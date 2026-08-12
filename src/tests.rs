@@ -12091,3 +12091,294 @@ fn tracing_degenerate_companies_returns_nothing_rather_than_failing() {
     assert_eq!(value, Uint128::zero());
     assert!(path.is_empty());
 }
+
+/// Builds the board every "route ends at a blockaded city" test below runs
+/// on, and returns the room ready for `RunManualRoute`.
+///
+/// Three real, labelled board hexes in a straight line -- D8 `(2, 3)`, D10
+/// `(3, 3)`, D12 `(4, 3)`, each one `HEX_NEIGHBOR_OFFSETS[0]` from the last:
+///
+/// ```text
+///   D8 (Small Town, $10)  --  D10 (city, $20)  --  D12 (Small Town, $10)
+///   B&O's home station        1 slot, filled        the far side
+///                             by a PRR token
+/// ```
+///
+/// D10 carries yellow city tile #57, whose artwork has exactly one Station
+/// Token slot (`hexmap::tile_city_slots`), and the PRR holds a token there.
+/// One rival token, one slot, no room left: D10 is FULLY blockaded, which is
+/// what `pathfinding::opponent_station_hexes` reports and what the rule
+/// under test turns on.
+///
+/// The tiles are seeded straight into `MAP_GRID` for the same reason the
+/// G-9 tests above do it (see `g9_seed_tile`): this is a test of route
+/// VALIDATION, and driving a city tile onto D10 through `LayTile` would mean
+/// satisfying the era lock and the OO-hex reservation gate, neither of which
+/// this rule touches. B&O is floated the ordinary way, though, so the
+/// President check, the Operating Round queue and the payout path below are
+/// all exercised for real.
+fn blockaded_city_route_scenario() -> (
+    cosmwasm_std::OwnedDeps<
+        cosmwasm_std::testing::MockStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    cosmwasm_std::Env,
+    Addr,
+    u64,
+) {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 50,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let player_one = Addr::unchecked("player_one");
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    // Float B&O for free by winning its private -- player_one becomes its
+    // President, which `RunManualRoute` requires.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BidOnPrivate {
+            game_id,
+            private_id: 6, // Baltimore & Ohio
+            bid_amount: Uint128::new(220),
+        },
+    )
+    .expect("player_one's bid should win Baltimore & Ohio and float the public B&O");
+
+    // The board. Tile #4 is a Small Town straight (segment 0-3, $10); tile
+    // #57 is THE yellow city (segment 0-3, $20, one token slot). At
+    // orientation 0 each has live edges {0, 3}, so every consecutive pair
+    // meets on a real shared track edge and the whole line is connected.
+    g9_seed_tile(&mut deps.storage, game_id, 2, 3, 4, 0); // D8
+    g9_seed_tile(&mut deps.storage, game_id, 3, 3, 57, 0); // D10
+    g9_seed_tile(&mut deps.storage, game_id, 4, 3, 4, 0); // D12
+
+    // B&O's home station is D8, and it owns a train long enough for the
+    // three-hex path below -- deliberately generous, so that a rejection can
+    // only ever be the blockade rule and never `RouteExceedsMaxDistance`
+    // (`execute_run_manual_route`'s step 4 counts HEXES).
+    g9_seed_company(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+        (2, 3),
+        &[("4", 4)],
+    );
+
+    // The blockade itself: one PRR token in D10's single slot.
+    PROTOCOL_STATION_HEXES
+        .save(
+            &mut deps.storage,
+            (game_id, PRR_PUBLIC_ID_BLOCKADE),
+            &vec![(3, 3)],
+        )
+        .unwrap();
+
+    let begin_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("begin_operating_round should succeed with B&O floated");
+    assert_eq!(attr(&begin_res, "active_corporation_id"), "4");
+
+    (deps, env, player_one, game_id)
+}
+
+/// B&O, the company running the routes in the blockade tests.
+const BO_PUBLIC_ID_BLOCKADE: u32 = 4;
+/// PRR, the rival whose token fills D10's only station slot.
+const PRR_PUBLIC_ID_BLOCKADE: u32 = 1;
+
+/// Audit G-9 follow-up, the headline rule: a manually-declared route may END
+/// at a city whose every station slot is taken by rival tokens, and scores
+/// that city's revenue for doing so. What it may not do is run THROUGH one.
+///
+/// Before this fix, `execute_run_manual_route`'s step 3 rejected a declared
+/// path containing ANY blockaded hex, terminal or not, so the accepted call
+/// at the bottom of this test would have failed with
+/// `RouteBlockedByRivalStation`. That was stricter than real 1830 and
+/// stricter than this contract's own automatic tracer, whose
+/// `pathfinding::Passability::StopOnly` has always allowed exactly this.
+#[test]
+fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
+    let (mut deps, env, player_one, game_id) = blockaded_city_route_scenario();
+
+    // Confirm the blockade is real before relying on it: D10 is a city with
+    // one slot, and the rival's token fills it.
+    assert_eq!(hexmap::tile_city_slots(57), 1);
+    let blocked = pathfinding::opponent_station_hexes(
+        &deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+    )
+    .unwrap();
+    assert!(
+        blocked.contains(&(3, 3)),
+        "D10 must be fully blockaded for this test to mean anything"
+    );
+
+    // ---- Still rejected: D10 as an INTERMEDIATE stop. ----
+    // The train would enter D10 from D8 and leave out the far side to D12,
+    // which is precisely what a full blockade forbids.
+    let through_err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID_BLOCKADE,
+            hex_path: vec!["D8".to_string(), "D10".to_string(), "D12".to_string()],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .unwrap_err();
+    match through_err {
+        ContractError::Operations(OperationsError::RouteBlockedByRivalStation { label }) => {
+            assert_eq!(
+                label, "D10",
+                "the error must name the blockaded city, not some other hex"
+            );
+        }
+        other => panic!("expected RouteBlockedByRivalStation for D10, got: {other:?}"),
+    }
+
+    // The rejected attempt moved nothing: same queue position, same
+    // treasury, so the accepted call below starts from a clean slate.
+    let session_after_reject = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(session_after_reject.active_corporation_index, 0);
+    assert_eq!(
+        session_after_reject.active_operating_order,
+        vec![BO_PUBLIC_ID_BLOCKADE]
+    );
+    let bo_before: crate::state::PublicCompany = PUBLIC_COMPANIES
+        .load(&deps.storage, (game_id, BO_PUBLIC_ID_BLOCKADE))
+        .unwrap();
+
+    // ---- Accepted: D10 as the FINAL stop. ----
+    let ends_there = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID_BLOCKADE,
+            hex_path: vec!["D8".to_string(), "D10".to_string()],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .expect("a route that merely ENDS at a fully blockaded city is legal in 1830");
+
+    assert_eq!(attr(&ends_there, "hex_path"), "D8->D10");
+    assert_eq!(
+        attr(&ends_there, "revenue_amount"),
+        "30",
+        "$10 D8 + $20 D10 -- the blockaded city is stopped at and PAID, not skipped"
+    );
+    let bo_after: crate::state::PublicCompany = PUBLIC_COMPANIES
+        .load(&deps.storage, (game_id, BO_PUBLIC_ID_BLOCKADE))
+        .unwrap();
+    assert_eq!(
+        bo_after.treasury,
+        bo_before.treasury + Uint128::new(30),
+        "the withheld revenue must include the blockaded city's own $20"
+    );
+}
+
+/// Audit G-9 follow-up, the symmetric half: a route is an undirected run
+/// between two ends, and `hex_path` merely lists it in one of the two orders
+/// the President could equally have typed. So a blockaded city is exempt at
+/// index `0` for the same reason it is exempt at the last index -- otherwise
+/// `["D8", "D10"]` would be accepted while the identical route written
+/// `["D10", "D8"]` was rejected, which is an artefact of typing order rather
+/// than a rule.
+#[test]
+fn run_manual_route_may_start_at_a_fully_blockaded_rival_city() {
+    let (mut deps, env, player_one, game_id) = blockaded_city_route_scenario();
+
+    let starts_there = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID_BLOCKADE,
+            // The same two hexes as the accepted route in the test above,
+            // listed the other way round.
+            hex_path: vec!["D10".to_string(), "D8".to_string()],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .expect("listing the same legal route in reverse must not change whether it is legal");
+
+    assert_eq!(attr(&starts_there, "hex_path"), "D10->D8");
+    assert_eq!(attr(&starts_there, "revenue_amount"), "30");
+}
+
+/// Audit G-9 follow-up, the control: the three-hex path rejected above is
+/// otherwise completely legal -- connected, tiled end to end, within the
+/// train's distance budget, and touching B&O's own station. Lift the rival
+/// token and the identical path is accepted for the full $40.
+///
+/// Without this, the rejection in
+/// `run_manual_route_may_end_at_a_fully_blockaded_rival_city` could be
+/// passing for the wrong reason (bad geometry, a missing tile, an
+/// off-by-one in the distance check) and the test would never notice.
+#[test]
+fn run_manual_route_runs_through_the_city_once_the_blockade_is_lifted() {
+    let (mut deps, env, player_one, game_id) = blockaded_city_route_scenario();
+
+    // Remove the rival's token; D10's one slot is open again.
+    PROTOCOL_STATION_HEXES.remove(&mut deps.storage, (game_id, PRR_PUBLIC_ID_BLOCKADE));
+    let blocked = pathfinding::opponent_station_hexes(
+        &deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+    )
+    .unwrap();
+    assert!(blocked.is_empty(), "no rival holds a token anywhere now");
+
+    let through = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID_BLOCKADE,
+            hex_path: vec!["D8".to_string(), "D10".to_string(), "D12".to_string()],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .expect("with no blockade, the full three-hex path is an ordinary legal route");
+
+    assert_eq!(attr(&through, "hex_path"), "D8->D10->D12");
+    assert_eq!(
+        attr(&through, "revenue_amount"),
+        "40",
+        "$10 D8 + $20 D10 + $10 D12"
+    );
+}

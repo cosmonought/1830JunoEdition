@@ -329,7 +329,9 @@ pub enum OperationsError {
     )]
     RouteMustTouchOwnStation { protocol_id: u32 },
 
-    #[error("Hex \"{label}\" is a rival protocol's blocking home station; this route cannot pass through it")]
+    #[error(
+        "Hex \"{label}\" is a city whose every station slot is taken by rival tokens, so this route cannot pass THROUGH it -- a route may still end there, by listing it as its first or last hex"
+    )]
     RouteBlockedByRivalStation { label: String },
 
     #[error("Protocol {protocol_id} owns no Hardware (trains), so it cannot run any route")]
@@ -803,10 +805,24 @@ fn advance_operating_round_turn(
 ///    has to CONTAIN that hex somewhere in the chain (`RouteMustTouchOwnStation`
 ///    otherwise) -- a real 1830 route runs BETWEEN stations, it isn't
 ///    required to be listed starting from one.
-/// 3. **No rival blockades.** Reuses `pathfinding::opponent_station_hexes`
-///    (now `pub(crate)` specifically for this) so the two route-revenue
-///    paths can never disagree about which hexes are blocked
-///    (`RouteBlockedByRivalStation`).
+/// 3. **No rival blockades on an intermediate stop.** Reuses
+///    `pathfinding::opponent_station_hexes` (now `pub(crate)` specifically
+///    for this) so the two route-revenue paths can never disagree about
+///    which cities are blockaded (`RouteBlockedByRivalStation`). That helper
+///    lists only cities where rivals hold tokens AND no slot remains open --
+///    a rival's mere laid track blocks nothing, and neither does a
+///    part-tokened city with a free slot.
+///
+///    Checked for the INTERIOR of the path only. Real 1830 lets a train run
+///    into a fully blockaded city and end its route there, scoring it; what
+///    it may not do is run through and out the far side. Both ends of the
+///    path are therefore exempt -- the last hex because that is where the
+///    train stops, and the first for symmetry, since a route is an
+///    undirected run between two ends and reversing how the President typed
+///    it must not change whether it is legal. This matches
+///    `pathfinding::trace_best_route_set`'s `Passability::StopOnly`
+///    handling, so an automatically-traced route and a manually-declared
+///    one now agree here too.
 /// 4. **Distance budget.** `hex_path.len()` (the visited-hex count, matching
 ///    `trace_best_route`'s own `visited.len() >= max_distance` check, not a
 ///    hop count) must not exceed the longest `max_route_distance` among
@@ -948,12 +964,38 @@ pub fn execute_run_manual_route(
         return Err(OperationsError::RouteMustTouchOwnStation { protocol_id });
     }
 
-    // ---- 3. No rival token blockades. ----
+    // ---- 3. No rival token blockades on any INTERMEDIATE stop. ----
+    //
+    // Audit G-9 follow-up. This loop used to reject the route if ANY hex in
+    // it was blockaded, terminals included. That is not the 1830 rule: a
+    // fully-tokened-out rival city blocks a train from running THROUGH it,
+    // but a train may always run INTO one and end its route there, scoring
+    // the city like any other stop. `pathfinding::trace_best_route_set`
+    // already models exactly that (its `Passability::StopOnly`); this
+    // manually-declared path was the last place still enforcing the older,
+    // stricter reading, and the residual noted on
+    // `pathfinding::opponent_station_hexes` is now closed.
+    //
+    // Only the interior of the path is checked, so both ends are free:
+    // - the LAST hex is where the train stops, which is the case above;
+    // - the FIRST hex is symmetric. A route is an undirected run between two
+    //   ends -- `hex_path` merely lists it in one of the two orders the
+    //   President could equally have typed -- so blocking on index `0` would
+    //   have rejected a perfectly legal route purely for being written
+    //   backwards, and `["A", "B", "C"]` and `["C", "B", "A"]` must accept
+    //   or reject identically.
+    //
+    // Degenerate lengths fall out correctly: a 1-hex path has no interior at
+    // all, and a 2-hex path is two terminals with nothing between them, so
+    // neither can be blockaded here. Neither is a scoring route anyway --
+    // 1830's two-revenue-centre minimum is enforced separately -- and a
+    // 0-hex path was already rejected as `EmptyRoutePath` in step 1.
     let blocked = pathfinding::opponent_station_hexes(deps.storage, game_id, protocol_id)?;
-    for (label, coord) in hex_path.iter().zip(axial_path.iter()) {
-        if blocked.contains(coord) {
+    let interior = axial_path.len().saturating_sub(1);
+    for index in 1..interior {
+        if blocked.contains(&axial_path[index]) {
             return Err(OperationsError::RouteBlockedByRivalStation {
-                label: label.clone(),
+                label: hex_path[index].clone(),
             });
         }
     }

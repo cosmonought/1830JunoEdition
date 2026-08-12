@@ -386,12 +386,13 @@ pub(crate) fn own_token_hexes(
 /// blocks anything, and a rival-tokened city with a slot still open no
 /// longer blocks anything either.
 ///
-/// Residual, and deliberately out of scope for a batch scoped to
-/// `state.rs`/`hexmap.rs`/`pathfinding.rs`: `execute_run_manual_route`
-/// rejects a declared path containing ANY hex in this set, including as its
-/// final hex, so a manual route still cannot END at a fully-blockaded city
-/// the way `trace_best_route_set` below correctly can. Closing that needs an
-/// edit to `operations.rs`.
+/// The residual G-9 left open here -- that `execute_run_manual_route`
+/// rejected a declared path containing ANY hex in this set, including as its
+/// final hex, so a manual route could not END at a fully-blockaded city the
+/// way `trace_best_route_set` below correctly can -- is CLOSED. That
+/// function now applies this set to the interior of a declared path only,
+/// matching `Passability::StopOnly`. Callers should read this set as "cities
+/// no route may pass THROUGH", never as "hexes no route may touch".
 pub(crate) fn opponent_station_hexes(
     storage: &dyn Storage,
     game_id: u64,

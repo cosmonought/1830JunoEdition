@@ -2738,12 +2738,27 @@ pub(crate) fn path_list_connections(paths: &[(u8, u8)]) -> u8 {
 /// (unreachable through `execute_lay_tile`, which rejects those with
 /// `TileNotFound`, but total by construction rather than by assumption).
 pub(crate) fn effective_tile_paths(tile: &Tile) -> Vec<(u8, u8)> {
-    let base: &[(u8, u8)] = if tile.paths.is_empty() {
+    rotate_paths(effective_base_tile_paths(tile), tile.orientation)
+}
+
+/// `effective_tile_paths` without the rotation step: the BASE (pre-rotation)
+/// segments actually in play on `tile`, stored list preferred and
+/// `TILE_CATALOG` used as the same backwards-compatibility fallback (see
+/// that function for why the fallback is load-bearing rather than dead).
+///
+/// Split out for `query::query_map_grid`, which surfaces these on
+/// `msg::MapTileEntry::paths`. That response reports `orientation` as its
+/// own separate field and states edges pre-rotation -- matching the
+/// convention `connections` has always used -- so the caller applies the
+/// rotation itself and this must hand back base edges, not rotated ones.
+/// Routing code inside the contract wants the rotated form and should keep
+/// calling `effective_tile_paths`.
+pub(crate) fn effective_base_tile_paths(tile: &Tile) -> &[(u8, u8)] {
+    if tile.paths.is_empty() {
         tile_paths_for(tile.tile_id).unwrap_or(&[])
     } else {
         &tile.paths
-    };
-    rotate_paths(base, tile.orientation)
+    }
 }
 
 /// How many Station Token slots the city artwork on `tile_id` provides, or

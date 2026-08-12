@@ -296,6 +296,24 @@ pub fn query_map_grid(deps: Deps, game_id: u64) -> StdResult<MapGridResponse> {
                 hex_label: hexmap::describe_hex(q, r),
                 tile_id: tile.tile_id,
                 orientation: tile.orientation,
+                // BASE (pre-rotation) edge pairs, resolved through the same
+                // stored-list-then-catalog fallback every routing call in
+                // the contract already goes through -- `orientation` above
+                // is reported separately and the caller applies it, exactly
+                // as it already must for `connections`.
+                //
+                // Deliberately NOT `tile.paths` raw. `Tile::paths` is
+                // `#[serde(default)]`, so a tile written to `MAP_GRID`
+                // before that field existed deserializes with an empty list;
+                // handing that empty list straight to a client would make a
+                // legacy tile render as a bare fan forever, even though its
+                // real pairing is knowable -- `paths` is a pure function of
+                // `tile_id`, which is why `hexmap::effective_tile_paths`
+                // resolves it this way for `pathfinding.rs` too. Falling
+                // back here keeps the query's answer identical to what the
+                // contract itself routes on, rather than inventing a second,
+                // weaker notion of what a tile's segments are.
+                paths: hexmap::effective_base_tile_paths(&tile).to_vec(),
                 landmark: hexmap::landmark_name_at(q, r).map(|name| name.to_string()),
             })
         })

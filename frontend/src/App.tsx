@@ -2010,6 +2010,31 @@ function AppShell() {
           onClose={handleCloseTilePopup}
         />
       )}
+      {/* Offline fallback (HexGridRenderer design note #120): no chain
+          client is wired up, so `GetLegalTilePlacements` was never called
+          and these tiles came from the local catalog mirror, filtered by era
+          and nothing else. Rendered through the SAME popup deliberately --
+          the point is that the picker works while developing against no
+          backend -- but flagged `offline`, which makes the popup label
+          itself provisional and refuse to dispatch. Kept as a separate
+          branch from the `"success"` one above rather than merged with a
+          ternary, so the authoritative path stays visibly untouched. */}
+      {activeMainTab === "map" && hexClickQuery?.status === "offline" && (
+        <TileSelectionPopup
+          offline
+          gameId={MOCK_GAME_ID}
+          protocolId={MOCK_LAY_TILE_PROTOCOL_ID}
+          q={hexClickQuery.q}
+          r={hexClickQuery.r}
+          hexLabel={hexClickQuery.hexLabel}
+          placements={hexClickQuery.placements}
+          anchorClientX={hexClickQuery.clientX}
+          anchorClientY={hexClickQuery.clientY}
+          onPreviewChange={setPreviewTile}
+          onDispatched={handleTileDispatched}
+          onClose={handleCloseTilePopup}
+        />
+      )}
     </div>
   );
 }

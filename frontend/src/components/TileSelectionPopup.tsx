@@ -79,6 +79,32 @@
 //    tray numbers are not contiguous and not tier-ordered (a hex can offer
 //    #8 next to #57, or #16 next to #53), so a bare ascending numeric list
 //    gave the player no signal about which era's artwork they were picking.
+// 6. **`offline` -- the picker without a chain.** Set when these
+//    `placements` came from `HexGridRenderer`'s local `TILE_CATALOG` mirror
+//    instead of from `GetLegalTilePlacements` (that file's design note #120
+//    and its `HexClickQueryState` `"offline"` variant). It exists so the
+//    picker still opens while developing against no backend, which it
+//    previously did not: with no chain client the click handler bailed
+//    before ever reporting a state, so this popup never mounted at all.
+//
+//    Design note #4 above says the carousel offers only what the contract
+//    returned. That invariant is NOT relaxed here, it is made visible. An
+//    offline tray is filtered by ERA AND NOTHING ELSE -- no connectivity, no
+//    landmark/OO/"B"/"NY" reservation, no upgrade colour step, no tray
+//    depletion -- so most of what it shows would be rejected outright by
+//    `hexmap::execute_lay_tile`. Presenting that silently, in a UI otherwise
+//    identical to the authoritative one, would be the worst outcome
+//    available: it looks exactly like a legality answer while being nothing
+//    of the kind.
+//
+//    So the mode is stated three times over, and dispatch is blocked twice.
+//    A banner above the carousel says plainly what was and wasn't checked;
+//    the heading reads "Catalog tiles" rather than "Legal tiles"; the
+//    rotation caption drops the word "legal", since all six are offered
+//    precisely because nothing filtered them. `handleConfirmPlacement`
+//    returns immediately AND the button is disabled and relabelled -- belt
+//    and braces, because the disabled attribute alone is a presentational
+//    guarantee and this needs a behavioural one.
 
 import React, { useEffect, useMemo, useState } from "react";
 import type { DeliverTxResponse } from "@cosmjs/stargate";
@@ -135,6 +161,14 @@ export interface TileSelectionPopupProps {
   /** Called when the player closes the popup (the "x" button, or after a
    *  successful dispatch). */
   onClose: () => void;
+  /** Design note #6: these `placements` did NOT come from the contract.
+   *  No chain client was available, so `HexGridRenderer` fell back to its
+   *  local `TILE_CATALOG` mirror filtered by era alone -- see that file's
+   *  `localCatalogPlacements` and its `HexClickQueryState`'s `"offline"`
+   *  variant. Makes the popup label itself provisional and hard-refuse to
+   *  dispatch. Defaults to `false`, so the ordinary contract-backed path is
+   *  entirely unaffected. */
+  offline?: boolean;
 }
 
 /** One carousel entry: a legal `tile_id` plus every orientation the
@@ -202,6 +236,7 @@ export function TileSelectionPopup({
   onPreviewChange,
   onDispatched,
   onClose,
+  offline = false,
 }: TileSelectionPopupProps) {
   const { execGameplay, sessionStatus } = useGameSession();
 
@@ -253,6 +288,13 @@ export function TileSelectionPopup({
   };
 
   const handleConfirmPlacement = async () => {
+    // Design note #6: a hard stop, not merely a disabled button. The button
+    // below is already disabled in offline mode, but this path is what
+    // actually guarantees an unvalidated, locally-invented placement can
+    // never reach `execGameplay` -- there is no contract behind these tiles
+    // to have approved them, and `hexmap::execute_lay_tile` would reject
+    // most of them outright.
+    if (offline) return;
     if (selectedTileId === null || selectedOrientation === null || sessionStatus !== "ready") {
       return;
     }
@@ -308,6 +350,7 @@ export function TileSelectionPopup({
   );
 
   const dispatchDisabled =
+    offline ||
     selectedTileId === null ||
     selectedOrientation === null ||
     sessionStatus !== "ready" ||
@@ -367,12 +410,36 @@ export function TileSelectionPopup({
       </div>
 
       <div style={{ padding: "10px 12px", overflowY: "auto" }}>
+        {/* Design note #6: unmissable, above the carousel rather than
+            tucked in the footer, because the tiles below LOOK exactly like
+            contract-approved ones. Says plainly what was and wasn't
+            checked, so nobody reads this tray as a legality answer. */}
+        {offline && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: "6px 8px",
+              borderRadius: 6,
+              background: "#3a3320",
+              border: "1px solid #8a7332",
+              color: "#f0d9a0",
+              fontSize: 11,
+              lineHeight: 1.35,
+            }}
+          >
+            <strong>Offline preview &mdash; not validated.</strong> No chain connection, so
+            the contract was never asked. These are the local catalog&rsquo;s tiles for the
+            current era only: connectivity, hex reservations, upgrade steps and tray supply
+            have <em>not</em> been checked, and placement is disabled.
+          </div>
+        )}
         {groups.length === 0 ? (
           <div style={{ opacity: 0.75 }}>No legal tile placements at this hex right now.</div>
         ) : (
           <>
             <div style={{ marginBottom: 6, opacity: 0.85 }}>
-              Legal tiles ({groups.length}) &mdash; scroll to see more:
+              {offline ? "Catalog tiles" : "Legal tiles"} ({groups.length}) &mdash; scroll to see
+              more:
             </div>
             {/* Scrollable gallery carousel of legal tile_id entries. */}
             <div
@@ -448,8 +515,11 @@ export function TileSelectionPopup({
                   />
                 </button>
                 <div style={{ fontSize: 11, opacity: 0.75, marginTop: 4 }}>
-                  Orientation {selectedOrientation} of legal:{" "}
-                  {selectedGroup.orientations.join(", ")}
+                  Orientation {selectedOrientation} of{" "}
+                  {/* Design note #6: offline, all six rotations are offered
+                      because nothing filtered them -- calling that list
+                      "legal" would be a claim the contract never made. */}
+                  {offline ? "all" : "legal"}: {selectedGroup.orientations.join(", ")}
                 </div>
                 {/* See design note #2: this used to be a "preview only"
                     disclaimer back when LayTile had no orientation field
@@ -457,10 +527,21 @@ export function TileSelectionPopup({
                     rotation. That's no longer true -- the contract now
                     commits exactly this selected orientation -- so this is
                     a plain confirmation of what will actually be
-                    submitted, not a caveat. */}
+                    submitted, not a caveat. Design note #6 restores a
+                    genuine caveat for the offline case only, where there is
+                    no contract to commit anything. */}
                 <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2, fontStyle: "italic" }}>
-                  Tile #{selectedGroup.tileId} will be laid at exactly this orientation (
-                  {selectedOrientation}) when confirmed.
+                  {offline ? (
+                    <>
+                      Artwork preview only &mdash; tile #{selectedGroup.tileId} at orientation{" "}
+                      {selectedOrientation} cannot be laid without a chain connection.
+                    </>
+                  ) : (
+                    <>
+                      Tile #{selectedGroup.tileId} will be laid at exactly this orientation (
+                      {selectedOrientation}) when confirmed.
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -474,7 +555,12 @@ export function TileSelectionPopup({
             {dispatchState.message}
           </div>
         )}
-        {sessionStatus !== "ready" && (
+        {/* Design note #6: offline suppresses the session-key hint, which
+            would otherwise be actively misleading -- it implies initializing
+            a session key is the one thing standing between the player and a
+            placement, when the real blocker is that there is no chain to
+            place onto and no contract has approved this tile. */}
+        {!offline && sessionStatus !== "ready" && (
           <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 6 }}>
             Session key not ready -- initialize it before dispatching.
           </div>
@@ -494,7 +580,11 @@ export function TileSelectionPopup({
             cursor: dispatchDisabled ? "default" : "pointer",
           }}
         >
-          {dispatchState.status === "pending" ? "Broadcasting..." : "Confirm Placement"}
+          {offline
+            ? "Placement unavailable (offline)"
+            : dispatchState.status === "pending"
+              ? "Broadcasting..."
+              : "Confirm Placement"}
         </button>
       </div>
     </div>

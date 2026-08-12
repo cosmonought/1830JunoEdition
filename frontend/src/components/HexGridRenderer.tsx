@@ -3053,6 +3053,91 @@
 //    the mirror's length or unique-id count ever stops matching
 //    `TILE_CATALOG_SIZE`, since a duplicated id silently collapses inside
 //    the `Map` and shadows an entry.
+// 119. **Discrete Double-Town Paths.** The five DoubleTown tiles (#1, #2,
+//    #55, #56, #69) now render their two real, separate town routes instead
+//    of one generic fan-to-centre, and place each dit ON its own route.
+//
+//    The problem was informational, not cosmetic. Each of these tiles has
+//    four live edges paired into two independent two-edge routes, and
+//    `connections` is a flat union that cannot say which edge pairs with
+//    which. It is not merely lossy in principle: #1 and #55 share the
+//    identical mask `0b01_1011` while pairing {0,4}+{1,3} versus {0,3}+{1,4},
+//    and #2 and #56 share `0b00_1111` while pairing {0,3}+{1,2} versus
+//    {0,2}+{1,3}. No function of the mask can distinguish those, so all four
+//    drew as the same four-way junction with two dits floated at fixed
+//    offsets -- wrong topology and wrong dit placement on all five.
+//
+//    The data already existed on the backend: `hexmap::TILE_CATALOG` has
+//    carried a seventh edge-pair field since Audit G-9 and `pathfinding.rs`
+//    routes on it. What was missing was a way for a client to see it, so
+//    this pass added `paths` to `msg::MapTileEntry` (resolved contract-side
+//    through the new `hexmap::effective_base_tile_paths`, which keeps the
+//    stored-list-then-catalog fallback `effective_tile_paths` already used,
+//    minus the rotation -- this response states edges pre-rotation and
+//    reports `orientation` separately, matching `connections`).
+//
+//    Two sources, deliberately, resolved by `pathsForTile`: the query row
+//    wins for a laid tile, and this file's `TILE_CATALOG` mirror is the
+//    fallback. The mirror is not redundancy for its own sake --
+//    `TilePreviewThumbnail` renders tiles that are not on the board yet and
+//    has no query row by construction, so without a mirror copy a previewed
+//    double-town would draw differently from the same tile once laid. The
+//    same fallback covers a contract deployed before `MapTileEntry.paths`
+//    existed, which simply omits the key.
+//
+//    Scope is deliberately narrow: the branch is gated on BOTH
+//    `terrain === "DoubleTown"` and paths actually being present, so only
+//    those five tiles can reach it. Multi-edge city and plain tiles carry
+//    path lists in the Rust catalog too, but their existing branches already
+//    render them correctly, so they are untouched and the mirror does not
+//    duplicate their paths.
+//
+//    One honest deviation, noted at the branch: each route is drawn through
+//    its own `twoNodePositions` node rather than through hex centre, so the
+//    two dits sit on their own track instead of colliding at the middle.
+//    Real #55 draws two straights that genuinely cross there. The topology
+//    -- which edge connects to which -- is exactly what the catalog
+//    declares; only the curvature is a presentation choice.
+// 120. **Tile Picker Opens Without A Chain.** Reported as "the tile picker
+//    refuses to open at all" when running `npm start` with no backend, no
+//    exception thrown, and the "[TileSelection] hex clicked" log still
+//    printing normally.
+//
+//    NOT caused by design note #119, despite arriving right after it. That
+//    pass touched the catalog mirror, `rotatePaths`/`pathsForTile`/
+//    `assignTownNodes` and one `drawTrackPath` branch -- all canvas
+//    rendering, none of it in the click pipeline, and `pathsForTile`
+//    returning `undefined` is its designed fallback, not a failure. Nothing
+//    in the picker flow queries `paths` at all: those ride on `GetMapGrid`
+//    (board data), while the picker runs `GetLegalTilePlacements`, which
+//    #119 never touched. No promise was left pending either.
+//
+//    The real cause was long-standing and structural. The click handler's
+//    guard tested all four interceptor props at once --
+//    `if (!queryClient || !contractAddress || gameId === undefined ||
+//    protocolId === undefined) return;` -- and those props go missing for
+//    two unrelated reasons. Route-select mode omits them ON PURPOSE, to keep
+//    a route-point click from also popping the picker (design note #7,
+//    App.tsx design note #11). Running without a wallet or node leaves ONLY
+//    `queryClient` undefined, since the other three are constants. Both hit
+//    the same `return`, so `onHexClickQuery` never fired, App.tsx's
+//    `hexClickQuery` stayed `null`, and its `status === "success"` gate
+//    never rendered the popup. The picker had no offline path whatsoever --
+//    it wasn't hanging or failing, it had decided there was nothing to do.
+//
+//    Fix: split the guard on that exact distinction. Missing hex identity
+//    (`contractAddress`/`gameId`/`protocolId`) still returns silently, so
+//    route-select mode is untouched. Missing `queryClient` alone now falls
+//    back to `localCatalogPlacements`, and reports `status: "offline"`.
+//
+//    That fallback filters by ERA AND NOTHING ELSE, and deliberately does
+//    not reimplement `hexmap::legal_tile_placements` -- no connectivity, no
+//    reservations, no colour-step, no tray depletion. Hence a distinct
+//    status rather than a flag on `"success"`: a separate variant makes the
+//    type checker point at every consumer that must decide what to do with
+//    unvalidated data, where a flag lets a consumer treat it as
+//    authoritative just by not knowing to look. `TileSelectionPopup` renders
+//    it under an explicit banner and refuses to dispatch from it.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -3066,6 +3151,22 @@ export interface MapTileEntry {
   r: number;
   tile_id: number;
   orientation: number;
+  /** This tile's DISCRETE track segments as BASE (pre-rotation) edge pairs
+   *  -- `msg::MapTileEntry::paths`, resolved contract-side through
+   *  `hexmap::effective_base_tile_paths` (design note #119).
+   *
+   *  Each `[a, b]` is one continuous run of track between edges `a` and
+   *  `b`; `a === b` is a terminal spur that enters at `a` and dead-ends.
+   *  Apply `orientation` yourself, the same as for a catalog entry's
+   *  `connections` -- `rotatePaths` below does it.
+   *
+   *  OPTIONAL on purpose, and the optionality is not decorative: this
+   *  component renders against whatever a deployed contract actually
+   *  returns, and a contract built before this field existed simply omits
+   *  the key. `pathsForTile` treats `undefined` and `[]` identically and
+   *  falls back to the local `TILE_CATALOG` mirror, so an older chain
+   *  renders exactly as it did before rather than throwing. */
+  paths?: ReadonlyArray<readonly [number, number]> | null;
   landmark: string | null;
 }
 
@@ -3261,6 +3362,28 @@ export type HexClickQueryState =
       clientX: number;
       clientY: number;
       message: string;
+    }
+  /** Design note #120: no chain client is wired up, so
+   *  `GetLegalTilePlacements` was never called and `placements` below came
+   *  from the LOCAL `TILE_CATALOG` mirror, not from the contract.
+   *
+   *  A separate status rather than a flag on `"success"` on purpose. These
+   *  placements are NOT contract-validated: they are era-gated and nothing
+   *  more -- no connectivity check, no terrain reservation, no tile-tray
+   *  depletion, no upgrade-color step. Folding them into `"success"` would
+   *  let any existing or future consumer treat unvalidated data as
+   *  authoritative simply by not knowing to check a flag, whereas a distinct
+   *  variant makes the exhaustiveness checker point at every site that has
+   *  to decide. Consumers MUST surface this to the player as provisional and
+   *  MUST NOT dispatch a `LayTile` from it. */
+  | {
+      status: "offline";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      placements: LegalTilePlacement[];
     };
 
 /** `DoubleTown` (item 1/2, structural calibration pass): a single hex
@@ -3319,6 +3442,31 @@ export interface TileCatalogEntry {
    *  independent city nodes. Omitted (`undefined`) for every single-city
    *  tile, which keeps the existing fan-to-center rendering unchanged. */
   cityGroups?: readonly (readonly number[])[];
+  /** Design note #119: this tile's DISCRETE track segments as BASE
+   *  (pre-rotation) edge pairs, mirroring `hexmap::TILE_CATALOG`'s SEVENTH
+   *  tuple element. Unlike `cityGroups` above, this one IS real backend
+   *  data, not a frontend-only embellishment -- the Rust catalog has
+   *  carried it since Audit G-9 and `pathfinding.rs` routes on it.
+   *
+   *  Each `[a, b]` is one continuous run of track between edges `a` and
+   *  `b`; `a === b` would be a terminal spur (none of the tiles mirrored
+   *  here have one). The union of every edge listed equals `connections`,
+   *  which the Rust test
+   *  `tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles`
+   *  asserts for all 46 entries.
+   *
+   *  POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES (#1, #2, #55, #56, #69),
+   *  deliberately and by scope decision. Those are the tiles where the flat
+   *  `connections` mask is genuinely lossy: four live edges paired into two
+   *  independent two-edge routes, one per town, and the mask cannot say
+   *  which edge pairs with which. Every other tile is either unambiguous
+   *  from its mask or already handled correctly by an existing branch
+   *  (`cityGroups` for two-city hubs, the 2-edge shortcut for simple
+   *  curves/straights, the fan for multi-spur junctions), so mirroring
+   *  paths for them would add a second source of truth for the same
+   *  rendering with no visible change. `pathsForTile` returns `undefined`
+   *  for those and every existing code path stays exactly as it was. */
+  paths?: ReadonlyArray<readonly [number, number]>;
 }
 
 /** Hand-kept mirror of `hexmap::TILE_CATALOG` (see design note #2 above).
@@ -3366,18 +3514,56 @@ export interface TileCatalogEntry {
  *  ("Audit G-5/G-10: NO tile carries this terrain any more"). */
 const TILE_CATALOG: readonly TileCatalogEntry[] = [
   /* ---- Yellow tier (12 tiles): legal from every room's genesis. ---- */
-  { tileId: 1, connections: 0b01_1011, terrain: "DoubleTown", color: "Yellow" }, // #1 x1 -- two towns, edges 0/1/3/4
-  { tileId: 2, connections: 0b00_1111, terrain: "DoubleTown", color: "Yellow" }, // #2 x1 -- two towns, edges 0/1/2/3
+  // The five DoubleTown tiles carry `paths` (design note #119). Each pair is
+  // one town's own two-edge route, transcribed from `hexmap::TILE_CATALOG`'s
+  // seventh field, which in turn cites the 18xx tile definition in a comment
+  // directly above each Rust entry. Note how differently the two towns pair
+  // up across tiles that share an identical `connections` mask -- #1 vs #55
+  // are both edges 0/1/3/4, and #2 vs #56 are both 0/1/2/3 -- which is
+  // exactly the distinction the flat mask cannot express and the whole
+  // reason this field exists.
+  {
+    tileId: 1,
+    connections: 0b01_1011,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    paths: [[0, 4], [1, 3]],
+  }, // #1 x1 -- 18xx: path=a:1,b:_0;path=a:_0,b:3;path=a:0,b:_1;path=a:_1,b:4
+  {
+    tileId: 2,
+    connections: 0b00_1111,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    paths: [[0, 3], [1, 2]],
+  }, // #2 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:2
   { tileId: 3, connections: 0b00_0011, terrain: "SmallTown", color: "Yellow" }, // #3 x2 -- single town, sharp curve
   { tileId: 4, connections: 0b00_1001, terrain: "SmallTown", color: "Yellow" }, // #4 x2 -- single town, straight. NOTE: real tray #4, NOT the deleted invented "river" tile that used to hold id 4.
   { tileId: 7, connections: 0b00_0011, terrain: "Plain", color: "Yellow" }, // #7 x4 -- plain sharp curve
   { tileId: 8, connections: 0b00_0101, terrain: "Plain", color: "Yellow" }, // #8 x8 -- plain gentle curve, the most common tile in the game
   { tileId: 9, connections: 0b00_1001, terrain: "Plain", color: "Yellow" }, // #9 x7 -- plain straight
-  { tileId: 55, connections: 0b01_1011, terrain: "DoubleTown", color: "Yellow" }, // #55 x1 -- two towns, edges 0/1/3/4
-  { tileId: 56, connections: 0b00_1111, terrain: "DoubleTown", color: "Yellow" }, // #56 x1 -- two towns, edges 0/1/2/3
+  {
+    tileId: 55,
+    connections: 0b01_1011,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    paths: [[0, 3], [1, 4]],
+  }, // #55 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:4 -- same mask as #1, two STRAIGHTS rather than #1's two curves
+  {
+    tileId: 56,
+    connections: 0b00_1111,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    paths: [[0, 2], [1, 3]],
+  }, // #56 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:2;path=a:1,b:_1;path=a:_1,b:3 -- same mask as #2, crossing routes rather than #2's nested ones
   { tileId: 57, connections: 0b00_1001, terrain: "MajorCityHub", color: "Yellow" }, // #57 x4 -- THE yellow city tile; every plain-city hex starts here. Replaces old internal id 10.
   { tileId: 58, connections: 0b00_0101, terrain: "SmallTown", color: "Yellow" }, // #58 x2 -- single town, gentle curve
-  { tileId: 69, connections: 0b01_1101, terrain: "DoubleTown", color: "Yellow" }, // #69 x1 -- two towns, edges 0/2/3/4
+  {
+    tileId: 69,
+    connections: 0b01_1101,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    paths: [[0, 3], [2, 4]],
+  }, // #69 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:2,b:_1;path=a:_1,b:4
 
   /* ---- Green tier (16 tiles): unlocked by the room's first 3-train. ---- */
   { tileId: 14, connections: 0b01_1011, terrain: "MajorCityHub", color: "Green" }, // #14 x3 -- green city, edges 0/1/3/4
@@ -4332,6 +4518,87 @@ function rotateConnections(mask: number, orientation: number): number {
   const m = mask & 0b111111;
   if (o === 0) return m;
   return ((m << o) | (m >> (6 - o))) & 0b111111;
+}
+
+/** Rotates a list of BASE (pre-rotation) edge pairs by `orientation` steps
+ *  -- the edge-pair counterpart of `rotateConnections`, and a direct port of
+ *  `hexmap::rotate_paths`. `rotateConnections` shifts bit `e` left by
+ *  `orientation`, i.e. base edge `e` becomes `(e + orientation) % 6`; this
+ *  applies that same map to both ends of every pair, so a rotated path list
+ *  and a rotated bitmask always describe the same track. Design note #119. */
+function rotatePaths(
+  paths: ReadonlyArray<readonly [number, number]>,
+  orientation: number,
+): Array<[number, number]> {
+  const rot = ((orientation % 6) + 6) % 6;
+  return paths.map(([a, b]) => [(a + rot) % 6, (b + rot) % 6] as [number, number]);
+}
+
+/** Resolves the BASE (pre-rotation) discrete segments to render for a tile,
+ *  preferring what the contract actually sent over the local mirror --
+ *  design note #119.
+ *
+ *  `queryPaths` is `MapTileEntry.paths` from `GetMapGrid`; `entry` is this
+ *  file's own `TILE_CATALOG` row. The contract's copy wins because it is the
+ *  authority on what is really on that hex, and because it keeps working if
+ *  the backend catalog gains a tile this mirror hasn't caught up to.
+ *
+ *  Falls through to the mirror when the query gave nothing usable, which
+ *  covers three distinct real cases and must not distinguish between them:
+ *  a contract deployed before `msg::MapTileEntry::paths` existed (key
+ *  absent -> `undefined`), a `Tile` record whose paths could not be resolved
+ *  contract-side (empty array), and every un-laid tile in
+ *  `TilePreviewThumbnail`'s picker carousel, which has no query row at all
+ *  and passes `undefined` by construction.
+ *
+ *  Returns `undefined` when neither source has data -- the signal for
+ *  callers to keep using their existing `connections`-derived rendering,
+ *  which is what every non-DoubleTown tile does today and continues to do. */
+function pathsForTile(
+  entry: TileCatalogEntry,
+  queryPaths?: ReadonlyArray<readonly [number, number]> | null,
+): ReadonlyArray<readonly [number, number]> | undefined {
+  if (queryPaths && queryPaths.length > 0) return queryPaths;
+  if (entry.paths && entry.paths.length > 0) return entry.paths;
+  return undefined;
+}
+
+/** Which colour tiers a room in `currentEra` has unlocked -- Yellow from
+ *  genesis, Green with the first 3-train, Brown with the first 5-train, each
+ *  tier keeping the ones before it (`hexmap::TILE_CATALOG`'s own tier
+ *  comments; design note #120). */
+const ERA_UNLOCKED_TIERS: Readonly<Record<TileColorTier, readonly TileColorTier[]>> = {
+  Yellow: ["Yellow"],
+  Green: ["Yellow", "Green"],
+  Brown: ["Yellow", "Green", "Brown"],
+};
+
+/** Every `(tile_id, orientation)` pairing the LOCAL catalog mirror considers
+ *  plausible at a hex in `currentEra` -- design note #120's offline fallback
+ *  for the tile picker, used only when no chain client is wired up.
+ *
+ *  This is an era filter and NOTHING MORE. It deliberately does not attempt
+ *  to reimplement `hexmap::legal_tile_placements`: no track connectivity, no
+ *  landmark/OO/"B"/"NY" reservation, no upgrade colour-step rule, no
+ *  tile-tray depletion. Those rules are nontrivial, live correctly on the
+ *  contract, and duplicating them here would create a second implementation
+ *  to drift out of sync -- the exact hazard `TileSelectionPopup`'s own design
+ *  note #4 exists to prevent, and the reason this returns a `"offline"`
+ *  status the UI must label as provisional rather than a `"success"` any
+ *  consumer could mistake for the contract's own answer.
+ *
+ *  All six orientations are offered for every tile, since without the
+ *  contract there is no basis for excluding any of them. */
+function localCatalogPlacements(currentEra: TileColorTier): LegalTilePlacement[] {
+  const unlocked = new Set<TileColorTier>(ERA_UNLOCKED_TIERS[currentEra] ?? ["Yellow"]);
+  const placements: LegalTilePlacement[] = [];
+  for (const entry of TILE_CATALOG) {
+    if (!unlocked.has(entry.color)) continue;
+    for (let orientation = 0; orientation < 6; orientation++) {
+      placements.push({ tile_id: entry.tileId, orientation });
+    }
+  }
+  return placements;
 }
 
 function liveEdges(mask: number): number[] {
@@ -6448,7 +6715,11 @@ export function HexGridRenderer({
         if (!landmarkAt(tile.q, tile.r)) {
           // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
           withHexClip(ctx, center, hexSize, () => {
-            drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation);
+            // Design note #119: the laid tile's OWN discrete segments as the
+            // contract reported them (`msg::MapTileEntry::paths`), preferred
+            // over the local catalog mirror. `undefined` on a pre-#119
+            // contract, which `pathsForTile` handles by falling back.
+            drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, tile.paths);
           });
         }
       } else {
@@ -7389,6 +7660,13 @@ export function HexGridRenderer({
       if (previewCatalogEntry) {
         // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
         withHexClip(ctx, previewCenter, hexSize, () => {
+          // No query paths to pass (design note #119): `previewTile` is a
+          // ghost of a tile the player is CONSIDERING, built client-side by
+          // `TileSelectionPopup` from a `GetLegalTilePlacements` pairing --
+          // it isn't on the board, so no `MapTileEntry` describes it.
+          // `pathsForTile` falls back to the catalog mirror, which is why
+          // the mirror had to carry `paths` too: a previewed double-town
+          // must draw identically to the same tile once it is laid.
           drawTrackPath(ctx, previewCenter, hexSize, previewCatalogEntry, previewTile.orientation);
         });
       }
@@ -7690,7 +7968,61 @@ export function HexGridRenderer({
 
       onHexClick?.({ q, r, hexLabel, clientX: event.clientX, clientY: event.clientY });
 
-      if (!queryClient || !contractAddress || gameId === undefined || protocolId === undefined) {
+      // Design note #120: this guard used to be a single condition covering
+      // all four interceptor props, and it is now split in two, because the
+      // props go missing for two completely different reasons that were
+      // being treated identically.
+      //
+      // FIRST: the interceptor is switched OFF deliberately. `App.tsx`'s
+      // route-select mode omits `contractAddress`/`gameId`/`protocolId` (and
+      // `queryClient`) specifically so a route-point click doesn't also pop
+      // the LayTile picker open underneath it -- see design note #7 and
+      // App.tsx design note #11. That must keep bailing out silently.
+      if (!contractAddress || gameId === undefined || protocolId === undefined) {
+        return;
+      }
+
+      // SECOND: the interceptor is ON -- the caller supplied the hex's
+      // identity -- but there is no chain client to ask. In practice that
+      // means the app is running without a connected wallet or node, which
+      // is the ordinary state of `npm start` against no backend.
+      //
+      // THE BUG THIS FIXES: the old combined guard returned here too, so
+      // `onHexClickQuery` never fired, `App.tsx`'s `hexClickQuery` stayed
+      // `null`, and its `hexClickQuery?.status === "success"` gate never
+      // rendered the popup. The picker appeared completely dead on click --
+      // no popup, no error, no exception, and the "[TileSelection] hex
+      // clicked" log above still printing perfectly, because the handler had
+      // genuinely run and then decided there was nothing to do. Nothing was
+      // hanging and no promise was pending; the flow simply had no offline
+      // path at all.
+      //
+      // Now it falls back to the local catalog mirror so the picker still
+      // opens and the tray still renders. `localCatalogPlacements` filters by
+      // era ONLY -- see its doc comment -- so the result is explicitly
+      // provisional and goes out under `status: "offline"`, which the UI is
+      // required to label as such and must not dispatch from.
+      if (!queryClient) {
+        const placements = localCatalogPlacements(currentEra);
+        // eslint-disable-next-line no-console
+        console.log("[TileSelection] no chain client -- local catalog fallback", {
+          hex_coordinate: { q, r, hex_label: hexLabel },
+          era: currentEra,
+          tile_count: new Set(placements.map((p) => p.tile_id)).size,
+          contract_validated: false,
+        });
+        // Supersede any in-flight real query, so a response that arrives
+        // after the client drops can't overwrite this offline state.
+        clickQuerySeqRef.current += 1;
+        onHexClickQuery?.({
+          status: "offline",
+          q,
+          r,
+          hexLabel,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          placements,
+        });
         return;
       }
 
@@ -7760,6 +8092,11 @@ export function HexGridRenderer({
       protocolId,
       onHexClick,
       onHexClickQuery,
+      // Design note #120: read by the offline `localCatalogPlacements`
+      // fallback above, so a room advancing Yellow -> Green -> Brown
+      // re-derives the handler and offers the newly unlocked tiles instead
+      // of serving a stale Yellow-only tray from a closed-over era.
+      currentEra,
     ],
   );
 
@@ -8154,12 +8491,85 @@ function twoCityStationPoints(
   return [center, center];
 }
 
+/** Assigns each of a double-town tile's two ROTATED paths to one of the two
+ *  canonical `twoNodePositions` town nodes -- design note #119.
+ *
+ *  The nodes are fixed (Top-Right, Bottom-Left); the only question is which
+ *  route gets which, and getting it wrong makes both routes detour across
+ *  the hex to reach a node on the far side from their own edges. So both
+ *  assignments are scored by total squared distance from each path's own
+ *  anchor to its proposed node, and the cheaper one wins.
+ *
+ *  The anchor is normally the midpoint of the path's two edge points, which
+ *  points squarely at the half of the hex that route occupies.
+ *
+ *  A STRAIGHT anchors on hex centre, since opposite edge points average back
+ *  there. That is honest rather than broken -- a straight spans the whole
+ *  hex and genuinely occupies no side -- and it has a consequence worth
+ *  knowing: because the two nodes are symmetric about centre, a straight is
+ *  equidistant from both and contributes the same cost to either assignment.
+ *  So on a tile with one straight and one curve (#2, #56, #69) the curve
+ *  alone decides, and the straight takes whichever node is left. On #2 at
+ *  orientations 1 and 4 even the curve lands on the nodes' perpendicular
+ *  bisector and the two assignments tie exactly; `<=` breaks it toward the
+ *  in-order pairing, which is stable across renders and visually equivalent.
+ *
+ *  Where BOTH paths are straights the metric says nothing at all -- #55
+ *  ({0,3} and {1,4}) puts both anchors on centre, so every assignment ties
+ *  and the winner would come down to floating-point noise. The fallback
+ *  re-anchors on each path's FIRST edge point, which is always distinct
+ *  between two paths -- two routes on one tile never share an edge -- so the
+ *  choice stays deterministic and still geometrically sensible.
+ *
+ *  Returns one point per path. Any path count other than 2 gets hex centre
+ *  throughout: not reachable for the five catalog double-towns, but total by
+ *  construction rather than by assumption, so a future 3-town tile degrades
+ *  to the old shared-centre rendering instead of indexing off the end. */
+function assignTownNodes(
+  rotatedPaths: ReadonlyArray<readonly [number, number]>,
+  center: { x: number; y: number },
+  size: number,
+  apothem: number,
+): Array<{ x: number; y: number }> {
+  if (rotatedPaths.length !== 2) {
+    return rotatedPaths.map(() => center);
+  }
+
+  const nodes = twoNodePositions(center, size);
+  const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
+  const midpointAnchor = (pair: readonly [number, number]) => {
+    const a = edgePoint(pair[0]);
+    const b = edgePoint(pair[1]);
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+
+  let anchors = rotatedPaths.map(midpointAnchor);
+  // Degenerate-straight fallback, described above. The threshold is a small
+  // fraction of the hex, comfortably larger than float noise and far smaller
+  // than any genuine separation between two routes' midpoints.
+  const separation = Math.hypot(anchors[0].x - anchors[1].x, anchors[0].y - anchors[1].y);
+  if (separation < size * 0.05) {
+    anchors = rotatedPaths.map((pair) => edgePoint(pair[0]));
+  }
+
+  const cost = (first: number, second: number) => {
+    const d0x = anchors[0].x - nodes[first].x;
+    const d0y = anchors[0].y - nodes[first].y;
+    const d1x = anchors[1].x - nodes[second].x;
+    const d1y = anchors[1].y - nodes[second].y;
+    return d0x * d0x + d0y * d0y + d1x * d1x + d1y * d1y;
+  };
+
+  return cost(0, 1) <= cost(1, 0) ? [nodes[0], nodes[1]] : [nodes[1], nodes[0]];
+}
+
 function drawTrackPath(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
   entry: TileCatalogEntry,
   orientation: number,
+  queryPaths?: ReadonlyArray<readonly [number, number]> | null,
 ): void {
   const actualMask = rotateConnections(entry.connections, orientation);
   const edges = liveEdges(actualMask);
@@ -8170,6 +8580,65 @@ function drawTrackPath(
   ctx.strokeStyle = "#2b2b2b";
   ctx.lineWidth = Math.max(3, size * 0.12);
   ctx.lineCap = "round";
+
+  // Design note #119: the DoubleTown discrete-path branch, checked before
+  // everything else because it is the narrowest and most specific case.
+  //
+  // SCOPE, deliberately: this branch is gated on `terrain === "DoubleTown"`
+  // AND on discrete paths actually being available, so it can only ever
+  // capture #1/#2/#55/#56/#69. Every other tile -- including the multi-edge
+  // city and plain tiles, whose Rust catalog rows DO carry path lists --
+  // falls through to exactly the branches it used before, unchanged. That
+  // is a scope decision, not an oversight: the existing branches already
+  // render those correctly, and routing them through here too would restyle
+  // most of the board for no correctness gain.
+  //
+  // Why these five needed it: each has FOUR live edges paired into TWO
+  // independent two-edge routes, one per town, and `connections` is a flat
+  // union that cannot say which edge pairs with which. Proof that the mask
+  // alone is insufficient rather than merely inconvenient -- #1 and #55
+  // share the identical mask `0b01_1011` but pair as {0,4}+{1,3} versus
+  // {0,3}+{1,4}; #2 and #56 share `0b00_1111` but pair as {0,3}+{1,2}
+  // versus {0,2}+{1,3}. No function of the mask can tell those apart. The
+  // old fan-to-centre rendering drew all four of them as the same four-way
+  // junction with two dits floated at fixed offsets, which is wrong track
+  // topology and wrong dit placement on every one of the five.
+  const doubleTownPaths =
+    entry.terrain === "DoubleTown" ? pathsForTile(entry, queryPaths) : undefined;
+  if (doubleTownPaths && doubleTownPaths.length > 0) {
+    const rotated = rotatePaths(doubleTownPaths, orientation);
+    // Each town gets its own node, offset from hex centre on the shared
+    // Top-Right/Bottom-Left diagonal every other two-node hex in this file
+    // already uses (`twoNodePositions`, design notes #57/#58) -- so a laid
+    // double-town lines up with the unlaid double-town-designated hex
+    // beneath it and with the OO/NY two-station tiles beside it.
+    //
+    // Routing each path through its OWN node, rather than both through
+    // `center`, is what makes the two routes visibly disjoint. It is also
+    // the one place here where rendering deviates from the data: real 1830
+    // artwork for #55 draws two straights that genuinely cross at the middle
+    // of the hex, whereas this bends each of them slightly through its own
+    // node so the two dits can sit on their own track without landing on top
+    // of each other at the crossing point. The TOPOLOGY -- which edge
+    // connects to which -- is exactly what the catalog declares either way;
+    // only the curvature is a presentation choice.
+    const nodes = assignTownNodes(rotated, center, size, apothem);
+    rotated.forEach(([a, b], index) => {
+      const node = nodes[index] ?? center;
+      const start = edgePoint(a);
+      const end = edgePoint(b);
+      bezierTrackSegment(ctx, start, node, size, edgeInwardNormal(a), null);
+      bezierTrackSegment(ctx, node, end, size, null, edgeInwardNormal(b));
+    });
+    // The dits land ON their own route, at the node each route was just
+    // drawn through -- the requirement's "rather than floating in the
+    // center". Drawn after every path so a crossing track can never be
+    // stroked over a town marker.
+    rotated.forEach((_pair, index) => {
+      drawDitMarker(ctx, nodes[index] ?? center, size * 0.85);
+    });
+    return;
+  }
 
   // Design note #118: `cityGroups` is checked FIRST now, ahead of the
   // 2-live-edge shortcut below. Previously the shortcut won, which was
@@ -10741,6 +11210,12 @@ export function TilePreviewThumbnail({
     if (catalogEntry) {
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
+        // Mirror-only, by construction (design note #119): this component
+        // renders an UN-LAID tile in the picker carousel and has no query
+        // row for it -- see this file's `pathsForTile`. It is also the
+        // reason the mirror carries `paths` at all rather than the backend
+        // being the single source: a tile has to render correctly before it
+        // exists on the board.
         drawTrackPath(ctx, center, hexSize, catalogEntry, orientation);
       });
     } else {

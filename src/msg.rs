@@ -642,6 +642,56 @@ pub struct MapTileEntry {
     pub hex_label: String,
     pub tile_id: u32,
     pub orientation: u8,
+    /// This tile's DISCRETE track segments, as BASE (pre-rotation) edge
+    /// pairs -- `state::Tile::paths` verbatim, which in turn is
+    /// `hexmap::TILE_CATALOG`'s seventh field for `tile_id`.
+    ///
+    /// Added so a client can render a tile's real, separate routes instead
+    /// of inferring them from `connections` alone. That inference is lossy
+    /// in exactly the case this field exists for: the five DoubleTown tiles
+    /// (#1, #2, #55, #56, #69) each carry FOUR live edges paired into TWO
+    /// independent two-edge routes, one per town, and a flat bitmask cannot
+    /// say which edge pairs with which. A renderer reading only
+    /// `connections` has to fall back to fanning every live edge into hex
+    /// centre, which draws a four-way junction where the real tile has two
+    /// disjoint curves. The same lossiness applies to any multi-route tile;
+    /// this just makes the truth available to every caller rather than
+    /// asking each one to hand-maintain its own copy of the catalog.
+    ///
+    /// Encoding matches `state::Tile::paths` exactly (see that field): each
+    /// `(a, b)` is one continuous run of track between edges `a` and `b`,
+    /// with `a == b` meaning a terminal spur that enters at `a` and dead-ends
+    /// on the tile. Edge numbers are pre-rotation, so a consumer applies
+    /// `orientation` itself -- the same convention `connections` already
+    /// uses, and the reason the two can be decoded side by side without one
+    /// needing to know how the other was transformed.
+    ///
+    /// BACKWARDS COMPATIBILITY, both directions. On the CONTRACT side, a
+    /// `Tile` written before `state::Tile::paths` existed deserializes with
+    /// `#[serde(default)]` to an empty `Vec`; `query_map_grid` resolves that
+    /// through `hexmap::effective_base_tile_paths`, which falls back to the
+    /// catalog entry for `tile_id`, so a legacy tile still reports its real
+    /// segments rather than an empty list. That fallback is sound precisely
+    /// because a tile's paths are a pure function of its `tile_id` -- it is
+    /// a lookup, not a guess, and it is the same resolution `pathfinding.rs`
+    /// already routes on. On the CLIENT side, a consumer that predates this
+    /// field ignores it: JSON object members are unordered and unknown keys
+    /// are skipped, so nothing that reads only `connections` changes
+    /// behaviour.
+    ///
+    /// This is therefore empty only for a `tile_id` absent from the catalog
+    /// entirely -- unreachable via `execute_lay_tile`, which rejects those
+    /// with `TileNotFound`. A consumer should still handle the empty case,
+    /// and must read it as "no discrete data available, fall back to
+    /// decoding `connections`", NEVER as "this tile has no track".
+    ///
+    /// `#[serde(default)]` mirrors `state::Tile::paths`' own attribute, for
+    /// the analogous reason one step further out: a Rust client (or a test
+    /// replaying a recorded response) deserializing a `MapGridResponse`
+    /// produced by a contract built before this field existed gets an empty
+    /// `Vec` rather than a hard `missing field` error.
+    #[serde(default)]
+    pub paths: Vec<(u8, u8)>,
     /// `Some(city name)` if this tile sits on one of the three reserved
     /// landmark hexes (New York, Boston, Baltimore).
     pub landmark: Option<String>,

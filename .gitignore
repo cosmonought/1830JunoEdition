@@ -1,0 +1,12 @@
+# Rust Build Artifacts
+/target/
+target/
+**/*.wasm
+
+# Node and React Modules
+/frontend/node_modules/
+node_modules/
+
+# Environment and System Files
+.env
+.DS_Store

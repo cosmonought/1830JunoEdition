@@ -1,0 +1,18 @@
+[package]
+name = "eighteen-cosmos"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cosmwasm-std = "1.5.0"
+cw-storage-plus = "1.1.0"
+schemars = "0.8.15"
+serde = { version = "1.0.188", default-features = false, features = ["derive"] }
+thiserror = "1.0.49"
+
+[features]
+# for more explicit smart contract library compilation
+library = []

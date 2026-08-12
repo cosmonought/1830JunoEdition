@@ -1,0 +1,673 @@
+//! Stock-market grid mechanics for the 1830-style Operating Round price
+//! chart described in `rules.md` (sections 2-3). The market is modeled as a
+//! sparse 2D grid of `MarketCell`s keyed by `(x, y)` -- a single shared
+//! board *template*, identical for every game room, exactly like a
+//! physical 18xx board's printed price chart is the same for every table.
+//! `PROTOCOL_MARKET` tracks each *game's own* protocol's current position
+//! on that shared template, keyed by `(game_id, protocol_id)` -- see its
+//! doc comment in `state.rs`. Every function below that reads or moves a
+//! marker therefore takes `game_id` explicitly, so two game rooms trading
+//! the same `protocol_id` (e.g. both running a PRR) never share or clobber
+//! each other's price marker; only the underlying board layout
+//! (`MARKET_GRID`) is shared. Four movements are supported, one per
+//! price-chart trigger in the rules:
+//!
+//! - `move_up`    -- sold-out round bonus (all shares held, none left in the bank pool)
+//! - `move_down`  -- dumped shares (a large block sold back onto the open market)
+//! - `move_right` -- Distribute Yield (a paid dividend)
+//! - `move_left`  -- Slash/Retain Yield (a withheld dividend)
+//!
+//! `x` is the column (price generally increases moving right); `y` is the
+//! row (price generally increases moving up). Every movement is bounds
+//! checked against `MARKET_MIN_X`/`MARKET_MAX_X`/`MARKET_MIN_Y`/`MARKET_MAX_Y`
+//! so a protocol's marker can never be pushed off the matrix: hitting an
+//! edge simply saturates the move on that axis, exactly like the physical
+//! 18xx board (no panics, no wrapping, no out-of-bounds coordinates).
+//!
+//! `seed_default_price_grid` populates the shared board template with the
+//! **authentic real 1830 price chart**; see its doc comment for the full
+//! sourcing note. Until a seeding function was first added, `MARKET_GRID`
+//! was never populated anywhere, so every movement here would have failed.
+//! Seeding also stamps the six `PAR_VALUE_LADDER` cells with the real
+//! standard 1830 par prices ($67/$71/$76/$82/$90/$100) -- see
+//! `trading::execute_buy_stock` for how a protocol's Par Value selection
+//! pins its starting marker to one of them. `initialize_game_market` is the
+//! per-room counterpart: called once per game at
+//! `contract::execute_create_game_room`, it gives that room's companies
+//! their own starting positions on the shared template, independent of any
+//! other room.
+//!
+//! **Architectural Refactor -- Definitive 1830 Tactical Compliance.** This
+//! module was originally seeded with an invented, illustrative linear
+//! formula (`price = 100 + x*10 + y*20` over a uniform 26x11 rectangle).
+//! It has since been replaced end-to-end with the real, verbatim 1830
+//! stock-market chart, sourced from the open-source `tobymao/18xx` engine
+//! (`lib/engine/game/g_1830/game.rb`'s `MARKET` constant, cross-checked
+//! against `github.com/blob` and `raw.githubusercontent.com` mirrors), plus
+//! its zone-letter legend (`lib/engine/share_price.rb`'s `TYPE_MAP` /
+//! `lib/engine/game/base.rb`'s `CERT_LIMIT_TYPES`/`MULTIPLE_BUY_TYPES`).
+//! The real chart is a genuinely **ragged (cliffside) shape** -- 19 columns
+//! at its widest row, narrowing to as few as 4 populated cells in its
+//! lowest row -- not a uniform rectangle; `MARKET_GRID` simply has no entry
+//! at a masked-out (blank) coordinate, and `apply_market_movement` treats
+//! that exactly like hitting the rectangle's own edge (see its doc
+//! comment): the move saturates in place rather than erroring, so a
+//! marker can never wander off the printed chart in either sense.
+//!
+//! `MarketCell::zone_type` (`state::ZoneType`) is real, sourced data too --
+//! see that type's own doc comment for the Yellow/Orange/Brown zone
+//! semantics and exactly which of this crate's trading rules each one
+//! waives. **`GAME_END_PRICE_TRIGGER` ($350, the chart's single highest
+//! cell) is this project's own explicit, user-requested house rule, not a
+//! transcription of the software engine's behavior** -- the verbatim
+//! `MARKET` array does NOT tag that cell with the engine's own `:endgame`/
+//! `:close` type codes (those exist in `TYPE_MAP` but are unused anywhere
+//! in 1830's own `MARKET` array); the real rulebook's primary end condition
+//! is the bank breaking, not a marker reaching the top of the chart. This
+//! module still enforces the $350 trigger exactly as requested, flagged
+//! here so it's never mistaken for verbatim-sourced engine behavior.
+//!
+//! Every write to a `ProtocolMarketState` (its initial default placement,
+//! an unconditional overwrite, or an ordinary grid movement) also stamps a
+//! fresh `arrival_sequence` via `next_arrival_sequence` -- a single,
+//! strictly increasing "who moved most recently" clock per game room, used
+//! only to break Operating Round tie-breaks (`operations::calculate_operating_order`)
+//! when two protocols land on the exact same price.
+
+use cosmwasm_std::{StdResult, Storage, Uint128};
+use thiserror::Error;
+
+use crate::state::{
+    MarketCell, ProtocolMarketState, ZoneType, MARKET_ARRIVAL_SEQUENCE, MARKET_GRID,
+    PROTOCOL_MARKET,
+};
+
+/// Grid boundaries for the price chart, matching the real 1830 board's
+/// widest row (19 columns) and full row count (11 rows). `(0, 0)` is the
+/// bottom-left corner of that bounding rectangle -- most rows don't
+/// actually extend the full width at every height (see this module's doc
+/// comment on the ragged/cliffside shape); these constants only bound
+/// where a marker is allowed to sit within the rectangle, not which cells
+/// within it have actually been seeded with a price (see `MARKET_GRID` in
+/// `state.rs`).
+pub const MARKET_MIN_X: u32 = 0;
+pub const MARKET_MAX_X: u32 = 18; // 19 columns, the real board's widest row
+pub const MARKET_MIN_Y: u32 = 0;
+pub const MARKET_MAX_Y: u32 = 10; // 11 rows, matching the real board
+
+/// A protocol's market position before its first-ever par value is chosen
+/// (`market::initialize_game_market`'s seed default, and
+/// `gamelog::execute_undo_last_action`'s reset-to-default) -- pinned to the
+/// real board's lowest par cell, $67 (`PAR_VALUE_LADDER`'s first entry),
+/// the same cell `market::par_value_coords` resolves for a $67 par choice.
+/// Purely a placeholder position: nothing prices a company off this cell
+/// before its first IPO purchase pins a real par value (see
+/// `trading::execute_buy_stock`'s `first_purchase_pin` handling, which
+/// reads the chosen par cell directly rather than this default), and
+/// `query::query_market_grid` gracefully reports `price: None` for any
+/// company whose position somehow doesn't resolve to a seeded cell.
+pub const DEFAULT_MARKET_POSITION: (u32, u32) = (6, 5);
+
+/// The six standard 1830 par-value price points a company's president may
+/// choose from the moment its very first IPO share is bought (see
+/// `trading::execute_buy_stock`), each pinned to a fixed `MARKET_GRID` cell:
+/// `(par_value, x, y)`. `seed_default_price_grid` overwrites these six
+/// cells with these exact prices (redundantly with the general row data --
+/// see that function's doc comment -- but explicit and authoritative
+/// regardless), taking priority over the surrounding grid. Ordered lowest
+/// to highest, at ascending `y` along column `x = 6` -- the real board's
+/// par track is a *vertical* column (column index 6 in the verbatim
+/// `MARKET` source array), not a horizontal row; see this module's doc
+/// comment for the real-vs-invented-formula history.
+pub const PAR_VALUE_LADDER: &[(u128, u32, u32)] = &[
+    (67, 6, 5),
+    (71, 6, 6),
+    (76, 6, 7),
+    (82, 6, 8),
+    (90, 6, 9),
+    (100, 6, 10),
+];
+
+/// The real 1830 board's single highest printed price -- the top-right
+/// corner of the chart (column 18, row 0 in the verbatim `MARKET` source
+/// array; `(x=18, y=10)` in this module's coordinate system). See this
+/// module's doc comment for why the game-end behavior below is this
+/// project's own explicit house rule, not verbatim engine behavior.
+pub const GAME_END_PRICE_TRIGGER: u128 = 350;
+
+/// True once `cell`'s price has reached (defensively, `>=` rather than
+/// `==`) `GAME_END_PRICE_TRIGGER` -- the $350 Game-End Trigger. Checked by
+/// every caller that applies an ascending market movement
+/// (`trading::execute_buy_stock`'s sold-out bonus,
+/// `trading::execute_declare_dividends`'s Distribute Yield,
+/// `operations::execute_operating_round`'s Distribute Yield) immediately
+/// after the movement resolves, so the instant a marker lands on the $350
+/// cell the room closes out -- see `contract::finalize_and_distribute_payouts`.
+/// Descending movements (Slash/Retain Yield, dumped shares) never need this
+/// check: they can only move a marker away from $350, never onto it.
+pub fn price_triggers_game_end(cell: &MarketCell) -> bool {
+    cell.price >= Uint128::new(GAME_END_PRICE_TRIGGER)
+}
+
+/// Returns the fixed `MARKET_GRID` coordinates for `par_value`, if it's one
+/// of the six standard `PAR_VALUE_LADDER` par prices.
+pub fn par_value_coords(par_value: Uint128) -> Option<(u32, u32)> {
+    PAR_VALUE_LADDER
+        .iter()
+        .find(|(value, _, _)| Uint128::new(*value) == par_value)
+        .map(|(_, x, y)| (*x, *y))
+}
+
+#[derive(Error, Debug)]
+pub enum MarketError {
+    #[error("{0}")]
+    Std(#[from] cosmwasm_std::StdError),
+
+    #[error("Protocol {protocol_id} has no market position recorded in game room {game_id}")]
+    ProtocolNotFound { game_id: u64, protocol_id: u32 },
+
+    #[error("No market cell is defined at grid position ({x}, {y})")]
+    MarketCellNotFound { x: u32, y: u32 },
+}
+
+/// Direction of a single market-price movement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarketMovement {
+    /// Sold-out round bonus: marker moves up one row.
+    Up,
+    /// Dumped shares: marker moves down one row.
+    Down,
+    /// Distribute Yield (paid dividend): marker moves right one column.
+    Right,
+    /// Slash/Retain Yield (withheld dividend): marker moves left one column.
+    Left,
+}
+
+/// Hands out the next `MARKET_ARRIVAL_SEQUENCE` value for `game_id`,
+/// treating an unseeded counter as `0` (so the first-ever stamp in a room is
+/// `1`), and persists the incremented counter. Called every time a
+/// protocol's `PROTOCOL_MARKET` position is actually written, so
+/// `ProtocolMarketState::arrival_sequence` always reflects "how recently,
+/// relative to every other marker movement in this room, did this protocol
+/// last arrive somewhere" -- see that field's doc comment and
+/// `operations::calculate_operating_order`'s tie-break rule.
+fn next_arrival_sequence(storage: &mut dyn Storage, game_id: u64) -> StdResult<u64> {
+    let next = MARKET_ARRIVAL_SEQUENCE
+        .may_load(storage, game_id)?
+        .unwrap_or(0)
+        .wrapping_add(1);
+    MARKET_ARRIVAL_SEQUENCE.save(storage, game_id, &next)?;
+    Ok(next)
+}
+
+/// Applies a single grid movement to `game_id`'s `protocol_id` price
+/// marker, clamping at the grid boundaries on every call regardless of the
+/// marker's current position, then persists the new position and returns
+/// the `MarketCell` it landed on.
+///
+/// The real 1830 chart is ragged (see this module's doc comment): a
+/// candidate cell inside the bounding rectangle can still be genuinely
+/// blank (unseeded). Per the physical board's own behavior -- a marker can
+/// never leave the printed chart -- a move whose candidate cell isn't
+/// seeded simply doesn't happen; the marker saturates in place exactly
+/// like hitting the rectangle's own `MARKET_MIN_*`/`MARKET_MAX_*` edge
+/// already did, rather than erroring. `MarketError::MarketCellNotFound` is
+/// therefore no longer reachable from an ordinary movement at all (every
+/// candidate is either a real seeded cell or gets clamped back to the
+/// marker's own current -- already-valid -- position); it remains for
+/// `current_cell`'s own doc comment case (a position recorded against a
+/// cell that was somehow never seeded in the first place).
+///
+/// Errors (rather than panics) only if this game's protocol has no
+/// recorded market position at all.
+pub fn apply_market_movement(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+    movement: MarketMovement,
+) -> Result<MarketCell, MarketError> {
+    let mut position: ProtocolMarketState = PROTOCOL_MARKET
+        .may_load(storage, (game_id, protocol_id))?
+        .ok_or(MarketError::ProtocolNotFound {
+            game_id,
+            protocol_id,
+        })?;
+
+    let (candidate_x, candidate_y) = match movement {
+        MarketMovement::Up => (
+            position.current_x,
+            position.current_y.saturating_add(1).min(MARKET_MAX_Y),
+        ),
+        MarketMovement::Down => (
+            position.current_x,
+            position.current_y.saturating_sub(1).max(MARKET_MIN_Y),
+        ),
+        MarketMovement::Right => (
+            position.current_x.saturating_add(1).min(MARKET_MAX_X),
+            position.current_y,
+        ),
+        MarketMovement::Left => (
+            position.current_x.saturating_sub(1).max(MARKET_MIN_X),
+            position.current_y,
+        ),
+    };
+
+    // Ragged-shape saturation: if the rectangle-clamped candidate lands on
+    // one of the chart's genuinely blank cells, stay put instead of
+    // erroring -- see this function's doc comment above.
+    let (new_x, new_y) = match MARKET_GRID.may_load(storage, (candidate_x, candidate_y))? {
+        Some(_) => (candidate_x, candidate_y),
+        None => (position.current_x, position.current_y),
+    };
+
+    let cell = MARKET_GRID
+        .may_load(storage, (new_x, new_y))?
+        .ok_or(MarketError::MarketCellNotFound { x: new_x, y: new_y })?;
+
+    position.current_x = new_x;
+    position.current_y = new_y;
+    position.arrival_sequence = next_arrival_sequence(storage, game_id)?;
+    PROTOCOL_MARKET.save(storage, (game_id, protocol_id), &position)?;
+
+    Ok(cell)
+}
+
+/// Sold-out round bonus: moves `game_id`'s protocol price marker up one
+/// row, saturating at `MARKET_MAX_Y`.
+pub fn move_up(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<MarketCell, MarketError> {
+    apply_market_movement(storage, game_id, protocol_id, MarketMovement::Up)
+}
+
+/// Dumped shares: moves `game_id`'s protocol price marker down one row,
+/// saturating at `MARKET_MIN_Y`.
+pub fn move_down(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<MarketCell, MarketError> {
+    apply_market_movement(storage, game_id, protocol_id, MarketMovement::Down)
+}
+
+/// Paid dividend (Distribute Yield): moves `game_id`'s protocol price
+/// marker right one column, saturating at `MARKET_MAX_X`.
+pub fn move_right(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<MarketCell, MarketError> {
+    apply_market_movement(storage, game_id, protocol_id, MarketMovement::Right)
+}
+
+/// Withheld revenue (Slash/Retain Yield): moves `game_id`'s protocol price
+/// marker left one column, saturating at `MARKET_MIN_X`.
+pub fn move_left(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<MarketCell, MarketError> {
+    apply_market_movement(storage, game_id, protocol_id, MarketMovement::Left)
+}
+
+/// Loads `game_id`'s `protocol_id` current market position, initializing it
+/// to `(default_x, default_y)` -- clamped to the grid bounds -- the first
+/// time this game's protocol is referenced. Idempotent: once a position is
+/// recorded, later calls just return it unchanged. Callers (e.g.
+/// `trading.rs`) should invoke this before the first trade against a
+/// protocol so `current_cell` and the `move_*` functions always have a
+/// position to work from.
+pub fn ensure_protocol_position(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+    default_x: u32,
+    default_y: u32,
+) -> Result<ProtocolMarketState, MarketError> {
+    if let Some(position) = PROTOCOL_MARKET.may_load(storage, (game_id, protocol_id))? {
+        return Ok(position);
+    }
+
+    let position = ProtocolMarketState {
+        protocol_id,
+        current_x: default_x.clamp(MARKET_MIN_X, MARKET_MAX_X),
+        current_y: default_y.clamp(MARKET_MIN_Y, MARKET_MAX_Y),
+        arrival_sequence: next_arrival_sequence(storage, game_id)?,
+    };
+    PROTOCOL_MARKET.save(storage, (game_id, protocol_id), &position)?;
+    Ok(position)
+}
+
+/// Unconditionally overwrites `game_id`'s `protocol_id` market position to
+/// `(x, y)`, regardless of whether one is already recorded -- unlike
+/// `ensure_protocol_position`, which only ever sets a *default* the first
+/// time a game's protocol is referenced and otherwise leaves an existing
+/// position untouched. Used by `trading::execute_buy_stock` to pin a
+/// protocol's price marker to its chosen Par Value cell the instant that
+/// par value is first selected.
+pub fn set_protocol_position(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+    x: u32,
+    y: u32,
+) -> Result<ProtocolMarketState, MarketError> {
+    let position = ProtocolMarketState {
+        protocol_id,
+        current_x: x.clamp(MARKET_MIN_X, MARKET_MAX_X),
+        current_y: y.clamp(MARKET_MIN_Y, MARKET_MAX_Y),
+        arrival_sequence: next_arrival_sequence(storage, game_id)?,
+    };
+    PROTOCOL_MARKET.save(storage, (game_id, protocol_id), &position)?;
+    Ok(position)
+}
+
+/// Returns the `MarketCell` at `game_id`'s `protocol_id` current market
+/// position. Errors if this game's protocol has no recorded position yet
+/// (call `ensure_protocol_position` first) or if that cell hasn't been
+/// seeded with a price in `MARKET_GRID`.
+pub fn current_cell(
+    storage: &dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<MarketCell, MarketError> {
+    let position = PROTOCOL_MARKET
+        .may_load(storage, (game_id, protocol_id))?
+        .ok_or(MarketError::ProtocolNotFound {
+            game_id,
+            protocol_id,
+        })?;
+
+    MARKET_GRID
+        .may_load(storage, (position.current_x, position.current_y))?
+        .ok_or(MarketError::MarketCellNotFound {
+            x: position.current_x,
+            y: position.current_y,
+        })
+}
+
+/// Initializes a fresh game room's own, independent set of protocol market
+/// positions -- one `ProtocolMarketState` per id in `company_ids`, each
+/// defaulting to `DEFAULT_MARKET_POSITION` (the lowest `PAR_VALUE_LADDER`
+/// cell, $67) -- so `game_id`'s companies start on their own game-scoped
+/// price track from the moment the room exists, never sharing or being
+/// clobbered by any other room's markers for the same `protocol_id`. Called
+/// once, when a game room is created (see `contract::execute_create_game_room`).
+/// Uses `ensure_protocol_position`, so it's idempotent and safe even if a
+/// protocol somehow already has a position recorded for this game.
+pub fn initialize_game_market(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    company_ids: &[u32],
+) -> Result<(), MarketError> {
+    let (default_x, default_y) = DEFAULT_MARKET_POSITION;
+    for &company_id in company_ids {
+        ensure_protocol_position(storage, game_id, company_id, default_x, default_y)?;
+    }
+    Ok(())
+}
+
+/// One real 1830 price cell's data, as printed on the physical board:
+/// `(price, zone)`. Used only to author `REAL_MARKET_ROWS` below in a
+/// compact, per-row form.
+type RealCell = (u128, ZoneType);
+
+/// The authentic 1830 stock-market chart, row by row, sourced verbatim from
+/// the open-source `tobymao/18xx` engine's `MARKET` constant
+/// (`lib/engine/game/g_1830/game.rb`) -- see this module's doc comment for
+/// the full sourcing note and cross-check method. Each tuple is `(y,
+/// start_x, cells)`: `y` is this module's row coordinate (the verbatim
+/// source's row 0 -- its highest-priced row, printed at the *top* of the
+/// physical board -- maps to `y = MARKET_MAX_Y`, its lowest-priced row
+/// maps to `y = MARKET_MIN_Y`, keeping this module's existing "price
+/// generally increases moving up" convention true of the real chart too);
+/// `start_x` is the column the row's first populated cell sits at (every
+/// row's *blank* cells, where any, are at its low-`x` end -- the real
+/// board's cliffside is bottom-left, not interior gaps); `cells` is that
+/// row's populated prices left to right, each tagged with its real
+/// `ZoneType` per the verbatim source's letter suffix (`y`=Yellow,
+/// `o`=Orange, `b`=Brown, `p`=par/no letter=Normal -- `p`-tagged cells are
+/// encoded here as plain `Normal` since `PAR_VALUE_LADDER`'s own overwrite
+/// pass below is the authoritative par marker; the plain price already
+/// matches, so this is redundant, not conflicting).
+const REAL_MARKET_ROWS: &[(u32, u32, &[RealCell])] = &[
+    (
+        10,
+        0,
+        &[
+            (60, ZoneType::YellowZone),
+            (67, ZoneType::Normal),
+            (71, ZoneType::Normal),
+            (76, ZoneType::Normal),
+            (82, ZoneType::Normal),
+            (90, ZoneType::Normal),
+            (100, ZoneType::Normal), // par
+            (112, ZoneType::Normal),
+            (126, ZoneType::Normal),
+            (142, ZoneType::Normal),
+            (160, ZoneType::Normal),
+            (180, ZoneType::Normal),
+            (200, ZoneType::Normal),
+            (225, ZoneType::Normal),
+            (250, ZoneType::Normal),
+            (275, ZoneType::Normal),
+            (300, ZoneType::Normal),
+            (325, ZoneType::Normal),
+            (350, ZoneType::Normal), // GAME_END_PRICE_TRIGGER
+        ],
+    ),
+    (
+        9,
+        0,
+        &[
+            (53, ZoneType::YellowZone),
+            (60, ZoneType::YellowZone),
+            (66, ZoneType::Normal),
+            (70, ZoneType::Normal),
+            (76, ZoneType::Normal),
+            (82, ZoneType::Normal),
+            (90, ZoneType::Normal), // par
+            (100, ZoneType::Normal),
+            (112, ZoneType::Normal),
+            (126, ZoneType::Normal),
+            (142, ZoneType::Normal),
+            (160, ZoneType::Normal),
+            (180, ZoneType::Normal),
+            (200, ZoneType::Normal),
+            (220, ZoneType::Normal),
+            (240, ZoneType::Normal),
+            (260, ZoneType::Normal),
+            (280, ZoneType::Normal),
+            (300, ZoneType::Normal),
+        ],
+    ),
+    (
+        8,
+        0,
+        &[
+            (46, ZoneType::YellowZone),
+            (55, ZoneType::YellowZone),
+            (60, ZoneType::YellowZone),
+            (65, ZoneType::Normal),
+            (70, ZoneType::Normal),
+            (76, ZoneType::Normal),
+            (82, ZoneType::Normal), // par
+            (90, ZoneType::Normal),
+            (100, ZoneType::Normal),
+            (111, ZoneType::Normal),
+            (125, ZoneType::Normal),
+            (140, ZoneType::Normal),
+            (155, ZoneType::Normal),
+            (170, ZoneType::Normal),
+            (185, ZoneType::Normal),
+            (200, ZoneType::Normal),
+        ],
+    ),
+    (
+        7,
+        0,
+        &[
+            (39, ZoneType::OrangeZone),
+            (48, ZoneType::YellowZone),
+            (54, ZoneType::YellowZone),
+            (60, ZoneType::YellowZone),
+            (66, ZoneType::Normal),
+            (71, ZoneType::Normal),
+            (76, ZoneType::Normal), // par
+            (82, ZoneType::Normal),
+            (90, ZoneType::Normal),
+            (100, ZoneType::Normal),
+            (110, ZoneType::Normal),
+            (120, ZoneType::Normal),
+            (130, ZoneType::Normal),
+        ],
+    ),
+    (
+        6,
+        0,
+        &[
+            (32, ZoneType::OrangeZone),
+            (41, ZoneType::OrangeZone),
+            (48, ZoneType::YellowZone),
+            (55, ZoneType::YellowZone),
+            (62, ZoneType::Normal),
+            (67, ZoneType::Normal),
+            (71, ZoneType::Normal), // par
+            (76, ZoneType::Normal),
+            (82, ZoneType::Normal),
+            (90, ZoneType::Normal),
+            (100, ZoneType::Normal),
+        ],
+    ),
+    (
+        5,
+        0,
+        &[
+            (25, ZoneType::BrownZone),
+            (34, ZoneType::OrangeZone),
+            (42, ZoneType::OrangeZone),
+            (50, ZoneType::YellowZone),
+            (58, ZoneType::YellowZone),
+            (65, ZoneType::Normal),
+            (67, ZoneType::Normal), // par
+            (71, ZoneType::Normal),
+            (75, ZoneType::Normal),
+            (80, ZoneType::Normal),
+        ],
+    ),
+    (
+        4,
+        0,
+        &[
+            (18, ZoneType::BrownZone),
+            (27, ZoneType::BrownZone),
+            (36, ZoneType::OrangeZone),
+            (45, ZoneType::OrangeZone),
+            (54, ZoneType::YellowZone),
+            (63, ZoneType::Normal),
+            (67, ZoneType::Normal),
+            (69, ZoneType::Normal),
+            (70, ZoneType::Normal),
+        ],
+    ),
+    (
+        3,
+        0,
+        &[
+            (10, ZoneType::BrownZone),
+            (20, ZoneType::BrownZone),
+            (30, ZoneType::BrownZone),
+            (40, ZoneType::OrangeZone),
+            (50, ZoneType::YellowZone),
+            (60, ZoneType::YellowZone),
+            (67, ZoneType::Normal),
+            (68, ZoneType::Normal),
+        ],
+    ),
+    (
+        2,
+        1,
+        &[
+            (10, ZoneType::BrownZone),
+            (20, ZoneType::BrownZone),
+            (30, ZoneType::BrownZone),
+            (40, ZoneType::OrangeZone),
+            (50, ZoneType::YellowZone),
+            (60, ZoneType::YellowZone),
+        ],
+    ),
+    (
+        1,
+        2,
+        &[
+            (10, ZoneType::BrownZone),
+            (20, ZoneType::BrownZone),
+            (30, ZoneType::BrownZone),
+            (40, ZoneType::OrangeZone),
+            (50, ZoneType::YellowZone),
+        ],
+    ),
+    (
+        0,
+        3,
+        &[
+            (10, ZoneType::BrownZone),
+            (20, ZoneType::BrownZone),
+            (30, ZoneType::BrownZone),
+            (40, ZoneType::OrangeZone),
+        ],
+    ),
+];
+
+/// Seeds `MARKET_GRID` with the authentic 1830 price chart
+/// (`REAL_MARKET_ROWS`), so `apply_market_movement` always has a real
+/// `MarketCell` to land on (or, at the chart's ragged edges, a well-defined
+/// "stay put" -- see that function's doc comment). Nothing in this contract
+/// previously ever populated `MARKET_GRID` -- every price movement
+/// (`BuyStock`'s sold-out bonus, `SellStock`'s dumped-shares drop,
+/// `DeclareDividends`, `ExecuteOperatingRound`'s payout/retain shift) would
+/// have failed with `MarketCellNotFound` the first time it ran. `MARKET_GRID`
+/// is the shared board *template* -- intentionally global, not game-scoped,
+/// since it's just the static layout every room's markers move around on
+/// (see its doc comment in `state.rs`; contrast with `PROTOCOL_MARKET`,
+/// which *is* scoped per game via `initialize_game_market`) -- so this only
+/// ever needs to run once, at contract `instantiate` time, rather than per
+/// room -- see `contract::instantiate`.
+///
+/// Only cells listed in `REAL_MARKET_ROWS` are ever written -- this
+/// function does NOT also fill the surrounding `[MARKET_MIN_X,
+/// MARKET_MAX_X] x [MARKET_MIN_Y, MARKET_MAX_Y]` rectangle with placeholder
+/// prices; the real board's blank cells stay genuinely unseeded (see this
+/// module's doc comment on the ragged/cliffside shape).
+pub fn seed_default_price_grid(storage: &mut dyn Storage) -> StdResult<()> {
+    for &(y, start_x, cells) in REAL_MARKET_ROWS {
+        for (offset, &(price, zone_type)) in cells.iter().enumerate() {
+            let x = start_x + offset as u32;
+            let cell = MarketCell {
+                x,
+                y,
+                price: Uint128::new(price),
+                zone_type,
+            };
+            MARKET_GRID.save(storage, (x, y), &cell)?;
+        }
+    }
+
+    // Overwrite the six `PAR_VALUE_LADDER` cells with their exact standard
+    // 1830 par prices, explicit and authoritative regardless of the row
+    // data above (which already carries the same plain price at each of
+    // these six coordinates -- see `PAR_VALUE_LADDER`'s own doc comment).
+    for (value, x, y) in PAR_VALUE_LADDER.iter().copied() {
+        let cell = MarketCell {
+            x,
+            y,
+            price: Uint128::new(value),
+            zone_type: ZoneType::Normal,
+        };
+        MARKET_GRID.save(storage, (x, y), &cell)?;
+    }
+
+    Ok(())
+}

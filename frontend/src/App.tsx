@@ -2073,11 +2073,15 @@ function AppShell() {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === MOCK_LAY_TILE_PROTOCOL_ID,
     );
-    // `trains` is not on the polled shape yet -- until it is, assume NO train,
-    // which leaves the button enabled and lets the contract be the authority.
-    // Erring the other way would disable a legal skip with no way to override.
-    void company;
-    return false;
+    // Audit G-15c closed the gap this used to stub out: `owned_trains` now
+    // arrives on `PublicCompanyState`, so the Routes skip button can be
+    // disabled for a corporation that genuinely holds a train.
+    //
+    // `undefined` still means "this chain does not say" (a contract predating
+    // the field), NOT "owns nothing" -- in that case report `false`, leaving
+    // the skip enabled and the contract as the authority. Erring the other
+    // way would disable a legal skip with no override.
+    return (company?.owned_trains?.length ?? 0) > 0;
   }, [gameState]);
 
   // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`

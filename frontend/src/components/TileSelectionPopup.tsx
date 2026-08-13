@@ -39,9 +39,11 @@
 //    and the contract commits *exactly* whichever rotation is submitted,
 //    rejecting it if that specific angle isn't legal. This component's
 //    rotation cycle is therefore a REAL, binding choice now, not a preview:
-//    clicking the hex preview changes which of `placements`' legal
-//    orientations is currently selected, and "Confirm Placement" submits
-//    exactly that one.
+//    the rotation gesture changes which of `placements`' legal orientations
+//    is currently selected, and "Confirm Placement" submits exactly that
+//    one. (Design note #7 changed WHAT that gesture is -- double-clicking
+//    the tile in the row, not clicking a separate preview panel -- but not
+//    that it is binding.)
 // 3. **Floating position, not a fixed layout.** `anchorClientX`/
 //    `anchorClientY` (the raw `event.clientX`/`clientY` from
 //    `HexGridRenderer`'s `onHexClick`) position this card via `position:
@@ -51,6 +53,12 @@
 //    zoom transform a second time -- the click's own screen coordinates are
 //    already exactly where the player just clicked, which is the more
 //    honest anchor point for a floating popup than re-deriving it.
+//    UPDATED by design note #7: still anchored to the click, for exactly
+//    the reason above, but the plain clamp became flip-aware once the card
+//    grew to ~900px. A docked bottom bar and a centred modal were both
+//    considered and rejected -- the bar costs too much mouse travel on a
+//    large scrollable map, and the modal hides the very board you need to
+//    see while judging a rotation.
 // 4. **No client-side re-validation of legality.** The carousel only ever
 //    offers `tile_id`s the contract's own `GetLegalTilePlacements` query
 //    already returned, and "Confirm Placement" sends exactly that
@@ -89,9 +97,10 @@
 //
 //    Design note #4 above says the carousel offers only what the contract
 //    returned. That invariant is NOT relaxed here, it is made visible. An
-//    offline tray is filtered by ERA AND NOTHING ELSE -- no connectivity, no
-//    landmark/OO/"B"/"NY" reservation, no upgrade colour step, no tray
-//    depletion -- so most of what it shows would be rejected outright by
+//    offline tray is filtered by NOTHING AT ALL as of design note #8 -- not
+//    even by era: no connectivity, no landmark/OO/"B"/"NY" reservation, no
+//    upgrade colour step, no tray depletion -- so most of what it shows
+//    would be rejected outright by
 //    `hexmap::execute_lay_tile`. Presenting that silently, in a UI otherwise
 //    identical to the authoritative one, would be the worst outcome
 //    available: it looks exactly like a legality answer while being nothing
@@ -105,8 +114,67 @@
 //    returns immediately AND the button is disabled and relabelled -- belt
 //    and braces, because the disabled attribute alone is a presentational
 //    guarantee and this needs a behavioural one.
+// 8. **Era tabs, offline only.** Reported: offline, the player was trapped
+//    looking at the Yellow tray with no way to see the rest of the catalog.
+//    Two things caused that together. `HexGridRenderer`'s offline fallback
+//    filtered the catalog to the room's `currentEra`, which at game start is
+//    Yellow -- twelve tiles of forty-six; and this popup had no way to ask
+//    for anything else. Both are fixed, in the places they belong: the
+//    fallback now returns the whole catalog (see that file's design note
+//    #125 for why that weakens no rule -- it was never enforcing one), and
+//    the browsing lives HERE as a view control the player can change, rather
+//    than as a filter upstream they cannot see or reach.
+//
+//    Strictly gated on `offline`. Online, `placements` is the contract's own
+//    answer about ONE hex and every entry in it is genuinely legal there --
+//    an era tab would only let a player hide legal moves from themselves,
+//    and worse, a hex mid-upgrade legitimately offers two eras at once, so
+//    hiding one would look like the picker was broken. The strip is also
+//    hidden when only one era is present, which is the common case for a
+//    real hex, so it costs nothing when it has nothing to offer.
+//
+//    Switching tabs can hide the current selection, so an effect pulls it
+//    back to the first visible tile -- otherwise the footer readout blanks
+//    and a ghost preview strands itself on a board hex whose tile is no
+//    longer on screen.
 
-import React, { useEffect, useMemo, useState } from "react";
+// 7. **Flattened single-row layout, double-click to rotate.** Direct user
+//    feedback: "the font is very small and split into two parts... it would
+//    be better to have just the legal tiles all in one row/panel, and double
+//    clicking them rotates them."
+//
+//    The split was the substantive complaint. The card used to be a 280px
+//    column: a cramped strip of 56px thumbnails on top, and beneath it a
+//    second panel holding ONE enlarged copy of whichever tile was selected,
+//    which was also the only surface that rotated. So the tile you were
+//    turning was never the tile you had just clicked, and comparing two
+//    candidates meant selecting one, reading the bottom panel, selecting the
+//    other, reading it again. The bottom panel is now deleted outright and
+//    its job folded into the row: the selected tile renders at its live
+//    orientation IN PLACE, so rotation happens exactly where you are
+//    looking.
+//
+//    Interaction: single click selects, double click rotates. The one real
+//    trap is documented at `handleSelectTile` -- a double click fires
+//    `click`, `click`, `dblclick`, so selecting must not reset the rotation
+//    or every double click would appear stuck one step from home. Because
+//    double-click is undiscoverable on its own it is also stated in the
+//    header legend, in each tile's `title`, and as a live `↻ n/m` readout on
+//    the selected tile; and because it is unreachable by keyboard, `r` and
+//    `ArrowRight` do the same thing (Enter/Space are left alone -- the
+//    browser already turns those into a `click`, which selects).
+//
+//    Readability: base font 13 -> 15, tile numbers 11 -> 17 bold, thumbnails
+//    56 -> 104px. The artwork is the actual content here, so its size was
+//    the biggest single win -- at 56px a #57 city and a #9 straight were
+//    genuinely hard to tell apart.
+//
+//    The row scrolls horizontally rather than wrapping, which keeps design
+//    note #5's tier ordering legible as one left-to-right Yellow -> Green ->
+//    Brown progression. That matters most in offline mode, where a Brown-era
+//    tray is all 46 catalog tiles.
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { DeliverTxResponse } from "@cosmjs/stargate";
 
 import { useGameSession } from "../context/GameSessionContext";
@@ -169,6 +237,31 @@ export interface TileSelectionPopupProps {
    *  dispatch. Defaults to `false`, so the ordinary contract-backed path is
    *  entirely unaffected. */
   offline?: boolean;
+}
+
+/** Live viewport size, for design note #7's flip-aware positioning.
+ *
+ *  The old 280px card read `window.innerWidth`/`innerHeight` straight
+ *  through during render and never subscribed to `resize`. That was
+ *  survivable when the card was narrow -- being a little mispositioned
+ *  after a resize is cosmetic. At up to 900px it is not: `cardWidth` itself
+ *  is derived from the viewport, so a stale reading can leave the card
+ *  wider than the window and hang its right-hand tiles off-screen with no
+ *  way to scroll to them. SSR-safe defaults, since this component is
+ *  rendered from a `position: fixed` overlay that may mount before layout. */
+function useViewportSize(): { width: number; height: number } {
+  const [size, setSize] = useState(() => ({
+    width: typeof window === "undefined" ? 1440 : window.innerWidth,
+    height: typeof window === "undefined" ? 900 : window.innerHeight,
+  }));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return size;
 }
 
 /** One carousel entry: a legal `tile_id` plus every orientation the
@@ -240,7 +333,20 @@ export function TileSelectionPopup({
 }: TileSelectionPopupProps) {
   const { execGameplay, sessionStatus } = useGameSession();
 
-  const groups = useMemo(() => groupPlacementsByTile(placements), [placements]);
+  const allGroups = useMemo(() => groupPlacementsByTile(placements), [placements]);
+
+  // Design note #8: OFFLINE-ONLY era filter. `null` means "show everything",
+  // which is the only value the contract-backed path ever takes -- see the
+  // tab strip's own comment for why this must not exist online.
+  const [eraFilter, setEraFilter] = useState<TileColorTier | null>(null);
+  const availableEras = useMemo(() => {
+    const present = new Set(allGroups.map((group) => group.tier).filter(Boolean));
+    return (["Yellow", "Green", "Brown"] as const).filter((tier) => present.has(tier));
+  }, [allGroups]);
+  const groups = useMemo(
+    () => (eraFilter ? allGroups.filter((group) => group.tier === eraFilter) : allGroups),
+    [allGroups, eraFilter],
+  );
 
   const [selectedTileId, setSelectedTileId] = useState<number | null>(groups[0]?.tileId ?? null);
   const [orientationIndex, setOrientationIndex] = useState(0);
@@ -276,15 +382,74 @@ export function TileSelectionPopup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Design note #7: keep the selected tile scrolled into view in the single
+  // row. Matters most in offline Brown era, where the row holds all 46
+  // catalog tiles and the initial selection (#1, a Yellow tile) is at the
+  // far left while a keyboard user arrowing through can easily walk the
+  // selection off the right-hand edge. `block: "nearest"` so this never
+  // scrolls the PAGE, only the row's own overflow container.
+  const tileButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  useEffect(() => {
+    if (selectedTileId === null) return;
+    tileButtonRefs.current
+      .get(selectedTileId)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedTileId]);
+
+  // Design note #7: single click selects. The `tileId === selectedTileId`
+  // early return is what makes double-click-to-rotate work at all, and is
+  // easy to delete by accident, so: a double click dispatches `click`,
+  // `click`, THEN `dblclick`. If selecting always reset `orientationIndex`
+  // to 0, those two leading clicks would zero the rotation a beat before
+  // `dblclick` advanced it, so every double click would land on index 1 and
+  // the tile would appear stuck one step from home no matter how many times
+  // it was rotated. Resetting only on a genuine tile CHANGE fixes that.
+  //
+  // Note what this does NOT do: `orientationIndex` is one shared value, not
+  // a per-tile map, so switching to a different tile and back restarts that
+  // tile at its first legal orientation rather than restoring where you left
+  // it. That is deliberate for now -- predictable, and it keeps the rotation
+  // state a single number -- but it is the obvious next step if players ask
+  // to compare two part-rotated tiles side by side.
+  // Design note #8: switching era tabs can hide whatever was selected. Pull
+  // the selection back to the first visible tile rather than leaving it
+  // dangling -- a stale `selectedTileId` would blank the footer readout and
+  // strand a ghost preview on a board hex the player can no longer see the
+  // tile for.
+  useEffect(() => {
+    if (groups.length === 0) return;
+    if (groups.some((group) => group.tileId === selectedTileId)) return;
+    setSelectedTileId(groups[0].tileId);
+    setOrientationIndex(0);
+  }, [groups, selectedTileId]);
+
   const handleSelectTile = (tileId: number) => {
+    setDispatchState({ status: "idle" });
+    if (tileId === selectedTileId) return;
     setSelectedTileId(tileId);
     setOrientationIndex(0);
-    setDispatchState({ status: "idle" });
   };
 
-  const handleCycleOrientation = () => {
-    if (!selectedGroup || selectedGroup.orientations.length <= 1) return;
-    setOrientationIndex((prev) => (prev + 1) % selectedGroup.orientations.length);
+  /** Advances `tileId` one step through its own legal orientations, in
+   *  place in the row -- design note #7's rotation half. Also handles the
+   *  case where the tile wasn't the selected one yet, which keeps a
+   *  double-click on a cold tile from being swallowed. */
+  const handleRotateTile = (tileId: number) => {
+    const group = groups.find((candidate) => candidate.tileId === tileId);
+    if (!group) return;
+    setDispatchState({ status: "idle" });
+    if (tileId !== selectedTileId) {
+      // A double click that landed on a tile which wasn't selected. In
+      // practice React has already processed the two leading `click`s and
+      // re-rendered by now, so this is a rare-but-real ordering guard
+      // rather than the usual path: select it AND take the first rotation
+      // step, so the gesture always visibly does something.
+      setSelectedTileId(tileId);
+      setOrientationIndex(1 % group.orientations.length);
+      return;
+    }
+    if (group.orientations.length <= 1) return;
+    setOrientationIndex((prev) => (prev + 1) % group.orientations.length);
   };
 
   const handleConfirmPlacement = async () => {
@@ -335,18 +500,48 @@ export function TileSelectionPopup({
     }
   };
 
-  // Clamp so the card can't render off the right/bottom edge of the
-  // viewport -- see design note #3.
-  const CARD_WIDTH = 280;
-  const CARD_MAX_HEIGHT = 420;
-  const OFFSET = 16;
+  // Design note #7: smart positioning for a card that is now ~3x wider than
+  // the one the original clamp was written for.
+  //
+  // The old version clamped `anchorClient* + 16` against a hardcoded 280x420
+  // and read `window.inner*` during render, which was fine for a small card
+  // and is not for a wide one: at 900px a card anchored right of a click
+  // past mid-screen would previously have been shoved hard against the right
+  // edge, sliding it far from the hex it belongs to. So instead of only
+  // clamping, this FLIPS to the other side of the cursor when the preferred
+  // side doesn't fit, and only clamps as a last resort -- which keeps the
+  // card near the click, the whole reason design note #3 anchors it there.
+  const viewport = useViewportSize();
+  const CARD_MAX_WIDTH = 900;
+  const VIEWPORT_MARGIN = 12;
+  const CURSOR_GAP = 18;
+  // Never wider than the viewport allows; on a narrow window this collapses
+  // gracefully to "almost full width" without any breakpoint logic.
+  const cardWidth = Math.min(CARD_MAX_WIDTH, viewport.width - VIEWPORT_MARGIN * 2);
+  // Height is content-driven (one row, not a scrolling list), so this is
+  // only the reservation used for flip decisions -- the card itself is
+  // capped by `maxHeight` below and will usually be shorter.
+  const CARD_HEIGHT_ESTIMATE = offline ? 340 : 290;
+
+  const fitsRight = anchorClientX + CURSOR_GAP + cardWidth <= viewport.width - VIEWPORT_MARGIN;
+  const rawLeft = fitsRight
+    ? anchorClientX + CURSOR_GAP
+    : // Flip to the cursor's left rather than jamming against the edge.
+      anchorClientX - CURSOR_GAP - cardWidth;
   const left = Math.min(
-    Math.max(8, anchorClientX + OFFSET),
-    (typeof window !== "undefined" ? window.innerWidth : 1200) - CARD_WIDTH - 8,
+    Math.max(VIEWPORT_MARGIN, rawLeft),
+    Math.max(VIEWPORT_MARGIN, viewport.width - cardWidth - VIEWPORT_MARGIN),
   );
+
+  const fitsBelow =
+    anchorClientY + CURSOR_GAP + CARD_HEIGHT_ESTIMATE <= viewport.height - VIEWPORT_MARGIN;
+  const rawTop = fitsBelow
+    ? anchorClientY + CURSOR_GAP
+    : // Flip above the cursor, so the card never covers the hex you clicked.
+      anchorClientY - CURSOR_GAP - CARD_HEIGHT_ESTIMATE;
   const top = Math.min(
-    Math.max(8, anchorClientY + OFFSET),
-    (typeof window !== "undefined" ? window.innerHeight : 800) - CARD_MAX_HEIGHT - 8,
+    Math.max(VIEWPORT_MARGIN, rawTop),
+    Math.max(VIEWPORT_MARGIN, viewport.height - CARD_HEIGHT_ESTIMATE - VIEWPORT_MARGIN),
   );
 
   const dispatchDisabled =
@@ -356,228 +551,360 @@ export function TileSelectionPopup({
     sessionStatus !== "ready" ||
     dispatchState.status === "pending";
 
+  const tileCount = groups.length;
+  const rotationHint =
+    selectedGroup && selectedGroup.orientations.length > 1
+      ? "Double-click a tile to rotate it"
+      : "This tile has only one legal rotation";
+
   return (
     <div
+      role="dialog"
+      aria-label="Tile selection"
       style={{
         position: "fixed",
         left,
         top,
-        width: CARD_WIDTH,
-        maxHeight: CARD_MAX_HEIGHT,
+        width: cardWidth,
+        // Content-driven height (design note #7): one row, so this cap only
+        // ever bites on a very short viewport, where the row scrolls.
+        maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`,
         background: "#1c2620",
         border: "1px solid #3a4a3f",
-        borderRadius: 10,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+        borderRadius: 12,
+        boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
         color: "#eaf2ea",
         fontFamily: "sans-serif",
-        fontSize: 13,
+        // Design note #7: base font up from 13 to 15. Every unstyled string
+        // in this card inherits it, so the readability complaint is fixed
+        // once here rather than per-element.
+        fontSize: 15,
         zIndex: 1000,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
       }}
     >
+      {/* ---- Header ---------------------------------------------------- */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "10px 12px",
+          gap: 16,
+          padding: "12px 16px",
           borderBottom: "1px solid #3a4a3f",
         }}
       >
-        <div>
-          <div style={{ fontWeight: 700 }}>Lay Tile</div>
-          <div style={{ opacity: 0.75, fontSize: 11 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+          <span style={{ fontWeight: 700, fontSize: 18 }}>Lay Tile</span>
+          <span style={{ opacity: 0.8, fontSize: 14, whiteSpace: "nowrap" }}>
             {hexLabel} &middot; ({q}, {r})
-          </div>
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close tile selection popup"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "#eaf2ea",
-            fontSize: 16,
-            cursor: "pointer",
-            lineHeight: 1,
-          }}
-        >
-          &times;
-        </button>
-      </div>
-
-      <div style={{ padding: "10px 12px", overflowY: "auto" }}>
-        {/* Design note #6: unmissable, above the carousel rather than
-            tucked in the footer, because the tiles below LOOK exactly like
-            contract-approved ones. Says plainly what was and wasn't
-            checked, so nobody reads this tray as a legality answer. */}
-        {offline && (
-          <div
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {/* Interaction legend, in the header where it reads as a caption
+              for the whole row rather than as a note about one tile.
+              Double-click is not a discoverable gesture on its own, so it
+              is stated outright -- design note #7. */}
+          {tileCount > 0 && (
+            <span style={{ opacity: 0.7, fontSize: 13, whiteSpace: "nowrap" }}>
+              Click to select &middot; Double-click to rotate
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close tile selection popup"
             style={{
-              marginBottom: 8,
-              padding: "6px 8px",
-              borderRadius: 6,
-              background: "#3a3320",
-              border: "1px solid #8a7332",
-              color: "#f0d9a0",
-              fontSize: 11,
-              lineHeight: 1.35,
+              background: "transparent",
+              border: "none",
+              color: "#eaf2ea",
+              fontSize: 24,
+              cursor: "pointer",
+              lineHeight: 1,
+              padding: "0 4px",
             }}
           >
-            <strong>Offline preview &mdash; not validated.</strong> No chain connection, so
-            the contract was never asked. These are the local catalog&rsquo;s tiles for the
-            current era only: connectivity, hex reservations, upgrade steps and tray supply
-            have <em>not</em> been checked, and placement is disabled.
-          </div>
-        )}
-        {groups.length === 0 ? (
-          <div style={{ opacity: 0.75 }}>No legal tile placements at this hex right now.</div>
-        ) : (
-          <>
-            <div style={{ marginBottom: 6, opacity: 0.85 }}>
-              {offline ? "Catalog tiles" : "Legal tiles"} ({groups.length}) &mdash; scroll to see
-              more:
-            </div>
-            {/* Scrollable gallery carousel of legal tile_id entries. */}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                overflowX: "auto",
-                paddingBottom: 8,
-                marginBottom: 10,
-              }}
-            >
-              {groups.map((group) => {
-                const isSelected = group.tileId === selectedTileId;
-                return (
-                  <button
-                    key={group.tileId}
-                    type="button"
-                    onClick={() => handleSelectTile(group.tileId)}
-                    style={{
-                      flex: "0 0 auto",
-                      padding: 4,
-                      background: isSelected ? "#2f4a37" : "#26332a",
-                      border: isSelected ? "2px solid #6fcf7c" : "2px solid transparent",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 2,
-                    }}
-                  >
-                    <TilePreviewThumbnail tileId={group.tileId} orientation={group.orientations[0]} size={56} hexSize={24} />
-                    {/* Real 1830 tray number -- see design note #5. */}
-                    <span style={{ fontSize: 11 }}>#{group.tileId}</span>
-                    <span
-                      style={{
-                        fontSize: 9,
-                        letterSpacing: 0.3,
-                        textTransform: "uppercase",
-                        color: group.tier ? TIER_LABEL_COLOR[group.tier] : "#8a8a8a",
-                      }}
-                    >
-                      {group.tier ?? "Unmapped"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {selectedGroup && selectedOrientation !== null && (
-              <div style={{ textAlign: "center" }}>
-                <div style={{ opacity: 0.85, marginBottom: 4 }}>
-                  Click the preview to choose your rotation:
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCycleOrientation}
-                  disabled={selectedGroup.orientations.length <= 1}
-                  title="Cycle through this tile's legal orientations"
-                  style={{
-                    background: "transparent",
-                    border: "1px dashed #6fcf7c",
-                    borderRadius: 8,
-                    padding: 4,
-                    cursor: selectedGroup.orientations.length > 1 ? "pointer" : "default",
-                  }}
-                >
-                  <TilePreviewThumbnail
-                    tileId={selectedGroup.tileId}
-                    orientation={selectedOrientation}
-                    size={96}
-                    hexSize={40}
-                  />
-                </button>
-                <div style={{ fontSize: 11, opacity: 0.75, marginTop: 4 }}>
-                  Orientation {selectedOrientation} of{" "}
-                  {/* Design note #6: offline, all six rotations are offered
-                      because nothing filtered them -- calling that list
-                      "legal" would be a claim the contract never made. */}
-                  {offline ? "all" : "legal"}: {selectedGroup.orientations.join(", ")}
-                </div>
-                {/* See design note #2: this used to be a "preview only"
-                    disclaimer back when LayTile had no orientation field
-                    and the contract always auto-picked the lowest legal
-                    rotation. That's no longer true -- the contract now
-                    commits exactly this selected orientation -- so this is
-                    a plain confirmation of what will actually be
-                    submitted, not a caveat. Design note #6 restores a
-                    genuine caveat for the offline case only, where there is
-                    no contract to commit anything. */}
-                <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2, fontStyle: "italic" }}>
-                  {offline ? (
-                    <>
-                      Artwork preview only &mdash; tile #{selectedGroup.tileId} at orientation{" "}
-                      {selectedOrientation} cannot be laid without a chain connection.
-                    </>
-                  ) : (
-                    <>
-                      Tile #{selectedGroup.tileId} will be laid at exactly this orientation (
-                      {selectedOrientation}) when confirmed.
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
-        )}
+            &times;
+          </button>
+        </div>
       </div>
 
-      <div style={{ padding: "10px 12px", borderTop: "1px solid #3a4a3f" }}>
-        {dispatchState.status === "error" && (
-          <div style={{ color: "#e08080", fontSize: 11, marginBottom: 6 }}>
-            {dispatchState.message}
+      {/* ---- Offline banner (design note #6, unchanged in substance) ---- */}
+      {offline && (
+        <div
+          style={{
+            margin: "12px 16px 0",
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#3a3320",
+            border: "1px solid #8a7332",
+            color: "#f0d9a0",
+            fontSize: 13,
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Offline preview &mdash; not validated.</strong> No chain connection, so the
+          contract was never asked. This is the whole local catalog, browsable by era &mdash;
+          era locks, connectivity, hex reservations, upgrade steps and tray supply have{" "}
+          <em>not</em> been checked, and placement is disabled.
+        </div>
+      )}
+
+      {/* ---- Era tabs, OFFLINE ONLY (design note #8) -------------------- */}
+      {offline && availableEras.length > 1 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "12px 16px 0",
+          }}
+        >
+          <span style={{ fontSize: 13, opacity: 0.7 }}>Era</span>
+          {([null, ...availableEras] as const).map((tier) => {
+            const isActive = eraFilter === tier;
+            const label = tier ?? "All";
+            const count = tier
+              ? allGroups.filter((group) => group.tier === tier).length
+              : allGroups.length;
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setEraFilter(tier)}
+                aria-pressed={isActive}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  cursor: "pointer",
+                  color: "inherit",
+                  font: "inherit",
+                  background: isActive ? "#2f4a37" : "transparent",
+                  border: `1px solid ${
+                    isActive && tier ? TIER_LABEL_COLOR[tier] : isActive ? "#6fcf7c" : "#3a4a3f"
+                  }`,
+                }}
+              >
+                {label}{" "}
+                <span style={{ opacity: 0.6, fontSize: 12 }}>({count})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ---- The single tile row --------------------------------------- */}
+      {tileCount === 0 ? (
+        <div style={{ padding: "18px 16px", opacity: 0.8 }}>
+          {offline && eraFilter
+            ? `No ${eraFilter} tiles in the catalog.`
+            : "No legal tile placements at this hex right now."}
+        </div>
+      ) : (
+        <div style={{ padding: "12px 16px 4px", minHeight: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 10,
+            }}
+          >
+            <span style={{ fontSize: 14, opacity: 0.85 }}>
+              {/* Design note #6: "Catalog tiles" offline, never "Legal". */}
+              {offline ? "Catalog tiles" : "Legal tiles"} ({tileCount})
+            </span>
+            <span style={{ fontSize: 13, opacity: 0.6 }}>{rotationHint}</span>
           </div>
-        )}
-        {/* Design note #6: offline suppresses the session-key hint, which
-            would otherwise be actively misleading -- it implies initializing
-            a session key is the one thing standing between the player and a
-            placement, when the real blocker is that there is no chain to
-            place onto and no contract has approved this tile. */}
-        {!offline && sessionStatus !== "ready" && (
-          <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 6 }}>
-            Session key not ready -- initialize it before dispatching.
+
+          {/* ONE row. Horizontal scroll rather than wrapping, so the tier
+              ordering stays a single readable Yellow -> Green -> Brown
+              progression left to right (design note #5). */}
+          <div
+            role="listbox"
+            aria-label={offline ? "Catalog tiles" : "Legal tiles"}
+            style={{
+              display: "flex",
+              gap: 12,
+              overflowX: "auto",
+              overflowY: "hidden",
+              paddingBottom: 12,
+            }}
+          >
+            {groups.map((group) => {
+              const isSelected = group.tileId === selectedTileId;
+              // The selected tile renders at its LIVE rotation, in place --
+              // this is what "rotates it right there in the row" means, and
+              // is why the old bottom preview panel is gone. Unselected
+              // tiles show their first legal orientation.
+              const shownOrientation =
+                isSelected && selectedOrientation !== null
+                  ? selectedOrientation
+                  : group.orientations[0];
+              const canRotate = group.orientations.length > 1;
+              return (
+                <button
+                  key={group.tileId}
+                  ref={(node) => {
+                    if (node) tileButtonRefs.current.set(group.tileId, node);
+                    else tileButtonRefs.current.delete(group.tileId);
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => handleSelectTile(group.tileId)}
+                  onDoubleClick={() => handleRotateTile(group.tileId)}
+                  onKeyDown={(event) => {
+                    // Keyboard equivalent of the double click -- design
+                    // note #7. `r` and the arrow keys rotate; Enter/Space
+                    // are left alone because the browser already turns
+                    // those into a `click`, which selects.
+                    if (event.key === "r" || event.key === "R" || event.key === "ArrowRight") {
+                      event.preventDefault();
+                      handleRotateTile(group.tileId);
+                    }
+                  }}
+                  title={
+                    canRotate
+                      ? `Tile #${group.tileId} -- double-click (or press R) to rotate`
+                      : `Tile #${group.tileId} -- only one legal rotation here`
+                  }
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "10px 12px 8px",
+                    background: isSelected ? "#2f4a37" : "#26332a",
+                    border: isSelected ? "2px solid #6fcf7c" : "2px solid transparent",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 6,
+                    color: "inherit",
+                    font: "inherit",
+                    // Stops a double click from selecting the label text
+                    // underneath it, which otherwise flashes a highlight on
+                    // every rotation.
+                    userSelect: "none",
+                  }}
+                >
+                  {/* Design note #7: 56px -> 104px. The single biggest
+                      readability win here -- the artwork IS the content,
+                      and at 56px a #57 city was hard to tell from a #9
+                      straight at a glance. */}
+                  <TilePreviewThumbnail
+                    tileId={group.tileId}
+                    orientation={shownOrientation}
+                    size={104}
+                    hexSize={44}
+                  />
+                  <span style={{ fontSize: 17, fontWeight: 700, lineHeight: 1 }}>
+                    #{group.tileId}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                      color: group.tier ? TIER_LABEL_COLOR[group.tier] : "#8a8a8a",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {group.tier ?? "Unmapped"}
+                  </span>
+                  {/* Live rotation readout on the selected tile only, so
+                      the row stays uncluttered but the thing you are
+                      currently turning always shows where it is. */}
+                  <span
+                    style={{
+                      fontSize: 12,
+                      opacity: isSelected ? 0.9 : 0,
+                      lineHeight: 1,
+                      whiteSpace: "nowrap",
+                      // Reserved even when invisible, so selecting a tile
+                      // doesn't jog the row's height.
+                      visibility: isSelected ? "visible" : "hidden",
+                    }}
+                  >
+                    {canRotate
+                      ? `↻ ${group.orientations.indexOf(shownOrientation) + 1}/${group.orientations.length}`
+                      : "• fixed"}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        )}
+        </div>
+      )}
+
+      {/* ---- Footer ---------------------------------------------------- */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          padding: "12px 16px",
+          borderTop: "1px solid #3a4a3f",
+        }}
+      >
+        <div style={{ minWidth: 0, fontSize: 13, lineHeight: 1.45 }}>
+          {dispatchState.status === "error" && (
+            <div style={{ color: "#e08080", marginBottom: 4 }}>{dispatchState.message}</div>
+          )}
+          {/* Design note #6: offline suppresses the session-key hint, which
+              would otherwise imply a session key is the one thing between
+              the player and a placement, when the real blocker is that
+              there is no chain and no contract has approved this tile. */}
+          {!offline && sessionStatus !== "ready" && (
+            <div style={{ opacity: 0.75, marginBottom: 4 }}>
+              Session key not ready -- initialize it before dispatching.
+            </div>
+          )}
+          {selectedGroup && selectedOrientation !== null && (
+            <div style={{ opacity: 0.8 }}>
+              {offline ? (
+                <>
+                  Artwork preview only &mdash; tile{" "}
+                  <strong>#{selectedGroup.tileId}</strong> at orientation{" "}
+                  <strong>{selectedOrientation}</strong> cannot be laid without a chain
+                  connection.
+                </>
+              ) : (
+                <>
+                  Tile <strong>#{selectedGroup.tileId}</strong> will be laid at orientation{" "}
+                  <strong>{selectedOrientation}</strong>
+                  {selectedGroup.orientations.length > 1 && (
+                    <span style={{ opacity: 0.7 }}>
+                      {" "}
+                      (of legal: {selectedGroup.orientations.join(", ")})
+                    </span>
+                  )}
+                  .
+                </>
+              )}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={handleConfirmPlacement}
           disabled={dispatchDisabled}
           style={{
-            width: "100%",
-            padding: "8px 0",
+            flex: "0 0 auto",
+            padding: "12px 28px",
             background: dispatchDisabled ? "#3a4a3f" : "#3f8f4f",
             color: "#eaf2ea",
             border: "none",
-            borderRadius: 6,
+            borderRadius: 8,
             fontWeight: 700,
+            fontSize: 15,
             cursor: dispatchDisabled ? "default" : "pointer",
+            whiteSpace: "nowrap",
           }}
         >
           {offline

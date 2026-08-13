@@ -60,16 +60,29 @@ import {
 } from "cosmjs-types/cosmwasm/wasm/v1/authz";
 import type { Any } from "cosmjs-types/google/protobuf/any";
 
+import type { Coin } from "@cosmjs/stargate";
+
 import { createExtendedRegistry, GAMEPLAY_MESSAGE_KEYS } from "../utils/sessionKey";
+import {
+  CONTRACT_ADDRESS,
+  NATIVE_DENOM,
+  requireChainId,
+  requireContractAddress,
+  requireRpcEndpoint,
+} from "../config";
 
 // --- Deployment config -------------------------------------------------
-// TODO(design gap): duplicated in ../utils/sessionKey.ts. Both files need
-// the same chain/contract constants; extract to a shared
-// `frontend/src/config.ts` once a third consumer shows up rather than
-// keep copy-pasting these across the wallet and session-key layers.
-const JUNO_CHAIN_ID = "juno-1";
-const JUNO_RPC_ENDPOINT = "https://rpc-juno.itastakers.com"; // swap per environment
-export const CONTRACT_ADDRESS = "juno1...eighteencosmos..."; // deployed 18Cosmos contract
+// F-4: the TODO that stood here is RESOLVED. The chain id, RPC endpoint and
+// contract address were local copies duplicated in `../utils/sessionKey.ts`;
+// both files now read them from `../config`.
+//
+// The `require*()` accessors throw if a value is unset or is still a
+// placeholder -- but only when CALLED, which is always inside a path that is
+// about to touch the chain (`connect`, `grantSessionKey`, `revokeSessionKey`).
+// Reading the raw `CONTRACT_ADDRESS` never throws and may be `undefined`,
+// which is what lets the app boot and run offline with no `.env` at all. See
+// `config.ts` design note #0.
+export { CONTRACT_ADDRESS };
 
 const SESSION_GRANT_DURATION_SECONDS = 60 * 60 * 6; // 6 hours; renew before expiry
 const MAX_SESSION_CALLS = 100_000; // MaxCallsLimit safety valve, not a real budget cap
@@ -95,6 +108,30 @@ interface WalletContextValue {
   address: string | null;
   signer: OfflineSigner | null;
   signingClient: SigningCosmWasmClient | null;
+  /** F-3: the connected wallet's REAL on-chain `ujuno` balance, or `null`
+   *  when disconnected or not yet fetched.
+   *
+   *  Deliberately a `Coin` (`{ denom, amount }` with `amount` a base-denom
+   *  INTEGER STRING) rather than a number. Two reasons, and the second is the
+   *  important one:
+   *    - it is exactly what `getBalance` returns, so nothing is lost or
+   *      reinterpreted on the way through; and
+   *    - `ujuno` amounts are `Uint128` on-chain. Converting to a JS number
+   *      loses precision above 2^53 base units, which is a real balance, and
+   *      the failure is silent -- the UI would simply show the wrong amount
+   *      of the player's own money. `config.formatNativeAmount` renders this
+   *      for display using integer string math only.
+   *
+   *  DISTINCT FROM VGP. This is the player's real spendable JUNO, which is
+   *  what the lobby ante is denominated in. The dashboard's existing balance
+   *  figure is `player_cash` -- Virtual Game Points, the in-game play money.
+   *  Conflating the two is precisely the confusion F-3 was filed about, so
+   *  they must never share a display slot or a label. */
+  nativeBalance: Coin | null;
+  /** Re-queries `nativeBalance`. Safe to call when disconnected (no-op).
+   *  Call after any real-JUNO movement -- creating or joining a room, or
+   *  ending a game -- since none of those go through the polling loop. */
+  refreshNativeBalance: () => Promise<void>;
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => void;
@@ -116,6 +153,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [signer, setSigner] = useState<OfflineSigner | null>(null);
   const [signingClient, setSigningClient] = useState<SigningCosmWasmClient | null>(null);
+  const [nativeBalance, setNativeBalance] = useState<Coin | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [sessionGrantStatus, setSessionGrantStatus] = useState<SessionGrantStatus>("none");
@@ -135,16 +173,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (!window.keplr) {
         throw new Error("Keplr extension not found. Install it from keplr.app to continue.");
       }
-      await window.keplr.enable(JUNO_CHAIN_ID);
+      // Resolved here, not at module scope: an unconfigured build must still
+      // boot into offline mode. This is the first point that genuinely needs
+      // a chain, so it is the right place to fail -- loudly, naming the
+      // variable, with the UI alive to show it.
+      const chainId = requireChainId();
+      await window.keplr.enable(chainId);
 
-      const offlineSigner = window.keplr.getOfflineSigner(JUNO_CHAIN_ID);
+      const offlineSigner = window.keplr.getOfflineSigner(chainId);
       const accounts = await offlineSigner.getAccounts();
       if (accounts.length === 0) {
         throw new Error("Keplr returned no accounts for juno-1.");
       }
 
       const client = await SigningCosmWasmClient.connectWithSigner(
-        JUNO_RPC_ENDPOINT,
+        requireRpcEndpoint(),
         offlineSigner,
         {
           gasPrice: GasPrice.fromString("0.025ujuno"),
@@ -221,7 +264,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             ContractExecutionAuthorization.fromPartial({
               grants: [
                 {
-                  contract: CONTRACT_ADDRESS,
+                  contract: requireContractAddress(),
                   limit: limitAny,
                   filter: filterAny,
                 },
@@ -320,12 +363,43 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [signingClient, address],
   );
 
+  // F-3: the real `ujuno` bank balance. `SigningCosmWasmClient` extends
+  // `CosmWasmClient`, which exposes `getBalance` from the underlying
+  // Stargate bank module -- so this needs no second client and no new
+  // dependency.
+  //
+  // Swallows query errors into `null` rather than surfacing them through
+  // `error`: that field drives the connect/disconnect UI, and a transient RPC
+  // hiccup on a balance read must not make the wallet look disconnected. A
+  // `null` balance renders as "unavailable", which is the honest state.
+  const refreshNativeBalance = useCallback(async () => {
+    if (!signingClient || !address) {
+      setNativeBalance(null);
+      return;
+    }
+    try {
+      const coin = await signingClient.getBalance(address, NATIVE_DENOM);
+      setNativeBalance(coin);
+    } catch {
+      setNativeBalance(null);
+    }
+  }, [signingClient, address]);
+
+  // Fetch on connect, and clear on disconnect. `refreshNativeBalance` already
+  // depends on both, so this fires exactly when the identity behind the
+  // balance changes -- never on an unrelated re-render.
+  useEffect(() => {
+    void refreshNativeBalance();
+  }, [refreshNativeBalance]);
+
   const value = useMemo<WalletContextValue>(
     () => ({
       status,
       address,
       signer,
       signingClient,
+      nativeBalance,
+      refreshNativeBalance,
       error,
       connect,
       disconnect,
@@ -339,6 +413,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       address,
       signer,
       signingClient,
+      nativeBalance,
+      refreshNativeBalance,
       error,
       connect,
       disconnect,

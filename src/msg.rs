@@ -271,6 +271,18 @@ pub enum ExecuteMsg {
         protocol_id: u32,
         q: i32,
         r: i32,
+        /// Audit G-12: WHICH city on `(q, r)` to token. Hexes carrying two
+        /// separate cities -- New York (#54/#62) and every OO tile
+        /// (#59/#64-#68) -- need this to be answerable at all; on a
+        /// single-city hex the only valid value is `0`.
+        ///
+        /// `Option` + `#[serde(default)]` so this is genuinely additive: a
+        /// client built before G-12 omits the key and the contract resolves
+        /// it to the lowest-indexed city with a free slot, which on a
+        /// single-city hex is the only city and on a two-city hex is at
+        /// least always a LEGAL placement rather than a rejection.
+        #[serde(default)]
+        city_index: Option<u8>,
     },
     /// Buys the next available unit from the front of the shared, global
     /// `HARDWARE_POOL` supply queue on behalf of `protocol_id` (only that
@@ -544,6 +556,29 @@ pub struct PublicCompanyState {
     /// Station Tokens, home token (if any) first -- empty before it floats.
     /// See `hexmap::PROTOCOL_STATION_HEXES`.
     pub station_token_hexes: Vec<(i32, i32)>,
+    /// The SAME tokens as `station_token_hexes`, one entry each and in the
+    /// same order, but as `(q, r, city_index)` -- Audit G-12.
+    ///
+    /// A hex is not a city. New York (#54/#62) and every OO tile
+    /// (#59/#64-#68) carry two separate cities on one hex, so `(q, r)` alone
+    /// cannot say which station a token stands in, and a renderer reading
+    /// only the hex has to guess -- which is what produced tokens floating
+    /// on the wrong half of a two-city tile.
+    ///
+    /// `station_token_hexes` is KEPT rather than replaced: it is what the
+    /// token-limit and duplicate-hex rules are actually about, and dropping
+    /// it would break every existing client for no gain. Read this field
+    /// when you need to know WHICH city; read that one when you need to know
+    /// how many hexes a company has tokened.
+    ///
+    /// `#[serde(default)]` for the usual reason in both directions -- a
+    /// client predating this field ignores it, and a Rust client
+    /// deserializing an older response gets an empty vector rather than a
+    /// hard error. An empty vector here alongside a NON-empty
+    /// `station_token_hexes` means "this contract predates G-12", not "this
+    /// company has no tokens".
+    #[serde(default)]
+    pub station_tokens: Vec<(i32, i32, u8)>,
     /// This corporation's total Station Token limit, home token included.
     /// See `hexmap::station_token_limit`.
     pub station_token_limit: u8,
@@ -692,6 +727,27 @@ pub struct MapTileEntry {
     /// `Vec` rather than a hard `missing field` error.
     #[serde(default)]
     pub paths: Vec<(u8, u8)>,
+    /// What a route actually earns for stopping on this hex, in VGP -- Audit
+    /// G-11. `hexmap::tile_base_value(tile_id)` verbatim.
+    ///
+    /// This is THE payout figure, not a display hint: it is the same call
+    /// `pathfinding::HexInfo.value` and
+    /// `operations::execute_run_manual_route` price a route through, so a
+    /// client rendering it is showing exactly what the contract will pay.
+    ///
+    /// Added because the alternative was a client re-deriving revenue from
+    /// `terrain` and disagreeing. Before Audit G-11 revenue lived only in
+    /// the flat `terrain_base_value` bucket, which cannot express real 1830
+    /// -- #62 and #64 share a terrain but print $90 and $50 -- so any UI
+    /// that inferred a value from terrain was necessarily wrong for most
+    /// city tiles, and a UI that hardcoded the real figures would have
+    /// advertised payouts the contract would not honour. Shipping the
+    /// authoritative number removes both failure modes.
+    ///
+    /// `0` for plain connector track, which is a real answer (that hex earns
+    /// nothing), not a missing one.
+    #[serde(default)]
+    pub revenue: Uint128,
     /// `Some(city name)` if this tile sits on one of the three reserved
     /// landmark hexes (New York, Boston, Baltimore).
     pub landmark: Option<String>,

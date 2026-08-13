@@ -63,13 +63,28 @@ import { MsgExecuteContract } from "cosmjs-types/cosmwasm/wasm/v1/tx";
 import type { Any } from "cosmjs-types/google/protobuf/any";
 
 // --- Deployment config -------------------------------------------------
-// TODO(design gap): duplicated in ../context/WalletContext.tsx -- see that
-// file's matching TODO. Extract to a shared config module once a third
-// consumer needs these.
-const JUNO_PREFIX = "juno";
-const JUNO_RPC_ENDPOINT = "https://rpc-juno.itastakers.com";
-const CONTRACT_ADDRESS = "juno1...eighteencosmos...";
-const DEVELOPER_FEE_GRANTER_ADDRESS = "juno1...devfeegrantaddress...";
+// F-4: the TODO that stood here is RESOLVED, and so is the placeholder that
+// was the actual bug. `DEVELOPER_FEE_GRANTER_ADDRESS` used to be the literal
+// string "juno1...devfeegrantaddress...", which is not valid bech32 -- and
+// since every gameplay transaction below routes `granter: feeGranter`, EVERY
+// session-key transaction would have failed at fee-grant resolution the
+// moment this pointed at a live chain. Nothing caught it earlier because
+// nothing validated it: the failure surfaced at broadcast, as far from the
+// mistake as it is possible to get.
+//
+// `../config` now reads all four from the environment and throws at import
+// on anything that is not a plausible address, so the app cannot start in
+// that state. It is also the single definition shared with
+// `../context/WalletContext.tsx`, which matters specifically for
+// `CONTRACT_ADDRESS`: this file's copy scopes the authz grant's
+// `ContractExecutionAuthorization` while that file's copy signs it, and two
+// drifting copies would authorize a contract the app never calls.
+import {
+  JUNO_PREFIX,
+  requireContractAddress,
+  requireFeeGranterAddress,
+  requireRpcEndpoint,
+} from "../config";
 
 const SESSION_STORAGE_KEY = "18cosmos.session_key.v1";
 
@@ -271,7 +286,7 @@ export async function getSessionWallet(): Promise<{
  *  extended registry (see `createExtendedRegistry`) so it can broadcast
  *  `MsgExec`. */
 export async function createSessionSigningClient(
-  rpcEndpoint: string = JUNO_RPC_ENDPOINT,
+  rpcEndpoint: string = requireRpcEndpoint(),
 ): Promise<{ client: SigningCosmWasmClient; address: string }> {
   const { wallet, address } = await getSessionWallet();
   const client = await SigningCosmWasmClient.connectWithSigner(rpcEndpoint, wallet, {
@@ -320,7 +335,7 @@ export async function execViaSessionKey(
     masterAddress,
     msg,
     funds = [],
-    feeGranter = DEVELOPER_FEE_GRANTER_ADDRESS,
+    feeGranter = requireFeeGranterAddress(),
     gasLimit = "300000",
     gasFeeAmount = { denom: "ujuno", amount: "5000" },
     memo = "18Cosmos move",
@@ -346,7 +361,7 @@ export async function execViaSessionKey(
     value: MsgExecuteContract.encode(
       MsgExecuteContract.fromPartial({
         sender: masterAddress, // the GRANTER -- what the contract sees as info.sender
-        contract: CONTRACT_ADDRESS,
+        contract: requireContractAddress(),
         msg: new TextEncoder().encode(JSON.stringify(msg)),
         funds,
       }),

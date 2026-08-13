@@ -39,7 +39,39 @@
 //    actions, informational hints) rather than mis-tagging it into one of
 //    the five.
 
-import type { ChatMessage } from "../components/Chatbox";
+// F-8 / tech-debt purge: `ChatMessage` and `truncateChatAddress` MOVED here
+// from `../components/Chatbox`, and that file is deleted.
+//
+// Two reasons, one practical and one about layering:
+//
+//  - The `Chatbox` component itself was dead. It has not been rendered
+//    anywhere since its state was hoisted into `App.tsx` and its UI replaced
+//    by `TopTicker`'s in-place accordion plus `InlineQuickChat`. Only the
+//    type and the truncation helper were still live, so the file was ~200
+//    lines of unreachable React kept alive by two small exports.
+//
+//  - The dependency ran the wrong way. `utils/feed.ts` is a pure domain
+//    module and it was importing a type out of `components/` -- utilities
+//    depending on the view layer, which is backwards and is what made the
+//    dead component look load-bearing. A shared chat type belongs here,
+//    beside `FeedItem`, which is the only thing that consumes it.
+
+/** One chat message in the merged activity feed. */
+export interface ChatMessage {
+  id: number;
+  author: string;
+  text: string;
+  timestamp: string;
+  /** Real sortable epoch-ms, stamped at construction -- see design note #2. */
+  timestampMs: number;
+}
+
+/** Shortens a `juno1...` address for display in a feed byline.
+ *  Addresses at or under 14 characters are returned untouched. */
+export function truncateChatAddress(address: string): string {
+  if (address.length <= 14) return address;
+  return `${address.slice(0, 8)}...${address.slice(-4)}`;
+}
 
 export type ActionLogStatus = "pending" | "success" | "error" | "info";
 

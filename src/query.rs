@@ -187,9 +187,24 @@ pub fn query_game_state(deps: Deps, game_id: u64) -> StdResult<GameStateResponse
 
         // Station Tokens (`hexmap.rs` module doc comment #23).
         let home_hex_label = hexmap::corporation_home_hex(company_id).map(|(_, _, label)| label.to_string());
-        let station_token_hexes = PROTOCOL_STATION_HEXES
+        let station_token_hexes: Vec<(i32, i32)> = PROTOCOL_STATION_HEXES
             .may_load(deps.storage, (game_id, company_id))?
             .unwrap_or_default();
+        // Audit G-12: resolved through `hex_token_occupants`, the same read
+        // path the blockade rule uses, so a client can never be shown a token
+        // in a city the pathfinder thinks is elsewhere. That helper also
+        // reconstructs pre-G-12 tokens against city 0, which is why this
+        // reports a city for every hex in the list above rather than only for
+        // tokens placed since the upgrade.
+        let mut station_tokens: Vec<(i32, i32, u8)> = Vec::with_capacity(station_token_hexes.len());
+        for (q, r) in station_token_hexes.iter().copied() {
+            let city_index = hexmap::hex_token_occupants(deps.storage, game_id, q, r)?
+                .into_iter()
+                .find(|(id, _)| *id == company_id)
+                .map(|(_, city)| city)
+                .unwrap_or(0);
+            station_tokens.push((q, r, city_index));
+        }
 
         public_companies.push(PublicCompanyState {
             company_id,
@@ -204,6 +219,7 @@ pub fn query_game_state(deps: Deps, game_id: u64) -> StdResult<GameStateResponse
             player_holdings,
             home_hex_label,
             station_token_hexes,
+            station_tokens,
             station_token_limit: hexmap::station_token_limit(company_id),
         });
     }
@@ -314,6 +330,12 @@ pub fn query_map_grid(deps: Deps, game_id: u64) -> StdResult<MapGridResponse> {
                 // contract itself routes on, rather than inventing a second,
                 // weaker notion of what a tile's segments are.
                 paths: hexmap::effective_base_tile_paths(&tile).to_vec(),
+                // Audit G-11: resolved through the SAME `tile_base_value`
+                // the payout engine uses, so this can never report a figure
+                // the contract would not pay. `unwrap_or_default()` covers
+                // only a `tile_id` absent from the catalog entirely, which
+                // `execute_lay_tile` rejects with `TileNotFound`.
+                revenue: hexmap::tile_base_value(tile.tile_id).unwrap_or_default(),
                 landmark: hexmap::landmark_name_at(q, r).map(|name| name.to_string()),
             })
         })
@@ -359,7 +381,7 @@ pub fn print_markdown_map(game_id: u64, tiles: &[MapTileEntry]) -> String {
             .copied()
             .find(|(id, ..)| *id == entry.tile_id);
         let (color, terrain) = catalog_entry
-            .map(|(_, _, _, terrain, color, _qty, _paths)| {
+            .map(|(_, _, _, terrain, color, _qty, _paths, _revenue)| {
                 (format!("{color:?}"), format!("{terrain:?}"))
             })
             .unwrap_or_else(|| ("?".to_string(), "?".to_string()));

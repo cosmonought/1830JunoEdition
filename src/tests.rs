@@ -3308,6 +3308,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: 50,
             r: 50,
+            city_index: None,
         },
     )
     .unwrap_err();
@@ -3329,6 +3330,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: NEW_YORK.0,
             r: NEW_YORK.1,
+            city_index: None,
         },
     )
     .unwrap_err();
@@ -3355,6 +3357,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: ALTOONA.0,
             r: ALTOONA.1,
+            city_index: None,
         },
     )
     .unwrap_err();
@@ -3392,6 +3395,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: PITTSBURGH.0,
             r: PITTSBURGH.1,
+            city_index: None,
         },
     )
     .unwrap_err();
@@ -3423,6 +3427,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: PITTSBURGH.0,
             r: PITTSBURGH.1,
+            city_index: None,
         },
     )
     .expect("PRR's 2nd Station Token, at a real reachable city with no token yet, should succeed");
@@ -3456,6 +3461,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             q: PITTSBURGH.0,
             r: PITTSBURGH.1,
+            city_index: None,
         },
     )
     .unwrap_err();
@@ -7804,7 +7810,7 @@ fn legal_tile_placements_reflects_topology_retention_upgrade_rules() {
             .copied()
             .find(|(id, ..)| *id == placement.tile_id)
             .expect("every offered tile must exist in the catalog");
-        let (_, base_connections, _cost, _terrain, colour, _qty, _paths) = entry;
+        let (_, base_connections, _cost, _terrain, colour, _qty, _paths, _revenue) = entry;
         assert_eq!(
             colour,
             TileColor::Green,
@@ -11485,7 +11491,7 @@ fn g9_seed_tile(
     tile_id: u32,
     orientation: u8,
 ) {
-    let (_, connections, _cost, _terrain, _color, _qty, paths) = hexmap::TILE_CATALOG
+    let (_, connections, _cost, _terrain, _color, _qty, paths, _revenue) = hexmap::TILE_CATALOG
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
@@ -11549,7 +11555,7 @@ fn tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles() {
     );
 
     let mut spur_tiles: Vec<u32> = Vec::new();
-    for &(tile_id, connections, _cost, _terrain, _color, _qty, paths) in hexmap::TILE_CATALOG {
+    for &(tile_id, connections, _cost, _terrain, _color, _qty, paths, _revenue) in hexmap::TILE_CATALOG {
         assert!(
             !paths.is_empty(),
             "tile {tile_id} has no edge-pair data, so no route could ever cross it"
@@ -11597,7 +11603,7 @@ fn tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles() {
 /// route tracer then refuses to use (or the reverse).
 #[test]
 fn rotating_a_tiles_paths_matches_rotating_its_connection_mask() {
-    for &(tile_id, connections, _cost, _terrain, _color, _qty, paths) in hexmap::TILE_CATALOG {
+    for &(tile_id, connections, _cost, _terrain, _color, _qty, paths, _revenue) in hexmap::TILE_CATALOG {
         for orientation in 0..6u8 {
             let rotated_paths = hexmap::rotate_paths(paths, orientation);
             let from_paths = hexmap::path_list_connections(&rotated_paths);
@@ -11926,7 +11932,13 @@ fn rival_tokens_block_a_route_only_when_the_city_has_no_open_slot() {
         vec![(0, 0), (1, 0), (2, 0)],
         "a 2-slot city with one rival token still has an open slot, so it blocks nobody"
     );
-    assert_eq!(open_slot_value, Uint128::new(40));
+    // Audit G-11: $10 town + $30 city + $10 town. The city figure is tile
+    // #14's OWN printed revenue now, not the flat `MajorCityHub` bucket --
+    // this line expected $40 (a $20 city) until per-tile revenue landed.
+    // Note the three #57 assertions around it are untouched: #57 prints $20,
+    // which is what its terrain bucket already paid, so only the tile whose
+    // value actually moved moved.
+    assert_eq!(open_slot_value, Uint128::new(50), "$10 + $30 city (#14) + $10");
 
     let (own_value, own_path) = trace(57, true, true);
     assert_eq!(
@@ -12381,4 +12393,302 @@ fn run_manual_route_runs_through_the_city_once_the_blockade_is_lifted() {
         "40",
         "$10 D8 + $20 D10 + $10 D12"
     );
+}
+
+/// **Audit G-12: per-CITY Station Token blockades.**
+///
+/// The rule under test, stated as 1830 states it: a city blocks a rival's
+/// route only when EVERY slot in that city is held by other companies. The
+/// bug this replaced counted slots per HEX, which is a different question on
+/// the eight tiles that carry two cities on one hex -- and those eight are
+/// New York and every OO hex, the most contested real estate on the board.
+#[test]
+fn passability_is_evaluated_per_city_not_per_hex() {
+    use crate::pathfinding::{passability_at, Passability};
+
+    const ME: u32 = 1;
+    const RIVAL_A: u32 = 2;
+    const RIVAL_B: u32 = 3;
+
+    // ---- The rule as literally requested: a DOUBLE-station city. ----
+    // #63 / #14 / #15: one city, two slots.
+    let two_slot = &[2u32][..];
+    assert_eq!(
+        passability_at(two_slot, &[(RIVAL_A, 0)], ME),
+        Passability::Open,
+        "one rival in a 2-slot city leaves a slot open -- must NOT block"
+    );
+    assert_eq!(
+        passability_at(two_slot, &[(RIVAL_A, 0), (RIVAL_B, 0)], ME),
+        Passability::StopOnly,
+        "two rivals fill a 2-slot city -- must block"
+    );
+    assert_eq!(
+        passability_at(two_slot, &[(ME, 0), (RIVAL_A, 0)], ME),
+        Passability::Open,
+        "a company is never blocked out of a city it holds a token in"
+    );
+
+    // ---- The regression itself. #64-#68: TWO separate 1-slot cities. ----
+    // Pooled counting saw "1 of 2 slots used" and reported the whole hex
+    // open, including city 0, which is full.
+    let two_cities = &[1u32, 1][..];
+    assert_eq!(
+        passability_at(two_cities, &[(RIVAL_A, 0)], ME),
+        Passability::Open,
+        "city 1 is still empty, so the hex is passable"
+    );
+    assert_eq!(
+        passability_at(two_cities, &[(RIVAL_A, 0), (RIVAL_B, 1)], ME),
+        Passability::StopOnly,
+        "both 1-slot cities taken -- hex is closed, where pooling said 2 of 2 only by luck"
+    );
+
+    // ---- #62, brown New York: two 2-slot cities. The tile that makes ----
+    // ---- pooled counting unsalvageable: 4 total slots cannot tell   ----
+    // ---- 2+2 (closed) from 4+0.                                     ----
+    let ny = &[2u32, 2][..];
+    assert_eq!(
+        passability_at(ny, &[(RIVAL_A, 0), (RIVAL_B, 0)], ME),
+        Passability::Open,
+        "city 0 is full but city 1 is empty -- the hex is still passable"
+    );
+    assert_eq!(
+        passability_at(ny, &[(RIVAL_A, 0), (RIVAL_B, 0), (4, 1), (5, 1)], ME),
+        Passability::StopOnly,
+        "all four slots across both cities taken -- closed"
+    );
+    assert_eq!(
+        passability_at(ny, &[(RIVAL_A, 0), (RIVAL_B, 0), (ME, 1), (5, 1)], ME),
+        Passability::Open,
+        "my own token in city 1 opens the hex even though city 0 is full"
+    );
+
+    // ---- A hex with no city at all can never be blockaded. ----
+    assert_eq!(passability_at(&[], &[], ME), Passability::Open);
+}
+
+/// The per-city slot table must agree, city for city, with the `slots:`
+/// counts in each tile's own 18xx definition string recorded in
+/// `TILE_CATALOG` -- and its total must equal what `tile_city_slots`
+/// reports, since that is now derived from it.
+#[test]
+fn tile_city_slot_counts_match_sourced_18xx_slot_fields() {
+    use crate::hexmap::{tile_city_slot_counts, tile_city_slots};
+
+    // Single city, single slot. #61 is the one that invites a wrong guess:
+    // the BROWN "B" hub is 1-slot, not 2.
+    for tile_id in [53u32, 57, 61] {
+        assert_eq!(tile_city_slot_counts(tile_id), &[1]);
+    }
+    // Single city, two slots.
+    for tile_id in [14u32, 15, 63] {
+        assert_eq!(tile_city_slot_counts(tile_id), &[2]);
+    }
+    // TWO separate 1-slot cities -- green New York included.
+    for tile_id in [54u32, 59, 64, 65, 66, 67, 68] {
+        assert_eq!(tile_city_slot_counts(tile_id), &[1, 1]);
+    }
+    // Two separate 2-slot cities -- #62 alone in all of 1830.
+    assert_eq!(tile_city_slot_counts(62), &[2, 2]);
+    // Plain track has no city and so can never be tokened or blockaded.
+    for tile_id in [7u32, 8, 9, 39, 45, 70] {
+        assert!(tile_city_slot_counts(tile_id).is_empty());
+    }
+
+    // Totals unchanged from the hand-written table this replaced.
+    assert_eq!(tile_city_slots(57), 1);
+    assert_eq!(tile_city_slots(14), 2);
+    assert_eq!(tile_city_slots(64), 2);
+    assert_eq!(tile_city_slots(62), 4);
+    assert_eq!(tile_city_slots(9), 0);
+}
+
+/// **Audit G-13: ghost routing through a blockaded city must be impossible.**
+///
+/// The bug this closes: passability used to be one answer per HEX. On a tile
+/// carrying two cities on physically separate, non-intersecting track -- #62
+/// (brown New York), #54 (green New York), and every OO tile (#59, #64-#68)
+/// -- "some city on this hex is open" was treated as "this hex is passable",
+/// so a route could enter through a FULLY TOKENED city's own track and leave
+/// through it again. Blocking a rival out of New York or an OO hex is a core
+/// defensive play in 1830; the old reading made those tokens decorative.
+///
+/// This exercises the decision layer directly (`transit_passability`, via the
+/// same `HexInfo` the DFS builds) rather than standing up a whole board,
+/// because that is where the granularity lives -- `expand` now asks this
+/// question once per candidate segment instead of once per hex.
+#[test]
+fn a_blockaded_city_cannot_be_ghost_routed_through_on_a_multi_city_tile() {
+    use crate::hexmap::{tile_city_slot_counts, tile_paths_for, tile_segment_cities};
+    use crate::pathfinding::{city_passability_at, hex_info_for_test, Passability};
+
+    const ME: u32 = 1;
+    const RIVAL_A: u32 = 2;
+    const RIVAL_B: u32 = 3;
+
+    // ---- Tile 62: two 2-slot cities. City 0 owns edges 0-1, city 1 owns
+    // ---- edges 2-3. Fill city 0 with two rivals; leave city 1 empty.
+    let slots = tile_city_slot_counts(62);
+    assert_eq!(slots, &[2, 2], "guards the premise of this test");
+    let paths = tile_paths_for(62).expect("tile 62 is in the catalog");
+    assert_eq!(paths, &[(0u8, 1u8), (2u8, 3u8)]);
+
+    let occupants = [(RIVAL_A, 0u8), (RIVAL_B, 0u8)];
+    let per_city = city_passability_at(slots, &occupants, ME);
+    assert_eq!(
+        per_city,
+        vec![Passability::StopOnly, Passability::Open],
+        "city 0 is full of rivals, city 1 is untouched"
+    );
+
+    let info = hex_info_for_test(
+        paths.to_vec(),
+        tile_segment_cities(62, paths.len()),
+        per_city.clone(),
+    );
+
+    // THE REGRESSION. Segment 0 is city 0's track. Under the old hex-level
+    // rule this returned `Open` -- because city 1 had a slot -- and a route
+    // ran clean through the blockade on rails it had no access to.
+    assert_eq!(
+        info.transit_passability(0),
+        Passability::StopOnly,
+        "GHOST ROUTE: city 0 is fully tokened by rivals, so its own track \
+         (edges 0-1) must NOT be passable, however open city 1 is"
+    );
+    // ...and the other city is genuinely unaffected. A fix that simply
+    // blocked the whole hex would pass the assertion above and be just as
+    // wrong, in the opposite direction.
+    assert_eq!(
+        info.transit_passability(1),
+        Passability::Open,
+        "city 1 has both slots free -- blocking it would over-correct"
+    );
+
+    // ---- Same shape on an OO tile, two 1-slot cities (#67). ----
+    let oo_slots = tile_city_slot_counts(67);
+    assert_eq!(oo_slots, &[1, 1]);
+    let oo_paths = tile_paths_for(67).expect("tile 67 is in the catalog");
+    assert_eq!(oo_paths, &[(0u8, 3u8), (2u8, 4u8)]);
+    let oo_info = hex_info_for_test(
+        oo_paths.to_vec(),
+        tile_segment_cities(67, oo_paths.len()),
+        city_passability_at(oo_slots, &[(RIVAL_A, 0u8)], ME),
+    );
+    assert_eq!(
+        oo_info.transit_passability(0),
+        Passability::StopOnly,
+        "one rival fills a 1-slot city -- its track is closed"
+    );
+    assert_eq!(oo_info.transit_passability(1), Passability::Open);
+
+    // ---- My own token in a city always opens THAT city, and only it. ----
+    let mine = hex_info_for_test(
+        paths.to_vec(),
+        tile_segment_cities(62, paths.len()),
+        city_passability_at(slots, &[(ME, 0u8), (RIVAL_A, 0u8), (RIVAL_A, 1u8)], ME),
+    );
+    assert_eq!(
+        mine.transit_passability(0),
+        Passability::Open,
+        "I hold a slot in city 0, so I am never blocked out of it"
+    );
+
+    // ---- A single-city hub: every segment shares one city, so a full ----
+    // ---- city closes the whole tile. #63, six spokes, two slots.     ----
+    let hub_paths = tile_paths_for(63).expect("tile 63 is in the catalog");
+    let hub = hex_info_for_test(
+        hub_paths.to_vec(),
+        tile_segment_cities(63, hub_paths.len()),
+        city_passability_at(
+            tile_city_slot_counts(63),
+            &[(RIVAL_A, 0u8), (RIVAL_B, 0u8)],
+            ME,
+        ),
+    );
+    for index in 0..hub_paths.len() {
+        assert_eq!(
+            hub.transit_passability(index),
+            Passability::StopOnly,
+            "every segment on #63 runs through its single city"
+        );
+    }
+
+    // ---- Plain track has no city and can never be blockaded. ----
+    let plain_paths = tile_paths_for(9).expect("tile 9 is in the catalog");
+    let plain = hex_info_for_test(
+        plain_paths.to_vec(),
+        tile_segment_cities(9, plain_paths.len()),
+        Vec::new(),
+    );
+    assert_eq!(plain.transit_passability(0), Passability::Open);
+
+    // ---- UNATTRIBUTABLE segments take the STRICTEST city, never the ----
+    // ---- most permissive. This is the synthesized-overlay case, and  ----
+    // ---- getting it backwards is the ghost route all over again.     ----
+    let synthetic = hex_info_for_test(
+        vec![(0, 3)],
+        vec![None],
+        vec![Passability::StopOnly, Passability::Open],
+    );
+    assert_eq!(
+        synthetic.transit_passability(0),
+        Passability::StopOnly,
+        "a segment we cannot attribute to a city must not be assumed passable"
+    );
+}
+
+/// The index correspondence `tile_segment_cities` relies on: every multi-city
+/// tile in 1830 carries exactly one track segment per city, listed in city
+/// order. If a future catalog edit breaks that, this fails rather than
+/// silently reintroducing ghost routing through a mis-attributed segment.
+#[test]
+fn tile_segment_cities_agree_with_catalog_path_counts() {
+    use crate::hexmap::{tile_city_slot_counts, tile_paths_for, tile_segment_cities};
+
+    for tile_id in [54u32, 59, 62, 64, 65, 66, 67, 68] {
+        let cities = tile_city_slot_counts(tile_id).len();
+        let paths = tile_paths_for(tile_id).expect("multi-city tile is in the catalog");
+        assert_eq!(
+            cities,
+            paths.len(),
+            "tile #{tile_id} must have exactly one segment per city"
+        );
+        let mapped = tile_segment_cities(tile_id, paths.len());
+        let expected: Vec<Option<u8>> = (0..paths.len()).map(|i| Some(i as u8)).collect();
+        assert_eq!(mapped, expected, "tile #{tile_id} segment -> city order");
+    }
+
+    // Single-city tiles: every segment runs through city 0.
+    for tile_id in [14u32, 15, 53, 57, 61, 63] {
+        let paths = tile_paths_for(tile_id).expect("city tile is in the catalog");
+        assert!(tile_segment_cities(tile_id, paths.len())
+            .into_iter()
+            .all(|city| city == Some(0)));
+    }
+
+    // Plain track and towns carry no city at all.
+    for tile_id in [1u32, 3, 7, 8, 9, 45, 70] {
+        let paths = tile_paths_for(tile_id).expect("tile is in the catalog");
+        assert!(tile_segment_cities(tile_id, paths.len())
+            .into_iter()
+            .all(|city| city.is_none()));
+    }
+
+    // A segment list whose length disagrees with the city count cannot be
+    // trusted, and comes back unattributed rather than mis-attributed.
+    assert_eq!(tile_segment_cities(62, 5), vec![None; 5]);
+}
+
+/// The synthetic overlay tile must never collide with a real catalog entry,
+/// or a preprinted hex would borrow that tile's city layout for segments that
+/// have nothing to do with it.
+#[test]
+fn synthetic_overlay_tile_id_is_not_a_real_catalog_tile() {
+    use crate::hexmap::{tile_city_slot_counts, tile_paths_for};
+    use crate::pathfinding::SYNTHETIC_OVERLAY_TILE_ID;
+
+    assert!(tile_paths_for(SYNTHETIC_OVERLAY_TILE_ID).is_none());
+    assert!(tile_city_slot_counts(SYNTHETIC_OVERLAY_TILE_ID).is_empty());
 }

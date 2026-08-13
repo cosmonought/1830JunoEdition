@@ -312,7 +312,14 @@ const DEFAULT_POLL_INTERVAL_MS = 6000;
  *  guard against a client-less render. */
 export function useGameStatePolling(
   client: QueryCapableClient | null | undefined,
-  contractAddress: string,
+  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured
+   *  contract (`config.CONTRACT_ADDRESS` unset), which is a supported state,
+   *  not an error -- the same offline mode `HexGridRenderer`'s tile-catalog
+   *  fallback runs in. The hook then behaves exactly as it does with no
+   *  client: it clears state, stops loading, and never queries. Typed
+   *  optional rather than coerced to `""` at the call site so the offline
+   *  case cannot be mistaken for a real address that happens to be empty. */
+  contractAddress: string | null | undefined,
   gameId: number,
   intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
 ): UseGameStatePollingResult {
@@ -325,7 +332,7 @@ export function useGameStatePolling(
   const requestSeqRef = useRef(0);
 
   const refresh = useCallback(() => {
-    if (!client) {
+    if (!client || !contractAddress) {
       setGameState(null);
       setLoading(false);
       return;
@@ -530,7 +537,14 @@ const DEFAULT_WATERFALL_POLL_INTERVAL_MS = 4000;
  *  rather than continuing to query a phase that's already over. */
 export function useWaterfallStatePolling(
   client: QueryCapableClient | null | undefined,
-  contractAddress: string,
+  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured
+   *  contract (`config.CONTRACT_ADDRESS` unset), which is a supported state,
+   *  not an error -- the same offline mode `HexGridRenderer`'s tile-catalog
+   *  fallback runs in. The hook then behaves exactly as it does with no
+   *  client: it clears state, stops loading, and never queries. Typed
+   *  optional rather than coerced to `""` at the call site so the offline
+   *  case cannot be mistaken for a real address that happens to be empty. */
+  contractAddress: string | null | undefined,
   gameId: number,
   enabled: boolean,
   intervalMs: number = DEFAULT_WATERFALL_POLL_INTERVAL_MS,
@@ -541,7 +555,7 @@ export function useWaterfallStatePolling(
   const requestSeqRef = useRef(0);
 
   const refresh = useCallback(() => {
-    if (!client || !enabled) {
+    if (!client || !enabled || !contractAddress) {
       setWaterfallState(null);
       setLoading(false);
       return;

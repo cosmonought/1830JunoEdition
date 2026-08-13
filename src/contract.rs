@@ -506,6 +506,7 @@ pub fn execute(
             protocol_id,
             q,
             r,
+            city_index,
         } => {
             let response = hexmap::execute_place_station_token(
                 deps.branch(),
@@ -515,6 +516,7 @@ pub fn execute(
                 protocol_id,
                 q,
                 r,
+                city_index,
             )?;
             gamelog::record_action(
                 deps.storage,
@@ -524,6 +526,7 @@ pub fn execute(
                     protocol_id,
                     q,
                     r,
+                    city_index,
                 },
             )?;
             Ok(response)

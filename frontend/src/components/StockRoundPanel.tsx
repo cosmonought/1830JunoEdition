@@ -61,6 +61,11 @@ export interface StockRoundPanelProps {
   onPassTurn: () => void;
   sessionReady: boolean;
   isMyTurn: boolean;
+  /** F-6: the connected wallet, needed to find THIS player's own stake in
+   *  `player_holdings` and so bound the sell sizes to what they can actually
+   *  cover. `null` when disconnected, which zeroes every option -- correct,
+   *  since a disconnected viewer holds nothing to sell. */
+  connectedAddress: string | null;
 }
 
 /** Design note #5: hand-kept duplicate of StockMarketRenderer.tsx's
@@ -83,8 +88,60 @@ function tickerColor(companyId: number): string {
 /** Standard 1830 par ladder, per this pass's own requirement. */
 const PAR_VALUE_LADDER: readonly string[] = ["67", "71", "76", "82", "90", "100"];
 
-/** Sell-bundle sizes -- one to four standard 10% certificate blocks. */
-const SELL_PERCENTAGE_OPTIONS: readonly number[] = [10, 20, 30, 40];
+/** Every sell-bundle size 1830 can express: 10% certificate blocks up to the
+ *  50% Bank Pool cap. F-6.
+ *
+ *  Was `[10, 20, 30, 40]`, which silently made a legal move unreachable: a
+ *  player holding 60% could not dump 50% in one action, and a president
+ *  executing a legal dump-and-transfer had no control for it at all. The
+ *  backend accepts any multiple of 10 up to holdings, bounded by the pool
+ *  cap; the UI simply did not offer the top step.
+ *
+ *  The list is now the full domain, and `sellOptionState` below decides which
+ *  entries are legal RIGHT NOW. Rendering the illegal ones greyed with a
+ *  reason is deliberate: an absent control teaches a player nothing, while a
+ *  disabled one that says "would exceed the 50% Bank Pool cap" teaches them
+ *  the rule at the moment it applies to them. */
+const SELL_PERCENTAGE_OPTIONS: readonly number[] = [10, 20, 30, 40, 50];
+
+/** The 1830 Bank Pool cap: no company may have more than 50% of its shares
+ *  sitting in the pool at once. Mirrors the backend's own bound. */
+const BANK_POOL_CAP_PERCENT = 50;
+
+/** Whether one sell size is currently legal, and if not, why.
+ *
+ *  TWO independent limits, reported separately because they call for
+ *  different actions from the player:
+ *    - HOLDINGS. You cannot sell shares you do not have. Nothing to be done
+ *      about it this turn.
+ *    - POOL CAP. The pool has room for `50 - bank_pool_percentage` more.
+ *      This one moves as other players buy out of the pool, so a player who
+ *      knows the reason knows to wait rather than assuming the UI is broken.
+ *
+ *  Holdings is checked first: if you cannot cover the bundle at all, saying
+ *  so is more useful than a pool-cap message about shares you never had. */
+function sellOptionState(
+  percentage: number,
+  playerHoldingPercent: number,
+  bankPoolPercent: number,
+): { enabled: boolean; reason?: string } {
+  if (percentage > playerHoldingPercent) {
+    return {
+      enabled: false,
+      reason: `You hold ${playerHoldingPercent}% -- not enough for a ${percentage}% bundle`,
+    };
+  }
+  const poolRoom = Math.max(0, BANK_POOL_CAP_PERCENT - bankPoolPercent);
+  if (percentage > poolRoom) {
+    return {
+      enabled: false,
+      reason:
+        `Bank Pool is at ${bankPoolPercent}% and caps at ${BANK_POOL_CAP_PERCENT}% -- ` +
+        `only ${poolRoom}% more can be sold into it`,
+    };
+  }
+  return { enabled: true };
+}
 
 const FLOAT_THRESHOLD_PERCENT = 60;
 
@@ -103,6 +160,7 @@ export function StockRoundPanel({
   onPassTurn,
   sessionReady,
   isMyTurn,
+  connectedAddress,
 }: StockRoundPanelProps) {
   const selectedCompany = publicCompanies.find((c) => c.company_id === selectedProtocolId) ?? null;
   const soldPercentage = selectedCompany
@@ -110,6 +168,20 @@ export function StockRoundPanel({
     : 0;
   const isFloated = selectedCompany?.is_floated ?? false;
   const controlsDisabled = !sessionReady;
+
+  // F-6: this player's own stake in the selected company, which is what
+  // bounds the sell sizes. `player_holdings` OMITS anyone holding exactly 0%
+  // (see `gameState.ts`), so an absent entry means zero, not missing data.
+  const playerHoldingPercent =
+    selectedCompany?.player_holdings.find((holding) => holding.player === connectedAddress)
+      ?.percentage ?? 0;
+  const bankPoolPercent = selectedCompany?.bank_pool_percentage ?? 0;
+
+  // Keep the committed selection legal. Without this, a player who selects
+  // 50%, then watches the pool fill as others sell, is left with an illegal
+  // size selected and an enabled Sell button that the contract will reject --
+  // the UI would be inviting a transaction it knows will fail.
+  const selectedSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
 
   return (
     <div style={styles.root}>
@@ -215,22 +287,42 @@ export function StockRoundPanel({
         <div style={styles.section}>
           <span style={styles.sectionLabel}>Sell Shares</span>
           <div style={styles.sellStepperRow}>
-            {SELL_PERCENTAGE_OPTIONS.map((pct) => (
-              <button
-                key={pct}
-                type="button"
-                style={{ ...styles.sellStep, ...(sellPercentage === pct ? styles.sellStepActive : {}) }}
-                onClick={() => onSelectSellPercentage(pct)}
-              >
-                {pct}%
-              </button>
-            ))}
+            {SELL_PERCENTAGE_OPTIONS.map((pct) => {
+              const state = sellOptionState(pct, playerHoldingPercent, bankPoolPercent);
+              return (
+                <button
+                  key={pct}
+                  type="button"
+                  // `title` carries the reason on hover. Native tooltip
+                  // rather than a custom one on purpose: a disabled button
+                  // does not fire pointer events in every browser, so a
+                  // JS-driven tooltip is unreliable here in exactly the state
+                  // it is needed.
+                  title={state.reason}
+                  style={{
+                    ...styles.sellStep,
+                    ...(sellPercentage === pct ? styles.sellStepActive : {}),
+                    ...(state.enabled ? {} : styles.sellStepDisabled),
+                  }}
+                  disabled={controlsDisabled || !selectedCompany || !state.enabled}
+                  onClick={() => onSelectSellPercentage(pct)}
+                >
+                  {pct}%
+                </button>
+              );
+            })}
           </div>
+          {/* The reason the CURRENT selection cannot be sold, stated inline.
+              The per-button tooltip only appears on hover, which a player who
+              has already committed to a size will not think to do. */}
+          {selectedCompany && !selectedSellState.enabled && (
+            <span style={styles.sellHint}>{selectedSellState.reason}</span>
+          )}
           <button
             type="button"
             style={styles.actionButton}
             onClick={onSellShares}
-            disabled={controlsDisabled || !selectedCompany}
+            disabled={controlsDisabled || !selectedCompany || !selectedSellState.enabled}
           >
             Sell {sellPercentage}% Bundle
           </button>
@@ -419,6 +511,20 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#4a2a2a",
     borderColor: "#924a4a",
     color: "#e6e8ef",
+  },
+  // F-6: an option the rules currently forbid. Dimmed and
+  // not-allowed-cursored, but still RENDERED -- an absent control teaches a
+  // player nothing, while a visibly disabled one carrying its reason teaches
+  // them the cap exists at the moment it binds them.
+  sellStepDisabled: {
+    opacity: 0.38,
+    cursor: "not-allowed",
+    borderColor: "#2b2f3a",
+  },
+  sellHint: {
+    fontSize: "11px",
+    lineHeight: 1.4,
+    color: "#c8a24a",
   },
   actionButton: {
     fontSize: "13px",

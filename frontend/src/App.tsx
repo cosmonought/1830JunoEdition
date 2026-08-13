@@ -479,8 +479,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
+import { chainConfigError, formatNativeAmount, NATIVE_DENOM_DISPLAY } from "./config";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
+  type RouteOverlay,
   type MapGridResponse,
   type HexClickQueryState,
 } from "./components/HexGridRenderer";
@@ -490,7 +492,6 @@ import StockMarketRenderer, {
 import TileSelectionPopup, {
   type TileSelectionPopupProps,
 } from "./components/TileSelectionPopup";
-import { type ChatMessage, truncateChatAddress } from "./components/Chatbox";
 import TopTicker from "./components/TopTicker";
 import InlineQuickChat from "./components/InlineQuickChat";
 import ContextualSubPanel from "./components/ContextualSubPanel";
@@ -506,7 +507,13 @@ import {
   type PrivateCompanyState,
   type TileColor,
 } from "./utils/gameState";
-import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
+import {
+  mergeFeedItems,
+  truncateChatAddress,
+  type ActionLogEntry,
+  type ChatMessage,
+  type FeedFilter,
+} from "./utils/feed";
 import { useDocumentTitleFlash } from "./utils/turnAlert";
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
 
@@ -636,6 +643,21 @@ function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
   const wallet = useWallet();
   const session = useGameSession();
 
+  // F-4 UI: WHY the wallet cannot connect, when that is a configuration
+  // problem rather than a user one.
+  //
+  // `config.ts` deliberately no longer throws at import (see its design note
+  // #0) -- an unconfigured build boots into offline mode instead of dying.
+  // The cost of that correctness is that "Connect Keplr" would otherwise look
+  // like it should work and simply fail on click. Surfacing the reason turns
+  // a dead button into an explained one, and names the exact environment
+  // variable so the fix is obvious without reading source.
+  //
+  // Computed at render, not memoised: it reads build-time constants that
+  // cannot change during a session, so there is nothing to cache and a
+  // `useMemo` here would only add indirection.
+  const configError = chainConfigError();
+
   const walletStatusLabel: Record<typeof wallet.status, string> = {
     disconnected: "Disconnected",
     connecting: "Connecting...",
@@ -676,6 +698,14 @@ function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
           </button>
         )}
         {wallet.error && <span style={styles.errorText}>{wallet.error}</span>}
+        {configError && (
+          <span style={styles.offlineBadge} title={configError}>
+            {/* The full message is long and names a rebuild requirement; the
+                badge shows the actionable half and the tooltip carries the
+                rest, so the bar never wraps. */}
+            Offline -- {firstMissingEnvVar(configError) ?? "chain not configured"}
+          </span>
+        )}
       </div>
 
       <div style={styles.dashboardSection}>
@@ -696,6 +726,33 @@ function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
         {session.sessionError && <span style={styles.errorText}>{session.sessionError}</span>}
       </div>
 
+      {/* F-3 UI: REAL money and GAME money, deliberately styled as two
+          different kinds of object.
+
+          These are not two balances of the same thing. `$JUNO` is the
+          player's actual on-chain holding -- what the lobby ante is
+          denominated in and what gas is paid from. `VGP` is Virtual Game
+          Points, the in-game play money the contract mints and moves freely.
+          Rendering them in one undifferentiated row is what made F-3's
+          confusion possible in the first place, so they get distinct
+          treatments rather than distinct labels alone:
+
+            - $JUNO: teal pill with a border -- "this is a real asset".
+            - VGP:   plain amber monospace, no container -- "this is a score".
+
+          Both are monospace and right-weighted so digits line up, because
+          the one thing a player DOES want to do across them is compare
+          magnitudes at a glance. */}
+      <div style={styles.dashboardSection}>
+        <span style={styles.dashboardLabel}>Wallet</span>
+        <span style={styles.nativeBalancePill} title={nativeBalanceTitle(wallet.nativeBalance)}>
+          <span style={styles.nativeBalanceAmount}>
+            {wallet.nativeBalance ? formatNativeAmount(wallet.nativeBalance.amount) : "--"}
+          </span>
+          <span style={styles.nativeBalanceDenom}>{NATIVE_DENOM_DISPLAY}</span>
+        </span>
+      </div>
+
       <div style={styles.dashboardSection}>
         <span style={styles.dashboardLabel}>VGP Cash</span>
         <span style={styles.vgpBalance}>{vgpBalance ?? "--"}</span>
@@ -703,6 +760,22 @@ function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
       </div>
     </header>
   );
+}
+
+/** Pulls the `REACT_APP_*` name out of a `chainConfigError()` message, for
+ *  the compact badge. `null` if the message names none, in which case the
+ *  caller falls back to a generic label rather than printing a truncated
+ *  sentence. */
+function firstMissingEnvVar(message: string): string | null {
+  return message.match(/REACT_APP_[A-Z_]+/)?.[0] ?? null;
+}
+
+/** Hover text for the native balance pill -- the exact base-denom integer
+ *  alongside the formatted figure, so a player can verify the conversion and
+ *  see that no precision was invented. */
+function nativeBalanceTitle(coin: { denom: string; amount: string } | null): string {
+  if (!coin) return "Native balance unavailable -- connect a wallet on a configured chain.";
+  return `${coin.amount} ${coin.denom} (raw base-denom integer)`;
 }
 
 function statusBadgeColor(
@@ -1286,7 +1359,50 @@ function AppShell() {
   // value, no per-player toggle, enforced globally: they turn on the
   // instant `isMyTurn` becomes `true` and stop the instant it becomes
   // `false`.
-  const isMyTurn = !!wallet.address && !!activePlayerAddress && wallet.address === activePlayerAddress;
+  // F-5: ROUND-TYPE AWARE. This was
+  //
+  //     wallet.address === activePlayerAddress
+  //
+  // which is right for a Stock Round and wrong for the whole of every
+  // Operating Round. `activePlayerAddress` is
+  // `player_addresses[active_player_index]` -- the STOCK ROUND turn pointer.
+  // During an Operating Round the acting entity is not a player at all: it is
+  // the corporation at `active_operating_order[active_corporation_index]`,
+  // and the authorised human is that corporation's `president`. The backend
+  // gates `LayTile` / `BuyHardwareFromPool` / `DeclareDividends` /
+  // `EndOperatingRoundTurn` on exactly that.
+  //
+  // The consequence was not a missing alert but an INVERTED one: for roughly
+  // half of game time the title flash and pulse glow fired for whoever
+  // happened to hold the stale SR pointer, while the president who actually
+  // had to act got nothing. Both halves of the mandatory notification
+  // requirement pointed at the wrong person simultaneously.
+  //
+  // Every field this needs is already on the polled `GameStateResponse`; no
+  // backend change and no extra query.
+  const isMyTurn = useMemo(() => {
+    if (!wallet.address || !gameState) return false;
+
+    if (gameState.current_round_type === "OperatingRound") {
+      const activeCompanyId =
+        gameState.active_operating_order[gameState.active_corporation_index];
+      // An Operating Round with an empty order, or an index past its end, has
+      // no acting corporation -- nobody's turn, rather than everybody's.
+      // Falling back to the Stock Round pointer here would resurrect exactly
+      // the bug this fixes, so it deliberately does not.
+      if (activeCompanyId === undefined) return false;
+      const president = gameState.public_companies.find(
+        (company) => company.company_id === activeCompanyId,
+      )?.president;
+      // A floated-but-presidentless corporation (no qualifying 20% holder)
+      // alerts nobody, which is correct: there is no human authorised to act
+      // for it, and the contract would reject them if they tried.
+      return !!president && president === wallet.address;
+    }
+
+    // Stock Round and Waterfall Auction both run on the player pointer.
+    return gameState.player_addresses[gameState.active_player_index] === wallet.address;
+  }, [wallet.address, gameState]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -1473,6 +1589,39 @@ function AppShell() {
   );
 
   const routeHopCount = Math.max(0, routePoints.length - 1);
+
+  // F-1: the player's in-progress manual route, handed to the canvas as a
+  // drawable overlay -- design note #137 in `HexGridRenderer.tsx`.
+  //
+  // Until now `routePoints` existed only as a TEXT list in the side panel. A
+  // player assembling a route by clicking hexes got a column of labels and no
+  // indication on the map of the path they were building, which is precisely
+  // the feedback the map exists to give.
+  //
+  // `useMemo` on `routePoints` alone: this array's identity is part of
+  // `HexGridRenderer`'s draw-effect dependency list, so rebuilding it on every
+  // render would repaint the whole canvas on every unrelated state change in
+  // this very large component.
+  //
+  // Fewer than two points yields `[]`, and `drawRouteOverlays` also skips any
+  // entry with `hexes.length < 2` -- a route needs at least one hop to be a
+  // line, and a single clicked hex is not yet a route.
+  const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
+    if (routePoints.length < 2) return [];
+    return [
+      {
+        // One overlay, because a manually-declared route IS one train's run.
+        // The multi-train case (`trace_best_route_set` returns one route per
+        // train) maps onto this same prop as several entries with different
+        // colours -- no shape change needed when that lands.
+        trainLabel: "Selected Route",
+        // Amber, matching the route-select UI's own accent, so the ribbon on
+        // the map reads as the same feature as the panel that built it.
+        color: "#e0a54a",
+        hexes: routePoints.map((point) => [point.q, point.r] as [number, number]),
+      },
+    ];
+  }, [routePoints]);
   const routeMaxDistanceForSelectedHardware = MOCK_TRAIN_CATALOG.find(
     (t) => t.modelType === selectedHardwareModel,
   )?.maxDistance;
@@ -1893,6 +2042,7 @@ function AppShell() {
                     onPassTurn={handlePassTurn}
                     sessionReady={session.sessionStatus === "ready"}
                     isMyTurn={isMyTurn}
+                    connectedAddress={wallet.address}
                   />
                 )}
 
@@ -1924,6 +2074,7 @@ function AppShell() {
                       // `gameState` hasn't resolved yet, falling back to
                       // HexGridRenderer's own stable empty-array default.
                       publicCompanies={gameState?.public_companies}
+                      routeOverlays={manualRouteOverlay}
                     />
                   ) : (
                     <StockMarketRenderer marketGrid={marketGrid} />
@@ -2120,10 +2271,46 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "15px",
     color: "#c7cbd4",
   },
+  // VGP: no container, amber. Reads as a SCORE.
   vgpBalance: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: "20px",
     fontWeight: 600,
+    color: "#e0b64a",
+  },
+  // $JUNO: contained pill, teal, bordered. Reads as a REAL ASSET -- see the
+  // comment at the render site for why the two are deliberately different
+  // kinds of object rather than two rows of the same kind.
+  nativeBalancePill: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "6px",
+    padding: "4px 12px",
+    borderRadius: "999px",
+    border: "1px solid #2f6f6a",
+    backgroundColor: "#14312f",
+  },
+  nativeBalanceAmount: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "20px",
+    fontWeight: 600,
+    color: "#5fd4c4",
+  },
+  nativeBalanceDenom: {
+    fontSize: "12px",
+    fontWeight: 700,
+    letterSpacing: "0.06em",
+    color: "#7fb3ad",
+  },
+  offlineBadge: {
+    fontSize: "12px",
+    fontWeight: 600,
+    padding: "4px 10px",
+    borderRadius: "6px",
+    border: "1px solid #6b5a24",
+    backgroundColor: "#2a2413",
+    color: "#d9b95c",
+    cursor: "help",
   },
   vgpBalanceNote: {
     fontSize: "13px",

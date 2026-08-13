@@ -1031,10 +1031,11 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, StdResult, Sto
 use std::collections::{HashSet, VecDeque};
 use thiserror::Error;
 
+use crate::public_company::CORE_PUBLIC_COMPANIES;
 use crate::state::{
-    GameSession, PrivateCompany, PublicCompany, TerrainType, Tile, TileColor, MAP_GRID,
-    PRIVATE_COMPANIES, PROTOCOL_LAST_TOKEN_SUBROUND, PROTOCOL_NETWORK_HEXES, PROTOCOL_PRESIDENT,
-    PROTOCOL_STATION_HEXES, PUBLIC_COMPANIES, REMAINING_TILES, SESSIONS,
+    GameSession, PrivateCompany, PublicCompany, TerrainType, Tile, TileColor, HEX_STATION_TOKENS,
+    MAP_GRID, PRIVATE_COMPANIES, PROTOCOL_LAST_TOKEN_SUBROUND, PROTOCOL_NETWORK_HEXES,
+    PROTOCOL_PRESIDENT, PROTOCOL_STATION_HEXES, PUBLIC_COMPANIES, REMAINING_TILES, SESSIONS,
 };
 
 /// The fixed set of layable tile artworks: `(tile_id, base connection
@@ -1124,160 +1125,180 @@ pub const UNLIMITED_TILE_SUPPLY: u32 = u32::MAX;
 /// identical quantity, so the tray a room can actually lay is unchanged.
 /// The numbering is kept as-is deliberately -- it is what the pre-G-9
 /// masks, the tests, and the frontend's own catalog mirror all already use.
-pub const TILE_CATALOG: &[(u32, u8, u128, TerrainType, TileColor, u32, &[(u8, u8)])] = &[
+///
+/// Audit G-11 added the EIGHTH element: `Option<u32>`, this tile's own
+/// printed revenue, or `None` to fall back to the flat
+/// `terrain_base_value` bucket for its `TerrainType`. See `tile_base_value`,
+/// which is the single site that resolves the two.
+///
+/// (Stated here rather than inline on the element: a tuple's fields cannot
+/// carry `///` doc comments -- only a struct's can -- and attaching one
+/// inside the type is a hard compile error, `expected type, found doc
+/// comment`. Ordinary `//` comments are legal there, but a reader looking
+/// for what field 8 means will look at the constant, so it lives here.)
+pub const TILE_CATALOG: &[(
+    u32,
+    u8,
+    u128,
+    TerrainType,
+    TileColor,
+    u32,
+    &[(u8, u8)],
+    Option<u32>,
+)] = &[
     // ---- Yellow tier: legal from every room's genesis. ----
     // #1 x1 -- two towns, edges 0/1/3/4.
     // 18xx: `town=revenue:10;town=revenue:10;path=a:1,b:_0;path=a:_0,b:3;path=a:0,b:_1;path=a:_1,b:4`
-    (1, 0b01_1011, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 4), (1, 3)]),
+    (1, 0b01_1011, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 4), (1, 3)], Some(10)),
     // #2 x1 -- two towns, edges 0/1/2/3.
     // 18xx: `town=revenue:10;town=revenue:10;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:2`
-    (2, 0b00_1111, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (1, 2)]),
+    (2, 0b00_1111, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (1, 2)], Some(10)),
     // #3 x2 -- single town, sharp curve.
     // 18xx: `town=revenue:10;path=a:0,b:_0;path=a:_0,b:1`
-    (3, 0b00_0011, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 1)]),
+    (3, 0b00_0011, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 1)], Some(10)),
     // #4 x2 -- single town, straight.
     // 18xx: `town=revenue:10;path=a:0,b:_0;path=a:_0,b:3`
-    (4, 0b00_1001, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 3)]),
+    (4, 0b00_1001, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 3)], Some(10)),
     // #7 x4 -- plain sharp curve.
     // 18xx: `path=a:0,b:1`
-    (7, 0b00_0011, 0, TerrainType::Plain, TileColor::Yellow, 4, &[(0, 1)]),
+    (7, 0b00_0011, 0, TerrainType::Plain, TileColor::Yellow, 4, &[(0, 1)], None),
     // #8 x8 -- plain gentle curve -- the most common tile in the game.
     // 18xx: `path=a:0,b:2`
-    (8, 0b00_0101, 0, TerrainType::Plain, TileColor::Yellow, 8, &[(0, 2)]),
+    (8, 0b00_0101, 0, TerrainType::Plain, TileColor::Yellow, 8, &[(0, 2)], None),
     // #9 x7 -- plain straight.
     // 18xx: `path=a:0,b:3`
-    (9, 0b00_1001, 0, TerrainType::Plain, TileColor::Yellow, 7, &[(0, 3)]),
+    (9, 0b00_1001, 0, TerrainType::Plain, TileColor::Yellow, 7, &[(0, 3)], None),
     // #55 x1 -- two towns, edges 0/1/3/4.
     // 18xx: `town=revenue:10;town=revenue:10;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:4`
-    (55, 0b01_1011, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (1, 4)]),
+    (55, 0b01_1011, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (1, 4)], Some(10)),
     // #56 x1 -- two towns, edges 0/1/2/3.
     // 18xx: `town=revenue:10;town=revenue:10;path=a:0,b:_0;path=a:_0,b:2;path=a:1,b:_1;path=a:_1,b:3`
-    (56, 0b00_1111, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 2), (1, 3)]),
+    (56, 0b00_1111, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 2), (1, 3)], Some(10)),
     // #57 x4 -- THE yellow city tile -- every plain-city hex starts here.
     // 18xx: `city=revenue:20;path=a:0,b:_0;path=a:_0,b:3`
-    (57, 0b00_1001, 0, TerrainType::MajorCityHub, TileColor::Yellow, 4, &[(0, 3)]),
+    (57, 0b00_1001, 0, TerrainType::MajorCityHub, TileColor::Yellow, 4, &[(0, 3)], Some(20)),
     // #58 x2 -- single town, gentle curve.
     // 18xx: `town=revenue:10;path=a:0,b:_0;path=a:_0,b:2`
-    (58, 0b00_0101, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 2)]),
+    (58, 0b00_0101, 0, TerrainType::SmallTown, TileColor::Yellow, 2, &[(0, 2)], Some(10)),
     // #69 x1 -- two towns, edges 0/2/3/4.
     // 18xx: `town=revenue:10;town=revenue:10;path=a:0,b:_0;path=a:_0,b:3;path=a:2,b:_1;path=a:_1,b:4`
-    (69, 0b01_1101, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (2, 4)]),
+    (69, 0b01_1101, 0, TerrainType::DoubleTown, TileColor::Yellow, 1, &[(0, 3), (2, 4)], Some(10)),
 
     // ---- Green tier: unlocked by the room's first 3-train. ----
     // #14 x3 -- green city, edges 0/1/3/4.
     // 18xx: `city=revenue:30,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:3,b:_0;path=a:4,b:_0`
     (14, 0b01_1011, 0, TerrainType::MajorCityHub, TileColor::Green, 3, &[
         (0, 1), (0, 3), (0, 4), (1, 3), (1, 4), (3, 4)
-    ]),
+    ], Some(30)),
     // #15 x2 -- green city, edges 0/1/2/3.
     // 18xx: `city=revenue:30,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0`
     (15, 0b00_1111, 0, TerrainType::MajorCityHub, TileColor::Green, 2, &[
         (0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)
-    ]),
+    ], Some(30)),
     // #16 x1 -- plain, edges 0/1/2/3.
     // 18xx: `path=a:0,b:2;path=a:1,b:3`
-    (16, 0b00_1111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 2), (1, 3)]),
+    (16, 0b00_1111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 2), (1, 3)], None),
     // #18 x1 -- plain, edges 0/1/2/3.
     // 18xx: `path=a:0,b:3;path=a:1,b:2`
-    (18, 0b00_1111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (1, 2)]),
+    (18, 0b00_1111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (1, 2)], None),
     // #19 x1 -- plain, edges 0/2/3/4.
     // 18xx: `path=a:0,b:3;path=a:2,b:4`
-    (19, 0b01_1101, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (2, 4)]),
+    (19, 0b01_1101, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (2, 4)], None),
     // #20 x1 -- plain, edges 0/1/3/4.
     // 18xx: `path=a:0,b:3;path=a:1,b:4`
-    (20, 0b01_1011, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (1, 4)]),
+    (20, 0b01_1011, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (1, 4)], None),
     // #23 x3 -- plain, edges 0/3/4.
     // 18xx: `path=a:0,b:3;path=a:0,b:4`
-    (23, 0b01_1001, 0, TerrainType::Plain, TileColor::Green, 3, &[(0, 3), (0, 4)]),
+    (23, 0b01_1001, 0, TerrainType::Plain, TileColor::Green, 3, &[(0, 3), (0, 4)], None),
     // #24 x3 -- plain, edges 0/2/3.
     // 18xx: `path=a:0,b:3;path=a:0,b:2`
-    (24, 0b00_1101, 0, TerrainType::Plain, TileColor::Green, 3, &[(0, 2), (0, 3)]),
+    (24, 0b00_1101, 0, TerrainType::Plain, TileColor::Green, 3, &[(0, 2), (0, 3)], None),
     // #25 x1 -- plain, edges 0/2/4.
     // 18xx: `path=a:0,b:2;path=a:0,b:4`
-    (25, 0b01_0101, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 2), (0, 4)]),
+    (25, 0b01_0101, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 2), (0, 4)], None),
     // #26 x1 -- plain, edges 0/3/5.
     // 18xx: `path=a:0,b:3;path=a:0,b:5`
-    (26, 0b10_1001, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (0, 5)]),
+    (26, 0b10_1001, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 3), (0, 5)], None),
     // #27 x1 -- plain, edges 0/1/3.
     // 18xx: `path=a:0,b:3;path=a:0,b:1`
-    (27, 0b00_1011, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 1), (0, 3)]),
+    (27, 0b00_1011, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 1), (0, 3)], None),
     // #28 x1 -- plain, edges 0/4/5.
     // 18xx: `path=a:0,b:4;path=a:0,b:5`
-    (28, 0b11_0001, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 4), (0, 5)]),
+    (28, 0b11_0001, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 4), (0, 5)], None),
     // #29 x1 -- plain, edges 0/1/2.
     // 18xx: `path=a:0,b:2;path=a:0,b:1`
-    (29, 0b00_0111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 1), (0, 2)]),
+    (29, 0b00_0111, 0, TerrainType::Plain, TileColor::Green, 1, &[(0, 1), (0, 2)], None),
     // #53 x2 -- "B" label -- Boston AND Baltimore, edges 0/2/4.
     // 18xx: `city=revenue:50;path=a:0,b:_0;path=a:2,b:_0;path=a:4,b:_0;label=B`
-    (53, 0b01_0101, 0, TerrainType::BostonHub, TileColor::Green, 2, &[(0, 2), (0, 4), (2, 4)]),
+    (53, 0b01_0101, 0, TerrainType::BostonHub, TileColor::Green, 2, &[(0, 2), (0, 4), (2, 4)], Some(50)),
     // #54 x1 -- "NY" label -- two cities, edges 0/1/2/3.
     // 18xx: `city=revenue:60,loc:0.5;city=revenue:60,loc:2.5;path=a:0,b:_0;path=a:_0,b:1;path=a:2,b:_1;path=a:_1,b:3;label=NY`
-    (54, 0b00_1111, 0, TerrainType::NewYorkHub, TileColor::Green, 1, &[(0, 1), (2, 3)]),
+    (54, 0b00_1111, 0, TerrainType::NewYorkHub, TileColor::Green, 1, &[(0, 1), (2, 3)], Some(60)),
     // #59 x2 -- "OO" label -- two cities, edges 0/2.
     // 18xx: `city=revenue:40;city=revenue:40;path=a:0,b:_0;path=a:2,b:_1;label=OO`
     // NOTE: 0>stop 2>stop -- `e>stop` is a terminal spur (enter and stop, never pass through).
-    (59, 0b00_0101, 0, TerrainType::DoubleCityHub, TileColor::Green, 2, &[(0, 0), (2, 2)]),
+    (59, 0b00_0101, 0, TerrainType::DoubleCityHub, TileColor::Green, 2, &[(0, 0), (2, 2)], Some(40)),
 
     // ---- Brown tier: unlocked by the room's first 5-train. ----
     // #39 x1 -- plain, edges 0/1/2.
     // 18xx: `path=a:0,b:2;path=a:0,b:1;path=a:1,b:2`
-    (39, 0b00_0111, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 2), (1, 2)]),
+    (39, 0b00_0111, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 2), (1, 2)], None),
     // #40 x1 -- plain, edges 0/2/4.
     // 18xx: `path=a:0,b:2;path=a:2,b:4;path=a:0,b:4`
-    (40, 0b01_0101, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 2), (0, 4), (2, 4)]),
+    (40, 0b01_0101, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 2), (0, 4), (2, 4)], None),
     // #41 x2 -- plain, edges 0/1/3.
     // 18xx: `path=a:0,b:3;path=a:0,b:1;path=a:1,b:3`
-    (41, 0b00_1011, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 1), (0, 3), (1, 3)]),
+    (41, 0b00_1011, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 1), (0, 3), (1, 3)], None),
     // #42 x2 -- plain, edges 0/3/5.
     // 18xx: `path=a:0,b:3;path=a:3,b:5;path=a:0,b:5`
-    (42, 0b10_1001, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 3), (0, 5), (3, 5)]),
+    (42, 0b10_1001, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 3), (0, 5), (3, 5)], None),
     // #43 x2 -- plain, edges 0/1/2/3.
     // 18xx: `path=a:0,b:3;path=a:0,b:2;path=a:1,b:3;path=a:1,b:2`
-    (43, 0b00_1111, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 2), (0, 3), (1, 2), (1, 3)]),
+    (43, 0b00_1111, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 2), (0, 3), (1, 2), (1, 3)], None),
     // #44 x1 -- plain, edges 0/1/3/4.
     // 18xx: `path=a:0,b:3;path=a:1,b:4;path=a:0,b:1;path=a:3,b:4`
-    (44, 0b01_1011, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 3), (1, 4), (3, 4)]),
+    (44, 0b01_1011, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 3), (1, 4), (3, 4)], None),
     // #45 x2 -- plain, edges 0/2/3/4.
     // 18xx: `path=a:0,b:3;path=a:2,b:4;path=a:0,b:4;path=a:2,b:3`
-    (45, 0b01_1101, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 3), (0, 4), (2, 3), (2, 4)]),
+    (45, 0b01_1101, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 3), (0, 4), (2, 3), (2, 4)], None),
     // #46 x2 -- plain, edges 0/2/3/4.
     // 18xx: `path=a:0,b:3;path=a:2,b:4;path=a:3,b:4;path=a:0,b:2`
-    (46, 0b01_1101, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 2), (0, 3), (2, 4), (3, 4)]),
+    (46, 0b01_1101, 0, TerrainType::Plain, TileColor::Brown, 2, &[(0, 2), (0, 3), (2, 4), (3, 4)], None),
     // #47 x1 -- plain, edges 0/1/3/4.
     // 18xx: `path=a:0,b:3;path=a:1,b:4;path=a:1,b:3;path=a:0,b:4`
-    (47, 0b01_1011, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 3), (0, 4), (1, 3), (1, 4)]),
+    (47, 0b01_1011, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 3), (0, 4), (1, 3), (1, 4)], None),
     // #61 x2 -- "B" label -- Boston AND Baltimore, edges 0/2/3/4.
     // 18xx: `city=revenue:60;path=a:0,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;label=B`
     (61, 0b01_1101, 0, TerrainType::BostonHub, TileColor::Brown, 2, &[
         (0, 2), (0, 3), (0, 4), (2, 3), (2, 4), (3, 4)
-    ]),
+    ], Some(60)),
     // #62 x1 -- "NY" label -- two cities, edges 0/1/2/3.
     // 18xx: `city=revenue:80,slots:2;city=revenue:80,slots:2;path=a:0,b:_0;path=a:_0,b:1;path=a:2,b:_1;path=a:_1,b:3;label=NY`
-    (62, 0b00_1111, 0, TerrainType::NewYorkHub, TileColor::Brown, 1, &[(0, 1), (2, 3)]),
+    (62, 0b00_1111, 0, TerrainType::NewYorkHub, TileColor::Brown, 1, &[(0, 1), (2, 3)], Some(90)),
     // #63 x3 -- brown city, all six edges.
     // 18xx: `city=revenue:40,slots:2;path=a:0,b:_0;path=a:1,b:_0;path=a:2,b:_0;path=a:3,b:_0;path=a:4,b:_0;path=a:5,b:_0`
     (63, 0b11_1111, 0, TerrainType::MajorCityHub, TileColor::Brown, 3, &[
         (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (1, 2), (1, 3), (1, 4), (1, 5), (2, 3), (2, 4),
         (2, 5), (3, 4), (3, 5), (4, 5)
-    ]),
+    ], Some(40)),
     // #64 x1 -- "OO" label, edges 0/2/3/4.
     // 18xx: `city=revenue:50;city=revenue:50,loc:3.5;path=a:0,b:_0;path=a:_0,b:2;path=a:3,b:_1;path=a:_1,b:4;label=OO`
-    (64, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 2), (3, 4)]),
+    (64, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 2), (3, 4)], Some(50)),
     // #65 x1 -- "OO" label, edges 0/2/3/4.
     // 18xx: `city=revenue:50;city=revenue:50,loc:2.5;path=a:0,b:_0;path=a:_0,b:4;path=a:2,b:_1;path=a:_1,b:3;label=OO`
-    (65, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 4), (2, 3)]),
+    (65, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 4), (2, 3)], Some(50)),
     // #66 x1 -- "OO" label, edges 0/1/2/3.
     // 18xx: `city=revenue:50;city=revenue:50,loc:1.5;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:2;label=OO`
-    (66, 0b00_1111, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (1, 2)]),
+    (66, 0b00_1111, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (1, 2)], Some(50)),
     // #67 x1 -- "OO" label, edges 0/2/3/4.
     // 18xx: `city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:3;path=a:2,b:_1;path=a:_1,b:4;label=OO`
-    (67, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (2, 4)]),
+    (67, 0b01_1101, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (2, 4)], Some(50)),
     // #68 x1 -- "OO" label, edges 0/1/3/4.
     // 18xx: `city=revenue:50;city=revenue:50;path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:4;label=OO`
-    (68, 0b01_1011, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (1, 4)]),
+    (68, 0b01_1011, 0, TerrainType::DoubleCityHub, TileColor::Brown, 1, &[(0, 3), (1, 4)], Some(50)),
     // #70 x1 -- plain, edges 0/1/2/3.
     // 18xx: `path=a:0,b:1;path=a:0,b:2;path=a:1,b:3;path=a:2,b:3`
-    (70, 0b00_1111, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 2), (1, 3), (2, 3)]),
+    (70, 0b00_1111, 0, TerrainType::Plain, TileColor::Brown, 1, &[(0, 1), (0, 2), (1, 3), (2, 3)], None),
 ];
 
 /// Fixed axial coordinates of 1830's three core major-destination cities --
@@ -1578,6 +1599,30 @@ pub fn grant_home_station_token(
     }
     token_hexes.push((home_q, home_r));
     PROTOCOL_STATION_HEXES.save(storage, (game_id, company_id), &token_hexes)?;
+
+    // Audit G-12: record WHICH city this home token occupies, not just which
+    // hex. Every 1830 corporation's home is a single-city hex, so this is
+    // city 0 in practice -- but writing it explicitly means the home token is
+    // visible to `hex_token_occupants` through the real registry rather than
+    // only through its city-0 reconstruction fallback, and it keeps the
+    // invariant that both writers maintain `HEX_STATION_TOKENS`.
+    //
+    // `first_open_city` rather than a hardcoded 0 so that a home hex which is
+    // ever redefined onto multi-city artwork stays correct without this
+    // function needing to change. `unwrap_or(0)` covers the "hex has no city
+    // slots at all" case, which for a corporation home is unreachable; the
+    // fallback keeps the home grant infallible rather than introducing a new
+    // way for a float to fail.
+    let slot_counts = city_slot_counts_at(storage, game_id, home_q, home_r)?;
+    let occupants = hex_token_occupants(storage, game_id, home_q, home_r)?;
+    let city_index = first_open_city(slot_counts, &occupants).unwrap_or(0);
+    let mut hex_tokens: Vec<(u32, u8)> = HEX_STATION_TOKENS
+        .may_load(storage, (game_id, home_q, home_r))?
+        .unwrap_or_default();
+    if !hex_tokens.iter().any(|(id, _)| *id == company_id) {
+        hex_tokens.push((company_id, city_index));
+        HEX_STATION_TOKENS.save(storage, (game_id, home_q, home_r), &hex_tokens)?;
+    }
     Ok(())
 }
 
@@ -2025,7 +2070,46 @@ pub fn tile_base_value(tile_id: u32) -> Option<Uint128> {
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, _, _, terrain, _color, _qty, _paths)| terrain_base_value(terrain))
+        .map(|(_, _, _, terrain, _color, _qty, _paths, revenue)| {
+            // Audit G-11: the tile's OWN printed revenue wins; the flat
+            // `terrain_base_value` bucket is the fallback for entries that
+            // have none. This is the single point the whole engine prices a
+            // hex through -- `pathfinding::HexInfo.value` and
+            // `operations::execute_run_manual_route`'s `tile_values` both
+            // resolve here -- so adding the override at this one site moves
+            // every payout path at once, with no second implementation to
+            // drift.
+            //
+            // WHY THIS WAS NEEDED: `terrain_base_value` prices by
+            // `TerrainType`, of which there are seven, across 46 tiles. That
+            // is structurally unable to express real 1830, where revenue is
+            // a property of the printed TILE, not of its category: #62 and
+            // #64 are both `NewYorkHub`-class two-city brown artwork, yet
+            // print $90 and $50. Under the terrain model they were
+            // necessarily equal, and both wrong. Same for the whole Green/
+            // Brown city ladder -- #14/#15 print $30 and #63 $40, where the
+            // flat `MajorCityHub` bucket paid $20 for all three.
+            //
+            // The bucket is deliberately KEPT rather than deleted: every
+            // town tile really does print $10, so `SmallTown`/`DoubleTown`
+            // carry explicit values that merely agree with it, and any
+            // future tile added without a sourced figure still prices
+            // sanely instead of silently paying zero.
+            revenue.map_or_else(|| terrain_base_value(terrain), |value| Uint128::new(value as u128))
+        })
+}
+
+/// `tile_id`'s own printed revenue as published in `TILE_CATALOG`, or `None`
+/// when the entry has none and falls back to its terrain bucket (Audit
+/// G-11). Surfaced on `msg::MapTileEntry::revenue` so a client renders the
+/// same figure the contract will actually pay, rather than re-deriving it
+/// from terrain and quietly disagreeing.
+pub fn tile_printed_revenue(tile_id: u32) -> Option<u32> {
+    TILE_CATALOG
+        .iter()
+        .copied()
+        .find(|(id, ..)| *id == tile_id)
+        .and_then(|(_, _, _, _terrain, _color, _qty, _paths, revenue)| revenue)
 }
 
 /// Looks up `tile_id`'s `TileColor` era tier, or `None` if no such tile
@@ -2037,7 +2121,7 @@ pub fn tile_color_for(tile_id: u32) -> Option<TileColor> {
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, _, _, _terrain, color, _qty, _paths)| color)
+        .map(|(_, _, _, _terrain, color, _qty, _paths, _revenue)| color)
 }
 
 /// Looks up `tile_id`'s `TerrainType`, or `None` if no such tile exists.
@@ -2050,7 +2134,7 @@ pub fn tile_terrain_for(tile_id: u32) -> Option<TerrainType> {
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, _, _, terrain, _color, _qty, _paths)| terrain)
+        .map(|(_, _, _, terrain, _color, _qty, _paths, _revenue)| terrain)
 }
 
 /* ------------------------------------------------------------------ */
@@ -2065,7 +2149,7 @@ pub fn tile_starting_quantity(tile_id: u32) -> Option<u32> {
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, _, _, _terrain, _color, quantity, _paths)| quantity)
+        .map(|(_, _, _, _terrain, _color, quantity, _paths, _revenue)| quantity)
 }
 
 /// Seeds `game_id`'s tile tray with a full starting supply of every
@@ -2079,7 +2163,7 @@ pub fn tile_starting_quantity(tile_id: u32) -> Option<u32> {
 /// ones) so a room's tray is fully self-describing in state and a later
 /// read never has to fall back on the catalog to know what it started with.
 pub fn seed_tile_inventory(storage: &mut dyn Storage, game_id: u64) -> StdResult<()> {
-    for (tile_id, _connections, _cost, _terrain, _color, quantity, _paths) in
+    for (tile_id, _connections, _cost, _terrain, _color, quantity, _paths, _revenue) in
         TILE_CATALOG.iter().copied()
     {
         REMAINING_TILES.save(storage, (game_id, tile_id), &quantity)?;
@@ -2606,6 +2690,28 @@ pub enum HexMapError {
         "Protocol {protocol_id} already has all {limit} of its Station Tokens placed -- no more may be placed this game"
     )]
     StationTokenLimitReached { protocol_id: u32, limit: u8 },
+    /// Audit G-12: the requested `city_index` does not exist on this hex --
+    /// e.g. city 1 on a single-city tile. Distinguished from
+    /// `StationTokenCityFull` on purpose: one is a malformed request, the
+    /// other a legal request the board refuses.
+    #[error("hex ({q}, {r}) [{hex_label}] has {city_count} city/cities; city_index {requested} does not exist")]
+    StationTokenCityIndexOutOfRange {
+        q: i32,
+        r: i32,
+        hex_label: String,
+        requested: u8,
+        city_count: u8,
+    },
+    /// Audit G-12: every slot in the requested city is already taken. When no
+    /// `city_index` was supplied this means EVERY city on the hex is full.
+    #[error("city {city_index} on hex ({q}, {r}) [{hex_label}] is full ({slots} slot(s))")]
+    StationTokenCityFull {
+        q: i32,
+        r: i32,
+        hex_label: String,
+        city_index: u8,
+        slots: u32,
+    },
 
     #[error(
         "Protocol {protocol_id} already placed a Station Token during this Operating Round sub-round (macro round {macro_round_number}, sub-round {sub_round_index}) -- only one Station Token placement is allowed per corporation per sub-round"
@@ -2677,6 +2783,25 @@ pub(crate) fn rotate_edge(edge: u8, orientation: u8) -> u8 {
 /// Deliberately mirrors `rotate_connections` exactly: `Tile::paths` and
 /// `Tile::connections` are both stored pre-rotation, so both must be
 /// rotated at read time and can never drift apart.
+/// The edge index on hex `from` that faces hex `to`, or `None` when the two
+/// are not adjacent -- Audit G-13.
+///
+/// The inverse of `HEX_NEIGHBOR_OFFSETS`, which this searches rather than
+/// re-deriving with its own arithmetic, so the two directions of the same
+/// mapping cannot drift apart.
+///
+/// Added for `operations::execute_run_manual_route`: a declared `hex_path`
+/// pins each interior hex's inbound and outbound edges by its axial deltas to
+/// its two neighbours, which is what lets the manual path ask the same
+/// city-granular transit question the DFS asks.
+pub fn edge_between(from: (i32, i32), to: (i32, i32)) -> Option<u8> {
+    let delta = (to.0 - from.0, to.1 - from.1);
+    HEX_NEIGHBOR_OFFSETS
+        .iter()
+        .position(|&(dq, dr)| (dq, dr) == delta)
+        .and_then(|index| u8::try_from(index).ok())
+}
+
 pub(crate) fn rotate_paths(paths: &[(u8, u8)], orientation: u8) -> Vec<(u8, u8)> {
     paths
         .iter()
@@ -2702,7 +2827,7 @@ pub fn tile_paths_for(tile_id: u32) -> Option<&'static [(u8, u8)]> {
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, _, _, _terrain, _color, _qty, paths)| paths)
+        .map(|(_, _, _, _terrain, _color, _qty, paths, _revenue)| paths)
 }
 
 /// Re-derives `tile_id`'s flat connection bitmask from its edge-pair list --
@@ -2777,12 +2902,39 @@ pub(crate) fn effective_base_tile_paths(tile: &Tile) -> &[(u8, u8)] {
 /// - Two-city tiles #54 ("NY", 1+1), #59/#64/#65/#66/#67/#68 ("OO", 1+1): 2.
 /// - Two-city brown "NY" #62 (`slots:2` twice): 4.
 pub fn tile_city_slots(tile_id: u32) -> u32 {
+    // Audit G-12: derived from `tile_city_slot_counts` rather than restated,
+    // so the total and the per-city breakdown cannot disagree. Values are
+    // unchanged from the hand-written table this replaced.
+    tile_city_slot_counts(tile_id).iter().sum()
+}
+
+/// How many Station Token slots EACH city on `tile_id` offers, one entry per
+/// city, in the SAME index order as that tile's `TILE_CATALOG` path list and
+/// the frontend's `TILE_GRAPHICS_CATALOG` markers -- so a `city_index` means
+/// the same city everywhere it appears.
+///
+/// **Audit G-12.** Sourced from the `slots:` field of each tile's own 18xx
+/// definition string, recorded in the `TILE_CATALOG` comments above:
+///
+/// - `#53`/`#57`/`#61`  `city=revenue:N` with no `slots:` -- one 1-slot city.
+///   Note #61, the BROWN "B" hub, really is 1-slot; its importance on the
+///   board invites the assumption that it is 2, and it is not.
+/// - `#14`/`#15`/`#63`  `city=revenue:N,slots:2` -- one 2-slot city.
+/// - `#54`/`#59`/`#64`-`#68`  two `city=` entries, neither carrying `slots:`
+///   -- TWO separate 1-slot cities. Green New York (#54) included.
+/// - `#62`  `city=revenue:80,slots:2;city=revenue:80,slots:2` -- TWO separate
+///   2-slot cities, and the only tile in 1830 shaped that way. It is the
+///   tile that makes pooled per-hex slot counting unsalvageable.
+///
+/// Empty for any tile with no city at all, which is the signal that nothing
+/// can ever be tokened or blockaded there.
+pub fn tile_city_slot_counts(tile_id: u32) -> &'static [u32] {
     match tile_id {
-        57 | 53 | 61 => 1,
-        14 | 15 | 63 => 2,
-        54 | 59 | 64 | 65 | 66 | 67 | 68 => 2,
-        62 => 4,
-        _ => 0,
+        53 | 57 | 61 => &[1],
+        14 | 15 | 63 => &[2],
+        54 | 59 | 64 | 65 | 66 | 67 | 68 => &[1, 1],
+        62 => &[2, 2],
+        _ => &[],
     }
 }
 
@@ -2806,13 +2958,168 @@ pub fn tile_city_slots(tile_id: u32) -> u32 {
 /// ordinary blank hex has no token slot at all and so can never be
 /// blockaded.
 pub fn preprinted_city_slots(q: i32, r: i32) -> u32 {
+    // Audit G-12: derived, not restated -- see `tile_city_slots`.
+    preprinted_city_slot_counts(q, r).iter().sum()
+}
+
+/// The per-city counterpart to `preprinted_city_slot_counts`' own totals --
+/// how many slots each city on a hex with NO laid tile offers (Audit G-12).
+///
+/// New York and the four OO hexes print TWO cities of one slot each, not one
+/// city of two slots, and the difference is exactly the bug this pass
+/// exists for: two rivals tokening New York's printed artwork fill both of
+/// its cities, whereas the pooled reading saw "2 of 2 slots" only once both
+/// happened to land on the same hex regardless of which city each took.
+pub fn preprinted_city_slot_counts(q: i32, r: i32) -> &'static [u32] {
     if landmark_name_at(q, r) == Some("New York") || oo_designation_name_at(q, r).is_some() {
-        return 2;
+        return &[1, 1];
     }
     if landmark_name_at(q, r).is_some() || city_designation_name_at(q, r).is_some() {
-        return 1;
+        return &[1];
     }
-    0
+    &[]
+}
+
+/// WHICH city each of `tile_id`'s track segments runs through, one entry per
+/// segment, parallel to `tile_paths_for(tile_id)` (and to the rotated list
+/// `effective_tile_paths` returns -- `rotate_paths` maps each segment in
+/// place and preserves order, so index `i` means the same segment either
+/// way).
+///
+/// **Audit G-13.** This is the lookup that makes a route's blockade check
+/// city-granular instead of hex-granular. Without it the engine can tell
+/// that SOME city on a hex is open but not WHICH, so a route could enter a
+/// tile through a fully-tokened city's track and leave through it again,
+/// "ghost routing" straight past a blockade that in real 1830 is the whole
+/// point of having placed those tokens.
+///
+/// `Some(i)` -- this segment passes through city `i`, whose capacity is
+/// `tile_city_slot_counts(tile_id)[i]`.
+///
+/// `None` -- one of two very different situations, which the caller MUST
+/// distinguish by checking whether the hex has any cities at all:
+///   - the tile genuinely has no city (plain track, or a town, which is a
+///     revenue stop that holds no token) -- nothing can ever block it; or
+///   - the segment list does not line up with the city list, which today
+///     means a synthesized overlay tile standing in for preprinted artwork
+///     (`pathfinding::synthetic_overlay_tile`, a fully-connected virtual
+///     tile whose 15 canonical segments carry no city information at all).
+///     A caller that finds `None` on a hex that DOES have cities must fall
+///     back to the strictest city's answer, never the most permissive one --
+///     guessing permissively is exactly the ghost route this exists to stop.
+///
+/// THE INDEX CORRESPONDENCE IS THE LOAD-BEARING CLAIM, so here it is
+/// explicitly, checked against each tile's own 18xx source string recorded
+/// in `TILE_CATALOG`. Every multi-city tile in 1830 has exactly one segment
+/// per city, and `TILE_CATALOG` lists them in city order:
+///
+/// - `#54`/`#62` `path=a:0,b:_0;path=a:_0,b:1;path=a:2,b:_1;path=a:_1,b:3`
+///   -> city 0 owns edges 0-1, city 1 owns edges 2-3; catalog `[(0,1),(2,3)]`.
+/// - `#59` `path=a:0,b:_0;path=a:2,b:_1` -> catalog `[(0,0),(2,2)]`.
+/// - `#64` `_0` = edges 0-2, `_1` = edges 3-4; catalog `[(0,2),(3,4)]`.
+/// - `#65` `_0` = 0-4, `_1` = 2-3; catalog `[(0,4),(2,3)]`.
+/// - `#66` `_0` = 0-3, `_1` = 1-2; catalog `[(0,3),(1,2)]`.
+/// - `#67` `_0` = 0-3, `_1` = 2-4; catalog `[(0,3),(2,4)]`.
+/// - `#68` `_0` = 0-3, `_1` = 1-4; catalog `[(0,3),(1,4)]`.
+///
+/// `tile_segment_cities_agree_with_catalog_path_counts` asserts the
+/// one-segment-per-city shape for all of them, so a future catalog edit that
+/// breaks the correspondence fails the suite rather than silently
+/// reintroducing ghost routing.
+///
+/// `segment_count` is passed rather than read from the catalog because the
+/// caller may be working from a `Tile`'s OWN stored `paths` list, which
+/// `effective_base_tile_paths` prefers over the catalog. If that stored list
+/// has a different length than the catalog's, the correspondence cannot be
+/// trusted and every entry comes back `None` -- conservative by
+/// construction.
+pub fn tile_segment_cities(tile_id: u32, segment_count: usize) -> Vec<Option<u8>> {
+    let cities = tile_city_slot_counts(tile_id).len();
+    match cities {
+        // No city on this tile -- nothing here can ever be blockaded.
+        0 => vec![None; segment_count],
+        // One city, and every segment on the tile runs through it: the
+        // multi-spoke city hubs (#14/#15/#53/#61/#63) and the single
+        // straight-through city (#57).
+        1 => vec![Some(0); segment_count],
+        // One segment per city, in city order.
+        n if n == segment_count => (0..segment_count).map(|i| u8::try_from(i).ok()).collect(),
+        // Shape we cannot interpret -- see the `None` discussion above.
+        _ => vec![None; segment_count],
+    }
+}
+
+/// Every city on hex `(q, r)` and its slot count -- the laid tile's own
+/// breakdown if a tile is there, otherwise the preprinted artwork's.
+/// Empty means the hex has no city, so it can never be tokened or blockaded.
+pub fn city_slot_counts_at(
+    storage: &dyn Storage,
+    game_id: u64,
+    q: i32,
+    r: i32,
+) -> Result<&'static [u32], StdError> {
+    if let Some(tile) = MAP_GRID.may_load(storage, (game_id, q, r))? {
+        return Ok(tile_city_slot_counts(tile.tile_id));
+    }
+    Ok(preprinted_city_slot_counts(q, r))
+}
+
+/// Every Station Token standing on hex `(q, r)`, as `(protocol_id,
+/// city_index)` -- Audit G-12, and the single read path for token occupancy.
+///
+/// Reads `HEX_STATION_TOKENS`, then RECONSTRUCTS anything that map does not
+/// know about from `PROTOCOL_STATION_HEXES`, assigning it `city_index` 0.
+/// That backfill is what makes this change safe to deploy over a game
+/// already in progress: tokens placed before G-12 exist only in the
+/// hex-keyed list, and silently dropping them would delete live blockades
+/// mid-game. City 0 is the honest reconstruction -- it is precisely the
+/// assumption the pre-G-12 code made -- and it is exactly right for every
+/// single-city hex, which is most of the board.
+///
+/// Idempotent, and safe to call on a hex holding a mix of pre- and post-G-12
+/// tokens: a company already named in `HEX_STATION_TOKENS` is never added a
+/// second time.
+pub fn hex_token_occupants(
+    storage: &dyn Storage,
+    game_id: u64,
+    q: i32,
+    r: i32,
+) -> Result<Vec<(u32, u8)>, StdError> {
+    let mut occupants: Vec<(u32, u8)> = HEX_STATION_TOKENS
+        .may_load(storage, (game_id, q, r))?
+        .unwrap_or_default();
+    for (company_id, _) in CORE_PUBLIC_COMPANIES.iter().copied() {
+        if occupants.iter().any(|(id, _)| *id == company_id) {
+            continue;
+        }
+        let hexes: Vec<(i32, i32)> = PROTOCOL_STATION_HEXES
+            .may_load(storage, (game_id, company_id))?
+            .unwrap_or_default();
+        if hexes.contains(&(q, r)) {
+            occupants.push((company_id, 0));
+        }
+    }
+    Ok(occupants)
+}
+
+/// How many tokens sit in city `city_index` on this hex.
+pub fn city_occupancy(occupants: &[(u32, u8)], city_index: u8) -> u32 {
+    occupants
+        .iter()
+        .filter(|(_, city)| *city == city_index)
+        .count() as u32
+}
+
+/// The lowest-indexed city on this hex that still has a free slot, or `None`
+/// if every city is full. Used to resolve a `PlaceStationToken` that does not
+/// name a city, which keeps the message backwards compatible: a client that
+/// predates `city_index` still lands somewhere legal rather than being
+/// rejected, and on a single-city hex "somewhere legal" is the only city.
+pub fn first_open_city(slot_counts: &[u32], occupants: &[(u32, u8)]) -> Option<u8> {
+    slot_counts.iter().enumerate().find_map(|(index, capacity)| {
+        let city_index = u8::try_from(index).ok()?;
+        (city_occupancy(occupants, city_index) < *capacity).then_some(city_index)
+    })
 }
 
 /// Breadth-first-walks `protocol_id`'s laid tiles outward from its Token
@@ -2972,7 +3279,7 @@ pub fn legal_tile_placements(
 
     let mut results = Vec::new();
 
-    for &(tile_id, base_connections, _cost, terrain, new_color, _quantity, _paths) in TILE_CATALOG {
+    for &(tile_id, base_connections, _cost, terrain, new_color, _quantity, _paths, _revenue) in TILE_CATALOG {
         // Tech Era Color-Locking (mirrors execute_lay_tile).
         if new_color > session.current_global_era {
             continue;
@@ -3234,7 +3541,7 @@ pub fn execute_lay_tile(
         .iter()
         .copied()
         .find(|(id, ..)| *id == tile_id)
-        .map(|(_, connections, _cost, terrain, color, _qty, paths)| (connections, terrain, color, paths))
+        .map(|(_, connections, _cost, terrain, color, _qty, paths, _revenue)| (connections, terrain, color, paths))
         .ok_or(HexMapError::TileNotFound { tile_id })?;
 
     // Tech Era Color-Locking (module doc comment #8): reject outright if
@@ -3821,6 +4128,12 @@ pub fn execute_place_station_token(
     protocol_id: u32,
     q: i32,
     r: i32,
+    // Audit G-12: WHICH city on `(q, r)` this token takes. `None` means "the
+    // caller did not say", which resolves to the lowest-indexed city with a
+    // free slot -- this keeps every pre-G-12 client working unchanged, and on
+    // a single-city hex it is the only possible answer anyway.
+    // (`//`, not `///`: Rust rejects doc comments on function parameters.)
+    city_index: Option<u8>,
 ) -> Result<Response, HexMapError> {
     let mut session: GameSession = SESSIONS
         .may_load(deps.storage, game_id)?
@@ -3931,6 +4244,57 @@ pub fn execute_place_station_token(
         });
     }
 
+    // ==== Audit G-12: PER-CITY CAPACITY. ====
+    //
+    // There was no capacity check here at all before this pass -- only the
+    // "not twice on the same hex" check above and the company's own token
+    // limit below. Nothing stopped every corporation in the game from
+    // tokening the same 1-slot city, which is the rule that makes contested
+    // cities contested in the first place.
+    //
+    // Checked per CITY, never per hex: a hex is not a city. #62 carries two
+    // separate 2-slot cities and #54/#59/#64-#68 two separate 1-slot cities,
+    // so a hex-level "is there room" question has no correct answer on any
+    // of them.
+    let slot_counts = city_slot_counts_at(deps.storage, game_id, q, r)?;
+    let occupants = hex_token_occupants(deps.storage, game_id, q, r)?;
+    let chosen_city = match city_index {
+        Some(requested) => {
+            if usize::from(requested) >= slot_counts.len() {
+                return Err(HexMapError::StationTokenCityIndexOutOfRange {
+                    q,
+                    r,
+                    hex_label: describe_hex(q, r),
+                    requested,
+                    city_count: u8::try_from(slot_counts.len()).unwrap_or(u8::MAX),
+                });
+            }
+            let capacity = slot_counts[usize::from(requested)];
+            if city_occupancy(&occupants, requested) >= capacity {
+                return Err(HexMapError::StationTokenCityFull {
+                    q,
+                    r,
+                    hex_label: describe_hex(q, r),
+                    city_index: requested,
+                    slots: capacity,
+                });
+            }
+            requested
+        }
+        // No city named: take the lowest-indexed one with room. If EVERY city
+        // is full the hex is genuinely closed, and that is a rejection rather
+        // than a silent overflow into a full city.
+        None => first_open_city(slot_counts, &occupants).ok_or_else(|| {
+            HexMapError::StationTokenCityFull {
+                q,
+                r,
+                hex_label: describe_hex(q, r),
+                city_index: 0,
+                slots: slot_counts.first().copied().unwrap_or(0),
+            }
+        })?,
+    };
+
     let limit = station_token_limit(protocol_id);
     if token_hexes.len() >= usize::from(limit) {
         return Err(HexMapError::StationTokenLimitReached { protocol_id, limit });
@@ -3979,6 +4343,18 @@ pub fn execute_place_station_token(
     let tokens_placed = token_hexes.len();
     PROTOCOL_STATION_HEXES.save(deps.storage, (game_id, protocol_id), &token_hexes)?;
 
+    // Audit G-12: the per-city registry, written in the same commit as the
+    // hex list above so the two can never disagree about whether a token
+    // exists. Re-loaded rather than reusing `occupants` because that vector
+    // includes the city-0 reconstruction of any legacy token, which must NOT
+    // be persisted -- reconstruction is a read-time fallback, and writing it
+    // back would freeze a guess into storage as though it were a record.
+    let mut hex_tokens: Vec<(u32, u8)> = HEX_STATION_TOKENS
+        .may_load(deps.storage, (game_id, q, r))?
+        .unwrap_or_default();
+    hex_tokens.push((protocol_id, chosen_city));
+    HEX_STATION_TOKENS.save(deps.storage, (game_id, q, r), &hex_tokens)?;
+
     Ok(Response::new()
         .add_attribute("action", "place_station_token")
         .add_attribute("game_id", game_id.to_string())
@@ -3986,6 +4362,7 @@ pub fn execute_place_station_token(
         .add_attribute("q", q.to_string())
         .add_attribute("r", r.to_string())
         .add_attribute("hex_label", describe_hex(q, r))
+        .add_attribute("city_index", chosen_city.to_string())
         .add_attribute("token_ordinal", token_ordinal.to_string())
         .add_attribute("cost", cost)
         .add_attribute("tokens_placed", tokens_placed.to_string())

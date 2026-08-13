@@ -638,6 +638,7 @@ pub fn reapply_game_log(
                 protocol_id,
                 q,
                 r,
+                city_index,
             } => {
                 hexmap::execute_place_station_token(
                     deps.branch(),
@@ -647,6 +648,7 @@ pub fn reapply_game_log(
                     protocol_id,
                     q,
                     r,
+                    city_index,
                 )?;
             }
             ActionRecord::BuyHardwareFromPool {

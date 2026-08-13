@@ -844,6 +844,35 @@ pub const PROTOCOL_STATION_HEXES: Map<(u64, u32), Vec<(i32, i32)>> =
 pub const PROTOCOL_LAST_TOKEN_SUBROUND: Map<(u64, u32), (u32, u32)> =
     Map::new("protocol_last_token_subround");
 
+/// (game_id, q, r) -> every Station Token standing on that hex, as
+/// `(protocol_id, city_index)`.
+///
+/// **Audit G-12: per-CITY token accounting.** `PROTOCOL_STATION_HEXES` above
+/// records which HEXES a company has tokened, which is all the token-limit
+/// and duplicate checks ever needed. It cannot answer the question the
+/// blockade rule actually asks, though: a hex is not a city. #62 (brown New
+/// York) is one hex carrying TWO separate 2-slot cities, and #54/#59/#64-#68
+/// each carry two separate 1-slot cities. Pooling their slots -- which is
+/// what a hex-keyed count necessarily does -- reports an OPEN slot on a hex
+/// whose relevant city is genuinely full, and there is no way to recover the
+/// distinction after the fact from a `Vec<(i32, i32)>`.
+///
+/// Deliberately a SEPARATE map rather than a widened `PROTOCOL_STATION_HEXES`
+/// element type. That map's entries are stored as JSON `[q, r]` pairs; any
+/// struct or 3-tuple replacement fails to deserialize them, which would brick
+/// every game in flight. A new map starts empty and absent, so a pre-G-12
+/// game reads it as "no per-city detail recorded" and
+/// `hexmap::hex_token_occupants` reconstructs those tokens against city 0 --
+/// the pre-G-12 assumption, and correct for the single-city hexes that are
+/// the overwhelming majority of the board.
+///
+/// INVARIANT, enforced by `hexmap::execute_place_station_token` and
+/// `hexmap::grant_home_station_token`, the only two writers: for any hex, the
+/// number of entries naming a given `city_index` never exceeds that city's
+/// slot count from `hexmap::city_slot_counts_at`.
+pub const HEX_STATION_TOKENS: Map<(u64, i32, i32), Vec<(u32, u8)>> =
+    Map::new("hex_station_tokens");
+
 /// A single piece of Hardware (train) inventory -- either still sitting in
 /// the global `HARDWARE_POOL` supply queue or already owned by a company
 /// via `COMPANY_HARDWARE`. `model_type` is the train's tier ("2", "3",
@@ -947,6 +976,12 @@ pub enum ActionRecord {
         protocol_id: u32,
         q: i32,
         r: i32,
+        /// Audit G-12. `#[serde(default)]` so an ActionRecord written before
+        /// G-12 still deserializes -- and replays to the same board it
+        /// originally produced, since `None` resolves to the first open
+        /// city, which is what the pre-G-12 code effectively always chose.
+        #[serde(default)]
+        city_index: Option<u8>,
     },
     BuyHardwareFromPool {
         player: Addr,

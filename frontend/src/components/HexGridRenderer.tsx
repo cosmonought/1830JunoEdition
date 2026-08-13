@@ -3098,6 +3098,10 @@
 //    Real #55 draws two straights that genuinely cross there. The topology
 //    -- which edge connects to which -- is exactly what the catalog
 //    declares; only the curvature is a presentation choice.
+//    SUPERSEDED by design note #121: that deviation was not as small as
+//    this note claimed. Bending #55's two straights around offset nodes
+//    turned its X into a pair of visibly bowed arms, and warped #56 badly
+//    enough to be hard to read. The generalized offset is gone; see #121.
 // 120. **Tile Picker Opens Without A Chain.** Reported as "the tile picker
 //    refuses to open at all" when running `npm start` with no backend, no
 //    exception thrown, and the "[TileSelection] hex clicked" log still
@@ -3138,8 +3142,71 @@
 //    unvalidated data, where a flag lets a consumer treat it as
 //    authoritative just by not knowing to look. `TileSelectionPopup` renders
 //    it under an explicit banner and refuses to dispatch from it.
+// 121. **Canonical Double-Town Artwork, Drawn Explicitly.** Reported: the
+//    generalized double-town renderer from design note #119 produced
+//    non-canonical track. #55 -- which is simply two straights crossing in
+//    an X -- came out with both arms visibly bowed, and #56's two gentle
+//    curves were warped enough to be hard to read.
+//
+//    The cause was a priority inversion in #119. That pass routed each town's
+//    track through its own offset node so the two dits could not collide at
+//    hex centre. In other words it moved the TRACK to make room for the
+//    MARKERS. For the two tiles whose whole character is a straight line,
+//    that is exactly backwards: a straight that bows is no longer the tile.
+//
+//    Fixed by abandoning the general algorithm. There are exactly five
+//    double-town tiles in all of 1830 and there will never be a sixth, so
+//    `DOUBLE_TOWN_ROUTES` now states each one's artwork explicitly, keyed on
+//    `tileId`. `drawDoubleTownRoute` draws each declared edge pair in its
+//    natural shape and reports the point halfway along what it actually
+//    drew, so the dit follows the track instead of the track following the
+//    dit:
+//      - opposite edges take a literal `lineTo`, not a Bezier that happens
+//        to look straight, so #55's X cannot bow by even a pixel;
+//      - everything else takes ONE cubic Bezier with control points on each
+//        endpoint's own inward normal at the file's standard `0.3` reach,
+//        which yields a tight corner for a 60-degree pair and a shallow bow
+//        for a 120-degree pair with no per-shape fudging.
+//
+//    Only #55 needs a marker rule of its own, because it is the only tile
+//    whose routes are BOTH straights and therefore share a midpoint at dead
+//    centre. Its two dits slide out along their own arms toward adjacent
+//    edges -- moving the markers, never the geometry.
+//
+//    Consequence worth knowing: this renderer no longer reads
+//    `msg::MapTileEntry::paths` for artwork, and #119's `rotatePaths`/
+//    `pathsForTile` are deleted as dead. The contract still sends the field
+//    and `TileCatalogEntry.paths` still mirrors it -- the mirror now feeds a
+//    dev-mode tripwire that cross-checks `DOUBLE_TOWN_ROUTES` against the
+//    catalog, so the explicit table cannot silently drift from the data.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  PILL_SLOT_SPACING,
+  TILE_GRAPHICS_CATALOG,
+  tileArtworkPaths,
+  tileCityAnchors,
+  tileCitySlotPoints,
+  tileMarkerPoints,
+} from "./TileGraphics";
+// Monolith split, Phase 1. Imported under their own names because this file's
+// own code refers to them unqualified throughout; the matching
+// `export ... from` re-export further down keeps them on this module's public
+// surface for `App.tsx` / `TileSelectionPopup.tsx`. A re-export creates no
+// local binding, so the two statements do not collide.
+//
+// MUST live here, at the top, not beside that re-export: ESLint's
+// `import/first` requires every `import` to precede all other statements, and
+// this file's first statement is ~3,300 lines below its own header comment,
+// which makes "next to the thing it relates to" and "at the top" look like
+// the same place when they are not.
+import {
+  TILE_CATALOG,
+  TILE_CATALOG_BY_ID,
+  type TerrainType,
+  type TileCatalogEntry,
+  type TileColorTier,
+} from "./hexTileCatalog";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #2                        */
@@ -3167,7 +3234,46 @@ export interface MapTileEntry {
    *  falls back to the local `TILE_CATALOG` mirror, so an older chain
    *  renders exactly as it did before rather than throwing. */
   paths?: ReadonlyArray<readonly [number, number]> | null;
+  /** Design note #132: THIS TILE'S PRINTED REVENUE, straight off the chain
+   *  -- `msg::MapTileEntry::revenue` (`hexmap::tile_base_value`, Audit
+   *  G-11). The single authority for what a stop on this hex pays.
+   *
+   *  Typed `string | number` because the backend field is `Uint128`, and
+   *  cosmwasm-std serialises `Uint128` as a JSON **string** (`"90"`), not a
+   *  number -- it has to, since a `u128` overflows an IEEE-754 double past
+   *  2^53. Reading this as `entry.revenue` and expecting arithmetic to work
+   *  is the trap; `chainTileRevenue` below parses it in exactly one place.
+   *  `number` is accepted too so a hand-built fixture or a future
+   *  narrower-typed field needs no change here.
+   *
+   *  OPTIONAL for the same backwards-compatibility reason as `paths` above:
+   *  a contract built before Audit G-11 simply omits the key, and
+   *  `chainTileRevenue` returns `undefined` so the caller falls back to the
+   *  old terrain bucket rather than printing `NaN` or `$0`.
+   *
+   *  NOT to be re-derived from `terrain`. That is what this replaces, and
+   *  it was wrong for most city tiles: `terrainBaseValue` is a flat
+   *  per-bucket lookup, but real 1830 prints revenue on the TILE. #62 and
+   *  #64 are both two-city brown artwork and print different figures; the
+   *  whole Green/Brown city ladder (#14/#15 at $30, #63 at $40) collapsed
+   *  to one bucket value under the old model. */
+  revenue?: string | number | null;
   landmark: string | null;
+}
+
+/** Design note #132: parses `MapTileEntry.revenue` -- the chain's own
+ *  `Uint128`, which arrives as a JSON string -- into a number, or
+ *  `undefined` if this contract predates the field.
+ *
+ *  `undefined` and `0` are DIFFERENT answers and callers must not conflate
+ *  them: `0` is a real figure (plain connector track earns nothing, and the
+ *  badge should be suppressed), `undefined` means "this chain never told
+ *  us" (fall back to the terrain bucket). */
+function chainTileRevenue(tile: MapTileEntry): number | undefined {
+  const raw = tile.revenue;
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const value = typeof raw === "number" ? raw : Number.parseInt(raw, 10);
+  return Number.isFinite(value) ? value : undefined;
 }
 
 /** Mirrors `msg.rs`'s `MapGridResponse` exactly -- `QueryMsg::GetMapGrid`'s
@@ -3200,6 +3306,37 @@ export interface StationTokenCompany {
   /** `(q, r)` pairs, home hex first (if granted) -- mirrors
    *  `PublicCompanyState.station_token_hexes` exactly. */
   station_token_hexes: Array<[number, number]>;
+  /** Design note #134: the SAME tokens as `station_token_hexes`, but as
+   *  `(q, r, city_index)` -- mirrors `PublicCompanyState.station_tokens`
+   *  (backend Audit G-12).
+   *
+   *  A hex is not a city. New York (#54/#62) and every OO tile
+   *  (#59/#64-#68) carry two separate cities on one hex, and `(q, r)` alone
+   *  cannot say which one holds this company's token -- which is why
+   *  `stationMarkerPoint` used to guess from the hex label and drop tokens
+   *  on the wrong half of a two-city tile.
+   *
+   *  OPTIONAL: a contract predating G-12 omits it, and `tokenCityIndex`
+   *  below falls back to the old heuristic rather than throwing. An empty
+   *  array alongside a non-empty `station_token_hexes` means "this chain
+   *  doesn't know", never "no tokens". */
+  station_tokens?: Array<[number, number, number]> | null;
+}
+
+/** Which city on `(q, r)` holds `company`'s token -- design note #134.
+ *
+ *  Prefers the chain's own answer. Returns `undefined` when the chain has
+ *  not told us, which is a DIFFERENT answer from `0` and must stay
+ *  distinguishable: the caller falls back to `stationMarkerPoint`'s legacy
+ *  per-hex heuristic rather than asserting city 0 and confidently drawing a
+ *  token in the wrong station. */
+function tokenCityIndex(
+  company: StationTokenCompany,
+  q: number,
+  r: number,
+): number | undefined {
+  const entry = company.station_tokens?.find(([tq, tr]) => tq === q && tr === r);
+  return entry ? entry[2] : undefined;
 }
 
 /** Station Tokens (design note #36; REASSIGNED by design note #44's house
@@ -3398,285 +3535,26 @@ export type HexClickQueryState =
  *  see `hexmap.rs` module doc comment #18 for the full backend enforcement
  *  this terrain now drives (an OO hex can only ever be upgraded with this
  *  terrain's tile, never plain `MajorCityHub`). */
-/** `BostonHub`/`NewYorkHub` (design note #49; mirrors `hexmap.rs` module doc
- *  comment #26/#27, `state::TerrainType::BostonHub`/`NewYorkHub` exactly):
- *  real 1830's "B"-labeled (Boston AND Baltimore) and "NY"-labeled hub
- *  artwork -- previously missing from this frontend mirror entirely (a
- *  cross-file consistency gap: the backend catalog had tiles 16/17 since
- *  module doc comment #26, but this file's own `TILE_CATALOG`/
- *  `TerrainType` never gained a matching entry, so a laid Boston/New York
- *  Green tile fell through every `TILE_CATALOG_BY_ID.get(...)` lookup below
- *  as `undefined` -- visibly wrong stroke color (`#c0392b`, the "unknown
- *  tile" fallback, instead of the real tier color) and a broken tile-picker
- *  thumbnail). Closed as part of this pass's own "Complete the Tile
- *  Manifest" scope. `BostonHub` renders like `MajorCityHub` (one station);
- *  `NewYorkHub` renders like `DoubleCityHub` (two stations) -- see
- *  `drawTrackPath`'s own dispatch below. */
-export type TerrainType =
-  | "Plain"
-  | "MountainRugged"
-  | "SmallTown"
-  | "DoubleTown"
-  | "MajorCityHub"
-  | "DoubleCityHub"
-  | "BostonHub"
-  | "NewYorkHub";
-export type TileColorTier = "Yellow" | "Green" | "Brown";
-
-export interface TileCatalogEntry {
-  tileId: number;
-  /** Base (pre-rotation) 6-bit edge bitmask -- mirrors
-   *  `hexmap::TILE_CATALOG`'s second tuple element exactly. */
-  connections: number;
-  terrain: TerrainType;
-  color: TileColorTier;
-  /** Design note #52 -- FRONTEND-ONLY, deliberately NOT mirrored from the
-   *  backend (which doesn't need it: `pathfinding.rs`'s simplified
-   *  hex-level revenue model never distinguishes which edge belongs to
-   *  which city within one tile, only the flat `connections` union). For a
-   *  genuine two-city tile (NY, every OO variant), each entry is the real
-   *  per-city edge group (e.g. `[[0, 1], [2, 3]]` means city A owns edges
-   *  0-1 and city B owns edges 2-3) -- `drawTrackPath` uses this so each
-   *  city draws its own paired curve instead of fanning every live edge
-   *  into one shared hub, which is wrong for a tile that actually has two
-   *  independent city nodes. Omitted (`undefined`) for every single-city
-   *  tile, which keeps the existing fan-to-center rendering unchanged. */
-  cityGroups?: readonly (readonly number[])[];
-  /** Design note #119: this tile's DISCRETE track segments as BASE
-   *  (pre-rotation) edge pairs, mirroring `hexmap::TILE_CATALOG`'s SEVENTH
-   *  tuple element. Unlike `cityGroups` above, this one IS real backend
-   *  data, not a frontend-only embellishment -- the Rust catalog has
-   *  carried it since Audit G-9 and `pathfinding.rs` routes on it.
-   *
-   *  Each `[a, b]` is one continuous run of track between edges `a` and
-   *  `b`; `a === b` would be a terminal spur (none of the tiles mirrored
-   *  here have one). The union of every edge listed equals `connections`,
-   *  which the Rust test
-   *  `tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles`
-   *  asserts for all 46 entries.
-   *
-   *  POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES (#1, #2, #55, #56, #69),
-   *  deliberately and by scope decision. Those are the tiles where the flat
-   *  `connections` mask is genuinely lossy: four live edges paired into two
-   *  independent two-edge routes, one per town, and the mask cannot say
-   *  which edge pairs with which. Every other tile is either unambiguous
-   *  from its mask or already handled correctly by an existing branch
-   *  (`cityGroups` for two-city hubs, the 2-edge shortcut for simple
-   *  curves/straights, the fan for multi-spur junctions), so mirroring
-   *  paths for them would add a second source of truth for the same
-   *  rendering with no visible change. `pathsForTile` returns `undefined`
-   *  for those and every existing code path stays exactly as it was. */
-  paths?: ReadonlyArray<readonly [number, number]>;
-}
-
-/** Hand-kept mirror of `hexmap::TILE_CATALOG` (see design note #2 above).
- *  Keep this in exact sync with that Rust array -- same `tile_id`s, same
- *  bitmasks, same terrain/color tags -- any time it changes.
- *
- *  **Design note #118: 46-Tile Tray Catalog Sync (backend Audit G-5).** The
- *  backend catalog no longer uses this engine's old synthetic, sequential
- *  internal ids (1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
- *  20-24). It now keys every entry on the tile's REAL physical 1830 tray
- *  number and carries the complete 46-tile manifest. This mirror is
- *  rewritten wholesale to match, entry for entry.
- *
- *  What moved (old internal id -> real tray number):
- *    - Green "NY" hub      17 -> 54
- *    - Green "B" hub       16 -> 53
- *    - Green "OO" hub      15 -> 59
- *    - Brown "NY" hub      19 -> 62
- *    - Brown "B" hub       18 -> 61
- *    - Brown "OO" hubs  20-24 -> 64, 65, 66, 67, 68
- *    - Yellow city hub     10 -> 57
- *    - Brown city hub      14 -> 63   (and Green city hubs are now 14/15)
- *
- *  What was DELETED outright, with no replacement: the invented terrain
- *  artwork (old ids 4, 5, 12 -- "MountainRugged" tiles) and the invented
- *  green filler tiles (old ids 11, 13), plus the old id 6 double-town.
- *  Real 1830 charges terrain as a HEX property, not a tile property, so
- *  `hexmap::terrain_build_fee(q, r)` ($80 river / $120 mountain / $0 clear)
- *  is now the only terrain-cost source -- see `TERRAIN_BUILD_COST_LABEL`.
- *
- *  DANGER, and the reason this had to be a wholesale rewrite rather than a
- *  patch: the old and new id spaces OVERLAP with completely different
- *  meanings. Old internal 16/18/19/20/23/24 were "B"/"NY"/"OO" hub artwork;
- *  real tray #16/#18/#19/#20/#23/#24 are ordinary green PLAIN track. Had
- *  this mirror been left alone, those ids would still have resolved -- to
- *  silently, confidently wrong artwork (a plain green curve rendered as a
- *  two-station New York hub, and vice versa) rather than to the honest
- *  `undefined` placeholder path that a genuinely unknown id takes.
- *
- *  `MountainRugged` survives in `TerrainType`/`TERRAIN_FILL`/
- *  `terrainBaseValue` even though no entry below carries it any more --
- *  deliberately, mirroring the backend, which kept the `state::TerrainType`
- *  variant so already-stored `Tile` records still deserialize and so this
- *  frontend enum needs no lockstep change. See `hexmap::terrain_base_value`
- *  ("Audit G-5/G-10: NO tile carries this terrain any more"). */
-const TILE_CATALOG: readonly TileCatalogEntry[] = [
-  /* ---- Yellow tier (12 tiles): legal from every room's genesis. ---- */
-  // The five DoubleTown tiles carry `paths` (design note #119). Each pair is
-  // one town's own two-edge route, transcribed from `hexmap::TILE_CATALOG`'s
-  // seventh field, which in turn cites the 18xx tile definition in a comment
-  // directly above each Rust entry. Note how differently the two towns pair
-  // up across tiles that share an identical `connections` mask -- #1 vs #55
-  // are both edges 0/1/3/4, and #2 vs #56 are both 0/1/2/3 -- which is
-  // exactly the distinction the flat mask cannot express and the whole
-  // reason this field exists.
-  {
-    tileId: 1,
-    connections: 0b01_1011,
-    terrain: "DoubleTown",
-    color: "Yellow",
-    paths: [[0, 4], [1, 3]],
-  }, // #1 x1 -- 18xx: path=a:1,b:_0;path=a:_0,b:3;path=a:0,b:_1;path=a:_1,b:4
-  {
-    tileId: 2,
-    connections: 0b00_1111,
-    terrain: "DoubleTown",
-    color: "Yellow",
-    paths: [[0, 3], [1, 2]],
-  }, // #2 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:2
-  { tileId: 3, connections: 0b00_0011, terrain: "SmallTown", color: "Yellow" }, // #3 x2 -- single town, sharp curve
-  { tileId: 4, connections: 0b00_1001, terrain: "SmallTown", color: "Yellow" }, // #4 x2 -- single town, straight. NOTE: real tray #4, NOT the deleted invented "river" tile that used to hold id 4.
-  { tileId: 7, connections: 0b00_0011, terrain: "Plain", color: "Yellow" }, // #7 x4 -- plain sharp curve
-  { tileId: 8, connections: 0b00_0101, terrain: "Plain", color: "Yellow" }, // #8 x8 -- plain gentle curve, the most common tile in the game
-  { tileId: 9, connections: 0b00_1001, terrain: "Plain", color: "Yellow" }, // #9 x7 -- plain straight
-  {
-    tileId: 55,
-    connections: 0b01_1011,
-    terrain: "DoubleTown",
-    color: "Yellow",
-    paths: [[0, 3], [1, 4]],
-  }, // #55 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:1,b:_1;path=a:_1,b:4 -- same mask as #1, two STRAIGHTS rather than #1's two curves
-  {
-    tileId: 56,
-    connections: 0b00_1111,
-    terrain: "DoubleTown",
-    color: "Yellow",
-    paths: [[0, 2], [1, 3]],
-  }, // #56 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:2;path=a:1,b:_1;path=a:_1,b:3 -- same mask as #2, crossing routes rather than #2's nested ones
-  { tileId: 57, connections: 0b00_1001, terrain: "MajorCityHub", color: "Yellow" }, // #57 x4 -- THE yellow city tile; every plain-city hex starts here. Replaces old internal id 10.
-  { tileId: 58, connections: 0b00_0101, terrain: "SmallTown", color: "Yellow" }, // #58 x2 -- single town, gentle curve
-  {
-    tileId: 69,
-    connections: 0b01_1101,
-    terrain: "DoubleTown",
-    color: "Yellow",
-    paths: [[0, 3], [2, 4]],
-  }, // #69 x1 -- 18xx: path=a:0,b:_0;path=a:_0,b:3;path=a:2,b:_1;path=a:_1,b:4
-
-  /* ---- Green tier (16 tiles): unlocked by the room's first 3-train. ---- */
-  { tileId: 14, connections: 0b01_1011, terrain: "MajorCityHub", color: "Green" }, // #14 x3 -- green city, edges 0/1/3/4
-  { tileId: 15, connections: 0b00_1111, terrain: "MajorCityHub", color: "Green" }, // #15 x2 -- green city, edges 0/1/2/3
-  { tileId: 16, connections: 0b00_1111, terrain: "Plain", color: "Green" }, // #16 x1 -- plain. NOT the old internal id 16 ("B" hub) -- see this constant's DANGER note.
-  { tileId: 18, connections: 0b00_1111, terrain: "Plain", color: "Green" }, // #18 x1 -- plain. NOT the old internal id 18 (Brown "B" hub).
-  { tileId: 19, connections: 0b01_1101, terrain: "Plain", color: "Green" }, // #19 x1 -- plain. NOT the old internal id 19 (Brown "NY" hub).
-  { tileId: 20, connections: 0b01_1011, terrain: "Plain", color: "Green" }, // #20 x1 -- plain. NOT the old internal id 20 (Brown "OO" hub).
-  { tileId: 23, connections: 0b01_1001, terrain: "Plain", color: "Green" }, // #23 x3 -- plain, edges 0/3/4
-  { tileId: 24, connections: 0b00_1101, terrain: "Plain", color: "Green" }, // #24 x3 -- plain, edges 0/2/3
-  { tileId: 25, connections: 0b01_0101, terrain: "Plain", color: "Green" }, // #25 x1 -- plain, edges 0/2/4
-  { tileId: 26, connections: 0b10_1001, terrain: "Plain", color: "Green" }, // #26 x1 -- plain, edges 0/3/5
-  { tileId: 27, connections: 0b00_1011, terrain: "Plain", color: "Green" }, // #27 x1 -- plain, edges 0/1/3
-  { tileId: 28, connections: 0b11_0001, terrain: "Plain", color: "Green" }, // #28 x1 -- plain, edges 0/4/5
-  { tileId: 29, connections: 0b00_0111, terrain: "Plain", color: "Green" }, // #29 x1 -- plain, edges 0/1/2
-  { tileId: 53, connections: 0b01_0101, terrain: "BostonHub", color: "Green" }, // #53 x2 -- "B" label (Boston AND Baltimore), edges 0/2/4. Was internal id 16.
-  {
-    tileId: 54,
-    connections: 0b00_1111,
-    terrain: "NewYorkHub",
-    color: "Green",
-    cityGroups: [[0, 1], [2, 3]],
-  }, // #54 x1 -- "NY" label, edges 0/1/2/3; city A owns 0-1, city B owns 2-3. Was internal id 17.
-  {
-    tileId: 59,
-    connections: 0b00_0101,
-    terrain: "DoubleCityHub",
-    color: "Green",
-    cityGroups: [[0], [2]],
-  }, // #59 x2 -- "OO" label; two DISCONNECTED one-edge station stubs (edge 0, edge 2), not a through-route. Was internal id 15.
-
-  /* ---- Brown tier (18 tiles): unlocked by the room's first 5-train. ---- */
-  { tileId: 39, connections: 0b00_0111, terrain: "Plain", color: "Brown" }, // #39 x1 -- plain, edges 0/1/2
-  { tileId: 40, connections: 0b01_0101, terrain: "Plain", color: "Brown" }, // #40 x1 -- plain, edges 0/2/4
-  { tileId: 41, connections: 0b00_1011, terrain: "Plain", color: "Brown" }, // #41 x2 -- plain, edges 0/1/3
-  { tileId: 42, connections: 0b10_1001, terrain: "Plain", color: "Brown" }, // #42 x2 -- plain, edges 0/3/5
-  { tileId: 43, connections: 0b00_1111, terrain: "Plain", color: "Brown" }, // #43 x2 -- plain, edges 0/1/2/3
-  { tileId: 44, connections: 0b01_1011, terrain: "Plain", color: "Brown" }, // #44 x1 -- plain, edges 0/1/3/4
-  { tileId: 45, connections: 0b01_1101, terrain: "Plain", color: "Brown" }, // #45 x2 -- plain, edges 0/2/3/4
-  { tileId: 46, connections: 0b01_1101, terrain: "Plain", color: "Brown" }, // #46 x2 -- plain, edges 0/2/3/4
-  { tileId: 47, connections: 0b01_1011, terrain: "Plain", color: "Brown" }, // #47 x1 -- plain, edges 0/1/3/4
-  { tileId: 61, connections: 0b01_1101, terrain: "BostonHub", color: "Brown" }, // #61 x2 -- "B" label, edges 0/2/3/4. Was internal id 18.
-  {
-    tileId: 62,
-    connections: 0b00_1111,
-    terrain: "NewYorkHub",
-    color: "Brown",
-    cityGroups: [[0, 1], [2, 3]],
-  }, // #62 x1 -- "NY" label, edges 0/1/2/3. Was internal id 19.
-  { tileId: 63, connections: 0b11_1111, terrain: "MajorCityHub", color: "Brown" }, // #63 x3 -- brown city, all six edges. Was internal id 14.
-  {
-    tileId: 64,
-    connections: 0b01_1101,
-    terrain: "DoubleCityHub",
-    color: "Brown",
-    cityGroups: [[0, 2], [3, 4]],
-  }, // #64 x1 -- "OO" label. Was internal id 20.
-  {
-    tileId: 65,
-    connections: 0b01_1101,
-    terrain: "DoubleCityHub",
-    color: "Brown",
-    cityGroups: [[0, 4], [2, 3]],
-  }, // #65 x1 -- "OO" label; same flat edge set as #64, different city pairing. Was internal id 21.
-  {
-    tileId: 66,
-    connections: 0b00_1111,
-    terrain: "DoubleCityHub",
-    color: "Brown",
-    cityGroups: [[0, 3], [1, 2]],
-  }, // #66 x1 -- "OO" label. Was internal id 22.
-  {
-    tileId: 67,
-    connections: 0b01_1101,
-    terrain: "DoubleCityHub",
-    color: "Brown",
-    cityGroups: [[0, 3], [2, 4]],
-  }, // #67 x1 -- "OO" label. Was internal id 23.
-  {
-    tileId: 68,
-    connections: 0b01_1011,
-    terrain: "DoubleCityHub",
-    color: "Brown",
-    cityGroups: [[0, 3], [1, 4]],
-  }, // #68 x1 -- "OO" label. Was internal id 24.
-  { tileId: 70, connections: 0b00_1111, terrain: "Plain", color: "Brown" }, // #70 x1 -- plain, edges 0/1/2/3
-];
-
-/** How many entries `hexmap::TILE_CATALOG` holds after Audit G-5's full
- *  1830 manifest expansion. Asserted against at module load (below) purely
- *  as a drift tripwire on this hand-kept mirror -- see design note #2 on why
- *  a mirror that silently falls behind is this file's standing hazard. */
-export const TILE_CATALOG_SIZE = 46;
-
-export const TILE_CATALOG_BY_ID: ReadonlyMap<number, TileCatalogEntry> = new Map(
-  TILE_CATALOG.map((entry) => [entry.tileId, entry]),
-);
-
-// Drift tripwire (design note #118). A duplicated `tileId` would silently
-// collapse inside the `Map` above and quietly shadow one of the two
-// entries, which is exactly the class of bug the old/new id-space overlap
-// makes easy to introduce. Dev-only: never throws, never runs in a
-// production bundle.
-if (process.env.NODE_ENV !== "production") {
-  if (TILE_CATALOG.length !== TILE_CATALOG_SIZE || TILE_CATALOG_BY_ID.size !== TILE_CATALOG_SIZE) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[HexGridRenderer] TILE_CATALOG mirror drift: ${TILE_CATALOG.length} entries / ` +
-        `${TILE_CATALOG_BY_ID.size} unique ids, expected ${TILE_CATALOG_SIZE}. ` +
-        "Re-sync against hexmap::TILE_CATALOG.",
-    );
-  }
-}
+/* ------------------------------------------------------------------ */
+/* Tile catalog -- EXTRACTED (monolith split, Phase 1)                  */
+/* ------------------------------------------------------------------ */
+//
+// `TerrainType`, `TileColorTier`, `TileCatalogEntry`, the 46-entry
+// `TILE_CATALOG` mirror of `hexmap::TILE_CATALOG`, `TILE_CATALOG_BY_ID` and
+// both dev-only drift tripwires now live in `./hexTileCatalog`.
+//
+// Re-exported here rather than merely imported, because these are part of
+// this component's PUBLIC surface -- `App.tsx` and `TileSelectionPopup.tsx`
+// both import `TerrainType`/`TileCatalogEntry` from this module today. A
+// re-export keeps every existing import path working, so the extraction is
+// invisible to consumers and can be verified as a pure move: no call site
+// changed, and `tsc` proves the graph still resolves.
+//
+// The matching `import` of the same names is at the TOP of this file, not
+// here -- `import/first`. Only these `export ... from` statements may sit in
+// the module body.
+export type { TerrainType, TileColorTier, TileCatalogEntry } from "./hexTileCatalog";
+export { TILE_CATALOG_SIZE, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 
 /** The three reserved 1830 landmark cities, at their VERIFIED REAL board
  *  coordinates (New York = G19, Boston = E23, Baltimore = I15 -- see design
@@ -3732,16 +3610,42 @@ const LANDMARK_TRACKS: Readonly<Record<string, ReadonlyArray<{ edges: readonly n
   Baltimore: [{ edges: [0, 4] }],
 };
 
-const TERRAIN_FILL: Readonly<Record<TerrainType, string>> = {
-  Plain: "#f4ecd8",
-  SmallTown: "#f0d9a0",
-  DoubleTown: "#f0d9a0",
-  MountainRugged: "#c9b28a",
-  MajorCityHub: "#e8d9c0",
-  DoubleCityHub: "#e8d9c0", // same fill as MajorCityHub -- both are hub-tile artwork, just a different station count
-  BostonHub: "#e8d9c0", // design note #49 -- same hub-tile fill, "B"-labeled artwork is still ordinary city fill
-  NewYorkHub: "#e8d9c0", // design note #49 -- same reasoning as BostonHub
+/** THE tile background colour, by era tier -- design note #122.
+ *
+ *  One constant per era, full stop. Previously a laid tile's fill came from
+ *  `TERRAIN_FILL` below, which is keyed on TERRAIN, so tiles of the same era
+ *  painted different colours purely because of what was printed on them: a
+ *  plain #9 came out `#f4ecd8`, a town #4 `#f0d9a0`, and the yellow city #57
+ *  `#e8d9c0`. #57 sits on nearly every city hex on the board, so the single
+ *  most-placed tile in the game was also the most visibly off-tray. Real
+ *  1830 cardboard is one stock colour per era; the artwork on top varies,
+ *  the card does not.
+ *
+ *  A second source of divergence went with it: the board loop used to
+ *  override the fill to `PRINTED_HEX_FILL.Yellow` for any hex whose static
+ *  entry was `printedColor: "Yellow"` (the landmarks and the four OO hexes),
+ *  so an upgraded Green or Brown tile on one of those hexes kept painting
+ *  yellow forever. Era now wins everywhere, which is also what tells a
+ *  player at a glance that a hex has actually been upgraded.
+ *
+ *  Gray and Red are NOT here on purpose: they are properties of preprinted
+ *  BOARD hexes, not of layable tile stock, and keep their own
+ *  `BOARD_HEX_FILL`/`PRINTED_HEX_FILL` entries. `TileColorTier` has exactly
+ *  three members and this map is total over them. */
+const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
+  Yellow: "#f0d9a0",
+  Green: "#c9e0b4",
+  Brown: "#d8bc9a",
 };
+
+/* Design note #122 deleted `TERRAIN_FILL` from here. It mapped each
+   TerrainType to its own tile background, and was the direct cause of the
+   reported colour drift: same era, different card colour, depending on what
+   was printed on the tile. `ERA_TILE_FILL` above replaced its last three
+   call sites (board loop, ghost preview, picker thumbnail) and nothing else
+   referenced it. Unlaid BOARD hexes were never its business -- those have
+   always used `BOARD_HEX_FILL`/`PRINTED_HEX_FILL`, which are untouched. */
+
 
 const COLOR_TIER_STROKE: Readonly<Record<TileColorTier, string>> = {
   Yellow: "#caa42a",
@@ -4065,10 +3969,54 @@ function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorTier): n
  *  as a cost figure, so the bare number reads cleanly on its own. Feeds
  *  BOTH render paths (the plain-hex box and `drawTerrainCompoundBadge`)
  *  unchanged, since both just render whatever string this constant holds. */
-const TERRAIN_BUILD_COST_LABEL: Readonly<Partial<Record<BoardHexType, string>>> = {
-  River: "80",
-  Mountain: "120",
-};
+/** Real 1830's printed water/river build fee, in VGP.
+ *  Mirrors `hexmap::RIVER_BUILD_FEE` exactly. */
+export const RIVER_BUILD_FEE = 80;
+
+/** Real 1830's printed mountain build fee, in VGP.
+ *  Mirrors `hexmap::MOUNTAIN_BUILD_FEE` exactly. */
+export const MOUNTAIN_BUILD_FEE = 120;
+
+/** What laying track on hex `(q, r)` costs in terrain fees -- design note
+ *  #136 (F-2).
+ *
+ *  A DIRECT MIRROR of `hexmap::terrain_build_fee(q, r)`, structured the same
+ *  way it is: look the hex up in the river set, then the mountain set, then
+ *  charge nothing. `0` for ordinary clear ground, which is a real answer, not
+ *  a missing one.
+ *
+ *  WHY BY COORDINATE RATHER THAN BY TERRAIN TYPE. This used to be a
+ *  `Record<BoardHexType, string>` keyed on the hex's `type` field, which made
+ *  the fee a property of a rendering CATEGORY. In real 1830 -- and in the
+ *  contract since backend G-10 -- terrain cost is a property of the HEX:
+ *  `hexmap::terrain_build_fee` takes `(q, r)` and consults
+ *  `RIVER_HEXES`/`MOUNTAIN_HEXES`. Keying on a display type meant the two
+ *  models could disagree about any hex whose rendering category and terrain
+ *  membership ever diverged, and it made the frontend's number look like a
+ *  UI constant rather than a mirrored contract value.
+ *
+ *  THE FIGURES ARE THE CONTRACT'S, AND THE SPEC DOCUMENT IS WRONG.
+ *  `AUDIT_PART2_FRONTEND.md`'s F-2 records the spec as saying "$20 River /
+ *  $80 Mountain". That is not real 1830 and not what this contract charges:
+ *  `hexmap::RIVER_BUILD_FEE = 80` and `hexmap::MOUNTAIN_BUILD_FEE = 120`,
+ *  which is also what the physical board prints. The renderer already showed
+ *  $80/$120; the reconciliation needed was to the SPEC, not to the code, and
+ *  the resolution is that the contract is the authority. These constants are
+ *  named after their backend counterparts so the correspondence is checkable
+ *  by grep rather than by memory.
+ *
+ *  STILL A MIRROR, and worth being honest about: no query surfaces
+ *  `terrain_build_fee`, so this cannot read the figure off the chain the way
+ *  `MapTileEntry.revenue` now does for tile revenue. If terrain fees ever
+ *  become player-visible in a way that affects a decision beyond a label,
+ *  they should be surfaced on a query and read from there. */
+export function terrainBuildFeeAt(q: number, r: number): number {
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (!hex) return 0;
+  if (hex.type === "River") return RIVER_BUILD_FEE;
+  if (hex.type === "Mountain") return MOUNTAIN_BUILD_FEE;
+  return 0;
+}
 
 const BOARD_HEX_FILL: Readonly<Record<BoardHexType, string>> = {
   Plain: "#33402f", // muted gray/green empty land
@@ -4520,80 +4468,42 @@ function rotateConnections(mask: number, orientation: number): number {
   return ((m << o) | (m >> (6 - o))) & 0b111111;
 }
 
-/** Rotates a list of BASE (pre-rotation) edge pairs by `orientation` steps
- *  -- the edge-pair counterpart of `rotateConnections`, and a direct port of
- *  `hexmap::rotate_paths`. `rotateConnections` shifts bit `e` left by
- *  `orientation`, i.e. base edge `e` becomes `(e + orientation) % 6`; this
- *  applies that same map to both ends of every pair, so a rotated path list
- *  and a rotated bitmask always describe the same track. Design note #119. */
-function rotatePaths(
-  paths: ReadonlyArray<readonly [number, number]>,
-  orientation: number,
-): Array<[number, number]> {
-  const rot = ((orientation % 6) + 6) % 6;
-  return paths.map(([a, b]) => [(a + rot) % 6, (b + rot) % 6] as [number, number]);
-}
+/* Design note #121 removed `rotatePaths` and `pathsForTile` from here.
+   Both existed only to feed the generalized double-town renderer that
+   `DOUBLE_TOWN_ROUTES` replaced: `rotatePaths` turned catalog edge pairs
+   into rotated ones, and `pathsForTile` picked query data over the mirror.
+   The explicit artwork table keys on `tileId` and rotates its own two edges
+   inline, so neither had a caller left. `msg::MapTileEntry::paths` is still
+   populated by the contract and still mirrored on `TileCatalogEntry.paths`
+   -- the mirror now feeds the drift tripwire beside that table -- but this
+   renderer no longer reads the per-tile query value for artwork. */
 
-/** Resolves the BASE (pre-rotation) discrete segments to render for a tile,
- *  preferring what the contract actually sent over the local mirror --
- *  design note #119.
+/** Every `(tile_id, orientation)` pairing in the LOCAL catalog mirror --
+ *  design note #120's offline fallback for the tile picker, used only when
+ *  no chain client is wired up.
  *
- *  `queryPaths` is `MapTileEntry.paths` from `GetMapGrid`; `entry` is this
- *  file's own `TILE_CATALOG` row. The contract's copy wins because it is the
- *  authority on what is really on that hex, and because it keeps working if
- *  the backend catalog gains a tile this mirror hasn't caught up to.
+ *  Design note #125: this no longer filters by era. It used to return only
+ *  the tiers a room in `currentEra` had unlocked, which meant a fresh
+ *  offline session showed the twelve Yellow tiles and nothing else, with no
+ *  way to reach the other thirty-four -- the player was stuck looking at one
+ *  tray. Offline mode exists to INSPECT the catalog, and `TileSelectionPopup`
+ *  now has era tabs to browse it, so the filtering moved there where it is a
+ *  view control the player can change rather than a wall.
  *
- *  Falls through to the mirror when the query gave nothing usable, which
- *  covers three distinct real cases and must not distinguish between them:
- *  a contract deployed before `msg::MapTileEntry::paths` existed (key
- *  absent -> `undefined`), a `Tile` record whose paths could not be resolved
- *  contract-side (empty array), and every un-laid tile in
- *  `TilePreviewThumbnail`'s picker carousel, which has no query row at all
- *  and passes `undefined` by construction.
- *
- *  Returns `undefined` when neither source has data -- the signal for
- *  callers to keep using their existing `connections`-derived rendering,
- *  which is what every non-DoubleTown tile does today and continues to do. */
-function pathsForTile(
-  entry: TileCatalogEntry,
-  queryPaths?: ReadonlyArray<readonly [number, number]> | null,
-): ReadonlyArray<readonly [number, number]> | undefined {
-  if (queryPaths && queryPaths.length > 0) return queryPaths;
-  if (entry.paths && entry.paths.length > 0) return entry.paths;
-  return undefined;
-}
-
-/** Which colour tiers a room in `currentEra` has unlocked -- Yellow from
- *  genesis, Green with the first 3-train, Brown with the first 5-train, each
- *  tier keeping the ones before it (`hexmap::TILE_CATALOG`'s own tier
- *  comments; design note #120). */
-const ERA_UNLOCKED_TIERS: Readonly<Record<TileColorTier, readonly TileColorTier[]>> = {
-  Yellow: ["Yellow"],
-  Green: ["Yellow", "Green"],
-  Brown: ["Yellow", "Green", "Brown"],
-};
-
-/** Every `(tile_id, orientation)` pairing the LOCAL catalog mirror considers
- *  plausible at a hex in `currentEra` -- design note #120's offline fallback
- *  for the tile picker, used only when no chain client is wired up.
- *
- *  This is an era filter and NOTHING MORE. It deliberately does not attempt
- *  to reimplement `hexmap::legal_tile_placements`: no track connectivity, no
- *  landmark/OO/"B"/"NY" reservation, no upgrade colour-step rule, no
- *  tile-tray depletion. Those rules are nontrivial, live correctly on the
- *  contract, and duplicating them here would create a second implementation
- *  to drift out of sync -- the exact hazard `TileSelectionPopup`'s own design
- *  note #4 exists to prevent, and the reason this returns a `"offline"`
- *  status the UI must label as provisional rather than a `"success"` any
- *  consumer could mistake for the contract's own answer.
+ *  This does not weaken any rule, because it was never enforcing one. The
+ *  result carries no legality claim of any kind: no era lock, no track
+ *  connectivity, no landmark/OO/"B"/"NY" reservation, no upgrade colour
+ *  step, no tray depletion. That is why it goes out under the `"offline"`
+ *  status the UI must label as provisional and must not dispatch from --
+ *  reimplementing `hexmap::legal_tile_placements` here would create a second
+ *  copy of the rules to drift out of sync, the exact hazard
+ *  `TileSelectionPopup`'s design note #4 exists to prevent.
  *
  *  All six orientations are offered for every tile, since without the
  *  contract there is no basis for excluding any of them. */
-function localCatalogPlacements(currentEra: TileColorTier): LegalTilePlacement[] {
-  const unlocked = new Set<TileColorTier>(ERA_UNLOCKED_TIERS[currentEra] ?? ["Yellow"]);
+function localCatalogPlacements(): LegalTilePlacement[] {
   const placements: LegalTilePlacement[] = [];
   for (const entry of TILE_CATALOG) {
-    if (!unlocked.has(entry.color)) continue;
     for (let orientation = 0; orientation < 6; orientation++) {
       placements.push({ tile_id: entry.tileId, orientation });
     }
@@ -5980,8 +5890,11 @@ function describeHexWithValue(
   }
 
   if (boardHex) {
-    const costLabel = TERRAIN_BUILD_COST_LABEL[boardHex.type];
-    if (costLabel) result = `${result} (Terrain Cost: $${costLabel})`;
+    // Design note #136 (F-2): resolved by COORDINATE through the mirror of
+    // `hexmap::terrain_build_fee`, not by looking the hex's display type up
+    // in a label table.
+    const terrainFee = terrainBuildFeeAt(q, r);
+    if (terrainFee > 0) result = `${result} (Terrain Cost: $${terrainFee})`;
   }
 
   // Design note #118: real placed station tokens, by ticker -- not a
@@ -6001,6 +5914,24 @@ function describeHexWithValue(
 /* ------------------------------------------------------------------ */
 /* Component                                                          */
 /* ------------------------------------------------------------------ */
+
+/** One train's traced route, for the map overlay -- design note #137 (F-1). */
+export interface RouteOverlay {
+  /** Short label for the train running this route, e.g. `"3-Train"`. Drawn
+   *  nowhere by this component today; carried so a future legend, tooltip or
+   *  hover-highlight has it without a second plumbing pass. */
+  trainLabel: string;
+  /** CSS colour for this route's stroke. One distinct colour per train, so
+   *  overlapping routes stay tellable apart -- which is the entire point of
+   *  drawing more than one. */
+  color: string;
+  /** The hexes this route runs through, IN ORDER. Consecutive entries must be
+   *  adjacent; a non-adjacent pair is skipped rather than drawn as a straight
+   *  line across the board (see `drawRouteOverlays`). */
+  hexes: Array<[number, number]>;
+}
+
+const EMPTY_ROUTE_OVERLAYS: readonly RouteOverlay[] = [];
 
 export interface HexGridRendererProps {
   /** `QueryMsg::GetMapGrid`'s response, verbatim. */
@@ -6029,6 +5960,14 @@ export interface HexGridRendererProps {
   contractAddress?: string;
   gameId?: number;
   protocolId?: number;
+  /** Traced train routes to draw over the rail map -- design note #137
+   *  (F-1). One entry per train; omit or pass `[]` for no overlay.
+   *
+   *  This is the layer the board previously had NO equivalent of: track was
+   *  drawn, but which track a train actually RAN was never shown, so a player
+   *  building a manual route had no visual confirmation of the path they were
+   *  assembling. */
+  routeOverlays?: readonly RouteOverlay[];
   /** Fired synchronously on every genuine hex click, before the
    *  `GetLegalTilePlacements` query (if enabled) resolves -- lets the host
    *  app position a popup immediately instead of waiting on the network. */
@@ -6249,6 +6188,7 @@ export function HexGridRenderer({
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
+  routeOverlays = EMPTY_ROUTE_OVERLAYS,
 }: HexGridRendererProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -6665,9 +6605,6 @@ export function HexGridRenderer({
     // pre-printed track is drawn unconditionally in a dedicated pass below
     // instead (see design note #6b). The fill/outline (including any
     // color-tier upgrade) still draws here either way.
-    const landmarkAt = (q: number, r: number) =>
-      LANDMARK_HEXES.find((landmark) => landmark.q === q && landmark.r === r);
-
     // BUG FIX ("Unify All Board Yellow Shades" follow-up -- reported: I15/
     // G19/E23 render a visibly different shade of yellow from every other
     // pre-printed yellow hex). The earlier pass fixed the STATIC background
@@ -6677,7 +6614,7 @@ export function HexGridRenderer({
     // `mapGrid.tiles` entry exists at that hex -- which, for a landmark, is
     // basically always true (a `MajorCityHub`/`DoubleCityHub` tile is
     // required there per the backend's landmark reservation, not an
-    // optional player upgrade), using `TERRAIN_FILL[catalogEntry.terrain]`
+    // optional player upgrade), using `ERA_TILE_FILL[catalogEntry.color]` (design note #122)
     // instead -- `TERRAIN_FILL.MajorCityHub`/`DoubleCityHub` is `#e8d9c0`, a
     // distinctly lighter/less-saturated tan than `#e8d488`, which is
     // exactly the "different shade of yellow" this reports. The same latent
@@ -6693,35 +6630,53 @@ export function HexGridRenderer({
     // hub tile ends up laid there or what tier it's since been upgraded to
     // -- exactly mirroring how the pre-laid static pass already treats it,
     // and how an ordinary buildable hex's fill never encodes tier either.
-    const printedYellowHexAt = (q: number, r: number) =>
-      STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.printedColor === "Yellow";
 
     for (const tile of mapGrid.tiles) {
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
       const center = axialToPixel(tile.q, tile.r, hexSize);
 
       drawHexPath(ctx, center, hexSize);
-      ctx.fillStyle = !catalogEntry
-        ? "#dddddd"
-        : printedYellowHexAt(tile.q, tile.r)
-          ? PRINTED_HEX_FILL.Yellow
-          : TERRAIN_FILL[catalogEntry.terrain];
+      // Design note #122: era, and only era. No terrain keying, and no
+      // printed-yellow override for landmark/OO hexes -- see `ERA_TILE_FILL`.
+      ctx.fillStyle = catalogEntry ? ERA_TILE_FILL[catalogEntry.color] : "#dddddd";
       ctx.fill();
       ctx.strokeStyle = catalogEntry ? COLOR_TIER_STROKE[catalogEntry.color] : "#9a9a9a";
       ctx.lineWidth = 2;
       ctx.stroke();
 
       if (catalogEntry) {
-        if (!landmarkAt(tile.q, tile.r)) {
-          // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
-          withHexClip(ctx, center, hexSize, () => {
-            // Design note #119: the laid tile's OWN discrete segments as the
-            // contract reported them (`msg::MapTileEntry::paths`), preferred
-            // over the local catalog mirror. `undefined` on a pre-#119
-            // contract, which `pathsForTile` handles by falling back.
-            drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, tile.paths);
-          });
-        }
+        // Design note #133: the `!landmarkAt(...)` guard that used to sit
+        // here is GONE, and its removal is the real fix for the reported
+        // "tile 62 draws crossing track with a station dumped on the
+        // intersection".
+        //
+        // New York, Boston and Baltimore are `LANDMARK_HEXES`. The guard
+        // meant a laid tile on one of them never called `drawTrackPath` at
+        // all -- so #54/#62 (NY) and #53/#61 (B) could never reach the
+        // hardcoded artwork catalog no matter what was in it. What the
+        // player saw on G19 instead was the PRE-PRINTED landmark track
+        // from `drawLandmarkTrack`, whose two stubs run to
+        // `twoNodePositions`' fixed NE/SW diagonal: a stub from the NW
+        // edge sweeping down to the SW node crosses the other stub, and
+        // the station sits on the crossing. Exactly the reported symptom,
+        // and entirely upstream of the #62 path strings -- those are
+        // provably non-crossing (see `TILE_GRAPHICS_CATALOG`'s #62 note:
+        // the two arcs occupy x >= 0.366 and x <= -0.366 respectively).
+        //
+        // The pre-printed track pass below is now the one that yields,
+        // which is the correct direction: printed artwork is what a hex
+        // shows UNTIL a tile covers it.
+        // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
+        withHexClip(ctx, center, hexSize, () => {
+          // Design note #121: no longer passes `tile.paths`. Double-town
+          // artwork now comes from the explicit `DOUBLE_TOWN_ROUTES` table
+          // keyed on `tile_id`, and every other tile was always drawn from
+          // `connections` alone -- so there is nothing left for the
+          // per-tile query value to feed. The contract still sends it and
+          // `MapTileEntry.paths` still types it; this renderer just has no
+          // use for it now.
+          drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, false);
+        });
       } else {
         // Unknown tile_id -- see design notes #2 and #118. Renders generic
         // provisional artwork rather than silently drawing nothing (or,
@@ -6740,6 +6695,12 @@ export function HexGridRenderer({
     // landmark-shading pass) so a laid hub tile's own opaque fill -- drawn
     // in that loop above -- can never paint over this authentic track.
     for (const landmark of LANDMARK_HEXES) {
+      // Design note #133: "always drawn" was the bug's other half. A
+      // landmark's pre-printed track is its STARTING artwork, not a
+      // permanent overlay -- once a real tile is laid the printed stubs are
+      // physically covered by it. Continuing to draw them on top of a laid
+      // #62 stacked two different renderings of New York in the same hex.
+      if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
@@ -6840,6 +6801,16 @@ export function HexGridRenderer({
       });
     }
 
+    // ---- Traced train routes (design note #137 / F-1). ----
+    //
+    // POSITION IN THE PASS ORDER IS DELIBERATE, and is the whole reason this
+    // sits here rather than at the end: AFTER every track pass, so a route
+    // reads as running ON the rails rather than under them; BEFORE station
+    // tokens, city circles and every badge, so the overlay can never bury the
+    // markers a player needs in order to read the board. A route is an
+    // annotation over the map, not a replacement for it.
+    drawRouteOverlays(ctx, hexSize, routeOverlays);
+
     // ---- Station Token markers (design note #36, extended by #44) --
     // layered on TOP of every white/gray/OO station circle drawn above. Two
     // passes: (1) a MUTED preprinted marker at each of the 8
@@ -6914,13 +6885,71 @@ export function HexGridRenderer({
         });
       }
 
+      // ---- Design note #134: PER-SLOT token placement. ----
+      //
+      // A 2-slot city draws a pill with one ring per slot, so a token has to
+      // land ON a ring rather than at the pill's centre -- two tokens at the
+      // centre of one pill stack on top of each other and hide a real,
+      // decision-relevant fact (whether that city still has room).
+      //
+      // The chain records WHICH CITY a token is in (`station_tokens`,
+      // backend Audit G-12) but not which SLOT, because a slot has no
+      // meaning in the rules -- capacity is a count, and two tokens in one
+      // city are interchangeable. So slot order is chosen here, by ascending
+      // `company_id`. That is deterministic and identical on every client
+      // and every re-render, which is the property that actually matters; it
+      // just isn't authoritative about which physical circle a company
+      // "owns", and nothing downstream should read it as though it were.
+      const occupantsByCity = new Map<string, StationTokenCompany[]>();
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
         for (const [q, r] of company.station_token_hexes) {
-          const point = stationMarkerPoint(q, r, hexSize);
+          const city = tokenCityIndex(company, q, r) ?? 0;
+          const key = `${q},${r},${city}`;
+          const bucket = occupantsByCity.get(key);
+          if (bucket) bucket.push(company);
+          else occupantsByCity.set(key, [company]);
+        }
+      }
+      // `forEach`, not `for...of` over `.values()` -- tsconfig targets ES5
+      // without `downlevelIteration`, so iterating a Map iterator is a
+      // compile error here.
+      occupantsByCity.forEach((bucket) => {
+        bucket.sort((a, b) => a.company_id - b.company_id);
+      });
+
+      for (const company of publicCompanies) {
+        if (!company.is_floated) continue;
+        for (const [q, r] of company.station_token_hexes) {
+          const laidTile = mapGrid.tiles.find((laid) => laid.q === q && laid.r === r);
+          const chainCity = tokenCityIndex(company, q, r);
           const tokenCenter = axialToPixel(q, r, hexSize);
+
+          let point: { x: number; y: number } | undefined;
+          if (laidTile && chainCity !== undefined) {
+            const slotPoints = tileCitySlotPoints(
+              laidTile.tile_id,
+              chainCity,
+              laidTile.orientation,
+              tokenCenter,
+              hexSize,
+            );
+            const bucket = occupantsByCity.get(`${q},${r},${chainCity}`) ?? [];
+            const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
+            // A bucket longer than the city has slots means the chain and
+            // this mirror disagree about capacity (see
+            // `tileCitySlotCounts`' own note). Clamping to the last real
+            // slot keeps the token visible and stacked rather than
+            // vanishing, which is the more debuggable failure.
+            point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+          }
+
+          // Fallback: a pre-G-12 chain, an unknown tile, or an untiled
+          // preprinted city -- all cases where there is no per-slot answer
+          // to be had, so the legacy per-hex anchor is the honest one.
+          const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile);
           withHexClip(ctx, tokenCenter, hexSize, () => {
-            drawStationTokenMarker(ctx, point, hexSize, company.ticker, stationTickerColor(company.company_id), false);
+            drawStationTokenMarker(ctx, resolved, hexSize, company.ticker, stationTickerColor(company.company_id), false);
           });
         }
       }
@@ -7311,8 +7340,12 @@ export function HexGridRenderer({
     for (const hex of STATIC_BOARD_HEXES) {
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
       const terrainType = hex.type;
-      const costLabel = TERRAIN_BUILD_COST_LABEL[hex.type];
-      if (!costLabel) continue;
+      // Design note #136 (F-2): the printed figure comes from the
+      // coordinate-keyed mirror of `hexmap::terrain_build_fee`, so the label
+      // on the board and the fee the contract charges are the same lookup.
+      const terrainFee = terrainBuildFeeAt(hex.q, hex.r);
+      if (terrainFee <= 0) continue;
+      const costLabel = String(terrainFee);
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #87: GENERALIZED past the old DoubleCity-only
       // `isDoubleCityHex` check -- see the terrain-icon pass above's own
@@ -7446,6 +7479,13 @@ export function HexGridRenderer({
     // override table entirely) falls through to `drawValueBadge`'s own
     // unchanged flat-by-terrain default.
     for (const landmark of LANDMARK_HEXES) {
+      // Design note #133: same yield as the track pass above, and for the
+      // same reason one step further on -- `HEX_START_VALUE_OVERRIDE` is
+      // this hex's PRINTED starting value. Once a tile is laid, the tile's
+      // own chain revenue is the figure that pays (a laid #62 pays $90, not
+      // New York's printed starting value), and the laid-tile badge loop
+      // below now prints it.
+      if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
       const override = HEX_START_VALUE_OVERRIDE[landmark.label];
       if (override === 0) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
@@ -7556,7 +7596,10 @@ export function HexGridRenderer({
       // above would widen `catalogEntry.terrain`'s narrowed type past what
       // `drawValueBadge` accepts for no functional benefit (this branch is
       // unreachable for a landmark hex either way).
-      if (landmarkAt(tile.q, tile.r)) continue; // landmark badge already drawn above
+      // Design note #133: no longer skipped for a landmark hex. The
+      // landmark badge pass above now yields whenever a tile is laid, so
+      // exactly one badge is drawn either way -- the printed value while the
+      // hex is bare, the chain's `MapTileEntry.revenue` once it is not.
       const center = axialToPixel(tile.q, tile.r, hexSize);
       // Local `const` so the allow-list narrowing above (`catalogEntry.terrain
       // !== ...`) survives being read inside the `withHexClip` closure below
@@ -7569,8 +7612,20 @@ export function HexGridRenderer({
       // uses to draw the real track, so the badge dodges exactly what's
       // actually drawn, not the tile's unrotated base artwork.
       const tileEdges = liveEdges(rotateConnections(catalogEntry.connections, tile.orientation));
+      // Design note #132: THE revenue figure, read off `MapTileEntry.revenue`
+      // -- `hexmap::tile_base_value`, the same call `pathfinding::HexInfo`
+      // and `operations::execute_run_manual_route` price a route through.
+      // What is printed here is therefore what the contract will actually
+      // pay, by construction. It is no longer computed on the frontend at
+      // all; `drawValueBadge`'s existing `valueOverride` parameter is the
+      // channel, so nothing about badge placement or styling changes.
+      const chainRevenue = chainTileRevenue(tile);
+      // `0` is a real chain answer -- plain connector track pays nothing --
+      // and a `$0` badge is noise, so suppress it. `undefined` (a pre-G-11
+      // contract) keeps the old terrain-bucket fallback by passing through.
+      if (chainRevenue === 0) continue;
       withHexClip(ctx, center, hexSize, () => {
-        drawValueBadge(ctx, center, tile.q, tile.r, terrain, hexSize, undefined, tileEdges, claimedHexSlots);
+        drawValueBadge(ctx, center, tile.q, tile.r, terrain, hexSize, chainRevenue, tileEdges, claimedHexSlots);
       });
     }
 
@@ -7648,7 +7703,7 @@ export function HexGridRenderer({
       ctx.save();
       ctx.globalAlpha = 0.65;
       drawHexPath(ctx, previewCenter, hexSize);
-      ctx.fillStyle = previewCatalogEntry ? TERRAIN_FILL[previewCatalogEntry.terrain] : "#dddddd";
+      ctx.fillStyle = previewCatalogEntry ? ERA_TILE_FILL[previewCatalogEntry.color] : "#dddddd";
       ctx.fill();
       ctx.setLineDash([5, 4]);
       ctx.strokeStyle = previewCatalogEntry
@@ -7714,7 +7769,33 @@ export function HexGridRenderer({
 
     ctx.restore();
   }, [
-    mapGrid.tiles,
+    // `mapGrid`, not `mapGrid.tiles` (react-hooks/exhaustive-deps).
+    //
+    // The body reads the WHOLE object, not just the array: `hexHasLaidTile`,
+    // `archetypeForHex`, `liveEdgesForHex`, `hexBlockedSlots` and
+    // `singleNodeNameplateAnchor` all take `mapGrid` itself. Depending only
+    // on `.tiles` was a narrower key than the closure actually needs, which
+    // is the definition of a stale-closure hazard: any change to `mapGrid`
+    // that did not also replace `.tiles` would leave this callback painting
+    // from the previous board.
+    //
+    // It costs nothing to widen. A live `GetMapGrid` response is freshly
+    // parsed per poll, so `mapGrid` and `mapGrid.tiles` get new identities
+    // together -- the narrow key only ever helped in the one case where a
+    // parent reuses the tiles array inside a new wrapper object, which no
+    // caller does.
+    //
+    // WHY THIS WAS INVISIBLE: `App.tsx` currently supplies
+    // `useMemo(() => MOCK_MAP_GRID, [])` -- a frozen mock that never changes
+    // at all, so neither the stale read nor any extra repaint could be
+    // observed. The hazard only becomes real when this is wired to the live
+    // poll, which is exactly when it would have been hardest to diagnose.
+    //
+    // NOTE FOR CALLERS: pass a STABLE `mapGrid` reference (memoised or
+    // straight from the polling hook). An object literal built inline in JSX
+    // gets a new identity every render and would repaint the canvas on every
+    // render of the parent.
+    mapGrid,
     hexSize,
     width,
     height,
@@ -7725,6 +7806,11 @@ export function HexGridRenderer({
     hoveredHexCoord,
     boardContentBounds,
     publicCompanies,
+    // Design note #137: a new route trace must repaint the canvas. Omitting
+    // this from the dep list is the classic failure here -- the prop updates,
+    // React re-renders, and the memoised draw callback never re-runs, so the
+    // overlay silently never appears.
+    routeOverlays,
     showCityNames,
   ]);
 
@@ -7911,10 +7997,31 @@ export function HexGridRenderer({
       // Design note #118: added so the tooltip's new real-ticker station
       // list doesn't close over a stale `publicCompanies` array from this
       // callback's first render -- station tokens are placed live during
-      // play. (`mapGrid`/`currentEra`, also read by `describeHexWithValue`
-      // below, were already absent from this list before this pass; left
-      // as-is, out of scope for this fix.)
+      // play.
       publicCompanies,
+      // Design note #138: `mapGrid` and `currentEra` added. The comment that
+      // stood here previously acknowledged both were missing and deferred
+      // them as "out of scope"; they are in scope now, and both were real
+      // staleness bugs rather than lint noise.
+      //
+      // All three feed the SAME call -- `describeHexWithValue(hoverQ, hoverR,
+      // mapGrid, currentEra, publicCompanies)` -- which builds the hover
+      // tooltip, so a stale closure here does not fail loudly. It quietly
+      // reports outdated numbers, indefinitely:
+      //
+      //   - `currentEra` is the worse of the two. It selects which off-board
+      //     revenue TIER the tooltip prints, and it advances Yellow -> Green
+      //     -> Brown as the game progresses. Frozen at first render, every
+      //     off-board hover would show Yellow-era revenue for the entire rest
+      //     of the game -- a number the contract stopped paying rounds ago.
+      //   - `mapGrid` selects the hex's own value. Frozen, hovering a hex
+      //     someone just upgraded reports its PRE-tile value.
+      //
+      // Cheap to fix: this is an `onPointerMove` prop, so a new identity just
+      // swaps the handler React has attached. Nothing re-subscribes, and
+      // nothing here writes state that could feed back into these deps.
+      mapGrid,
+      currentEra,
     ],
   );
 
@@ -8003,11 +8110,11 @@ export function HexGridRenderer({
       // provisional and goes out under `status: "offline"`, which the UI is
       // required to label as such and must not dispatch from.
       if (!queryClient) {
-        const placements = localCatalogPlacements(currentEra);
+        const placements = localCatalogPlacements();
         // eslint-disable-next-line no-console
         console.log("[TileSelection] no chain client -- local catalog fallback", {
           hex_coordinate: { q, r, hex_label: hexLabel },
-          era: currentEra,
+          eras: "all (browse via the picker's era tabs)",
           tile_count: new Set(placements.map((p) => p.tile_id)).size,
           contract_validated: false,
         });
@@ -8092,11 +8199,10 @@ export function HexGridRenderer({
       protocolId,
       onHexClick,
       onHexClickQuery,
-      // Design note #120: read by the offline `localCatalogPlacements`
-      // fallback above, so a room advancing Yellow -> Green -> Brown
-      // re-derives the handler and offers the newly unlocked tiles instead
-      // of serving a stale Yellow-only tray from a closed-over era.
-      currentEra,
+      // Design note #125 dropped `currentEra` from here: the offline
+      // fallback no longer filters by era, so the handler has nothing
+      // era-dependent left to close over. Era browsing is now a view control
+      // inside `TileSelectionPopup` instead.
     ],
   );
 
@@ -8491,76 +8597,374 @@ function twoCityStationPoints(
   return [center, center];
 }
 
-/** Assigns each of a double-town tile's two ROTATED paths to one of the two
- *  canonical `twoNodePositions` town nodes -- design note #119.
+/* ------------------------------------------------------------------ */
+/* Canonical double-town artwork -- design note #121                    */
+/* ------------------------------------------------------------------ */
+
+/** How one town's track runs across the tile, and where its dit sits.
+ *  BASE (pre-rotation) edge numbers, same space as `TileCatalogEntry`'s
+ *  `connections`/`paths`. */
+interface DoubleTownRoute {
+  /** The two hex edges this town's track joins. */
+  edges: readonly [number, number];
+  /** Where to put this town's marker.
+   *
+   *  `"midpoint"` evaluates the drawn track at its own halfway point, so
+   *  the dit is guaranteed to sit ON the track whatever shape it took --
+   *  which for a straight is hex centre, and for a curve is the middle of
+   *  the arc.
+   *
+   *  `"alongTrack"` exists solely for #55, whose two tracks are BOTH
+   *  straights and therefore both have their midpoint at dead centre. It
+   *  slides each dit out along its own straight by `fraction` of the
+   *  apothem, toward `towardEdge`. Because it moves the MARKER rather than
+   *  the track, the X stays perfectly straight. */
+  /** Where this town's marker sits, as the parameter `t` along its OWN
+   *  drawn track: `0` is the `edges[0]` end, `1` is the `edges[1]` end,
+   *  `0.5` is the middle. Design note #123.
+   *
+   *  Superseded a `"midpoint"` rule that put every dit at `t = 0.5`. That
+   *  is exactly the wrong place on these tiles: the middle of a track is
+   *  where the OTHER track crosses it. On #69 the gentle curve's midpoint
+   *  landed precisely on the straight, so its dit sat on the intersection
+   *  and read as a blob rather than a town. Pushing each dit out along its
+   *  own arm is also what the printed tiles do -- the circles sit clear of
+   *  the crossing, toward the edges. */
+  ditAt: number;
+}
+
+/** The five real 1830 double-town tiles, drawn explicitly rather than
+ *  derived -- design note #121.
  *
- *  The nodes are fixed (Top-Right, Bottom-Left); the only question is which
- *  route gets which, and getting it wrong makes both routes detour across
- *  the hex to reach a node on the far side from their own edges. So both
- *  assignments are scored by total squared distance from each path's own
- *  anchor to its proposed node, and the cheaper one wins.
+ *  There are exactly five of these in the whole game and there will never
+ *  be a sixth, so an explicit table beats a general algorithm: it is
+ *  readable as "this is what #55 looks like", it cannot produce a surprise
+ *  on some orientation nobody tested, and each entry can be checked against
+ *  a photograph of the physical tile.
  *
- *  The anchor is normally the midpoint of the path's two edge points, which
- *  points squarely at the half of the hex that route occupies.
+ *  Shape per entry, by edge separation (`d = min(|a-b|, 6-|a-b|)`):
+ *    #1  {0,4} + {1,3} -- two gentle curves (d=2, d=2)
+ *    #2  {0,3} + {1,2} -- straight + sharp curve (d=3, d=1)
+ *    #55 {0,3} + {1,4} -- two straights: the X (d=3, d=3)
+ *    #56 {0,2} + {1,3} -- two gentle curves (d=2, d=2)
+ *    #69 {0,3} + {2,4} -- straight + gentle curve (d=3, d=2)
  *
- *  A STRAIGHT anchors on hex centre, since opposite edge points average back
- *  there. That is honest rather than broken -- a straight spans the whole
- *  hex and genuinely occupies no side -- and it has a consequence worth
- *  knowing: because the two nodes are symmetric about centre, a straight is
- *  equidistant from both and contributes the same cost to either assignment.
- *  So on a tile with one straight and one curve (#2, #56, #69) the curve
- *  alone decides, and the straight takes whichever node is left. On #2 at
- *  orientations 1 and 4 even the curve lands on the nodes' perpendicular
- *  bisector and the two assignments tie exactly; `<=` breaks it toward the
- *  in-order pairing, which is stable across renders and visually equivalent.
+ *  `edges` duplicates `hexmap::TILE_CATALOG`'s path data on purpose, so
+ *  this table reads standalone. The dev-mode assertion under
+ *  `TILE_CATALOG_BY_ID` cross-checks the two, so the duplication cannot
+ *  silently drift. */
+const DOUBLE_TOWN_ROUTES: Readonly<Record<number, readonly DoubleTownRoute[]>> = {
+  1: [
+    { edges: [0, 4], ditAt: 0.80 },
+    { edges: [1, 3], ditAt: 0.20 },
+  ],
+  2: [
+    { edges: [0, 3], ditAt: 0.80 },
+    { edges: [1, 2], ditAt: 0.20 },
+  ],
+  // #55 -- the X. Both arms are straights, so their midpoints coincide at
+  // the crossing; the two dits go out along opposite arms instead. The
+  // TRACK is still drawn dead straight, which is the whole point.
+  55: [
+    { edges: [0, 3], ditAt: 0.20 },
+    { edges: [1, 4], ditAt: 0.80 },
+  ],
+  56: [
+    { edges: [0, 2], ditAt: 0.20 },
+    { edges: [1, 3], ditAt: 0.80 },
+  ],
+  // #69 -- the tile that prompted design note #123. Its gentle curve
+  // crosses the straight at the straight's own midpoint, so `t = 0.5` put
+  // one dit squarely on the intersection. Both are now off it.
+  69: [
+    { edges: [0, 3], ditAt: 0.38 },
+    { edges: [2, 4], ditAt: 0.20 },
+  ],
+};
+
+// Drift tripwire for the table above (design note #121). `DOUBLE_TOWN_ROUTES`
+// restates each double-town's edge pairs so it reads standalone, which makes
+// it a second copy of data `TILE_CATALOG` already holds. This is what stops
+// the two silently diverging: if the backend ever re-sources a tile's
+// pairing, the artwork table has to move with it, or that tile keeps
+// rendering the old shape while every other consumer uses the new one.
+// Dev-only, never throws.
+if (process.env.NODE_ENV !== "production") {
+  const normalize = (pairs: ReadonlyArray<readonly [number, number]>) =>
+    JSON.stringify(
+      pairs.map(([a, b]) => (a <= b ? [a, b] : [b, a])).sort((x, y) => x[0] - y[0] || x[1] - y[1]),
+    );
+  for (const entry of TILE_CATALOG) {
+    const routes = DOUBLE_TOWN_ROUTES[entry.tileId];
+    if (entry.terrain === "DoubleTown" && !routes) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[HexGridRenderer] DoubleTown tile #${entry.tileId} has no DOUBLE_TOWN_ROUTES entry -- ` +
+          "it will fall through to the generic multi-spur fan. Add its canonical artwork.",
+      );
+      continue;
+    }
+    if (!routes || !entry.paths) continue;
+    const fromTable = normalize(routes.map((route) => route.edges));
+    const fromCatalog = normalize(entry.paths);
+    if (fromTable !== fromCatalog) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[HexGridRenderer] DoubleTown tile #${entry.tileId} artwork/catalog mismatch: ` +
+          `DOUBLE_TOWN_ROUTES says ${fromTable}, TILE_CATALOG says ${fromCatalog}.`,
+      );
+    }
+  }
+}
+
+/** Draws one double-town track between two edges and returns the point
+ *  halfway along whatever it drew -- design note #121.
  *
- *  Where BOTH paths are straights the metric says nothing at all -- #55
- *  ({0,3} and {1,4}) puts both anchors on centre, so every assignment ties
- *  and the winner would come down to floating-point noise. The fallback
- *  re-anchors on each path's FIRST edge point, which is always distinct
- *  between two paths -- two routes on one tile never share an edge -- so the
- *  choice stays deterministic and still geometrically sensible.
+ *  Two shapes, chosen by how far apart the edges are:
  *
- *  Returns one point per path. Any path count other than 2 gets hex centre
- *  throughout: not reachable for the five catalog double-towns, but total by
- *  construction rather than by assumption, so a future 3-town tile degrades
- *  to the old shared-centre rendering instead of indexing off the end. */
-function assignTownNodes(
-  rotatedPaths: ReadonlyArray<readonly [number, number]>,
+ *  OPPOSITE edges (`d === 3`) get a literal `lineTo`. Not a Bezier that
+ *  happens to look straight -- an actual straight segment, so #55's X can
+ *  never bow by a fraction of a pixel. Its halfway point is hex centre.
+ *
+ *  Anything else gets ONE cubic Bezier whose control points sit on each
+ *  endpoint's own inward normal, `hexSize * 0.3` in. That is the file's
+ *  existing `bezierTrackSegment` reach, and it is deliberately gentle: the
+ *  tangent leaves each edge perpendicular, as real printed track does, and
+ *  the curve then flows to the other edge without being dragged toward any
+ *  intermediate node. A 60-degree pair reads as a tight corner curve and a
+ *  120-degree pair as a shallow bow, purely from the geometry -- no
+ *  per-shape fudging. */
+function drawDoubleTownRoute(
+  ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
   apothem: number,
-): Array<{ x: number; y: number }> {
-  if (rotatedPaths.length !== 2) {
-    return rotatedPaths.map(() => center);
+  edgeA: number,
+  edgeB: number,
+): (t: number) => { x: number; y: number } {
+  const from = pointOnCircle(center, apothem, edgeAngleRad(edgeA));
+  const to = pointOnCircle(center, apothem, edgeAngleRad(edgeB));
+  const separation = Math.min(Math.abs(edgeA - edgeB), 6 - Math.abs(edgeA - edgeB));
+
+  if (separation === 3) {
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    // Straight line: plain linear interpolation, exact.
+    return (t) => ({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
   }
 
-  const nodes = twoNodePositions(center, size);
-  const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
-  const midpointAnchor = (pair: readonly [number, number]) => {
-    const a = edgePoint(pair[0]);
-    const b = edgePoint(pair[1]);
-    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  };
+  const reach = size * 0.3;
+  const normalA = edgeInwardNormal(edgeA);
+  const normalB = edgeInwardNormal(edgeB);
+  const cp1 = { x: from.x + normalA.x * reach, y: from.y + normalA.y * reach };
+  const cp2 = { x: to.x + normalB.x * reach, y: to.y + normalB.y * reach };
 
-  let anchors = rotatedPaths.map(midpointAnchor);
-  // Degenerate-straight fallback, described above. The threshold is a small
-  // fraction of the hex, comfortably larger than float noise and far smaller
-  // than any genuine separation between two routes' midpoints.
-  const separation = Math.hypot(anchors[0].x - anchors[1].x, anchors[0].y - anchors[1].y);
-  if (separation < size * 0.05) {
-    anchors = rotatedPaths.map((pair) => edgePoint(pair[0]));
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y);
+  ctx.stroke();
+
+  // The standard cubic basis, evaluated on the curve JUST DRAWN -- an exact
+  // point on it, not an approximation, so a dit placed at any `t` can never
+  // drift off its own track. Design note #123 needs arbitrary `t`, not just
+  // the midpoint, to push each town clear of where the other track crosses.
+  return (t) => {
+    const u = 1 - t;
+    return {
+      x: u * u * u * from.x + 3 * u * u * t * cp1.x + 3 * u * t * t * cp2.x + t * t * t * to.x,
+      y: u * u * u * from.y + 3 * u * u * t * cp1.y + 3 * u * t * t * cp2.y + t * t * t * to.y,
+    };
+  };
+}
+
+/** True when `paths` are pairwise edge-DISJOINT, i.e. the tile carries
+ *  several independent runs of track rather than one shared junction --
+ *  design note #122.
+ *
+ *  This is the whole basis for choosing a rendering, and it is read off the
+ *  catalog rather than guessed. A junction tile's path list names every
+ *  through-route across a shared node: #14 lists all six pairs among its
+ *  four edges, #63 all fifteen among its six, #39 all three among its
+ *  three. Drawing those as separate curves would be spaghetti -- they mean
+ *  "everything meets in the middle", which is exactly the fan. A disjoint
+ *  list means the opposite: #16's `[[0,2],[1,3]]` is two tracks that never
+ *  touch, and fanning them into one node invents a connection the tile does
+ *  not have. */
+function pathsAreDisjoint(paths: ReadonlyArray<readonly [number, number]>): boolean {
+  const seen = new Set<number>();
+  for (const [a, b] of paths) {
+    if (a === b) return false; // terminal spur -- handled by `cityGroups`
+    if (seen.has(a) || seen.has(b)) return false;
+    seen.add(a);
+    seen.add(b);
   }
+  return paths.length > 0;
+}
 
-  const cost = (first: number, second: number) => {
-    const d0x = anchors[0].x - nodes[first].x;
-    const d0y = anchors[0].y - nodes[first].y;
-    const d1x = anchors[1].x - nodes[second].x;
-    const d1y = anchors[1].y - nodes[second].y;
-    return d0x * d0x + d0y * d0y + d1x * d1x + d1y * d1y;
-  };
+/** Draws a tile's revenue-centre markers -- station circle, town dit(s),
+ *  or a neutral junction dot -- on top of whatever track was already
+ *  stroked. Extracted from `drawTrackPath` by design note #122 so the
+ *  new disjoint-path branch and the original fan branch share one
+ *  implementation instead of growing a second copy that could drift.
+ *
+ *  Keyed purely on TERRAIN, never on edge count -- see the notes inside.
+ *  `DoubleTown` is handled by `DOUBLE_TOWN_ROUTES` before this is ever
+ *  reached, so its branch here is a fallback for a double-town tile with
+ *  no explicit artwork entry. */
+function drawTileMarkers(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  size: number,
+  entry: TileCatalogEntry,
+  edges: readonly number[],
+): void {
+  //
+  // Design note #118: this block used to live INSIDE the 3+-edge branch (for
+  // the station circle) and to be gated on `edges.length === 2` (for the
+  // dits), which quietly assumed the old invented catalog's geometry. The
+  // real 1830 tray catalog breaks both assumptions in ways that matter:
+  //
+  //   - #57, the Yellow `MajorCityHub` that EVERY plain-city hex on the
+  //     board starts from, has exactly TWO live edges (0/3, a straight) --
+  //     so under the old placement it drew no station circle at all, the
+  //     single most visible tile in the game rendering as bare track.
+  //   - #1/#2/#55/#56/#69, the Yellow `DoubleTown`s, have FOUR live edges
+  //     each -- so under the old `=== 2` gate they drew no dits, and picked
+  //     up the neutral junction dot instead, reading as plain track.
+  //
+  // Hoisting the whole thing out and keying it purely on TERRAIN (never on
+  // edge count) fixes both and is inherently robust to any future catalog
+  // whose geometry differs again.
+  if (entry.terrain === "MajorCityHub" || entry.terrain === "BostonHub") {
+    // design note #49: Boston/Baltimore's own "B"-labeled single-city hub
+    // (`BostonHub`) gets the same single-station treatment as an ordinary
+    // MajorCityHub -- the "B" label is a legality restriction, not a
+    // different artwork shape.
+    drawStationCircle(ctx, center, size);
+  } else if (entry.terrain === "SmallTown") {
+    // A solid DARK circle (design note #3b / item 8's "Distinct Dark Small
+    // Towns"), deliberately not the small white circle this file used
+    // previously, so a town/dit reads as visually distinct from a buildable
+    // city station hub at a glance.
+    drawDitMarker(ctx, center, size);
+  } else if (entry.terrain === "DoubleTown") {
+    // Standardized onto the SAME `twoNodePositions` diagonal coordinates as
+    // G19/OO/every unlaid double-town-designated hex (design notes #57/#58).
+    // Index 0/1 map directly onto the two `drawDitMarker` calls below, first
+    // slot then second slot, with no re-sorting.
+    const [node0, node1] = twoNodePositions(center, size);
+    drawDitMarker(ctx, node0, size * 0.85); // index 0: top-right
+    drawDitMarker(ctx, node1, size * 0.85); // index 1: bottom-left
+  }
+  // FIX (design note #128): a branch used to sit here giving any non-city
+  // tile with 3+ live edges a small dark dot at hex centre. That dot is why
+  // Green and Brown PLAIN track showed phantom towns -- at 0.18 radius in
+  // `#555555` it reads as a dit, and the multi-edge plains and junctions
+  // (#16, #39-#47, #70) all qualified. A junction is a track crossing, not a
+  // revenue centre; real cardboard prints nothing there.
+  //
+  // Every marker this function draws is now gated on TERRAIN alone -- never
+  // on edge count, never on path shape. Only `SmallTown`/`DoubleTown`
+  // produce dits, only `MajorCityHub`/`BostonHub` a station circle, and
+  // anything else draws no centre marker at all.
+}
 
-  return cost(0, 1) <= cost(1, 0) ? [nodes[0], nodes[1]] : [nodes[1], nodes[0]];
+/* Design note #126 deleted `drawRevenueBadge` from here -- the bespoke
+   white disc the picker drew for itself. It clashed with the board's own
+   shape-coded `drawValueBadge` art, which was the reported bug. Both
+   surfaces now go through `drawValueBadgeAt`, the single extracted
+   implementation, so a value is identical in the tray and on the map. */
+
+
+/* ------------------------------------------------------------------ */
+/* Design note #131: HARDCODED ARTWORK INTERCEPT                       */
+/* ------------------------------------------------------------------ */
+
+/** Draws `tileId` from its hand-authored `TILE_GRAPHICS_CATALOG` entry and
+ *  returns `true`, or returns `false` if this tile has no explicit artwork
+ *  and the caller should fall through to its procedural path.
+ *
+ *  THIS IS THE "ART, NOT MATH" BOUNDARY. Everything below the `return true`
+ *  is literal `Path2D` playback of a hand-written `d` string. No control
+ *  point is computed here, no offset is derived, `bezierTrackSegment` and
+ *  `edgeInwardNormal` are never reached for a catalogued tile. Adding a
+ *  tile to `TILE_GRAPHICS_CATALOG` is therefore the whole mechanism for
+ *  taking it off procedural generation -- there is no second switch to flip
+ *  and no way for the two renderers to disagree about one tile, because
+ *  only one of them ever runs.
+ *
+ *  ORIENTATION is a rigid `ctx.rotate` about the hex centre -- the tile is
+ *  turned, exactly as cardboard is turned. `-60 * orientation` degrees
+ *  matches `edgeAngleRad`'s own `-60 * i` convention, so base edge `i`
+ *  lands on live edge `(i + orientation) % 6`, agreeing with
+ *  `rotateConnections` by construction rather than by coincidence.
+ *
+ *  TRACK IS STROKED BEFORE MARKERS, always, and markers are drawn OUTSIDE
+ *  the rotated/scaled transform in plain board pixels. Two reasons, both
+ *  load-bearing: a crossing arm (#55/#68's two straights meet at centre)
+ *  must never be stroked over a station it passes, and a circle drawn under
+ *  `ctx.scale(size, size)` would take its stroke width from the transform
+ *  and stop matching every other marker on the board. */
+function drawHardcodedTileArtwork(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  size: number,
+  tileId: number,
+  orientation: number,
+): boolean {
+  const paths = tileArtworkPaths(tileId);
+  const art = TILE_GRAPHICS_CATALOG[tileId];
+  if (!paths || !art) return false;
+
+  const rot = ((orientation % 6) + 6) % 6;
+
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate((-60 * rot * Math.PI) / 180);
+  ctx.scale(size, size);
+  ctx.strokeStyle = "#2b2b2b";
+  // The catalog is authored in unit-hex space, so the transform scales the
+  // pen too -- divide back out to land on the SAME on-screen stroke width
+  // (`max(3, size * 0.12)`) every other track in this file uses.
+  ctx.lineWidth = Math.max(3, size * 0.12) / size;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const path of paths) {
+    ctx.stroke(path);
+  }
+  ctx.restore();
+
+  // Markers, in board pixels, at their own explicit per-tile coordinates.
+  // A two-node tile shrinks its marker exactly as the old `cityGroups`
+  // branch did (`size * 0.85`), so a tile moving onto this renderer keeps
+  // the marker size players already know.
+  const markerSize = art.markers.length > 1 ? size * 0.85 : size;
+  const points = tileMarkerPoints(tileId, orientation, center, size);
+  art.markers.forEach((marker, index) => {
+    const point = points[index];
+    if (!point) return;
+    if (marker.kind === "town") {
+      // A town is a stop, never a station -- it has no slots and can never
+      // take a token, so it is always the plain dot.
+      drawDitMarker(ctx, point, markerSize);
+      return;
+    }
+    const slots = marker.slots ?? 1;
+    if (slots > 1) {
+      // Design note #133: the tile's own rotation is folded into the pill
+      // axis HERE rather than inside `drawStationPill`, because the marker
+      // pass runs in unrotated board pixels -- `-60 * rot` is the same
+      // convention `ctx.rotate` used for the track above, so the pill turns
+      // with the track it sits on.
+      drawStationPill(ctx, point, markerSize, slots, (marker.angle ?? 0) - 60 * rot);
+    } else {
+      drawStationCircle(ctx, point, markerSize);
+    }
+  });
+
+  return true;
 }
 
 function drawTrackPath(
@@ -8569,8 +8973,32 @@ function drawTrackPath(
   size: number,
   entry: TileCatalogEntry,
   orientation: number,
-  queryPaths?: ReadonlyArray<readonly [number, number]> | null,
+  /** Design note #124: draw the tile's own revenue disc. Default `true`, so
+   *  every isolated rendering of a tile (picker thumbnails, the rotation
+   *  preview) carries its value. The main BOARD loop passes `false`: laid
+   *  hexes already get a value badge from this file's own long-standing
+   *  `drawValueBadge` pass, which is placement-aware and knows about
+   *  off-board tiers and per-hex overrides. Drawing both would stamp two
+   *  different numbers on the same hex. */
+  showRevenue = true,
+  /** Design note #132: the chain's own `MapTileEntry.revenue` for this
+   *  tile, when the caller has a laid tile to read it from. `undefined` for
+   *  a tray thumbnail of a tile that isn't on the board yet, which falls
+   *  back to the terrain bucket -- the one place that fallback is still
+   *  correct, since there is no chain record to disagree with. */
+  revenueOverride?: number,
 ): void {
+  // ==== Design note #131: hardcoded artwork wins, unconditionally. ====
+  // FIRST statement in the function, ahead of `rotateConnections`/
+  // `liveEdges` and every procedural branch below, so a catalogued tile
+  // cannot reach them even by accident. The overlays pass still runs --
+  // that is the revenue badge and the "B"/"NY"/"OO" restriction label,
+  // neither of which is track art.
+  if (drawHardcodedTileArtwork(ctx, center, size, entry.tileId, orientation)) {
+    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
+    return;
+  }
+
   const actualMask = rotateConnections(entry.connections, orientation);
   const edges = liveEdges(actualMask);
 
@@ -8603,40 +9031,72 @@ function drawTrackPath(
   // old fan-to-centre rendering drew all four of them as the same four-way
   // junction with two dits floated at fixed offsets, which is wrong track
   // topology and wrong dit placement on every one of the five.
-  const doubleTownPaths =
-    entry.terrain === "DoubleTown" ? pathsForTile(entry, queryPaths) : undefined;
-  if (doubleTownPaths && doubleTownPaths.length > 0) {
-    const rotated = rotatePaths(doubleTownPaths, orientation);
-    // Each town gets its own node, offset from hex centre on the shared
-    // Top-Right/Bottom-Left diagonal every other two-node hex in this file
-    // already uses (`twoNodePositions`, design notes #57/#58) -- so a laid
-    // double-town lines up with the unlaid double-town-designated hex
-    // beneath it and with the OO/NY two-station tiles beside it.
-    //
-    // Routing each path through its OWN node, rather than both through
-    // `center`, is what makes the two routes visibly disjoint. It is also
-    // the one place here where rendering deviates from the data: real 1830
-    // artwork for #55 draws two straights that genuinely cross at the middle
-    // of the hex, whereas this bends each of them slightly through its own
-    // node so the two dits can sit on their own track without landing on top
-    // of each other at the crossing point. The TOPOLOGY -- which edge
-    // connects to which -- is exactly what the catalog declares either way;
-    // only the curvature is a presentation choice.
-    const nodes = assignTownNodes(rotated, center, size, apothem);
-    rotated.forEach(([a, b], index) => {
-      const node = nodes[index] ?? center;
-      const start = edgePoint(a);
-      const end = edgePoint(b);
-      bezierTrackSegment(ctx, start, node, size, edgeInwardNormal(a), null);
-      bezierTrackSegment(ctx, node, end, size, null, edgeInwardNormal(b));
+  // SUPERSEDED APPROACH (design note #121): a first pass drew these from
+  // the catalog's path data through a generalized offset -- each route bent
+  // through its own node so the two dits could not collide. That was wrong
+  // on the tiles it mattered most for. #55 is two straights crossing in an
+  // X, and bending both arms through offset nodes visibly bowed them into
+  // something that is not the tile; #56's two gentle curves came out warped
+  // enough to be hard to read. The lesson is that "make the markers fit" is
+  // not a good enough reason to move the TRACK. There are exactly five of
+  // these tiles in all of 1830, so they are now drawn from an explicit
+  // per-tile table (`DOUBLE_TOWN_ROUTES`) instead of derived, and the dits
+  // move around the geometry rather than the geometry moving around them.
+  const doubleTownRoutes =
+    entry.terrain === "DoubleTown" ? DOUBLE_TOWN_ROUTES[entry.tileId] : undefined;
+  if (doubleTownRoutes) {
+    const rot = ((orientation % 6) + 6) % 6;
+    // Every route drawn before any dit, so a crossing arm (#55's X crosses
+    // at centre by definition) can never be stroked over a town marker.
+    const ditPoints = doubleTownRoutes.map((route) => {
+      const edgeA = (route.edges[0] + rot) % 6;
+      const edgeB = (route.edges[1] + rot) % 6;
+      const along = drawDoubleTownRoute(ctx, center, size, apothem, edgeA, edgeB);
+      // Design note #123: each town sits at its own explicit `ditAt`, out
+      // along its arm and clear of the crossing -- never at `t = 0.5`,
+      // which is precisely where the other track passes.
+      return along(route.ditAt);
     });
-    // The dits land ON their own route, at the node each route was just
-    // drawn through -- the requirement's "rather than floating in the
-    // center". Drawn after every path so a crossing track can never be
-    // stroked over a town marker.
-    rotated.forEach((_pair, index) => {
-      drawDitMarker(ctx, nodes[index] ?? center, size * 0.85);
-    });
+    for (const point of ditPoints) {
+      drawDitMarker(ctx, point, size * 0.85);
+    }
+    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
+    return;
+  }
+
+  // Design note #122: every OTHER tile whose catalog paths are disjoint --
+  // #16/#18/#19/#20's crossing green plains, and the single-track tiles
+  // (#3/#4/#7/#8/#9/#57/#58) -- is now drawn from those declared paths too,
+  // with the same canonical straight/gentle/sharp primitives the
+  // double-towns use. This is the "art, not math" rule applied to the whole
+  // catalog: track shape comes from sourced path data, never from a guess
+  // about what a flat bitmask might have meant. Junction and city tiles
+  // deliberately do NOT come through here -- see `pathsAreDisjoint`.
+  // REGRESSION FIX (design note #130): the `!entry.cityGroups` guard is
+  // load-bearing and its absence was the reported "city markers completely
+  // missing" bug, introduced by design note #122's own ordering.
+  //
+  // Every two-city tile has DISJOINT paths by definition -- that is what
+  // makes it two cities rather than one hub. #54/#62 are `[[0,1],[2,3]]`,
+  // #59 two spurs, #64-#68 two pairs. So this branch, sitting above the
+  // `cityGroups` branch, swallowed all eight of them: it drew their track
+  // correctly and then handed off to `drawTileMarkers`, which keys on
+  // terrain and has no case for `NewYorkHub`/`DoubleCityHub` -- because
+  // those were always meant to have drawn their own pair of station circles
+  // in the `cityGroups` branch that now never ran. Result: correct track,
+  // no cities at all.
+  //
+  // Guarding here rather than reordering the branches keeps the diff honest
+  // about which one is the special case: `cityGroups` tiles have bespoke
+  // two-node artwork and must claim themselves first; this branch is the
+  // general disjoint-path renderer for everything else.
+  if (!entry.cityGroups && entry.paths && pathsAreDisjoint(entry.paths)) {
+    const rot = ((orientation % 6) + 6) % 6;
+    for (const [baseA, baseB] of entry.paths) {
+      drawDoubleTownRoute(ctx, center, size, apothem, (baseA + rot) % 6, (baseB + rot) % 6);
+    }
+    drawTileMarkers(ctx, center, size, entry, edges);
+    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
     return;
   }
 
@@ -8713,6 +9173,8 @@ function drawTrackPath(
     // merged onto `DoubleCityHub`'s geometry rather than keeping its own.
     drawStationCircle(ctx, stationPoints[0], size * 0.85);
     drawStationCircle(ctx, stationPoints[1], size * 0.85);
+    // Design note #124: two-node hubs return through the shared tail below,
+    // so their badge is drawn there like every other tile's.
   } else if (edges.length === 2) {
     const [a, b] = edges;
     const start = edgePoint(a);
@@ -8775,60 +9237,87 @@ function drawTrackPath(
     }
   }
 
-  // ---- Revenue-centre markers, drawn on top of whichever path ran above.
-  //
-  // Design note #118: this block used to live INSIDE the 3+-edge branch (for
-  // the station circle) and to be gated on `edges.length === 2` (for the
-  // dits), which quietly assumed the old invented catalog's geometry. The
-  // real 1830 tray catalog breaks both assumptions in ways that matter:
-  //
-  //   - #57, the Yellow `MajorCityHub` that EVERY plain-city hex on the
-  //     board starts from, has exactly TWO live edges (0/3, a straight) --
-  //     so under the old placement it drew no station circle at all, the
-  //     single most visible tile in the game rendering as bare track.
-  //   - #1/#2/#55/#56/#69, the Yellow `DoubleTown`s, have FOUR live edges
-  //     each -- so under the old `=== 2` gate they drew no dits, and picked
-  //     up the neutral junction dot instead, reading as plain track.
-  //
-  // Hoisting the whole thing out and keying it purely on TERRAIN (never on
-  // edge count) fixes both and is inherently robust to any future catalog
-  // whose geometry differs again.
-  if (entry.terrain === "MajorCityHub" || entry.terrain === "BostonHub") {
-    // design note #49: Boston/Baltimore's own "B"-labeled single-city hub
-    // (`BostonHub`) gets the same single-station treatment as an ordinary
-    // MajorCityHub -- the "B" label is a legality restriction, not a
-    // different artwork shape.
-    drawStationCircle(ctx, center, size);
-  } else if (entry.terrain === "SmallTown") {
-    // A solid DARK circle (design note #3b / item 8's "Distinct Dark Small
-    // Towns"), deliberately not the small white circle this file used
-    // previously, so a town/dit reads as visually distinct from a buildable
-    // city station hub at a glance.
-    drawDitMarker(ctx, center, size);
-  } else if (entry.terrain === "DoubleTown") {
-    // Standardized onto the SAME `twoNodePositions` diagonal coordinates as
-    // G19/OO/every unlaid double-town-designated hex (design notes #57/#58).
-    // Index 0/1 map directly onto the two `drawDitMarker` calls below, first
-    // slot then second slot, with no re-sorting.
-    const [node0, node1] = twoNodePositions(center, size);
-    drawDitMarker(ctx, node0, size * 0.85); // index 0: top-right
-    drawDitMarker(ctx, node1, size * 0.85); // index 1: bottom-left
-  } else if (!entry.cityGroups && edges.length > 2) {
-    // An ordinary multi-spur junction (a Plain tile with 3+ live edges) --
-    // a track crossing, not a passenger destination, so it keeps the small
-    // neutral dark dot rather than a station circle.
-    //
-    // The `!entry.cityGroups` guard is load-bearing since design note #118
-    // hoisted this block out of the old 3+-edge branch: every two-node tile
-    // (`DoubleCityHub`/`NewYorkHub`) already drew its own pair of station
-    // circles above, and most of them (#54, #62, #64-#68) have 4 live edges,
-    // so without this guard they would each get a stray grey junction dot
-    // stamped over the middle of their own artwork.
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, size * 0.18, 0, Math.PI * 2);
-    ctx.fillStyle = "#555555";
-    ctx.fill();
+  drawTileMarkers(ctx, center, size, entry, edges);
+  drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
+}
+
+/* ------------------------------------------------------------------ */
+/* Traced route overlay -- design note #137 (F-1)                       */
+/* ------------------------------------------------------------------ */
+
+/** Draws every traced train route as a wide translucent ribbon following the
+ *  real track geometry.
+ *
+ *  GEOMETRY, and why it is not just a polyline between hex centres: each hop
+ *  is drawn as two `bezierTrackSegment` halves -- centre to the shared edge
+ *  midpoint, then that midpoint to the next hex's centre -- the exact same
+ *  primitive, with the exact same perpendicular-entry normals, that
+ *  `drawTrackPath` uses for real track. A straight centre-to-centre line
+ *  would visibly cut the corner on every curve and drift off the rails it is
+ *  meant to be highlighting.
+ *
+ *  STROKE. Wide (`size * 0.30`, roughly 2.5x a track spline's own
+ *  `size * 0.12`), round-capped and round-joined, at 55% alpha. Translucent
+ *  rather than opaque so the track beneath stays legible through it -- an
+ *  opaque ribbon would hide exactly the thing it is pointing at -- and so two
+ *  routes sharing a hex show their overlap instead of the later one simply
+ *  winning.
+ *
+ *  NON-ADJACENT PAIRS ARE SKIPPED, not drawn. A caller can hand over a
+ *  partially-built route whose ends are not yet connected (the manual route
+ *  builder does exactly that, as the player clicks hexes). Drawing a straight
+ *  line across the board between two distant hexes would assert a connection
+ *  that does not exist; skipping the segment shows the pieces that ARE real
+ *  and leaves the gap visible, which is the honest rendering of an incomplete
+ *  route.
+ *
+ *  Restores every context field it touches, so the passes after it are
+ *  unaffected. */
+function drawRouteOverlays(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  overlays: readonly RouteOverlay[],
+): void {
+  if (overlays.length === 0) return;
+
+  const apothem = size * (Math.sqrt(3) / 2);
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(6, size * 0.3);
+  ctx.globalAlpha = 0.55;
+
+  for (const overlay of overlays) {
+    if (overlay.hexes.length < 2) continue;
+    ctx.strokeStyle = overlay.color;
+
+    for (let index = 0; index < overlay.hexes.length - 1; index += 1) {
+      const [q, r] = overlay.hexes[index];
+      const [nextQ, nextR] = overlay.hexes[index + 1];
+
+      // Which edge of the current hex faces the next one. `undefined` means
+      // they are not neighbours -- see the doc comment on why that is skipped
+      // rather than bridged.
+      const exitEdge = HEX_NEIGHBOR_OFFSETS.findIndex(
+        ([dq, dr]) => q + dq === nextQ && r + dr === nextR,
+      );
+      if (exitEdge < 0) continue;
+
+      const center = axialToPixel(q, r, size);
+      const nextCenter = axialToPixel(nextQ, nextR, size);
+      const crossing = pointOnCircle(center, apothem, edgeAngleRad(exitEdge));
+      const arrivalEdge = (exitEdge + 3) % 6;
+
+      // Same two-half construction, same normals, as a real track spline --
+      // so the ribbon lies along the rails through curves instead of cutting
+      // across them.
+      bezierTrackSegment(ctx, center, crossing, size, null, edgeInwardNormal(exitEdge));
+      bezierTrackSegment(ctx, crossing, nextCenter, size, null, edgeInwardNormal(arrivalEdge));
+    }
   }
+
+  ctx.restore();
 }
 
 /** GENERIC PLACEHOLDER ARTWORK for a `tile_id` that isn't in this file's
@@ -8892,6 +9381,85 @@ function drawStationCircle(
   ctx.strokeStyle = "#2b2b2b";
   ctx.lineWidth = Math.max(2, size * 0.06);
   ctx.stroke();
+}
+
+/** A MULTI-SLOT city station -- design note #133.
+ *
+ *  Real 18xx cardboard draws a city that can hold N tokens as an elongated
+ *  oval ("pill"), N circles wide, not as a bigger circle. That shape is
+ *  load-bearing information: it is the only thing on the tile that tells a
+ *  player a second company can still build into this city. A 2-slot city
+ *  rendered as a plain circle -- which is what every city on this board did
+ *  before this pass -- reads as "full", and misleads the player about a
+ *  decision they are actively making.
+ *
+ *  Geometry is two half-circles of the SAME `size * 0.22` radius
+ *  `drawStationCircle` uses, joined by straight sides. Consecutive
+ *  `ctx.arc` calls inside one path auto-connect with an implicit `lineTo`,
+ *  so the sides come for free and the outline is a single closed path --
+ *  which matters, because it means one `fill()` and one `stroke()` with no
+ *  seam where the two ends meet.
+ *
+ *  SPACING: centre-to-centre `1.6 * r`, not the `2 * r` that would place two
+ *  exactly-tangent circles. Real cardboard overlaps its slot circles
+ *  slightly, and at a full `2 * r` the pill on #63 (six radial spokes)
+ *  grows long enough to reach its own track arms.
+ *
+ *  `angleDeg` is the long axis in BOARD space -- the caller has already
+ *  folded in the tile's orientation. Markers are drawn outside the
+ *  artwork's rotated/scaled transform (see `drawHardcodedTileArtwork`), so
+ *  without this a rotated tile would keep a stubbornly horizontal pill
+ *  sitting across its own track. */
+function drawStationPill(
+  ctx: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  size: number,
+  slots: number,
+  angleDeg: number,
+): void {
+  const radius = size * 0.22;
+  const spacing = PILL_SLOT_SPACING * radius;
+  const span = spacing * (slots - 1);
+
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.rotate((angleDeg * Math.PI) / 180);
+
+  // ---- 1. The outer capsule. ----
+  ctx.beginPath();
+  ctx.arc(-span / 2, 0, radius, Math.PI / 2, Math.PI * 1.5);
+  ctx.arc(span / 2, 0, radius, Math.PI * 1.5, Math.PI / 2);
+  ctx.closePath();
+
+  // Identical fill/stroke to `drawStationCircle` -- a 1-slot and a 2-slot
+  // city must read as the same KIND of object, differing only in length.
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.strokeStyle = "#2b2b2b";
+  ctx.lineWidth = Math.max(2, size * 0.06);
+  ctx.stroke();
+
+  // ---- 2. The slot rings. ----
+  // One thin circle per slot, INSIDE the capsule, at the exact centres
+  // `tileCitySlotPoints` will place tokens on. This is what makes the pill
+  // countable: the outline alone says "this city is bigger", the rings say
+  // "it holds exactly two". On real cardboard these are the printed circles
+  // the wooden tokens drop into.
+  //
+  // Drawn at roughly HALF the capsule's own stroke weight and never filled,
+  // so they read as an internal division of one station rather than as two
+  // separate stations that happen to touch -- the distinction matters most
+  // on #62, where two genuinely separate 2-slot cities sit on one tile and
+  // must not be confusable with one 4-slot city.
+  ctx.lineWidth = Math.max(1, size * 0.03);
+  for (let slot = 0; slot < slots; slot += 1) {
+    const offset = -span / 2 + spacing * slot;
+    ctx.beginPath();
+    ctx.arc(offset, 0, radius * 0.86, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 /** A small 1830-style town/dit stop marker (design note #59: Lightweight
@@ -9244,6 +9812,32 @@ function drawValueBadge(
   // redundant; dropping it also leaves more of the tightly-fit square for
   // the digits themselves. Font bumped back up 1pt (now -1pt net off the
   // #63 baseline, not -2) alongside this change.
+  drawValueBadgeAt(ctx, badgeCenter, size, terrain, value);
+}
+
+/** THE revenue badge artwork -- design note #126.
+ *
+ *  Extracted VERBATIM from `drawValueBadge` so the board and the tile picker
+ *  cannot render a value differently. That was the whole bug: the picker had
+ *  its own white disc, its own font and its own stroke, reading as a
+ *  different object from the board's shape-coded badge sitting inches away
+ *  in the same window. There is now exactly one implementation of what a
+ *  value looks like, and both callers go through it.
+ *
+ *  What stayed behind in `drawValueBadge` is PLACEMENT, not art -- the
+ *  13-slot search, dead-edge avoidance and per-hex overrides all need a
+ *  board position (`q`/`r`) and a live `mapGrid`, none of which an isolated
+ *  tray thumbnail has. The caller decides WHERE; this decides WHAT.
+ *
+ *  `terrain` still drives `VALUE_BADGE_SHAPE` (design note #62's shape-coded
+ *  iconography), which is why it is passed rather than just a number. */
+function drawValueBadgeAt(
+  ctx: CanvasRenderingContext2D,
+  badgeCenter: { x: number; y: number },
+  size: number,
+  terrain: "SmallTown" | "DoubleTown" | "MajorCityHub" | "DoubleCityHub",
+  value: number,
+): void {
   const label = `${value}`;
   const fontSizePx = Math.max(9, size * 0.2) - 1;
   ctx.font = `bold ${fontSizePx}px ${FONT_FAMILY_STACK}`;
@@ -9264,6 +9858,143 @@ function drawValueBadge(
   ctx.textBaseline = "middle";
   ctx.fillText(label, badgeCenter.x, badgeCenter.y);
 }
+
+/** The per-tile overlay pass: revenue badge, then restriction label --
+ *  design notes #126/#127.
+ *
+ *  One place so all three `drawTrackPath` exits (double-town, disjoint-path,
+ *  fan) get identical treatment instead of each remembering to draw both.
+ *
+ *  `showRevenue` is false from the main BOARD loop only: laid hexes already
+ *  get a badge from `drawValueBadge`'s own placement-aware pass, which knows
+ *  about off-board tiers and per-hex value overrides, so drawing here too
+ *  would stamp two numbers on one hex. The restriction label is NOT gated
+ *  the same way -- `drawRestrictionBadge` labels the HEX (and only the nine
+ *  real B/NY/OO hexes), whereas this labels the TILE, which is a different
+ *  statement: it tells you what the piece in your hand is restricted to,
+ *  which is exactly what the tray needs and what the board's hex badge
+ *  cannot say. */
+function drawTileOverlays(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  size: number,
+  entry: TileCatalogEntry,
+  showRevenue: boolean,
+  /** Design note #132: the chain's `MapTileEntry.revenue` for this tile.
+   *  When present it REPLACES `terrainBaseValue` outright -- including when
+   *  it is `0`, which is a real answer meaning "this tile earns nothing"
+   *  and correctly suppresses the badge. Only `undefined` (a contract that
+   *  predates Audit G-11, or a tray thumbnail with no chain record) falls
+   *  back to the terrain bucket. */
+  revenueOverride?: number,
+): void {
+  if (showRevenue) {
+    const badgeTerrain = valueBadgeTerrainFor(entry.terrain);
+    // Design note #135: THE precedence chain for what a badge prints, most
+    // authoritative first.
+    //
+    //   1. `revenueOverride` -- the chain's own `MapTileEntry.revenue` for a
+    //      tile actually laid on the board. Only the board pass has one.
+    //   2. `entry.revenue` -- this file's mirror of `hexmap::TILE_CATALOG`'s
+    //      printed figure. THIS is what the tile picker and offline mode
+    //      resolve to: a tray thumbnail has no chain record because the tile
+    //      is not on the board yet, and offline there is no chain at all.
+    //   3. `terrainBaseValue` -- the flat per-terrain bucket, now a genuine
+    //      last resort. It is reached only by plain connector track (which
+    //      correctly buckets to `0` and draws no badge) or by a tile id
+    //      missing from the mirror.
+    //
+    // `??` throughout, deliberately, NOT `||`. A revenue of `0` is a
+    // legitimate answer at every level and must beat the level below it;
+    // `||` treats it as absent and falls through to exactly the wrong number
+    // this chain exists to stop printing.
+    const value = revenueOverride ?? entry.revenue ?? terrainBaseValue(entry.terrain);
+    if (badgeTerrain && value > 0) {
+      // Same offset convention as `drawValueBadge`'s own slot placement
+      // (`REVENUE_BADGE_OFFSET`), pointed south-east -- a tray thumbnail has
+      // no board neighbours to dodge, so it takes a fixed, predictable
+      // corner instead of running the 13-slot search.
+      const badgeCenter = { x: center.x + size * 0.46, y: center.y + size * 0.5 };
+      drawValueBadgeAt(ctx, badgeCenter, size, badgeTerrain, value);
+    }
+  }
+
+  const label = restrictionLabelFor(entry.terrain);
+  if (label) {
+    // Design note #129: the SAME `RESTRICTION_BADGE_OFFSET` distance the
+    // board uses (0.65 of hex size from centre), pointed due north. A tray
+    // thumbnail has no neighbours or dead edges to dodge, so it takes a
+    // fixed, predictable slot rather than running the board's 13-slot
+    // search -- but the distance, font, colour and background-less styling
+    // all come from the shared renderer, not from here.
+    const badgeCenter = { x: center.x, y: center.y - size * 0.65 };
+    drawRestrictionBadgeAt(ctx, badgeCenter, size, label);
+  }
+}
+
+/** Maps a tile's real terrain onto the four badge-shape buckets
+ *  `VALUE_BADGE_SHAPE` defines -- design note #126. `BostonHub` is a
+ *  single-station city and `NewYorkHub` a two-station one, exactly as
+ *  `archetypeForTerrain` already classifies them, so they borrow those
+ *  buckets rather than inventing two more shapes for the same kind of
+ *  revenue centre. `null` for terrain with no revenue at all, which is the
+ *  signal to draw no badge. */
+function valueBadgeTerrainFor(
+  terrain: TerrainType,
+): "SmallTown" | "DoubleTown" | "MajorCityHub" | "DoubleCityHub" | null {
+  switch (terrain) {
+    case "SmallTown":
+      return "SmallTown";
+    case "DoubleTown":
+      return "DoubleTown";
+    case "MajorCityHub":
+    case "BostonHub":
+      return "MajorCityHub";
+    case "DoubleCityHub":
+    case "NewYorkHub":
+      return "DoubleCityHub";
+    default:
+      return null;
+  }
+}
+
+/** The "B" / "NY" / "OO" restriction label a tile carries, or `null` --
+ *  design note #127.
+ *
+ *  Derived from terrain rather than stored as a new catalog column, because
+ *  here the two are the same fact: `hexmap.rs` defines `BostonHub`/
+ *  `NewYorkHub`/`DoubleCityHub` precisely AS "the artwork legal only at the
+ *  B / NY / OO labelled hexes" (module doc comments #18/#26/#27). A `label`
+ *  column would be a second copy of something the terrain already says, free
+ *  to drift out of sync with it.
+ *
+ *  NOTE on the tiles named in the request: #57, #63 and #45 do NOT carry a
+ *  label. #57 is the ordinary yellow city every plain-city hex starts from,
+ *  #63 the ordinary brown city, #45 an ordinary brown plain -- none is
+ *  restricted to particular hexes in real 1830, and labelling them would
+ *  tell the player something untrue about where they may be laid. The nine
+ *  that really are label-restricted: #53/#61 (B), #54/#62 (NY),
+ *  #59/#64/#65/#66/#67/#68 (OO). */
+function restrictionLabelFor(terrain: TerrainType): "B" | "NY" | "OO" | null {
+  switch (terrain) {
+    case "BostonHub":
+      return "B";
+    case "NewYorkHub":
+      return "NY";
+    case "DoubleCityHub":
+      return "OO";
+    default:
+      return null;
+  }
+}
+
+/* Design note #129 deleted `drawTileRestrictionLabel` from here -- the
+   bespoke white-pill label the picker drew for itself. It did not match the
+   board, which draws these as plain bold black text with NO background
+   (design note #47 removed the background from them deliberately). The tile
+   pipeline now calls `drawRestrictionBadgeAt`, the single extracted
+   implementation the board's own badge also goes through. */
+
 
 /** Canonical Tile Upgrade Restrictions (design note #47, mirroring
  *  `hexmap.rs` module doc comment #26): draws one small, high-contrast "B"
@@ -9435,6 +10166,30 @@ function drawRestrictionBadge(
   // -- same "base drops, `fitFontSize`'s own `minFontSizePx` floor (8)
   // stays put" convention this file's other badges use for a plain point
   // drop (e.g. `drawTerrainCompoundBadge`'s own design note #92/#95/#99).
+  drawRestrictionBadgeAt(ctx, badgeCenter, size, text);
+}
+
+/** THE restriction-label artwork -- design note #129.
+ *
+ *  Extracted VERBATIM from `drawRestrictionBadge` above, for the same reason
+ *  design note #126 extracted `drawValueBadgeAt`: the tile picker had grown
+ *  its own label renderer, and it did not match. Mine drew a white rounded
+ *  pill with a dark outline; the board draws plain bold black text on no
+ *  background at all -- design note #47's own reversal, which deliberately
+ *  removed a background from these badges. Two labels in one window, styled
+ *  as different objects.
+ *
+ *  `drawRestrictionBadge` keeps everything above this line, which is all
+ *  PLACEMENT: the 13-slot search, `hexBlockedSlots`, dead-edge avoidance and
+ *  the cross-pass claiming ledger, none of which an isolated tray thumbnail
+ *  can supply (they need `mapGrid`, `q`, `r`). The caller decides WHERE;
+ *  this decides WHAT, and there is now exactly one answer to that. */
+function drawRestrictionBadgeAt(
+  ctx: CanvasRenderingContext2D,
+  badgeCenter: { x: number; y: number },
+  size: number,
+  text: "B" | "NY" | "OO",
+): void {
   ctx.font = fitFontSize(ctx, text, 9, size * 0.5, 8, "bold");
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -9801,8 +10556,37 @@ function drawOOCityMarkers(
  *  unification. Every `DoubleCity`-archetype hex (`G19` included) now
  *  shares the exact same two node coordinates and the exact same Node
  *  0/Node 1 convention, with zero per-hex-name branching. */
-function stationMarkerPoint(q: number, r: number, size: number): { x: number; y: number } {
+function stationMarkerPoint(
+  q: number,
+  r: number,
+  size: number,
+  /** Design note #131: the tile actually laid on this hex, if any.
+   *
+   *  REQUIRED for correctness on any two-city hex once that hex holds a
+   *  catalogued tile. `twoNodePositions` below returns a FIXED NE/SW
+   *  diagonal that knows nothing about the tile's track, while the artwork
+   *  puts each station on its own curve -- for #62 both cities sit in the
+   *  upper half, nowhere near the SW node. Passing the laid tile keeps the
+   *  token on the circle the player can see; omitting it leaves the old
+   *  behaviour for an unlaid, still-blank designated hex, which is the one
+   *  case where there is no artwork to follow. */
+  laidTile?: MapTileEntry,
+): { x: number; y: number } {
   const center = axialToPixel(q, r, size);
+
+  if (laidTile) {
+    const anchors = tileCityAnchors(laidTile.tile_id, laidTile.orientation, center, size);
+    if (anchors.length > 0) {
+      // Index choice is UNCHANGED from the logic below -- OO hexes take the
+      // second station, New York the first -- so this moves where a token
+      // is drawn without changing which city it is understood to occupy.
+      const hexHere = STATIC_BOARD_HEXES.find((h) => h.q === q && h.r === r);
+      if (hexHere && YELLOW_OO_HEXES.has(hexHere.label)) return anchors[1] ?? anchors[0];
+      if (LANDMARK_HEXES.some((entry) => entry.q === q && entry.r === r)) return anchors[0];
+      return anchors[0];
+    }
+  }
+
   const hex = STATIC_BOARD_HEXES.find((h) => h.q === q && h.r === r);
   if (hex && YELLOW_OO_HEXES.has(hex.label)) {
     // Index 1: bottom-left circle, mirrors `drawOOCityMarkers`'s own
@@ -11201,7 +11985,7 @@ export function TilePreviewThumbnail({
     const catalogEntry = TILE_CATALOG_BY_ID.get(tileId);
 
     drawHexPath(ctx, center, hexSize);
-    ctx.fillStyle = catalogEntry ? TERRAIN_FILL[catalogEntry.terrain] : "#dddddd";
+    ctx.fillStyle = catalogEntry ? ERA_TILE_FILL[catalogEntry.color] : "#dddddd";
     ctx.fill();
     ctx.strokeStyle = catalogEntry ? COLOR_TIER_STROKE[catalogEntry.color] : "#9a9a9a";
     ctx.lineWidth = 2;

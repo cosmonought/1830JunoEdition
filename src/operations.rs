@@ -221,7 +221,7 @@ use thiserror::Error;
 
 use crate::auction::CORE_PRIVATE_COMPANIES;
 use crate::hardware;
-use crate::hexmap::{axial_for_label, rotate_connections, HEX_NEIGHBOR_OFFSETS};
+use crate::hexmap::{axial_for_label, edge_between, rotate_connections, HEX_NEIGHBOR_OFFSETS};
 use crate::market::{self, MarketError};
 use crate::msg::PayoutStrategy;
 use crate::pathfinding::{self, PathfindingError};
@@ -990,10 +990,55 @@ pub fn execute_run_manual_route(
     // neither can be blockaded here. Neither is a scoring route anyway --
     // 1830's two-revenue-centre minimum is enforced separately -- and a
     // 0-hex path was already rejected as `EmptyRoutePath` in step 1.
-    let blocked = pathfinding::opponent_station_hexes(deps.storage, game_id, protocol_id)?;
+    // ==== Audit G-13: CITY-GRANULAR, not hex-granular. ====
+    //
+    // `opponent_station_hexes` answers "is this hex closed to me ENTIRELY",
+    // which on a multi-city tile is the wrong question: #62 and the OO tiles
+    // carry two cities on separate, non-intersecting track, and a route
+    // running through the blockaded one is illegal even while the other is
+    // wide open. Checking only the hex let a President hand-write exactly the
+    // ghost route the automatic search now refuses.
+    //
+    // A declared `hex_path` knows as much about the track as the DFS does:
+    // hex `i`'s inbound edge is fixed by its axial delta to hex `i - 1` and
+    // its outbound edge by the delta to hex `i + 1`, so the specific segment
+    // -- and therefore the specific city -- is determined. Both paths now go
+    // through the same `pathfinding::transit_passability_for_hex`, so they
+    // cannot disagree.
+    //
+    // Only the interior of the path is checked, so both ends are free:
+    // - the LAST hex is where the train stops, which is the case above;
+    // - the FIRST hex is symmetric. A route is an undirected run between two
+    //   ends -- `hex_path` merely lists it in one of the two orders the
+    //   President could equally have typed -- so blocking on index `0` would
+    //   have rejected a perfectly legal route purely for being written
+    //   backwards, and `["A", "B", "C"]` and `["C", "B", "A"]` must accept
+    //   or reject identically. An interior hex has both neighbours by
+    //   definition, which is exactly what makes its transit edges knowable.
     let interior = axial_path.len().saturating_sub(1);
     for index in 1..interior {
-        if blocked.contains(&axial_path[index]) {
+        let (q, r) = axial_path[index];
+        let previous = axial_path[index - 1];
+        let following = axial_path[index + 1];
+        let (Some(in_edge), Some(out_edge)) = (
+            edge_between((q, r), previous),
+            edge_between((q, r), following),
+        ) else {
+            // Non-adjacent neighbours in a declared path: a connectivity
+            // failure, rejected with its own error by step 5 below. Not this
+            // check's business to report.
+            continue;
+        };
+        if pathfinding::transit_passability_for_hex(
+            deps.storage,
+            game_id,
+            q,
+            r,
+            protocol_id,
+            in_edge,
+            out_edge,
+        )? == pathfinding::Passability::StopOnly
+        {
             return Err(OperationsError::RouteBlockedByRivalStation {
                 label: hex_path[index].clone(),
             });

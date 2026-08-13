@@ -257,6 +257,22 @@ const CORE_LIMITS: RuleRow[] = [
     label: "Bank cash (total pool)",
     value: "$12,000",
   },
+  // F-7: the two stock-round restrictions this table never documented.
+  // Both were invisible at every layer -- not in the rules panel, and not
+  // surfaced by the Stock Round controls -- so a player could only discover
+  // them by having a transaction rejected.
+  {
+    label: "Stock Round 1 -- no sales",
+    value: "Selling is prohibited for the whole of SR1",
+    note:
+      "In the first Stock Round of the game nobody may sell any certificate, of any corporation, for any reason. The round is buy-or-pass only. This exists so the opening share auction cannot be immediately unwound: without it, a player could buy a presidency, bank the price movement and dump it in the same round, which is not a strategy 1830 intends to offer. The restriction lifts completely at SR2 and never returns.",
+  },
+  {
+    label: "Bank Pool cap (per corporation)",
+    value: "50% -- shares may not be sold into a pool already at 50%",
+    note:
+      "The Bank Pool holds shares players have sold back. It caps at 50% of any one corporation's shares, and the cap is checked against the pool's CURRENT level, not against the size of your sale -- so the room for a sale is 50% minus whatever is already in the pool, and it grows again as other players buy out of it. A 40% bundle into a pool already holding 20% is rejected; the same bundle is legal once the pool drops to 10%. This is why a sell size can be greyed out one turn and available the next.",
+  },
   {
     label: "Capitalization mode -- Full Capitalization",
     value: "10x Par credited to treasury immediately upon floating at 60%",

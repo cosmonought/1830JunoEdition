@@ -102,6 +102,7 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   "BuyPrivateCompany",
   "ExecuteOperatingRound",
   "BeginOperatingRound",
+  "AdvanceOperatingSubPhase",
   "LayTile",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
@@ -133,6 +134,12 @@ export interface PublicCompanyPayoutChoiceDto {
  *  snake_case in `msg.rs`; only the enum's own externally-tagged variant
  *  name follows serde's PascalCase default). */
 export type GameplayExecuteMsg =
+  // Audit G-14: advances a corporation past its current Operating Round
+  // sub-phase without acting in it. The six OR actions are gated on-chain
+  // against a persisted cursor, so this is the only way to get past a phase
+  // the corporation has nothing to do in -- and every skip is a recorded,
+  // replayable event rather than a client-side jump.
+  | { AdvanceOperatingSubPhase: { game_id: number; protocol_id: number } }
   | {
       BuyStock: {
         game_id: number;

@@ -9,6 +9,7 @@ pub mod operations;
 pub mod pathfinding;
 pub mod public_company;
 pub mod query;
+pub mod or_phase;
 pub mod state;
 #[cfg(test)]
 mod tests;

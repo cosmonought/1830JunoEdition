@@ -180,6 +180,20 @@ pub enum ExecuteMsg {
     /// points to (`NotYourOperatingTurn` otherwise). See
     /// `operations::execute_end_operating_round_turn` for the full design.
     EndOperatingRoundTurn { game_id: u64, protocol_id: u32 },
+    /// Advances `protocol_id` past its current Operating Round sub-phase
+    /// WITHOUT acting in it -- Audit G-14's explicit skip.
+    ///
+    /// The turn runs BuyPrivate -> Track -> Tokens -> Routes -> Dividends ->
+    /// Hardware, and every one of those six actions is now gated on the
+    /// corporation being exactly on its phase. This is how a corporation with
+    /// nothing to do in a phase gets past it, and it keeps every skip a
+    /// recorded, replayable event rather than an implicit jump.
+    ///
+    /// Rejected with `OperatingSubPhaseNotSkippable` for the two phases that
+    /// are not the corporation's to skip: `Routes` while it owns any train
+    /// (a train must be run), and `Dividends` ever (pay or withhold, but not
+    /// neither).
+    AdvanceOperatingSubPhase { game_id: u64, protocol_id: u32 },
     /// Manual Route Validation: lets `protocol_id`'s President submit a
     /// hand-picked path of real board hex labels (e.g. `["G19", "F20",
     /// "E21"]`) instead of relying on the automatic

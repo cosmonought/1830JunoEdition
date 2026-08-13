@@ -1031,9 +1031,11 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, StdResult, Sto
 use std::collections::{HashSet, VecDeque};
 use thiserror::Error;
 
+use crate::or_phase;
 use crate::public_company::CORE_PUBLIC_COMPANIES;
 use crate::state::{
-    GameSession, PrivateCompany, PublicCompany, TerrainType, Tile, TileColor, HEX_STATION_TOKENS,
+    GameSession, OperatingSubPhase, PrivateCompany, PublicCompany, TerrainType, Tile, TileColor,
+    HEX_STATION_TOKENS,
     MAP_GRID, PRIVATE_COMPANIES, PROTOCOL_LAST_TOKEN_SUBROUND, PROTOCOL_NETWORK_HEXES,
     PROTOCOL_PRESIDENT, PROTOCOL_STATION_HEXES, PUBLIC_COMPANIES, REMAINING_TILES, SESSIONS,
 };
@@ -2690,6 +2692,21 @@ pub enum HexMapError {
         "Protocol {protocol_id} already has all {limit} of its Station Tokens placed -- no more may be placed this game"
     )]
     StationTokenLimitReached { protocol_id: u32, limit: u8 },
+    /// Audit G-14: this action was attempted outside its Operating Round
+    /// sub-phase. The turn runs BuyPrivate -> Track -> Tokens -> Routes ->
+    /// Dividends -> Hardware, and the check is strict equality -- being PAST
+    /// a phase fails as loudly as being before it, because reordering after
+    /// the fact is exactly what this prevents.
+    #[error(
+        "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); this action requires phase {required} (step {required_index} of 6)"
+    )]
+    WrongOperatingSubPhase {
+        protocol_id: u32,
+        actual: String,
+        actual_index: u8,
+        required: String,
+        required_index: u8,
+    },
     /// Audit G-12: the requested `city_index` does not exist on this hex --
     /// e.g. city 1 on a single-city tile. Distinguished from
     /// `StationTokenCityFull` on purpose: one is a malformed request, the
@@ -3532,6 +3549,29 @@ pub fn execute_lay_tile(
         });
     }
 
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // Strict equality against the persisted cursor -- see `or_phase`'s module
+    // doc for the six-phase order and which phases may be skipped. Being PAST
+    // a phase fails as loudly as being before it.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::Track,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => HexMapError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => HexMapError::Std(StdError::generic_err(message)),
+        });
+    }
+
     // Audit G-10: the catalog's `cost` field is now uniformly `0` and is no
     // longer read here -- a hex's build fee comes from the HEX
     // (`terrain_build_fee`, below), never from the tile artwork laid on it.
@@ -3983,6 +4023,11 @@ pub fn execute_lay_tile(
     };
     MAP_GRID.save(deps.storage, (game_id, q, r), &tile)?;
 
+    // Audit G-14: EXACTLY ONE tile lay per turn. Advancing the cursor here is
+    // what enforces it -- there was no per-turn tile limit at all before this
+    // pass, and a corporation could lay unlimited tiles in a single turn.
+    or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::Track)?;
+
     if !is_upgrade {
         network_hexes.push((q, r));
         PROTOCOL_NETWORK_HEXES.save(deps.storage, (game_id, protocol_id), &network_hexes)?;
@@ -4244,6 +4289,28 @@ pub fn execute_place_station_token(
         });
     }
 
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // Strict equality against the persisted cursor -- see `or_phase`'s module
+    // doc for the six-phase order and which phases may be skipped.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::Tokens,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => HexMapError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => HexMapError::Std(StdError::generic_err(message)),
+        });
+    }
+
     // ==== Audit G-12: PER-CITY CAPACITY. ====
     //
     // There was no capacity check here at all before this pass -- only the
@@ -4354,6 +4421,9 @@ pub fn execute_place_station_token(
         .unwrap_or_default();
     hex_tokens.push((protocol_id, chosen_city));
     HEX_STATION_TOKENS.save(deps.storage, (game_id, q, r), &hex_tokens)?;
+
+    // Audit G-14: one token placement per turn -- advance past Tokens.
+    or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::Tokens)?;
 
     Ok(Response::new()
         .add_attribute("action", "place_station_token")

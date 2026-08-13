@@ -362,6 +362,15 @@ fn full_game_simulation() {
     // `LANDMARK_HEXES` entries, so its route genuinely has nowhere to
     // extend to, preserving this test's original single-hex scenario.
     let home_orientation = lowest_legal_orientation(&deps.storage, game_id, 4, 2, 5, 58);
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        4,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -381,6 +390,15 @@ fn full_game_simulation() {
     assert_eq!(home_tile.tile_id, 58);
 
     // Buy a 2-train from the shared Hardware pool.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        4,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -470,6 +488,15 @@ fn full_game_simulation() {
     )
     .expect("the room creator should be able to begin an Operating Round");
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        4,
+        crate::state::OperatingSubPhase::Dividends,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -3219,6 +3246,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
         NEW_YORK.1,
         NY_HUB_TILE,
     );
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -3282,6 +3318,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
         PITTSBURGH.1,
         HUB_TILE,
     );
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -3299,6 +3344,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
 
     // A hex with no laid tile at all, and not a GRAY city either, is
     // rejected as "not a city."
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let not_a_city_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -3321,6 +3375,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
     );
 
     // New York is a real city tile, but nowhere near PRR's own network.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let not_reachable_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -3348,6 +3411,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
     // both "a real city" and "reachable" despite carrying no laid tile --
     // if either check had failed instead, a different error would surface
     // here, not this one.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let duplicate_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -3386,6 +3458,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             &(session.macro_round_number, session.sub_round_index),
         )
         .unwrap();
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let subround_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -3418,6 +3499,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
         .unwrap()
         .treasury;
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let place_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -3452,6 +3542,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
 
     // Pittsburgh now already carries PRR's own token -- placing again there
     // is rejected the same way Altoona was above.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Tokens,
+    );
     let duplicate_again_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -5940,6 +6039,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
 
     // PRR is at the front of the queue -- its President's calls succeed.
     let prr_orientation = lowest_legal_orientation(&deps.storage, game_id, PRR_ID, 50, 50, 8);
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -5954,6 +6062,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
         },
     )
     .expect("PRR, at the front of the Operating Round queue, should be able to lay track");
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -5964,6 +6081,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
         },
     )
     .expect("PRR, at the front of the queue, should be able to buy Hardware");
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Dividends,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -5979,6 +6105,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
 
     // B&O is *not* at the front of the queue -- the same President's calls
     // for B&O must all be rejected, one per wrapped message type.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     let lay_tile_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -6004,6 +6139,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
         "expected HexMap(NotYourOperatingTurn), got: {lay_tile_err:?}"
     );
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     let buy_hardware_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -6022,6 +6166,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
         "expected Hardware(NotYourOperatingTurn), got: {buy_hardware_err:?}"
     );
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Dividends,
+    );
     let dividends_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -6430,6 +6583,15 @@ fn begin_operating_round_paces_multiple_operating_rounds_for_higher_train_tiers(
 
     // PRR buys the room's first-ever 3-train ($180, comfortably inside its
     // $1,000 treasury).
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     let three_train_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -8243,6 +8405,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
     // (`TRAIN_LIMIT_BY_PHASE`'s `("2", 4)` row). $80 each, $320 total,
     // treasury $1,000 -> $680.
     for _ in 0..4 {
+        // Audit G-14: position the sub-phase cursor. This test's subject is not
+        // sequencing, so it jumps to the phase the action needs rather than
+        // dispatching AdvanceOperatingSubPhase repeatedly.
+        crate::or_phase::force_sub_phase(
+            &mut deps.storage,
+            game_id,
+            PRR_ID,
+            crate::state::OperatingSubPhase::Hardware,
+        );
         let res = execute(
             deps.as_mut(),
             env.clone(),
@@ -8264,6 +8435,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
     // A 5th purchase is rejected outright -- PRR already owns 4, at its
     // cap -- even though the pool still has 2 more 2-trains in stock (the
     // cap is per-corporation, not a pool-exhaustion rule).
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     let over_cap_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -8315,6 +8495,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
     // purchase would be the first-ever 4-train, which would rust away every
     // one of PRR's own 2-trains -- but the cap check runs first and blocks
     // it outright, before any rusting can happen.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     let blocked_would_rust_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -8396,6 +8585,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
     // the 4-train Rusting trigger (`RUST_TRIGGERS`'s `("4", "2")` pair),
     // globally purging every 2-train from every company's inventory --
     // here, exactly PRR's four.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        NYC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     let four_train_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -8522,6 +8720,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // routes this test submits, and small enough that neither invalid path
     // below could be rejected merely for exceeding it (both are length 2 as
     // well), isolating each rejection to the specific rule it's testing.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8543,6 +8750,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // `0` (edges {0, 3}) -- edge 4 is the one that faces E7 `(1, 4)`, this
     // pass's replacement second hex (see below).
     let home_orientation: u32 = 1;
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8586,6 +8802,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // sub-tests below need is "E9" -- see this test's own doc comment for
     // why E9 needs no B&O tile lay of its own at all.
     let e7_orientation: u32 = 1;
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8614,6 +8839,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // softer check -- see `execute_run_manual_route`'s own doc comment for
     // why) and must reject outright rather than silently advancing a
     // macro round that was never really running.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let no_queue_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -8653,6 +8887,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // since `RouteMustTouchOwnStation` fires at step 2 of
     // `execute_run_manual_route`, before any tile-presence or connectivity
     // check (steps 5+) ever runs.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let no_station_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -8681,6 +8924,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     // home tile's only live edges are 1 and 4), so this must still be
     // rejected as disconnected, not silently accepted just because both
     // ends resolve to *some* tile.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let disconnected_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -8714,6 +8966,15 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
         .unwrap();
 
     // ---- The valid path: D8 -> E7 (home hex, then the $10 Small Town). ----
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let valid_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -8814,6 +9075,15 @@ fn run_manual_route_withhold_credits_company_treasury() {
     )
     .expect("player_one's bid should win Baltimore & Ohio and float the public B&O");
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8832,6 +9102,15 @@ fn run_manual_route_withhold_credits_company_treasury() {
     // -- see the sibling test above's identical fix for the full
     // explanation (edge 4 must be live to face E7 below).
     let home_orientation: u32 = 1;
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8860,6 +9139,15 @@ fn run_manual_route_withhold_credits_company_treasury() {
     // connects back to D8 via edge 1).
     let e7_orientation =
         lowest_legal_orientation(&deps.storage, game_id, BO_PUBLIC_ID, 1, 4, 58);
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -8893,6 +9181,15 @@ fn run_manual_route_withhold_credits_company_treasury() {
         .unwrap();
     let bank_before = SESSIONS.load(&deps.storage, game_id).unwrap().virtual_bank_vgp;
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let withhold_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -12257,6 +12554,15 @@ fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
     // ---- Still rejected: D10 as an INTERMEDIATE stop. ----
     // The train would enter D10 from D8 and leave out the far side to D12,
     // which is precisely what a full blockade forbids.
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let through_err = execute(
         deps.as_mut(),
         env.clone(),
@@ -12292,6 +12598,15 @@ fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
         .unwrap();
 
     // ---- Accepted: D10 as the FINAL stop. ----
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let ends_there = execute(
         deps.as_mut(),
         env.clone(),
@@ -12332,6 +12647,15 @@ fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
 fn run_manual_route_may_start_at_a_fully_blockaded_rival_city() {
     let (mut deps, env, player_one, game_id) = blockaded_city_route_scenario();
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let starts_there = execute(
         deps.as_mut(),
         env.clone(),
@@ -12374,6 +12698,15 @@ fn run_manual_route_runs_through_the_city_once_the_blockade_is_lifted() {
     .unwrap();
     assert!(blocked.is_empty(), "no rival holds a token anywhere now");
 
+    // Audit G-14: position the sub-phase cursor. This test's subject is not
+    // sequencing, so it jumps to the phase the action needs rather than
+    // dispatching AdvanceOperatingSubPhase repeatedly.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID_BLOCKADE,
+        crate::state::OperatingSubPhase::Routes,
+    );
     let through = execute(
         deps.as_mut(),
         env.clone(),
@@ -12691,4 +13024,168 @@ fn synthetic_overlay_tile_id_is_not_a_real_catalog_tile() {
 
     assert!(tile_paths_for(SYNTHETIC_OVERLAY_TILE_ID).is_none());
     assert!(tile_city_slot_counts(SYNTHETIC_OVERLAY_TILE_ID).is_empty());
+}
+
+/// **Audit G-14: the Operating Round sub-phase sequence is rigid.**
+///
+/// Before this, the six-step order existed only in `App.tsx`'s local state.
+/// Every message was gated on "is it your corporation's turn" and nothing
+/// else, so a direct dispatch could declare dividends before running trains,
+/// or lay track after buying a train. Two of these phases are genuinely order
+/// dependent -- dividends are declared against revenue that running produced
+/// -- so the old freedom was not merely untidy.
+#[test]
+fn operating_sub_phase_order_and_skip_rules() {
+    use crate::or_phase::{next_sub_phase, phase_index, OR_PHASE_ORDER};
+    use crate::state::OperatingSubPhase as P;
+
+    // The order, exactly as specified.
+    assert_eq!(
+        OR_PHASE_ORDER,
+        &[P::BuyPrivate, P::Track, P::Tokens, P::Routes, P::Dividends, P::Hardware],
+        "BuyPrivate leads the turn -- before Track, not after"
+    );
+
+    // `next_sub_phase` walks it and terminates.
+    assert_eq!(next_sub_phase(P::BuyPrivate), Some(P::Track));
+    assert_eq!(next_sub_phase(P::Track), Some(P::Tokens));
+    assert_eq!(next_sub_phase(P::Tokens), Some(P::Routes));
+    assert_eq!(next_sub_phase(P::Routes), Some(P::Dividends));
+    assert_eq!(next_sub_phase(P::Dividends), Some(P::Hardware));
+    assert_eq!(
+        next_sub_phase(P::Hardware),
+        None,
+        "the turn ends via EndOperatingRoundTurn, never by running off the end"
+    );
+
+    // 1-based indices, for the "step N of 6" reporting in every error.
+    assert_eq!(phase_index(P::BuyPrivate), 1);
+    assert_eq!(phase_index(P::Track), 2);
+    assert_eq!(phase_index(P::Hardware), 6);
+}
+
+/// `BuyPrivate` leads the turn, but its action is locked until Phase 3. Rather
+/// than force a no-op skip transaction every turn for the whole Yellow era,
+/// the cursor starts at `Track` until the era advances.
+#[test]
+fn initial_operating_sub_phase_skips_buy_private_before_phase_three() {
+    use crate::or_phase::initial_sub_phase;
+    use crate::state::{OperatingSubPhase as P, TileColor};
+
+    assert_eq!(
+        initial_sub_phase(TileColor::Yellow),
+        P::Track,
+        "before Phase 3 the private-purchase phase does not exist yet"
+    );
+    assert_eq!(initial_sub_phase(TileColor::Green), P::BuyPrivate);
+    assert_eq!(initial_sub_phase(TileColor::Brown), P::BuyPrivate);
+}
+
+/// The two conditional skip rules, exercised against real storage.
+///
+/// `Routes` is the interesting one: skippable ONLY by a corporation that owns
+/// no train. A company holding a train must run it -- it may not decline to
+/// earn in order to dodge the dividend decision.
+#[test]
+fn routes_is_only_skippable_without_a_train_and_dividends_never_is() {
+    use crate::or_phase::may_skip;
+    use crate::state::{HardwareAsset, OperatingSubPhase as P, COMPANY_HARDWARE};
+
+    const PRR_ID: u32 = 1;
+
+    let mut deps = mock_dependencies();
+    let game_id = 1u64;
+    let protocol_id = PRR_ID;
+
+    // ---- No train yet. ----
+    for phase in [P::BuyPrivate, P::Track, P::Tokens, P::Hardware] {
+        assert!(
+            may_skip(&deps.storage, game_id, protocol_id, phase).unwrap(),
+            "{phase:?} must always be skippable"
+        );
+    }
+    assert!(
+        may_skip(&deps.storage, game_id, protocol_id, P::Routes).unwrap(),
+        "a corporation with NO train has nothing to run and must be able to pass through"
+    );
+    assert!(
+        !may_skip(&deps.storage, game_id, protocol_id, P::Dividends).unwrap(),
+        "Dividends is never skippable -- pay or withhold, but not neither"
+    );
+
+    // ---- Now it owns a train. ----
+    COMPANY_HARDWARE
+        .save(
+            &mut deps.storage,
+            (game_id, protocol_id),
+            &vec![HardwareAsset {
+                model_type: "2".to_string(),
+                cost: Uint128::new(80),
+                max_route_distance: 2,
+            }],
+        )
+        .unwrap();
+
+    assert!(
+        !may_skip(&deps.storage, game_id, protocol_id, P::Routes).unwrap(),
+        "THE RULE: a corporation holding a train MUST run it -- Routes is no longer skippable"
+    );
+    // The unconditional ones are unaffected by owning a train.
+    assert!(may_skip(&deps.storage, game_id, protocol_id, P::Track).unwrap());
+    assert!(may_skip(&deps.storage, game_id, protocol_id, P::Hardware).unwrap());
+}
+
+/// The cursor advances and resets the way the turn structure needs.
+#[test]
+fn operating_sub_phase_cursor_advances_and_resets() {
+    use crate::or_phase::{advance, current_sub_phase, reset_for_turn};
+    use crate::state::{OperatingSubPhase as P, TileColor};
+
+    const PRR_ID: u32 = 1;
+
+    let mut deps = mock_dependencies();
+    let game_id = 1u64;
+    let protocol_id = PRR_ID;
+    let era = TileColor::Green;
+
+    // Absent entry reads as the era-appropriate start -- no migration needed
+    // for a game already in flight.
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, era).unwrap(),
+        P::BuyPrivate
+    );
+
+    advance(&mut deps.storage, game_id, protocol_id, P::BuyPrivate).unwrap();
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, era).unwrap(),
+        P::Track
+    );
+
+    advance(&mut deps.storage, game_id, protocol_id, P::Track).unwrap();
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, era).unwrap(),
+        P::Tokens
+    );
+
+    // Advancing off the end is a no-op, not a wrap.
+    advance(&mut deps.storage, game_id, protocol_id, P::Hardware).unwrap();
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, era).unwrap(),
+        P::Tokens,
+        "advancing from the last phase must not wrap back to the first"
+    );
+
+    // Reset REMOVES the entry rather than writing one, so the next turn
+    // resolves against the era in force THEN. A corporation that ended its
+    // turn mid-sequence must not begin its next one there.
+    reset_for_turn(&mut deps.storage, game_id, protocol_id);
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, TileColor::Yellow).unwrap(),
+        P::Track,
+        "a cleared cursor re-resolves through initial_sub_phase, era-sensitively"
+    );
+    assert_eq!(
+        current_sub_phase(&deps.storage, game_id, protocol_id, TileColor::Brown).unwrap(),
+        P::BuyPrivate
+    );
 }

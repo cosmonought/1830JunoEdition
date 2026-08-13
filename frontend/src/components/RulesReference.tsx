@@ -244,7 +244,7 @@
 //    `flowIntro` (only used by the removed standalone Game Flow sections)
 //    are deleted rather than left dead in the file.
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 interface RuleRow {
   label: string;
@@ -361,8 +361,29 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
   {
     step: "Lay Track",
     detail:
-      "The active corporation's President may lay or upgrade tiles on the map, extending its rail network. A company's very first tile lay (at its home hex) doubles as placing its home Station token -- there is no separate token-placement action.",
-    quick: "Lay or upgrade one tile; first lay also places the home Station.",
+      "The active corporation's President may lay or upgrade one tile on the map, extending its rail network. Terrain is charged on top of the tile: $80 to build across a river hex, $120 across a mountain hex, nothing on clear ground.",
+    quick: "Lay or upgrade one tile (+$80 river / $120 mountain terrain fee).",
+  },
+  {
+    // CORRECTION (design note #141): this step was MISSING from this list
+    // entirely, and the "Lay Track" text above actively denied it existed --
+    // it claimed the first tile lay "doubles as placing its home Station
+    // token -- there is no separate token-placement action". Both halves of
+    // that were wrong:
+    //
+    //   - The HOME token is granted automatically at FLOAT, by
+    //     `hexmap::grant_home_station_token` (called from `auction.rs` the
+    //     moment a corporation crosses 60%), not by laying a tile.
+    //   - There IS a separate action: `ExecuteMsg::PlaceStationToken` ->
+    //     `hexmap::execute_place_station_token`, with its own cost ladder,
+    //     token limit, reachability check and one-per-sub-round rule.
+    //
+    // So a player reading this reference was told not to look for a control
+    // that the Operating Round bar has had all along, in its own sub-phase.
+    step: "Place a Station",
+    detail:
+      "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot -- a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one placement per corporation per Operating Round.",
+    quick: "Optionally place one Station token in a reachable city with a free slot.",
   },
   {
     step: "Routes",
@@ -433,7 +454,13 @@ const AUCTION_FLOW: FlowStep[] = [
 /* ------------------------------------------------------------------ */
 
 type RulesRoundType = "WaterfallAuction" | "StockRound" | "OperatingRound";
-type RulesOperatingSubPhase = "Track" | "Tokens" | "Dividends" | "Hardware";
+type RulesOperatingSubPhase =
+  | "BuyPrivate"
+  | "Track"
+  | "Tokens"
+  | "Routes"
+  | "Dividends"
+  | "Hardware";
 
 const ROUND_ORDER: RulesRoundType[] = ["WaterfallAuction", "StockRound", "OperatingRound"];
 
@@ -449,11 +476,99 @@ const ROUND_META: Readonly<Record<RulesRoundType, { label: string; flow: FlowSte
  *  discipline. Only used for the small supplementary UI-step badge; the
  *  numbered checklist itself always comes from `OPERATING_ROUND_FLOW`. */
 const OPERATING_SUB_PHASE_QUICK_LABELS: Readonly<Record<RulesOperatingSubPhase, { index: number; name: string }>> = {
-  Track: { index: 1, name: "Track" },
-  Tokens: { index: 2, name: "Tokens" },
-  Dividends: { index: 3, name: "Dividends" },
-  Hardware: { index: 4, name: "Hardware" },
+  // Design note #144: mirrors `or_phase::OR_PHASE_ORDER`, which the contract
+  // now ENFORCES rather than merely describes.
+  BuyPrivate: { index: 1, name: "Buy Private" },
+  Track: { index: 2, name: "Track" },
+  Tokens: { index: 3, name: "Tokens" },
+  Routes: { index: 4, name: "Routes" },
+  Dividends: { index: 5, name: "Dividends" },
+  Hardware: { index: 6, name: "Hardware" },
 };
+
+/** Kept in step with `App.tsx`'s `OPERATING_SUB_PHASE_TOTAL`. */
+const OPERATING_SUB_PHASE_TOTAL = Object.keys(OPERATING_SUB_PHASE_QUICK_LABELS).length;
+
+/* ------------------------------------------------------------------ */
+/* Quick Reference strip -- RESTORED, design note #141                  */
+/* ------------------------------------------------------------------ */
+
+/** The compact, scannable round checklist that leads this page.
+ *
+ *  RESTORED, not newly invented. Design note #7 built a sticky
+ *  `QuickReferenceSection` that showed one line per step; design note #10(2)
+ *  deleted it in favour of `CurrentRoundReferenceSection`, which always
+ *  renders every round's FULL `detail` prose. That trade lost something real:
+ *  the full version is a document you read, and what a player wants mid-turn
+ *  is a list they can glance at. Both now exist, and they are deliberately
+ *  different tools rather than two sizes of the same one:
+ *
+ *    - THIS, at the top: one line per step, active round only when connected.
+ *      Answers "what am I doing, and what comes next".
+ *    - `CurrentRoundReferenceSection`, below: full prose for all three rounds.
+ *      Answers "what exactly does that step mean".
+ *
+ *  It reads the SAME `FlowStep.quick` one-liners the flow arrays already
+ *  carry -- the field design note #7 added for precisely this and which has
+ *  been unused since #10(2) removed its only consumer. So a step added to a
+ *  flow array appears in both places automatically; the two cannot drift.
+ *
+ *  DISCONNECTED it lists all three rounds side by side rather than hiding.
+ *  In offline sandbox mode there is no live round, and a panel that renders
+ *  nothing is indistinguishable from a panel that is broken -- which is
+ *  exactly how its absence was reported. */
+function QuickReferenceStrip({
+  roundType,
+  operatingSubPhase,
+}: {
+  roundType?: RulesRoundType | null;
+  operatingSubPhase?: RulesOperatingSubPhase | null;
+}) {
+  const connected = roundType !== undefined && roundType !== null;
+  const subPhaseMeta =
+    connected && roundType === "OperatingRound" && operatingSubPhase
+      ? OPERATING_SUB_PHASE_QUICK_LABELS[operatingSubPhase]
+      : null;
+  const shown = connected ? [roundType as RulesRoundType] : ROUND_ORDER;
+
+  return (
+    <section style={styles.quickStrip}>
+      <div style={styles.quickRefHeader}>
+        <h3 style={styles.quickStripTitle}>
+          Quick Reference{connected ? ` -- ${ROUND_META[roundType as RulesRoundType].label}` : ""}
+        </h3>
+        {connected && subPhaseMeta ? (
+          <span style={styles.quickRefBadge}>
+            UI step {subPhaseMeta.index} of {OPERATING_SUB_PHASE_TOTAL}: {subPhaseMeta.name}
+          </span>
+        ) : (
+          !connected && (
+            <span style={styles.quickRefBadgeMuted}>
+              Not connected -- all three rounds shown
+            </span>
+          )
+        )}
+      </div>
+
+      <div style={styles.quickStripColumns}>
+        {shown.map((rt) => (
+          <div key={rt} style={styles.quickStripColumn}>
+            {!connected && <h4 style={styles.quickStripColumnTitle}>{ROUND_META[rt].label}</h4>}
+            <ol style={styles.quickStripList}>
+              {ROUND_META[rt].flow.map((step, index) => (
+                <li key={step.step} style={styles.quickStripItem}>
+                  <span style={styles.quickStripNum}>{index + 1}</span>
+                  <span style={styles.quickStripStep}>{step.step}</span>
+                  <span style={styles.quickStripQuick}>{step.quick}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 /** Right-column card -- see design note #10. Unlike the superseded
  *  `QuickReferenceSection` this replaces (one-line-per-step "quick"
@@ -480,11 +595,66 @@ function CurrentRoundReferenceSection({
       ? OPERATING_SUB_PHASE_QUICK_LABELS[operatingSubPhase]
       : null;
 
-  // Active round first (if connected), then the remaining two in their
-  // usual order -- never drops a round, just reprioritizes reading order.
+  // Active round first, then the rest in their usual order -- never drops a
+  // round, just reprioritises reading order.
   const orderedRounds = connected
     ? [roundType as RulesRoundType, ...ROUND_ORDER.filter((rt) => rt !== roundType)]
     : ROUND_ORDER;
+
+  // Design note #143: which rounds are expanded.
+  //
+  // The rule asked for, and the reason each half of it matters:
+  //   - the ACTIVE round opens automatically whenever the round CHANGES, so
+  //     a player who has just moved from a Stock Round to an Operating Round
+  //     finds the relevant rules already in front of them; and
+  //   - a manual open/close of any section STICKS, so someone who deliberately
+  //     opened another round to check something is not fighting a panel that
+  //     keeps re-collapsing under them.
+  //
+  // Those two pull against each other, which is why this is state plus an
+  // effect rather than a derived value. Deriving "open = isActive" would make
+  // manual expansion impossible; pure state would never react to the round
+  // changing. The effect below fires ONLY on a genuine `roundType`
+  // transition, tracked against a ref -- not on every render, and not on the
+  // ~poll-interval re-render that reports the same round again, which would
+  // silently reopen a section the player had just closed.
+  const [openRounds, setOpenRounds] = useState<ReadonlySet<RulesRoundType>>(() =>
+    connected ? new Set([roundType as RulesRoundType]) : new Set(ROUND_ORDER),
+  );
+  const previousRoundRef = useRef<RulesRoundType | null | undefined>(roundType);
+
+  useEffect(() => {
+    if (roundType === previousRoundRef.current) return;
+    previousRoundRef.current = roundType;
+    if (roundType === undefined || roundType === null) {
+      // Disconnected: no round is "current", so opening all three is the only
+      // honest default -- a fully collapsed panel offline is indistinguishable
+      // from a broken one.
+      setOpenRounds(new Set(ROUND_ORDER));
+      return;
+    }
+    // Open the new active round. Deliberately ADDITIVE -- anything the player
+    // opened by hand stays open; this promotes the new round without
+    // confiscating their other choices.
+    // `forEach` into a fresh Set, not `[...prev, roundType]` -- tsconfig
+    // targets ES5 without `downlevelIteration`, so spreading a Set is a
+    // compile error here.
+    setOpenRounds((prev) => {
+      const next = new Set<RulesRoundType>();
+      prev.forEach((rt) => next.add(rt));
+      next.add(roundType);
+      return next;
+    });
+  }, [roundType]);
+
+  const toggleRound = (rt: RulesRoundType) => {
+    setOpenRounds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rt)) next.delete(rt);
+      else next.add(rt);
+      return next;
+    });
+  };
 
   return (
     <section style={styles.currentRoundSection}>
@@ -495,31 +665,47 @@ function CurrentRoundReferenceSection({
         )}
       </div>
 
-      {orderedRounds.map((rt, roundIndex) => {
+      {orderedRounds.map((rt) => {
         const isActive = connected && rt === roundType;
+        const isOpen = openRounds.has(rt);
         return (
           <div key={rt} style={styles.currentRoundBlock}>
-            <div style={styles.quickRefHeader}>
+            <button
+              type="button"
+              onClick={() => toggleRound(rt)}
+              aria-expanded={isOpen}
+              style={{
+                ...styles.roundAccordionHeader,
+                ...(isActive ? styles.roundAccordionHeaderActive : {}),
+              }}
+            >
+              <span style={styles.roundAccordionChevron}>{isOpen ? "\u25be" : "\u25b8"}</span>
               <h4 style={styles.quickRefCardTitle}>{ROUND_META[rt].label}</h4>
               {isActive && (
                 <span style={styles.quickRefBadge}>
                   ACTIVE
-                  {subPhaseMeta && ` -- UI step: ${subPhaseMeta.name} (${subPhaseMeta.index} of 4)`}
+                  {subPhaseMeta &&
+                    ` -- UI step: ${subPhaseMeta.name} (${subPhaseMeta.index} of ${OPERATING_SUB_PHASE_TOTAL})`}
                 </span>
               )}
-            </div>
-            <ol style={styles.flowList}>
-              {ROUND_META[rt].flow.map((step) => (
-                <li key={step.step} style={styles.flowItem}>
-                  <div style={styles.flowItemHead}>
-                    <span style={styles.flowStep}>{step.step}</span>
-                    <span style={styles.flowQuick}>{step.quick}</span>
-                  </div>
-                  <span style={styles.flowDetail}>{step.detail}</span>
-                </li>
-              ))}
-            </ol>
-            {roundIndex < orderedRounds.length - 1 && <div style={styles.currentRoundDivider} />}
+              {!isOpen && (
+                <span style={styles.roundAccordionHint}>{ROUND_META[rt].flow.length} steps</span>
+              )}
+            </button>
+
+            {isOpen && (
+              <ol style={styles.flowList}>
+                {ROUND_META[rt].flow.map((step) => (
+                  <li key={step.step} style={styles.flowItem}>
+                    <div style={styles.flowItemHead}>
+                      <span style={styles.flowStep}>{step.step}</span>
+                      <span style={styles.flowQuick}>{step.quick}</span>
+                    </div>
+                    <span style={styles.flowDetail}>{step.detail}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
         );
       })}
@@ -605,14 +791,30 @@ const CERT_AND_CASH_BY_PLAYERS: Array<{ players: number; limit: number; cash: nu
 export function RulesReference({ className, roundType, operatingSubPhase }: RulesReferenceProps) {
   return (
     <div style={styles.root} className={className}>
-      <h2 style={styles.pageTitle}>Rules Reference -- 1830 Limits &amp; Caps</h2>
-      <p style={styles.sourceNote}>
-        Sourced from the open-source tobymao/18xx engine's real 1830 config, cross-checked against
-        this contract's own implementation where it applies -- see design note #1/#3 in this file.
-      </p>
+      <h2 style={styles.pageTitle}>Rules Reference</h2>
+      {/* REGRESSION FIX (design note #140): the current-round panel is back
+          at the TOP, full width, above the narrative -- not in a side column.
 
-      {/* Design note #10(2): top row -- narrative on the left, current
-          round's rules reference on the right. */}
+          Nothing deleted it; that is why it was hard to spot. Design note
+          #10(2) moved it out of its old sticky top position into
+          `topRowRight`, a `flex: 1 1 480px` column sharing a wrapping row
+          with `AboutSection`'s five paragraphs of prose. Above ~1000px the
+          two sit side by side and it is visible. Below that the row wraps,
+          `AboutSection` renders first, and the round panel lands underneath
+          a full screen of narrative -- present in the DOM, absent from view,
+          and reported as "vanished".
+
+          It leads the page again because of what it IS: the only part of
+          this screen that changes with the room's live state, and the part a
+          player consults mid-turn to see what they may do NOW. Static
+          reference tables can be scrolled to; the answer to "whose turn is
+          it and what comes next" cannot. `AboutSection` is orientation
+          material read once, so it moves below. */}
+      {/* Design note #141/#143: the compact strip leads full width -- it is
+          the one thing read mid-turn. Below it, narrative on the left and the
+          collapsible full round reference on the right, as before. */}
+      <QuickReferenceStrip roundType={roundType} operatingSubPhase={operatingSubPhase} />
+
       <div style={styles.topRow}>
         <div style={styles.topRowLeft}>
           <AboutSection />
@@ -862,6 +1064,98 @@ const styles: Record<string, React.CSSProperties> = {
     height: "1px",
     background: "#262a34",
     margin: "4px 0 0",
+  },
+  // Design note #141: the compact strip. Denser than everything else on the
+  // page on purpose -- it is scanned, not read.
+  quickStrip: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    padding: "14px 18px",
+    backgroundColor: "#12141b",
+    border: "1px solid #3a3f4b",
+    borderRadius: "10px",
+  },
+  quickStripTitle: {
+    margin: 0,
+    fontSize: "17px",
+    fontWeight: 700,
+    color: "#e6e8ef",
+  },
+  quickStripColumns: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "18px",
+  },
+  quickStripColumn: {
+    flex: "1 1 300px",
+    minWidth: 0,
+  },
+  quickStripColumnTitle: {
+    margin: "0 0 6px 0",
+    fontSize: "13px",
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    color: "#9aa0ac",
+  },
+  quickStripList: {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: "5px",
+  },
+  quickStripItem: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "8px",
+    fontSize: "15px",
+    lineHeight: 1.45,
+  },
+  quickStripNum: {
+    flex: "0 0 auto",
+    minWidth: "18px",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "13px",
+    color: "#6f7684",
+  },
+  quickStripStep: {
+    flex: "0 0 auto",
+    fontWeight: 700,
+    color: "#e6e8ef",
+  },
+  quickStripQuick: {
+    color: "#b8bdc8",
+  },
+  // Design note #143: accordion header. A real <button> so it is keyboard
+  // reachable and announces its expanded state; styled flat so it reads as a
+  // section heading rather than an action.
+  roundAccordionHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    width: "100%",
+    padding: "6px 0",
+    background: "none",
+    border: "none",
+    borderBottom: "1px solid #2b2f3a",
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  roundAccordionHeaderActive: {
+    borderBottomColor: "#4a6f92",
+  },
+  roundAccordionChevron: {
+    flex: "0 0 auto",
+    fontSize: "12px",
+    color: "#8a919e",
+  },
+  roundAccordionHint: {
+    marginLeft: "auto",
+    fontSize: "12px",
+    color: "#6f7684",
   },
   quickRefHeader: {
     display: "flex",

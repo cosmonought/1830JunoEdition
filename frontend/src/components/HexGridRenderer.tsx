@@ -8081,11 +8081,34 @@ export function HexGridRenderer({
       // being treated identically.
       //
       // FIRST: the interceptor is switched OFF deliberately. `App.tsx`'s
-      // route-select mode omits `contractAddress`/`gameId`/`protocolId` (and
-      // `queryClient`) specifically so a route-point click doesn't also pop
-      // the LayTile picker open underneath it -- see design note #7 and
+      // route-select mode omits `gameId`/`protocolId` (and `contractAddress`
+      // and `queryClient`) specifically so a route-point click doesn't also
+      // pop the LayTile picker open underneath it -- see design note #7 and
       // App.tsx design note #11. That must keep bailing out silently.
-      if (!contractAddress || gameId === undefined || protocolId === undefined) {
+      //
+      // REGRESSION FIX (design note #139): `!contractAddress` USED TO BE PART
+      // OF THIS GUARD, and moving it out is the entire fix for "clicking a
+      // hex no longer opens the tile picker offline".
+      //
+      // A contract address is a CHAIN concern, not a "which hex am I laying
+      // on" concern, so it never belonged in the deliberately-off test. It
+      // survived here only because it was never previously falsy: the address
+      // was a hardcoded placeholder string (`"juno1...eighteencosmos..."`)
+      // that was invalid but TRUTHY, so this guard always passed and control
+      // always reached the offline fallback below. Offline mode was, without
+      // anyone intending it, load-bearing on a fake constant being truthy.
+      //
+      // F-4 moved the address into the environment, where an unset variable
+      // is correctly `undefined` -- and this guard, unchanged, began swallowing
+      // every hex click in exactly the sandbox mode that has no address by
+      // design. Silent, too: `onHexClick` had already fired, so the
+      // "[TileSelection] hex clicked" log above still printed while the popup
+      // never opened.
+      //
+      // `gameId`/`protocolId` are the honest discriminator: `App.tsx` supplies
+      // both in normal mode and omits both in route-select mode, and neither
+      // has anything to do with whether a chain is reachable.
+      if (gameId === undefined || protocolId === undefined) {
         return;
       }
 
@@ -8109,7 +8132,11 @@ export function HexGridRenderer({
       // era ONLY -- see its doc comment -- so the result is explicitly
       // provisional and goes out under `status: "offline"`, which the UI is
       // required to label as such and must not dispatch from.
-      if (!queryClient) {
+      // Design note #139: `!contractAddress` now sits HERE, alongside
+      // `!queryClient`, because the two mean the same thing -- there is no
+      // chain to ask. Either one missing takes the offline path, which is the
+      // behaviour the sandbox has always needed and only accidentally had.
+      if (!queryClient || !contractAddress) {
         const placements = localCatalogPlacements();
         // eslint-disable-next-line no-console
         console.log("[TileSelection] no chain client -- local catalog fallback", {

@@ -304,8 +304,10 @@ use crate::hexmap;
 use crate::market::{self, MarketError};
 use crate::msg::SharePurchaseSource;
 use crate::public_company::CORE_PUBLIC_COMPANIES;
+use crate::or_phase;
 use crate::state::{
-    count_player_certificates, GameSession, PrivateCompany, PublicCompany, RoundType, TileColor,
+    count_player_certificates, GameSession, OperatingSubPhase, PrivateCompany, PublicCompany,
+    RoundType, TileColor,
     ZoneType, BANK_POOL_SHARES, IPO_POOL_SHARES, MARKET_GRID, PLAYER_CASH_VGP, PLAYER_SHARES,
     PRIVATE_COMPANIES, PROTOCOL_PAR_VALUE, PROTOCOL_PRESIDENT, PUBLIC_COMPANIES, SESSIONS,
 };
@@ -423,6 +425,21 @@ pub enum TradingError {
     #[error("Unauthorized: only protocol {protocol_id}'s registered President may declare its dividends")]
     NotPresident { protocol_id: u32 },
 
+    /// Audit G-14: this action was attempted outside its Operating Round
+    /// sub-phase. The turn runs BuyPrivate -> Track -> Tokens -> Routes ->
+    /// Dividends -> Hardware, and the check is strict equality -- being PAST
+    /// a phase fails as loudly as being before it, because reordering after
+    /// the fact is exactly what this prevents.
+    #[error(
+        "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); this action requires phase {required} (step {required_index} of 6)"
+    )]
+    WrongOperatingSubPhase {
+        protocol_id: u32,
+        actual: String,
+        actual_index: u8,
+        required: String,
+        required_index: u8,
+    },
     #[error(
         "It is not protocol {protocol_id}'s turn in game room {game_id}'s Operating Round Corporation Turn Queue; protocol {expected_protocol_id} must act first"
     )]
@@ -1538,6 +1555,28 @@ pub fn execute_declare_dividends(
         return Err(TradingError::NotPresident { protocol_id });
     }
 
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // Declared against revenue the Routes phase already computed. This phase
+    // is NEVER skippable -- pay or withhold are both legal, so "neither" is not.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::Dividends,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => TradingError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => TradingError::Std(StdError::generic_err(message)),
+        });
+    }
+
     // Operating Round Corporation Turn Queue (see `hexmap.rs`'s module doc
     // comment #13 for the shared design): layered on top of the President
     // check above, only enforced once the room actually has a non-empty
@@ -1559,6 +1598,9 @@ pub fn execute_declare_dividends(
         let (default_x, default_y) = market::DEFAULT_MARKET_POSITION;
         market::ensure_protocol_position(deps.storage, game_id, protocol_id, default_x, default_y)?;
     }
+
+    // Audit G-14: the payout decision is made; move on to buying trains.
+    or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::Dividends)?;
 
     let mut response = Response::new()
         .add_attribute("action", "declare_dividends")
@@ -1804,6 +1846,29 @@ pub fn execute_buy_private_company(
         return Err(TradingError::NotPresident { protocol_id });
     }
 
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // FIRST phase of the turn, before track. Only reachable from Phase 3 on --
+    // `or_phase::initial_sub_phase` starts the cursor at `Track` while the era
+    // is Yellow, so this phase does not exist yet rather than being skipped.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::BuyPrivate,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => TradingError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => TradingError::Std(StdError::generic_err(message)),
+        });
+    }
+
     // Operating Round Corporation Turn Queue (soft gate, mirrors
     // `execute_declare_dividends`): only enforced once the room actually
     // has a non-empty `active_operating_order`.
@@ -1878,6 +1943,9 @@ pub fn execute_buy_private_company(
     private.owner = None;
     private.owner_protocol_id = Some(protocol_id);
     PRIVATE_COMPANIES.save(deps.storage, (game_id, private_id), &private)?;
+
+    // Audit G-14: one private purchase per turn; move on to track.
+    or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::BuyPrivate)?;
 
     Ok(Response::new()
         .add_attribute("action", "buy_private_company")

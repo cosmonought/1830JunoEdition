@@ -146,6 +146,7 @@ use crate::contract::STARTING_CAPITAL_POOL;
 use crate::hardware::{self, HardwareError};
 use crate::hexmap::{self, HexMapError};
 use crate::market::{self, MarketError};
+use crate::operations::{self, OperationsError};
 use crate::public_company::{self, CORE_PUBLIC_COMPANIES};
 use crate::state::{
     ActionRecord, GameSession, RoundType, TileColor, BANK_POOL_SHARES, COMPANY_HARDWARE, GAME_LOG,
@@ -174,6 +175,13 @@ pub enum GameLogError {
 
     #[error("{0}")]
     Market(#[from] MarketError),
+
+    /// Audit G-14. `AdvanceOperatingSubPhase` is the FIRST `operations`-owned
+    /// message the game log replays -- every OR action recorded before it
+    /// lived in `hexmap`/`trading`/`hardware`, which is why this variant and
+    /// `use crate::operations` were both absent until now.
+    #[error("{0}")]
+    Operations(#[from] OperationsError),
 
     #[error("Game room {game_id} was not found")]
     GameNotFound { game_id: u64 },
@@ -631,6 +639,14 @@ pub fn reapply_game_log(
                     r,
                     tile_id,
                     orientation,
+                )?;
+            }
+            ActionRecord::AdvanceOperatingSubPhase { player, protocol_id } => {
+                operations::execute_advance_operating_sub_phase(
+                    deps.branch(),
+                    synthetic_info(player),
+                    game_id,
+                    protocol_id,
                 )?;
             }
             ActionRecord::PlaceStationToken {

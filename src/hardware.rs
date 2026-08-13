@@ -197,8 +197,10 @@ use thiserror::Error;
 use crate::auction::{BO_PUBLIC_COMPANY_ID, CORE_PRIVATE_COMPANIES, PRIVATE_BO_ID};
 use crate::market::{self, MarketError};
 use crate::public_company::CORE_PUBLIC_COMPANIES;
+use crate::or_phase;
 use crate::state::{
-    GameSession, HardwareAsset, PrivateCompany, PublicCompany, TileColor, BANK_POOL_SHARES,
+    GameSession, HardwareAsset, OperatingSubPhase, PrivateCompany, PublicCompany, TileColor,
+    BANK_POOL_SHARES,
     COMPANY_HARDWARE, HARDWARE_POOL, PLAYER_CASH_VGP, PLAYER_SHARES, PRIVATE_COMPANIES,
     PROTOCOL_PRESIDENT, PUBLIC_COMPANIES, SESSIONS, TRAINS_PURCHASED_COUNT,
 };
@@ -346,6 +348,21 @@ pub enum HardwareError {
     )]
     NotPresident { protocol_id: u32 },
 
+    /// Audit G-14: this action was attempted outside its Operating Round
+    /// sub-phase. The turn runs BuyPrivate -> Track -> Tokens -> Routes ->
+    /// Dividends -> Hardware, and the check is strict equality -- being PAST
+    /// a phase fails as loudly as being before it, because reordering after
+    /// the fact is exactly what this prevents.
+    #[error(
+        "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); this action requires phase {required} (step {required_index} of 6)"
+    )]
+    WrongOperatingSubPhase {
+        protocol_id: u32,
+        actual: String,
+        actual_index: u8,
+        required: String,
+        required_index: u8,
+    },
     #[error(
         "It is not protocol {protocol_id}'s turn in game room {game_id}'s Operating Round Corporation Turn Queue; protocol {expected_protocol_id} must act first"
     )]
@@ -574,6 +591,29 @@ pub fn execute_buy_hardware_from_pool(
         .ok_or(HardwareError::NoPresidentAssigned { protocol_id })?;
     if info.sender != president {
         return Err(HardwareError::NotPresident { protocol_id });
+    }
+
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // Deliberately does NOT advance the cursor afterwards: a corporation may buy
+    // as many trains as it can afford up to the phase train limit, so it stays
+    // on `Hardware` until the turn ends.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::Hardware,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => HardwareError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => HardwareError::Std(StdError::generic_err(message)),
+        });
     }
 
     // Operating Round Corporation Turn Queue (see `hexmap.rs`'s module doc

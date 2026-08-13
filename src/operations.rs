@@ -226,8 +226,10 @@ use crate::market::{self, MarketError};
 use crate::msg::PayoutStrategy;
 use crate::pathfinding::{self, PathfindingError};
 use crate::public_company::CORE_PUBLIC_COMPANIES;
+use crate::or_phase;
 use crate::state::{
-    GameSession, PrivateCompany, PublicCompany, RoundType, Tile, COMPANY_HARDWARE, HARDWARE_POOL,
+    GameSession, OperatingSubPhase, PrivateCompany, PublicCompany, RoundType, Tile, COMPANY_HARDWARE,
+    HARDWARE_POOL,
     PLAYER_CASH_VGP, PLAYER_SHARES, PRIVATE_COMPANIES, PROTOCOL_MARKET, PROTOCOL_NETWORK_HEXES,
     PROTOCOL_PRESIDENT, PUBLIC_COMPANIES, SESSIONS,
 };
@@ -300,6 +302,27 @@ pub enum OperationsError {
     )]
     NoActiveOperatingOrder { game_id: u64 },
 
+    #[error(
+        "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); this action requires phase {required} (step {required_index} of 6)"
+    )]
+    WrongOperatingSubPhase {
+        protocol_id: u32,
+        actual: String,
+        actual_index: u8,
+        required: String,
+        required_index: u8,
+    },
+    /// Audit G-14: `AdvanceOperatingSubPhase` was called on a phase that may
+    /// not be skipped. `Routes` is skippable only by a corporation owning no
+    /// train; `Dividends` never is.
+    #[error(
+        "protocol {protocol_id} may not skip Operating Round phase {phase}: {reason}"
+    )]
+    OperatingSubPhaseNotSkippable {
+        protocol_id: u32,
+        phase: String,
+        reason: String,
+    },
     #[error(
         "It is not protocol {protocol_id}'s turn in game room {game_id}'s Operating Round Corporation Turn Queue; protocol {expected_protocol_id} must act first"
     )]
@@ -659,6 +682,94 @@ pub fn execute_end_operating_round_turn(
     advance_operating_round_turn(deps, game_id, session, response)
 }
 
+/// Advances `protocol_id` past its current Operating Round sub-phase without
+/// acting in it -- Audit G-14, the explicit skip.
+///
+/// This is what makes the sequence enforceable without being a straitjacket:
+/// a corporation with no tile worth laying, no reachable city to token and no
+/// train to buy still has to reach the phases it cares about, and every skip
+/// is a recorded, replayable event rather than an implicit jump.
+///
+/// REFUSES the two phases that are not the corporation's to skip:
+///   - `Routes`, if it owns any train. Running is not optional in 1830 -- you
+///     may not decline to earn in order to dodge a dividend. A corporation
+///     with NO train has nothing to run and may pass through.
+///   - `Dividends`, ever. Pay or withhold are both legal, so "neither" never
+///     is, and skipping would end the turn with revenue in an undefined state.
+pub fn execute_advance_operating_sub_phase(
+    deps: DepsMut,
+    info: MessageInfo,
+    game_id: u64,
+    protocol_id: u32,
+) -> Result<Response, OperationsError> {
+    let session: GameSession = SESSIONS
+        .may_load(deps.storage, game_id)?
+        .ok_or(OperationsError::GameNotFound { game_id })?;
+    if !session.is_active {
+        return Err(OperationsError::GameNotActive { game_id });
+    }
+
+    let president = PROTOCOL_PRESIDENT
+        .may_load(deps.storage, (game_id, protocol_id))?
+        .ok_or(OperationsError::NoPresidentAssigned {
+            game_id,
+            protocol_id,
+        })?;
+    if info.sender != president {
+        return Err(OperationsError::NotPresident { protocol_id });
+    }
+
+    if let Some(&expected_protocol_id) = session
+        .active_operating_order
+        .get(session.active_corporation_index as usize)
+    {
+        if protocol_id != expected_protocol_id {
+            return Err(OperationsError::NotYourOperatingTurn {
+                game_id,
+                protocol_id,
+                expected_protocol_id,
+            });
+        }
+    }
+
+    let current = or_phase::current_sub_phase(
+        deps.storage,
+        game_id,
+        protocol_id,
+        session.current_global_era,
+    )?;
+
+    if !or_phase::may_skip(deps.storage, game_id, protocol_id, current)? {
+        let reason = match current {
+            OperatingSubPhase::Routes =>
+                "this corporation owns at least one train, and a corporation holding a train must run it",
+            _ =>
+                "the dividend decision is mandatory -- declare a payout or withhold, but it cannot be passed over",
+        };
+        return Err(OperationsError::OperatingSubPhaseNotSkippable {
+            protocol_id,
+            phase: or_phase::phase_name(current).to_string(),
+            reason: reason.to_string(),
+        });
+    }
+
+    or_phase::advance(deps.storage, game_id, protocol_id, current)?;
+    let now = or_phase::current_sub_phase(
+        deps.storage,
+        game_id,
+        protocol_id,
+        session.current_global_era,
+    )?;
+
+    Ok(Response::new()
+        .add_attribute("action", "advance_operating_sub_phase")
+        .add_attribute("game_id", game_id.to_string())
+        .add_attribute("protocol_id", protocol_id.to_string())
+        .add_attribute("skipped_phase", or_phase::phase_name(current))
+        .add_attribute("current_phase", or_phase::phase_name(now))
+        .add_attribute("current_phase_index", or_phase::phase_index(now).to_string()))
+}
+
 /// Shared three-way Operating Round Corporation Turn Queue advancement --
 /// design notes #10/#12 for the full design. Factored out of
 /// `execute_end_operating_round_turn` (which still owns every check BEFORE
@@ -679,6 +790,14 @@ fn advance_operating_round_turn(
     mut session: GameSession,
     mut response: Response,
 ) -> Result<Response, OperationsError> {
+    // Audit G-14: every corporation queued this round starts its NEXT turn at
+    // the top of the sequence. Cleared here, in the one function BOTH turn-end
+    // paths funnel through (`execute_end_operating_round_turn` and
+    // `execute_run_manual_route`), so no path can leave a stale cursor behind
+    // -- a corporation that ended its turn on `Hardware` would otherwise begin
+    // its next one there and be unable to lay track for the rest of the game.
+    or_phase::reset_all_for_session(deps.storage, &session);
+
     let next_index = session.active_corporation_index + 1;
 
     if (next_index as usize) < session.active_operating_order.len() {
@@ -914,6 +1033,28 @@ pub fn execute_run_manual_route(
         return Err(OperationsError::NotPresident { protocol_id });
     }
 
+
+    // ==== Audit G-14: Operating Round sub-phase gate. ====
+    // Running trains is what PRODUCES the revenue the Dividends phase then
+    // decides about, which is why the two are separate phases in this order.
+    if let Err(mismatch) = or_phase::require_sub_phase(
+        deps.storage,
+        &session,
+        protocol_id,
+        OperatingSubPhase::Routes,
+    ) {
+        return Err(match mismatch {
+            or_phase::PhaseMismatch::Wrong { actual, required } => OperationsError::WrongOperatingSubPhase {
+                protocol_id,
+                actual: or_phase::phase_name(actual).to_string(),
+                actual_index: or_phase::phase_index(actual),
+                required: or_phase::phase_name(required).to_string(),
+                required_index: or_phase::phase_index(required),
+            },
+            or_phase::PhaseMismatch::Storage(message) => OperationsError::Std(StdError::generic_err(message)),
+        });
+    }
+
     // Operating Round Corporation Turn Queue gating -- STRICT, unlike
     // `DeclareDividends`'s "only enforced if a queue exists" check, since
     // this message always ends by advancing that same queue (see this
@@ -1133,6 +1274,10 @@ pub fn execute_run_manual_route(
         PayoutStrategy::DeclareDividends => "declare_dividends",
         PayoutStrategy::Withhold => "withhold",
     };
+
+    // Audit G-14: trains have run; the revenue figure now exists, so the
+    // Dividends phase has something to decide about.
+    or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::Routes)?;
 
     let mut response = Response::new()
         .add_attribute("action", "run_manual_route")

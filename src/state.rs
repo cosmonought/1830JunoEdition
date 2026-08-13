@@ -873,6 +873,47 @@ pub const PROTOCOL_LAST_TOKEN_SUBROUND: Map<(u64, u32), (u32, u32)> =
 pub const HEX_STATION_TOKENS: Map<(u64, i32, i32), Vec<(u32, u8)>> =
     Map::new("hex_station_tokens");
 
+/// One step of a corporation's Operating Round turn -- Audit G-14.
+///
+/// The order is the rule, and it is defined once, in
+/// `or_phase::OR_PHASE_ORDER`. This enum deliberately carries no ordering of
+/// its own (no `PartialOrd`, no discriminant arithmetic) so there is exactly
+/// one place a phase sequence can be read from and no second, drifting copy.
+///
+/// See `or_phase`'s module doc for what each phase gates and which may be
+/// skipped.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+pub enum OperatingSubPhase {
+    /// Buy a private company from a player. Phase 3+ only, and FIRST in the
+    /// turn -- before track.
+    BuyPrivate,
+    /// Lay or upgrade exactly one tile.
+    Track,
+    /// Place one Station token.
+    Tokens,
+    /// Run trains. Not skippable by a corporation that owns one.
+    Routes,
+    /// Pay out or withhold. Never skippable.
+    Dividends,
+    /// Buy trains -- as many as affordable up to the phase train limit, so
+    /// this phase does NOT auto-advance.
+    Hardware,
+}
+
+/// (game_id, protocol_id) -> which Operating Round phase that corporation is
+/// currently in (Audit G-14).
+///
+/// ABSENT means "at the start of its turn": `or_phase::current_sub_phase`
+/// resolves a missing entry through `initial_sub_phase`, which is era
+/// dependent. That is also why `or_phase::reset_for_turn` REMOVES the entry
+/// rather than writing one -- see its doc comment for why writing a concrete
+/// phase would silently skip `BuyPrivate` in a later era.
+///
+/// No migration needed for a game already in flight: every corporation simply
+/// starts its next turn at the top of the sequence.
+pub const PROTOCOL_OR_SUB_PHASE: Map<(u64, u32), OperatingSubPhase> =
+    Map::new("protocol_or_sub_phase");
+
 /// A single piece of Hardware (train) inventory -- either still sitting in
 /// the global `HARDWARE_POOL` supply queue or already owned by a company
 /// via `COMPANY_HARDWARE`. `model_type` is the train's tier ("2", "3",
@@ -971,6 +1012,13 @@ pub enum ActionRecord {
     /// re-running whichever `BidOnPrivate`/`BuyStock` action originally
     /// floated the company, exactly like every other float-time side
     /// effect already is).
+    /// Audit G-14: a recorded sub-phase skip, so `reapply_game_log` rebuilds
+    /// the same phase cursor the live game had. Without this the replayed
+    /// board would stall the first time a corporation skipped a phase.
+    AdvanceOperatingSubPhase {
+        player: Addr,
+        protocol_id: u32,
+    },
     PlaceStationToken {
         player: Addr,
         protocol_id: u32,

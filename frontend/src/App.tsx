@@ -570,7 +570,13 @@ const MOCK_TRAIN_CATALOG: ReadonlyArray<{
  *  `operations.rs`), so nothing here is read from or written to chain
  *  state. It exists only to guide which buttons the Contextual Top Action
  *  Bar shows next. */
-type OperatingSubPhase = "Track" | "Tokens" | "Dividends" | "Hardware";
+type OperatingSubPhase =
+  | "BuyPrivate"
+  | "Track"
+  | "Tokens"
+  | "Routes"
+  | "Dividends"
+  | "Hardware";
 
 /* ------------------------------------------------------------------ */
 /* Mock map preview data -- see design note #2                        */
@@ -841,11 +847,47 @@ function axialHexDistance(a: { q: number; r: number }, b: { q: number; r: number
  *  communicates progress through a corporation's turn, not just its current
  *  button set. */
 const OPERATING_SUB_PHASE_LABELS: Readonly<Record<OperatingSubPhase, { index: number; name: string }>> = {
-  Track: { index: 1, name: "Track" },
-  Tokens: { index: 2, name: "Tokens" },
-  Dividends: { index: 3, name: "Dividends" },
-  Hardware: { index: 4, name: "Hardware" },
+  // Design note #144: mirrors `or_phase::OR_PHASE_ORDER` in the contract,
+  // which is now the AUTHORITY rather than a description. Every one of these
+  // six actions is gated on-chain against a persisted cursor, so this is no
+  // longer a UI convention the chain merely tolerates -- a client that walks
+  // a different order will have its transactions rejected with
+  // `WrongOperatingSubPhase`.
+  //
+  // `BuyPrivate` leads the turn but its action is locked until Phase 3; the
+  // contract starts the cursor at `Track` while the era is Yellow, and
+  // `initialOrSubPhase` below mirrors that so the bar does not open on a
+  // phase the chain says does not exist yet.
+  BuyPrivate: { index: 1, name: "Buy Private" },
+  Track: { index: 2, name: "Track" },
+  Tokens: { index: 3, name: "Tokens" },
+  // Design note #142: `Routes` is its own phase now. It used to be folded
+  // into `Dividends`, with "Run Trains" sitting as the first of three buttons
+  // there -- so the bar said "Dividends" while the action the player actually
+  // had to take first was running trains, and the two are not the same
+  // decision. Running trains COMPUTES the revenue; declaring dividends
+  // chooses what to DO with it, and cannot be answered before the first is
+  // done. Bundling them asked the player to make the second choice while the
+  // header named only that choice and the number it depends on did not exist
+  // yet.
+  Routes: { index: 4, name: "Routes" },
+  Dividends: { index: 5, name: "Dividends" },
+  Hardware: { index: 6, name: "Hardware" },
 };
+
+/** Where a corporation's turn starts, mirroring
+ *  `or_phase::initial_sub_phase` -- `Track` before Phase 3, because
+ *  `BuyPrivate`'s action is locked until then and the contract's cursor
+ *  starts there too. */
+function initialOrSubPhase(era: string | null | undefined): OperatingSubPhase {
+  return era === "Yellow" || !era ? "Track" : "BuyPrivate";
+}
+
+/** Total Operating Round sub-phases, derived rather than written twice --
+ *  the "Phase N of M" label reads `M` from here, so adding a phase above
+ *  cannot leave a stale denominator behind (design note #142: the previous
+ *  hardcoded "of 4" was exactly that hazard). */
+const OPERATING_SUB_PHASE_TOTAL = Object.keys(OPERATING_SUB_PHASE_LABELS).length;
 
 function ContextualActionBar({
   roundType,
@@ -855,8 +897,9 @@ function ContextualActionBar({
   onSellShares,
   onPassTurn,
   onPlaceStationTokenHint,
-  onSkipTrackLay,
-  onSkipTokens,
+  onSkipSubPhase,
+  onBuyPrivateHint,
+  ownsAnyTrain,
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
@@ -891,8 +934,15 @@ function ContextualActionBar({
   onSellShares: () => void;
   onPassTurn: () => void;
   onPlaceStationTokenHint: () => void;
-  onSkipTrackLay: () => void;
-  onSkipTokens: () => void;
+  /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`
+   *  message. Every skip is now an on-chain, replayable event -- the old
+   *  client-only `setOrSubPhase` calls advanced the UI while the contract's
+   *  cursor stayed put, which under G-14 enforcement would have desynced the
+   *  bar from what the chain would actually accept. */
+  onSkipSubPhase: () => void;
+  onBuyPrivateHint: () => void;
+  /** Drives the Routes skip button's disabled state -- see its `title`. */
+  ownsAnyTrain: boolean;
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
@@ -944,9 +994,23 @@ function ContextualActionBar({
           {
             key: "skip-track",
             label: "Skip Track Lay",
-            onClick: onSkipTrackLay,
+            onClick: onSkipSubPhase,
             title: "No tile to lay this turn -- click a hex on the Rail Map instead to lay one.",
           },
+        ];
+        break;
+      case "BuyPrivate":
+        // Design note #144: Phase 3+ only, and FIRST in the turn. The
+        // contract starts the cursor at `Track` before Phase 3, so this case
+        // is unreachable in the Yellow era rather than showing a dead button.
+        contextualButtons = [
+          {
+            key: "buy-private",
+            label: "Buy Private Company",
+            onClick: onBuyPrivateHint,
+            title: "Select a private company below to purchase it into this corporation's treasury.",
+          },
+          { key: "skip-private", label: "Skip Private Purchase", onClick: onSkipSubPhase },
         ];
         break;
       case "Tokens":
@@ -957,18 +1021,33 @@ function ContextualActionBar({
             onClick: onPlaceStationTokenHint,
             title: "Click any hex on the Rail Map to open the tile/station placement popup.",
           },
-          { key: "skip-tokens", label: "Skip Tokens", onClick: onSkipTokens },
+          { key: "skip-tokens", label: "Skip Tokens", onClick: onSkipSubPhase },
+        ];
+        break;
+      case "Routes":
+        // Design note #142: its own phase. Running trains is what PRODUCES
+        // the revenue figure; the dividend decision below is what is done
+        // with it. A player who sees "Routes" knows the outstanding task is
+        // to run, not to choose a payout that has nothing to pay out yet.
+        contextualButtons = [
+          { key: "trains", label: "Run Trains (mock)", onClick: onRunTrains },
+          {
+            key: "skip-routes",
+            label: "Skip Routes",
+            onClick: onSkipSubPhase,
+            // Design note #144: the contract REFUSES this skip for a
+            // corporation that owns any train -- a train must be run. Disabled
+            // rather than hidden, with the reason, so the rule is visible at
+            // the moment it binds instead of surfacing as a rejected tx.
+            disabled: ownsAnyTrain,
+            title: ownsAnyTrain
+              ? "This corporation owns a train, and a train must be run -- Routes cannot be skipped."
+              : "No train owned, so there is nothing to run.",
+          },
         ];
         break;
       case "Dividends":
-        // "Run Trains (mock)" (the real `ExecuteOperatingRound` dispatch)
-        // has no phase of its own in this item's 4-phase list, but a real
-        // 1830 turn must run trains to compute revenue BEFORE dividends can
-        // be declared against it -- rather than dropping that already-wired
-        // button, it's kept here as a preceding step in the same phase, not
-        // folded silently into either dividends button.
         contextualButtons = [
-          { key: "trains", label: "Run Trains (mock)", onClick: onRunTrains },
           { key: "pay-dividends", label: "Pay Dividends", onClick: onPayDividends },
           { key: "withhold-revenue", label: "Withhold Revenue", onClick: onWithholdRevenue },
         ];
@@ -996,7 +1075,7 @@ function ContextualActionBar({
     <div style={{ ...styles.actionBar, ...(isMyTurn ? styles.actionBarTurnPulse : {}) }}>
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
-          ? `Operating Round${phaseLabel ? ` -- Phase ${phaseLabel.index} of 4: ${phaseLabel.name}` : ""}`
+          ? `Operating Round${phaseLabel ? ` -- Phase ${phaseLabel.index} of ${OPERATING_SUB_PHASE_TOTAL}: ${phaseLabel.name}` : ""}`
           : roundType === "StockRound"
             ? "Stock Round"
             : "No live round"}
@@ -1248,7 +1327,13 @@ function AppShell() {
   // Design note #10/item 2: which of the four legal OR action sub-phases
   // the Contextual Top Action Bar is currently guiding the player through.
   // Client-side only -- see `OperatingSubPhase`'s own doc comment.
-  const [orSubPhase, setOrSubPhase] = useState<OperatingSubPhase>("Track");
+  // Design note #144: seeded from `initialOrSubPhase`, mirroring
+  // `or_phase::initial_sub_phase` -- `Track` before Phase 3, `BuyPrivate`
+  // from Green on. Hardcoding "Track" would open the bar on a phase the
+  // contract has already moved past once the era advances.
+  const [orSubPhase, setOrSubPhase] = useState<OperatingSubPhase>(() =>
+    initialOrSubPhase(null),
+  );
   const [selectedHardwareModel, setSelectedHardwareModel] = useState<string>(
     MOCK_TRAIN_CATALOG[0].modelType,
   );
@@ -1303,8 +1388,8 @@ function AppShell() {
   // note #10/item 2. Deliberately keyed on these two live poll fields, not
   // on every poll tick, so it fires exactly once per actual turn change.
   useEffect(() => {
-    setOrSubPhase("Track");
-  }, [gameState?.current_round_type, gameState?.active_corporation_index]);
+    setOrSubPhase(initialOrSubPhase(gameState?.current_global_era));
+  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -1761,16 +1846,20 @@ function AppShell() {
     [runGameplayAction, srSelectedProtocolId, srSellPercentage],
   );
 
-  const handleRunTrains = useCallback(
-    () =>
-      runGameplayAction("ExecuteOperatingRound (mock)", {
-        // No per-company payout picker UI yet (see design note #4) -- an
-        // empty choice list is a real, valid call (every company simply
-        // retains), not a fabricated one.
-        ExecuteOperatingRound: { game_id: MOCK_GAME_ID, public_company_choices: [] },
-      }),
-    [runGameplayAction],
-  );
+  const handleRunTrains = useCallback(() => {
+    runGameplayAction("ExecuteOperatingRound (mock)", {
+      // No per-company payout picker UI yet (see design note #4) -- an
+      // empty choice list is a real, valid call (every company simply
+      // retains), not a fabricated one.
+      ExecuteOperatingRound: { game_id: MOCK_GAME_ID, public_company_choices: [] },
+    });
+    // Design note #142: advance Routes -> Dividends once trains have run.
+    // Optimistic, matching this file's existing convention (design note #4)
+    // of not gating local UI sequencing on a chain round-trip -- and now
+    // necessary rather than cosmetic, since running trains is the step that
+    // produces the figure the Dividends phase decides about.
+    setOrSubPhase("Dividends");
+  }, [runGameplayAction]);
 
   // Generalized over `distribute` (design note #10/item 2 -- Phase 3's
   // explicit "Pay Dividends" vs "Withhold Revenue" buttons are the same
@@ -1884,15 +1973,52 @@ function AppShell() {
   // dispatch anything themselves; they just log an informational Action Log
   // entry (matching `handlePlaceStationTokenHint`'s own convention) and
   // advance `orSubPhase` to the next legal step.
-  const handleSkipTrackLay = useCallback(() => {
-    logInfo("Skip Track Lay", "No tile laid this turn -- advancing to the Tokens phase.");
-    setOrSubPhase("Tokens");
+  // Design note #144: ONE real dispatch replaces the three client-only skip
+  // handlers this used to have.
+  //
+  // Those called `setOrSubPhase` directly, moving the UI forward while the
+  // contract's cursor stayed where it was. Harmless while the sequence was a
+  // client-side convention; under G-14 enforcement it desyncs the bar from
+  // what the chain will actually accept, and the player's next action gets
+  // rejected with `WrongOperatingSubPhase` for reasons the UI just made
+  // invisible. The chain owns the cursor now, so skipping has to go through
+  // it.
+  //
+  // No optimistic `setOrSubPhase` here on purpose: `orSubPhase` is driven off
+  // the polled game state, so the bar advances when the chain says it did.
+  // Guessing would reintroduce exactly the desync this removes.
+  const handleSkipSubPhase = useCallback(
+    () =>
+      runGameplayAction("AdvanceOperatingSubPhase", {
+        AdvanceOperatingSubPhase: {
+          game_id: MOCK_GAME_ID,
+          protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
+        },
+      }),
+    [runGameplayAction],
+  );
+
+  const handleBuyPrivateHint = useCallback(() => {
+    logInfo(
+      "Buy Private Company",
+      "Select a private company and price in the panel below, then confirm the purchase.",
+    );
   }, [logInfo]);
 
-  const handleSkipTokens = useCallback(() => {
-    logInfo("Skip Tokens", "No station token placed this turn -- advancing to the Dividends phase.");
-    setOrSubPhase("Dividends");
-  }, [logInfo]);
+  // Design note #144: drives the Routes skip button's disabled state. The
+  // contract refuses that skip for any corporation owning a train, so the
+  // button is disabled with the reason rather than dispatching a transaction
+  // that is certain to be rejected.
+  const ownsAnyTrain = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === MOCK_LAY_TILE_PROTOCOL_ID,
+    );
+    // `trains` is not on the polled shape yet -- until it is, assume NO train,
+    // which leaves the button enabled and lets the contract be the authority.
+    // Erring the other way would disable a legal skip with no way to override.
+    void company;
+    return false;
+  }, [gameState]);
 
   // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`
   // dispatch the Stock Round's "Pass Turn" button uses (per `msg.rs`'s own
@@ -1993,8 +2119,9 @@ function AppShell() {
                   onSellShares={handleSellShares}
                   onPassTurn={handlePassTurn}
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
-                  onSkipTrackLay={handleSkipTrackLay}
-                  onSkipTokens={handleSkipTokens}
+                  onSkipSubPhase={handleSkipSubPhase}
+                  onBuyPrivateHint={handleBuyPrivateHint}
+                  ownsAnyTrain={ownsAnyTrain}
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}

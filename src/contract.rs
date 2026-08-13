@@ -501,6 +501,26 @@ pub fn execute(
             )?;
             Ok(response)
         }
+        ExecuteMsg::AdvanceOperatingSubPhase {
+            game_id,
+            protocol_id,
+        } => {
+            let response = operations::execute_advance_operating_sub_phase(
+                deps.branch(),
+                info.clone(),
+                game_id,
+                protocol_id,
+            )?;
+            gamelog::record_action(
+                deps.storage,
+                game_id,
+                ActionRecord::AdvanceOperatingSubPhase {
+                    player: info.sender,
+                    protocol_id,
+                },
+            )?;
+            Ok(response)
+        }
         ExecuteMsg::PlaceStationToken {
             game_id,
             protocol_id,

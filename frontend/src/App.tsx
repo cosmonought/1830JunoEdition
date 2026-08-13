@@ -497,10 +497,12 @@ import InlineQuickChat from "./components/InlineQuickChat";
 import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
+import TrainTradePanel from "./components/TrainTradePanel";
 import WaterfallAuctionDashboard from "./components/WaterfallAuctionDashboard";
 import StockRoundPanel from "./components/StockRoundPanel";
 import {
   useGameStatePolling,
+  useTrainOffersPolling,
   useWaterfallStatePolling,
   playerSellablePrivateCompanies,
   type RoundType,
@@ -1371,6 +1373,15 @@ function AppShell() {
   // `utils/gameState.ts` design note #7. `WaterfallAuctionDashboard` below
   // is the only consumer.
   const isWaterfallPhase = gameState?.current_round_type === "WaterfallAuction";
+  // Audit G-15: pending corporation-to-corporation train offers. Polled
+  // separately from the board because a SELLER must see an offer arrive while
+  // it is emphatically not their turn -- this cannot key off turn state.
+  const { offers: trainOffers, refresh: refreshTrainOffers } = useTrainOffersPolling(
+    wallet.signingClient ?? undefined,
+    CONTRACT_ADDRESS,
+    MOCK_GAME_ID,
+  );
+
   const {
     waterfallState,
     loading: waterfallStateLoading,
@@ -1998,6 +2009,55 @@ function AppShell() {
     [runGameplayAction],
   );
 
+  // Audit G-15. Each refreshes the offer list on completion: the whole point
+  // of these four is that they change what BOTH players can do next, and the
+  // poll interval is too slow for an action the player just took themselves.
+  const handleMakeTrainOffer = useCallback(
+    (input: { sellerProtocolId: number; modelType: string; price: string }) => {
+      runGameplayAction("BuyTrainFromCorporation", {
+        BuyTrainFromCorporation: {
+          game_id: MOCK_GAME_ID,
+          buyer_protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
+          seller_protocol_id: input.sellerProtocolId,
+          model_type: input.modelType,
+          price: input.price,
+        },
+      });
+      refreshTrainOffers();
+    },
+    [runGameplayAction, refreshTrainOffers],
+  );
+
+  const handleAcceptTrainOffer = useCallback(
+    (offerId: number) => {
+      runGameplayAction("AcceptTrainOffer", {
+        AcceptTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+      });
+      refreshTrainOffers();
+    },
+    [runGameplayAction, refreshTrainOffers],
+  );
+
+  const handleRejectTrainOffer = useCallback(
+    (offerId: number) => {
+      runGameplayAction("RejectTrainOffer", {
+        RejectTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+      });
+      refreshTrainOffers();
+    },
+    [runGameplayAction, refreshTrainOffers],
+  );
+
+  const handleRescindTrainOffer = useCallback(
+    (offerId: number) => {
+      runGameplayAction("RescindTrainOffer", {
+        RescindTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+      });
+      refreshTrainOffers();
+    },
+    [runGameplayAction, refreshTrainOffers],
+  );
+
   const handleBuyPrivateHint = useCallback(() => {
     logInfo(
       "Buy Private Company",
@@ -2147,6 +2207,46 @@ function AppShell() {
                   currentGlobalEra={gameState?.current_global_era ?? null}
                   isMyTurn={isMyTurn}
                 />
+
+                {/* Audit G-15: train trading, shown only during the Buy
+                    Trains step.
+                    
+                    Safe to gate this tightly, and worth spelling out why: an
+                    offer can only be CREATED in the Hardware phase, and while
+                    one is outstanding the buyer's turn is blocked there
+                    (`operations::PendingTrainOfferBlocksTurn`). So an offer
+                    cannot outlive the phase that produced it, and hiding the
+                    panel elsewhere hides nothing a player could act on.
+                    
+                    `orSubPhase` tracks the ACTIVE corporation's step, not the
+                    viewer's, so a seller still sees this during the buyer's
+                    Hardware phase -- which is the only time their answer is
+                    wanted. */}
+                {gameState?.current_round_type === "OperatingRound" &&
+                  orSubPhase === "Hardware" && (
+                  <TrainTradePanel
+                    offers={trainOffers}
+                    companies={(gameState?.public_companies ?? []).map((company) => ({
+                      company_id: company.company_id,
+                      ticker: company.ticker,
+                      president: company.president ?? null,
+                      // Audit G-15c: drives the greyed-out model options.
+                      // Passed through UNCHANGED, `undefined` included --
+                      // that value means "this chain doesn't say", and the
+                      // panel treats it differently from an empty list.
+                      owned_train_models: company.owned_trains,
+                    }))}
+                    activeProtocolId={
+                      gameState.active_operating_order[gameState.active_corporation_index] ?? null
+                    }
+                    connectedAddress={wallet.address}
+                    sessionReady={session.sessionStatus === "ready"}
+                    onMakeOffer={handleMakeTrainOffer}
+                    onAccept={handleAcceptTrainOffer}
+                    onReject={handleRejectTrainOffer}
+                    onRescind={handleRescindTrainOffer}
+                  />
+                )}
 
                 {/* Stock Round (SR) Action Control Panel -- requirement 1's
                     "directly above ... the Stock Market Matrix." Gated on

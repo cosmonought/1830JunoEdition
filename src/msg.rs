@@ -494,6 +494,10 @@ pub enum QueryMsg {
     /// if it sits on one of the three reserved landmark hexes -- which
     /// city. See `query::MapGridResponse` / `query::query_map_grid`.
     GetMapGrid { game_id: u64 },
+    /// Audit G-15: every unanswered corporation-to-corporation train offer in
+    /// the room. Both sides of a negotiation need this -- the seller to find
+    /// offers awaiting their answer, the buyer to see (and rescind) their own.
+    GetTrainOffers { game_id: u64 },
     /// Renders `game_id`'s current `MAP_GRID` as a human-readable Markdown/
     /// ASCII text block -- a data table of every laid tile plus an
     /// approximate square-grid sketch of the board, with the three
@@ -630,6 +634,26 @@ pub struct PublicCompanyState {
     /// This corporation's total Station Token limit, home token included.
     /// See `hexmap::station_token_limit`.
     pub station_token_limit: u8,
+    /// Audit G-15c: the MODEL of every train this corporation currently owns,
+    /// e.g. `["2", "2", "4"]`. Duplicates are meaningful -- two 2-trains are
+    /// two entries.
+    ///
+    /// Added so a client can tell what is actually for sale. Without it the
+    /// train-trade UI had to offer all six models for every corporation and
+    /// let the contract reject the impossible ones, which turns a rule the
+    /// player could have seen into a transaction failure they have to read.
+    ///
+    /// Models only, not full `HardwareAsset`s: cost and range are properties
+    /// of the MODEL (`hardware::TRAIN_CATALOG`), identical for every unit, so
+    /// sending them per-unit would be redundant data that could drift from
+    /// the catalog.
+    ///
+    /// `#[serde(default)]` so a client predating this field still
+    /// deserializes, and an older contract's response reads as an empty list
+    /// rather than a hard error -- which the UI must treat as "unknown", NOT
+    /// as "owns nothing".
+    #[serde(default)]
+    pub owned_trains: Vec<String>,
 }
 
 /// One private company's ownership snapshot, part of `GameStateResponse`.
@@ -799,6 +823,32 @@ pub struct MapTileEntry {
     /// `Some(city name)` if this tile sits on one of the three reserved
     /// landmark hexes (New York, Boston, Baltimore).
     pub landmark: Option<String>,
+}
+
+/// One unanswered train offer -- Audit G-15.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct TrainOfferEntry {
+    pub offer_id: u64,
+    pub buyer_protocol_id: u32,
+    pub seller_protocol_id: u32,
+    /// `"2"`, `"3"`, `"4"`, `"5"`, `"6"` or `"D"`.
+    pub model_type: String,
+    /// VGP. `Uint128`, so it arrives as a JSON STRING -- see
+    /// `MapTileEntry::revenue` for why that matters on the client.
+    pub price: Uint128,
+    /// The wallet that must call `AcceptTrainOffer`/`RejectTrainOffer`.
+    /// Resolved here so a client does not have to cross-reference the
+    /// company list to know whether an offer is theirs to answer.
+    pub seller_president: Option<Addr>,
+    /// The wallet that may call `RescindTrainOffer`.
+    pub buyer_president: Option<Addr>,
+}
+
+/// `QueryMsg::GetTrainOffers`'s response.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct TrainOffersResponse {
+    pub game_id: u64,
+    pub offers: Vec<TrainOfferEntry>,
 }
 
 /// `QueryMsg::GetMapGrid`'s response. See that variant's doc comment.

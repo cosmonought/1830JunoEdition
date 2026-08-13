@@ -115,12 +115,15 @@ use crate::market;
 use crate::msg::{
     GameStateResponse, LegalTilePlacement, LegalTilePlacementsResponse, MapGridMarkdownResponse,
     MapGridResponse, MapTileEntry, MarketGridResponse, MarketPositionEntry, PlayerCashEntry,
+    TrainOfferEntry, TrainOffersResponse,
     PlayerNetWorthResponse, PlayerShareEntry, PrivateCompanyState, PublicCompanyState,
     WaterfallBidEntry, WaterfallMiniAuctionStatus, WaterfallPrivateStatus, WaterfallStateResponse,
 };
 use crate::public_company::CORE_PUBLIC_COMPANIES;
+use crate::train_trade;
 use crate::state::{
-    GameSession, WaterfallMiniAuction, BANK_POOL_SHARES, IPO_POOL_SHARES, MAP_GRID,
+    GameSession, WaterfallMiniAuction, BANK_POOL_SHARES, COMPANY_HARDWARE, IPO_POOL_SHARES,
+    MAP_GRID,
     PLAYER_CASH_VGP, PLAYER_SHARES, PRIVATE_BIDS, PRIVATE_COMPANIES, PROTOCOL_MARKET,
     PROTOCOL_PAR_VALUE, PROTOCOL_PRESIDENT, PROTOCOL_STATION_HEXES, PUBLIC_COMPANIES, SESSIONS,
     WATERFALL_MINI_AUCTION,
@@ -221,6 +224,13 @@ pub fn query_game_state(deps: Deps, game_id: u64) -> StdResult<GameStateResponse
             station_token_hexes,
             station_tokens,
             station_token_limit: hexmap::station_token_limit(company_id),
+            // Audit G-15c: model strings only -- see the field's doc comment.
+            owned_trains: COMPANY_HARDWARE
+                .may_load(deps.storage, (game_id, company_id))?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|unit| unit.model_type)
+                .collect(),
         });
     }
 
@@ -298,6 +308,34 @@ pub fn query_market_grid(deps: Deps, game_id: u64) -> StdResult<MarketGridRespon
 /// Assembles `QueryMsg::GetMapGrid`'s response: every tile currently laid
 /// on `game_id`'s shared `MAP_GRID`, sorted by `(r, q)` for a stable,
 /// row-by-row reading order.
+/// `QueryMsg::GetTrainOffers` -- Audit G-15.
+///
+/// Resolves each side's PRESIDENT alongside the raw offer, so a client can
+/// decide what to show without a second round-trip: the seller's president
+/// sees Accept/Reject, the buyer's president sees Rescind, everyone else sees
+/// a read-only row.
+pub fn query_train_offers(deps: Deps, game_id: u64) -> StdResult<TrainOffersResponse> {
+    load_session(deps, game_id)?;
+    let offers = train_trade::pending_offers(deps.storage, game_id)?
+        .into_iter()
+        .map(|(offer_id, offer)| {
+            Ok(TrainOfferEntry {
+                offer_id,
+                buyer_protocol_id: offer.buyer_protocol_id,
+                seller_protocol_id: offer.seller_protocol_id,
+                model_type: offer.model_type,
+                price: offer.price,
+                seller_president: PROTOCOL_PRESIDENT
+                    .may_load(deps.storage, (game_id, offer.seller_protocol_id))?,
+                buyer_president: PROTOCOL_PRESIDENT
+                    .may_load(deps.storage, (game_id, offer.buyer_protocol_id))?,
+            })
+        })
+        .collect::<StdResult<Vec<_>>>()?;
+
+    Ok(TrainOffersResponse { game_id, offers })
+}
+
 pub fn query_map_grid(deps: Deps, game_id: u64) -> StdResult<MapGridResponse> {
     load_session(deps, game_id)?;
 

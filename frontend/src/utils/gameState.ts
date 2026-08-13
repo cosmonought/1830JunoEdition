@@ -143,6 +143,15 @@ export interface PublicCompanyState {
    *  `hexmap::station_token_limit`. Mirrors `msg.rs::PublicCompanyState.
    *  station_token_limit` exactly. */
   station_token_limit: number;
+  /** Audit G-15c: the MODEL of every train this corporation owns, e.g.
+   *  `["2", "2", "4"]`. Duplicates are meaningful.
+   *
+   *  OPTIONAL, and the optionality carries meaning the UI must respect:
+   *  `undefined` means a contract predating the field, i.e. "unknown", NOT
+   *  "owns nothing". A UI that conflates the two would grey out every train
+   *  on every corporation against an older chain and make trading look
+   *  broken rather than unsupported. */
+  owned_trains?: string[] | null;
 }
 
 export interface PrivateCompanyState {
@@ -535,6 +544,81 @@ const DEFAULT_WATERFALL_POLL_INTERVAL_MS = 4000;
  *  unconditionally polling every game room forever; when `enabled` is
  *  `false` this hook tears down its interval and clears `waterfallState`
  *  rather than continuing to query a phase that's already over. */
+/** Mirrors `msg::TrainOfferEntry`. */
+export interface TrainOfferEntry {
+  offer_id: number;
+  buyer_protocol_id: number;
+  seller_protocol_id: number;
+  model_type: string;
+  /** `Uint128` -- a JSON string. Never parsed to a number. */
+  price: string;
+  seller_president: string | null;
+  buyer_president: string | null;
+}
+
+export interface TrainOffersResponse {
+  game_id: number;
+  offers: TrainOfferEntry[];
+}
+
+export interface UseTrainOffersPollingResult {
+  offers: TrainOfferEntry[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+}
+
+/** Audit G-15: polls `GetTrainOffers`.
+ *
+ *  Its own hook rather than a field on the main game-state poll, following
+ *  the same pattern `useWaterfallStatePolling` established. Offers change on
+ *  a different rhythm from the board -- they appear and vanish on two
+ *  players' actions rather than on turn boundaries -- and a seller needs to
+ *  see one arrive while it is emphatically NOT their turn, so this cannot key
+ *  off turn state. */
+export function useTrainOffersPolling(
+  client: QueryCapableClient | null | undefined,
+  contractAddress: string | null | undefined,
+  gameId: number,
+  intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+): UseTrainOffersPollingResult {
+  const [offers, setOffers] = useState<TrainOfferEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestSeqRef = useRef(0);
+
+  const refresh = useCallback(() => {
+    if (!client || !contractAddress) {
+      setOffers([]);
+      setLoading(false);
+      return;
+    }
+    const seq = ++requestSeqRef.current;
+    setLoading(true);
+    client
+      .queryContractSmart(contractAddress, { GetTrainOffers: { game_id: gameId } })
+      .then((response) => {
+        if (requestSeqRef.current !== seq) return;
+        setOffers((response as TrainOffersResponse).offers ?? []);
+        setError(null);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (requestSeqRef.current !== seq) return;
+        setError(e instanceof Error ? e.message : "Unknown error querying GetTrainOffers.");
+        setLoading(false);
+      });
+  }, [client, contractAddress, gameId]);
+
+  useEffect(() => {
+    refresh();
+    const handle = setInterval(refresh, intervalMs);
+    return () => clearInterval(handle);
+  }, [refresh, intervalMs]);
+
+  return { offers, loading, error, refresh };
+}
+
 export function useWaterfallStatePolling(
   client: QueryCapableClient | null | undefined,
   /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured

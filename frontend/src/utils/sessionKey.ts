@@ -103,6 +103,10 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   "ExecuteOperatingRound",
   "BeginOperatingRound",
   "AdvanceOperatingSubPhase",
+  "BuyTrainFromCorporation",
+  "AcceptTrainOffer",
+  "RejectTrainOffer",
+  "RescindTrainOffer",
   "LayTile",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
@@ -140,6 +144,20 @@ export type GameplayExecuteMsg =
   // the corporation has nothing to do in -- and every skip is a recorded,
   // replayable event rather than a client-side jump.
   | { AdvanceOperatingSubPhase: { game_id: number; protocol_id: number } }
+  // Audit G-15: corporation-to-corporation train sales. `price` is a STRING
+  // for the same big-int-safety reason every other `Uint128` field here is.
+  | {
+      BuyTrainFromCorporation: {
+        game_id: number;
+        buyer_protocol_id: number;
+        seller_protocol_id: number;
+        model_type: string;
+        price: string;
+      };
+    }
+  | { AcceptTrainOffer: { game_id: number; offer_id: number } }
+  | { RejectTrainOffer: { game_id: number; offer_id: number } }
+  | { RescindTrainOffer: { game_id: number; offer_id: number } }
   | {
       BuyStock: {
         game_id: number;

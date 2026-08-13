@@ -227,6 +227,7 @@ use crate::msg::PayoutStrategy;
 use crate::pathfinding::{self, PathfindingError};
 use crate::public_company::CORE_PUBLIC_COMPANIES;
 use crate::or_phase;
+use crate::train_trade;
 use crate::state::{
     GameSession, OperatingSubPhase, PrivateCompany, PublicCompany, RoundType, Tile, COMPANY_HARDWARE,
     HARDWARE_POOL,
@@ -301,6 +302,18 @@ pub enum OperationsError {
         "Game room {game_id} has no active Operating Round Corporation Turn Queue -- BeginOperatingRound must run first"
     )]
     NoActiveOperatingOrder { game_id: u64 },
+
+    /// Audit G-15b: the corporation has an unanswered train offer standing.
+    /// It may still buy from the Bank, but it cannot end its turn -- and it
+    /// can always clear this itself with `RescindTrainOffer`.
+    #[error(
+        "protocol {protocol_id} cannot end its turn: train offer {offer_id} to protocol {seller_protocol_id} is still unanswered. Wait for a reply, or rescind it."
+    )]
+    PendingTrainOfferBlocksTurn {
+        protocol_id: u32,
+        offer_id: u64,
+        seller_protocol_id: u32,
+    },
 
     #[error(
         "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); this action requires phase {required} (step {required_index} of 6)"
@@ -632,6 +645,24 @@ pub fn execute_end_operating_round_turn(
     if info.sender != president {
         return Err(OperationsError::NotPresident { protocol_id });
     }
+
+    // Audit G-15b: an unanswered train offer holds the turn open. The buyer
+    // may still buy from the Bank -- that is inside the same Buy Trains step
+    // -- but it may not walk away leaving a rival's train tied up in a
+    // proposition it has already moved on from.
+    //
+    // Never a deadlock: `RescindTrainOffer` clears this unilaterally, by the
+    // same player it constrains, in one transaction.
+    if let Some((offer_id, offer)) =
+        train_trade::pending_offer_for_buyer(deps.storage, game_id, protocol_id)?
+    {
+        return Err(OperationsError::PendingTrainOfferBlocksTurn {
+            protocol_id,
+            offer_id,
+            seller_protocol_id: offer.seller_protocol_id,
+        });
+    }
+
 
     if session.active_operating_order.is_empty() {
         return Err(OperationsError::NoActiveOperatingOrder { game_id });

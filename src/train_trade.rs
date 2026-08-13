@@ -20,19 +20,31 @@
 //! president records an offer; the seller's president accepts or rejects it.
 //! The buyer may rescind at any time before it is answered.
 //!
-//! # The offer does NOT block the Operating Round
+//! # A pending offer BLOCKS the buyer in its Buy Trains step
 //!
-//! A pending offer never stalls the turn. The buying corporation may buy from
-//! the Bank instead, or simply end its turn; the seller answers whenever they
-//! next act.
+//! While an offer it made is unanswered, the buying corporation may NOT end
+//! its Operating Round turn (`operations::PendingTrainOfferBlocksTurn`). It
+//! may still buy from the Bank -- that is inside the same step -- but it
+//! cannot walk away.
 //!
-//! This is a deliberate departure from the tabletop, where the table waits
-//! while two players haggle. On-chain the table cannot wait: one player who
-//! steps away would freeze the room indefinitely, and there is no honest
-//! timeout -- block-time-driven auto-rejection would make the game log
-//! non-deterministic to replay, which `gamelog::reapply_game_log` depends on.
-//! So the offer is a standing proposition rather than an interrupt, and
-//! `RescindTrainOffer` exists precisely because it can outlive the moment.
+//! An offer is a live commitment. Letting the buyer end its turn with one
+//! outstanding would leave a rival's train tied up in a proposition the
+//! offerer had already moved on from, at no cost to the offerer. Blocking
+//! keeps the offer honest: it stays outstanding only as long as the buyer is
+//! genuinely still standing behind it.
+//!
+//! THE BUYER IS NEVER TRAPPED, and this is what makes blocking safe on-chain
+//! rather than a deadlock. The buyer holds `RescindTrainOffer` and may use it
+//! at any time, unilaterally, without the seller's involvement. So the block
+//! is always one transaction away from clearing, by the same player it
+//! constrains. That is why no timeout is needed -- and a timeout would be
+//! unwelcome anyway, since block-time-driven auto-rejection would make the
+//! game log non-deterministic to replay, which
+//! `gamelog::reapply_game_log` depends on.
+//!
+//! Only ONE offer may be outstanding per corporation. With the turn already
+//! blocked, a second would only serve to tie up a second rival at the same
+//! time, for free.
 //!
 //! # Everything is re-validated at ACCEPT, not at offer
 //!
@@ -64,7 +76,7 @@
 //! - **Price ceiling.** None. $1 minimum, nothing above.
 //! - **Train limit on the SELLER.** Selling only ever reduces its count.
 
-use cosmwasm_std::{Addr, DepsMut, Env, MessageInfo, Response, StdError, Storage, Uint128};
+use cosmwasm_std::{Addr, DepsMut, Env, MessageInfo, Order, Response, StdError, Storage, Uint128};
 use thiserror::Error;
 
 use crate::hardware::{highest_train_tier_purchased, train_limit_for_phase};
@@ -132,6 +144,15 @@ pub enum TrainTradeError {
     #[error("Train offer {offer_id} was not found in game room {game_id}")]
     OfferNotFound { game_id: u64, offer_id: u64 },
 
+    /// Audit G-15b.
+    #[error(
+        "Protocol {buyer_protocol_id} already has train offer {offer_id} outstanding -- answer or rescind it before making another"
+    )]
+    OfferAlreadyPending {
+        buyer_protocol_id: u32,
+        offer_id: u64,
+    },
+
     #[error(
         "Train offer {offer_id} is protocol {buyer_protocol_id}'s to rescind, not yours"
     )]
@@ -145,6 +166,38 @@ pub enum TrainTradeError {
 
     #[error("Arithmetic overflow")]
     Overflow {},
+}
+
+/// Every pending offer in `game_id`, as `(offer_id, offer)`.
+pub fn pending_offers(
+    storage: &dyn Storage,
+    game_id: u64,
+) -> Result<Vec<(u64, TrainOffer)>, StdError> {
+    TRAIN_OFFERS
+        .prefix(game_id)
+        .range(storage, None, None, Order::Ascending)
+        .collect()
+}
+
+/// The offer `buyer_protocol_id` currently has outstanding, if any.
+///
+/// Audit G-15b: a pending offer BLOCKS the buying corporation in its Buy
+/// Trains step. It may still buy from the Bank, but it may not end its turn
+/// while an offer it made is unanswered -- the offer is a live commitment,
+/// and walking away from one mid-negotiation would let a player tie up a
+/// rival's train indefinitely at no cost.
+///
+/// It is also why only ONE offer may be outstanding per corporation: with the
+/// turn already blocked, a second offer could only serve to blockade a second
+/// rival simultaneously.
+pub fn pending_offer_for_buyer(
+    storage: &dyn Storage,
+    game_id: u64,
+    buyer_protocol_id: u32,
+) -> Result<Option<(u64, TrainOffer)>, StdError> {
+    Ok(pending_offers(storage, game_id)?
+        .into_iter()
+        .find(|(_, offer)| offer.buyer_protocol_id == buyer_protocol_id))
 }
 
 /// Loads an active session or fails.
@@ -339,6 +392,17 @@ pub fn execute_buy_train_from_corporation(
             or_phase::PhaseMismatch::Storage(message) => {
                 TrainTradeError::Std(StdError::generic_err(message))
             }
+        });
+    }
+
+    // Audit G-15b: one outstanding offer per corporation. The buyer's turn is
+    // already blocked while an offer is live (see `pending_offer_for_buyer`),
+    // so a second one could only serve to tie up another rival's train at the
+    // same time, for free.
+    if let Some((existing_id, _)) = pending_offer_for_buyer(deps.storage, game_id, buyer_protocol_id)? {
+        return Err(TrainTradeError::OfferAlreadyPending {
+            buyer_protocol_id,
+            offer_id: existing_id,
         });
     }
 

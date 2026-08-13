@@ -731,6 +731,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             to_json_binary(&query::query_market_grid(deps, game_id)?)
         }
         QueryMsg::GetMapGrid { game_id } => to_json_binary(&query::query_map_grid(deps, game_id)?),
+        QueryMsg::GetTrainOffers { game_id } => {
+            to_json_binary(&query::query_train_offers(deps, game_id)?)
+        }
         QueryMsg::GetMapGridMarkdown { game_id } => {
             to_json_binary(&query::query_map_grid_markdown(deps, game_id)?)
         }

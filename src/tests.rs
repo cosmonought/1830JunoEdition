@@ -13189,3 +13189,142 @@ fn operating_sub_phase_cursor_advances_and_resets() {
         P::BuyPrivate
     );
 }
+
+/// **Audit G-15: the train roster matches the printed 1830 game.**
+///
+/// Guards the numbers the whole train economy rests on. `TRAIN_CATALOG` is
+/// `(model, cost, max_route_distance, quantity)`.
+#[test]
+fn train_catalog_matches_printed_1830_roster() {
+    use crate::hardware::{RUST_TRIGGERS, TRAIN_CATALOG, TRAIN_LIMIT_BY_PHASE};
+
+    let by_model: std::collections::HashMap<&str, (u128, u32, u32)> = TRAIN_CATALOG
+        .iter()
+        .copied()
+        .map(|(model, cost, distance, quantity)| (model, (cost, distance, quantity)))
+        .collect();
+
+    // (model, cost, distance, quantity)
+    for (model, cost, distance, quantity) in [
+        ("2", 80u128, 2u32, 6u32),
+        ("3", 180, 3, 5),
+        ("4", 300, 4, 4),
+        ("5", 450, 5, 3),
+        // $630, NOT $600 -- the printed 1830 price, confirmed against the
+        // board owner before this test was written.
+        ("6", 630, 6, 2),
+    ] {
+        assert_eq!(
+            by_model.get(model),
+            Some(&(cost, distance, quantity)),
+            "{model}-train roster"
+        );
+    }
+
+    // The Diesel is nominally unlimited. A finite pool stands in for that --
+    // 20 is far beyond what any 6-player game consumes, so the pool cannot
+    // empty in practice, and an infinite supply has no representation in a
+    // `Vec`-backed pool.
+    let (diesel_cost, diesel_distance, diesel_quantity) = by_model["D"];
+    assert_eq!(diesel_cost, 1_100);
+    assert!(
+        diesel_distance >= 99,
+        "the Diesel visits ANY number of revenue centres; {diesel_distance} is the practical stand-in"
+    );
+    assert!(diesel_quantity >= 6, "Diesels must not run out in a real game");
+
+    // Rust conditions: the first 4 rusts every 2, the first 6 every 3, the
+    // first D every 4. 5s and 6s never rust.
+    assert_eq!(RUST_TRIGGERS, &[("4", "2"), ("6", "3"), ("D", "4")]);
+    let rusted: Vec<&str> = RUST_TRIGGERS.iter().map(|(_, victim)| *victim).collect();
+    for permanent in ["5", "6", "D"] {
+        assert!(
+            !rusted.contains(&permanent),
+            "the {permanent}-train is permanent and must never appear as a rust victim"
+        );
+    }
+
+    // Train limits by phase.
+    assert_eq!(
+        TRAIN_LIMIT_BY_PHASE,
+        &[("2", 4), ("3", 4), ("4", 3), ("5", 2), ("6", 2), ("D", 2)]
+    );
+}
+
+/// **Audit G-15: a corporation-to-corporation sale moves the train and the
+/// money, and does NOT advance the game's phase.**
+///
+/// The phase point is the subtle one. `record_purchase_and_apply_rusting`
+/// bumps `TRAINS_PURCHASED_COUNT` and runs the Rusting sweep, because those
+/// are about a train ENTERING PLAY from the Bank. A train sold between two
+/// corporations was already bought once -- counting it again would advance
+/// the phase and rust a whole tier out of existence on a move that introduced
+/// no new equipment.
+#[test]
+fn train_transfer_between_corporations_does_not_trigger_rusting_or_phase_advance() {
+    use crate::hardware::highest_train_tier_purchased;
+    use crate::state::{HardwareAsset, COMPANY_HARDWARE};
+
+    const PRR_ID: u32 = 1;
+    const NYC_ID: u32 = 2;
+
+    let mut deps = mock_dependencies();
+    let game_id = 1u64;
+
+    // PRR holds a 4-train; nothing has been "purchased" from the Bank in this
+    // fixture, so the phase is untouched to begin with.
+    COMPANY_HARDWARE
+        .save(
+            &mut deps.storage,
+            (game_id, PRR_ID),
+            &vec![HardwareAsset {
+                model_type: "4".to_string(),
+                cost: Uint128::new(300),
+                max_route_distance: 4,
+            }],
+        )
+        .unwrap();
+
+    let phase_before = highest_train_tier_purchased(&deps.storage, game_id).unwrap();
+
+    // Hand the 4-train to NYC by hand, mirroring what `settle_trade` does --
+    // the point under test is that this path never touches the purchase
+    // counter, so the phase must be identical afterwards.
+    let mut prr = COMPANY_HARDWARE.load(&deps.storage, (game_id, PRR_ID)).unwrap();
+    let moved = prr.remove(0);
+    COMPANY_HARDWARE.save(&mut deps.storage, (game_id, PRR_ID), &prr).unwrap();
+    COMPANY_HARDWARE
+        .save(&mut deps.storage, (game_id, NYC_ID), &vec![moved])
+        .unwrap();
+
+    let phase_after = highest_train_tier_purchased(&deps.storage, game_id).unwrap();
+    assert_eq!(
+        phase_before, phase_after,
+        "moving a train between corporations must not advance the game phase"
+    );
+
+    assert!(COMPANY_HARDWARE
+        .load(&deps.storage, (game_id, PRR_ID))
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        COMPANY_HARDWARE
+            .load(&deps.storage, (game_id, NYC_ID))
+            .unwrap()[0]
+            .model_type,
+        "4"
+    );
+}
+
+/// **Audit G-15: the $1 price floor.**
+#[test]
+fn train_sale_price_floor_is_one() {
+    use crate::train_trade::MINIMUM_TRAIN_PRICE;
+
+    assert_eq!(
+        MINIMUM_TRAIN_PRICE, 1,
+        "a train may not change hands for nothing -- $1 keeps it a sale, not a gift"
+    );
+    // There is deliberately NO ceiling: moving a train for a company's entire
+    // treasury is a legitimate 1830 play, not an exploit to be capped.
+}

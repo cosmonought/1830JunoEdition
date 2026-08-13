@@ -914,6 +914,37 @@ pub enum OperatingSubPhase {
 pub const PROTOCOL_OR_SUB_PHASE: Map<(u64, u32), OperatingSubPhase> =
     Map::new("protocol_or_sub_phase");
 
+/// A standing offer from one corporation to buy a train from another --
+/// Audit G-15.
+///
+/// Only ever exists for a CROSS-PLAYER sale. When one president controls both
+/// corporations there is no counterparty to consent, and
+/// `train_trade::execute_buy_train_from_corporation` settles immediately
+/// without writing one of these.
+///
+/// Deliberately records the MODEL, not a specific unit. Trains of a model are
+/// interchangeable -- same cost, same range, same rust fate -- so pinning an
+/// index would only create a way for the offer to go stale when an unrelated
+/// train left the seller's roster.
+///
+/// Nothing is escrowed here: see `train_trade`'s module doc for why the
+/// price is re-checked at acceptance instead of reserved at offer time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct TrainOffer {
+    pub offer_id: u64,
+    pub buyer_protocol_id: u32,
+    pub seller_protocol_id: u32,
+    pub model_type: String,
+    pub price: Uint128,
+}
+
+/// (game_id, offer_id) -> a pending cross-player train offer.
+pub const TRAIN_OFFERS: Map<(u64, u64), TrainOffer> = Map::new("train_offers");
+
+/// game_id -> the next offer id to hand out. Starts at 1, so `0` is never a
+/// valid offer id and a defaulted field cannot accidentally name a real one.
+pub const NEXT_TRAIN_OFFER_ID: Map<u64, u64> = Map::new("next_train_offer_id");
+
 /// A single piece of Hardware (train) inventory -- either still sitting in
 /// the global `HARDWARE_POOL` supply queue or already owned by a company
 /// via `COMPANY_HARDWARE`. `model_type` is the train's tier ("2", "3",
@@ -1018,6 +1049,28 @@ pub enum ActionRecord {
     AdvanceOperatingSubPhase {
         player: Addr,
         protocol_id: u32,
+    },
+    /// Audit G-15. Replays deterministically: the same-president/offer branch
+    /// is decided from `PROTOCOL_PRESIDENT` at replay time, exactly as it was
+    /// live, so no branch flag needs recording.
+    BuyTrainFromCorporation {
+        player: Addr,
+        buyer_protocol_id: u32,
+        seller_protocol_id: u32,
+        model_type: String,
+        price: Uint128,
+    },
+    AcceptTrainOffer {
+        player: Addr,
+        offer_id: u64,
+    },
+    RejectTrainOffer {
+        player: Addr,
+        offer_id: u64,
+    },
+    RescindTrainOffer {
+        player: Addr,
+        offer_id: u64,
     },
     PlaceStationToken {
         player: Addr,

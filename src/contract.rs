@@ -132,6 +132,7 @@ use crate::market::{self, MarketError};
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::operations::{self, OperationsError};
 use crate::public_company;
+use crate::train_trade::{self, TrainTradeError};
 use crate::query;
 use crate::state::{
     ActionRecord, GameConfig, GameSession, PrivateCompany, RoundType, TileColor, CONFIG,
@@ -177,6 +178,10 @@ pub enum ContractError {
 
     #[error("{0}")]
     Operations(#[from] OperationsError),
+
+    /// Audit G-15: corporation-to-corporation train sales.
+    #[error("{0}")]
+    TrainTrade(#[from] TrainTradeError),
 
     #[error("{0}")]
     HexMap(#[from] HexMapError),
@@ -497,6 +502,90 @@ pub fn execute(
                     r,
                     tile_id,
                     orientation,
+                },
+            )?;
+            Ok(response)
+        }
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id,
+            seller_protocol_id,
+            model_type,
+            price,
+        } => {
+            let response = train_trade::execute_buy_train_from_corporation(
+                deps.branch(),
+                env,
+                info.clone(),
+                game_id,
+                buyer_protocol_id,
+                seller_protocol_id,
+                model_type.clone(),
+                price,
+            )?;
+            gamelog::record_action(
+                deps.storage,
+                game_id,
+                ActionRecord::BuyTrainFromCorporation {
+                    player: info.sender,
+                    buyer_protocol_id,
+                    seller_protocol_id,
+                    model_type,
+                    price,
+                },
+            )?;
+            Ok(response)
+        }
+        ExecuteMsg::AcceptTrainOffer { game_id, offer_id } => {
+            let response = train_trade::execute_accept_train_offer(
+                deps.branch(),
+                env,
+                info.clone(),
+                game_id,
+                offer_id,
+            )?;
+            gamelog::record_action(
+                deps.storage,
+                game_id,
+                ActionRecord::AcceptTrainOffer {
+                    player: info.sender,
+                    offer_id,
+                },
+            )?;
+            Ok(response)
+        }
+        ExecuteMsg::RejectTrainOffer { game_id, offer_id } => {
+            let response = train_trade::execute_reject_train_offer(
+                deps.branch(),
+                env,
+                info.clone(),
+                game_id,
+                offer_id,
+            )?;
+            gamelog::record_action(
+                deps.storage,
+                game_id,
+                ActionRecord::RejectTrainOffer {
+                    player: info.sender,
+                    offer_id,
+                },
+            )?;
+            Ok(response)
+        }
+        ExecuteMsg::RescindTrainOffer { game_id, offer_id } => {
+            let response = train_trade::execute_rescind_train_offer(
+                deps.branch(),
+                env,
+                info.clone(),
+                game_id,
+                offer_id,
+            )?;
+            gamelog::record_action(
+                deps.storage,
+                game_id,
+                ActionRecord::RescindTrainOffer {
+                    player: info.sender,
+                    offer_id,
                 },
             )?;
             Ok(response)

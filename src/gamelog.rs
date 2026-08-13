@@ -147,6 +147,7 @@ use crate::hardware::{self, HardwareError};
 use crate::hexmap::{self, HexMapError};
 use crate::market::{self, MarketError};
 use crate::operations::{self, OperationsError};
+use crate::train_trade::{self, TrainTradeError};
 use crate::public_company::{self, CORE_PUBLIC_COMPANIES};
 use crate::state::{
     ActionRecord, GameSession, RoundType, TileColor, BANK_POOL_SHARES, COMPANY_HARDWARE, GAME_LOG,
@@ -182,6 +183,10 @@ pub enum GameLogError {
     /// `use crate::operations` were both absent until now.
     #[error("{0}")]
     Operations(#[from] OperationsError),
+
+    /// Audit G-15.
+    #[error("{0}")]
+    TrainTrade(#[from] TrainTradeError),
 
     #[error("Game room {game_id} was not found")]
     GameNotFound { game_id: u64 },
@@ -639,6 +644,51 @@ pub fn reapply_game_log(
                     r,
                     tile_id,
                     orientation,
+                )?;
+            }
+            ActionRecord::BuyTrainFromCorporation {
+                player,
+                buyer_protocol_id,
+                seller_protocol_id,
+                model_type,
+                price,
+            } => {
+                train_trade::execute_buy_train_from_corporation(
+                    deps.branch(),
+                    env.clone(),
+                    synthetic_info(player),
+                    game_id,
+                    buyer_protocol_id,
+                    seller_protocol_id,
+                    model_type,
+                    price,
+                )?;
+            }
+            ActionRecord::AcceptTrainOffer { player, offer_id } => {
+                train_trade::execute_accept_train_offer(
+                    deps.branch(),
+                    env.clone(),
+                    synthetic_info(player),
+                    game_id,
+                    offer_id,
+                )?;
+            }
+            ActionRecord::RejectTrainOffer { player, offer_id } => {
+                train_trade::execute_reject_train_offer(
+                    deps.branch(),
+                    env.clone(),
+                    synthetic_info(player),
+                    game_id,
+                    offer_id,
+                )?;
+            }
+            ActionRecord::RescindTrainOffer { player, offer_id } => {
+                train_trade::execute_rescind_train_offer(
+                    deps.branch(),
+                    env.clone(),
+                    synthetic_info(player),
+                    game_id,
+                    offer_id,
                 )?;
             }
             ActionRecord::AdvanceOperatingSubPhase { player, protocol_id } => {

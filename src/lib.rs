@@ -11,6 +11,7 @@ pub mod public_company;
 pub mod query;
 pub mod or_phase;
 pub mod state;
+pub mod train_trade;
 #[cfg(test)]
 mod tests;
 pub mod trading;

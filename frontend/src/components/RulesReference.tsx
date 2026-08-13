@@ -252,6 +252,32 @@ interface RuleRow {
   note?: string;
 }
 
+/** The printed 1830 train roster -- Audit G-15. Mirrors
+ *  `hardware::TRAIN_CATALOG` / `RUST_TRIGGERS` / `TRAIN_LIMIT_BY_PHASE`.
+ *
+ *  Documented here because every one of these numbers was previously
+ *  discoverable only by reading Rust: cost, how many exist, what each can
+ *  reach, and -- most consequential of all -- what kills it. A player
+ *  deciding whether to buy the first 4-train is deciding whether to erase
+ *  every 2-train on the board, including their own, and nothing in the app
+ *  said so. */
+interface TrainRow {
+  model: string;
+  quantity: string;
+  cost: string;
+  rusts: string;
+  reach: string;
+}
+
+const TRAIN_ROSTER: TrainRow[] = [
+  { model: "2", quantity: "6", cost: "$80", rusts: "When the first 4-train is bought", reach: "2 revenue centres" },
+  { model: "3", quantity: "5", cost: "$180", rusts: "When the first 6-train is bought", reach: "3 revenue centres" },
+  { model: "4", quantity: "4", cost: "$300", rusts: "When the first D-train is bought", reach: "4 revenue centres" },
+  { model: "5", quantity: "3", cost: "$450", rusts: "Never -- permanent", reach: "5 revenue centres" },
+  { model: "6", quantity: "2", cost: "$630", rusts: "Never -- permanent", reach: "6 revenue centres" },
+  { model: "D", quantity: "Unlimited", cost: "$1,100", rusts: "Never -- permanent", reach: "Any number of revenue centres" },
+];
+
 const CORE_LIMITS: RuleRow[] = [
   {
     label: "Bank cash (total pool)",
@@ -261,6 +287,12 @@ const CORE_LIMITS: RuleRow[] = [
   // Both were invisible at every layer -- not in the rules panel, and not
   // surfaced by the Stock Round controls -- so a player could only discover
   // them by having a transaction rejected.
+  {
+    label: "Buying a train from another corporation",
+    value: "Any price at or above $1, by mutual agreement",
+    note:
+      "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling -- moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary 1830 plays. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
+  },
   {
     label: "Stock Round 1 -- no sales",
     value: "Selling is prohibited for the whole of SR1",
@@ -398,10 +430,10 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
     quick: "Pay out this turn's revenue to shareholders, or withhold it.",
   },
   {
-    step: "Buy Equipment",
+    step: "Buy Trains",
     detail:
       "The President may buy the next train at the front of the shared Hardware pool, paid from the company's treasury -- subject to the corporation's current Train Limit (see Core Limits & Caps) and triggering a Rusting sweep if it's the room's first-ever unit of a new tier.",
-    quick: "Buy the next train from the shared Hardware pool.",
+    quick: "Buy from the Bank, or from another corporation for $1+.",
   },
   {
     step: "Buy Private Company",
@@ -855,6 +887,37 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
         </div>
 
         <div style={styles.bottomRowColumn}>
+          {/* Audit G-15: the train roster. Placed beside the other lookup
+              tables because that is what it is -- the numbers a player checks
+              mid-decision, especially the rust column. */}
+          <section style={styles.section}>
+            <h3 style={styles.sectionTitle}>Trains</h3>
+            <div style={styles.tableScroll}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Train</th>
+                    <th style={styles.th}>Qty</th>
+                    <th style={styles.th}>Cost</th>
+                    <th style={styles.th}>Reaches</th>
+                    <th style={styles.th}>Rusts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {TRAIN_ROSTER.map((row) => (
+                    <tr key={row.model}>
+                      <td style={styles.td}>{row.model}</td>
+                      <td style={styles.td}>{row.quantity}</td>
+                      <td style={styles.td}>{row.cost}</td>
+                      <td style={styles.td}>{row.reach}</td>
+                      <td style={styles.td}>{row.rusts}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section style={styles.section}>
             <h3 style={styles.sectionTitle}>Certificate Limit &amp; Starting Cash by Player Count</h3>
             <div style={styles.tableScroll}>

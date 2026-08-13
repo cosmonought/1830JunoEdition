@@ -305,6 +305,40 @@ pub enum ExecuteMsg {
     /// trigger the cascading "Rusting" obsolescence sweep -- see
     /// `hardware::execute_buy_hardware_from_pool`.
     BuyHardwareFromPool { game_id: u64, protocol_id: u32 },
+    /// Audit G-15: buy a train from ANOTHER corporation instead of the Bank,
+    /// at any price of $1 or more.
+    ///
+    /// Two outcomes, decided by the contract, not the caller:
+    ///   - the two corporations share a president -> the sale SETTLES
+    ///     IMMEDIATELY, since there is no counterparty to consent; or
+    ///   - different presidents -> a `TrainOffer` is recorded for the seller's
+    ///     president to `AcceptTrainOffer` or `RejectTrainOffer`.
+    ///
+    /// The response's `settlement` attribute says which happened
+    /// (`immediate_same_president` / `offer_pending`), and the latter carries
+    /// the `offer_id`.
+    BuyTrainFromCorporation {
+        game_id: u64,
+        /// The corporation acquiring the train. Must be in its Hardware phase.
+        buyer_protocol_id: u32,
+        seller_protocol_id: u32,
+        /// Which model to buy -- `"2"`, `"3"`, `"4"`, `"5"`, `"6"`, `"D"`.
+        /// Trains of a model are interchangeable, so no unit is named.
+        model_type: String,
+        /// Agreed price in VGP, minimum 1. No upper bound: moving a train for
+        /// a company's whole treasury is a legitimate 1830 play.
+        price: Uint128,
+    },
+    /// Audit G-15: the SELLER's president agrees to a pending offer.
+    /// Everything is re-validated at this point -- an offer is a proposition,
+    /// not a reservation.
+    AcceptTrainOffer { game_id: u64, offer_id: u64 },
+    /// Audit G-15: the SELLER's president declines.
+    RejectTrainOffer { game_id: u64, offer_id: u64 },
+    /// Audit G-15: the BUYER's president withdraws their own offer, at any
+    /// time before it is answered. Distinct from reject: different person,
+    /// different right, and the game log should say which occurred.
+    RescindTrainOffer { game_id: u64, offer_id: u64 },
     /// Validator Liability / Emergency Buy: usable only when `protocol_id`
     /// currently owns zero Hardware and its own treasury alone cannot
     /// afford the next `HARDWARE_POOL` unit (otherwise this fails and

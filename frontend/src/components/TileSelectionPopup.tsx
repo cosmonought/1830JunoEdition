@@ -174,11 +174,12 @@
 //    Brown progression. That matters most in offline mode, where a Brown-era
 //    tray is all 46 catalog tiles.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeliverTxResponse } from "@cosmjs/stargate";
 
 import { useGameSession } from "../context/GameSessionContext";
 import { TilePreviewThumbnail, TILE_CATALOG_BY_ID } from "./HexGridRenderer";
+import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 import type { LegalTilePlacement, TileColorTier } from "./HexGridRenderer";
 
 /** Display order for the colour tiers in the carousel -- chronological
@@ -264,6 +265,111 @@ function useViewportSize(): { width: number; height: number } {
   return size;
 }
 
+/* ==================================================================== */
+/*  DESIGN NOTE 10: DRAGGING                                            */
+/* ==================================================================== */
+//
+// The card is anchored next to the hex you clicked (design note #3) and
+// flips sides to avoid the viewport edge (design note #7), but on a dense
+// board there is no side that is guaranteed clear -- the card is up to
+// 1040px wide and the interesting hex is often surrounded by the very hexes
+// you are comparing it against. Auto-placement cannot solve that, because
+// only the player knows which neighbours they are currently looking at. So
+// they get to move it.
+//
+// Implementation notes, each of which is a bug avoided:
+//
+//   - POINTER EVENTS, not mouse events. One code path covers mouse, touch
+//     and pen, and `setPointerCapture` means the drag keeps tracking even
+//     when the cursor outruns the card (easy to do on a fast drag) or
+//     crosses the canvas underneath.
+//   - OFFSET-BASED, not delta-accumulating. The drag records where in the
+//     card you grabbed it and positions from that, so the card never
+//     "slides" relative to the cursor over a long drag the way accumulated
+//     deltas do once a single frame is dropped.
+//   - The offset RESETS when the popup re-anchors to a different hex. A
+//     dragged position is a statement about one hex's surroundings; keeping
+//     it for the next hex would mean the card opens somewhere arbitrary
+//     with no relationship to the click that opened it. Keyed on
+//     `anchorClientX`/`Y` rather than on `q`/`r` so it also resets when the
+//     board is panned under a re-opened popup.
+//   - Clamped so the card can never be dragged fully off-screen, which
+//     would strand its close button somewhere unreachable. The clamp keeps
+//     the whole card inside the viewport rather than merely a corner of it,
+//     since a card that is 90% off-screen is not meaningfully recoverable.
+
+interface DragOffset {
+  dx: number;
+  dy: number;
+}
+
+function useDraggableCard(anchorKey: string) {
+  const [offset, setOffset] = useState<DragOffset>({ dx: 0, dy: 0 });
+  const [dragging, setDragging] = useState(false);
+  // Where inside the card the pointer went down, in card-local pixels.
+  const grabRef = useRef<{ x: number; y: number } | null>(null);
+  // The offset at the moment the drag started -- added to the pointer delta
+  // so a second drag continues from where the first left off.
+  const startOffsetRef = useRef<DragOffset>({ dx: 0, dy: 0 });
+
+  // Reset on re-anchor. See design note #10.
+  useEffect(() => {
+    setOffset({ dx: 0, dy: 0 });
+  }, [anchorKey]);
+
+  const onPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // Left button / primary contact only -- a right-click on the header
+      // should open the context menu, not start a drag.
+      if (event.button !== 0) return;
+      // Never start a drag from a control inside the header. Without this,
+      // pressing the close button would begin a drag and the subsequent
+      // `click` would be swallowed, making the button feel broken.
+      if ((event.target as HTMLElement).closest("button")) return;
+
+      grabRef.current = { x: event.clientX, y: event.clientY };
+      startOffsetRef.current = offset;
+      setDragging(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    },
+    [offset],
+  );
+
+  const onPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const grab = grabRef.current;
+      if (!grab) return;
+      setOffset({
+        dx: startOffsetRef.current.dx + (event.clientX - grab.x),
+        dy: startOffsetRef.current.dy + (event.clientY - grab.y),
+      });
+    },
+    [],
+  );
+
+  const endDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!grabRef.current) return;
+    grabRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  return {
+    offset,
+    dragging,
+    reset: useCallback(() => setOffset({ dx: 0, dy: 0 }), []),
+    handleProps: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+    },
+  };
+}
+
 /** One carousel entry: a legal `tile_id` plus every orientation the
  *  contract will currently accept for it at this hex. `tier` is resolved
  *  from `HexGridRenderer.tsx`'s catalog mirror and is `null` for an id that
@@ -272,6 +378,15 @@ interface TileGroup {
   tileId: number;
   orientations: number[];
   tier: TileColorTier | null;
+  /** The tile's own PRINTED revenue, from the shared catalog mirror's
+   *  `TileCatalogEntry.revenue` -- design note #9.
+   *
+   *  `null` for plain track (most Yellow tiles have no revenue at all), and
+   *  also `null` for an id the mirror has not caught up to. Those two cases
+   *  are deliberately NOT distinguished in the UI: rendering "0" for a
+   *  track tile would be wrong, and rendering "?" for a catalog gap would
+   *  be noise, so both simply show no badge. */
+  revenue: number | null;
 }
 
 /** Groups `placements` by `tile_id`, sorting each tile's legal orientations
@@ -301,11 +416,18 @@ function groupPlacementsByTile(
       byTile.set(placement.tile_id, [placement.orientation]);
     }
   }
-  const groups: TileGroup[] = Array.from(byTile.entries()).map(([tileId, orientations]) => ({
-    tileId,
-    orientations: [...orientations].sort((a, b) => a - b),
-    tier: TILE_CATALOG_BY_ID.get(tileId)?.color ?? null,
-  }));
+  const groups: TileGroup[] = Array.from(byTile.entries()).map(([tileId, orientations]) => {
+    const entry = TILE_CATALOG_BY_ID.get(tileId);
+    return {
+      tileId,
+      orientations: [...orientations].sort((a, b) => a - b),
+      tier: entry?.color ?? null,
+      // Design note #9. Read from the SAME catalog mirror the tier comes
+      // from -- this file still keeps no tile table of its own, which is
+      // the discipline design note #5 already established here.
+      revenue: typeof entry?.revenue === "number" ? entry.revenue : null,
+    };
+  });
   groups.sort((a, b) => {
     // Unknown tier sorts last (999) rather than first, so a mirror gap can
     // never bury the recognisable tiles below the fold of a scroll strip.
@@ -512,7 +634,10 @@ export function TileSelectionPopup({
   // side doesn't fit, and only clamps as a last resort -- which keeps the
   // card near the click, the whole reason design note #3 anchors it there.
   const viewport = useViewportSize();
-  const CARD_MAX_WIDTH = 900;
+  // Design note #9: 900 -> 1040. The tiles inside grew from 104px to 150px
+  // and each gained a revenue badge, so the row needs more width to still
+  // show a useful number of them before scrolling.
+  const CARD_MAX_WIDTH = 1040;
   const VIEWPORT_MARGIN = 12;
   const CURSOR_GAP = 18;
   // Never wider than the viewport allows; on a narrow window this collapses
@@ -521,7 +646,12 @@ export function TileSelectionPopup({
   // Height is content-driven (one row, not a scrolling list), so this is
   // only the reservation used for flip decisions -- the card itself is
   // capped by `maxHeight` below and will usually be shorter.
-  const CARD_HEIGHT_ESTIMATE = offline ? 340 : 290;
+  // Design note #9: raised alongside the tile upscale (104 -> 150px artwork
+  // plus a larger type scale throughout). This drives the flip-above/below
+  // decision, so leaving it at the old value would have had the card decide
+  // it fits below the cursor when it no longer does, and open with its
+  // footer -- and therefore its Confirm button -- past the bottom edge.
+  const CARD_HEIGHT_ESTIMATE = offline ? 470 : 410;
 
   const fitsRight = anchorClientX + CURSOR_GAP + cardWidth <= viewport.width - VIEWPORT_MARGIN;
   const rawLeft = fitsRight
@@ -544,6 +674,31 @@ export function TileSelectionPopup({
     Math.max(VIEWPORT_MARGIN, viewport.height - CARD_HEIGHT_ESTIMATE - VIEWPORT_MARGIN),
   );
 
+  /* ---- Drag -- design note #10 ---------------------------------------- */
+  //
+  // Applied ON TOP of the auto-placement above rather than replacing it:
+  // the card still opens next to the hex you clicked, and dragging moves it
+  // from there. Re-anchoring resets the offset (see the hook), so the two
+  // systems never fight -- auto-placement decides where it OPENS, the drag
+  // decides where it SITS.
+  const drag = useDraggableCard(`${anchorClientX}:${anchorClientY}`);
+
+  // Clamped so the whole card stays on screen. Without this a drag could
+  // strand the close button past the viewport edge with no way back.
+  const draggedLeft = Math.min(
+    Math.max(VIEWPORT_MARGIN, left + drag.offset.dx),
+    Math.max(VIEWPORT_MARGIN, viewport.width - cardWidth - VIEWPORT_MARGIN),
+  );
+  const draggedTop = Math.min(
+    Math.max(VIEWPORT_MARGIN, top + drag.offset.dy),
+    // Uses the height ESTIMATE, not a measured height: the card is
+    // content-driven and measuring it would need a layout effect and a
+    // resize observer for a clamp that only has to be approximately right.
+    // Erring toward the estimate keeps at least the header reachable.
+    Math.max(VIEWPORT_MARGIN, viewport.height - CARD_HEIGHT_ESTIMATE - VIEWPORT_MARGIN),
+  );
+  const hasBeenDragged = drag.offset.dx !== 0 || drag.offset.dy !== 0;
+
   const dispatchDisabled =
     offline ||
     selectedTileId === null ||
@@ -552,10 +707,13 @@ export function TileSelectionPopup({
     dispatchState.status === "pending";
 
   const tileCount = groups.length;
-  const rotationHint =
-    selectedGroup && selectedGroup.orientations.length > 1
-      ? "Double-click a tile to rotate it"
-      : "This tile has only one legal rotation";
+  // Design note #9: `rotationHint` is REMOVED, not merely unrendered. It
+  // said "Double-click a tile to rotate it" / "This tile has only one legal
+  // rotation" -- both of which are now stated closer to where they matter:
+  // the gesture by the permanent header legend, and the per-tile rotation
+  // state by each tile's own "↻ 1/3" / "• fixed" readout. Keeping the
+  // variable around unused would leave the next reader wondering which of
+  // the three the real one is.
 
   return (
     <div
@@ -563,8 +721,8 @@ export function TileSelectionPopup({
       aria-label="Tile selection"
       style={{
         position: "fixed",
-        left,
-        top,
+        left: draggedLeft,
+        top: draggedTop,
         width: cardWidth,
         // Content-driven height (design note #7): one row, so this cap only
         // ever bites on a very short viewport, where the row scrolls.
@@ -572,45 +730,81 @@ export function TileSelectionPopup({
         background: "#1c2620",
         border: "1px solid #3a4a3f",
         borderRadius: 12,
-        boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+        // Lifts while dragging so the card reads as picked up, and so it
+        // clears the board art it is being moved across.
+        boxShadow: drag.dragging ? "0 22px 56px rgba(0,0,0,0.65)" : "0 12px 32px rgba(0,0,0,0.5)",
         color: "#eaf2ea",
-        fontFamily: "sans-serif",
-        // Design note #7: base font up from 13 to 15. Every unstyled string
-        // in this card inherits it, so the readability complaint is fixed
-        // once here rather than per-element.
-        fontSize: 15,
+        fontFamily: FONT_FAMILY,
+        // Every unstyled string in this card inherits this, so the base
+        // readability is set once here rather than per element.
+        fontSize: FONT_SIZE.body,
         zIndex: 1000,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        // No transition on left/top: the card must track the pointer
+        // exactly during a drag, and any easing reads as lag.
+        userSelect: drag.dragging ? "none" : undefined,
       }}
     >
-      {/* ---- Header ---------------------------------------------------- */}
+      {/* ---- Header / drag handle (design note #10) --------------------- */}
       <div
+        {...drag.handleProps}
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 16,
-          padding: "12px 16px",
+          padding: "14px 18px",
           borderBottom: "1px solid #3a4a3f",
+          // The whole header is the handle, which is the convention every
+          // desktop window uses -- so it needs no instruction beyond the
+          // cursor. `grabbing` while active gives the drag its feedback.
+          cursor: drag.dragging ? "grabbing" : "grab",
+          background: drag.dragging ? "#243128" : "transparent",
+          // Stops the browser from claiming the gesture for panning/scroll
+          // on touch and pen, which would otherwise pre-empt the drag
+          // entirely on a trackpad or tablet.
+          touchAction: "none",
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, fontSize: 18 }}>Lay Tile</span>
-          <span style={{ opacity: 0.8, fontSize: 14, whiteSpace: "nowrap" }}>
+          <span aria-hidden="true" style={{ opacity: 0.5, fontSize: FONT_SIZE.body }}>
+            ⠿
+          </span>
+          <span style={{ fontWeight: 700, fontSize: FONT_SIZE.heading }}>Lay Tile</span>
+          <span style={{ opacity: 0.85, fontSize: FONT_SIZE.control, whiteSpace: "nowrap" }}>
             {hexLabel} &middot; ({q}, {r})
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {/* Interaction legend, in the header where it reads as a caption
-              for the whole row rather than as a note about one tile.
-              Double-click is not a discoverable gesture on its own, so it
-              is stated outright -- design note #7. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {/* Interaction legend. Double-click and drag are both
+              non-discoverable gestures, so both are stated outright. */}
           {tileCount > 0 && (
-            <span style={{ opacity: 0.7, fontSize: 13, whiteSpace: "nowrap" }}>
-              Click to select &middot; Double-click to rotate
+            <span style={{ opacity: 0.7, fontSize: FONT_SIZE.small, whiteSpace: "nowrap" }}>
+              Click to select &middot; Double-click to rotate &middot; Drag this bar to move
             </span>
+          )}
+          {/* Only offered once it would do something. A "reset position"
+              control on a card that has never moved is clutter. */}
+          {hasBeenDragged && (
+            <button
+              type="button"
+              onClick={drag.reset}
+              title="Snap the picker back beside the hex you clicked"
+              style={{
+                background: "transparent",
+                border: "1px solid #3a4a3f",
+                borderRadius: 6,
+                color: "#eaf2ea",
+                fontSize: FONT_SIZE.small,
+                cursor: "pointer",
+                padding: "4px 10px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              ⤺ Snap back
+            </button>
           )}
           <button
             type="button"
@@ -620,7 +814,7 @@ export function TileSelectionPopup({
               background: "transparent",
               border: "none",
               color: "#eaf2ea",
-              fontSize: 24,
+              fontSize: FONT_SIZE.display,
               cursor: "pointer",
               lineHeight: 1,
               padding: "0 4px",
@@ -641,7 +835,7 @@ export function TileSelectionPopup({
             background: "#3a3320",
             border: "1px solid #8a7332",
             color: "#f0d9a0",
-            fontSize: 13,
+            fontSize: FONT_SIZE.small,
             lineHeight: 1.45,
           }}
         >
@@ -662,7 +856,7 @@ export function TileSelectionPopup({
             padding: "12px 16px 0",
           }}
         >
-          <span style={{ fontSize: 13, opacity: 0.7 }}>Era</span>
+          <span style={{ fontSize: FONT_SIZE.small, opacity: 0.7 }}>Era</span>
           {([null, ...availableEras] as const).map((tier) => {
             const isActive = eraFilter === tier;
             const label = tier ?? "All";
@@ -676,9 +870,9 @@ export function TileSelectionPopup({
                 onClick={() => setEraFilter(tier)}
                 aria-pressed={isActive}
                 style={{
-                  padding: "6px 14px",
+                  padding: "8px 16px",
                   borderRadius: 8,
-                  fontSize: 14,
+                  fontSize: FONT_SIZE.control,
                   cursor: "pointer",
                   color: "inherit",
                   font: "inherit",
@@ -689,7 +883,7 @@ export function TileSelectionPopup({
                 }}
               >
                 {label}{" "}
-                <span style={{ opacity: 0.6, fontSize: 12 }}>({count})</span>
+                <span style={{ opacity: 0.6, fontSize: FONT_SIZE.small }}>({count})</span>
               </button>
             );
           })}
@@ -698,27 +892,26 @@ export function TileSelectionPopup({
 
       {/* ---- The single tile row --------------------------------------- */}
       {tileCount === 0 ? (
-        <div style={{ padding: "18px 16px", opacity: 0.8 }}>
+        <div style={{ padding: "22px 18px", opacity: 0.8, fontSize: FONT_SIZE.control }}>
           {offline && eraFilter
             ? `No ${eraFilter} tiles in the catalog.`
             : "No legal tile placements at this hex right now."}
         </div>
       ) : (
-        <div style={{ padding: "12px 16px 4px", minHeight: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
-              gap: 12,
-              marginBottom: 10,
-            }}
-          >
-            <span style={{ fontSize: 14, opacity: 0.85 }}>
+        <div style={{ padding: "14px 18px 6px", minHeight: 0 }}>
+          {/* Design note #9: the old two-item caption row is down to one
+              item. `rotationHint` ("Double-click a tile to rotate it" /
+              "This tile has only one legal rotation") was removed as
+              redundant clutter -- the header legend already states the
+              double-click gesture permanently, and the per-tile rotation
+              readout below already shows "1/3" or "fixed", which says the
+              same thing about the specific tile in the place you are
+              looking. Three statements of one fact is two too many. */}
+          <div style={{ marginBottom: 12 }}>
+            <span style={{ fontSize: FONT_SIZE.control, opacity: 0.85 }}>
               {/* Design note #6: "Catalog tiles" offline, never "Legal". */}
               {offline ? "Catalog tiles" : "Legal tiles"} ({tileCount})
             </span>
-            <span style={{ fontSize: 13, opacity: 0.6 }}>{rotationHint}</span>
           </div>
 
           {/* ONE row. Horizontal scroll rather than wrapping, so the tier
@@ -792,22 +985,64 @@ export function TileSelectionPopup({
                     userSelect: "none",
                   }}
                 >
-                  {/* Design note #7: 56px -> 104px. The single biggest
-                      readability win here -- the artwork IS the content,
-                      and at 56px a #57 city was hard to tell from a #9
-                      straight at a glance. */}
-                  <TilePreviewThumbnail
-                    tileId={group.tileId}
-                    orientation={shownOrientation}
-                    size={104}
-                    hexSize={44}
-                  />
-                  <span style={{ fontSize: 17, fontWeight: 700, lineHeight: 1 }}>
+                  {/* Design note #9: 104px -> 150px (originally 56px). The
+                      artwork IS the content of this picker -- everything
+                      else on the card is a label for it -- so it gets the
+                      space. At 150px the track geometry of a #57 vs a #9 is
+                      distinguishable without leaning in. */}
+                  <div style={{ position: "relative" }}>
+                    <TilePreviewThumbnail
+                      tileId={group.tileId}
+                      orientation={shownOrientation}
+                      size={150}
+                      hexSize={64}
+                    />
+
+                    {/* Design note #9: REVENUE, the number that actually
+                        decides which tile you want, overlaid on the artwork
+                        rather than listed underneath it. Placement is the
+                        point: revenue is a property OF the tile, and a
+                        player scanning the row compares artwork, so the
+                        figure has to live where their eye already is. Gold
+                        on near-black is the highest-contrast pairing on
+                        this card and is used for nothing else, so the
+                        numbers read as a set at a glance.
+
+                        Absent for plain track -- see `TileGroup.revenue`
+                        for why no badge beats a "0". */}
+                    {group.revenue !== null && (
+                      <span
+                        title={`Printed revenue: ${group.revenue}`}
+                        style={{
+                          position: "absolute",
+                          top: 4,
+                          right: 4,
+                          minWidth: 34,
+                          padding: "3px 9px",
+                          borderRadius: 999,
+                          background: "#0d0f0c",
+                          border: "2px solid #e8c860",
+                          color: "#ffd970",
+                          fontSize: FONT_SIZE.control,
+                          fontWeight: 800,
+                          lineHeight: 1.15,
+                          textAlign: "center",
+                          fontVariantNumeric: "tabular-nums",
+                          boxShadow: "0 2px 6px rgba(0,0,0,0.6)",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {group.revenue}
+                      </span>
+                    )}
+                  </div>
+
+                  <span style={{ fontSize: FONT_SIZE.heading, fontWeight: 700, lineHeight: 1 }}>
                     #{group.tileId}
                   </span>
                   <span
                     style={{
-                      fontSize: 11,
+                      fontSize: FONT_SIZE.micro,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
                       color: group.tier ? TIER_LABEL_COLOR[group.tier] : "#8a8a8a",
@@ -821,7 +1056,7 @@ export function TileSelectionPopup({
                       currently turning always shows where it is. */}
                   <span
                     style={{
-                      fontSize: 12,
+                      fontSize: FONT_SIZE.small,
                       opacity: isSelected ? 0.9 : 0,
                       lineHeight: 1,
                       whiteSpace: "nowrap",
@@ -852,7 +1087,7 @@ export function TileSelectionPopup({
           borderTop: "1px solid #3a4a3f",
         }}
       >
-        <div style={{ minWidth: 0, fontSize: 13, lineHeight: 1.45 }}>
+        <div style={{ minWidth: 0, fontSize: FONT_SIZE.small, lineHeight: 1.45 }}>
           {dispatchState.status === "error" && (
             <div style={{ color: "#e08080", marginBottom: 4 }}>{dispatchState.message}</div>
           )}
@@ -902,7 +1137,7 @@ export function TileSelectionPopup({
             border: "none",
             borderRadius: 8,
             fontWeight: 700,
-            fontSize: 15,
+            fontSize: FONT_SIZE.control,
             cursor: dispatchDisabled ? "default" : "pointer",
             whiteSpace: "nowrap",
           }}

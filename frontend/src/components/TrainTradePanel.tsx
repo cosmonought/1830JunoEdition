@@ -48,6 +48,7 @@
 //    benefit whatsoever.
 
 import React, { useEffect, useMemo, useState } from "react";
+import { FONT_SIZE } from "../styles/typography";
 
 /** Mirrors `msg::TrainOfferEntry` exactly. */
 export interface TrainOfferEntry {
@@ -386,11 +387,11 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "10px",
   },
   headerRow: { display: "flex", alignItems: "baseline", gap: "12px" },
-  headerTitle: { fontSize: "16px", fontWeight: 700, color: "#e6e8ef" },
-  headerHint: { fontSize: "12px", color: "#8a919e" },
+  headerTitle: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#e6e8ef" },
+  headerHint: { fontSize: FONT_SIZE.small, color: "#8a919e" },
   section: { display: "flex", flexDirection: "column", gap: "8px" },
   sectionLabel: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.05em",
@@ -398,7 +399,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   formRow: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" },
   select: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     padding: "7px 10px",
     borderRadius: "7px",
     border: "1px solid #3a3f4b",
@@ -408,7 +409,7 @@ const styles: Record<string, React.CSSProperties> = {
   priceInput: {
     width: "110px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     padding: "7px 10px",
     borderRadius: "7px",
     border: "1px solid #3a3f4b",
@@ -416,7 +417,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#e6e8ef",
   },
   actionButton: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "8px 16px",
     borderRadius: "8px",
@@ -436,7 +437,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #6b5a24",
     backgroundColor: "#2a2413",
   },
-  blockText: { flex: 1, fontSize: "13px", lineHeight: 1.5, color: "#e0c97a" },
+  blockText: { flex: 1, fontSize: FONT_SIZE.body, lineHeight: 1.5, color: "#e0c97a" },
   offerRow: {
     display: "flex",
     alignItems: "center",
@@ -446,10 +447,10 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#171a22",
     border: "1px solid #2b2f3a",
   },
-  offerText: { flex: 1, fontSize: "13px", lineHeight: 1.5, color: "#c8ccd6" },
+  offerText: { flex: 1, fontSize: FONT_SIZE.body, lineHeight: 1.5, color: "#c8ccd6" },
   offerActions: { display: "flex", gap: "6px", alignItems: "center" },
   acceptButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
     borderRadius: "7px",
@@ -459,7 +460,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   rejectButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
     borderRadius: "7px",
@@ -469,7 +470,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   rescindButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
     borderRadius: "7px",
@@ -478,7 +479,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#e0c97a",
     cursor: "pointer",
   },
-  waitingNote: { fontSize: "12px", color: "#6f7684" },
-  warn: { fontSize: "12px", color: "#c8a24a" },
-  note: { fontSize: "12px", lineHeight: 1.5, color: "#8a919e" },
+  waitingNote: { fontSize: FONT_SIZE.small, color: "#6f7684" },
+  warn: { fontSize: FONT_SIZE.small, color: "#c8a24a" },
+  note: { fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a919e" },
 };

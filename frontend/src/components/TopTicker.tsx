@@ -60,9 +60,13 @@
 import React, { useEffect, useRef } from "react";
 import type { FeedItem } from "../utils/feed";
 import { colorForAuthor, iconForLogEntry, iconForLogStatus } from "../utils/feed";
+import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 
 const HISTORY_LINE_COUNT = 7;
-const HISTORY_LINE_HEIGHT_PX = 36;
+// Bumped 36 -> 46 alongside the typography scale: this constant sizes the
+// scroll body to ~7 rows, so leaving it while row TEXT grew would have shown
+// about five rows and clipped the sixth mid-glyph.
+const HISTORY_LINE_HEIGHT_PX = 46;
 
 export interface TopTickerProps {
   latestItem: FeedItem | null;
@@ -189,8 +193,8 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1E293B",
     border: "none",
     color: "#F8FAFC",
-    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-    fontSize: "15px",
+    fontFamily: FONT_FAMILY,
+    fontSize: FONT_SIZE.strong,
     fontWeight: 500,
     cursor: "pointer",
     textAlign: "left",
@@ -206,7 +210,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   unreadBadge: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     minWidth: "24px",
     height: "24px",
@@ -220,7 +224,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   expandHint: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 600,
     color: "#9aa0ac",
     flexShrink: 0,
@@ -242,13 +246,18 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 20px",
   },
   emptyHint: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#6f7480",
     margin: 0,
   },
   // ---- Chat entries -- ported from FeedOverlay.tsx design note #3. ----
   chatEntry: {
-    borderLeft: "3px solid #3a3f4b",
+    // Longhand: the JSX below applies a per-author `borderLeftColor`
+    // inline, and overriding a longhand onto a shorthand is exactly the
+    // mix React warns about.
+    borderLeftWidth: "3px",
+    borderLeftStyle: "solid",
+    borderLeftColor: "#3a3f4b",
     backgroundColor: "#182236",
     borderRadius: "0 10px 10px 10px",
     padding: "6px 12px",
@@ -259,11 +268,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
   },
   chatAuthor: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
   },
   chatText: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#c7cbd4",
     marginTop: "1px",
   },
@@ -276,10 +285,10 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#141c2c",
     border: "1px solid #1e2937",
     borderRadius: "999px",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
   },
   logCategoryBadge: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "2px 8px",
     borderRadius: "999px",
@@ -288,7 +297,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   logStatusIcon: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
   },
   logLabel: {
     flex: 1,
@@ -298,7 +307,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   timestamp: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#6f7480",
     flexShrink: 0,
   },

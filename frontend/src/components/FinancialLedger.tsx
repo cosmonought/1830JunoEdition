@@ -108,6 +108,7 @@
 import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
+import { FONT_SIZE } from "../styles/typography";
 import {
   estimateCertificateCount,
   playerCompanyHoldings,
@@ -528,15 +529,15 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
   },
   pageTitle: {
-    fontSize: "20px",
+    fontSize: FONT_SIZE.heading,
     margin: 0,
   },
   placeholderText: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#6f7480",
   },
   staleNote: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#8a6d1f",
   },
   section: {
@@ -545,7 +546,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
   },
   sectionTitle: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
     color: "#9aa0ac",
@@ -569,12 +570,12 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "6px",
   },
   treeCardPlayer: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontWeight: 700,
   },
   treeCardCertCount: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#9aa0ac",
   },
   netWorthRow: {
@@ -589,28 +590,28 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #33394a",
   },
   netWorthLabel: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.03em",
     color: "#9aa0ac",
   },
   netWorthValue: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     color: "#7fd88f",
   },
   netWorthBreakdown: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     color: "#6f7480",
   },
   netWorthPending: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#6f7480",
     fontStyle: "italic",
   },
   treeEmpty: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#6f7480",
     margin: 0,
   },
@@ -623,18 +624,18 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "3px",
   },
   treeLeaf: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#c7cbd4",
   },
   treeLeafKind: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#6f7480",
     marginRight: "4px",
   },
   presidentTag: {
     marginLeft: "6px",
-    fontSize: "9px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "1px 5px",
     borderRadius: "999px",
@@ -642,7 +643,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#fff8e0",
   },
   footnote: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     color: "#6f7480",
     margin: 0,
     lineHeight: 1.4,
@@ -657,7 +658,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   table: {
     borderCollapse: "collapse",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     minWidth: "480px",
     width: "100%",
   },
@@ -684,6 +685,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #1e2129",
     color: "#6f7480",
     fontStyle: "italic",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
   },
 };

@@ -58,7 +58,26 @@
 
 /** One chat message in the merged activity feed. */
 export interface ChatMessage {
-  id: number;
+  /** Widened from `number` to `string | number` for the Firebase Real-Time
+   *  Integration pass (Step 4). Chat is no longer a local counter
+   *  (`nextChatMessageId++` in App.tsx) -- it is a Firestore collection, and
+   *  the identity of a message is its DOCUMENT ID, which is a string.
+   *
+   *  Deriving a number from that string (hashing it, or keeping a parallel
+   *  counter) would be strictly worse: a hash can collide, and a counter is
+   *  per-client, so the same message would carry different ids in different
+   *  browsers -- which is exactly the wrong property for the value React
+   *  uses as a list key and `mergeFeedItems` uses to build `FeedItem.id`.
+   *  The document id is already globally unique and identical for everyone.
+   *
+   *  Nothing downstream needed changing: `mergeFeedItems` only ever
+   *  interpolates this into a template string, and ordering has always come
+   *  from `timestampMs`, never from the id. */
+  id: string | number;
+  /** The display label for the sender -- a player-chosen display name when
+   *  one is set, otherwise a truncated address. NOT an identity: display
+   *  names are self-asserted (see `utils/lobby.ts`'s note on why) and the
+   *  wallet address remains the real identity everywhere it matters. */
   author: string;
   text: string;
   timestamp: string;

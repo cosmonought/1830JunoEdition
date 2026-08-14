@@ -11,13 +11,48 @@
 //
 // Design notes / scope, since this is a layout-and-wiring pass, not a full
 // live-chain integration:
-// 1. **No game/room selection UI yet.** Nothing in the frontend so far
-//    creates or joins a room (`CreateGameRoom`/`JoinGameRoom` are
-//    Keplr-signed, real-JUNO-moving messages -- a future milestone's own
-//    screen, not this one). `MOCK_GAME_ID` below stands in for "the
-//    currently open room" everywhere a `game_id` is required, purely so
-//    this screen's buttons and every live query have something concrete to
-//    target. Swap it for real room state once that flow exists.
+// 1. **RESOLVED (Step 4: Firebase Real-Time Integration).** This note used
+//    to read "No game/room selection UI yet ... `gameId` stands in for
+//    the currently open room ... swap it for real room state once that flow
+//    exists." That flow now exists, and this is the swap.
+//
+//    `components/Lobby.tsx` is the room-selection screen, and `GameRouter`
+//    at the bottom of this file is the boundary: with no room chosen it
+//    renders the Lobby, and once a player is genuinely in a room's on-chain
+//    roster it renders `AppShell` with a REAL `gameId` -- the `u64` the
+//    contract itself assigned at `CreateGameRoom`, parsed from that
+//    transaction's own `game_id` attribute (see `Lobby.tsx` design note #2).
+//    Every `game_id` in every query and every `ExecuteMsg` below now comes
+//    from that one prop.
+//
+//    `AppShell` also receives `roomId`, the FIRESTORE room id, which is a
+//    different identifier serving a different system: `gameId` addresses the
+//    contract, `roomId` addresses off-chain chat and presence. Both are
+//    load-bearing and they are never interchangeable -- see design note #22.
+// 22. **Firebase carries chat and presence ONLY (Step 4).** The strict
+//    boundary, restated here because this file is where it would be
+//    easiest to violate: the Juno contract remains the single source of
+//    truth for game state, rules, board tiles, treasuries and turn
+//    execution, and Firestore stores none of it. What changed in this file
+//    is exactly two things, both transport-level:
+//
+//      - `chatMessages` is no longer `useState<ChatMessage[]>` fed by a
+//        local `nextChatMessageId++` counter. It comes from
+//        `useFirestoreChat(roomId, ...)`, so the chat half of the merged
+//        feed is now genuinely multiplayer. `TopTicker`/`InlineQuickChat`
+//        are UNCHANGED -- both already read from `mergeFeedItems` rather
+//        than owning chat state, so replacing the transport underneath them
+//        required no change to either component (see `ChatBox.tsx` design
+//        note #0 for why no new chat panel was added).
+//      - `usePresenceHeartbeat` runs for the whole session, so the table can
+//        see when the active turn-holder has dropped. That is a UI hint with
+//        no authority: the contract's own Inactivity Timeout Safety Valve is
+//        the only thing permitted to have consequences for an absent player.
+//
+//    `actionLog` remains entirely local and on-chain-derived. It is NOT
+//    written to Firestore -- it is this browser's record of transactions it
+//    itself dispatched, and mirroring it would be the first step toward
+//    treating an off-chain document as a game log.
 // 2. **The map/stock panes still render mock data, not a live `GetMapGrid`/
 //    `GetMarketGrid` query.** Per this milestone's own original request,
 //    `MOCK_MAP_GRID`/`MOCK_MARKET_GRID` are small, hand-built responses so
@@ -479,7 +514,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
-import { chainConfigError, formatNativeAmount, NATIVE_DENOM_DISPLAY } from "./config";
+import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
+
+import {
+  chainConfigError,
+  formatNativeAmount,
+  JUNO_RPC_ENDPOINT,
+  NATIVE_DENOM_DISPLAY,
+} from "./config";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
   type RouteOverlay,
@@ -509,21 +551,40 @@ import {
   type PrivateCompanyState,
   type TileColor,
 } from "./utils/gameState";
-import {
-  mergeFeedItems,
-  truncateChatAddress,
-  type ActionLogEntry,
-  type ChatMessage,
-  type FeedFilter,
-} from "./utils/feed";
+// Design note #22: `truncateChatAddress` and the `ChatMessage` type are no
+// longer imported here. Both were only ever used to CONSTRUCT chat messages
+// locally, and this file no longer constructs any -- `useFirestoreChat`
+// returns them already built (and already labelled with a display name
+// rather than a raw address, which is what `truncateChatAddress` was for).
+import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
+import { CONTROL_PADDING, FONT_SIZE, LINE_HEIGHT } from "./styles/typography";
 import { useDocumentTitleFlash } from "./utils/turnAlert";
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
+
+// Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
+import Lobby from "./components/Lobby";
+import { useFirestoreChat } from "./components/ChatBox";
+// NOT importing `truncateAddress` from `utils/lobby` -- this file already
+// has its own local one (below, with configurable lead/trail lengths) and
+// importing the second would be a name collision. Two truncators is one too
+// many, but unifying them is a separate tidy-up, not this pass's business.
+import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
 
 /* ------------------------------------------------------------------ */
 /* Placeholder room state -- see design note #1                       */
 /* ------------------------------------------------------------------ */
 
-const MOCK_GAME_ID = 1;
+/** Room id for the two MOCK DISPLAY GRIDS below, and nothing else.
+ *
+ *  Design note #1's `MOCK_GAME_ID` is GONE -- `AppShell` now receives a real
+ *  `gameId` prop from `GameRouter`, sourced from the contract's own
+ *  `CreateGameRoom` response (see `Lobby.tsx` design note #2). This constant
+ *  survives only because `MOCK_MAP_GRID`/`MOCK_MARKET_GRID` are module-scope
+ *  literals that have to put SOMETHING in their `game_id` field, and design
+ *  note #2 above is explicit that those two are illustrative data never
+ *  produced by a live query. It is deliberately NOT the room anything talks
+ *  to. */
+const MOCK_GRID_GAME_ID = 1;
 const MOCK_BUY_STOCK_PROTOCOL_ID = 1; // PRR, per public_company::CORE_PUBLIC_COMPANIES
 const MOCK_BUY_STOCK_PAR_VALUE = "100"; // top of the standard 1830 par ladder
 const MOCK_SELL_STOCK_PERCENTAGE = 10; // one standard 10% certificate block
@@ -590,7 +651,7 @@ type OperatingSubPhase =
 // `tiles: []` is actually the MORE accurate mock of a freshly-created real
 // game, not less.
 const MOCK_MAP_GRID: MapGridResponse = {
-  game_id: MOCK_GAME_ID,
+  game_id: MOCK_GRID_GAME_ID,
   tiles: [],
 };
 
@@ -606,7 +667,7 @@ const MOCK_MAP_GRID: MapGridResponse = {
 /* ------------------------------------------------------------------ */
 
 const MOCK_MARKET_GRID: MarketGridResponse = {
-  game_id: MOCK_GAME_ID,
+  game_id: MOCK_GRID_GAME_ID,
   positions: [
     { company_id: 1, ticker: "PRR", x: 6, y: 10, price: "100" },
     { company_id: 2, ticker: "NYC", x: 6, y: 10, price: "100" },
@@ -634,11 +695,12 @@ function truncateAddress(address: string | null, lead = 10, trail = 6): string {
 
 let nextLogEntryId = 1;
 
-// Design note #18/item 3: chat-message id counter, moved up from
-// `Chatbox.tsx` (that file's own copy stays, for the reasons its design
-// note #6 explains, but is no longer what actually generates ids for
-// messages this app renders).
-let nextChatMessageId = 1;
+// Design note #18/item 3's `nextChatMessageId` counter is REMOVED (design
+// note #22). Chat message ids are now Firestore document ids -- globally
+// unique and identical in every player's browser, which a per-client
+// counter could never be. See `utils/feed.ts`'s `ChatMessage.id` for why
+// that field was widened to `string | number` rather than the id being
+// hashed back down into a number.
 
 /* ------------------------------------------------------------------ */
 /* Dashboard Control Bar                                              */
@@ -1319,9 +1381,143 @@ const TURN_PULSE_KEYFRAMES_CSS = `
 /* App shell -- everything below here renders inside both providers   */
 /* ------------------------------------------------------------------ */
 
-function AppShell() {
+interface AppShellProps {
+  /** The CONTRACT's game id -- the `u64` assigned by `CreateGameRoom`.
+   *  Every query and every `ExecuteMsg` below targets this.
+   *
+   *  Note this is now in the dependency array of every gameplay
+   *  `useCallback` below. It did not used to be, and that was correct then
+   *  and would be a bug now: `MOCK_GAME_ID` was a module-scope constant, so
+   *  a closure over it could never go stale, whereas a prop can. `GameRouter`
+   *  additionally keys `AppShell` on it, so in practice the component
+   *  remounts rather than re-closing -- but a correct dependency array
+   *  should not be load-bearing on a `key` prop two files away. */
+  gameId: number;
+  /** The FIRESTORE room id -- addresses off-chain chat and presence only.
+   *  A different identifier for a different system; see design note #22. */
+  roomId: string;
+  /** Returns to the Lobby. */
+  onLeaveGame: () => void;
+  /** Which of the three ways of looking at a board this is -- design note
+   *  #24. The two booleans below are derived from it inside the component;
+   *  the mode is the single source so they cannot contradict each other. */
+  mode: BoardMode;
+}
+
+function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
+
+  /* ---------------- The two gates, derived from `mode` ---------------- */
+  //
+  // DESIGN NOTE #23 -- read-only mode is enforced at the DISPATCH sites,
+  // not by disabling buttons. Hiding a control is a courtesy to the user;
+  // refusing to dispatch is the guarantee, and only the second survives a
+  // future pass adding a button without knowing spectators exist.
+  //
+  // This app has exactly TWO paths that can execute a gameplay message, and
+  // read-only mode is only as good as its coverage of both:
+  //
+  //   1. `runGameplayAction` below -- the funnel for every button on the
+  //      Contextual Action Bar, the Waterfall dashboard and the train-trade
+  //      panel. Gated inside the function itself, so all ~20 controls are
+  //      covered by one check.
+  //   2. `TileSelectionPopup` -- calls `useGameSession().execGameplay`
+  //      DIRECTLY (that component's own design note #1), so the gate in (1)
+  //      does not apply to it. Covered by not mounting it when `spectator`.
+  //
+  // If a third dispatch path is ever added it must be gated too.
+  // `grep -rn 'execGameplay('` over `src/` is the check, and it should
+  // return exactly those two call sites.
+  //
+  // Belt and braces regardless: a spectator is not in the contract's
+  // `player_addresses`, so the chain would reject anything they sent. These
+  // gates make that refusal instant, free and legible rather than costing a
+  // signature to discover.
+  const spectator = mode === "spectate";
+
+  // Design note #24. `sandbox` answers a different question from
+  // `spectator`: not "may this viewer act?" but "is there a chain at all?".
+  // Sandbox mode is emphatically NOT read-only -- the tile picker is the
+  // main thing it exists to exercise -- it simply has nothing to talk to.
+  const sandbox = mode === "sandbox";
+
+  // Design note #22. Read once at mount rather than subscribed to: the name
+  // is set in the Lobby, before this component exists, and a rename
+  // mid-game would (correctly) not rewrite the byline on messages already
+  // sent -- `ChatBox.tsx` denormalises the name onto each message for
+  // exactly that reason.
+  const [displayName] = useState<string>(() => loadDisplayName() ?? "");
+
+  // Design note #22: keeps this player's seat marked alive for the whole
+  // session, so the rest of the table can see when the active turn-holder
+  // has dropped rather than staring at a stalled board. A UI hint with no
+  // authority -- the contract's Inactivity Timeout Safety Valve is the only
+  // mechanism permitted to act on an absent player.
+  //
+  // Suppressed for spectators (design note #23): a spectator holds no seat
+  // document, so a heartbeat would be an `updateDoc` against a path that
+  // does not exist -- a guaranteed rejected write every 20 seconds. Passing
+  // `null` disables the hook outright rather than relying on its
+  // fire-and-forget `catch` to swallow the failure, which would work but
+  // would be failing on purpose.
+  // Sandbox has no Firestore room either (design note #24), so it joins
+  // spectators in sitting this out.
+  usePresenceHeartbeat(spectator || sandbox ? null : roomId, wallet.address);
+
+  /* ---------------- Read-only query client -- design note #23 ---------- */
+  //
+  // A spectator has no wallet requirement, so there may be no
+  // `signingClient` to query through -- and every live panel on this screen
+  // reads through one. `useGameStatePolling` takes a structural
+  // `QueryCapableClient` (just `queryContractSmart`), which a plain
+  // `CosmWasmClient` satisfies without any signer, key or Keplr prompt.
+  //
+  // So: use the wallet's client when there is one (a player, or a spectator
+  // who happens to be connected), and otherwise connect an anonymous
+  // read-only client. This also quietly improves the PLAYER path -- the
+  // board now renders before the wallet is connected instead of sitting
+  // empty until it is.
+  const [readOnlyClient, setReadOnlyClient] = useState<CosmWasmClient | null>(null);
+
+  useEffect(() => {
+    // A signing client is already query-capable; a second connection would
+    // be pure waste.
+    // Design note #24: sandbox never touches the network at all.
+    if (sandbox) return undefined;
+    if (wallet.signingClient) return undefined;
+    // Offline Sandbox Mode: nothing to connect to, and this must not throw
+    // (config.ts design note #0), so read the raw value rather than
+    // `requireRpcEndpoint()`.
+    if (!JUNO_RPC_ENDPOINT) return undefined;
+
+    let cancelled = false;
+    CosmWasmClient.connect(JUNO_RPC_ENDPOINT)
+      .then((client) => {
+        // The guard matters: without it, a connection resolving after the
+        // user has navigated back to the lobby sets state on an unmounted
+        // component, and worse, a wallet connecting mid-flight would leave
+        // this stale client racing the real one.
+        if (!cancelled) setReadOnlyClient(client);
+      })
+      .catch(() => {
+        // Unreachable RPC. The polls simply report no state and every panel
+        // shows its own empty/error affordance -- there is nothing useful to
+        // add here that they do not already say.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.signingClient, sandbox]);
+
+  /** The single client every live query on this screen reads through.
+   *
+   *  `undefined` in sandbox, which stops every poll on this screen at
+   *  source (`useGameStatePolling` treats a missing client as offline and
+   *  simply never queries). Panels then render their own empty states,
+   *  which is the honest depiction of a board with no chain behind it. */
+  const queryClient = sandbox ? undefined : (wallet.signingClient ?? readOnlyClient ?? undefined);
 
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
   const [vgpBalanceNote, setVgpBalanceNote] = useState<string | null>(null);
@@ -1365,7 +1561,7 @@ function AppShell() {
     loading: gameStateLoading,
     error: gameStateError,
     refresh: refreshGameState,
-  } = useGameStatePolling(wallet.signingClient ?? undefined, CONTRACT_ADDRESS, MOCK_GAME_ID);
+  } = useGameStatePolling(queryClient, CONTRACT_ADDRESS, gameId);
 
   // Pre-Game Waterfall Auction (`waterfall.rs`): a second, independent poll
   // against `QueryMsg::GetWaterfallState`, only actually enabled while
@@ -1377,9 +1573,9 @@ function AppShell() {
   // separately from the board because a SELLER must see an offer arrive while
   // it is emphatically not their turn -- this cannot key off turn state.
   const { offers: trainOffers, refresh: refreshTrainOffers } = useTrainOffersPolling(
-    wallet.signingClient ?? undefined,
+    queryClient,
     CONTRACT_ADDRESS,
-    MOCK_GAME_ID,
+    gameId,
   );
 
   const {
@@ -1387,9 +1583,9 @@ function AppShell() {
     loading: waterfallStateLoading,
     error: waterfallStateError,
   } = useWaterfallStatePolling(
-    wallet.signingClient ?? undefined,
+    queryClient,
     CONTRACT_ADDRESS,
-    MOCK_GAME_ID,
+    gameId,
     isWaterfallPhase,
   );
 
@@ -1507,7 +1703,29 @@ function AppShell() {
   // #20. `chatMessages` was previously owned entirely inside
   // `Chatbox.tsx`; moved up here so it can be merged with `actionLog` into
   // one chronologically sorted timeline (`mergeFeedItems`).
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  //
+  // Design note #22 (Step 4): the LOCAL `useState<ChatMessage[]>` that used
+  // to live on this line is replaced by a live Firestore subscription. Note
+  // what did NOT have to change as a result -- `feedItems`, the filter, the
+  // unread count, `TopTicker` and `InlineQuickChat` are all untouched,
+  // because every one of them was already reading from `mergeFeedItems`
+  // rather than owning chat state. That is the payoff of the hoist design
+  // note #18 performed: swapping chat from a local array to a multiplayer
+  // transport is a one-line change at exactly one call site.
+  //
+  // Keyed on `roomId` (Firestore), NOT `gameId` (contract) -- chat is
+  // off-chain and belongs to the off-chain room, which is what lets the
+  // staging-room transcript in `Lobby.tsx` continue uninterrupted into the
+  // live game instead of resetting at launch.
+  const {
+    messages: chatMessages,
+    sendMessage: sendChatMessage,
+    error: chatError,
+    // Design note #24: `null` in sandbox. `SANDBOX_ROOM_ID` names no real
+    // Firestore document, and subscribing to it would CREATE one the first
+    // time anyone typed -- littering the room collection with junk rooms
+    // from what is supposed to be a local, chain-free scratchpad.
+  } = useFirestoreChat(sandbox ? null : roomId, wallet.address, displayName);
   const [chatDraft, setChatDraft] = useState("");
   // Renamed from `feedOpen` -- design note #20/item 1. Same boolean role,
   // now gates `TopTicker.tsx`'s in-place accordion body instead of a
@@ -1544,21 +1762,18 @@ function AppShell() {
 
   const handleToggleTickerExpand = useCallback(() => setIsTickerExpanded((prev) => !prev), []);
 
+  // Design note #22: pushes to `games/{roomId}/chat` instead of appending to
+  // a local array. The draft is cleared optimistically because the write is
+  // ALSO optimistic -- Firestore applies it to the local snapshot before the
+  // server confirms, so the message is on screen immediately and the round
+  // trip finishes in the background (see `ChatBox.tsx` design note #2 for
+  // the timestamp handling that makes that ordering stable).
   const handleSendChatMessage = useCallback(() => {
     const text = chatDraft.trim();
     if (!text) return;
-    setChatMessages((messages) => [
-      ...messages,
-      {
-        id: nextChatMessageId++,
-        author: wallet.address ? truncateChatAddress(wallet.address) : "You",
-        text,
-        timestamp: new Date().toLocaleTimeString(),
-        timestampMs: Date.now(),
-      },
-    ]);
     setChatDraft("");
-  }, [chatDraft, wallet.address]);
+    void sendChatMessage(text);
+  }, [chatDraft, sendChatMessage]);
 
   // Buy Private Company Action Tray -- design note #14. Recomputed from the
   // live poll every time `activePlayerAddress` changes hands or the room's
@@ -1626,6 +1841,27 @@ function AppShell() {
   const handleHexClickQuery = useCallback((state: HexClickQueryState) => {
     setHexClickQuery(state);
   }, []);
+
+  // Design note #141: a blocked cue is a transient nudge, not a state the
+  // player has to dismiss. Every other `hexClickQuery` status ends by the
+  // player closing the popup (`handleCloseTilePopup`), but a blocked click
+  // opens no popup, so there is no close button and nothing would ever
+  // clear it -- the tooltip would sit on the board until the next click.
+  //
+  // Keyed on the whole state object rather than on `status`, so clicking a
+  // SECOND blocked hex restarts the timer instead of inheriting the first
+  // one's remaining time (which, on a fast double-click, could dismiss the
+  // second message almost immediately).
+  useEffect(() => {
+    if (hexClickQuery?.status !== "blocked") return undefined;
+    const timer = window.setTimeout(() => {
+      // Clears only if nothing has replaced it in the meantime -- otherwise
+      // a timer from an earlier click could wipe a live "loading" or
+      // "success" state belonging to a later one.
+      setHexClickQuery((current) => (current === hexClickQuery ? null : current));
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [hexClickQuery]);
 
   const handleCloseTilePopup = useCallback(() => {
     setHexClickQuery(null);
@@ -1763,6 +1999,41 @@ function AppShell() {
       const id = nextLogEntryId++;
       const timestamp = new Date().toLocaleTimeString();
       const timestampMs = Date.now();
+
+      // Design note #23: the read-only gate for dispatch path (1). Every
+      // gameplay control on this screen except the tile popup -- the
+      // Contextual Action Bar's twenty-odd buttons, the Waterfall dashboard,
+      // the train-offer panel -- funnels through this one function, which is
+      // why the check belongs here rather than on each button. Disabling
+      // buttons individually would be a list that has to be kept complete
+      // forever; this is one invariant a new button cannot opt out of.
+      //
+      // The tile popup is path (2) and is NOT covered here -- it dispatches
+      // directly and is gated by not being mounted. See `AppShellProps`.
+      //
+      // Logged rather than silently dropped, so a spectator who finds a
+      // control this pass failed to hide gets an explanation instead of a
+      // dead click. The chain would refuse them anyway -- a spectator is not
+      // in `player_addresses` -- but failing here is instant, free and
+      // legible, where failing on-chain costs a signature and returns an
+      // error about turn order.
+      if (spectator || sandbox) {
+        setActionLog((log) => [
+          {
+            id,
+            label,
+            status: "info",
+            detail: sandbox
+              ? "Offline sandbox -- no chain connected, so nothing was dispatched."
+              : "Spectator mode -- watching only. Join from the lobby to play.",
+            timestamp,
+            timestampMs,
+          },
+          ...log,
+        ]);
+        return;
+      }
+
       setActionLog((log) => [
         { id, label, status: "pending", detail: "Broadcasting via session key...", timestamp, timestampMs },
         ...log,
@@ -1792,7 +2063,7 @@ function AppShell() {
         );
       }
     },
-    [session, refreshGameState],
+    [session, refreshGameState, spectator, sandbox],
   );
 
   const logInfo = useCallback((label: string, detail: string) => {
@@ -1803,13 +2074,13 @@ function AppShell() {
   }, []);
 
   const handlePassTurn = useCallback(
-    () => runGameplayAction("PassTurn", { PassTurn: { game_id: MOCK_GAME_ID } }),
-    [runGameplayAction],
+    () => runGameplayAction("PassTurn", { PassTurn: { game_id: gameId } }),
+    [runGameplayAction, gameId],
   );
 
   const handleUndoLastAction = useCallback(
-    () => runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: MOCK_GAME_ID } }),
-    [runGameplayAction],
+    () => runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } }),
+    [runGameplayAction, gameId],
   );
 
   // Design note (Stock & Auction pass): reads real UI-driven selection state
@@ -1830,7 +2101,7 @@ function AppShell() {
         "BuyStock",
         {
           BuyStock: {
-            game_id: MOCK_GAME_ID,
+            game_id: gameId,
             protocol_id: srSelectedProtocolId,
             source: srSource,
             par_value: srSelectedCompanyIsFloated ? null : srParValue,
@@ -1838,7 +2109,7 @@ function AppShell() {
         },
         "updated after BuyStock",
       ),
-    [runGameplayAction, srSelectedProtocolId, srSource, srSelectedCompanyIsFloated, srParValue],
+    [runGameplayAction, gameId, srSelectedProtocolId, srSource, srSelectedCompanyIsFloated, srParValue],
   );
 
   const handleSellShares = useCallback(
@@ -1847,14 +2118,14 @@ function AppShell() {
         "SellStock",
         {
           SellStock: {
-            game_id: MOCK_GAME_ID,
+            game_id: gameId,
             protocol_id: srSelectedProtocolId,
             percentage: srSellPercentage,
           },
         },
         "updated after SellStock",
       ),
-    [runGameplayAction, srSelectedProtocolId, srSellPercentage],
+    [runGameplayAction, gameId, srSelectedProtocolId, srSellPercentage],
   );
 
   const handleRunTrains = useCallback(() => {
@@ -1862,7 +2133,7 @@ function AppShell() {
       // No per-company payout picker UI yet (see design note #4) -- an
       // empty choice list is a real, valid call (every company simply
       // retains), not a fabricated one.
-      ExecuteOperatingRound: { game_id: MOCK_GAME_ID, public_company_choices: [] },
+      ExecuteOperatingRound: { game_id: gameId, public_company_choices: [] },
     });
     // Design note #142: advance Routes -> Dividends once trains have run.
     // Optimistic, matching this file's existing convention (design note #4)
@@ -1870,7 +2141,7 @@ function AppShell() {
     // necessary rather than cosmetic, since running trains is the step that
     // produces the figure the Dividends phase decides about.
     setOrSubPhase("Dividends");
-  }, [runGameplayAction]);
+  }, [runGameplayAction, gameId]);
 
   // Generalized over `distribute` (design note #10/item 2 -- Phase 3's
   // explicit "Pay Dividends" vs "Withhold Revenue" buttons are the same
@@ -1883,7 +2154,7 @@ function AppShell() {
     (distribute: boolean) => {
       runGameplayAction(distribute ? "DeclareDividends: Pay (mock)" : "DeclareDividends: Withhold (mock)", {
         DeclareDividends: {
-          game_id: MOCK_GAME_ID,
+          game_id: gameId,
           protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
           revenue_amount: MOCK_DECLARE_DIVIDENDS_REVENUE,
           distribute,
@@ -1891,7 +2162,7 @@ function AppShell() {
       });
       setOrSubPhase("Hardware");
     },
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
   const handlePayDividends = useCallback(
     () => handleDeclareDividendsChoice(true),
@@ -1905,9 +2176,9 @@ function AppShell() {
   const handleBuyTrain = useCallback(
     () =>
       runGameplayAction("BuyHardwareFromPool (mock)", {
-        BuyHardwareFromPool: { game_id: MOCK_GAME_ID, protocol_id: MOCK_LAY_TILE_PROTOCOL_ID },
+        BuyHardwareFromPool: { game_id: gameId, protocol_id: MOCK_LAY_TILE_PROTOCOL_ID },
       }),
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
 
   // Buy Private Company Action Tray -- design note #14. `protocol_id` uses
@@ -1919,54 +2190,54 @@ function AppShell() {
     if (!selected) return;
     runGameplayAction(`BuyPrivateCompany: ${selected.name} @ ${privatePriceVgp} VGP (mock)`, {
       BuyPrivateCompany: {
-        game_id: MOCK_GAME_ID,
+        game_id: gameId,
         protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
         private_id: selected.private_id,
         price: String(privatePriceVgp),
       },
     });
-  }, [runGameplayAction, sellablePrivates, selectedPrivateId, privatePriceVgp]);
+  }, [runGameplayAction, gameId, sellablePrivates, selectedPrivateId, privatePriceVgp]);
 
   // Pre-Game Waterfall Auction Action Tray (`WaterfallAuctionDashboard.tsx`)
   // -- five real `ExecuteMsg` dispatches, `waterfall.rs`'s own five turn
   // actions exactly. `bid_amount`/`price` are stringified for the same
   // big-int-safety reason every other `Uint128` field in this file is.
   const handleWaterfallBuyLowest = useCallback(
-    () => runGameplayAction("WaterfallBuyLowest", { WaterfallBuyLowest: { game_id: MOCK_GAME_ID } }),
-    [runGameplayAction],
+    () => runGameplayAction("WaterfallBuyLowest", { WaterfallBuyLowest: { game_id: gameId } }),
+    [runGameplayAction, gameId],
   );
 
   const handleWaterfallBidHigher = useCallback(
     (privateId: number, bidAmountVgp: number) =>
       runGameplayAction(`WaterfallBidHigher: private #${privateId} @ ${bidAmountVgp} VGP`, {
         WaterfallBidHigher: {
-          game_id: MOCK_GAME_ID,
+          game_id: gameId,
           private_id: privateId,
           bid_amount: String(bidAmountVgp),
         },
       }),
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
 
   const handleWaterfallPass = useCallback(
-    () => runGameplayAction("WaterfallPass", { WaterfallPass: { game_id: MOCK_GAME_ID } }),
-    [runGameplayAction],
+    () => runGameplayAction("WaterfallPass", { WaterfallPass: { game_id: gameId } }),
+    [runGameplayAction, gameId],
   );
 
   const handleWaterfallMiniAuctionRaise = useCallback(
     (bidAmountVgp: number) =>
       runGameplayAction(`WaterfallMiniAuctionRaise: ${bidAmountVgp} VGP`, {
-        WaterfallMiniAuctionRaise: { game_id: MOCK_GAME_ID, bid_amount: String(bidAmountVgp) },
+        WaterfallMiniAuctionRaise: { game_id: gameId, bid_amount: String(bidAmountVgp) },
       }),
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
 
   const handleWaterfallMiniAuctionPass = useCallback(
     () =>
       runGameplayAction("WaterfallMiniAuctionPass", {
-        WaterfallMiniAuctionPass: { game_id: MOCK_GAME_ID },
+        WaterfallMiniAuctionPass: { game_id: gameId },
       }),
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
 
   // Deliberately non-dispatching -- see design note #8 for why "Place
@@ -2002,11 +2273,11 @@ function AppShell() {
     () =>
       runGameplayAction("AdvanceOperatingSubPhase", {
         AdvanceOperatingSubPhase: {
-          game_id: MOCK_GAME_ID,
+          game_id: gameId,
           protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
         },
       }),
-    [runGameplayAction],
+    [runGameplayAction, gameId],
   );
 
   // Audit G-15. Each refreshes the offer list on completion: the whole point
@@ -2016,7 +2287,7 @@ function AppShell() {
     (input: { sellerProtocolId: number; modelType: string; price: string }) => {
       runGameplayAction("BuyTrainFromCorporation", {
         BuyTrainFromCorporation: {
-          game_id: MOCK_GAME_ID,
+          game_id: gameId,
           buyer_protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
           seller_protocol_id: input.sellerProtocolId,
           model_type: input.modelType,
@@ -2025,37 +2296,37 @@ function AppShell() {
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, refreshTrainOffers],
+    [runGameplayAction, gameId, refreshTrainOffers],
   );
 
   const handleAcceptTrainOffer = useCallback(
     (offerId: number) => {
       runGameplayAction("AcceptTrainOffer", {
-        AcceptTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+        AcceptTrainOffer: { game_id: gameId, offer_id: offerId },
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, refreshTrainOffers],
+    [runGameplayAction, gameId, refreshTrainOffers],
   );
 
   const handleRejectTrainOffer = useCallback(
     (offerId: number) => {
       runGameplayAction("RejectTrainOffer", {
-        RejectTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+        RejectTrainOffer: { game_id: gameId, offer_id: offerId },
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, refreshTrainOffers],
+    [runGameplayAction, gameId, refreshTrainOffers],
   );
 
   const handleRescindTrainOffer = useCallback(
     (offerId: number) => {
       runGameplayAction("RescindTrainOffer", {
-        RescindTrainOffer: { game_id: MOCK_GAME_ID, offer_id: offerId },
+        RescindTrainOffer: { game_id: gameId, offer_id: offerId },
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, refreshTrainOffers],
+    [runGameplayAction, gameId, refreshTrainOffers],
   );
 
   const handleBuyPrivateHint = useCallback(() => {
@@ -2117,6 +2388,46 @@ function AppShell() {
 
       <DashboardControlBar vgpBalance={vgpBalance} vgpBalanceNote={derivedVgpBalanceNote} />
 
+      {/* Room strip -- design notes #1/#22. Shows WHICH room this dashboard
+          is bound to, which matters now that there is more than one: every
+          query and action below targets `gameId`, and a player with two tabs
+          open needs to be able to tell them apart at a glance. Also the only
+          place `chatError` is surfaced -- chat failing silently is worse
+          than chat saying it is broken, and the ticker has no room for an
+          error line of its own. */}
+      <div style={styles.roomStrip}>
+        {/* Design note #23: says plainly what mode this is, because a
+            read-only board is otherwise indistinguishable from a board where
+            it simply is not your turn. */}
+        {spectator && <span style={styles.spectatorBadge}>👁 SPECTATING &middot; read-only</span>}
+        {sandbox ? (
+          // Design note #24: neither id means anything here, so neither is
+          // shown. Displaying "game #0" would invite someone to go looking
+          // for game 0 on chain.
+          <>
+            <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
+            <span style={styles.roomStripLabel}>
+              Local mock state &middot; no chain, no wallet, no chat. Click any hex to open the
+              tile picker.
+            </span>
+          </>
+        ) : (
+          <>
+            <span style={styles.roomStripLabel}>
+              ⛓ On-chain game <strong style={styles.roomStripValue}>#{gameId}</strong>
+            </span>
+            <span style={styles.roomStripDivider} aria-hidden="true" />
+            <span style={styles.roomStripLabel} title={`Firestore room ${roomId}`}>
+              💬 Room <strong style={styles.roomStripValue}>{truncateAddress(roomId, 6, 4)}</strong>
+            </span>
+          </>
+        )}
+        {chatError && <span style={styles.roomStripError}>{chatError}</span>}
+        <button type="button" style={styles.roomStripButton} onClick={onLeaveGame}>
+          ← Back to lobby
+        </button>
+      </div>
+
       <MainTabBar activeTab={activeMainTab} onSelect={setActiveMainTab} />
 
       {/* In-Place Accordion Ticker + Inline Control Strip -- design notes
@@ -2174,7 +2485,21 @@ function AppShell() {
               <>
                 {/* Item 5: contextual gameplay action bar -- see design notes
                     #8/#10. Step-by-step OR sub-phase guidance is design note
-                    #10/item 2. */}
+                    #10/item 2.
+
+                    Design note #23: hidden entirely for spectators. This is
+                    the COURTESY half of read-only mode -- the guarantee is
+                    `runGameplayAction`'s gate, which holds whether or not
+                    this bar renders. Hidden rather than disabled because a
+                    row of twenty greyed-out buttons is visual noise offering
+                    a spectator nothing; the badge in the room strip already
+                    explains why they are gone. */}
+                {spectator ? (
+                  <div style={styles.spectatorNotice}>
+                    👁 Watching game #{gameId}. Board, ledger and market are live; every action
+                    control is hidden. Join a room from the lobby to play.
+                  </div>
+                ) : (
                 <ContextualActionBar
                   roundType={gameState?.current_round_type ?? null}
                   orSubPhase={orSubPhase}
@@ -2211,6 +2536,7 @@ function AppShell() {
                   currentGlobalEra={gameState?.current_global_era ?? null}
                   isMyTurn={isMyTurn}
                 />
+                )}
 
                 {/* Audit G-15: train trading, shown only during the Buy
                     Trains step.
@@ -2289,9 +2615,29 @@ function AppShell() {
                       // click-interceptor/popup flow, leaving `onHexClick` as
                       // the only click consumer, so a route-point click never
                       // also pops open the LayTile popup underneath it.
-                      queryClient={routeSelectMode ? undefined : (wallet.signingClient ?? undefined)}
-                      contractAddress={routeSelectMode ? undefined : CONTRACT_ADDRESS}
-                      gameId={routeSelectMode ? undefined : MOCK_GAME_ID}
+                      // Design note #24: SANDBOX FORCES THE OFFLINE PATH.
+                      // Withholding `contractAddress` (and the client) is
+                      // not merely tidy -- it is the mechanism. Per
+                      // HexGridRenderer's own design note #139, a missing
+                      // client OR a missing contract address means "there
+                      // is no chain to ask", which routes a hex click into
+                      // `localCatalogPlacements()` and opens the picker in
+                      // `offline` mode against the local tile catalog.
+                      // That is exactly the browsable, chain-free tile
+                      // picker the sandbox exists to provide, and it is
+                      // machinery that already existed -- sandbox mode just
+                      // guarantees the conditions for it.
+                      //
+                      // Withholding it also prevents the alternative, which
+                      // is worse than useless: `CONTRACT_ADDRESS` is a
+                      // non-empty MOCK string, so it is truthy, so without
+                      // this the interceptor would fire a real
+                      // `GetLegalTilePlacements` at a contract that does not
+                      // exist and every click would surface a query error
+                      // instead of a tile picker.
+                      queryClient={routeSelectMode || spectator || sandbox ? undefined : queryClient}
+                      contractAddress={routeSelectMode || sandbox ? undefined : CONTRACT_ADDRESS}
+                      gameId={routeSelectMode ? undefined : gameId}
                       protocolId={routeSelectMode ? undefined : MOCK_LAY_TILE_PROTOCOL_ID}
                       onHexClick={routeSelectMode ? handleRouteHexClick : undefined}
                       onHexClickQuery={handleHexClickQuery}
@@ -2332,9 +2678,9 @@ function AppShell() {
           // Player Net Worth (FinancialLedger.tsx design note #4): same
           // live query client/contract/game id every other connected panel
           // in this file already uses.
-          queryClient={wallet.signingClient ?? undefined}
+          queryClient={queryClient}
           contractAddress={CONTRACT_ADDRESS}
-          gameId={MOCK_GAME_ID}
+          gameId={gameId}
         />
       )}
 
@@ -2377,9 +2723,39 @@ function AppShell() {
           GetLegalTilePlacements failed: {hexClickQuery.message}
         </div>
       )}
-      {activeMainTab === "map" && hexClickQuery?.status === "success" && (
+      {/* Design note #141: the visual cue for a hex that refused the click.
+          Amber, not red -- nothing failed and the player did nothing wrong;
+          they clicked a hex that simply cannot take a tile. Red is reserved
+          for the query error directly above, which IS a fault.
+
+          Reuses the same floating indicator the loading/error states use,
+          so the feedback appears in the one place a player is already
+          watching after a hex click, rather than in a banner elsewhere on
+          the page. Auto-dismisses -- see `handleHexClickQuery`. */}
+      {activeMainTab === "map" &&
+        hexClickQuery?.status === "blocked" &&
+        hexClickQuery.message !== null && (
+          <div
+            role="status"
+            style={{
+              ...styles.hexClickIndicator,
+              ...styles.hexClickIndicatorBlocked,
+              left: hexClickQuery.clientX + 16,
+              top: hexClickQuery.clientY + 16,
+            }}
+          >
+            🚫 {hexClickQuery.message}
+          </div>
+        )}
+      {/* Design note #23: `!spectator` is load-bearing, not decorative.
+          `TileSelectionPopup` is the SECOND of this app's two gameplay
+          dispatch paths -- it calls `useGameSession().execGameplay` itself
+          (that component's own design note #1) rather than routing through
+          `runGameplayAction`, so the gate inside that function does not
+          cover it. Not mounting it is what covers it. */}
+      {activeMainTab === "map" && !spectator && hexClickQuery?.status === "success" && (
         <TileSelectionPopup
-          gameId={MOCK_GAME_ID}
+          gameId={gameId}
           protocolId={MOCK_LAY_TILE_PROTOCOL_ID}
           q={hexClickQuery.q}
           r={hexClickQuery.r}
@@ -2401,10 +2777,20 @@ function AppShell() {
           itself provisional and refuse to dispatch. Kept as a separate
           branch from the `"success"` one above rather than merged with a
           ternary, so the authoritative path stays visibly untouched. */}
-      {activeMainTab === "map" && hexClickQuery?.status === "offline" && (
+      {/* Design note #23: and this branch especially. A spectator gets
+          `queryClient={undefined}`, and HexGridRenderer treats a missing
+          client as "no chain to ask" (its design note #139) -- which routes
+          every board click straight into THIS offline branch. So without
+          `!spectator` here, disabling the query interceptor would have had
+          the exact opposite of the intended effect: instead of no popup, a
+          spectator would get the offline tile picker on every click. It
+          refuses to dispatch on its own (that component's `offline` prop),
+          so nothing could actually have been laid -- but a picker offering a
+          watcher tiles they cannot place is a worse answer than no picker. */}
+      {activeMainTab === "map" && !spectator && hexClickQuery?.status === "offline" && (
         <TileSelectionPopup
           offline
-          gameId={MOCK_GAME_ID}
+          gameId={gameId}
           protocolId={MOCK_LAY_TILE_PROTOCOL_ID}
           q={hexClickQuery.q}
           r={hexClickQuery.r}
@@ -2422,6 +2808,185 @@ function AppShell() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Room routing -- design note #1                                      */
+/* ------------------------------------------------------------------ */
+
+/** Survives a reload so a player who refreshes mid-game lands back at the
+ *  board rather than at the room list. Holds BOTH ids because they address
+ *  two different systems and neither can be derived from the other: the
+ *  `u64` the contract assigned, and the Firestore room id chat/presence
+ *  live under. */
+const ACTIVE_GAME_STORAGE_KEY = "18cosmos.active_game.v1";
+
+/* ==================================================================== */
+/*  DESIGN NOTE 24: THE THREE WAYS TO BE LOOKING AT A BOARD             */
+/* ==================================================================== */
+//
+//   play     A real on-chain game. `gameId` is the contract's, every
+//            control is live, every action signs.
+//   spectate A real on-chain game someone else is playing. Live data,
+//            no dispatch -- design note #23.
+//   sandbox  NO CHAIN AT ALL. The board, tile catalog and picker run off
+//            local mock state so the UI can be worked on without a
+//            deployed contract, a funded wallet, or a populated Firestore.
+//
+// Sandbox exists because the lobby was a TRAP. Launching needs a valid
+// contract address, spectating needs a game someone already launched, and
+// with mock addresses and a fresh Firebase neither is possible -- so there
+// was no route from the lobby to `HexGridRenderer` at all. A UI you cannot
+// open is a UI you cannot develop.
+//
+// IMPLEMENTATION NOTE, and the reason this is a mode rather than a magic
+// `gameId`. The obvious shape -- `gameId = "offline-sandbox"` -- was tried
+// and rejected: `gameId` is typed `number` because it is threaded into
+// roughly twenty `ExecuteMsg` payloads as `game_id`, which the contract
+// declares as `u64`. Widening it to `number | string` would push a
+// `string | number` into every one of those messages and delete the
+// compiler's ability to tell a real game id from a placeholder -- the exact
+// class of mistake `config.ts` design note #3 exists to catch. So the
+// sandbox's identity lives in `mode`, where it is a UI concern, and
+// `gameId` stays a number that always means "a room the contract knows
+// about". `SANDBOX_GAME_ID` is never sent anywhere; sandbox mode does not
+// dispatch.
+//
+// Sandbox is NOT spectator mode. Spectating disables the tile picker
+// (design note #23); sandbox is specifically FOR the tile picker. The two
+// are separate flags on purpose -- `spectator` gates dispatch, `sandbox`
+// gates whether there is a chain to dispatch to.
+export type BoardMode = "play" | "spectate" | "sandbox";
+
+/** The `gameId` handed to the shell in sandbox mode. Never reaches the
+ *  chain: sandbox forces `HexGridRenderer` down its offline path, and every
+ *  dispatch site is gated before a message is built. `0` because the
+ *  contract's `NEXT_GAME_ID` counter starts at 1, so this collides with no
+ *  real room. */
+const SANDBOX_GAME_ID = 0;
+
+/** The `roomId` handed to the shell in sandbox mode. There is no Firestore
+ *  room, so chat and presence both no-op on it. */
+const SANDBOX_ROOM_ID = "offline-sandbox";
+
+interface ActiveGame {
+  gameId: number;
+  roomId: string;
+  /** Design note #24. Persisted alongside the ids so a reload cannot
+   *  silently promote a spectator into a player -- reading the ids back
+   *  without this would default to the most permissive mode and hand a
+   *  watcher a playable board. */
+  mode: BoardMode;
+}
+
+function readActiveGame(): ActiveGame | null {
+  try {
+    const raw = window.sessionStorage.getItem(ACTIVE_GAME_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as ActiveGame).gameId === "number" &&
+      Number.isSafeInteger((parsed as ActiveGame).gameId) &&
+      typeof (parsed as ActiveGame).roomId === "string" &&
+      (parsed as ActiveGame).roomId.length > 0
+    ) {
+      const storedMode = (parsed as ActiveGame).mode;
+      return {
+        gameId: (parsed as ActiveGame).gameId,
+        roomId: (parsed as ActiveGame).roomId,
+        // Fails CLOSED: only the three known modes are accepted, and
+        // anything else -- including an entry written before this field
+        // existed -- degrades to `spectate`, the least privileged of the
+        // three. The safe reading of "I do not know what this viewer is" is
+        // "assume they may not act"; the cost is one trip back through the
+        // lobby, versus handing a non-player a board full of live controls.
+        mode:
+          storedMode === "play" || storedMode === "spectate" || storedMode === "sandbox"
+            ? storedMode
+            : "spectate",
+      };
+    }
+    return null;
+  } catch {
+    // Malformed JSON or storage disabled. Falling back to the Lobby is
+    // always safe -- it is the screen that can recover from anything.
+    return null;
+  }
+}
+
+/**
+ * The boundary between "choosing a room" and "playing in one".
+ *
+ * With no active game this renders `Lobby`; with one, `AppShell`. That is
+ * the whole router -- there is no URL routing here on purpose, since this
+ * app has exactly two screens and adding `react-router` for a single
+ * boolean would be a dependency and a build-config change (see
+ * `config-overrides.js`) bought for nothing.
+ *
+ * Rendered INSIDE both providers: `Lobby` calls `useWallet()` to sign the
+ * launch transaction, so it must sit under `WalletProvider` -- the same
+ * nesting requirement `GameSessionContext.tsx`'s own design note #2 records
+ * for itself.
+ */
+function GameRouter() {
+  const [activeGame, setActiveGame] = useState<ActiveGame | null>(readActiveGame);
+
+  useEffect(() => {
+    try {
+      if (activeGame) window.sessionStorage.setItem(ACTIVE_GAME_STORAGE_KEY, JSON.stringify(activeGame));
+      else window.sessionStorage.removeItem(ACTIVE_GAME_STORAGE_KEY);
+    } catch {
+      /* private browsing -- the game still works, it just is not resumable */
+    }
+  }, [activeGame]);
+
+  const handleEnterGame = useCallback((gameId: number, roomId: string) => {
+    setActiveGame({ gameId, roomId, mode: "play" });
+  }, []);
+
+  const handleSpectateGame = useCallback((gameId: number, roomId: string) => {
+    setActiveGame({ gameId, roomId, mode: "spectate" });
+  }, []);
+
+  /** Design note #24: the escape hatch. Needs no wallet, no contract, no
+   *  Firestore room -- which is the entire point, since the absence of all
+   *  three is what made the lobby inescapable. */
+  const handleEnterSandbox = useCallback(() => {
+    setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
+  }, []);
+
+  const handleLeaveGame = useCallback(() => setActiveGame(null), []);
+
+  if (!activeGame) {
+    return (
+      <Lobby
+        onEnterGame={handleEnterGame}
+        onSpectateGame={handleSpectateGame}
+        onEnterSandbox={handleEnterSandbox}
+      />
+    );
+  }
+
+  return (
+    <AppShell
+      // Remounts cleanly on a room change. Without this key, switching
+      // rooms would keep the previous room's `actionLog`, ticker scroll
+      // position and OR sub-phase cursor -- state that is meaningless in a
+      // different game and actively misleading in it.
+      //
+      // `mode` is part of the key too (design note #24): a viewer who
+      // spectates a game and then joins it properly must get a genuinely
+      // fresh shell, not one carrying a spectator's accumulated
+      // "watching only" log entries and stale derived state.
+      key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}`}
+      gameId={activeGame.gameId}
+      roomId={activeGame.roomId}
+      mode={activeGame.mode}
+      onLeaveGame={handleLeaveGame}
+    />
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Root export -- Provider wrapping, per design note above             */
 /* ------------------------------------------------------------------ */
 
@@ -2429,7 +2994,7 @@ export default function App() {
   return (
     <WalletProvider>
       <GameSessionProvider>
-        <AppShell />
+        <GameRouter />
       </GameSessionProvider>
     </WalletProvider>
   );
@@ -2444,6 +3009,72 @@ export default function App() {
 // past a first wiring pass.
 
 const styles: Record<string, React.CSSProperties> = {
+  // ---- Room strip -- design notes #1/#22. Sits between the brand header
+  // and the nav tabs, in the same #0F172A recessed tone `TopTicker`'s
+  // expanded body and `Lobby`'s panels use, so the two screens read as one
+  // application. ----
+  roomStrip: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    width: "100%",
+    padding: "8px 28px",
+    backgroundColor: "#0F172A",
+    borderBottom: "1px solid #1e2937",
+    fontSize: FONT_SIZE.body,
+    color: "#9aa0ac",
+    boxSizing: "border-box",
+    flexWrap: "wrap",
+  },
+  spectatorNotice: {
+    width: "100%",
+    padding: "14px 28px",
+    backgroundColor: "#1a1710",
+    borderTop: "1px solid #3a2f14",
+    borderBottom: "1px solid #3a2f14",
+    color: "#e0c07a",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 600,
+    boxSizing: "border-box",
+  },
+  sandboxBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.5px",
+    padding: "4px 12px",
+    borderRadius: "999px",
+    backgroundColor: "#2a1e3a",
+    border: "1px solid #6a4a8a",
+    color: "#c9a8e8",
+    flexShrink: 0,
+  },
+  spectatorBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.5px",
+    padding: "4px 12px",
+    borderRadius: "999px",
+    backgroundColor: "#3a2f14",
+    border: "1px solid #6a5a24",
+    color: "#e0c07a",
+    flexShrink: 0,
+  },
+  roomStripLabel: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  roomStripValue: { color: "#e6e8ef", fontWeight: 700 },
+  roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a3a52" },
+  roomStripError: { color: "#f0b0a8", fontSize: FONT_SIZE.small },
+  roomStripButton: {
+    marginLeft: "auto",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 600,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: "999px",
+    border: "1px solid #3a3f4b",
+    backgroundColor: "#1e2129",
+    color: "#9aa0ac",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
   appRoot: {
     display: "flex",
     flexDirection: "column",
@@ -2477,7 +3108,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   dashboardBrand: {
     fontWeight: 700,
-    fontSize: "28px",
+    fontSize: FONT_SIZE.display,
     letterSpacing: "0.02em",
   },
   dashboardSection: {
@@ -2486,26 +3117,26 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
   },
   dashboardLabel: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#9aa0ac",
     textTransform: "uppercase",
     letterSpacing: "0.04em",
   },
   statusBadge: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: "5px 14px",
     borderRadius: "999px",
   },
   addressIndicator: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     color: "#c7cbd4",
   },
   // VGP: no container, amber. Reads as a SCORE.
   vgpBalance: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "20px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 600,
     color: "#e0b64a",
   },
@@ -2523,18 +3154,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   nativeBalanceAmount: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "20px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 600,
     color: "#5fd4c4",
   },
   nativeBalanceDenom: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
     letterSpacing: "0.06em",
     color: "#7fb3ad",
   },
   offlineBadge: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 600,
     padding: "4px 10px",
     borderRadius: "6px",
@@ -2544,12 +3175,12 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "help",
   },
   vgpBalanceNote: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#8a6d1f",
     maxWidth: "320px",
   },
   button: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     padding: "9px 18px",
     borderRadius: "8px",
     border: "1px solid #3a3f4b",
@@ -2558,7 +3189,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   errorText: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#e07a7a",
     maxWidth: "280px",
   },
@@ -2578,7 +3209,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0F172A",
   },
   mainTabButton: {
-    fontSize: "17px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     padding: "14px 28px",
     borderRadius: "10px 10px 0 0",
@@ -2608,7 +3239,7 @@ const styles: Record<string, React.CSSProperties> = {
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
   sidebarHint: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#6f7480",
     margin: "0 0 4px",
   },
@@ -2646,7 +3277,7 @@ const styles: Record<string, React.CSSProperties> = {
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
   actionBarRoundLabel: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
@@ -2660,7 +3291,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   actionBarButton: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     padding: "12px 20px",
     borderRadius: "10px",
     border: "1px solid #3a3f4b",
@@ -2717,7 +3348,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px dashed #3a3f4b",
   },
   routePanelHint: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#8a90a0",
     lineHeight: 1.4,
   },
@@ -2729,13 +3360,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
   },
   routePanelEmpty: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#6f7480",
     fontStyle: "italic",
   },
   routePanelPoint: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     color: "#f4ecd8",
     padding: "4px 10px",
@@ -2744,7 +3375,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #3a3f4b",
   },
   routePanelArrow: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#6f7480",
   },
   routePanelMeta: {
@@ -2756,18 +3387,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   routePanelHopCount: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#9aa0ac",
   },
   routePanelHopCountExceeded: {
     color: "#ff8a75",
   },
   routePanelWarning: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#ff8a75",
   },
   routePanelClearButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     padding: "5px 12px",
     borderRadius: "8px",
     border: "1px solid #3a3f4b",
@@ -2802,11 +3433,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#2a2410",
   },
   hardwareTrayCardModel: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
   },
   hardwareTrayCardCost: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#9aa0ac",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
@@ -2823,7 +3454,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1a1d26",
   },
   privateCompanyTrayLabel: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#9aa0ac",
     fontWeight: 600,
   },
@@ -2841,7 +3472,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
   },
   privateCompanyPriceValue: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#e6e8ef",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     minWidth: "72px",
@@ -2871,12 +3502,23 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#242833",
     border: "1px solid #3a3f4b",
     color: "#e6e8ef",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
   },
   hexClickIndicatorError: {
     backgroundColor: "#2a1414",
     borderColor: "#8a2020",
     color: "#ffe8e8",
+  },
+  // Design note #141. Amber, and deliberately roomier than the error
+  // variant: these messages explain a board rule ("gray hexes are
+  // permanently fixed") rather than report a failure, so they run longer
+  // and need the width to stay readable at two or three lines.
+  hexClickIndicatorBlocked: {
+    maxWidth: "320px",
+    backgroundColor: "#2a2114",
+    borderColor: "#8a6a20",
+    color: "#f0dcb0",
+    lineHeight: LINE_HEIGHT.normal,
   },
 };

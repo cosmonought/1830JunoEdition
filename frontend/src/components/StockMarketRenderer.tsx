@@ -574,6 +574,7 @@
 //    breaker for whatever slight overlap remains at high occupant counts.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { FONT_SIZE } from "../styles/typography";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -1606,12 +1607,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   headerTitle: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     letterSpacing: "0.02em",
   },
   headerHint: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#8a90a0",
   },
   // The old horizontal `legend`/`legendItem` header-row styles (design note
@@ -1636,13 +1637,13 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   legendLabel: {
-    fontSize: "23px",
+    fontSize: FONT_SIZE.display,
     fontWeight: 700,
     color: "#c8cbd6",
     flexShrink: 0,
   },
   legendText: {
-    fontSize: "19px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 600,
     color: "#c4c9d4",
     lineHeight: 1.45,
@@ -1728,14 +1729,14 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "8px",
   },
   parTrayTitle: {
-    fontSize: "19px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.03em",
     color: "#c8cbd6",
   },
   parTrayHint: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#6f7480",
     lineHeight: 1.35,
   },
@@ -1756,7 +1757,7 @@ const styles: Record<string, React.CSSProperties> = {
     // Upsized well past the main chart's own necessarily-small per-cell
     // numbers -- see design note #17: this panel's only job is being an
     // easy-to-read reference sheet.
-    fontSize: "27px",
+    fontSize: FONT_SIZE.display,
     fontWeight: 700,
     // Per-row color is overridden inline from `PAR_VALUE_COLORS` so the six
     // standard prices stay visually distinguishable against the now-neutral
@@ -1770,7 +1771,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "flex-end",
   },
   parTrayEmpty: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     // Muted steel-gray to match the tray's now-neutral background (was
     // tuned for the old gold row fill -- see design note #14).
     color: "#5a6072",
@@ -1778,7 +1779,7 @@ const styles: Record<string, React.CSSProperties> = {
   parTrayMarkerBadge: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     // Upsized alongside `parTrayPrice` -- see design note #17.
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#ffffff",
     padding: "5px 11px",

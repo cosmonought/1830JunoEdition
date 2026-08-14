@@ -59,6 +59,7 @@ import {
 import { TILE_CATALOG, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
 import type {
+  HexClickRejection,
   LegalTilePlacement,
   MapGridResponse,
   StationTokenCompany,
@@ -326,6 +327,190 @@ export function axialRound(qFrac: number, rFrac: number): { q: number; r: number
  *  change. */
 export function hexHasLaidTile(mapGrid: MapGridResponse, q: number, r: number): boolean {
   return mapGrid.tiles.some((tile) => tile.q === q && tile.r === r);
+}
+
+/** ================================================================
+ *  TILE-LAYING CLICK ELIGIBILITY (design note #141)
+ *  ================================================================
+ *
+ *  Four hard gates a hex must pass before the tile picker is allowed to
+ *  open on it. Clicking empty space beyond the board, a red off-board
+ *  terminal, a preprinted gray hex, or a hex whose tile is already Brown
+ *  used to open a picker anyway -- offering, in the first three cases, a
+ *  tray of tiles that could never be laid there under any circumstances.
+ *
+ *  WHY THIS IS A CLIENT-SIDE GATE AT ALL, given design note #4's rule that
+ *  this frontend does not re-implement contract legality. Because these
+ *  four are categorically different from the rules that note is about.
+ *  Connectivity, tray depletion, upgrade topology and era locks are
+ *  STATEFUL -- they depend on what else is on the board, what the tray
+ *  holds, and whose turn it is, so any client-side answer is a guess that
+ *  goes stale. These four are STATIC BOARD GEOMETRY plus one colour
+ *  comparison: whether a coordinate is a hex at all, whether it is red or
+ *  gray, and whether the tile sitting on it is already the top tier.
+ *  None of that can change during a game, none of it needs the chain, and
+ *  all of it is already in `hexBoardData` for rendering.
+ *
+ *  THE CONSERVATISM RULE, which matters more than the gates themselves:
+ *  this must only ever block what is DEFINITELY illegal. A false block is
+ *  strictly worse than a false allow -- a false allow costs the player a
+ *  rejected transaction and an error message, while a false block makes a
+ *  legal move look impossible and is invisible, unreportable and
+ *  indistinguishable from the feature working. So every gate below is
+ *  drawn from a rule the contract states absolutely and unconditionally,
+ *  and anything conditional is deliberately left to the contract:
+ *
+ *    gate 1  not a real hex        -- `STATIC_BOARD_HEXES` is the complete
+ *                                     93-hex board (design note #6)
+ *    gate 2a red off-board         -- `hexmap.rs` doc comment #14,
+ *                                     Off-Board Reservation
+ *    gate 2b preprinted gray       -- `hexmap.rs` doc comments #19/#20,
+ *                                     Gray Hex Immutability, checked
+ *                                     unconditionally in BOTH
+ *                                     `execute_lay_tile` and
+ *                                     `legal_tile_placements`
+ *    gate 3  already top tier      -- `hexmap.rs` doc comment #10 /
+ *                                     `HexMapError::AlreadyMaxColor`
+ *
+ *  Everything else -- connectivity, era locks, private-company hex
+ *  reservations, tray supply, topology retention -- stays with the
+ *  contract, exactly as design note #4 requires.
+ */
+
+export interface HexClickEligibility {
+  eligible: boolean;
+  reason: HexClickRejection | null;
+  /** Player-facing, written to explain rather than merely refuse. `null`
+   *  when eligible, and also when the reason is `"not-a-hex"` -- see
+   *  `evaluateHexForTileLaying` for why that one says nothing. */
+  message: string | null;
+  hexLabel: string;
+}
+
+const ELIGIBLE: Omit<HexClickEligibility, "hexLabel"> = {
+  eligible: true,
+  reason: null,
+  message: null,
+};
+
+/** The colour a tile of `tier` upgrades INTO, or `null` if it is terminal.
+ *
+ *  Mirrors `hexmap::next_tile_color` exactly, including the part that does
+ *  the work here: Brown returns `None`, which is what makes
+ *  `HexMapError::AlreadyMaxColor` fire on the contract. `TileColorTier` has
+ *  only these three members, so there is no fourth case to forget. */
+export function nextTileColorTier(tier: TileColorTier): TileColorTier | null {
+  switch (tier) {
+    case "Yellow":
+      return "Green";
+    case "Green":
+      return "Brown";
+    case "Brown":
+      return null;
+  }
+}
+
+/** Whether the catalog contains ANY tile that could be the next colour step
+ *  up from `tier`.
+ *
+ *  This is the "or has no valid subsequent upgrades in the tile catalog"
+ *  half of gate 3, and it is a genuinely separate condition from the Brown
+ *  check: a catalog that happened to ship no Brown tiles at all would make
+ *  every Green tile terminal in practice while `nextTileColorTier` still
+ *  claimed otherwise. Deliberately checks colour ONLY, not terrain
+ *  compatibility -- the contract's upgrade rule (`execute_lay_tile`) tests
+ *  the colour step and edge-superset topology, and does NOT require the
+ *  terrain to match, so filtering by terrain here would block upgrades the
+ *  contract would happily accept. That is precisely the false block the
+ *  conservatism rule above forbids. */
+function catalogHasTierAbove(tier: TileColorTier): boolean {
+  const next = nextTileColorTier(tier);
+  if (next === null) return false;
+  return TILE_CATALOG.some((entry) => entry.color === next);
+}
+
+/**
+ * Runs the four gates for `(q, r)`.
+ *
+ * Pure and synchronous -- every input is static board data plus the already
+ * fetched `mapGrid`, so this can run inline in a click handler with no
+ * query and no await.
+ *
+ * @param mapGrid The laid tiles. Gate 3 is skipped entirely on an empty
+ *                hex, so a stale or empty grid can only ever make this
+ *                MORE permissive, never less -- which is the correct
+ *                direction to fail (see the conservatism rule).
+ */
+export function evaluateHexForTileLaying(
+  q: number,
+  r: number,
+  mapGrid: MapGridResponse,
+): HexClickEligibility {
+  /* ---- Gate 1: is this a hex at all? ---- */
+  const boardHex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (!boardHex) {
+    // No message on purpose. `pixelToAxial` maps EVERY point in the canvas
+    // to some axial coordinate, including the large empty margins around a
+    // non-convex board and the gaps inside its outline (row A has no A13 or
+    // A15 -- see `STATIC_BOARD_HEXES`' own comment). Clicking blank space
+    // is not an error a player made, it is a click on nothing, and
+    // reporting it would flash a tooltip every time someone clicked the
+    // background to dismiss something.
+    return { eligible: false, reason: "not-a-hex", message: null, hexLabel: describeHex(q, r) };
+  }
+
+  const hexLabel = boardHex.label;
+
+  /* ---- Gate 2a: red off-board terminals ---- */
+  if (boardHex.type === "RedOffboard") {
+    return {
+      eligible: false,
+      reason: "offboard",
+      message: `${hexLabel} is a red off-board area. It is a revenue destination, not a buildable hex -- no tile can ever be laid here.`,
+      hexLabel,
+    };
+  }
+
+  /* ---- Gate 2b: preprinted gray hexes ---- */
+  //
+  // `printedColor === "Gray"` is the frontend's record of the same twelve
+  // hexes the contract holds in `hexmap::GRAY_PREPRINTED_HEXES`, and the
+  // two are verified to agree (twelve entries each). `GRAY_HEXES` is also
+  // consulted because it is keyed by label and carries the printed track:
+  // the two tables were populated in separate passes, and requiring only
+  // one of them to be right would make this gate depend on which pass a
+  // given hex happened to be added in.
+  if (boardHex.printedColor === "Gray" || GRAY_HEXES[hexLabel] !== undefined) {
+    return {
+      eligible: false,
+      reason: "gray-immutable",
+      message: `${hexLabel} is a preprinted gray hex. Gray hexes are permanently fixed -- their track can never be replaced or upgraded.`,
+      hexLabel,
+    };
+  }
+
+  /* ---- Gate 3: terminal tier ---- */
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) {
+    const entry = TILE_CATALOG_BY_ID.get(laid.tile_id);
+    // An id the catalog mirror has not caught up to is ALLOWED through.
+    // The mirror is hand-kept (design note #2) and can lag the backend, and
+    // treating "I do not recognise this tile" as "this tile is finished"
+    // would silently freeze every hex holding a newly added tile.
+    if (entry) {
+      const next = nextTileColorTier(entry.color);
+      if (next === null || !catalogHasTierAbove(entry.color)) {
+        return {
+          eligible: false,
+          reason: "max-tier",
+          message: `${hexLabel} already holds tile #${laid.tile_id}, which is ${entry.color} -- the top colour tier. There is no further upgrade for this hex.`,
+          hexLabel,
+        };
+      }
+    }
+  }
+
+  return { ...ELIGIBLE, hexLabel };
 }
 
 /** ================================================================

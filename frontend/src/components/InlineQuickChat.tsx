@@ -41,6 +41,7 @@
 
 import React from "react";
 import type { FeedFilter } from "../utils/feed";
+import { CONTROL_PADDING, FONT_SIZE } from "../styles/typography";
 
 export interface InlineQuickChatProps {
   draft: string;
@@ -128,14 +129,14 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   icon: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     flexShrink: 0,
   },
   input: {
     flex: "1 1 160px",
     minWidth: "120px",
-    fontSize: "14px",
-    padding: "9px 12px",
+    fontSize: FONT_SIZE.control,
+    padding: CONTROL_PADDING.input,
     borderRadius: "8px",
     border: "1px solid #3a3f4b",
     backgroundColor: "#0a0e17",
@@ -143,9 +144,9 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
   },
   sendButton: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 600,
-    padding: "9px 18px",
+    padding: CONTROL_PADDING.button,
     borderRadius: "8px",
     border: "1px solid #3a3f4b",
     backgroundColor: "#242833",
@@ -172,11 +173,16 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   pill: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    padding: "6px 12px",
+    padding: CONTROL_PADDING.buttonSmall,
     borderRadius: "999px",
-    border: "1px solid #3a3f4b",
+    // Longhand: `pillActive` overrides `borderColor` alone, and mixing that
+    // against a `border` shorthand is the same warning `Lobby.tsx`'s tab bar
+    // hit.
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a3f4b",
     backgroundColor: "#1e2129",
     color: "#9aa0ac",
     cursor: "pointer",

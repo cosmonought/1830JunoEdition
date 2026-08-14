@@ -21,6 +21,7 @@
 // NEW DESIGN NOTES GO IN THAT FILE, not back here.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FONT_SIZE } from "../styles/typography";
 import {
   tileCitySlotPoints,
 } from "./TileGraphics";
@@ -82,6 +83,7 @@ import {
   describeHex,
   describeHexDesignationForLog,
   describeHexWithValue,
+  evaluateHexForTileLaying,
   hexBlockedSlots,
   hexHasLaidTile,
   hexSlotDirection,
@@ -366,7 +368,7 @@ const CAMERA_CONTROL_BUTTON_STYLE: React.CSSProperties = {
   backgroundColor: "rgba(255, 255, 255, 0.06)",
   color: "#f4ecd8",
   fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-  fontSize: "18px",
+  fontSize: FONT_SIZE.heading,
   fontWeight: 700,
   lineHeight: 1,
   cursor: "pointer",
@@ -393,7 +395,7 @@ const HOVER_TOOLTIP_STYLE: React.CSSProperties = {
   border: "2px solid #6a7285",
   color: "#f4ecd8",
   fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-  fontSize: "20px",
+  fontSize: FONT_SIZE.heading,
   fontWeight: 700,
   whiteSpace: "nowrap",
   boxShadow: "0 4px 14px rgba(0, 0, 0, 0.55)",
@@ -2356,6 +2358,27 @@ export function HexGridRenderer({
         preprinted: describeHexDesignationForLog(q, r),
       });
 
+      /* ---- Design note #141: the four static board gates ---------------
+       *
+       * Split deliberately either side of `onHexClick`, because the two
+       * halves answer different questions and only one of them is about
+       * laying a tile.
+       *
+       * GATE 1 RUNS FIRST, BEFORE `onHexClick`. "This coordinate is not a
+       * hex" is not a tile-laying rule, it is the absence of a target.
+       * `pixelToAxial` maps every point in the canvas to SOME axial
+       * coordinate -- including the wide empty margins around the board and
+       * the real gaps inside its non-convex outline (row A has no A13/A15)
+       * -- so without this, clicking blank background is indistinguishable
+       * from clicking a hex. Nothing downstream should react to it: not the
+       * picker, and not route-point selection either, which would otherwise
+       * happily append a route point in the middle of the Atlantic.
+       */
+      const eligibility = evaluateHexForTileLaying(q, r, mapGrid);
+      if (eligibility.reason === "not-a-hex") {
+        return;
+      }
+
       onHexClick?.({ q, r, hexLabel, clientX: event.clientX, clientY: event.clientY });
 
       // Design note #120: this guard used to be a single condition covering
@@ -2392,6 +2415,53 @@ export function HexGridRenderer({
       // both in normal mode and omits both in route-select mode, and neither
       // has anything to do with whether a chain is reachable.
       if (gameId === undefined || protocolId === undefined) {
+        return;
+      }
+
+      /* ---- Gates 2 and 3 -- design note #141 ---------------------------
+       *
+       * These run AFTER `onHexClick` and after the route-select bail-out,
+       * both on purpose.
+       *
+       * After `onHexClick`, because off-board and gray hexes are perfectly
+       * legal things for a ROUTE to run through -- that is what red
+       * terminals and gray connector hexes are FOR. These gates say "no
+       * tile may be laid here", which is a different claim from "nothing
+       * may happen here", and conflating the two would break the manual
+       * route-point tool (App.tsx design note #11) for precisely the hexes
+       * it most needs to reach.
+       *
+       * After the route-select bail-out, because in that mode the picker is
+       * switched off entirely and reporting a blocked status would put a
+       * tooltip on screen for a picker that was never going to open.
+       *
+       * Reported rather than silently dropped: `"blocked"` carries the
+       * reason to the UI. This codebase has shipped a silent-hex-click bug
+       * twice already (design notes #120 and #139) and both times the
+       * symptom was a click that logged and then did nothing.
+       */
+      if (!eligibility.eligible) {
+        // eslint-disable-next-line no-console
+        console.log("[TileSelection] hex blocked -- picker suppressed", {
+          hex_coordinate: { q, r, hex_label: eligibility.hexLabel },
+          reason: eligibility.reason,
+        });
+        // Supersede any in-flight query, so a response for a PREVIOUS hex
+        // cannot land after this and re-open the picker the gate just
+        // refused. Same guard the offline path uses below.
+        clickQuerySeqRef.current += 1;
+        onHexClickQuery?.({
+          status: "blocked",
+          q,
+          r,
+          hexLabel: eligibility.hexLabel,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          // Non-null: `"not-a-hex"` already returned above, and it is the
+          // only reason with no message.
+          reason: eligibility.reason!,
+          message: eligibility.message,
+        });
         return;
       }
 
@@ -2509,6 +2579,12 @@ export function HexGridRenderer({
       protocolId,
       onHexClick,
       onHexClickQuery,
+      // Design note #141: gate 3 reads the laid tile at the clicked hex out
+      // of `mapGrid`, so a stale closure here would keep judging a hex by
+      // whatever was on it when the handler was last built -- meaning a hex
+      // upgraded to Brown during play would go on opening the picker until
+      // something unrelated forced a re-render.
+      mapGrid,
       // Design note #125 dropped `currentEra` from here: the offline
       // fallback no longer filters by era, so the handler has nothing
       // era-dependent left to close over. Era browsing is now a view control

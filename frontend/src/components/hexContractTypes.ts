@@ -286,7 +286,50 @@ export interface LegalTilePlacementsResponse {
  *  query state (see design note #7) -- reported to the host app via
  *  `onHexClickQuery` so `App.tsx` can decide when/where to render
  *  `<TileSelectionPopup />`. */
+/** Why a hex refused a tile-laying click -- design note #141.
+ *
+ *  Defined HERE rather than beside `evaluateHexForTileLaying` in
+ *  `hexGeometry.ts`, which is where the logic lives, purely to respect the
+ *  one-way import rule: `hexGeometry` imports from this module, so this
+ *  module cannot import back without creating the cycle that file's own
+ *  header warns about. The type is data, the function is behaviour, and the
+ *  data has to sit at the bottom.
+ *
+ *    "not-a-hex"       the coordinate is not one of the 93 real board hexes
+ *    "offboard"        a red off-board revenue terminal
+ *    "gray-immutable"  a preprinted gray hex -- permanently fixed
+ *    "max-tier"        the tile there is already the top colour tier
+ */
+export type HexClickRejection = "not-a-hex" | "offboard" | "gray-immutable" | "max-tier";
+
 export type HexClickQueryState =
+  /** Design note #141: the hex failed one of the four static board gates
+   *  (`evaluateHexForTileLaying`), so `GetLegalTilePlacements` was never
+   *  called and no picker may open.
+   *
+   *  A distinct variant rather than simply reporting nothing, for the same
+   *  reason `"offline"` is a variant rather than a flag: the consumer has
+   *  to make a decision, and the exhaustiveness checker should be the thing
+   *  that reminds it. Reporting nothing was the ORIGINAL behaviour for
+   *  off-board and gray clicks in an earlier draft of this gate, and it is
+   *  indistinguishable from the click handler being broken -- which is
+   *  exactly the failure mode this codebase has already hit twice (see
+   *  design notes #120 and #139, both of which were silent-click bugs).
+   *
+   *  Consumers MUST NOT open the tile picker on this status. They SHOULD
+   *  show `message` briefly when it is non-null. */
+  | {
+      status: "blocked";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      reason: HexClickRejection;
+      /** `null` for a click on empty space beyond the board, which is not
+       *  worth telling anyone about -- see `evaluateHexForTileLaying`. */
+      message: string | null;
+    }
   | {
       status: "loading";
       q: number;

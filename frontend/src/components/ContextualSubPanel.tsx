@@ -53,6 +53,7 @@ import React from "react";
 
 import type { GameStateResponse } from "../utils/gameState";
 import { estimateCertificateCount } from "../utils/gameState";
+import { FONT_SIZE } from "../styles/typography";
 
 export interface ContextualSubPanelProps {
   gameState: GameStateResponse | null;
@@ -280,31 +281,31 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
   },
   headerTitle: {
-    fontSize: "17px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
     color: "#c8cbd6",
   },
   headerHint: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#8a90a0",
   },
   placeholderText: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     color: "#6f7480",
     margin: 0,
   },
   staleNote: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#8a6d1f",
     margin: 0,
   },
   table: {
     width: "100%",
     borderCollapse: "collapse",
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
   },
   th: {
     textAlign: "left",
@@ -323,7 +324,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   activeBadge: {
     marginLeft: "10px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     padding: "2px 9px",
@@ -332,7 +333,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#eafff0",
   },
   footnote: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#6f7480",
     margin: 0,
     lineHeight: 1.4,
@@ -345,12 +346,12 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #4a3f1f",
   },
   designGapTitle: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     color: "#d4a94c",
   },
   designGapText: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#b3a479",
     margin: "6px 0 0",
     lineHeight: 1.45,

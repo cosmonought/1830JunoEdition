@@ -110,8 +110,21 @@ function looksLikeJunoAddress(value: string): boolean {
 }
 
 /** Reads a build-time value, normalising unset/blank to `undefined`. Never
- *  throws -- see design note #0. */
-function readOptional(value: string | undefined): string | undefined {
+ *  throws -- see design note #0.
+ *
+ *  EXPORTED for `config/firebase.ts`, which applies the identical
+ *  deferred-read discipline to the `REACT_APP_FIREBASE_*` variables. Sharing
+ *  the helper rather than copying it is design note #1's rule applied to the
+ *  reading policy itself: if the definition of "unset" ever changes (say,
+ *  treating the literal string "undefined" as blank -- a real hazard when a
+ *  CI system interpolates a missing variable), it must change in exactly one
+ *  place or the two config modules will disagree about whether the app is
+ *  configured.
+ *
+ *  Note it takes the already-read VALUE, never the variable name -- see
+ *  design note #2 for why the read itself must stay a literal
+ *  `process.env.REACT_APP_FOO` expression at each call site. */
+export function readOptional(value: string | undefined): string | undefined {
   const trimmed = (value ?? "").trim();
   return trimmed.length === 0 ? undefined : trimmed;
 }

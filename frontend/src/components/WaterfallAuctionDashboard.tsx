@@ -65,6 +65,7 @@
 //    guard is needed.
 
 import React, { useEffect, useMemo, useState } from "react";
+import { FONT_SIZE } from "../styles/typography";
 
 import type {
   GameStateResponse,
@@ -552,22 +553,22 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   headerTitle: {
-    fontSize: "19px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
     color: "#c8cbd6",
   },
   headerHint: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     color: "#8a90a0",
   },
   staleNote: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#8a6d1f",
   },
   placeholderText: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     color: "#6f7480",
     margin: 0,
   },
@@ -611,13 +612,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "4px",
   },
   privateCardName: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     color: "#e6e8ef",
   },
   lowestBadge: {
     alignSelf: "flex-start",
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     letterSpacing: "0.05em",
     color: "#d4a94c",
@@ -627,7 +628,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 6px",
   },
   privateCardFaceValue: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#8a90a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
@@ -638,14 +639,14 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "4px",
   },
   noBidsText: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#6f7480",
     fontStyle: "italic",
   },
   bidRowEntry: {
     display: "flex",
     justifyContent: "space-between",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#c8cbd6",
     padding: "2px 6px",
@@ -654,7 +655,7 @@ const styles: Record<string, React.CSSProperties> = {
   bidRowEntryOwn: {
     display: "flex",
     justifyContent: "space-between",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#eafff0",
     backgroundColor: "#1f2a1f",
@@ -665,12 +666,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
   },
   privateCardRevenue: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#8a90a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   privateCardAbility: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#8fa0b8",
     lineHeight: 1.4,
   },
@@ -681,7 +682,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "2px",
   },
   statusBadgeEscrow: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#8fc7e8",
     backgroundColor: "#122a38",
@@ -691,7 +692,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   statusBadgeAutoAward: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#8fe8a8",
     backgroundColor: "#123822",
@@ -701,7 +702,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   statusBadgeTied: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#e88f8f",
     backgroundColor: "#381212",
@@ -711,7 +712,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   highestBidderLine: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#c7cbd4",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
@@ -732,14 +733,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
   },
   turnBannerLabel: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     letterSpacing: "0.05em",
     textTransform: "uppercase",
     color: "#8a90a0",
   },
   turnBannerAddress: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#e6e8ef",
   },
@@ -762,14 +763,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
   },
   actionCardTitle: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     letterSpacing: "0.03em",
     color: "#c8cbd6",
   },
   primaryButton: {
     padding: "10px 12px",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     color: "#0f1115",
     backgroundColor: "#d4a94c",
@@ -779,7 +780,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   secondaryButton: {
     padding: "9px 14px",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 600,
     color: "#e6e8ef",
     backgroundColor: "#2a2e3a",
@@ -789,7 +790,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   passButton: {
     padding: "9px 12px",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 600,
     color: "#c8cbd6",
     backgroundColor: "transparent",
@@ -805,7 +806,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "1 1 auto",
     minWidth: 0,
     padding: "8px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     backgroundColor: "#0f1115",
     color: "#e6e8ef",
     border: "1px solid #3a3f4d",
@@ -814,7 +815,7 @@ const styles: Record<string, React.CSSProperties> = {
   numberInput: {
     width: "90px",
     padding: "8px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     backgroundColor: "#0f1115",
     color: "#e6e8ef",
@@ -822,7 +823,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
   },
   hintText: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     color: "#8a90a0",
   },
   miniAuctionBidders: {
@@ -843,7 +844,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#c8cbd6",
     padding: "3px 6px",
@@ -853,7 +854,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: "#eafff0",
     backgroundColor: "#1f2a1f",
@@ -867,7 +868,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "1 1 auto",
   },
   youBadge: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#8ee08a",
     border: "1px solid #2f5a2f",
@@ -875,7 +876,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1px 5px",
   },
   leaderBadge: {
-    fontSize: "10px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#d4a94c",
     border: "1px solid #6b5a1f",

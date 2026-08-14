@@ -45,6 +45,7 @@
 
 import React from "react";
 import type { PublicCompanyState } from "../utils/gameState";
+import { FONT_SIZE } from "../styles/typography";
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
@@ -358,12 +359,12 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
   },
   headerTitle: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#e6e8ef",
   },
   headerHint: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#9aa0ac",
   },
   section: {
@@ -379,7 +380,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 700,
     color: "#9aa0ac",
     textTransform: "uppercase",
@@ -394,7 +395,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     gap: "4px",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
     borderRadius: "999px",
@@ -410,11 +411,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "currentColor",
   },
   emptyHint: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#6f7480",
   },
   floatBadge: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "2px 8px",
     borderRadius: "999px",
@@ -446,7 +447,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#e0c341",
   },
   floatBarCaption: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#9aa0ac",
   },
   controlsRow: {
@@ -460,7 +461,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
   },
   parCell: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 600,
     padding: "6px 10px",
     borderRadius: "6px",
@@ -479,7 +480,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
   },
   sourceToggle: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 600,
     padding: "6px 10px",
     borderRadius: "6px",
@@ -498,7 +499,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
   },
   sellStep: {
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     fontWeight: 600,
     padding: "6px 10px",
     borderRadius: "6px",
@@ -522,12 +523,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "#2b2f3a",
   },
   sellHint: {
-    fontSize: "11px",
+    fontSize: FONT_SIZE.micro,
     lineHeight: 1.4,
     color: "#c8a24a",
   },
   actionButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "9px 14px",
     borderRadius: "8px",
@@ -543,7 +544,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: "10px",
   },
   passButton: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "9px 18px",
     borderRadius: "8px",

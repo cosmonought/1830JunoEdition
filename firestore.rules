@@ -1,0 +1,263 @@
+rules_version = '2';
+
+// 18Cosmos -- Cloud Firestore security rules
+//
+// DEPLOY THIS BEFORE TEST MODE EXPIRES. A Firestore database created in
+// Test Mode allows unrestricted read and write to anyone on the internet
+// who knows the project id, and after ~30 days it flips to denying
+// everything instead. Neither state is one to be surprised by.
+//
+//   firebase deploy --only firestore:rules
+//
+// ===================================================================
+//  WHAT THESE RULES ARE ACTUALLY DEFENDING
+// ===================================================================
+//
+// Not the game. The Juno contract is the single source of truth for game
+// state, and it does not read one byte of this database -- so no amount of
+// Firestore tampering can steal a turn, move a tile, mint VGP or redirect a
+// payout. That property comes from the ARCHITECTURE, not from this file,
+// and it is the reason a compromise here is embarrassing rather than
+// catastrophic.
+//
+// What this file defends is the integrity of the social layer and the
+// usability of the lobby:
+//
+//   - Nobody may put words in another player's mouth (author binding).
+//   - Nobody may rewrite or delete history (chat is append-only).
+//   - Nobody may mark someone else ready, kick them, or fake their
+//     presence (seat ownership).
+//   - Nobody may repoint a launched room at a different on-chain game
+//     (`chainGameId` is write-once).
+//   - Nobody may smuggle a field that looks like game state into these
+//     documents, so that no future reader can be tempted to trust one.
+//
+// ===================================================================
+//  THE AUTHENTICATION GAP -- READ THIS
+// ===================================================================
+//
+// These rules bind a write to a CLAIMED wallet address, not to a PROVEN
+// one. Firestore can verify `request.auth`, and this app has no Firebase
+// Auth yet, so `isSelf()` below compares the document key to a field in the
+// payload -- which stops accidents and casual tampering, and does not stop
+// someone who deliberately writes as another address.
+//
+// Closing it properly needs a signature challenge: the client signs a nonce
+// with its Keplr key, a Cloud Function verifies the secp256k1 signature
+// against the bech32 address and mints a Firebase custom token, and every
+// `isSelf()` below becomes `request.auth.uid == address`. That is a real
+// piece of work and it is deliberately NOT pretended at here -- a rule that
+// looks like authentication but is not is worse than an honest gap, because
+// the next person to read it will believe it.
+//
+// Until then: the blast radius is impersonation in chat and seat griefing
+// in the lobby. Both are visible, both are recoverable, and neither can
+// touch anything on-chain.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ---------------- helpers ---------------- */
+
+    // Shape of a Juno bech32 address, mirroring `config.ts`'s
+    // `looksLikeJunoAddress`. Keeps junk out of the address-keyed seat
+    // documents.
+    function isJunoAddress(value) {
+      return value is string && value.matches('^juno1[02-9ac-hj-np-z]{38,58}$');
+    }
+
+    // See "THE AUTHENTICATION GAP" above -- claimed, not proven.
+    function isSelf(address) {
+      return isJunoAddress(address);
+    }
+
+    // The core of the architectural boundary, enforced in the database
+    // itself: no document here may carry a field named for game state, so a
+    // future reader cannot find one to trust. If some later feature needs a
+    // new field, add it to the explicit allow-list on the relevant
+    // collection -- never widen this.
+    function hasNoGameStateFields(data) {
+      return !data.keys().hasAny([
+        'playerCash', 'cashVgp', 'treasury', 'shares', 'holdings',
+        'tiles', 'mapGrid', 'marketGrid', 'stockPrice', 'parValue',
+        'currentRoundType', 'activePlayerIndex', 'priorityDeal',
+        'trains', 'hardware', 'privateCompanies', 'netWorth',
+        'totalJunoPool', 'virtualBankVgp', 'era', 'phase'
+      ]);
+    }
+
+    // Ordering trusts the sender's clock (see `ChatBox.tsx` design note #2),
+    // so bound it: a message more than five minutes from server time cannot
+    // be pinned to the top or bottom of a room's history permanently.
+    function hasSaneClientClock(data) {
+      return data.clientCreatedAtMs is number
+        && data.clientCreatedAtMs > request.time.toMillis() - 300000
+        && data.clientCreatedAtMs < request.time.toMillis() + 300000;
+    }
+
+    /* ---------------- rooms: games/{roomId} ---------------- */
+
+    match /games/{roomId} {
+
+      // Room discovery is public by design -- an open lobby that nobody can
+      // list is not a lobby. Nothing sensitive lives here.
+      allow read: if true;
+
+      allow create: if
+           request.resource.data.keys().hasOnly([
+             'name', 'hostAddress', 'hostDisplayName', 'maxPlayers',
+             'seatCount', 'status', 'chainGameId', 'anteUjuno',
+             'virtualBankStart', 'createdAt', 'launchError'
+           ])
+        && hasNoGameStateFields(request.resource.data)
+        && isSelf(request.resource.data.hostAddress)
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 48
+        // The contract's own bound: `CreateGameRoom { max_players }` is 2-6.
+        && request.resource.data.maxPlayers is int
+        && request.resource.data.maxPlayers >= 2
+        && request.resource.data.maxPlayers <= 6
+        && request.resource.data.seatCount == 0
+        // A room may only ever be BORN off-chain. This single line is what
+        // makes "stage off-chain, launch on-chain" a rule rather than a
+        // convention -- nobody can create a room that claims to already be
+        // live on a game id they did not pay for.
+        && request.resource.data.status == 'staging'
+        && request.resource.data.chainGameId == null
+        // Base-denom integer strings, never numbers -- a `Uint128` past
+        // 2^53 is not representable as a JSON number without silent loss.
+        && request.resource.data.anteUjuno is string
+        && request.resource.data.anteUjuno.matches('^[0-9]{1,30}$')
+        && request.resource.data.virtualBankStart is string
+        && request.resource.data.virtualBankStart.matches('^[0-9]{1,30}$');
+
+      allow update: if
+           request.resource.data.keys().hasOnly([
+             'name', 'hostAddress', 'hostDisplayName', 'maxPlayers',
+             'seatCount', 'status', 'chainGameId', 'anteUjuno',
+             'virtualBankStart', 'createdAt', 'launchError'
+           ])
+        && hasNoGameStateFields(request.resource.data)
+        // Immutable after creation. The ante in particular: a host who
+        // could raise it after players had agreed to a number would be
+        // changing the price of a seat out from under them.
+        && request.resource.data.hostAddress == resource.data.hostAddress
+        && request.resource.data.anteUjuno == resource.data.anteUjuno
+        && request.resource.data.virtualBankStart == resource.data.virtualBankStart
+        && request.resource.data.maxPlayers == resource.data.maxPlayers
+        && request.resource.data.createdAt == resource.data.createdAt
+        // `chainGameId` is WRITE-ONCE. It is the one field other clients act
+        // on without verifying -- they pass it straight to `GetGameState` --
+        // so repointing a launched room at a different game is the single
+        // most disruptive write available here. Once set, it is frozen.
+        && (resource.data.chainGameId == null
+            || request.resource.data.chainGameId == resource.data.chainGameId)
+        && (request.resource.data.chainGameId == null
+            || (request.resource.data.chainGameId is int
+                && request.resource.data.chainGameId >= 0))
+        && request.resource.data.status in ['staging', 'launching', 'live', 'closed']
+        // A room cannot claim to be live without an id to be live AS.
+        && (request.resource.data.status != 'live'
+            || request.resource.data.chainGameId != null)
+        && request.resource.data.seatCount is int
+        && request.resource.data.seatCount >= 0
+        && request.resource.data.seatCount <= resource.data.maxPlayers;
+
+      // Rooms are closed by status, never deleted -- a deleted room takes
+      // its chat transcript and seat history with it, and `closed` already
+      // removes it from the discovery list (`useLobbyRooms` filters it out).
+      allow delete: if false;
+
+      /* ---------------- seats: games/{roomId}/seats/{address} ---------------- */
+
+      match /seats/{address} {
+
+        allow read: if true;
+
+        allow create: if
+             request.resource.data.keys().hasOnly([
+               'address', 'displayName', 'ready', 'isHost',
+               'onChain', 'joinedAt', 'lastSeen'
+             ])
+          && hasNoGameStateFields(request.resource.data)
+          // The document key IS the address. Keeping the field and the key
+          // in agreement is what makes a second seat for one wallet
+          // structurally impossible rather than merely checked.
+          && request.resource.data.address == address
+          && isSelf(address)
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 24
+          && request.resource.data.ready is bool
+          && request.resource.data.isHost is bool
+          // A seat cannot be born already in the contract's roster --
+          // `onChain` may only be set by a later update, after the ante has
+          // actually confirmed.
+          && request.resource.data.onChain == false
+          // Only a staging room accepts new seats.
+          && get(/databases/$(database)/documents/games/$(roomId)).data.status == 'staging';
+
+        allow update: if
+             request.resource.data.keys().hasOnly([
+               'address', 'displayName', 'ready', 'isHost',
+               'onChain', 'joinedAt', 'lastSeen'
+             ])
+          && hasNoGameStateFields(request.resource.data)
+          && isSelf(address)
+          && request.resource.data.address == resource.data.address
+          && request.resource.data.isHost == resource.data.isHost
+          && request.resource.data.joinedAt == resource.data.joinedAt
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 24
+          // `onChain` is a latch: it may go false -> true (the ante
+          // confirmed) and never back. Letting it clear would let a player
+          // be quietly removed from the table's picture of the roster.
+          && (resource.data.onChain == false || request.resource.data.onChain == true);
+
+        // Leaving a room, and the host clearing a seat that stopped
+        // heartbeating. Not narrowed further for the reason in "THE
+        // AUTHENTICATION GAP": without real auth, a host-only check would
+        // be checking a claim, not a fact -- so it would read as a
+        // protection it is not. Seat griefing is visible and recoverable.
+        allow delete: if true;
+      }
+
+      /* ---------------- chat: games/{roomId}/chat/{messageId} ---------------- */
+
+      match /chat/{messageId} {
+
+        allow read: if true;
+
+        allow create: if
+             request.resource.data.keys().hasOnly([
+               'author', 'displayName', 'text', 'createdAt', 'clientCreatedAtMs'
+             ])
+          && hasNoGameStateFields(request.resource.data)
+          && isSelf(request.resource.data.author)
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 24
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500
+          // Must be the real server clock, not a client-supplied time
+          // dressed up as one.
+          && request.resource.data.createdAt == request.time
+          && hasSaneClientClock(request.resource.data);
+
+        // APPEND-ONLY. Chat is a transcript: if a message could be edited or
+        // deleted after the fact, then quoting it, screenshotting it, or
+        // resolving a dispute with it would all be worthless. This also
+        // means moderation must be additive (a client-side mute list) rather
+        // than destructive, which is the correct trade for a game table.
+        allow update, delete: if false;
+      }
+    }
+
+    // Everything not matched above is denied. Firestore denies by default;
+    // this is here so that a future `match` added in the wrong scope fails
+    // closed and visibly, rather than inheriting a permissive parent.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

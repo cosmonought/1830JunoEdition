@@ -245,6 +245,7 @@
 //    are deleted rather than left dead in the file.
 
 import React, { useEffect, useRef, useState } from "react";
+import { FONT_SIZE } from "../styles/typography";
 
 interface RuleRow {
   label: string;
@@ -969,11 +970,11 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
   },
   pageTitle: {
-    fontSize: "26px",
+    fontSize: FONT_SIZE.display,
     margin: 0,
   },
   sourceNote: {
-    fontSize: "17px",
+    fontSize: FONT_SIZE.heading,
     color: "#8a90a0",
     margin: 0,
     maxWidth: "820px",
@@ -1016,7 +1017,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
   },
   sectionTitle: {
-    fontSize: "18px",
+    fontSize: FONT_SIZE.heading,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
     color: "#9aa0ac",
@@ -1030,7 +1031,7 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: "800px",
   },
   aboutParagraph: {
-    fontSize: "18px",
+    fontSize: FONT_SIZE.heading,
     color: "#c7cbd4",
     margin: 0,
     lineHeight: 1.75,
@@ -1041,7 +1042,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   table: {
     borderCollapse: "collapse",
-    fontSize: "18px",
+    fontSize: FONT_SIZE.heading,
     width: "100%",
   },
   th: {
@@ -1057,7 +1058,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #1e2129",
   },
   rowNote: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     color: "#8a90a0",
     marginTop: "4px",
     maxWidth: "540px",
@@ -1091,18 +1092,18 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
   },
   flowStep: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 600,
     color: "#c9cedb",
     flexShrink: 0,
   },
   flowQuick: {
-    fontSize: "16px",
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#8fe0a0",
   },
   flowDetail: {
-    fontSize: "18px",
+    fontSize: FONT_SIZE.heading,
     color: "#a5abb8",
     lineHeight: 1.7,
   },
@@ -1141,7 +1142,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   quickStripTitle: {
     margin: 0,
-    fontSize: "17px",
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     color: "#e6e8ef",
   },
@@ -1156,7 +1157,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   quickStripColumnTitle: {
     margin: "0 0 6px 0",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.05em",
@@ -1174,14 +1175,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "baseline",
     gap: "8px",
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     lineHeight: 1.45,
   },
   quickStripNum: {
     flex: "0 0 auto",
     minWidth: "18px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     color: "#6f7684",
   },
   quickStripStep: {
@@ -1212,12 +1213,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   roundAccordionChevron: {
     flex: "0 0 auto",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#8a919e",
   },
   roundAccordionHint: {
     marginLeft: "auto",
-    fontSize: "12px",
+    fontSize: FONT_SIZE.small,
     color: "#6f7684",
   },
   quickRefHeader: {
@@ -1227,7 +1228,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
   },
   quickRefBadge: {
-    fontSize: "14px",
+    fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "4px 12px",
     borderRadius: "999px",
@@ -1236,12 +1237,12 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #3f5f42",
   },
   quickRefBadgeMuted: {
-    fontSize: "13px",
+    fontSize: FONT_SIZE.body,
     fontStyle: "italic",
     color: "#6f7480",
   },
   quickRefCardTitle: {
-    fontSize: "15px",
+    fontSize: FONT_SIZE.strong,
     margin: 0,
     color: "#c9cedb",
   },

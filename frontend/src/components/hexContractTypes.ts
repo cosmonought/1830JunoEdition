@@ -1,0 +1,337 @@
+// frontend/src/components/hexContractTypes.ts
+//
+// PHASE 3a of the `HexGridRenderer.tsx` monolith extraction -- a prerequisite
+// for Phase 3 proper.
+//
+// WHAT THIS IS. The frontend's mirrors of the contract's own query response
+// shapes (`msg.rs`), the small pure helpers that read them, and the
+// click-query state machine the renderer reports through.
+//
+// WHY THIS HAD TO COME FIRST. Phase 3 extracts the hex geometry and slot
+// engine. Much of that engine is not pure coordinate math -- `archetypeForHex`,
+// `liveEdgesForHex`, `hexBlockedSlots`, `claimHexSlot*`, `hexRouteValue` and
+// `describeHexWithValue` all take a `MapGridResponse` or a
+// `StationTokenCompany[]`. Those types lived in `HexGridRenderer.tsx`, so
+// moving the geometry without them would have made the new module import from
+// the file that imports it: a cycle.
+//
+// Leaving those functions behind instead was the alternative, and it was
+// worse -- it would have split the slot engine down the middle, with half its
+// call graph in each file.
+//
+// So the types move first, as their own leaf. They depend on nothing but
+// `hexTileCatalog` (already extracted in Phase 1), which keeps the strict
+// leaf-first ordering intact.
+//
+// IMPORT DIRECTION IS ONE-WAY: never import from `HexGridRenderer.tsx`.
+
+/** Mirrors `msg.rs`'s `MapTileEntry` exactly -- one laid hex tile. */
+export interface MapTileEntry {
+  q: number;
+  r: number;
+  tile_id: number;
+  orientation: number;
+  /** This tile's DISCRETE track segments as BASE (pre-rotation) edge pairs
+   *  -- `msg::MapTileEntry::paths`, resolved contract-side through
+   *  `hexmap::effective_base_tile_paths` (design note #119).
+   *
+   *  Each `[a, b]` is one continuous run of track between edges `a` and
+   *  `b`; `a === b` is a terminal spur that enters at `a` and dead-ends.
+   *  Apply `orientation` yourself, the same as for a catalog entry's
+   *  `connections` -- `rotatePaths` below does it.
+   *
+   *  OPTIONAL on purpose, and the optionality is not decorative: this
+   *  component renders against whatever a deployed contract actually
+   *  returns, and a contract built before this field existed simply omits
+   *  the key. `pathsForTile` treats `undefined` and `[]` identically and
+   *  falls back to the local `TILE_CATALOG` mirror, so an older chain
+   *  renders exactly as it did before rather than throwing. */
+  paths?: ReadonlyArray<readonly [number, number]> | null;
+  /** Design note #132: THIS TILE'S PRINTED REVENUE, straight off the chain
+   *  -- `msg::MapTileEntry::revenue` (`hexmap::tile_base_value`, Audit
+   *  G-11). The single authority for what a stop on this hex pays.
+   *
+   *  Typed `string | number` because the backend field is `Uint128`, and
+   *  cosmwasm-std serialises `Uint128` as a JSON **string** (`"90"`), not a
+   *  number -- it has to, since a `u128` overflows an IEEE-754 double past
+   *  2^53. Reading this as `entry.revenue` and expecting arithmetic to work
+   *  is the trap; `chainTileRevenue` below parses it in exactly one place.
+   *  `number` is accepted too so a hand-built fixture or a future
+   *  narrower-typed field needs no change here.
+   *
+   *  OPTIONAL for the same backwards-compatibility reason as `paths` above:
+   *  a contract built before Audit G-11 simply omits the key, and
+   *  `chainTileRevenue` returns `undefined` so the caller falls back to the
+   *  old terrain bucket rather than printing `NaN` or `$0`.
+   *
+   *  NOT to be re-derived from `terrain`. That is what this replaces, and
+   *  it was wrong for most city tiles: `terrainBaseValue` is a flat
+   *  per-bucket lookup, but real 1830 prints revenue on the TILE. #62 and
+   *  #64 are both two-city brown artwork and print different figures; the
+   *  whole Green/Brown city ladder (#14/#15 at $30, #63 at $40) collapsed
+   *  to one bucket value under the old model. */
+  revenue?: string | number | null;
+  landmark: string | null;
+}
+
+/** Design note #132: parses `MapTileEntry.revenue` -- the chain's own
+ *  `Uint128`, which arrives as a JSON string -- into a number, or
+ *  `undefined` if this contract predates the field.
+ *
+ *  `undefined` and `0` are DIFFERENT answers and callers must not conflate
+ *  them: `0` is a real figure (plain connector track earns nothing, and the
+ *  badge should be suppressed), `undefined` means "this chain never told
+ *  us" (fall back to the terrain bucket). */
+export function chainTileRevenue(tile: MapTileEntry): number | undefined {
+  const raw = tile.revenue;
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const value = typeof raw === "number" ? raw : Number.parseInt(raw, 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/** Mirrors `msg.rs`'s `MapGridResponse` exactly -- `QueryMsg::GetMapGrid`'s
+ *  response shape. */
+export interface MapGridResponse {
+  game_id: number;
+  tiles: MapTileEntry[];
+}
+
+/** Structural shape this component needs from a chain query client --
+ *  matches both `CosmWasmClient` and `SigningCosmWasmClient` from
+ *  `@cosmjs/cosmwasm-stargate` without importing that package into this
+ *  otherwise wallet-agnostic file (see design note #7). Any object with a
+ *  compatible `queryContractSmart` (App.tsx's already-connected
+ *  `SigningCosmWasmClient` included) satisfies this. */
+export interface QueryCapableClient {
+  queryContractSmart(contractAddress: string, queryMsg: Record<string, unknown>): Promise<unknown>;
+}
+
+/** Station Tokens (design note #36): a hand-kept SUBSET mirror of
+ *  `utils/gameState.ts`'s `PublicCompanyState` -- only the fields this
+ *  component's Station Token rendering pass actually needs, re-declared
+ *  locally rather than imported (see design note #36 for why). Every
+ *  field here is a direct, same-name, same-shape copy of its
+ *  `PublicCompanyState`/`msg.rs::PublicCompanyState` counterpart. */
+export interface StationTokenCompany {
+  company_id: number;
+  ticker: string;
+  is_floated: boolean;
+  /** `(q, r)` pairs, home hex first (if granted) -- mirrors
+   *  `PublicCompanyState.station_token_hexes` exactly. */
+  station_token_hexes: Array<[number, number]>;
+  /** Design note #134: the SAME tokens as `station_token_hexes`, but as
+   *  `(q, r, city_index)` -- mirrors `PublicCompanyState.station_tokens`
+   *  (backend Audit G-12).
+   *
+   *  A hex is not a city. New York (#54/#62) and every OO tile
+   *  (#59/#64-#68) carry two separate cities on one hex, and `(q, r)` alone
+   *  cannot say which one holds this company's token -- which is why
+   *  `stationMarkerPoint` used to guess from the hex label and drop tokens
+   *  on the wrong half of a two-city tile.
+   *
+   *  OPTIONAL: a contract predating G-12 omits it, and `tokenCityIndex`
+   *  below falls back to the old heuristic rather than throwing. An empty
+   *  array alongside a non-empty `station_token_hexes` means "this chain
+   *  doesn't know", never "no tokens". */
+  station_tokens?: Array<[number, number, number]> | null;
+}
+
+/** Which city on `(q, r)` holds `company`'s token -- design note #134.
+ *
+ *  Prefers the chain's own answer. Returns `undefined` when the chain has
+ *  not told us, which is a DIFFERENT answer from `0` and must stay
+ *  distinguishable: the caller falls back to `stationMarkerPoint`'s legacy
+ *  per-hex heuristic rather than asserting city 0 and confidently drawing a
+ *  token in the wrong station. */
+export function tokenCityIndex(
+  company: StationTokenCompany,
+  q: number,
+  r: number,
+): number | undefined {
+  const entry = company.station_tokens?.find(([tq, tr]) => tq === q && tr === r);
+  return entry ? entry[2] : undefined;
+}
+
+/** Station Tokens (design note #36; REASSIGNED by design note #44's house
+ *  rule): a local mirror of `hexmap::CORPORATION_HOME_HEX` -- all eight core
+ *  corporations' preprinted home hex, sourced from this same file's own
+ *  `LANDMARK_HEXES`/`GRAY_HEXES`/`YELLOW_OO_HEXES` entries above exactly the
+ *  way the backend constant's own doc comment describes deriving it. As of
+ *  design note #44 (mirroring `hexmap.rs` module doc comment #25's backend
+ *  house rule), NYC (company_id 2) is reassigned to Albany (E19) and NNH
+ *  (company_id 7, "NYNH") -- previously omitted for having no assigned home
+ *  -- takes over the New York (G19) hex NYC vacated. This is a deliberate
+ *  departure from real 1830 (where NYC's home is G19), requested three
+ *  times, explicitly, by the same requester who owns this custom board. */
+export const STATION_HOME_HEXES: ReadonlyArray<{
+  companyId: number;
+  q: number;
+  r: number;
+  label: string;
+}> = [
+  { companyId: 1, q: 2, r: 7, label: "H12" }, // PRR -> Altoona
+  { companyId: 2, q: 7, r: 4, label: "E19" }, // NYC -> Albany (house rule, design note #44)
+  { companyId: 3, q: 9, r: 0, label: "A19" }, // CPR -> Montreal
+  { companyId: 4, q: 3, r: 8, label: "I15" }, // B&O -> Baltimore
+  { companyId: 5, q: 0, r: 5, label: "F6" }, // C&O -> Cleveland
+  { companyId: 6, q: 3, r: 4, label: "E11" }, // ERIE -> Dunkirk & Buffalo (shared OO hex)
+  { companyId: 7, q: 6, r: 6, label: "G19" }, // NNH ("NYNH") -> New York (house rule, design note #44)
+  { companyId: 8, q: 9, r: 4, label: "E23" }, // B&M -> Boston
+];
+
+/** Station Tokens (design note #36): a small, deliberately DUPLICATED copy
+ *  of `StockMarketRenderer.tsx`'s own `TICKER_COLORS` -- same values, same
+ *  `company_id` keys. See design note #36 for why this is copied rather
+ *  than imported. */
+export const STATION_TICKER_COLORS: Readonly<Record<number, string>> = {
+  1: "#c0392b", // PRR
+  2: "#2980b9", // NYC
+  3: "#8e44ad", // CPR
+  4: "#27ae60", // B&O
+  5: "#d68910", // C&O
+  6: "#16a085", // ERIE
+  7: "#b03a2e", // NNH
+  8: "#34495e", // B&M
+};
+export const STATION_FALLBACK_TICKER_COLOR = "#5a6270";
+
+export function stationTickerColor(companyId: number): string {
+  return STATION_TICKER_COLORS[companyId] ?? STATION_FALLBACK_TICKER_COLOR;
+}
+
+/** Corporate Acronym Overlay guarantee (design note #45): a small,
+ *  deliberately DUPLICATED copy of `public_company.rs`'s own
+ *  `CORE_PUBLIC_COMPANIES` real on-chain tickers (same values, same
+ *  `company_id` keys, same "copy, don't import" reasoning as
+ *  `STATION_TICKER_COLORS` above). Exists so a RESERVED/unfloated home
+ *  station badge can always draw its acronym even before `publicCompanies`
+ *  has loaded (or ever loads) real data for that company -- see the muted
+ *  drawing pass below, which now prefers a live `company.ticker` when
+ *  present but falls back to this static table instead of an empty string.
+ *  Company 7's real ticker is `NNH`, not `NYNH` -- `public_company.rs`'s
+ *  `CORE_PUBLIC_COMPANIES` (`(7, "NNH")`) is the single source of truth;
+ *  "NYNH" is this project's own established colloquial name for the real
+ *  New York, New Haven & Hartford railroad the request refers to (see
+ *  design note #36's own note on this), not a second, different on-chain
+ *  ticker -- using "NNH" here keeps this placeholder text identical to
+ *  what `company.ticker` will actually show once the corporation floats,
+ *  so the badge's acronym never visibly changes/flickers at that moment. */
+export const STATION_TICKER_LABELS: Readonly<Record<number, string>> = {
+  1: "PRR",
+  2: "NYC",
+  3: "CPR",
+  4: "B&O",
+  5: "C&O",
+  6: "ERIE",
+  7: "NNH",
+  8: "B&M",
+};
+
+export function stationTickerLabel(companyId: number): string {
+  return STATION_TICKER_LABELS[companyId] ?? "";
+}
+
+/** Crisp Token Typography (design note #46): WCAG relative luminance of a
+ *  `#rrggbb` hex color -- the standard sRGB-to-linear formula, used below to
+ *  pick whichever of pure white/pure black actually contrasts better
+ *  against a given badge fill, rather than assuming one fixed choice works
+ *  for every corporate color. */
+export function relativeLuminance(hex: string): number {
+  const toLinear = (channel: number): number => {
+    const s = channel / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  const r = toLinear(parseInt(hex.slice(1, 3), 16));
+  const g = toLinear(parseInt(hex.slice(3, 5), 16));
+  const b = toLinear(parseInt(hex.slice(5, 7), 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Crisp Token Typography (design note #46): returns whichever of pure
+ *  white (`#FFFFFF`) or pure black (`#000000`) has the higher WCAG contrast
+ *  ratio against `backgroundHex`, per the standard
+ *  `(lighter + 0.05) / (darker + 0.05)` formula. See design note #46 for
+ *  why this is picked dynamically per badge rather than one color asserted
+ *  for every corporate ticker color -- several of `STATION_TICKER_COLORS`'s
+ *  own established brand colors (duplicated from `StockMarketRenderer.tsx`,
+ *  out of scope to re-tune here) don't actually reach the 7:1 AAA threshold
+ *  against EITHER pure color alone; this always returns the better of the
+ *  two available options, which is the closest a flat single-color badge
+ *  fill can get without changing the brand palette itself. */
+export function bestContrastTextColor(backgroundHex: string): string {
+  const bgLuminance = relativeLuminance(backgroundHex);
+  const contrastWithWhite = 1.05 / (bgLuminance + 0.05);
+  const contrastWithBlack = (bgLuminance + 0.05) / 0.05;
+  return contrastWithWhite >= contrastWithBlack ? "#FFFFFF" : "#000000";
+}
+
+/** Mirrors `msg.rs`'s `LegalTilePlacement` exactly. */
+export interface LegalTilePlacement {
+  tile_id: number;
+  orientation: number;
+}
+
+/** Mirrors `msg.rs`'s `LegalTilePlacementsResponse` exactly --
+ *  `QueryMsg::GetLegalTilePlacements`'s response shape. */
+export interface LegalTilePlacementsResponse {
+  game_id: number;
+  protocol_id: number;
+  q: number;
+  r: number;
+  hex_label: string;
+  placements: LegalTilePlacement[];
+}
+
+/** Discriminated union describing the click interceptor's in-flight/settled
+ *  query state (see design note #7) -- reported to the host app via
+ *  `onHexClickQuery` so `App.tsx` can decide when/where to render
+ *  `<TileSelectionPopup />`. */
+export type HexClickQueryState =
+  | {
+      status: "loading";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+    }
+  | {
+      status: "success";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      response: LegalTilePlacementsResponse;
+    }
+  | {
+      status: "error";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      message: string;
+    }
+  /** Design note #120: no chain client is wired up, so
+   *  `GetLegalTilePlacements` was never called and `placements` below came
+   *  from the LOCAL `TILE_CATALOG` mirror, not from the contract.
+   *
+   *  A separate status rather than a flag on `"success"` on purpose. These
+   *  placements are NOT contract-validated: they are era-gated and nothing
+   *  more -- no connectivity check, no terrain reservation, no tile-tray
+   *  depletion, no upgrade-color step. Folding them into `"success"` would
+   *  let any existing or future consumer treat unvalidated data as
+   *  authoritative simply by not knowing to check a flag, whereas a distinct
+   *  variant makes the exhaustiveness checker point at every site that has
+   *  to decide. Consumers MUST surface this to the player as provisional and
+   *  MUST NOT dispatch a `LayTile` from it. */
+  | {
+      status: "offline";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      placements: LegalTilePlacement[];
+    };

@@ -377,6 +377,19 @@ pub enum HardwareError {
     )]
     PoolEmpty { game_id: u64 },
 
+    /// Audit G-17: this corporation has an unanswered train offer standing,
+    /// and an emergency purchase is an answer to the same problem. Resolve the
+    /// offer first -- `RescindTrainOffer` is the buyer's own unilateral right,
+    /// so this is never a deadlock.
+    #[error(
+        "protocol {protocol_id} cannot emergency-buy while train offer {offer_id} to protocol {seller_protocol_id} is unanswered -- rescind it, or wait for a reply"
+    )]
+    PendingTrainOfferBlocksEmergencyBuy {
+        protocol_id: u32,
+        offer_id: u64,
+        seller_protocol_id: u32,
+    },
+
     #[error("Protocol {company_id}'s treasury holds {available} VGP, which is less than the {required} VGP baseline cost")]
     InsufficientTreasury {
         company_id: u32,
@@ -415,6 +428,61 @@ pub enum HardwareError {
 /// Seeds `game_id` with the full `TRAIN_CATALOG` supply, in strict tier
 /// order, as `HARDWARE_POOL`'s starting queue. Called once, when a game
 /// room is created (see `contract::execute_create_game_room`).
+/// The Diesel's catalog row, looked up once. `expect` rather than a fallible
+/// return: a `TRAIN_CATALOG` without a `"D"` entry is a broken build, not a
+/// runtime condition any caller could handle.
+fn diesel_asset() -> HardwareAsset {
+    let (model_type, cost, max_route_distance, _qty) = TRAIN_CATALOG
+        .iter()
+        .copied()
+        .find(|(model, ..)| *model == DIESEL_MODEL)
+        .expect("TRAIN_CATALOG must contain the Diesel");
+    HardwareAsset {
+        model_type: model_type.to_string(),
+        cost: Uint128::new(cost),
+        max_route_distance,
+    }
+}
+
+/// The model string for the unlimited top-tier train.
+pub const DIESEL_MODEL: &str = "D";
+
+/// Guarantees the pool is never empty -- Audit G-17.
+///
+/// # The rule
+///
+/// In 1830 every train type has a fixed supply EXCEPT the Diesel, which is
+/// unlimited: once the game reaches the D tier, the Bank can always sell you
+/// another one. That is not a detail. It is the game's terminal state --
+/// Diesels never rust, so the endgame assumes any corporation that can afford
+/// one can always buy one.
+///
+/// # Why a `Vec` needed help
+///
+/// `HARDWARE_POOL` is a `Vec<HardwareAsset>` seeded once by
+/// `spawn_hardware_pool`, and "unlimited" has no representation in a `Vec`.
+/// The previous approach seeded a large finite number of Diesels (20) as a
+/// stand-in and relied on no real game exhausting them. That is *probably*
+/// true -- but "probably" is doing load-bearing work in a rule that says
+/// "always", and the failure mode is the worst kind: a late-game
+/// `PoolEmpty` that looks like a contract bug and strands every corporation
+/// at once, in a state the rules say cannot occur.
+///
+/// So the pool is topped up instead. When the last unit is taken, the next
+/// call finds it empty and appends a fresh Diesel. The finite tiers are
+/// untouched -- they are consumed in catalog order and run out exactly as
+/// they should; only the tail is inexhaustible.
+///
+/// `PoolEmpty` is consequently unreachable from either buy path. It is
+/// deliberately KEPT rather than deleted: it is still the honest answer if a
+/// future caller reads the pool without going through this, and a removed
+/// error variant is a worse outcome than an unused one.
+pub fn replenish_pool_if_exhausted(pool: &mut Vec<HardwareAsset>) {
+    if pool.is_empty() {
+        pool.push(diesel_asset());
+    }
+}
+
 pub fn spawn_hardware_pool(storage: &mut dyn Storage, game_id: u64) -> StdResult<()> {
     let mut pool = Vec::new();
     for (model_type, cost, max_route_distance, quantity) in TRAIN_CATALOG.iter().copied() {
@@ -668,6 +736,9 @@ pub fn execute_buy_hardware_from_pool(
     let mut pool = HARDWARE_POOL
         .may_load(deps.storage, game_id)?
         .unwrap_or_default();
+    // Audit G-17: Diesels are unlimited, so an exhausted pool refills with one
+    // rather than failing. See `replenish_pool_if_exhausted`.
+    replenish_pool_if_exhausted(&mut pool);
     if pool.is_empty() {
         return Err(HardwareError::PoolEmpty { game_id });
     }
@@ -887,9 +958,41 @@ pub fn execute_emergency_buy_hardware(
         });
     }
 
+    // ==== Audit G-17: an outstanding train offer must be resolved first. ====
+    //
+    // The two mechanisms are answers to the SAME problem -- this corporation
+    // has no train -- and running them concurrently is incoherent. An
+    // emergency purchase is the expensive last resort: it empties the
+    // company's treasury and reaches into the President's own personal cash.
+    // A pending offer might be about to supply a train at a price the
+    // corporation can actually afford.
+    //
+    // REFUSED, NOT AUTO-RESCINDED, and the distinction is deliberate.
+    // Silently withdrawing an offer the player made, as a side effect of a
+    // different message, spends their negotiating position without asking --
+    // and the rival might have been one block away from accepting. Refusing
+    // hands the decision back: rescind and emergency-buy, or wait.
+    //
+    // NOT A DEADLOCK. `RescindTrainOffer` is the buyer's own unilateral
+    // right, one transaction away, needing nobody's cooperation. A stranded
+    // corporation is therefore never more than one message from its escape
+    // hatch -- which is exactly the property that makes the turn block safe
+    // too (see `train_trade`'s module doc).
+    if let Some((offer_id, offer)) =
+        crate::train_trade::pending_offer_for_buyer(deps.storage, game_id, protocol_id)?
+    {
+        return Err(HardwareError::PendingTrainOfferBlocksEmergencyBuy {
+            protocol_id,
+            offer_id,
+            seller_protocol_id: offer.seller_protocol_id,
+        });
+    }
+
     let mut pool = HARDWARE_POOL
         .may_load(deps.storage, game_id)?
         .unwrap_or_default();
+    // Audit G-17: Diesels are unlimited -- see `replenish_pool_if_exhausted`.
+    replenish_pool_if_exhausted(&mut pool);
     if pool.is_empty() {
         return Err(HardwareError::PoolEmpty { game_id });
     }

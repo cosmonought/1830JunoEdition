@@ -50,6 +50,7 @@ use crate::state::{
     PUBLIC_COMPANIES, REMAINING_TILES, SESSIONS, TRAINS_PURCHASED_COUNT, WATERFALL_MINI_AUCTION,
 };
 use crate::trading::TradingError;
+use crate::train_trade::TrainTradeError;
 use crate::waterfall::WaterfallError;
 
 /// Reads a `String`-valued response attribute by key, panicking with a
@@ -13327,4 +13328,855 @@ fn train_sale_price_floor_is_one() {
     );
     // There is deliberately NO ceiling: moving a train for a company's entire
     // treasury is a legitimate 1830 play, not an exploit to be capped.
+}
+
+/* =================================================================== */
+/*  Audit G-16: corporation-to-corporation train sales, end to end      */
+/* =================================================================== */
+
+/// PRR -- the BUYER in every trade test below.
+const TT_BUYER: u32 = 1;
+/// NYC -- the cross-player SELLER (a different president from PRR).
+const TT_SELLER_RIVAL: u32 = 2;
+/// CPR -- the same-president SELLER, for the instant-settle path.
+const TT_SELLER_OWN: u32 = 3;
+
+/// Builds a room mid-Operating-Round with three floated corporations:
+///
+///   PRR (buyer)  president = player_one
+///   CPR (seller) president = player_one   <- same human, instant settle
+///   NYC (seller) president = player_two   <- different human, offer required
+///
+/// Seeded directly into storage rather than played out through the stock
+/// market: these tests are about the TRADE state machine, and driving three
+/// floats through a real auction would make them fail for a dozen reasons
+/// that have nothing to do with trains.
+///
+/// The cursor is left on `Hardware`, which is where a train purchase belongs.
+fn train_trade_scenario() -> (
+    cosmwasm_std::OwnedDeps<
+        cosmwasm_std::testing::MockStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    cosmwasm_std::Env,
+    Addr,
+    Addr,
+    u64,
+) {
+    use crate::state::{PublicCompany, PROTOCOL_PRESIDENT, PUBLIC_COMPANIES};
+
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 50,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let player_one = Addr::unchecked("player_one");
+    let player_two = Addr::unchecked("player_two");
+
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_two.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .expect("player_two should join");
+
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    // Three floated corporations with real treasuries and presidents.
+    for (protocol_id, president) in [
+        (TT_BUYER, &player_one),
+        (TT_SELLER_OWN, &player_one),
+        (TT_SELLER_RIVAL, &player_two),
+    ] {
+        PUBLIC_COMPANIES
+            .save(
+                &mut deps.storage,
+                (game_id, protocol_id),
+                &PublicCompany {
+                    company_id: protocol_id,
+                    ticker: match protocol_id {
+                        TT_BUYER => "PRR".to_string(),
+                        TT_SELLER_RIVAL => "NYC".to_string(),
+                        _ => "CPR".to_string(),
+                    },
+                    current_x: 0,
+                    current_y: 0,
+                    treasury: Uint128::new(1_000),
+                    is_floated: true,
+                    total_shares_issued: 10,
+                },
+            )
+            .unwrap();
+        PROTOCOL_PRESIDENT
+            .save(&mut deps.storage, (game_id, protocol_id), president)
+            .unwrap();
+    }
+
+    // Rosters. The buyer starts with one train so it is never at its limit;
+    // each seller holds a distinct model so a test can tell them apart.
+    g9_seed_company(&mut deps.storage, game_id, TT_BUYER, (2, 3), &[("2", 2)]);
+    g9_seed_company(&mut deps.storage, game_id, TT_SELLER_RIVAL, (3, 3), &[("4", 4)]);
+    g9_seed_company(&mut deps.storage, game_id, TT_SELLER_OWN, (4, 3), &[("3", 3)]);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("begin_operating_round should succeed");
+
+    // Put the buyer where a train purchase is legal, and make it the active
+    // corporation so its turn-level gates all pass.
+    let mut session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    session.active_operating_order = vec![TT_BUYER];
+    session.active_corporation_index = 0;
+    SESSIONS.save(&mut deps.storage, game_id, &session).unwrap();
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        TT_BUYER,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+
+    (deps, env, player_one, player_two, game_id)
+}
+
+fn tt_models(
+    storage: &dyn cosmwasm_std::Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Vec<String> {
+    COMPANY_HARDWARE
+        .may_load(storage, (game_id, protocol_id))
+        .unwrap()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|unit| unit.model_type)
+        .collect()
+}
+
+fn tt_treasury(
+    storage: &dyn cosmwasm_std::Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Uint128 {
+    crate::state::PUBLIC_COMPANIES
+        .load(storage, (game_id, protocol_id))
+        .unwrap()
+        .treasury
+}
+
+/// **G-16 (1): offer -> ACCEPT.** The full cross-player happy path.
+#[test]
+fn train_offer_accept_transfers_the_train_and_the_money() {
+    use crate::state::TRAIN_OFFERS;
+
+    let (mut deps, env, player_one, player_two, game_id) = train_trade_scenario();
+
+    let buyer_before = tt_treasury(&deps.storage, game_id, TT_BUYER);
+    let seller_before = tt_treasury(&deps.storage, game_id, TT_SELLER_RIVAL);
+
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .expect("a cross-player offer should be accepted for recording");
+
+    assert_eq!(attr(&offer_res, "settlement"), "offer_pending");
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    // Nothing has moved yet -- an offer is a proposition, not a transfer.
+    assert_eq!(tt_treasury(&deps.storage, game_id, TT_BUYER), buyer_before);
+    assert_eq!(tt_models(&deps.storage, game_id, TT_BUYER), vec!["2"]);
+    assert!(TRAIN_OFFERS.has(&deps.storage, (game_id, offer_id)));
+
+    // The BUYER cannot accept their own offer -- only the seller's president.
+    let wrong_signer = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::AcceptTrainOffer { game_id, offer_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            wrong_signer,
+            ContractError::TrainTrade(TrainTradeError::NotPresident { .. })
+        ),
+        "expected TrainTrade(NotPresident), got: {wrong_signer:?}"
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_two.as_str(), &[]),
+        ExecuteMsg::AcceptTrainOffer { game_id, offer_id },
+    )
+    .expect("the seller's President should be able to accept");
+
+    // The train moved, the money moved the other way, the offer is gone.
+    let mut buyer_models = tt_models(&deps.storage, game_id, TT_BUYER);
+    buyer_models.sort();
+    assert_eq!(buyer_models, vec!["2", "4"]);
+    assert!(tt_models(&deps.storage, game_id, TT_SELLER_RIVAL).is_empty());
+    assert_eq!(
+        tt_treasury(&deps.storage, game_id, TT_BUYER),
+        buyer_before - Uint128::new(250)
+    );
+    assert_eq!(
+        tt_treasury(&deps.storage, game_id, TT_SELLER_RIVAL),
+        seller_before + Uint128::new(250)
+    );
+    assert!(!TRAIN_OFFERS.has(&deps.storage, (game_id, offer_id)));
+}
+
+/// **G-16 (2): offer -> REJECT.** Nothing moves, and the offer is cleared.
+#[test]
+fn train_offer_reject_moves_nothing_and_clears_the_offer() {
+    use crate::state::TRAIN_OFFERS;
+
+    let (mut deps, env, player_one, player_two, game_id) = train_trade_scenario();
+    let buyer_before = tt_treasury(&deps.storage, game_id, TT_BUYER);
+    let seller_before = tt_treasury(&deps.storage, game_id, TT_SELLER_RIVAL);
+
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .unwrap();
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_two.as_str(), &[]),
+        ExecuteMsg::RejectTrainOffer { game_id, offer_id },
+    )
+    .expect("the seller's President should be able to reject");
+
+    assert!(!TRAIN_OFFERS.has(&deps.storage, (game_id, offer_id)));
+    assert_eq!(tt_models(&deps.storage, game_id, TT_BUYER), vec!["2"]);
+    assert_eq!(tt_models(&deps.storage, game_id, TT_SELLER_RIVAL), vec!["4"]);
+    assert_eq!(tt_treasury(&deps.storage, game_id, TT_BUYER), buyer_before);
+    assert_eq!(
+        tt_treasury(&deps.storage, game_id, TT_SELLER_RIVAL),
+        seller_before
+    );
+}
+
+/// **G-16 (3): offer -> RESCIND.** The buyer withdraws unilaterally, and the
+/// SELLER cannot rescind on the buyer's behalf.
+#[test]
+fn train_offer_rescind_is_the_buyers_alone() {
+    use crate::state::TRAIN_OFFERS;
+
+    let (mut deps, env, player_one, player_two, game_id) = train_trade_scenario();
+
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .unwrap();
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    // Rescind is the OFFERER's right. Reject is the counterparty's. They are
+    // different people exercising different rights, so the seller trying to
+    // rescind must fail rather than quietly behaving like a rejection.
+    let seller_rescind = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_two.as_str(), &[]),
+        ExecuteMsg::RescindTrainOffer { game_id, offer_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            seller_rescind,
+            ContractError::TrainTrade(TrainTradeError::NotOfferer { .. })
+        ),
+        "expected TrainTrade(NotOfferer), got: {seller_rescind:?}"
+    );
+    assert!(TRAIN_OFFERS.has(&deps.storage, (game_id, offer_id)));
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RescindTrainOffer { game_id, offer_id },
+    )
+    .expect("the buyer's President should be able to rescind");
+
+    assert!(!TRAIN_OFFERS.has(&deps.storage, (game_id, offer_id)));
+    assert_eq!(tt_models(&deps.storage, game_id, TT_SELLER_RIVAL), vec!["4"]);
+}
+
+/// **G-16 (4): same president -> INSTANT SETTLE.** No offer is ever written.
+#[test]
+fn same_president_train_sale_settles_immediately_with_no_offer() {
+    use crate::train_trade::pending_offers;
+
+    let (mut deps, env, player_one, _player_two, game_id) = train_trade_scenario();
+    let buyer_before = tt_treasury(&deps.storage, game_id, TT_BUYER);
+    let seller_before = tt_treasury(&deps.storage, game_id, TT_SELLER_OWN);
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            // CPR -- player_one is President of BOTH, so there is no
+            // counterparty whose consent could be required.
+            seller_protocol_id: TT_SELLER_OWN,
+            model_type: "3".to_string(),
+            // $1 is legal and is the classic move: shift a train between two
+            // corporations you control for a token price.
+            price: Uint128::new(1),
+        },
+    )
+    .expect("a same-president sale should settle immediately");
+
+    assert_eq!(attr(&res, "settlement"), "immediate_same_president");
+    assert!(
+        pending_offers(&deps.storage, game_id).unwrap().is_empty(),
+        "an instant settlement must not leave an offer behind"
+    );
+
+    let mut buyer_models = tt_models(&deps.storage, game_id, TT_BUYER);
+    buyer_models.sort();
+    assert_eq!(buyer_models, vec!["2", "3"]);
+    assert!(tt_models(&deps.storage, game_id, TT_SELLER_OWN).is_empty());
+    assert_eq!(
+        tt_treasury(&deps.storage, game_id, TT_BUYER),
+        buyer_before - Uint128::new(1)
+    );
+    assert_eq!(
+        tt_treasury(&deps.storage, game_id, TT_SELLER_OWN),
+        seller_before + Uint128::new(1)
+    );
+}
+
+/// **G-16 (5): `PendingTrainOfferBlocksTurn`, and its exact reach.**
+///
+/// THE SCOPE OF THE BLOCK IS NARROWER THAN "the corporation is frozen", and
+/// this test pins down both halves of that deliberately, because the
+/// difference is a design decision rather than an oversight:
+///
+///   BLOCKED    -- `EndOperatingRoundTurn`. The buyer may not walk away
+///                 leaving a rival's train tied up in a proposition it has
+///                 already moved on from.
+///   NOT BLOCKED-- `BuyHardwareFromPool`. Buying from the Bank is INSIDE the
+///                 same Buy Trains step; the offer holds the corporation in
+///                 that step rather than freezing it. A corporation whose
+///                 offer is being ignored must still be able to buy a train
+///                 from the Bank, or an unresponsive rival could deny it
+///                 equipment for the whole round.
+///   NOT REACHED-- `LayTile`. Already impossible here for an unrelated
+///                 reason: the sub-phase cursor is on `Hardware`, and Audit
+///                 G-14's gate rejects track-laying from any phase but
+///                 `Track`. Asserted anyway, so that if the phase gate ever
+///                 loosens, this test says so rather than silently passing.
+///
+/// And the block LIFTS on resolution -- proven here via rescind, the path
+/// entirely in the blocked player's own hands, which is what makes the block
+/// safe from deadlock.
+#[test]
+fn pending_train_offer_blocks_end_turn_but_not_bank_purchases() {
+    let (mut deps, env, player_one, _player_two, game_id) = train_trade_scenario();
+
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .unwrap();
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    // ---- BLOCKED: the turn cannot end. ----
+    let end_err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::EndOperatingRoundTurn {
+            game_id,
+            protocol_id: TT_BUYER,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            end_err,
+            ContractError::Operations(OperationsError::PendingTrainOfferBlocksTurn { .. })
+        ),
+        "expected Operations(PendingTrainOfferBlocksTurn), got: {end_err:?}"
+    );
+
+    // ---- BLOCKED: no second offer while one stands. ----
+    let second = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_OWN,
+            model_type: "3".to_string(),
+            price: Uint128::new(5),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            second,
+            ContractError::TrainTrade(TrainTradeError::OfferAlreadyPending { .. })
+        ),
+        "expected TrainTrade(OfferAlreadyPending), got: {second:?}"
+    );
+
+    // ---- NOT BLOCKED: the Bank is still open. ----
+    // Deliberate. If this ever starts failing, the rule changed and the
+    // change should be a decision, not a surprise.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: TT_BUYER,
+        },
+    )
+    .expect("a pending offer must NOT close the Bank to the buyer");
+
+    // ---- NOT REACHED: track-laying, refused by the PHASE gate. ----
+    let lay_err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::LayTile {
+            game_id,
+            protocol_id: TT_BUYER,
+            q: 2,
+            r: 3,
+            tile_id: 57,
+            orientation: 0,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            lay_err,
+            ContractError::HexMap(HexMapError::WrongOperatingSubPhase { .. })
+        ),
+        "track-laying from the Hardware phase must fail on the SUB-PHASE gate, \
+         not the offer block -- got: {lay_err:?}"
+    );
+
+    // ---- THE BLOCK LIFTS. ----
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RescindTrainOffer { game_id, offer_id },
+    )
+    .expect("the buyer can always clear its own block");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::EndOperatingRoundTurn {
+            game_id,
+            protocol_id: TT_BUYER,
+        },
+    )
+    .expect("with the offer withdrawn, the turn ends normally");
+}
+
+/// **G-16 (6): the phase gate is TYPED.**
+///
+/// Buying a train -- from the Bank or from another corporation -- is a
+/// Hardware-phase action. This previously surfaced as a formatted
+/// `StdError::generic_err`, detectable only by substring-matching an English
+/// sentence and indistinguishable from a genuine storage failure.
+#[test]
+fn buying_a_train_from_a_corporation_is_gated_to_the_hardware_phase() {
+    let (mut deps, env, player_one, _player_two, game_id) = train_trade_scenario();
+
+    // Wind the cursor back to Track -- a legal phase, just not this action's.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        TT_BUYER,
+        crate::state::OperatingSubPhase::Track,
+    );
+
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .unwrap_err();
+
+    match err {
+        ContractError::TrainTrade(TrainTradeError::WrongOperatingSubPhase {
+            protocol_id,
+            ref actual,
+            ref required,
+            ..
+        }) => {
+            assert_eq!(protocol_id, TT_BUYER);
+            assert_eq!(actual, "Track");
+            assert_eq!(required, "Hardware");
+        }
+        other => panic!("expected TrainTrade(WrongOperatingSubPhase), got: {other:?}"),
+    }
+}
+
+/// **G-16 (7): the price floor and self-trade, through `execute`.**
+#[test]
+fn train_sale_rejects_zero_price_and_self_trade() {
+    let (mut deps, env, player_one, _player_two, game_id) = train_trade_scenario();
+
+    let zero = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::zero(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            zero,
+            ContractError::TrainTrade(TrainTradeError::PriceBelowMinimum { .. })
+        ),
+        "expected TrainTrade(PriceBelowMinimum), got: {zero:?}"
+    );
+
+    let itself = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_BUYER,
+            model_type: "2".to_string(),
+            price: Uint128::new(10),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            itself,
+            ContractError::TrainTrade(TrainTradeError::SelfTrade { .. })
+        ),
+        "expected TrainTrade(SelfTrade), got: {itself:?}"
+    );
+}
+
+/// **G-17 (1): the Bank can never run out of Diesels.**
+///
+/// Every other tier is finite and runs out exactly as it should. The Diesel
+/// is not -- once the game reaches the D tier the Bank can always sell
+/// another, and the endgame depends on it (Diesels never rust, so a
+/// corporation that can afford one must always be able to get one).
+///
+/// The previous implementation seeded a large finite number as a stand-in.
+/// This proves the pool now tops itself up instead, by draining it far past
+/// any quantity the catalog ever seeded.
+#[test]
+fn the_diesel_supply_is_inexhaustible() {
+    use crate::hardware::{replenish_pool_if_exhausted, DIESEL_MODEL, TRAIN_CATALOG};
+    use crate::state::HardwareAsset;
+
+    let seeded_diesels = TRAIN_CATALOG
+        .iter()
+        .copied()
+        .find(|(model, ..)| *model == DIESEL_MODEL)
+        .map(|(_, _, _, quantity)| quantity)
+        .expect("the catalog must contain a Diesel");
+
+    // Start from a genuinely empty pool -- the state that used to be fatal.
+    let mut pool: Vec<HardwareAsset> = Vec::new();
+
+    // Draw far more than the catalog ever seeds. Every draw must succeed and
+    // every unit must be a Diesel: the finite tiers are long gone by here.
+    let draws = (seeded_diesels as usize) * 5 + 25;
+    for draw in 0..draws {
+        replenish_pool_if_exhausted(&mut pool);
+        assert!(
+            !pool.is_empty(),
+            "draw {draw}: the pool must never be empty after replenishment"
+        );
+        let unit = pool.remove(0);
+        assert_eq!(
+            unit.model_type, DIESEL_MODEL,
+            "draw {draw}: an exhausted pool must refill with Diesels, not another tier"
+        );
+        assert_eq!(unit.cost, Uint128::new(1_100), "a Diesel costs $1,100");
+    }
+
+    // And replenishment NEVER disturbs a non-empty pool -- the finite tiers
+    // must still run down in catalog order.
+    let mut stocked = vec![HardwareAsset {
+        model_type: "2".to_string(),
+        cost: Uint128::new(80),
+        max_route_distance: 2,
+    }];
+    replenish_pool_if_exhausted(&mut stocked);
+    assert_eq!(stocked.len(), 1, "a stocked pool must not be topped up");
+    assert_eq!(stocked[0].model_type, "2");
+}
+
+/// **G-17 (2): emergency buy refuses to run alongside a pending offer.**
+///
+/// Both mechanisms answer the same question -- this corporation has no train
+/// -- and running them concurrently is incoherent. An emergency purchase
+/// empties the treasury and reaches into the President's personal cash; a
+/// pending offer might be about to supply a train for far less.
+///
+/// Refused rather than auto-rescinded: silently withdrawing an offer as a
+/// side effect of a different message spends the player's negotiating
+/// position without asking. And it is never a deadlock -- rescind is the
+/// buyer's own unilateral right, proven here by clearing the block with it.
+#[test]
+fn emergency_buy_is_refused_while_a_train_offer_is_pending() {
+    let (mut deps, env, player_one, _player_two, game_id) = train_trade_scenario();
+
+    // Strand the buyer: sell its only train to the corporation its own
+    // President also controls, which settles instantly.
+    //
+    // THE BUYER OF THIS FIRST SALE IS `TT_SELLER_OWN`, NOT `TT_BUYER`, so it
+    // needs its own Hardware cursor. `train_trade_scenario` only advances
+    // `TT_BUYER`, and the G-16 gate reads the sub-phase of whichever
+    // corporation is DOING the buying -- here that is `TT_SELLER_OWN`, which
+    // was still sitting at Track. Sub-phase cursors are per-corporation and
+    // independent, so two corporations standing at Hardware is not a fiction:
+    // each one passes through that step on its own turn.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        TT_SELLER_OWN,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_SELLER_OWN,
+            seller_protocol_id: TT_BUYER,
+            model_type: "2".to_string(),
+            price: Uint128::new(1),
+        },
+    )
+    .expect("a same-president sale should settle immediately");
+    assert!(
+        tt_models(&deps.storage, game_id, TT_BUYER).is_empty(),
+        "the buyer must now be stranded for this test to mean anything"
+    );
+
+    // Now it makes an offer to a RIVAL -- an unanswered one.
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(250),
+        },
+    )
+    .unwrap();
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    // ---- REFUSED, and specifically for the offer, not for anything else. ----
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::EmergencyBuyHardware {
+            game_id,
+            protocol_id: TT_BUYER,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ContractError::Hardware(HardwareError::PendingTrainOfferBlocksEmergencyBuy { .. })
+        ),
+        "expected Hardware(PendingTrainOfferBlocksEmergencyBuy), got: {err:?}"
+    );
+
+    // ---- One transaction clears it, by the stranded player's own hand. ----
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RescindTrainOffer { game_id, offer_id },
+    )
+    .expect("rescind is the buyer's unilateral right");
+
+    // With the offer gone the emergency path is reachable again. It may still
+    // refuse for its OWN reasons (a treasury that can afford a normal
+    // purchase, for instance) -- what must not happen is another
+    // offer-related rejection.
+    let after = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::EmergencyBuyHardware {
+            game_id,
+            protocol_id: TT_BUYER,
+        },
+    );
+    if let Err(e) = after {
+        assert!(
+            !matches!(
+                e,
+                ContractError::Hardware(HardwareError::PendingTrainOfferBlocksEmergencyBuy { .. })
+            ),
+            "the offer block must be gone once the offer is rescinded, got: {e:?}"
+        );
+    }
+}
+
+/// **G-17 (3): a corporation may sell its LAST train.**
+///
+/// Legal in 1830 and deliberately unrestricted -- stranding yourself is a real
+/// (if desperate) play, and the Validator Liability emergency purchase is the
+/// recovery path. This proves the sale goes through AND that the rest of the
+/// engine correctly registers the seller as trainless afterwards, which is
+/// what every downstream "must own a train" rule keys on.
+#[test]
+fn a_corporation_may_sell_its_last_train_and_is_then_registered_as_stranded() {
+    use crate::or_phase::{may_skip, owns_any_train};
+    use crate::state::OperatingSubPhase;
+
+    let (mut deps, env, player_one, player_two, game_id) = train_trade_scenario();
+
+    // NYC holds exactly one train, and must run it while it does.
+    assert_eq!(tt_models(&deps.storage, game_id, TT_SELLER_RIVAL), vec!["4"]);
+    assert!(owns_any_train(&deps.storage, game_id, TT_SELLER_RIVAL).unwrap());
+    assert!(
+        !may_skip(&deps.storage, game_id, TT_SELLER_RIVAL, OperatingSubPhase::Routes).unwrap(),
+        "a corporation holding a train must run it -- Routes is not skippable"
+    );
+
+    // PRR buys it; NYC's President accepts, selling its ONLY train.
+    let offer_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyTrainFromCorporation {
+            game_id,
+            buyer_protocol_id: TT_BUYER,
+            seller_protocol_id: TT_SELLER_RIVAL,
+            model_type: "4".to_string(),
+            price: Uint128::new(300),
+        },
+    )
+    .unwrap();
+    let offer_id: u64 = attr(&offer_res, "offer_id").parse().unwrap();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_two.as_str(), &[]),
+        ExecuteMsg::AcceptTrainOffer { game_id, offer_id },
+    )
+    .expect("selling your last train is legal -- nothing may block this");
+
+    // ---- The seller is now genuinely stranded, by every measure. ----
+    assert!(
+        tt_models(&deps.storage, game_id, TT_SELLER_RIVAL).is_empty(),
+        "the seller's roster must be empty"
+    );
+    assert!(
+        !owns_any_train(&deps.storage, game_id, TT_SELLER_RIVAL).unwrap(),
+        "`owns_any_train` is what every downstream rule reads -- it must say false"
+    );
+    assert!(
+        may_skip(&deps.storage, game_id, TT_SELLER_RIVAL, OperatingSubPhase::Routes).unwrap(),
+        "with no train there is nothing to run, so Routes becomes skippable -- \
+         otherwise the stranded corporation could never finish a turn"
+    );
+
+    // And the buyer really did receive it.
+    let mut buyer = tt_models(&deps.storage, game_id, TT_BUYER);
+    buyer.sort();
+    assert_eq!(buyer, vec!["2", "4"]);
 }

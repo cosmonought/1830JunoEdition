@@ -144,6 +144,27 @@ pub enum TrainTradeError {
     #[error("Train offer {offer_id} was not found in game room {game_id}")]
     OfferNotFound { game_id: u64, offer_id: u64 },
 
+    /// Audit G-16: buying a train is a Hardware-phase action wherever the
+    /// train comes from, so the same sub-phase gate applies here as to
+    /// `BuyHardwareFromPool`.
+    ///
+    /// Typed, matching the four other gated modules. It was briefly a
+    /// formatted `StdError::generic_err`, which type-checked but was wrong on
+    /// two counts: a client could only detect it by substring-matching an
+    /// English sentence, and it collapsed a domain rule into the same variant
+    /// that carries genuine storage failures -- so a phase violation and a
+    /// corrupt read were indistinguishable to a caller.
+    #[error(
+        "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); buying a train requires phase {required} (step {required_index} of 6)"
+    )]
+    WrongOperatingSubPhase {
+        protocol_id: u32,
+        actual: String,
+        actual_index: u8,
+        required: String,
+        required_index: u8,
+    },
+
     /// Audit G-15b.
     #[error(
         "Protocol {buyer_protocol_id} already has train offer {offer_id} outstanding -- answer or rescind it before making another"
@@ -381,13 +402,13 @@ pub fn execute_buy_train_from_corporation(
     ) {
         return Err(match mismatch {
             or_phase::PhaseMismatch::Wrong { actual, required } => {
-                TrainTradeError::Std(StdError::generic_err(format!(
-                    "protocol {buyer_protocol_id} is in Operating Round phase {} (step {} of 6); buying a train requires phase {} (step {} of 6)",
-                    or_phase::phase_name(actual),
-                    or_phase::phase_index(actual),
-                    or_phase::phase_name(required),
-                    or_phase::phase_index(required),
-                )))
+                TrainTradeError::WrongOperatingSubPhase {
+                    protocol_id: buyer_protocol_id,
+                    actual: or_phase::phase_name(actual).to_string(),
+                    actual_index: or_phase::phase_index(actual),
+                    required: or_phase::phase_name(required).to_string(),
+                    required_index: or_phase::phase_index(required),
+                }
             }
             or_phase::PhaseMismatch::Storage(message) => {
                 TrainTradeError::Std(StdError::generic_err(message))

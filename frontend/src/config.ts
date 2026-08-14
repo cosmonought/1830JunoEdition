@@ -252,3 +252,22 @@ export function formatNativeAmount(baseAmount: string): string {
   const fraction = padded.slice(padded.length - NATIVE_DENOM_EXPONENT);
   return `${whole.replace(/^0+(?=\d)/, "")}.${fraction}`;
 }
+
+/** `formatNativeAmount` with trailing fraction zeros trimmed: `40000000` ->
+ *  `"40"`, `40500000` -> `"40.5"`, `1` -> `"0.000001"`.
+ *
+ *  For places that report a POOL rather than a wallet balance -- the Game
+ *  Ledger's ante pool, for one. A wallet wants fixed decimals so successive
+ *  balances line up in the same column; a single headline figure reading
+ *  "40.000000 JUNO" is just six characters of noise around the number the
+ *  reader wanted.
+ *
+ *  Built on `formatNativeAmount` rather than dividing, so the no-floats
+ *  discipline documented above holds here too -- this only ever trims a
+ *  string it was handed. */
+export function formatNativeAmountCompact(baseAmount: string): string {
+  const fixed = formatNativeAmount(baseAmount);
+  if (!fixed.includes(".")) return fixed;
+  // Trim the zeros, then the point itself if nothing survived it.
+  return fixed.replace(/0+$/, "").replace(/\.$/, "");
+}

@@ -318,6 +318,20 @@ const DEFAULT_HEIGHT = 640;
  *  just happens to be a reasonable "3x closer than the full-board fit"
  *  interactive zoom-in ceiling either way. */
 const MAX_ZOOM_MULTIPLIER = 3;
+
+/** Design note #43: how far BELOW the fit-to-screen scale a player may zoom.
+ *
+ *  `minZoom` is the scale at which the board exactly fills the pane, and it
+ *  was also used as the hard lower bound -- so "Fit to Screen" WAS the zoom
+ *  floor and the "-" button became a no-op the moment you reached it. That
+ *  is wrong for a board this wide: pulling back past the fit to see the
+ *  whole map with margin around it, while judging a long route, is a normal
+ *  thing to want and there was no way to do it.
+ *
+ *  0.4 lets the board shrink to roughly a third of the pane width, which is
+ *  far enough to be useful and near enough that the map is still legible.
+ *  `ABSOLUTE_MIN_ZOOM_FLOOR` still backstops a degenerate viewport. */
+const MIN_ZOOM_MULTIPLIER = 0.4;
 /** Absolute safety floor under the dynamically-computed board-fit minimum
  *  zoom (design note #8) -- guards only against a degenerate near-zero
  *  viewport/`hexSize` combination; in normal use the computed `minZoom`
@@ -342,11 +356,11 @@ const ABSOLUTE_MIN_ZOOM_FLOOR = 0.1;
  *  text, which (design note #28) is drawn deliberately close to the true
  *  board edge. */
 const MAP_CONTROLS_PANEL_STYLE: React.CSSProperties = {
-  position: "absolute",
-  top: "20px",
-  right: "20px",
-  zIndex: 5,
+  // Design note #44: static, below the map. Was `absolute; top/right: 20px`
+  // over the canvas, covering the coordinate labels.
   display: "flex",
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
   flexDirection: "row",
   alignItems: "stretch",
   gap: "6px",
@@ -2627,7 +2641,13 @@ export function HexGridRenderer({
       setDetailedView(true);
       setView((prev) => {
         const baseView = detailedView ? prev : fitView;
-        const nextZoom = Math.min(minZoom * MAX_ZOOM_MULTIPLIER, Math.max(minZoom, baseView.zoom * factor));
+        // Design note #43: the floor is now `minZoom * MIN_ZOOM_MULTIPLIER`,
+        // not `minZoom` itself, so "-" keeps working past Fit to Screen.
+        const zoomFloor = Math.max(ABSOLUTE_MIN_ZOOM_FLOOR, minZoom * MIN_ZOOM_MULTIPLIER);
+        const nextZoom = Math.min(
+          minZoom * MAX_ZOOM_MULTIPLIER,
+          Math.max(zoomFloor, baseView.zoom * factor),
+        );
         // Keep the point currently at the canvas's own screen-space center
         // fixed in world space while zooming, so repeated +/- presses zoom
         // in/out around the middle of the view rather than drifting.
@@ -2677,7 +2697,19 @@ export function HexGridRenderer({
     [handlePointerUp],
   );
 
+  /* Design note #44: the control cluster moved OUT of the canvas.
+   *
+   * It was `position: absolute; top/right: 20px` inside the canvas
+   * container, which put it directly on top of the board's top-right
+   * coordinate labels -- the one part of the map that is pure reference
+   * text and therefore the worst thing to cover. There is no placement
+   * inside a full-bleed canvas that does not cover SOMETHING, so the
+   * controls leave the canvas entirely and sit in normal flow underneath
+   * it. The canvas keeps its own `position: relative` wrapper (the tooltip
+   * and click-indicator overlays still need it); this just adds a column
+   * around the pair. */
   return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "10px", width: widthProp ?? "100%" }}>
     <div
       ref={containerRef}
       style={{
@@ -2746,12 +2778,12 @@ export function HexGridRenderer({
           {hoveredCoordLabel.label}
         </div>
       )}
-      {/* Rail Map Overhaul (design note #42): "Clean Up Control Overlay
-          Overlaps" -- the old separate "Toggle Detailed View" button
-          (design note #13) is removed entirely, and the former "+"/"-"/
-          "Fit to Screen" bottom-right stack is folded into this single
-          floating top-right panel alongside the new City Names toggle, so
-          there's exactly ONE control cluster instead of two. */}
+    </div>
+
+      {/* Design note #44: ONE control cluster, in normal flow BELOW the
+          map -- it no longer overlays the coordinate labels it used to sit
+          on top of. Consolidation from design note #42 is unchanged; only
+          the placement moved. */}
       <div style={MAP_CONTROLS_PANEL_STYLE}>
         <button
           type="button"

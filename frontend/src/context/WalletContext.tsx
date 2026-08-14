@@ -298,7 +298,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           address,
           [grantMsg],
           fee,
-          "18Cosmos: authorize session key",
+          "1830 Juno: authorize session key",
         );
 
         if (result.code !== 0) {
@@ -344,7 +344,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           address,
           [revokeMsg],
           fee,
-          "18Cosmos: revoke session key",
+          "1830 Juno: revoke session key",
         );
 
         if (result.code !== 0) {

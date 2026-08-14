@@ -176,17 +176,50 @@
 //    own doc comment); the real-JUNO ante pool is redistributed
 //    proportionally to final net worth by
 //    `contract::finalize_and_distribute_payouts`, the shared core behind
-//    both `EndGameAndDistribute` (room creator, any time) and the
-//    automatic $350 Game-End Trigger; and the game's four real end paths
-//    are enumerated precisely -- including calling out, same as
-//    `market.rs`'s own module doc comment does, that the $350 trigger is
-//    "this project's own explicit, user-requested house rule, not a
-//    transcription of the [reference] engine's behavior," while the Bank
-//    running dry (`GameSession::bank_is_broken`, `trading.rs`) is "the real
-//    rulebook's primary end condition" -- so a player reading this section
-//    gets the same honest real-vs-house-rule distinction this codebase's
-//    other design notes already insist on, not a flattened "it just ends
-//    at $350" oversimplification.
+//    both `EndGameAndDistribute` (room creator, any time) and the former
+//    automatic $350 Game-End Trigger.
+//
+//    THE $350 TRIGGER IS NO LONGER DOCUMENTED AS AN END CONDITION. It was
+//    never canonical 1830 -- `market.rs`'s own module doc comment already
+//    conceded it is "this project's own explicit, user-requested house rule,
+//    not a transcription of the [reference] engine's behavior" -- and it has
+//    now been removed from the rules text and from the market grid's green
+//    game-end cell (`StockMarketRenderer.tsx` design note #27). This section
+//    enumerates the three real end paths: the Bank running dry
+//    (`GameSession::bank_is_broken`, `trading.rs`, the rulebook's primary end
+//    condition), presidential bankruptcy on a mandatory train purchase, and
+//    the room creator ending the game manually.
+//
+//    NOTE FOR THE BACKEND AUDIT: the contract still fires the $350 trigger.
+//    The frontend no longer advertises it, which closes the player-facing
+//    half of the discrepancy but not the contract half -- removing the
+//    trigger itself is a Rust change and is deliberately out of scope here.
+//
+//    SECOND, LARGER AUDIT ITEM -- ANNULMENT. This section now documents two
+//    CLASSES of ending, not three paths to one ending:
+//
+//      - NATURAL END (bank breaks, or presidential bankruptcy): the ante
+//        pool is distributed by final net worth, as before.
+//      - ANNULMENT (host ends the match, or a 48-hour inactivity timeout):
+//        no winner, no net-worth payout, every player refunded their own
+//        ante less gas and development fees.
+//
+//    The anti-exploit reason is the whole point: while every ending paid out
+//    by net worth, a host who was ahead could simply end the match and bank
+//    the lead. Refund-on-annul removes the incentive entirely.
+//
+//    THE CONTRACT DOES NOT DO THIS YET, and this is the sharper end of the
+//    discrepancy. `EndGameAndDistribute` runs the SAME
+//    `contract::finalize_and_distribute_payouts` that a natural end runs, so
+//    today a manual end still pays out by net worth. There is also no
+//    48-hour timeout in the contract at all -- no stored last-action
+//    timestamp, no permissionless expiry entry point.
+//
+//    Implementing annulment therefore needs a refund path distinct from the
+//    payout path, plus timeout state. That is a Rust change and is out of
+//    scope here by instruction. Until it lands, THIS TEXT DESCRIBES INTENDED
+//    RULES, NOT SHIPPED BEHAVIOUR -- flagged deliberately rather than
+//    quietly written as though it were already true.
 
 // 10. **Page Restructure -- Top Row (Narrative | Current Round) / Bottom Row
 //    (side-by-side lookup tables).** Direct feedback on design note #9's
@@ -295,7 +328,7 @@ const CORE_LIMITS: RuleRow[] = [
       "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling -- moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary 1830 plays. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
   },
   {
-    label: "Stock Round 1 -- no sales",
+    label: "Stock Round 1",
     value: "Selling is prohibited for the whole of SR1",
     note:
       "In the first Stock Round of the game nobody may sell any certificate, of any corporation, for any reason. The round is buy-or-pass only. This exists so the opening share auction cannot be immediately unwound: without it, a player could buy a presidency, bank the price movement and dump it in the same round, which is not a strategy 1830 intends to offer. The restriction lifts completely at SR2 and never returns.",
@@ -326,7 +359,7 @@ const CORE_LIMITS: RuleRow[] = [
     note: "One 20% president's certificate plus eight 10% certificates -- ten 10%-units of ownership in total, held as nine physical cards.",
   },
   {
-    label: "President's certificate -- certificate limit",
+    label: "President's certificate",
     value: "Counts as exactly 1 certificate.",
     note: "The president's 20% certificate counts the same as any ordinary 10% certificate against a player's certificate limit, despite representing double the ownership.",
   },
@@ -392,10 +425,28 @@ const STOCK_ROUND_FLOW: FlowStep[] = [
  *  design note #8 for the "Buy Private Company" step added by this pass. */
 const OPERATING_ROUND_FLOW: FlowStep[] = [
   {
+    // Design note #29: FIRST, not last. This is the chronological order a
+    // corporation's turn actually runs in -- a private is bought before
+    // track is laid, because the private's own special power (a free tile
+    // lay, a reserved hex) can change what track lay is legal in the very
+    // same turn. Listing it sixth described a sequence the game does not
+    // follow, in both the quick sidebar and the detailed panel, since both
+    // render from this one array.
+    //
+    // The Phase 3 caveat leads the text rather than trailing it: a step
+    // that is invisible for the first third of the game needs to say so
+    // before it says anything else, or a Phase 1 player spends their turn
+    // looking for a control that is not there.
+    step: "Buy Private Company",
+    detail:
+      "Unlocks in Phase 3. The President may spend the CORPORATION'S TREASURY -- never personal cash -- to buy a still-owned private company directly from the player holding it, at a price the two negotiate but bounded to 50%-200% of that private's face value. The private's revenue then flows to the corporation instead of the player.",
+    quick: "Phase 3+ only: buy a private from a player, 50%-200% of face value, from Treasury.",
+  },
+  {
     step: "Lay Track",
     detail:
-      "The active corporation's President may lay or upgrade one tile on the map, extending its rail network. Terrain is charged on top of the tile: $80 to build across a river hex, $120 across a mountain hex, nothing on clear ground.",
-    quick: "Lay or upgrade one tile (+$80 river / $120 mountain terrain fee).",
+      "The active corporation's President may lay or upgrade one tile on the map, extending its rail network. Three rules bind every lay. COLOUR PROGRESSION: upgrades go Yellow -> Green -> Brown in strict order, with no skipping, and the higher colours only become available as the game phase advances. CONNECTIVITY: the hex must be reachable by track traced back to one of this corporation's own station tokens -- you cannot lay in unconnected territory. TRACK PRESERVATION: an upgrade must keep every path the old tile already carried, so a lay can never sever an existing route, including a rival's. Terrain is charged on top of the tile and comes out of the CORPORATION'S TREASURY, not personal cash: $80 across a river hex, $120 across a mountain hex, nothing on clear ground.",
+    quick: "Lay or upgrade one connected tile, preserving existing track. Terrain fees from Treasury.",
   },
   {
     // CORRECTION (design note #141): this step was MISSING from this list
@@ -415,32 +466,26 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
     // that the Operating Round bar has had all along, in its own sub-phase.
     step: "Place a Station",
     detail:
-      "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot -- a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one placement per corporation per Operating Round.",
-    quick: "Optionally place one Station token in a reachable city with a free slot.",
+      "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot -- a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one station placement per corporation per Operating Round turn (e.g., one in OR 2.1, and another in OR 2.2).",
+    quick: "Optionally place one Station token in a reachable city with a free slot ($40, then $100).",
   },
   {
     step: "Routes",
     detail:
-      "Revenue is computed automatically by the Pathfinding Revenue Engine, bounded by the company's best-owned train's max route distance -- see design note #5(b) for exactly when this runs relative to a single corporation's turn.",
-    quick: "Revenue auto-computed by the Pathfinding Revenue Engine.",
+      "Each train runs a route and earns the revenue of the centres it visits, up to its own capacity -- a 2-train reaches 2 revenue centres, a 6-train reaches 6, a Diesel is unlimited. Large cities and small towns both count as one centre each against that capacity. Two rules bind a run: a train may not re-enter the same hex twice on a single route, and if the corporation owns several trains their routes must be COMPLETELY DISTINCT. No two trains owned by the same corporation may share a track segment, though multiple trains may visit or terminate in the same city if they use separate tracks to enter and leave. Autopath computes the highest legal total for you.",
+    quick: "Each train runs up to its capacity; multiple trains cannot share track. Autopath available.",
   },
   {
     step: "Dividends",
     detail:
-      "The President may declare dividends on whatever revenue the company earned: distribute it across every shareholder (including the Bank pool's own share, credited to the bank), or retain it into the company's treasury.",
-    quick: "Pay out this turn's revenue to shareholders, or withhold it.",
+      "The President chooses one of two, and the choice moves the share price. PAY OUT: the revenue is split evenly across all ten 10% share units and paid to whoever holds them (the Bank Pool's own share is credited to the bank), and the corporation's market price advances ONE CELL RIGHT. WITHHOLD: the corporation keeps 100% of the revenue in its treasury and the market price drops ONE CELL LEFT. Withholding builds the capital a corporation needs for trains; paying out is what raises the shareholders' net worth, which is how the game is won.",
+    quick: "Pay out (price moves right) or withhold into Treasury (price moves left).",
   },
   {
     step: "Buy Trains",
     detail:
-      "The President may buy the next train at the front of the shared Hardware pool, paid from the company's treasury -- subject to the corporation's current Train Limit (see Core Limits & Caps) and triggering a Rusting sweep if it's the room's first-ever unit of a new tier.",
-    quick: "Buy from the Bank, or from another corporation for $1+.",
-  },
-  {
-    step: "Buy Private Company",
-    detail:
-      "Starting in Phase 3, the President may spend the corporation's treasury to buy a still-owned private company directly from the player holding it, at a price the two negotiate but bounded on-chain to 50%-200% of that private's face value -- see design note #8 for the exact contract mechanics this mirrors (`trading::execute_buy_private_company`'s `PrivatePurchaseLockedBeforePhase3` gate and price bound).",
-    quick: "Phase 3+: buy a private from a player, 50%-200% of face value.",
+      "The President may buy the next train at the front of the Bank Depot at its face value, or a train from another corporation at any negotiated price of $1 or more. BOTH ARE PAID FROM THE CORPORATION'S TREASURY. The purchase is subject to the current Train Limit (see Limits, Caps, and Special Rules) and triggers a Rusting sweep if it is the room's first unit of a new tier. EMERGENCY TRAIN PURCHASE: a corporation that owns NO train must buy one, and if its treasury cannot cover the cheapest available train the President becomes personally liable -- they must contribute their own cash and, if that is still not enough, sell their own shares to raise the difference. Watch the rusting schedule and keep a viable fleet; this is the rule that ends games badly.",
+    quick: "Buy from the Depot at face value or a rival for $1+, from Treasury. Trainless = emergency.",
   },
 ];
 
@@ -471,14 +516,14 @@ const AUCTION_FLOW: FlowStep[] = [
   {
     step: "Mini-Auction Raise",
     detail:
-      "Once every other player has passed on the lowest-offered private while at least one bid stands elsewhere, a mini-auction runs among that private's tied bidders: on their turn, a tied bidder may raise their bid.",
-    quick: "Tied bidder: raise your bid.",
+      "Once every other player has passed on the lowest-offered private while at least one bid stands elsewhere, a mini-auction runs among that private's competing bidders: on their turn, a competing bidder may raise their bid.",
+    quick: "Competing bidder: raise your bid.",
   },
   {
     step: "Mini-Auction Pass",
     detail:
-      "A tied bidder may instead drop out of the mini-auction -- their escrowed bid is fully refunded, and the auction continues among the remaining bidder(s).",
-    quick: "Tied bidder: drop out (bid fully refunded).",
+      "A competing bidder may instead drop out of the mini-auction -- their escrowed bid is fully refunded, and the auction continues among the remaining bidder(s).",
+    quick: "Competing bidder: drop out (bid fully refunded).",
   },
 ];
 
@@ -610,7 +655,7 @@ function QuickReferenceStrip({
  *  Auction/Stock Round/Operating Round" sections used to carry -- so
  *  consolidating those three sections into this one column loses no
  *  content. When connected, the live round is reordered to the front and
- *  gets an "ACTIVE" badge; each step also leads with its own `quick`
+ *  is ordered first (no badge -- see below); each step also leads with its own `quick`
  *  one-liner (bold) directly above the full `detail` paragraph, so the
  *  list stays scannable at a glance while still offering the complete
  *  explanation underneath -- both `FlowStep` fields now do real work
@@ -623,10 +668,13 @@ function CurrentRoundReferenceSection({
   operatingSubPhase?: RulesOperatingSubPhase | null;
 }) {
   const connected = roundType !== undefined && roundType !== null;
-  const subPhaseMeta =
-    connected && roundType === "OperatingRound" && operatingSubPhase
-      ? OPERATING_SUB_PHASE_QUICK_LABELS[operatingSubPhase]
-      : null;
+
+  // `operatingSubPhase` is deliberately NOT read here any more. It used to
+  // drive the ACTIVE badge in this panel; that badge was removed because the
+  // sidebar already marks the live round and the detail panel repeating it
+  // was noise. The prop stays on the signature because the sidebar half of
+  // this component still needs it -- see the quick-reference section.
+  void operatingSubPhase;
 
   // Active round first, then the rest in their usual order -- never drops a
   // round, just reprioritises reading order.
@@ -714,13 +762,13 @@ function CurrentRoundReferenceSection({
             >
               <span style={styles.roundAccordionChevron}>{isOpen ? "\u25be" : "\u25b8"}</span>
               <h4 style={styles.quickRefCardTitle}>{ROUND_META[rt].label}</h4>
-              {isActive && (
-                <span style={styles.quickRefBadge}>
-                  ACTIVE
-                  {subPhaseMeta &&
-                    ` -- UI step: ${subPhaseMeta.name} (${subPhaseMeta.index} of ${OPERATING_SUB_PHASE_TOTAL})`}
-                </span>
-              )}
+              {/* Design note #30: the ACTIVE badge is gone. The active
+                  round is already reordered to the front AND auto-opened
+                  AND given `roundAccordionHeaderActive`'s highlight -- the
+                  badge was a fourth signal for a fact three other things
+                  were already saying. The sub-phase detail it carried moves
+                  to the sub-phase list inside the panel, where it belongs
+                  next to the steps it describes. */}
               {!isOpen && (
                 <span style={styles.roundAccordionHint}>{ROUND_META[rt].flow.length} steps</span>
               )}
@@ -776,22 +824,28 @@ function AboutSection() {
           your personal wallet.
         </p>
         <p style={styles.aboutParagraph}>
-          Every player who joins this room antes real JUNO into a shared pool. When the game ends,
-          that pool is redistributed proportionally to each player's final net worth -- your own
-          cash on hand, plus the live market value of every share you personally hold. A
+          Every player who joins this room antes real JUNO into a shared pool. When a game reaches a
+          natural end, that pool is redistributed proportionally to each player's final net worth --
+          your own cash on hand, plus the live market value of every share you personally hold. A
           corporation's own treasury cash never counts toward any individual player's net worth,
           even for its President. There's no separate victory-points track: whoever has the highest
-          net worth when the game ends simply walks away with the largest slice of the real pool.
+          net worth at the finish simply walks away with the largest slice of the real pool.
         </p>
         <p style={styles.aboutParagraph}>
-          The game can end four ways: the room's creator can end it manually at any time; the Bank
-          can run dry of cash -- the classic 1830 rulebook's own primary end condition (see Bank
-          Treasury on the Game Ledger tab); a share price can reach the top of the chart, $350 --
-          this app's own added house rule, not part of the original rulebook's end conditions; or,
-          rarely, a corporation's President can be unable to cover a mandatory train purchase even
-          after emptying both the company's treasury and their own personal cash, which halts the
-          game on the spot. However it ends, the same final net-worth calculation decides the
-          payout.
+          A game reaches a natural end one of two ways: the Bank runs dry of cash -- the classic
+          1830 rulebook's own primary end condition (see Bank Treasury on the Game Ledger tab) -- or
+          a corporation's President cannot cover a mandatory train purchase even after emptying both
+          the company's treasury and their own personal cash, which bankrupts them and halts the
+          game on the spot. In either case the final net-worth calculation above decides the payout,
+          and the pool is distributed.
+        </p>
+        <p style={styles.aboutParagraph}>
+          A game can also be cut short: the host may end the match, or the room may hit its
+          48-hour inactivity timeout. Neither is a result. In both cases the game is{" "}
+          <strong style={styles.aboutEmphasis}>annulled</strong> -- no winner is declared, no
+          net-worth payout is calculated, and every player is refunded their own initial ante, less
+          standard gas and development fees. Ending a match early is a way to close an abandoned
+          room, not a way to bank a lead.
         </p>
       </div>
     </section>
@@ -862,7 +916,7 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
       <div style={styles.bottomRow}>
         <div style={styles.bottomRowColumn}>
           <section style={styles.section}>
-            <h3 style={styles.sectionTitle}>Core Limits &amp; Caps</h3>
+            <h3 style={styles.sectionTitle}>Limits, Caps, and Special Rules</h3>
             <div style={styles.tableScroll}>
               <table style={styles.table}>
                 <thead>
@@ -874,11 +928,20 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
                 <tbody>
                   {CORE_LIMITS.map((row) => (
                     <tr key={row.label}>
-                      <td style={styles.td}>
-                        {row.label}
-                        {row.note && <div style={styles.rowNote}>{row.note}</div>}
-                      </td>
-                      <td style={styles.td}>{row.value}</td>
+                      {/* Design note #37: PLAIN TEXT, NO HOVER STATE AT
+                          ALL. Label left, value right, nothing hidden.
+                          This went through three rounds -- prose in the
+                          cell, then a tooltip with a marker glyph, then a
+                          tooltip with no marker -- and the last of those
+                          was the worst of the three: information that
+                          exists but is undiscoverable is not a feature, it
+                          is a trap for whoever maintains this next. If a
+                          `note` matters enough to keep, it belongs in the
+                          narrative section as visible prose; if it does
+                          not, it should be deleted. Either way it does not
+                          belong in a `title` on a lookup table. */}
+                      <td style={styles.td}>{row.label}</td>
+                      <td style={styles.tdNum}>{row.value}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -919,7 +982,7 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
             </div>
           </section>
 
-          <section style={styles.section}>
+          <section style={{ ...styles.section, ...styles.sectionSpaced }}>
             <h3 style={styles.sectionTitle}>Certificate Limit &amp; Starting Cash by Player Count</h3>
             <div style={styles.tableScroll}>
               <table style={styles.table}>
@@ -1011,6 +1074,11 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "1 1 380px",
     minWidth: 0,
   },
+  /** Design note #31: the two lookup tables at the bottom ran together --
+   *  the Trains rows and the Certificate Limit rows read as one continuous
+   *  table with a stray heading in the middle. A generous gap is the whole
+   *  fix; they are separate references consulted for different reasons. */
+  sectionSpaced: { marginTop: "34px" },
   section: {
     display: "flex",
     flexDirection: "column",
@@ -1036,6 +1104,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
     lineHeight: 1.75,
   },
+  aboutEmphasis: { color: "#e0b64a", fontWeight: 700 },
   tableScroll: {
     overflowX: "auto",
     width: "100%",
@@ -1057,6 +1126,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "9px 14px",
     borderBottom: "1px solid #1e2129",
   },
+  /** Design note #31: marks a row whose `title` carries more detail. */
+  /** Design note #31: numbers right-aligned. */
+  tdNum: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
   rowNote: {
     fontSize: FONT_SIZE.strong,
     color: "#8a90a0",

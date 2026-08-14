@@ -56,6 +56,7 @@ import {
   offboardValueForEra,
   terrainBuildFeeAt,
 } from "./hexBoardData";
+import { corporationLabel } from "../utils/corporationNames";
 import { TILE_CATALOG, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
 import type {
@@ -1819,11 +1820,18 @@ export function describeHexWithValue(
 
   // Design note #118: real placed station tokens, by ticker -- not a
   // capacity count.
+  //
+  // The token drawn on the canvas can only fit an acronym, and this hover
+  // string is the ONLY place a player can find out which railroad that
+  // acronym is -- a canvas token has no DOM node to hang a `title` on. So
+  // the tooltip carries the full name for a single token. Multiple tokens
+  // stay as bare tickers: three expanded names in one hover line would run
+  // past the edge of the tooltip and bury the hex's own description.
   const tickersHere = publicCompanies
     .filter((company) => company.station_token_hexes.some(([hexQ, hexR]) => hexQ === q && hexR === r))
     .map((company) => company.ticker);
   if (tickersHere.length === 1) {
-    result = `${result} (Station: ${tickersHere[0]})`;
+    result = `${result} (Station: ${corporationLabel(tickersHere[0])})`;
   } else if (tickersHere.length > 1) {
     result = `${result} (Stations: ${tickersHere.join(", ")})`;
   }

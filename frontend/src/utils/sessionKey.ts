@@ -363,7 +363,7 @@ export async function execViaSessionKey(
     feeGranter = requireFeeGranterAddress(),
     gasLimit = "300000",
     gasFeeAmount = { denom: "ujuno", amount: "5000" },
-    memo = "18Cosmos move",
+    memo = "1830 Juno move",
   } = options;
 
   const messageKey = Object.keys(msg)[0] as GameplayMessageKey;

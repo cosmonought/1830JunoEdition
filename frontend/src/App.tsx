@@ -91,7 +91,7 @@
 // 7. **One shared live `GetGameState` poll, not several one-off queries.**
 //    `utils/gameState.ts`'s `useGameStatePolling` is a properly typed,
 //    interval-driven (default 6s) poll of the FULL `GameStateResponse` --
-//    the VGP balance display, the Chatbox's turn-alert comparison, the
+//    the balance display, the Chatbox's turn-alert comparison, the
 //    Contextual Sub-Panel, the Contextual Top Action Bar's round-type
 //    switch (design note #8), the Financial Ledger tab, and
 //    `HexGridRenderer`'s `currentEra` prop all derive from this ONE shared
@@ -529,6 +529,7 @@ import HexGridRenderer, {
   type HexClickQueryState,
 } from "./components/HexGridRenderer";
 import StockMarketRenderer, {
+  marketCellForPrice,
   type MarketGridResponse,
 } from "./components/StockMarketRenderer";
 import TileSelectionPopup, {
@@ -558,11 +559,28 @@ import {
 // rather than a raw address, which is what `truncateChatAddress` was for).
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
 import { CONTROL_PADDING, FONT_SIZE, LINE_HEIGHT } from "./styles/typography";
+import { TURN_PULSE_INK_RGB } from "./styles/palette";
+import { derivePhase, rustOutlook, type GamePhase } from "./utils/gamePhase";
 import { useDocumentTitleFlash } from "./utils/turnAlert";
+import {
+  SANDBOX_MARKET_PRICES,
+  SANDBOX_PLAYERS,
+  sandboxGameState,
+  sandboxMarketPositions,
+  sandboxPlayerLabel,
+  sandboxWaterfallState,
+} from "./utils/sandboxState";
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
+import TutorialModal, {
+  OPERATING_ROUND_TUTORIAL,
+  STOCK_MARKET_TUTORIAL,
+  STOCK_ROUND_TUTORIAL,
+  WATERFALL_AUCTION_TUTORIAL,
+} from "./components/TutorialModal";
+import { ConnectWalletButton } from "./components/ConnectWalletButton";
 import { useFirestoreChat } from "./components/ChatBox";
 // NOT importing `truncateAddress` from `utils/lobby` -- this file already
 // has its own local one (below, with configurable lead/trail lengths) and
@@ -585,9 +603,7 @@ import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
  *  produced by a live query. It is deliberately NOT the room anything talks
  *  to. */
 const MOCK_GRID_GAME_ID = 1;
-const MOCK_BUY_STOCK_PROTOCOL_ID = 1; // PRR, per public_company::CORE_PUBLIC_COMPANIES
 const MOCK_BUY_STOCK_PAR_VALUE = "100"; // top of the standard 1830 par ladder
-const MOCK_SELL_STOCK_PERCENTAGE = 10; // one standard 10% certificate block
 const MOCK_DECLARE_DIVIDENDS_REVENUE = "0"; // no revenue-entry UI yet -- see design note #4
 // Same placeholder rationale as design note #1/#4 above: there's no
 // company-selector UI yet, so the Interactive Tile-Selection Popup's
@@ -600,7 +616,7 @@ const MOCK_DECLARE_DIVIDENDS_REVENUE = "0"; // no revenue-entry UI yet -- see de
 const MOCK_LAY_TILE_PROTOCOL_ID = 4; // B&O, per public_company::CORE_PUBLIC_COMPANIES
 
 /** Hand-kept mirror of `hardware::TRAIN_CATALOG` (`(model_type, baseline
- *  cost in VGP, max route distance, bank quantity)`) -- same convention as
+ *  cost in, max route distance, bank quantity)`) -- same convention as
  *  `HexGridRenderer.tsx`'s `TILE_CATALOG` mirror. Purely a DISPLAY source
  *  for the Operating Round Phase 4 "active engines" marketplace tray (item
  *  2/Phase 4 below): `BuyHardwareFromPool` itself takes no model-selection
@@ -706,9 +722,62 @@ let nextLogEntryId = 1;
 /* Dashboard Control Bar                                              */
 /* ------------------------------------------------------------------ */
 
-function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
-  vgpBalance: string | null;
-  vgpBalanceNote: string | null;
+/* ==================================================================
+ *  DESIGN NOTE 34: ONE TOP BAR
+ * ==================================================================
+ *
+ * There were two full-width headers stacked above the tab bar: this one
+ * (brand, Master Wallet, Session Key, JUNO balance, Cash) and the room
+ * strip below it (game id, room id, Back to lobby). Three rows of chrome
+ * before a single hex of the board -- and the two headers were not even
+ * different subjects, both being "what am I connected to".
+ *
+ * They are one slim strip now: identity and room context on the left,
+ * connection controls pushed right, `Connect Keplr` last. The room content
+ * arrives as `roomContext` rather than being rebuilt here, because the
+ * sandbox phase switcher and the spectator badge need state that lives in
+ * `AppShell`; passing a node keeps this component ignorant of game state
+ * it has no other reason to know about.
+ *
+ * WHAT WAS DELETED, AND WHY IT WAS SAFE:
+ *
+ *   - THE CASH READOUT. In-game cash belongs to the Game Ledger and the
+ *     Player Index, not to the row that also shows a crypto balance --
+ *     that adjacency was the exact confusion the old F-3 note worried
+ *     about, and the honest fix is not two visual treatments of two kinds
+ *     of money side by side, it is not putting them side by side.
+ *   - THE FIELD LABELS ("Master Wallet", "Session Key", "Wallet"). A
+ *     truncated bech32 address next to a status dot does not need a
+ *     caption; the tooltips carry the full values.
+ *   - THE ALWAYS-VISIBLE "Initialize Session Key" BUTTON. It now appears
+ *     only while it is actionable -- wallet connected, session not ready.
+ *     Once ready it collapses to a dot, because a button that has already
+ *     been pressed and cannot usefully be pressed again is just width.
+ *
+ * The session key is NOT dropped, only condensed: it is what authorises
+ * gameplay transactions, so its state stays visible at all times, and its
+ * error still renders inline. */
+/* Design note #40: the phase badge is NOT in this bar.
+ *
+ * It was, briefly, sitting between the brand and the room context. That was
+ * the wrong slot for a measurable reason rather than an aesthetic one: this
+ * header is a single `flex` row, and adding two more pills to it pushed the
+ * wallet cluster -- balance, address, Connect -- onto a second line, which
+ * undid the entire point of design note #34's consolidation.
+ *
+ * The badge now lives at the far right of the Contextual Action Bar, which
+ * is also the better home on the merits. The action bar already says WHAT
+ * ROUND it is; the phase says which trains and tiles that round can use.
+ * The two belong on the same strip, and that strip has spare width because
+ * its buttons are left-aligned. */
+function TopBar({
+  roomContext,
+  onLeaveGame,
+}: {
+  /** Room identity / sandbox controls, owned by `AppShell` -- see design
+   *  note #34 for why this is a node rather than a pile of props. */
+  roomContext?: React.ReactNode;
+  onLeaveGame?: () => void;
 }) {
   const wallet = useWallet();
   const session = useGameSession();
@@ -742,92 +811,122 @@ function DashboardControlBar({ vgpBalance, vgpBalanceNote }: {
     error: "Error",
   };
 
+  // Only offer the session key when pressing it would do something. See
+  // design note #34 -- the disabled-forever button was pure width.
+  const canInitSession = wallet.status === "connected" && session.sessionStatus !== "ready";
+
   return (
-    <header style={styles.dashboard}>
-      <div style={styles.dashboardBrand}>18Cosmos</div>
+    <header style={styles.topBar}>
+      {/* Inline styles cannot express `:hover`; see design note #46. */}
+      <style>{NETA_CREDIT_CSS}</style>
+      <span style={styles.topBarBrand}>1830: Juno Edition</span>
 
-      <div style={styles.dashboardSection}>
-        <span style={styles.dashboardLabel}>Master Wallet</span>
-        <span style={{ ...styles.statusBadge, ...statusBadgeColor(wallet.status) }}>
-          {walletStatusLabel[wallet.status]}
-        </span>
-        <span style={styles.addressIndicator} title={wallet.address ?? undefined}>
-          {truncateAddress(wallet.address)}
-        </span>
-        {wallet.status === "connected" ? (
-          <button style={styles.button} onClick={wallet.disconnect}>
-            Disconnect
-          </button>
-        ) : (
-          <button
-            style={styles.button}
-            onClick={wallet.connect}
-            disabled={wallet.status === "connecting"}
-          >
-            Connect Keplr
-          </button>
-        )}
-        {wallet.error && <span style={styles.errorText}>{wallet.error}</span>}
-        {configError && (
-          <span style={styles.offlineBadge} title={configError}>
-            {/* The full message is long and names a rebuild requirement; the
-                badge shows the actionable half and the tooltip carries the
-                rest, so the bar never wraps. */}
-            Offline -- {firstMissingEnvVar(configError) ?? "chain not configured"}
-          </span>
-        )}
-      </div>
+      {/* Design note #47: the Neta DAO credit.
+          Sits with the BRAND, not with the wallet cluster. It is an
+          attribution, so it belongs next to the thing being attributed --
+          and the right-hand group is the one that already wraps first when
+          the bar gets tight (design note #34). Parking a decorative link
+          there would push a functional control onto a second line.
 
-      <div style={styles.dashboardSection}>
-        <span style={styles.dashboardLabel}>Session Key</span>
-        <span style={{ ...styles.statusBadge, ...statusBadgeColor(session.sessionStatus) }}>
-          {sessionStatusLabel[session.sessionStatus]}
+          `flexShrink: 0` plus `nowrap` so it never becomes the thing that
+          breaks the row, and `rel="noopener noreferrer"` because
+          `target="_blank"` without it hands the new tab a `window.opener`
+          handle back into this app. */}
+      <a
+        href="https://netadao.org"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="neta-credit"
+        style={styles.netaCredit}
+        title="Neta DAO -- opens netadao.org in a new tab"
+      >
+        Powered by Neta DAO
+      </a>
+
+      {roomContext}
+
+      {/* Everything after this spacer is pinned right. */}
+      <span style={styles.topBarSpacer} />
+
+      {configError && (
+        <span style={styles.offlineBadge} title={configError}>
+          {/* The full message is long and names a rebuild requirement; the
+              badge shows the actionable half and the tooltip carries the
+              rest, so the bar never wraps. */}
+          Offline -- {firstMissingEnvVar(configError) ?? "chain not configured"}
         </span>
-        <span style={styles.addressIndicator} title={session.sessionAddress ?? undefined}>
-          {truncateAddress(session.sessionAddress)}
+      )}
+
+      {wallet.error && (
+        <span style={styles.topBarError} title={wallet.error}>
+          {wallet.error}
         </span>
+      )}
+      {session.sessionError && (
+        <span style={styles.topBarError} title={session.sessionError}>
+          {session.sessionError}
+        </span>
+      )}
+
+      {/* Session key: a dot plus, when it would do something, a button. */}
+      <span
+        style={{ ...styles.topBarDot, ...statusDotColor(session.sessionStatus) }}
+        title={`Session key: ${sessionStatusLabel[session.sessionStatus]}${
+          session.sessionAddress ? ` (${session.sessionAddress})` : ""
+        }`}
+        aria-label={`Session key ${sessionStatusLabel[session.sessionStatus]}`}
+      />
+      {canInitSession && (
         <button
-          style={styles.button}
+          type="button"
+          style={styles.topBarButton}
           onClick={session.initializeSessionKey}
-          disabled={wallet.status !== "connected" || session.sessionStatus === "initializing"}
+          disabled={session.sessionStatus === "initializing"}
+          title="Authorise a session key so gameplay actions do not each need a wallet popup."
         >
-          Initialize Session Key
+          {session.sessionStatus === "initializing" ? "Initializing..." : "Session Key"}
         </button>
-        {session.sessionError && <span style={styles.errorText}>{session.sessionError}</span>}
-      </div>
+      )}
 
-      {/* F-3 UI: REAL money and GAME money, deliberately styled as two
-          different kinds of object.
-
-          These are not two balances of the same thing. `$JUNO` is the
-          player's actual on-chain holding -- what the lobby ante is
-          denominated in and what gas is paid from. `VGP` is Virtual Game
-          Points, the in-game play money the contract mints and moves freely.
-          Rendering them in one undifferentiated row is what made F-3's
-          confusion possible in the first place, so they get distinct
-          treatments rather than distinct labels alone:
-
-            - $JUNO: teal pill with a border -- "this is a real asset".
-            - VGP:   plain amber monospace, no container -- "this is a score".
-
-          Both are monospace and right-weighted so digits line up, because
-          the one thing a player DOES want to do across them is compare
-          magnitudes at a glance. */}
-      <div style={styles.dashboardSection}>
-        <span style={styles.dashboardLabel}>Wallet</span>
-        <span style={styles.nativeBalancePill} title={nativeBalanceTitle(wallet.nativeBalance)}>
-          <span style={styles.nativeBalanceAmount}>
-            {wallet.nativeBalance ? formatNativeAmount(wallet.nativeBalance.amount) : "--"}
+      {wallet.status === "connected" && (
+        <>
+          <span
+            style={styles.nativeBalancePill}
+            title={nativeBalanceTitle(wallet.nativeBalance)}
+          >
+            <span style={styles.nativeBalanceAmount}>
+              {wallet.nativeBalance ? formatNativeAmount(wallet.nativeBalance.amount) : "--"}
+            </span>
+            <span style={styles.nativeBalanceDenom}>{NATIVE_DENOM_DISPLAY}</span>
           </span>
-          <span style={styles.nativeBalanceDenom}>{NATIVE_DENOM_DISPLAY}</span>
-        </span>
-      </div>
+          <span style={styles.topBarAddress} title={wallet.address ?? undefined}>
+            {truncateAddress(wallet.address)}
+          </span>
+        </>
+      )}
 
-      <div style={styles.dashboardSection}>
-        <span style={styles.dashboardLabel}>VGP Cash</span>
-        <span style={styles.vgpBalance}>{vgpBalance ?? "--"}</span>
-        {vgpBalanceNote && <span style={styles.vgpBalanceNote}>{vgpBalanceNote}</span>}
-      </div>
+      <span
+        style={{ ...styles.topBarDot, ...statusDotColor(wallet.status) }}
+        title={`Wallet: ${walletStatusLabel[wallet.status]}`}
+        aria-label={`Wallet ${walletStatusLabel[wallet.status]}`}
+      />
+
+      {wallet.status === "connected" ? (
+        <button type="button" style={styles.topBarButton} onClick={wallet.disconnect}>
+          Disconnect
+        </button>
+      ) : (
+        // Design note #34 + `ConnectWalletButton`'s own design note #0: the
+        // burner-wallet recommendation ships WITH the button, so no entry
+        // point can skip it.
+        <ConnectWalletButton buttonStyle={styles.topBarConnectButton} />
+      )}
+
+      {onLeaveGame && (
+        <button type="button" style={styles.topBarButton} onClick={onLeaveGame}>
+          &larr; Lobby
+        </button>
+      )}
     </header>
   );
 }
@@ -848,21 +947,24 @@ function nativeBalanceTitle(coin: { denom: string; amount: string } | null): str
   return `${coin.amount} ${coin.denom} (raw base-denom integer)`;
 }
 
-function statusBadgeColor(
+/** Design note #34: the status PILLS became status DOTS, so this returns a
+ *  fill only -- there is no longer any text sitting on the colour to need a
+ *  matching foreground. Same four states, same meanings. */
+function statusDotColor(
   status: "disconnected" | "connecting" | "connected" | "error"
     | "uninitialized" | "initializing" | "ready",
 ): React.CSSProperties {
   switch (status) {
     case "connected":
     case "ready":
-      return { backgroundColor: "#1f7a3f", color: "#eafff0" };
+      return { backgroundColor: "#2f9e57" };
     case "connecting":
     case "initializing":
-      return { backgroundColor: "#8a6d1f", color: "#fff8e0" };
+      return { backgroundColor: "#c9a94c" };
     case "error":
-      return { backgroundColor: "#8a2020", color: "#ffe8e8" };
+      return { backgroundColor: "#c05050" };
     default:
-      return { backgroundColor: "#3a3f4b", color: "#c7cbd4" };
+      return { backgroundColor: "#4a505e" };
   }
 }
 
@@ -957,9 +1059,8 @@ function ContextualActionBar({
   roundType,
   orSubPhase,
   sessionReady,
-  onBuyShare,
-  onSellShares,
   onPassTurn,
+  passDisabledReason,
   onPlaceStationTokenHint,
   onSkipSubPhase,
   onBuyPrivateHint,
@@ -988,15 +1089,18 @@ function ContextualActionBar({
   onBuyPrivateCompany,
   currentGlobalEra,
   isMyTurn,
+  phase,
 }: {
   roundType: RoundType | null;
   /** Only meaningful while `roundType === "OperatingRound"` -- see design
    *  note #10/item 2. */
   orSubPhase: OperatingSubPhase;
   sessionReady: boolean;
-  onBuyShare: () => void;
-  onSellShares: () => void;
   onPassTurn: () => void;
+  /** Design note #31: why passing is currently illegal, or `null`. The
+   *  waterfall forbids it while no private holds a standing bid
+   *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
+  passDisabledReason: string | null;
   onPlaceStationTokenHint: () => void;
   /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`
    *  message. Every skip is now an on-chain, replayable event -- the old
@@ -1041,6 +1145,9 @@ function ContextualActionBar({
    *  JSX call site for where that `<style>` tag is injected) to this bar's
    *  own outer wrapper. */
   isMyTurn: boolean;
+  /** Derived phase (`utils/gamePhase.ts`) for the far-right badge -- see
+   *  design note #40 for why it moved here from the header. */
+  phase?: GamePhase | null;
 }) {
   // Round-type-specific buttons -- see design note #8 for exactly which
   // real ExecuteMsg each one dispatches, and why "Place Station Token" is
@@ -1124,18 +1231,81 @@ function ContextualActionBar({
         break;
     }
   } else {
-    // Stock & Auction pass: Buy/Sell/Pass now live entirely in the new
-    // `StockRoundPanel` (rendered directly above the Stock Market Matrix,
-    // see App.tsx's render block) so there is never a duplicate/competing
-    // control surface. `onBuyShare`/`onSellShares`/`onPassTurn` stay in
-    // this component's props interface (still passed at the call site)
-    // deliberately, to keep this a minimal-footprint change.
+    // Stock & Auction: Buy/Sell live entirely in `StockRoundPanel`'s own
+    // corporation cards, so there is never a duplicate control surface.
+    //
+    // Design note #29: `onBuyShare`/`onSellShares` are no longer props of
+    // this component at all. They were kept in the interface after the
+    // controls moved out, unused, "to keep this a minimal-footprint
+    // change" -- and then their signature changed to take a company id,
+    // and four call sites failed to typecheck for a prop nobody reads.
+    // Dead props are not free; they are a type error waiting for the real
+    // implementation to move.
     contextualButtons = [];
   }
 
   const phaseLabel = roundType === "OperatingRound" ? OPERATING_SUB_PHASE_LABELS[orSubPhase] : null;
 
+  /* ==================================================================
+   *  DESIGN NOTE 33: THE ROUTE TOGGLE IS A RUN-TRAINS TOOL, NOT A
+   *  GLOBAL ONE
+   * ==================================================================
+   *
+   * `Routes` is this UI's name for the contract's run-trains sub-phase
+   * (`OPERATING_SUB_PHASE_LABELS.Routes` renders as "Run Trains", mirroring
+   * `or_phase::OR_PHASE_ORDER`). Sketching a route is only meaningful while
+   * a corporation is about to run one, so that is the only time the toggle
+   * exists now.
+   *
+   * Design note #11 argued the toggle was "harmless to leave on" outside
+   * that phase. It was not, for two reasons that only show up in use:
+   *
+   *   1. IT SILENTLY DISARMS THE MAP. Leaving route mode on rewires the
+   *      Rail Map's click handling -- look at the `queryClient`/
+   *      `contractAddress`/`gameId`/`onHexClick` props below, every one of
+   *      which is switched to `undefined` while `routeSelectMode` is true.
+   *      A player who flipped the switch during Routes, moved to Track next
+   *      turn and clicked a hex to lay tile would get a route point and no
+   *      tile picker, with nothing on screen explaining why.
+   *   2. IT ADVERTISED A CONTROL FOR A PHASE THE PLAYER WAS NOT IN, on the
+   *      Auction and Stock Round tabs where there is no train to run at all.
+   *
+   * Hiding the button alone would have left hazard (1) intact -- the mode
+   * would just become unreachable while still ON. So the owning component
+   * force-clears `routeSelectMode` whenever this condition goes false; see
+   * the `useEffect` next to the `routeSelectMode` state declaration. */
+  const showRouteToggle = roundType === "OperatingRound" && orSubPhase === "Routes";
+
+  /* ==================================================================
+   *  DESIGN NOTE 31: ONE BAR, EVERYWHERE
+   * ==================================================================
+   *
+   * This is now the app's ONLY action bar, and it renders on every active
+   * tab. Two separate bars existed: this one (chunky, inside the workspace,
+   * carrying the operating-round buttons plus Undo) and a slim
+   * `GlobalActionBar` added at the top of the phase tab for Pass/Undo. On
+   * the phase tab during a Stock Round BOTH rendered, one above the other,
+   * with two Undo buttons -- because the phase tab falls through to this
+   * component's branch as well.
+   *
+   * `GlobalActionBar` is deleted. This component absorbed Pass, kept Undo,
+   * and was restyled slim, so there is exactly one strip of turn controls
+   * no matter which tab is showing.
+   *
+   * PASS IS PHASE-ROUTED, and this is the part worth not getting wrong:
+   * `WaterfallPass` and `PassTurn` are different contract messages, not one
+   * action with two names. The caller decides which; this component just
+   * renders the button and shows `passDisabledReason` when passing is
+   * illegal (the waterfall forbids it while no bid stands anywhere).
+   *
+   * THE THREE TRAYS BELOW ARE NOT PART OF THE BAR. The hardware
+   * marketplace, the Buy Private Company tray and the route-point readout
+   * used to sit inside the bar's own container, which is most of what made
+   * it "chunky" -- they are panels, not buttons, and one of them contains a
+   * price slider. They now render UNDER the slim strip as their own blocks,
+   * so the bar stays one row tall while the trays keep working. */
   return (
+    <>
     <div style={{ ...styles.actionBar, ...(isMyTurn ? styles.actionBarTurnPulse : {}) }}>
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
@@ -1144,6 +1314,109 @@ function ContextualActionBar({
             ? "Stock Round"
             : "No live round"}
       </span>
+      <div style={styles.actionBarButtons}>
+        {/* Design note #31: Pass leads -- it is the action available in
+            every phase, and the one a player reaches for most. */}
+        <button
+          type="button"
+          style={{
+            ...styles.actionBarButton,
+            ...(!sessionReady || passDisabledReason !== null
+              ? styles.actionBarButtonDisabled
+              : {}),
+          }}
+          onClick={onPassTurn}
+          disabled={!sessionReady || passDisabledReason !== null}
+          title={passDisabledReason ?? "Pass / skip your turn."}
+        >
+          Pass Turn
+        </button>
+        <span style={styles.actionBarDivider} />
+        {contextualButtons.map((btn) => (
+          <button
+            key={btn.key}
+            style={styles.actionBarButton}
+            onClick={btn.onClick}
+            disabled={btn.disabled || !sessionReady}
+            title={btn.title}
+          >
+            {btn.label}
+          </button>
+        ))}
+        <span style={styles.actionBarDivider} />
+        <button
+          style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+          onClick={onUndoLastAction}
+          disabled={!sessionReady}
+          title="Always available, independent of round type."
+        >
+          Undo Last Action
+        </button>
+        {/* Manual Route Point UI toggle -- design notes #11 and #33. Scoped
+            to the Routes sub-phase; see design note #33 for why "harmless
+            everywhere else" was not actually true. */}
+        {showRouteToggle && (
+          <>
+            <span style={styles.actionBarDivider} />
+            <button
+              type="button"
+              role="switch"
+              aria-checked={routeSelectMode}
+              style={{
+                ...styles.actionBarButton,
+                ...(routeSelectMode ? styles.routeToggleButtonActive : {}),
+              }}
+              onClick={onToggleRouteSelectMode}
+              title="Click a chain of neighbouring hexes on the Rail Map to sketch a route for the train you are about to run."
+            >
+              <span style={styles.routeToggleSwitchTrack}>
+                <span
+                  style={{
+                    ...styles.routeToggleSwitchThumb,
+                    ...(routeSelectMode ? styles.routeToggleSwitchThumbActive : {}),
+                  }}
+                />
+              </span>
+              Select Route Points
+            </button>
+          </>
+        )}
+
+        {/* Design note #40: the phase badge, pinned right. `marginLeft:
+            auto` on the spacer rather than on the badge itself, because the
+            badge is conditional -- an auto margin on a node that sometimes
+            does not render would silently stop pinning anything. */}
+        <span style={styles.actionBarSpacer} />
+        {phase && (
+          <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
+            {phase.label}
+          </span>
+        )}
+        {phase?.shiftImminent && (
+          <span
+            style={styles.phaseShiftBadge}
+            // The exact consequence, per tier. Falls back to a plain
+            // depot-count statement for the 2-train case, which empties
+            // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
+            title={
+              phase.shiftWarning ??
+              (phase.depotRemaining === 0
+                ? `No ${phase.tier}-Trains left in the Bank Depot.`
+                : `Only one ${phase.tier}-Train left in the Bank Depot.`)
+            }
+          >
+            &#9888; Phase Shift Imminent
+          </span>
+        )}
+      </div>
+    </div>
+
+    {/* ---- Contextual trays -- design note #31 --------------------------
+        Panels, not bar content: a train marketplace, a private-company
+        purchase tray with a price slider, and the route-point readout.
+        Each is narrowly conditional (a specific OR sub-phase, or the route
+        toggle being on), so most of the time none of this renders at all
+        and the bar above is the entire control surface. */}
       {/* Phase 4's marketplace selection tray -- see design note #10/item 2.
           `BuyHardwareFromPool` has no per-model parameter yet (see
           `MOCK_TRAIN_CATALOG`'s own doc comment), so selecting a card here
@@ -1164,7 +1437,7 @@ function ContextualActionBar({
               title={`Max route distance ${train.maxDistance === 999 ? "unlimited" : train.maxDistance}, ${train.bankQuantity} in the bank`}
             >
               <span style={styles.hardwareTrayCardModel}>{train.modelType}-train</span>
-              <span style={styles.hardwareTrayCardCost}>{train.costVgp} VGP</span>
+              <span style={styles.hardwareTrayCardCost}>${train.costVgp}</span>
             </button>
           ))}
         </div>
@@ -1188,7 +1461,7 @@ function ContextualActionBar({
             >
               {sellablePrivates.map((priv) => (
                 <option key={priv.private_id} value={priv.private_id}>
-                  {priv.name} (face value {priv.cost} VGP)
+                  {priv.name} (face value ${priv.cost})
                 </option>
               ))}
             </select>
@@ -1213,14 +1486,14 @@ function ContextualActionBar({
                     disabled={!sessionReady}
                   />
                   <span style={styles.privateCompanyPriceValue}>
-                    {privatePriceVgp} VGP ({floor}-{ceiling})
+                    ${privatePriceVgp} ({floor}-{ceiling})
                   </span>
                   <button
                     type="button"
                     style={styles.actionBarButton}
                     onClick={onBuyPrivateCompany}
                     disabled={!sessionReady}
-                    title="Dispatches ExecuteMsg::BuyPrivateCompany -- see trading.rs module doc comment #17."
+                    title="Buys this company at the price selected above."
                   >
                     Buy
                   </button>
@@ -1229,54 +1502,6 @@ function ContextualActionBar({
             })()}
           </div>
         )}
-      <div style={styles.actionBarButtons}>
-        {contextualButtons.map((btn) => (
-          <button
-            key={btn.key}
-            style={styles.actionBarButton}
-            onClick={btn.onClick}
-            disabled={btn.disabled || !sessionReady}
-            title={btn.title}
-          >
-            {btn.label}
-          </button>
-        ))}
-        <span style={styles.actionBarDivider} />
-        <button
-          style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
-          onClick={onUndoLastAction}
-          disabled={!sessionReady}
-          title="Always available, independent of round type."
-        >
-          Undo Last Action
-        </button>
-        <span style={styles.actionBarDivider} />
-        {/* Manual Route Point UI toggle -- see design note #11. Always
-            visible, independent of round type; only meaningful on the Rail
-            Map tab, but harmless to leave on while viewing the Stock Market
-            tab (there's simply no canvas to click there). */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={routeSelectMode}
-          style={{
-            ...styles.actionBarButton,
-            ...(routeSelectMode ? styles.routeToggleButtonActive : {}),
-          }}
-          onClick={onToggleRouteSelectMode}
-          title="Click a sequence of map cities on the Rail Map to build a custom route path -- see this file's design note #11 for exactly what this can and can't verify."
-        >
-          <span style={styles.routeToggleSwitchTrack}>
-            <span
-              style={{
-                ...styles.routeToggleSwitchThumb,
-                ...(routeSelectMode ? styles.routeToggleSwitchThumbActive : {}),
-              }}
-            />
-          </span>
-          Select Route Points
-        </button>
-      </div>
       {routeSelectMode && (
         <div style={styles.routePanel}>
           <span style={styles.routePanelHint}>
@@ -1325,28 +1550,142 @@ function ContextualActionBar({
       {!sessionReady && (
         <span style={styles.sidebarHint}>Initialize the session key above to enable these actions.</span>
       )}
-    </div>
+    </>
   );
 }
+
+/** Design note #47: the credit's hover/focus states, which inline styles
+ *  cannot reach. Kept next to the tab bar's own escape hatch so this file
+ *  has one place where raw CSS lives rather than several. */
+const NETA_CREDIT_CSS = `
+.neta-credit { transition: color 120ms ease, text-shadow 120ms ease; }
+.neta-credit:hover { color: #ffffff; text-shadow: 0 0 8px rgba(255,255,255,0.35); }
+.neta-credit:focus-visible { outline: 2px solid #94a3b8; outline-offset: 2px; color: #ffffff; }
+`;
 
 /* ------------------------------------------------------------------ */
 /* Main tabs -- see design note #9                                    */
 /* ------------------------------------------------------------------ */
 
-type MainTab = "map" | "stock" | "ledger" | "rules";
+/* ==================================================================== */
+/*  DESIGN NOTE 28: PHASE TAB vs REFERENCE BOARDS                       */
+/* ==================================================================== */
+//
+// `"phase"` is new, and splitting it out fixes a conflation that had been
+// there since the tabs were flattened. One tab used to be both "the thing
+// you act in" and "the stock market chart", renaming itself between
+// "Auction", "Stock Round" and "Stock Market" depending on the round. That
+// meant the 2D market chart -- a REFERENCE board a player wants to consult
+// at any time, including mid-auction to see where prices stand -- was
+// unreachable during the two phases where it is most worth consulting,
+// because the tab that would have shown it was busy being the auction.
+//
+// The split is along a real line:
+//
+//   ACTIONABLE   `"phase"`  the surface where the current round is played.
+//                           Auction dashboard, or Stock Round panel.
+//   REFERENCE    `"map"`    the rail map (also actionable in an OR).
+//                `"stock"`  the market chart. Always just a board.
+//                `"ledger"` / `"rules"`  never actionable.
+//
+// The Operating Round is the one phase with no dedicated `"phase"` surface,
+// because its actionable surface IS the rail map -- so during an OR the
+// phase tab is simply absent and `"map"` leads instead. That is why
+// `orderedMainTabs` returns a LIST rather than a fixed array with a
+// reshuffle: the tab set itself changes shape by phase, not just its order.
+//
+/* ==================================================================== */
+/*  DESIGN NOTE 41: `"corps"` -- THE PERSISTENT STOCKS TAB              */
+/* ==================================================================== */
+//
+// The corporation roster used to be reachable ONLY as the Stock Round's
+// phase surface. That made "who owns what, and what is it worth" a fact you
+// could look up during a Stock Round and nowhere else -- including during
+// the Operating Round that decides those valuations, which is precisely
+// when a player wants to check them.
+//
+// `"corps"` is therefore its own tab, present in every phase, and during a
+// Stock Round it simply IS the phase surface (there is no separate
+// `"phase"` tab that round, the same way an Operating Round has none).
+//
+// NAMING, because this is a trap worth marking: the id is `"corps"` and the
+// LABEL is "Stocks", while a DIFFERENT tab has the id `"stock"` and the
+// label "Stock Market". `"stock"`/`"stocks"` as sibling ids would be one
+// letter apart and impossible to review; the two surfaces are unrelated
+// (one is a corporation roster, one is the price chart).
+type MainTab = "phase" | "corps" | "map" | "stock" | "ledger" | "rules";
 
-function MainTabBar({ activeTab, onSelect }: { activeTab: MainTab; onSelect: (tab: MainTab) => void }) {
-  const tabs: { id: MainTab; label: string }[] = [
-    { id: "map", label: "Rail Map" },
-    { id: "stock", label: "Stock & Auction" },
+/** The tabs to show, in order, for the current round.
+ *
+ *  The active phase always leads. A player's attention starts at the left
+ *  edge, and in a game where the legal action changes completely between
+ *  rounds, the first tab should be the one they can actually act in --
+ *  otherwise every phase transition begins with a hunt. */
+function orderedMainTabs(roundType: RoundType | null): { id: MainTab; label: string }[] {
+  const reference: { id: MainTab; label: string }[] = [
+    { id: "stock", label: "Stock Market" },
     { id: "ledger", label: "Game Ledger" },
     { id: "rules", label: "Rules Reference" },
   ];
+  const railMap = { id: "map" as MainTab, label: "Rail Map" };
+  // Design note #41: present in every branch below, without exception.
+  const stocks = { id: "corps" as MainTab, label: "Stocks" };
+
+  switch (roundType) {
+    case "WaterfallAuction":
+      return [{ id: "phase", label: "Auction" }, stocks, railMap, ...reference];
+    case "StockRound":
+      // No separate phase tab: Stocks IS the Stock Round's surface, and a
+      // duplicate tab rendering the identical panel would be a bug that
+      // merely looked like a feature.
+      return [stocks, railMap, ...reference];
+    case "OperatingRound":
+      // No phase tab: the rail map is the operating round's own surface.
+      return [railMap, stocks, ...reference];
+    default:
+      // Round type not yet known (first paint, or offline). Rail map first
+      // -- it is the one surface that renders without any chain data.
+      return [railMap, stocks, ...reference];
+  }
+}
+
+/** Whether `tab` exists for `roundType`. Used to redirect off a tab that
+ *  has just disappeared under the player -- e.g. sitting on the Auction tab
+ *  when the auction ends. */
+function isTabAvailable(tab: MainTab, roundType: RoundType | null): boolean {
+  return orderedMainTabs(roundType).some((entry) => entry.id === tab);
+}
+
+function MainTabBar({
+  activeTab,
+  onSelect,
+  roundType,
+}: {
+  activeTab: MainTab;
+  onSelect: (tab: MainTab) => void;
+  /** Design note #28: decides both which tabs exist and their order.
+   *  `null` before the first `GetGameState` resolves. */
+  roundType: RoundType | null;
+}) {
+  // Design note #28: the tab set is computed, not a fixed array. Superseded
+  // design note #26's single self-renaming tab, which conflated the phase
+  // surface with the market chart -- see #28 for why that had to split.
+  const tabs = orderedMainTabs(roundType);
   return (
     <div style={styles.mainTabBar}>
+      {/* Design note #46: hover states need real CSS.
+          Inline `React.CSSProperties` cannot express `:hover` (Lobby.tsx
+          design note #3), and an unselected tab that never responds to the
+          pointer is the specific thing that made these read as disabled.
+          Same `<style>`-tag escape hatch the turn pulse and the auction
+          glow already use, scoped to one class so it cannot leak. */}
+      <style>{MAIN_TAB_HOVER_CSS}</style>
       {tabs.map((tab) => (
         <button
           key={tab.id}
+          type="button"
+          className={activeTab === tab.id ? "nav-tab nav-tab-active" : "nav-tab"}
+          aria-current={activeTab === tab.id ? "page" : undefined}
           style={{
             ...styles.mainTabButton,
             ...(activeTab === tab.id ? styles.mainTabButtonActive : {}),
@@ -1360,6 +1699,23 @@ function MainTabBar({ activeTab, onSelect }: { activeTab: MainTab; onSelect: (ta
   );
 }
 
+/** Design note #46: the hover/focus half of the tab treatment.
+ *
+ *  Only the states inline styles cannot reach live here -- the resting and
+ *  active looks stay in `styles.mainTabButton`/`mainTabButtonActive`, so
+ *  there is one place to read a tab's normal appearance rather than two
+ *  that have to be kept in agreement.
+ *
+ *  `:focus-visible` mirrors hover because a keyboard user needs the same
+ *  affordance a mouse user gets, and the browser default outline is nearly
+ *  invisible against this dark chrome. */
+const MAIN_TAB_HOVER_CSS = `
+.nav-tab { transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease; }
+.nav-tab:hover { color: #e2e8f0; border-color: #64748b; background-color: #1e2330; }
+.nav-tab:focus-visible { outline: 2px solid #94a3b8; outline-offset: -2px; color: #e2e8f0; }
+.nav-tab-active:hover { color: #ffffff; border-color: rgba(255,255,255,0.8); }
+`;
+
 /* ------------------------------------------------------------------ */
 /* Active Player Turn Notifications -- CSS pulse keyframes, see design    */
 /* note #18/item 4. `document.title` flashing (the other half of this    */
@@ -1370,10 +1726,29 @@ function MainTabBar({ activeTab, onSelect }: { activeTab: MainTab; onSelect: (ta
 /* `@keyframes` rule at all.                                             */
 /* ------------------------------------------------------------------ */
 
+/* Design note #35: WHITE, not red.
+ *
+ * This pulse used to be red, and so did the mini-auction ring in
+ * `WaterfallAuctionDashboard.tsx`. Two red pulses on screen simultaneously
+ * read as one effect, which is worst exactly when both are firing: your
+ * turn, during a contested mini-auction.
+ *
+ * The turn indicator is the one that moved, because it is the one drawn
+ * over EVERYTHING. It sits on the dark chrome, the linen-white cards and
+ * the map canvas in turn, and white/crisp silver is the only ink that keeps
+ * a consistent weight across all three -- red read as urgent on the dark
+ * shell and as a smudge over the cards. Red is now exclusively the
+ * auction's "contested" colour. */
 const TURN_PULSE_KEYFRAMES_CSS = `
 @keyframes app-turn-pulse-glow {
-  0%, 100% { box-shadow: inset 0 0 0 rgba(224, 90, 90, 0), 0 0 0 rgba(224, 90, 90, 0); }
-  50% { box-shadow: inset 0 0 40px rgba(224, 90, 90, 0.35), 0 0 30px rgba(224, 90, 90, 0.45); }
+  0%, 100% {
+    box-shadow: inset 0 0 0 rgba(${TURN_PULSE_INK_RGB}, 0),
+                0 0 0 rgba(${TURN_PULSE_INK_RGB}, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 40px rgba(${TURN_PULSE_INK_RGB}, 0.28),
+                0 0 30px rgba(${TURN_PULSE_INK_RGB}, 0.4);
+  }
 }
 `;
 
@@ -1441,6 +1816,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Sandbox mode is emphatically NOT read-only -- the tile picker is the
   // main thing it exists to exercise -- it simply has nothing to talk to.
   const sandbox = mode === "sandbox";
+
+  /* ---------------- Sandbox phase toggle -- design note #25 ---------- */
+  //
+  // The sandbox could reach the rail map but nothing else. Both
+  // phase-scoped panels mount on `gameState.current_round_type`, and with
+  // no chain `gameState` is `null`, so the Waterfall Auction and the Stock
+  // Round were unreachable -- not broken, just never rendered, with no way
+  // to look at either.
+  //
+  // A DEBUG CONTROL, not a game mechanic. On a real chain the round type is
+  // contract state advanced by `PassTurn` and the operating-round engine;
+  // nothing in the UI may set it. This exists solely because the sandbox
+  // has no contract to advance it, so the alternative is a screen that can
+  // only ever depict one phase. It is rendered only when `sandbox` is true
+  // and it feeds only `sandboxGameState` -- there is no code path by which
+  // it can touch a real room's state.
+  const [sandboxPhase, setSandboxPhase] = useState<RoundType>("WaterfallAuction");
+
+  /** Who the dashboard should think it is looking at.
+   *
+   *  Design note #25. In sandbox there is no wallet, so `wallet.address` is
+   *  `null` -- and every turn-gated control on both phase panels compares
+   *  the connected address against the active player. The result was a
+   *  sandbox where the Auction and Stock Round rendered, but rendered
+   *  entirely DISABLED, which is close to useless for judging layout: you
+   *  cannot polish a control you can only see greyed out. Seating the
+   *  viewer as the sandbox's first player (Alice, who `sandboxGameState`
+   *  makes the active player in every phase) puts the panels in their live,
+   *  enabled state.
+   *
+   *  READ-ONLY IDENTITY. This is used for DISPLAY and ENABLEMENT only --
+   *  whose cash to show, whose holdings to mark "you", whether a control is
+   *  live. It is deliberately NOT used for anything that signs: every
+   *  dispatch still goes through `wallet.address`, and in sandbox
+   *  `runGameplayAction` refuses before building a message at all. A
+   *  pretend identity that could sign would be a genuinely dangerous
+   *  shortcut; one that can only light up a button is not. */
+  const viewerAddress = sandbox ? SANDBOX_PLAYERS[0] : wallet.address;
+
 
   // Design note #22. Read once at mount rather than subscribed to: the name
   // is set in the Lobby, before this component exists, and a rename
@@ -1520,7 +1934,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const queryClient = sandbox ? undefined : (wallet.signingClient ?? readOnlyClient ?? undefined);
 
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
-  const [vgpBalanceNote, setVgpBalanceNote] = useState<string | null>(null);
   const [activeMainTab, setActiveMainTab] = useState<MainTab>("map");
   // Design note #10/item 2: which of the four legal OR action sub-phases
   // the Contextual Top Action Bar is currently guiding the player through.
@@ -1536,14 +1949,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     MOCK_TRAIN_CATALOG[0].modelType,
   );
 
-  // Stock Round (SR) Action Control Panel selection state -- see
-  // `StockRoundPanel.tsx` design note #1. Purely UI-selection state; the
-  // real dispatch still runs through `handleBuyShare`/`handleSellShares`
-  // below, just reading these instead of the old MOCK_* constants.
-  const [srSelectedProtocolId, setSrSelectedProtocolId] = useState<number>(MOCK_BUY_STOCK_PROTOCOL_ID);
+  // Stock Round (SR) control state -- see `StockRoundPanel.tsx` design
+  // note #1. Purely UI state; the real dispatch runs through
+  // `handleBuyShare`/`handleSellShares` below.
+  //
+  // Design note #29: `srSelectedProtocolId` is GONE. It held "which company
+  // the single set of Stock Round controls is pointed at", and there is no
+  // single set any more -- every corporation card carries its own Buy and
+  // Sell, and passes its own id to the handler. Keeping a shared selection
+  // alongside eight per-card actions would be a second, contradictory
+  // answer to "which company?" waiting to be read by mistake.
   const [srParValue, setSrParValue] = useState<string>(MOCK_BUY_STOCK_PAR_VALUE);
-  const [srSource, setSrSource] = useState<"Ipo" | "Bank">("Ipo");
-  const [srSellPercentage, setSrSellPercentage] = useState<number>(MOCK_SELL_STOCK_PERCENTAGE);
 
   // Automatic Phase-Based Tab Navigation (design note below near its own
   // `useEffect`): holds the last-seen `current_round_type` so the
@@ -1557,11 +1973,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Top Action Bar's round-type switch, FinancialLedger,
   // HexGridRenderer's `currentEra`) derives from this same result.
   const {
-    gameState,
+    gameState: liveGameState,
     loading: gameStateLoading,
     error: gameStateError,
     refresh: refreshGameState,
   } = useGameStatePolling(queryClient, CONTRACT_ADDRESS, gameId);
+
+  // Design note #25: in sandbox the poll above is permanently `null` (no
+  // client), so a hand-authored snapshot stands in. Everything downstream
+  // reads `gameState` and is completely unaware of the substitution --
+  // which is the point: the panels are being inspected as they will really
+  // behave, not through a sandbox-only rendering path that could drift from
+  // the real one.
+  //
+  // Memoised because `gameState` sits in the dependency array of a dozen
+  // hooks below. Rebuilding the object every render would give it a new
+  // identity each time and re-fire all of them continuously.
+  const sandboxState = useMemo(
+    () => (sandbox ? sandboxGameState(sandboxPhase, gameId) : null),
+    [sandbox, sandboxPhase, gameId],
+  );
+  const gameState = sandboxState ?? liveGameState;
 
   // Pre-Game Waterfall Auction (`waterfall.rs`): a second, independent poll
   // against `QueryMsg::GetWaterfallState`, only actually enabled while
@@ -1579,7 +2011,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   );
 
   const {
-    waterfallState,
+    waterfallState: liveWaterfallState,
     loading: waterfallStateLoading,
     error: waterfallStateError,
   } = useWaterfallStatePolling(
@@ -1588,6 +2020,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     gameId,
     isWaterfallPhase,
   );
+
+  // Design note #25. Returns `null` outside the auction phase, mirroring
+  // the real poll, so the auction dashboard's own "no auction running"
+  // branch still gets exercised when the toggle is on another phase.
+  const sandboxWaterfall = useMemo(
+    () => (sandbox ? sandboxWaterfallState(sandboxPhase, gameId) : null),
+    [sandbox, sandboxPhase, gameId],
+  );
+  const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
   // Resets the Contextual Top Action Bar's OR sub-phase back to "Track"
   // whenever a NEW corporation's turn starts (`active_corporation_index`
@@ -1613,28 +2054,43 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     const previousRoundType = prevRoundTypeRef.current;
     if (currentRoundType !== previousRoundType) {
       prevRoundTypeRef.current = currentRoundType;
-      if (currentRoundType === "WaterfallAuction" || currentRoundType === "StockRound") {
-        setActiveMainTab("stock");
+      // Design note #28: jump to the surface the new round is played on --
+      // the phase tab for auction/stock, the rail map for an OR (which has
+      // no phase tab of its own).
+      if (currentRoundType === "WaterfallAuction") {
+        setActiveMainTab("phase");
+      } else if (currentRoundType === "StockRound") {
+        // Design note #41: a Stock Round's surface is the Stocks tab, not
+        // a phase tab -- there is no `"phase"` entry that round to land on.
+        setActiveMainTab("corps");
       } else if (currentRoundType === "OperatingRound") {
         setActiveMainTab("map");
       }
     }
   }, [gameState?.current_round_type]);
 
-  const vgpBalance = useMemo(() => {
-    if (!gameState || !wallet.address) return null;
-    const entry = gameState.player_cash.find((e) => e.player === wallet.address);
-    return entry ? entry.cash_vgp : "0";
-  }, [gameState, wallet.address]);
-
-  const derivedVgpBalanceNote = useMemo(() => {
-    if (vgpBalanceNote) return vgpBalanceNote;
-    if (!wallet.address) return null;
-    if (gameStateError) {
-      return `live query unavailable (placeholder contract/game_id) -- ${gameStateError}`;
+  // Design note #28: the tab set changes shape by phase, so the active tab
+  // can cease to exist under the player -- sitting on "Auction" when the
+  // auction ends leaves `activeMainTab` pointing at a tab no longer in the
+  // bar, which renders nothing at all. Separate from the auto-navigation
+  // effect above on purpose: that one fires only on genuine TRANSITIONS and
+  // deliberately never overrides a manual click, whereas this is a
+  // correctness guard that must run whenever the pairing is invalid.
+  useEffect(() => {
+    const roundType = gameState?.current_round_type ?? null;
+    if (!isTabAvailable(activeMainTab, roundType)) {
+      setActiveMainTab("map");
     }
-    return null;
-  }, [vgpBalanceNote, wallet.address, gameStateError]);
+  }, [activeMainTab, gameState?.current_round_type]);
+
+  // Design note #34: `vgpBalance` and `derivedVgpBalanceNote` are DELETED.
+  // Both existed only to feed the top bar's Cash readout, which is gone --
+  // in-game cash lives in the Game Ledger and the Player Index now. The
+  // The whole optimistic-note chain went with them: `vgpBalanceNote` state,
+  // `runGameplayAction`'s third parameter, and the two notes BuyStock and
+  // SellStock passed into it. Those two were the only writers, and their
+  // only reader was the readout just deleted -- a write path to a value
+  // nothing displays is how a "harmless" leftover becomes a puzzle later.
 
   const activePlayerAddress = useMemo(() => {
     if (!gameState) return null;
@@ -1673,7 +2129,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Every field this needs is already on the polled `GameStateResponse`; no
   // backend change and no extra query.
   const isMyTurn = useMemo(() => {
-    if (!wallet.address || !gameState) return false;
+    if (!viewerAddress || !gameState) return false;
 
     if (gameState.current_round_type === "OperatingRound") {
       const activeCompanyId =
@@ -1689,12 +2145,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // A floated-but-presidentless corporation (no qualifying 20% holder)
       // alerts nobody, which is correct: there is no human authorised to act
       // for it, and the contract would reject them if they tried.
-      return !!president && president === wallet.address;
+      return !!president && president === viewerAddress;
     }
 
     // Stock Round and Waterfall Auction both run on the player pointer.
-    return gameState.player_addresses[gameState.active_player_index] === wallet.address;
-  }, [wallet.address, gameState]);
+    return gameState.player_addresses[gameState.active_player_index] === viewerAddress;
+  }, [viewerAddress, gameState]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -1874,6 +2330,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // LayTile-popup click interceptor; `routePoints` is the resulting chain,
   // `routeFeedback` a short-lived inline message for a rejected click
   // (non-adjacent to the last point).
+  // Design note #44: armed by finishing a first Operating Round as a
+  // president. One-way -- `TutorialModal` handles dismissal and remembering.
+  const [marketTutorialArmed, setMarketTutorialArmed] = useState(false);
   const [routeSelectMode, setRouteSelectMode] = useState(false);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
@@ -1882,6 +2341,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     setRouteSelectMode((prev) => !prev);
     setRouteFeedback(null);
   }, []);
+
+  // Design note #33: hiding the toggle is not enough -- route mode also
+  // rewires the Rail Map's click handling, so a mode left ON when its phase
+  // ends would keep swallowing tile-lay clicks with no visible control to
+  // turn it back off. Force it off (and drop the half-built path with it)
+  // the moment the Routes sub-phase ends, in the same place the flag lives
+  // rather than in the bar that renders the switch.
+  const inRunTrainsSubPhase =
+    (gameState?.current_round_type ?? null) === "OperatingRound" && orSubPhase === "Routes";
+  useEffect(() => {
+    if (inRunTrainsSubPhase) return;
+    setRouteSelectMode(false);
+    setRoutePoints([]);
+    setRouteFeedback(null);
+  }, [inRunTrainsSubPhase]);
 
   const handleClearRoute = useCallback(() => {
     setRoutePoints([]);
@@ -1995,7 +2469,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   );
 
   const runGameplayAction = useCallback(
-    async (label: string, msg: GameplayExecuteMsg, optimisticBalanceNote?: string) => {
+    async (label: string, msg: GameplayExecuteMsg) => {
       const id = nextLogEntryId++;
       const timestamp = new Date().toLocaleTimeString();
       const timestampMs = Date.now();
@@ -2052,9 +2526,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               : entry,
           ),
         );
-        if (optimisticBalanceNote) {
-          setVgpBalanceNote(optimisticBalanceNote);
-        }
         refreshGameState();
       } catch (e) {
         const message = e instanceof Error ? e.message : "Unknown error executing action.";
@@ -2090,42 +2561,93 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // whenever the selected company is already floated, since a floated
   // company's price comes from the Stock Market Matrix, not a fresh par
   // choice (matches `BuyStock`'s own real semantics, not a fabricated one).
-  const srSelectedCompanyIsFloated = useMemo(
-    () => gameState?.public_companies.find((c) => c.company_id === srSelectedProtocolId)?.is_floated ?? false,
-    [gameState, srSelectedProtocolId],
-  );
-
-  const handleBuyShare = useCallback(
-    () =>
-      runGameplayAction(
+  /* ---- Design note #29: THE TARGET COMPANY IS AN ARGUMENT ------------
+   *
+   * Both handlers used to read `srSelectedProtocolId` -- a single "which
+   * company is selected" value, which was correct while the Stock Round had
+   * exactly one set of controls fed by a pill selector.
+   *
+   * Permanently expanding the corporation cards breaks that assumption
+   * completely: there are now EIGHT live Buy buttons and eight live Sell
+   * buttons on screen at once. Reading a shared selection would mean every
+   * one of them dispatched against whichever company happened to be
+   * selected -- so clicking Buy inside the B&M card would buy PRR. Silently,
+   * with a perfectly successful transaction, and no way to tell from the UI
+   * that anything had gone wrong until the roster refreshed.
+   *
+   * Setting the selection on click and then dispatching does NOT fix it:
+   * `setState` is asynchronous, so the handler would still read the
+   * previous value on the click that mattered.
+   *
+   * So the company id is a parameter. There is no shared selection left to
+   * go stale, and the id travels with the click that produced it. */
+  /* ==================================================================
+   *  DESIGN NOTE 42: MULTI-BUY IS N TRANSACTIONS, NOT A BATCH
+   * ==================================================================
+   *
+   * The Brown zone lets a player take several bank-pool shares in one turn
+   * (`StockRoundPanel.tsx` design note #33). `ExecuteMsg::BuyStock` has no
+   * quantity parameter, so "buy 3" is three sequential `BuyStock` messages.
+   *
+   * SEQUENTIAL, AND STOPPING AT THE FIRST FAILURE. `runGameplayAction`
+   * awaits each broadcast, so purchase N+1 is only attempted once N has
+   * been accepted on chain. Firing them in parallel would race the
+   * contract's own pool accounting and could leave the player having bought
+   * fewer shares than the log claims. Each purchase is its own log entry,
+   * which is accurate rather than noisy -- it really is three purchases.
+   *
+   * A batched `BuyStock { quantity }` would make this one signature and one
+   * atomic state change, and is worth raising in the contract audit. Until
+   * then this is the honest shape of the operation, not a workaround
+   * pretending to be atomic. */
+  const buyOneShare = useCallback(
+    (protocolId: number, source: "Ipo" | "Bank") => {
+      const isFloated =
+        gameState?.public_companies.find((c) => c.company_id === protocolId)?.is_floated ?? false;
+      return runGameplayAction(
         "BuyStock",
         {
           BuyStock: {
             game_id: gameId,
-            protocol_id: srSelectedProtocolId,
-            source: srSource,
-            par_value: srSelectedCompanyIsFloated ? null : srParValue,
+            protocol_id: protocolId,
+            // Design note #18 in `StockRoundPanel.tsx`: the buy source is
+            // per-card state now, so it arrives as an argument rather than
+            // being read from a shared value that every card could flip.
+            source,
+            // A floated company's price comes from the Stock Market Matrix,
+            // not a fresh par choice -- matches `BuyStock`'s real semantics.
+            // Resolved from the company being BOUGHT, not from a selection.
+            par_value: isFloated ? null : srParValue,
           },
         },
-        "updated after BuyStock",
-      ),
-    [runGameplayAction, gameId, srSelectedProtocolId, srSource, srSelectedCompanyIsFloated, srParValue],
+      );
+    },
+    [runGameplayAction, gameId, gameState, srParValue],
+  );
+
+  const handleBuyShare = useCallback(
+    async (protocolId: number, source: "Ipo" | "Bank", quantity = 1) => {
+      const times = Math.max(1, Math.floor(quantity));
+      for (let i = 0; i < times; i += 1) {
+        await buyOneShare(protocolId, source);
+      }
+    },
+    [buyOneShare],
   );
 
   const handleSellShares = useCallback(
-    () =>
+    (protocolId: number, percentage: number) =>
       runGameplayAction(
         "SellStock",
         {
           SellStock: {
             game_id: gameId,
-            protocol_id: srSelectedProtocolId,
-            percentage: srSellPercentage,
+            protocol_id: protocolId,
+            percentage,
           },
         },
-        "updated after SellStock",
       ),
-    [runGameplayAction, gameId, srSelectedProtocolId, srSellPercentage],
+    [runGameplayAction, gameId],
   );
 
   const handleRunTrains = useCallback(() => {
@@ -2188,7 +2710,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const handleBuyPrivateCompany = useCallback(() => {
     const selected = sellablePrivates.find((p) => p.private_id === selectedPrivateId);
     if (!selected) return;
-    runGameplayAction(`BuyPrivateCompany: ${selected.name} @ ${privatePriceVgp} VGP (mock)`, {
+    runGameplayAction(`BuyPrivateCompany: ${selected.name} @ $${privatePriceVgp} (mock)`, {
       BuyPrivateCompany: {
         game_id: gameId,
         protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
@@ -2209,7 +2731,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
 
   const handleWaterfallBidHigher = useCallback(
     (privateId: number, bidAmountVgp: number) =>
-      runGameplayAction(`WaterfallBidHigher: private #${privateId} @ ${bidAmountVgp} VGP`, {
+      runGameplayAction(`WaterfallBidHigher: private #${privateId} @ $${bidAmountVgp}`, {
         WaterfallBidHigher: {
           game_id: gameId,
           private_id: privateId,
@@ -2226,7 +2748,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
 
   const handleWaterfallMiniAuctionRaise = useCallback(
     (bidAmountVgp: number) =>
-      runGameplayAction(`WaterfallMiniAuctionRaise: ${bidAmountVgp} VGP`, {
+      runGameplayAction(`WaterfallMiniAuctionRaise: $${bidAmountVgp}`, {
         WaterfallMiniAuctionRaise: { game_id: gameId, bid_amount: String(bidAmountVgp) },
       }),
     [runGameplayAction, gameId],
@@ -2363,15 +2885,75 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // next (the poll-driven reset effect above would also catch this once
   // `active_corporation_index` changes, but resetting immediately avoids a
   // one-poll-interval flash of Phase 4's buttons for the new corporation).
+  /* ==================================================================
+   *  DESIGN NOTE 44: THE FORCED MARKET LESSON
+   * ==================================================================
+   *
+   * A first-time president finishes their first Operating Round, and their
+   * share price moves LEFT. Nothing on screen explains it, and the natural
+   * reading is "I played that badly" -- when in fact every corporation
+   * moves left on its first turn, because it has no train yet and so cannot
+   * pay out. That is a bad first impression caused entirely by a missing
+   * sentence.
+   *
+   * So this is the one tutorial that INTERRUPTS: it navigates the player to
+   * the market chart and opens on top of it, because the lesson is about a
+   * thing that just happened to a specific number they can see.
+   *
+   * TRIGGERED FROM THE ACTION, NOT FROM POLLED STATE. "Did this player just
+   * finish their first OR turn" is genuinely hard to infer from
+   * `GameStateResponse` -- indices advance, and a poll landing late or
+   * twice would fire it at the wrong moment or not at all. Ending the turn
+   * is an explicit click by a known viewer, so the click is the signal.
+   *
+   * GUARDED THREE WAYS, because a modal that interrupts must not do so
+   * twice: only for a president (the lesson is about YOUR corporation),
+   * only during the FIRST Operating Round, and `TutorialModal`'s own
+   * per-topic seen flag and global off switch both still apply -- this
+   * arms the modal, it does not bypass anyone's preferences. */
   const handleEndOperatingTurn = useCallback(() => {
+    const viewerIsPresident =
+      viewerAddress != null &&
+      (gameState?.public_companies ?? []).some((c) => c.president === viewerAddress);
+    const isFirstOperatingRound = (gameState?.macro_round_number ?? 0) <= 1;
+
     handlePassTurn();
     setOrSubPhase("Track");
-  }, [handlePassTurn]);
+
+    if (viewerIsPresident && isFirstOperatingRound) {
+      setActiveMainTab("stock");
+      setMarketTutorialArmed(true);
+    }
+  }, [handlePassTurn, viewerAddress, gameState]);
 
   const mapGrid = useMemo(() => MOCK_MAP_GRID, []);
-  const marketGrid = useMemo(() => MOCK_MARKET_GRID, []);
+  // Design note #2 in `utils/sandboxState.ts`: in sandbox the chart is
+  // DERIVED from the same corporations table the Stock Round cards read,
+  // so the two can no longer disagree. `MOCK_MARKET_GRID` remains only for
+  // the non-sandbox placeholder path (design note #2 at the top of this
+  // file -- illustrative data never produced by a live query).
+  const marketGrid = useMemo<MarketGridResponse>(
+    () =>
+      sandbox
+        ? { game_id: gameId, positions: sandboxMarketPositions(marketCellForPrice) }
+        : MOCK_MARKET_GRID,
+    [sandbox, gameId],
+  );
 
-  const isWorkspaceTab = activeMainTab === "map" || activeMainTab === "stock";
+  // Design note #36: derived, not queried -- see `utils/gamePhase.ts`
+  // design note #1 for why `current_global_era` cannot answer this.
+  const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);
+  // Design note #4 in `TrainBadges.tsx`: the shared per-tier countdown, so
+  // the action bar tag and every chip quote the same number.
+  const currentRustOutlook = useMemo(() => rustOutlook(gameState), [gameState]);
+
+  // Design note #28: the phase tab shares the workspace shell (canvas pane
+  // + contextual panel) with the map and market tabs.
+  const isWorkspaceTab =
+    activeMainTab === "phase" ||
+    activeMainTab === "corps" ||
+    activeMainTab === "map" ||
+    activeMainTab === "stock";
 
   return (
     <div style={styles.appRoot}>
@@ -2386,16 +2968,58 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       <style>{TURN_PULSE_KEYFRAMES_CSS}</style>
       {isMyTurn && <div style={styles.turnPulseOverlay} aria-hidden="true" />}
 
-      <DashboardControlBar vgpBalance={vgpBalance} vgpBalanceNote={derivedVgpBalanceNote} />
+      {/* Design note #32: FTUE. Mounted at the shell level, not inside the
+          phase panels, so a modal survives its panel unmounting on a tab
+          switch -- one that vanished when you clicked Rail Map to look at
+          the board would have to be re-triggered to finish reading.
 
-      {/* Room strip -- design notes #1/#22. Shows WHICH room this dashboard
-          is bound to, which matters now that there is more than one: every
-          query and action below targets `gameId`, and a player with two tabs
-          open needs to be able to tell them apart at a glance. Also the only
-          place `chatError` is surfaced -- chat failing silently is worse
-          than chat saying it is broken, and the ticker has no room for an
-          error line of its own. */}
-      <div style={styles.roomStrip}>
+          Design note #39: THREE topics, one per round. All three are
+          mounted unconditionally and each decides for itself whether to
+          open, keyed on its own `active`. That is safe against two firing
+          at once because `current_round_type` is a single value -- the
+          three `active` flags are mutually exclusive by construction, not
+          by coordination between them. Each also tracks its own "seen"
+          flag, so a player who read the auction explainer still gets the
+          Stock Round one when the game reaches it. */}
+      <TutorialModal
+        topicKey="waterfall-auction"
+        heading="Waterfall Auction"
+        pages={WATERFALL_AUCTION_TUTORIAL}
+        active={isWaterfallPhase}
+      />
+      <TutorialModal
+        topicKey="stock-round"
+        heading="Stock Round"
+        pages={STOCK_ROUND_TUTORIAL}
+        active={gameState?.current_round_type === "StockRound"}
+      />
+      <TutorialModal
+        topicKey="operating-round"
+        heading="Operating Round"
+        pages={OPERATING_ROUND_TUTORIAL}
+        active={gameState?.current_round_type === "OperatingRound"}
+      />
+      {/* Design note #44: the only tutorial not keyed to a round type. It
+          opens on an event -- the player's first OR turn ending -- and the
+          tab switch that precedes it is deliberate, not incidental. */}
+      <TutorialModal
+        topicKey="stock-market"
+        heading="The Stock Market"
+        pages={STOCK_MARKET_TUTORIAL}
+        active={marketTutorialArmed}
+      />
+
+      {/* Design note #34: one bar. The room context below used to be a
+          second full-width strip of its own; it is now the middle of the
+          single header. It still says WHICH room this shell is bound to --
+          every query and action targets `gameId`, and someone with two tabs
+          open needs to tell them apart -- and is still the only place
+          `chatError` surfaces, because chat failing silently is worse than
+          chat saying it is broken. */}
+      <TopBar
+        onLeaveGame={onLeaveGame}
+        roomContext={
+          <>
         {/* Design note #23: says plainly what mode this is, because a
             read-only board is otherwise indistinguishable from a board where
             it simply is not your turn. */}
@@ -2406,9 +3030,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
+            {/* Design note #25: the phase switcher. Debug-only -- on a real
+                chain the round type is contract state and nothing in the UI
+                may set it. Rendered inside the `sandbox` branch so it is
+                structurally impossible to reach in a live game. */}
+            <span style={styles.roomStripLabel}>Phase</span>
+            <div style={styles.phaseToggleGroup} role="group" aria-label="Sandbox phase">
+              {(
+                [
+                  ["WaterfallAuction", "🔨 Auction"],
+                  ["StockRound", "💹 Stock Round"],
+                  ["OperatingRound", "🚂 Operating Round"],
+                ] as ReadonlyArray<[RoundType, string]>
+              ).map(([phase, label]) => (
+                <button
+                  key={phase}
+                  type="button"
+                  onClick={() => setSandboxPhase(phase)}
+                  aria-pressed={sandboxPhase === phase}
+                  style={{
+                    ...styles.phaseToggleButton,
+                    ...(sandboxPhase === phase ? styles.phaseToggleButtonActive : {}),
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <span style={styles.roomStripLabel}>
-              Local mock state &middot; no chain, no wallet, no chat. Click any hex to open the
-              tile picker.
+              Mock state &middot; nothing dispatches
             </span>
           </>
         ) : (
@@ -2422,13 +3072,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             </span>
           </>
         )}
-        {chatError && <span style={styles.roomStripError}>{chatError}</span>}
-        <button type="button" style={styles.roomStripButton} onClick={onLeaveGame}>
-          ← Back to lobby
-        </button>
-      </div>
+            {chatError && <span style={styles.roomStripError}>{chatError}</span>}
+          </>
+        }
+      />
 
-      <MainTabBar activeTab={activeMainTab} onSelect={setActiveMainTab} />
+      <MainTabBar
+        activeTab={activeMainTab}
+        onSelect={setActiveMainTab}
+        roundType={gameState?.current_round_type ?? null}
+      />
 
       {/* In-Place Accordion Ticker + Inline Control Strip -- design notes
           #18-#20. Docked directly below the main nav tabs now (design note
@@ -2461,28 +3114,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               (ActivityFeed) is removed entirely -- `canvasPane` now renders
               directly, claiming the panel's full available width. */}
           <main style={styles.canvasPane}>
-            {isWaterfallPhase ? (
-              /* Pre-Game Waterfall Auction (`waterfall.rs`): replaces the
-                 normal action bar + board + contextual panel entirely for
-                 this phase -- see `WaterfallAuctionDashboard.tsx`'s own doc
-                 comment for why a dedicated dashboard, not a mode grafted
-                 onto `ContextualActionBar`, is the right shape for six
-                 privates' worth of bid trackers and a mini-auction sub-panel. */
-              <WaterfallAuctionDashboard
-                waterfallState={waterfallState}
-                loading={waterfallStateLoading}
-                error={waterfallStateError}
-                gameState={gameState}
-                connectedWalletAddress={wallet.address}
-                sessionReady={session.sessionStatus === "ready"}
-                onBuyLowest={handleWaterfallBuyLowest}
-                onBidHigher={handleWaterfallBidHigher}
-                onPass={handleWaterfallPass}
-                onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
-                onMiniAuctionPass={handleWaterfallMiniAuctionPass}
-              />
-            ) : (
-              <>
+            {/* Design note #31: THE one action bar, hoisted above the
+                phase branch so it renders on every active tab -- auction,
+                stock round and rail map alike. It used to live inside the
+                non-auction branch only, which is why the auction grew its
+                own Pass and the phase tab ended up with two bars. */}
                 {/* Item 5: contextual gameplay action bar -- see design notes
                     #8/#10. Step-by-step OR sub-phase guidance is design note
                     #10/item 2.
@@ -2504,9 +3140,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   roundType={gameState?.current_round_type ?? null}
                   orSubPhase={orSubPhase}
                   sessionReady={session.sessionStatus === "ready"}
-                  onBuyShare={handleBuyShare}
-                  onSellShares={handleSellShares}
-                  onPassTurn={handlePassTurn}
+                  // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`
+                  // and `PassTurn` are different contract messages, not one
+                  // action with two names -- sending the wrong one would
+                  // fail with an error about turn state that mentions
+                  // nothing to do with passing.
+                  onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
+                  passDisabledReason={
+                    isWaterfallPhase &&
+                    !(waterfallState?.privates ?? []).some((p) => p.bids.length > 0)
+                      ? "Passing is illegal until at least one private company has a standing bid."
+                      : null
+                  }
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
                   onSkipSubPhase={handleSkipSubPhase}
                   onBuyPrivateHint={handleBuyPrivateHint}
@@ -2519,6 +3164,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   onBuyTrain={handleBuyTrain}
                   onEndOperatingTurn={handleEndOperatingTurn}
                   onUndoLastAction={handleUndoLastAction}
+                  phase={currentPhase}
                   routeSelectMode={routeSelectMode}
                   onToggleRouteSelectMode={handleToggleRouteSelectMode}
                   routePoints={routePoints}
@@ -2538,6 +3184,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 />
                 )}
 
+            {isWaterfallPhase && activeMainTab === "phase" ? (
+              /* Pre-Game Waterfall Auction (`waterfall.rs`): replaces the
+                 normal action bar + board + contextual panel for this phase
+                 -- see `WaterfallAuctionDashboard.tsx`'s own doc comment for
+                 why a dedicated dashboard, not a mode grafted onto
+                 `ContextualActionBar`, is the right shape for six privates'
+                 worth of bid trackers.
+
+                 BUG FIX (design note #27): `&& activeMainTab === "stock"` is
+                 new and is the whole fix for "the Rail Map tab just
+                 re-renders the auction screen".
+
+                 This branch sits inside `isWorkspaceTab`, which is TRUE FOR
+                 BOTH the map and stock tabs. So while `isWaterfallPhase`
+                 held, the auction dashboard replaced the workspace on
+                 EITHER tab -- clicking "Rail Map" dutifully set
+                 `activeMainTab` to `"map"`, and then this ternary rendered
+                 the auction anyway, because nothing here consulted the tab.
+                 The tab button worked perfectly and had no visible effect,
+                 which is the worst kind of broken.
+
+                 Worth stating plainly: this was NOT a sandbox bug. The
+                 sandbox only made it easy to hit, by letting someone sit in
+                 the auction phase indefinitely and click around. In a real
+                 game the rail map would have been equally unreachable for
+                 the whole of the private auction -- during which players
+                 have every reason to study the board they are about to
+                 compete over. */
+              <WaterfallAuctionDashboard
+                waterfallState={waterfallState}
+                loading={waterfallStateLoading}
+                error={waterfallStateError}
+                gameState={gameState}
+                connectedWalletAddress={viewerAddress}
+                playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                sessionReady={session.sessionStatus === "ready"}
+                onBuyLowest={handleWaterfallBuyLowest}
+                onBidHigher={handleWaterfallBidHigher}
+                onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
+                onMiniAuctionPass={handleWaterfallMiniAuctionPass}
+              />
+            ) : (
+              <>
                 {/* Audit G-15: train trading, shown only during the Buy
                     Trains step.
                     
@@ -2569,7 +3258,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     activeProtocolId={
                       gameState.active_operating_order[gameState.active_corporation_index] ?? null
                     }
-                    connectedAddress={wallet.address}
+                    connectedAddress={viewerAddress}
                     sessionReady={session.sessionStatus === "ready"}
                     onMakeOffer={handleMakeTrainOffer}
                     onAccept={handleAcceptTrainOffer}
@@ -2582,27 +3271,80 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     "directly above ... the Stock Market Matrix." Gated on
                     a live Stock Round so it never renders during Operating
                     Round (Waterfall bypasses this whole branch already, via
-                    `isWaterfallPhase` above). */}
-                {gameState?.current_round_type === "StockRound" && (
+                    `isWaterfallPhase` above).
+
+                    ALSO gated on the stock tab (design note #27). This is
+                    the same class of problem as the auction hijacking the
+                    Rail Map, caught while fixing it: the panel is not
+                    exclusive -- it renders ABOVE the canvas rather than
+                    instead of it -- so the map was still technically there.
+                    But the panel now leads with an eight-card corporation
+                    roster, which pushed the rail map most of a screen down.
+                    "Visible if you scroll far enough" is not the Rail Map
+                    tab doing its job. Its controls are all Stock-Round
+                    actions and belong with the market. */}
+                {/* Design note #41: gated on the TAB alone, not on the round.
+                    The roster is a reference surface now -- it renders in an
+                    Operating Round and during the auction too, because
+                    "what do I own and what is it worth" does not stop being
+                    a question when the Stock Round ends. Its Buy/Sell
+                    controls are separately gated on `isMyTurn` and session
+                    readiness, so an out-of-phase viewer reads but cannot
+                    act. */}
+                {activeMainTab === "corps" && (
                   <StockRoundPanel
                     publicCompanies={gameState?.public_companies ?? []}
-                    selectedProtocolId={srSelectedProtocolId}
-                    onSelectProtocolId={setSrSelectedProtocolId}
                     parValue={srParValue}
                     onSelectParValue={setSrParValue}
-                    source={srSource}
-                    onSelectSource={setSrSource}
-                    sellPercentage={srSellPercentage}
-                    onSelectSellPercentage={setSrSellPercentage}
                     onBuyShare={handleBuyShare}
                     onSellShares={handleSellShares}
-                    onPassTurn={handlePassTurn}
                     sessionReady={session.sessionStatus === "ready"}
                     isMyTurn={isMyTurn}
-                    connectedAddress={wallet.address}
+                    connectedAddress={viewerAddress}
+                    // Design note #31 in that file: powers the front-face
+                    // operating snapshot -- train limit and which tier is
+                    // about to rust.
+                    phase={currentPhase}
+                    outlook={currentRustOutlook}
+                    // Design note #8 in that file: market price is separate
+                    // data (`GetMarketGrid`) from the ownership registry.
+                    // Only the sandbox has it wired so far -- a live game
+                    // passes `undefined` and the roster renders a dash,
+                    // which is honest about not knowing rather than
+                    // inventing a price.
+                    marketPrices={sandbox ? SANDBOX_MARKET_PRICES : undefined}
+                    playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                    // Design note #41: the roster is readable in every
+                    // phase, but shares only trade in a Stock Round.
+                    actionsLockedReason={
+                      gameState?.current_round_type === "StockRound"
+                        ? null
+                        : "Viewing only -- shares can be bought and sold during a Stock Round."
+                    }
                   />
                 )}
 
+                {/* Design note #28: the phase tab renders NO reference
+                    board. Its content is the phase panel above -- the
+                    auction dashboard or the Stock Round cards -- and the
+                    2D market chart now has its own tab. Rendering the
+                    chart here too is what the old single-tab design did,
+                    and it is precisely the conflation this note split
+                    apart: a player on the Stock Round tab is choosing
+                    shares, not reading the chart, and the chart is one
+                    click away when they want it. */}
+                {/* Design note #45: AN ALLOWLIST, NOT A DENYLIST.
+                    This read `activeMainTab !== "phase"`, which silently
+                    assumed the only workspace tabs were the phase surface,
+                    the map and the chart. Adding `"corps"` (design note
+                    #41) therefore opted it in by default: the Stocks tab
+                    passed the `!== "phase"` test, fell past the `=== "map"`
+                    branch, and rendered a second copy of the Stock Market
+                    matrix underneath the corporation cards.
+                    
+                    Naming the two tabs that OWN a board means a future tab
+                    has to ask for one rather than inherit it. */}
+                {(activeMainTab === "map" || activeMainTab === "stock") && (
                 <div style={styles.boardPane}>
                   {activeMainTab === "map" ? (
                     <HexGridRenderer
@@ -2654,15 +3396,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       routeOverlays={manualRouteOverlay}
                     />
                   ) : (
-                    <StockMarketRenderer marketGrid={marketGrid} />
+                    <StockMarketRenderer
+                      marketGrid={marketGrid}
+                      // Design note #24 in that file: the par track is fed
+                      // by par_value, which the contract sets when the
+                      // President's Certificate is bought -- so a parred
+                      // but unfloated company appears on the track, which
+                      // is the whole point of it.
+                      parredCompanies={gameState?.public_companies}
+                    />
                   )}
                 </div>
+                )}
 
                 {/* Automated contextual block underneath the board. */}
                 <ContextualSubPanel
                   gameState={gameState}
                   loading={gameStateLoading}
                   error={gameStateError}
+                  // Design note #10 in that file: market price is not on
+                  // `GameStateResponse`, so the Market Value column needs
+                  // the grid handed to it separately.
+                  marketGrid={marketGrid}
                 />
               </>
             )}
@@ -2681,6 +3436,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           queryClient={queryClient}
           contractAddress={CONTRACT_ADDRESS}
           gameId={gameId}
+          // Design note #14 in that file: the merged Corporation Assets
+          // table's Market Price column. Not on `GameStateResponse`.
+          marketGrid={marketGrid}
         />
       )}
 
@@ -3008,24 +3766,148 @@ export default function App() {
 // Swap for a real stylesheet/CSS-in-JS library whenever this UI grows
 // past a first wiring pass.
 
+/** Design note #36: the four phase tints. Kept beside `styles` rather than
+ *  in `palette.ts` because these are chrome colours on the dark top bar,
+ *  not card-surface colours -- the palette module is specifically the
+ *  light-card system and mixing the two is how a "shared" palette stops
+ *  meaning anything. */
+const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProperties>> = {
+  yellow: { borderColor: "#8a6d1f", backgroundColor: "#2a2413", color: "#e0c060" },
+  green: { borderColor: "#2f7a4a", backgroundColor: "#12291d", color: "#6fd39a" },
+  brown: { borderColor: "#8a5a2f", backgroundColor: "#2a1d12", color: "#d8a070" },
+};
+
 const styles: Record<string, React.CSSProperties> = {
+  /* ---- Design note #34: the single slim top bar. ----
+     `padding` is 6px vertical against the old header's 16px, and the brand
+     drops from `display` to `strong`: the point of the consolidation was
+     vertical space, so the row has to actually be short or nothing was
+     gained by merging. `flexWrap` stays on -- the sandbox phase switcher
+     genuinely can overflow on a narrow window, and wrapping is a better
+     failure than a clipped Connect button. */
+  topBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    width: "100%",
+    padding: "6px 20px",
+    backgroundColor: "#1a1d26",
+    borderBottom: "1px solid #2a2e3a",
+    boxSizing: "border-box",
+    flexWrap: "wrap",
+    rowGap: "6px",
+  },
+  /* ---- Design note #36: the phase badge and its warning. ----
+     Both are `flexShrink: 0` and `whiteSpace: nowrap`: the top bar wraps
+     rather than clips, and a phase label broken across two lines in a slim
+     bar reads as a layout fault. */
+  actionBarSpacer: { flex: 1, minWidth: "8px" },
+  phaseBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.03em",
+    padding: "3px 10px",
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  phaseShiftBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.02em",
+    padding: "3px 9px",
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#a8551a",
+    backgroundColor: "#3a2410",
+    color: "#f0b070",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    cursor: "help",
+  },
+  /* Design note #47: muted by default, brightening on hover -- a credit
+     should be findable without competing with the game's own chrome. */
+  netaCredit: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    color: "#94a3b8",
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    paddingLeft: "2px",
+  },
+  topBarBrand: {
+    fontWeight: 700,
+    fontSize: FONT_SIZE.strong,
+    letterSpacing: "0.02em",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  // Pushes the connection cluster right. A spacer element rather than
+  // `marginLeft: auto` on the first right-hand child, because which child
+  // is first varies (the offline badge and the two error spans are all
+  // conditional) and an `auto` margin on a node that sometimes does not
+  // render silently un-pins the whole group.
+  topBarSpacer: { flex: 1, minWidth: "8px" },
+  topBarDot: {
+    width: "9px",
+    height: "9px",
+    borderRadius: "50%",
+    flexShrink: 0,
+    cursor: "help",
+  },
+  topBarAddress: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.small,
+    color: "#9aa0ac",
+    whiteSpace: "nowrap",
+  },
+  topBarButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 600,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: "999px",
+    border: "1px solid #3a3f4b",
+    backgroundColor: "#242833",
+    color: "#c7cbd4",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  // The one call to action in the bar, so it is the one thing in it with a
+  // filled treatment.
+  topBarConnectButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: "999px",
+    border: "1px solid #2f6f6a",
+    backgroundColor: "#14312f",
+    color: "#7fe0d0",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
+  topBarError: {
+    fontSize: FONT_SIZE.small,
+    color: "#e07a7a",
+    maxWidth: "240px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
   // ---- Room strip -- design notes #1/#22. Sits between the brand header
   // and the nav tabs, in the same #0F172A recessed tone `TopTicker`'s
   // expanded body and `Lobby`'s panels use, so the two screens read as one
   // application. ----
-  roomStrip: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    width: "100%",
-    padding: "8px 28px",
-    backgroundColor: "#0F172A",
-    borderBottom: "1px solid #1e2937",
-    fontSize: FONT_SIZE.body,
-    color: "#9aa0ac",
-    boxSizing: "border-box",
-    flexWrap: "wrap",
-  },
+  // Design note #34: `roomStrip` the container is gone -- its children are
+  // inline content in `topBar` now. The `roomStrip*` item styles below are
+  // kept because those children still exist and still need their look.
   spectatorNotice: {
     width: "100%",
     padding: "14px 28px",
@@ -3036,6 +3918,71 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     boxSizing: "border-box",
+  },
+  // ---- Global action bar (design note #30). Sits above the phase panel,
+  // visually part of the page chrome rather than of either phase's own
+  // card layout -- which is the point: these two actions are constant
+  // while everything below them changes. ----
+  globalActionBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    flexWrap: "wrap",
+    width: "100%",
+    padding: "12px 20px",
+    marginBottom: "14px",
+    backgroundColor: "#1b2130",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#2f3646",
+    borderRadius: "10px",
+    boxSizing: "border-box",
+  },
+  globalActionBarLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.6px",
+    textTransform: "uppercase",
+    color: "#7f8798",
+  },
+  globalActionButton: {
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    padding: CONTROL_PADDING.button,
+    borderRadius: "8px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a4055",
+    backgroundColor: "#242c3d",
+    color: "#e6e8ef",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
+  // the disabled look is computed, never assumed.
+  globalActionButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  globalActionBarHint: { fontSize: FONT_SIZE.small, color: "#8a90a0" },
+  // ---- Sandbox phase switcher (design note #25). Violet, matching the
+  // sandbox badge beside it, so it reads as part of the debug affordance
+  // and never as a gameplay control. ----
+  phaseToggleGroup: { display: "flex", gap: "4px", flexShrink: 0 },
+  phaseToggleButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: CONTROL_PADDING.buttonSmall,
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#4a3a6a",
+    backgroundColor: "#1a1424",
+    color: "#9a8ab0",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  phaseToggleButtonActive: {
+    backgroundColor: "#3a2a56",
+    borderColor: "#7a5aa8",
+    color: "#e8d8ff",
   },
   sandboxBadge: {
     fontSize: FONT_SIZE.micro,
@@ -3063,18 +4010,6 @@ const styles: Record<string, React.CSSProperties> = {
   roomStripValue: { color: "#e6e8ef", fontWeight: 700 },
   roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a3a52" },
   roomStripError: { color: "#f0b0a8", fontSize: FONT_SIZE.small },
-  roomStripButton: {
-    marginLeft: "auto",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 600,
-    padding: CONTROL_PADDING.buttonSmall,
-    borderRadius: "999px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#1e2129",
-    color: "#9aa0ac",
-    cursor: "pointer",
-    flexShrink: 0,
-  },
   appRoot: {
     display: "flex",
     flexDirection: "column",
@@ -3097,49 +4032,7 @@ const styles: Record<string, React.CSSProperties> = {
   // sizes so the absolute topmost bar reads comfortably on a widescreen
   // panel, matching the same "fill the real estate" intent already applied
   // to the map/stock canvases.
-  dashboard: {
-    display: "flex",
-    alignItems: "center",
-    gap: "36px",
-    padding: "16px 28px",
-    backgroundColor: "#1a1d26",
-    borderBottom: "1px solid #2a2e3a",
-    flexWrap: "wrap",
-  },
-  dashboardBrand: {
-    fontWeight: 700,
-    fontSize: FONT_SIZE.display,
-    letterSpacing: "0.02em",
-  },
-  dashboardSection: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-  },
-  dashboardLabel: {
-    fontSize: FONT_SIZE.control,
-    color: "#9aa0ac",
-    textTransform: "uppercase",
-    letterSpacing: "0.04em",
-  },
-  statusBadge: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 600,
-    padding: "5px 14px",
-    borderRadius: "999px",
-  },
-  addressIndicator: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.strong,
-    color: "#c7cbd4",
-  },
-  // VGP: no container, amber. Reads as a SCORE.
-  vgpBalance: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.heading,
-    fontWeight: 600,
-    color: "#e0b64a",
-  },
+  //: no container, amber. Reads as a SCORE.
   // $JUNO: contained pill, teal, bordered. Reads as a REAL ASSET -- see the
   // comment at the render site for why the two are deliberately different
   // kinds of object rather than two rows of the same kind.
@@ -3174,11 +4067,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#d9b95c",
     cursor: "help",
   },
-  vgpBalanceNote: {
-    fontSize: FONT_SIZE.body,
-    color: "#8a6d1f",
-    maxWidth: "320px",
-  },
   button: {
     fontSize: FONT_SIZE.strong,
     padding: "9px 18px",
@@ -3208,21 +4096,35 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 28px 0",
     backgroundColor: "#0F172A",
   },
+  /* ---- Design note #46: every tab is visibly a control. ----
+     The resting border was `#2a2e3a` against a `#1a1d26` bar -- barely a
+     shade apart, so an unselected tab had no edge and read as recessed
+     rather than clickable. It is now a crisp slate line on a slightly
+     inset fill, which is what makes the row legible as a set of buttons
+     before anyone hovers anything. */
   mainTabButton: {
     fontSize: FONT_SIZE.heading,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: "14px 28px",
     borderRadius: "10px 10px 0 0",
-    border: "1px solid #2a2e3a",
-    borderBottom: "none",
-    backgroundColor: "#1a1d26",
-    color: "#9aa0ac",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "rgba(51, 65, 85, 0.85)",
+    borderBottomWidth: 0,
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
+    color: "#94a3b8",
     cursor: "pointer",
   },
+  /* The active tab is the only WHITE-edged thing in the bar, and the only
+     one with a lift. It also keeps `#1E293B` so it still docks seamlessly
+     into the panel below (design note #7 in `TopTicker.tsx`). */
   mainTabButtonActive: {
     backgroundColor: "#1E293B",
-    color: "#e6e8ef",
-    borderColor: "#1E293B",
+    color: "#ffffff",
+    fontWeight: 700,
+    borderColor: "rgba(255, 255, 255, 0.8)",
+    borderBottomColor: "#1E293B",
+    boxShadow: "0 -1px 6px rgba(0, 0, 0, 0.35)",
   },
   // ---- Active Player Turn Notifications -- design note #18/item 4. A
   // full-viewport, `pointerEvents: "none"` overlay so the pulsing glow
@@ -3259,21 +4161,35 @@ const styles: Record<string, React.CSSProperties> = {
   // by design note #12/item 5 (Gameplay Action Top Bar): larger button
   // font/padding and a taller bar overall so the dynamic header action
   // layout reads clearly at widescreen scale. ----
+  /* ---- Design note #31: THE slim bar. Was a tall panel because three
+   * trays lived inside it; those are separate blocks below it now, so this
+   * is a single row of controls and is styled as page chrome rather than as
+   * a card. ---- */
   actionBar: {
     display: "flex",
-    flexDirection: "column",
+    // Row, not column: the round label sits inline with the controls now
+    // that nothing else shares the container.
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
     gap: "10px",
-    padding: "16px 20px",
-    backgroundColor: "#1a1d26",
-    border: "1px solid #2a2e3a",
+    padding: "10px 16px",
+    backgroundColor: "#1b2130",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#2f3646",
     borderRadius: "10px",
+    marginBottom: "12px",
   },
   // Active Player Turn Notifications -- design note #18/item 4. Spread onto
   // `actionBar` alongside its base style, not replacing it, so the bar's
   // own layout/padding/background are unaffected -- only the border color
   // and the shared pulsing-glow animation are added.
   actionBarTurnPulse: {
-    borderColor: "#c0392b",
+    // Design note #35: crisp silver rather than the old `#c0392b`. Bright
+    // enough to read as lit against `actionBar`'s dark fill, and it no
+    // longer competes with the auction's red contested ring.
+    borderColor: `rgba(${TURN_PULSE_INK_RGB}, 0.75)`,
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
   actionBarRoundLabel: {
@@ -3287,18 +4203,31 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
-    gap: "12px",
+    gap: "6px",
     flexWrap: "wrap",
+    // Design note #40: must GROW, or the internal spacer has no width to
+    // expand into and the phase badge sits flush against Undo instead of at
+    // the far right. `minWidth: 0` lets it shrink below its content width
+    // too, so a long button row wraps rather than overflowing the bar.
+    flex: 1,
+    minWidth: 0,
   },
   actionBarButton: {
-    fontSize: FONT_SIZE.strong,
-    padding: "12px 20px",
-    borderRadius: "10px",
+    // Design note #31: slimmed from `strong`/12px padding. These were sized
+    // for a standalone panel; in a single chrome strip they only have to be
+    // comfortably clickable, not the focal point of the screen.
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: "7px 14px",
+    borderRadius: "8px",
     border: "1px solid #3a3f4b",
     backgroundColor: "#242833",
     color: "#e6e8ef",
     cursor: "pointer",
   },
+  // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
+  // every disabled control computes its own look.
+  actionBarButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
   actionBarUtilityButton: {
     color: "#c7cbd4",
     borderStyle: "dashed",

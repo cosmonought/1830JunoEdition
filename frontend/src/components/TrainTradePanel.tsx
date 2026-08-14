@@ -44,11 +44,12 @@
 //    and arrives as a JSON string. The input is validated as a non-negative
 //    integer string and passed on unparsed -- the same no-float discipline
 //    the contract holds itself to. A price above 2^53 is not realistic in
-//    VGP, but parsing to `Number` here would be a silent precision bug for no
+//, but parsing to `Number` here would be a silent precision bug for no
 //    benefit whatsoever.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { corporationLabel } from "../utils/corporationNames";
 
 /** Mirrors `msg::TrainOfferEntry` exactly. */
 export interface TrainOfferEntry {
@@ -239,7 +240,7 @@ export function TrainTradePanel({
             <option value="">Select a corporation...</option>
             {sellers.map((company) => (
               <option key={company.company_id} value={company.company_id}>
-                {company.ticker}
+                {corporationLabel(company.ticker)}
               </option>
             ))}
           </select>
@@ -267,7 +268,7 @@ export function TrainTradePanel({
             style={styles.priceInput}
             value={price}
             inputMode="numeric"
-            aria-label="Offer price in VGP"
+            aria-label="Offer price in"
             disabled={!sessionReady || !iAmActivePresident || !!myBlockingOffer}
             onChange={(event) => setPrice(event.target.value)}
           />

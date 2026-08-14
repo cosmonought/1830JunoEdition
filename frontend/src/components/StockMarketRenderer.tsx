@@ -109,7 +109,8 @@
 //    cliffside shape -- matching HexGridRenderer's "unknown tile_id renders
 //    a visible placeholder rather than silently nothing" honesty convention
 //    instead of ever silently dropping a real corporation's token.
-// 9. **Game-end ($350) cap.** The top-right cell (`x=18, y=10`, the real
+// 9. **Game-end ($350) cap -- SUPERSEDED BY DESIGN NOTE #27, kept for the
+//    coordinate reference.** The top-right cell (`x=18, y=10`, the real
 //    board's printed `$350`) is the coordinate `market::GAME_END_PRICE_TRIGGER`
 //    watches -- see `market.rs`'s module doc comment for the important
 //    caveat that this auto-end behavior is an explicit house rule for this
@@ -575,6 +576,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { corporationLabel } from "../utils/corporationNames";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -622,7 +624,7 @@ function clamp(value: number, min: number, max: number): number {
 
 /** Mirrors `state::ZoneType` exactly -- see design note #3 for the
  *  cumulative-semantics caveat. */
-type ZoneType = "Normal" | "Yellow" | "Orange" | "Brown";
+export type ZoneType = "Normal" | "Yellow" | "Orange" | "Brown";
 
 /** One real price cell: `[price, zoneType]`. Index `i` within a row's
  *  `cells` array corresponds to board column `startX + i`. */
@@ -834,6 +836,12 @@ interface PriceCell {
   zoneType: ZoneType;
   isParValueLadder: boolean;
   isGameEndCell: boolean;
+  /** Design note #43: the leftmost cell of its row -- a LEFT CLIFF. A price
+   *  here that would move left moves DOWN instead. */
+  isLeftCliff: boolean;
+  /** The rightmost cell of its row -- a RIGHT CLIFF. A price here that
+   *  would move right moves UP instead. */
+  isRightCliff: boolean;
 }
 
 /** Walks the hardcoded `REAL_MARKET_ROWS` coordinate array directly, cell by
@@ -844,6 +852,12 @@ interface PriceCell {
  *  top-to-bottom exactly as it should render in the CSS grid below. */
 function buildPriceGrid(): PriceCell[] {
   const cells: PriceCell[] = [];
+  // Design note #43a: which coordinates exist at all, so a cliff can ask
+  // whether the cell it would be pushed INTO is on the board.
+  const occupied = new Set<string>();
+  for (const row of REAL_MARKET_ROWS) {
+    row.cells.forEach((_, index) => occupied.add(cellKey(row.startX + index, row.y)));
+  }
   for (const row of REAL_MARKET_ROWS) {
     row.cells.forEach(([price, zoneType], index) => {
       const x = row.startX + index;
@@ -854,7 +868,35 @@ function buildPriceGrid(): PriceCell[] {
         price: parOverride ?? price,
         zoneType,
         isParValueLadder: parOverride !== undefined,
-        isGameEndCell: x === GAME_END_CELL_X && row.y === GAME_END_CELL_Y,
+        // Design note #27: ALWAYS false. The $350 cell is an ordinary top
+        // -of-chart price, not a game-end trigger -- that condition is not
+        // canonical 1830 and has been removed from the rules text too. The
+        // flag and its green fill are kept in the type/style tables rather
+        // than ripped out, so re-enabling it is a one-line change if the
+        // house rule ever comes back deliberately.
+        // `GAME_END_CELL_X`/`_Y` still name the cell; the `&& false` is the
+        // switch. Written this way rather than deleting the coordinates so
+        // restoring the house rule is one edit, not an archaeology exercise.
+        isGameEndCell: false && x === GAME_END_CELL_X && row.y === GAME_END_CELL_Y,
+        // Design note #43: cliffs are a property of the ROW, not of the
+        // board's overall rectangle. `REAL_MARKET_ROWS` is jagged -- 19
+        // cells at the top narrowing to 4 at the bottom -- so a row's own
+        // first and last cells are its cliffs, and comparing against a
+        // global min/max x would mark almost nothing.
+        // Design note #43a: A CLIFF ONLY COUNTS IF THERE IS SOMEWHERE TO
+        // GO. A left cliff redirects a leftward move DOWNWARD, so it is
+        // only a cliff if a cell exists below it; the $10 floor at the
+        // bottom-left has nothing beneath it and simply cannot move, so it
+        // gets no arrow. Same in mirror for the right cliff and the $350
+        // ceiling, which has no row above.
+        //
+        // Derived from the grid rather than hardcoding "$10" and "$350":
+        // the two terminal prices are a CONSEQUENCE of the board's shape,
+        // and a hardcoded pair would silently stop matching if the board
+        // were ever re-cut.
+        isLeftCliff: index === 0 && occupied.has(cellKey(x, row.y - 1)),
+        isRightCliff:
+          index === row.cells.length - 1 && occupied.has(cellKey(x, row.y + 1)),
       });
     });
   }
@@ -862,6 +904,60 @@ function buildPriceGrid(): PriceCell[] {
 }
 
 const PRICE_GRID: readonly PriceCell[] = buildPriceGrid();
+
+/** Finds the market-chart cell a given share price sits in.
+ *
+ *  EXPORTED for the Offline Sandbox (design note #16). The sandbox has to
+ *  produce a `MarketGridResponse` -- the same shape `GetMarketGrid` returns
+ *  -- and a position on this chart is `(x, y)`, not a price. Without this,
+ *  the sandbox's grid coordinates were hand-written separately from the
+ *  prices its corporation cards displayed, and the two promptly disagreed:
+ *  PRR read 112 on its card and sat on the 100 cell of the chart.
+ *
+ *  Real 1830 charts repeat some prices across rows, so this returns the
+ *  FIRST match walking `REAL_MARKET_ROWS` in order. That is arbitrary but
+ *  deterministic, and it is only ever used to place a mock token -- a live
+ *  game gets its real `(x, y)` from the contract, which tracks the actual cell
+ *  a marker has walked to rather than re-deriving it from the price.
+ *
+ *  Returns `null` for a price with no cell, which callers must treat as
+ *  "not on the chart" rather than coercing to the origin -- `(0, 0)` is a
+ *  real cell and a marker parked there would be a visible lie. */
+export function marketCellForPrice(price: number): { x: number; y: number } | null {
+  const cell = PRICE_GRID.find((candidate) => candidate.price === price);
+  return cell ? { x: cell.x, y: cell.y } : null;
+}
+
+/** The rule zone a price sits in, or `null` if the price is not on the
+ *  board at all.
+ *
+ *  Exported because the zones are RULES, not decoration, and three surfaces
+ *  outside this chart now depend on them: the certificate count (Yellow and
+ *  Orange shares are exempt from the limit), the Stock Round buy control
+ *  (Brown allows buying several bank-pool shares at once), and the ledger.
+ *  Those consumers must read the SAME table the chart colours itself from
+ *  -- a second copy of "which prices are Brown" would drift the moment
+ *  either was edited, and the failure mode is a player being told a rule
+ *  that the board contradicts. */
+export function marketZoneForPrice(price: number | null | undefined): ZoneType | null {
+  if (price == null || !Number.isFinite(price)) return null;
+  return PRICE_GRID.find((candidate) => candidate.price === price)?.zoneType ?? null;
+}
+
+/** Whether shares priced here are exempt from a player's certificate limit
+ *  -- true in Yellow, Orange and Brown. Named rather than left as an
+ *  inline zone comparison because the same three-way test is made in two
+ *  files, and `zone !== "Normal"` is easy to write as `=== "Yellow"` by
+ *  mistake. */
+export function isCertificateExemptZone(zone: ZoneType | null): boolean {
+  return zone === "Yellow" || zone === "Orange" || zone === "Brown";
+}
+
+/** Whether a player may buy MULTIPLE bank-pool shares of a corporation in
+ *  one turn -- the Brown zone's own additional allowance. */
+export function allowsMultipleBankPoolBuys(zone: ZoneType | null): boolean {
+  return zone === "Brown";
+}
 
 /** One distinct color per real par value, from brightest gold ($100) down
  *  to deep bronze ($67). Keyed by price so `PAR_VALUE_LADDER`'s own entries
@@ -889,12 +985,11 @@ const FALLBACK_PAR_VALUE_COLOR = "#8a6d1f";
 /* Rule zone color fills -- see design note #3                        */
 /* ------------------------------------------------------------------ */
 
-const ZONE_COLORS: Readonly<Record<ZoneType, string | undefined>> = {
-  Normal: undefined,
-  Yellow: "#5c5015",
-  Orange: "#5c3a15",
-  Brown: "#3d2811",
-};
+// Design note #25: `ZONE_COLORS` is REMOVED. It existed only to paint the
+// swatches in the deleted Market Rules Legend -- the grid cells themselves
+// use `ZONE_GRADIENTS`. Its content lives on where it matters: every
+// non-Normal cell carries `ZONE_LEGEND_LABELS` + `ZONE_DESCRIPTIONS` as its
+// `title`, which is the tooltip coverage that made the legend redundant.
 
 /** Gradient counterpart to `ZONE_COLORS` -- see the doc comment on
  *  `PAR_VALUE_GRADIENTS` just above for the full rationale; same
@@ -982,27 +1077,27 @@ interface ParMarker {
   price: number;
 }
 
-/** Session-local, client-observed cache of `company_id -> its chosen par
- *  cell`, keyed by par PRICE for the tray's own lookups below -- see design
- *  note #10 for exactly what this is (an observed-position cache, not a
- *  chain query) and its known first-load gap. Deliberately module-scoped,
- *  not `useState`-owned, so it survives this component unmounting/
- *  remounting across a tab switch. */
-const parMemoryStore = new Map<number, ParMarker>();
-
-/** Snapshots `parMemoryStore`'s current entries into a `price -> markers[]`
- *  lookup for rendering -- more than one corporation can have historically
- *  parred at the same standard price, so each price bucket is a list. */
-function snapshotParMemory(): ReadonlyMap<number, ParMarker[]> {
+/** Buckets parred companies by their par price for the tray's rows.
+ *
+ *  Design note #24: derived from contract state on every render, not
+ *  accumulated in a module-scoped cache. The cache it replaced had a
+ *  documented first-load gap (it only knew what this session had watched
+ *  happen) and, more importantly, could not represent a parred-but-unfloated
+ *  company at all. More than one corporation can par at the same standard
+ *  price, so each bucket is a list. */
+function buildParMarkers(
+  companies: ReadonlyArray<{ company_id: number; ticker: string; par_value: string | null }>,
+): ReadonlyMap<number, ParMarker[]> {
   const byPrice = new Map<number, ParMarker[]>();
-  parMemoryStore.forEach((marker) => {
-    const bucket = byPrice.get(marker.price);
-    if (bucket) {
-      bucket.push(marker);
-    } else {
-      byPrice.set(marker.price, [marker]);
-    }
-  });
+  for (const company of companies) {
+    if (company.par_value === null) continue;
+    const price = Number(company.par_value);
+    if (!Number.isFinite(price)) continue;
+    const marker: ParMarker = { companyId: company.company_id, ticker: company.ticker, price };
+    const bucket = byPrice.get(price);
+    if (bucket) bucket.push(marker);
+    else byPrice.set(price, [marker]);
+  }
   return byPrice;
 }
 
@@ -1022,7 +1117,7 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
     <aside style={styles.parTray}>
       <div style={styles.parTrayHeader}>
         <span style={styles.parTrayTitle}>Par / IPO Tray</span>
-        <span style={styles.parTrayHint} title="See design note #10 in this file">
+        <span style={styles.parTrayHint} title="Par prices set here; a company moves onto the grid once it floats.">
           Reference only -- markers are session-observed, not a live chain query
         </span>
       </div>
@@ -1050,7 +1145,7 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
                   <span
                     key={marker.companyId}
                     style={{ ...styles.parTrayMarkerBadge, backgroundColor: tickerColor(marker.companyId) }}
-                    title={`${marker.ticker} parred at $${price}`}
+                    title={`${corporationLabel(marker.ticker)} -- parred at $${price}`}
                   >
                     {marker.ticker}
                   </span>
@@ -1071,27 +1166,6 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
 /* under the header.                                                      */
 /* ------------------------------------------------------------------ */
 
-function MarketRulesLegend() {
-  return (
-    <aside style={styles.legendColumn}>
-      <div style={styles.parTrayHeader}>
-        <span style={styles.parTrayTitle}>Market Rules Legend</span>
-        <span style={styles.parTrayHint}>
-          Zone tags on the matrix below -- hover any tinted cell for the same text
-        </span>
-      </div>
-      {(Object.keys(ZONE_DESCRIPTIONS) as Array<Exclude<ZoneType, "Normal">>).map((zone) => (
-        <div key={zone} style={styles.legendColumnItem} title={ZONE_DESCRIPTIONS[zone]}>
-          <div style={styles.legendColumnItemHeader}>
-            <span style={{ ...styles.legendSwatch, backgroundColor: ZONE_COLORS[zone] }} />
-            <span style={styles.legendLabel}>{ZONE_LEGEND_LABELS[zone]}</span>
-          </div>
-          <span style={styles.legendText}>{ZONE_DESCRIPTIONS[zone]}</span>
-        </div>
-      ))}
-    </aside>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Component                                                          */
@@ -1100,6 +1174,26 @@ function MarketRulesLegend() {
 export interface StockMarketRendererProps {
   /** `QueryMsg::GetMarketGrid`'s response, verbatim. */
   marketGrid: MarketGridResponse;
+  /** Design note #24: every corporation that has a PAR PRICE SET, floated
+   *  or not.
+   *
+   *  RULES CORRECTION, and the reason this prop exists. A company's par is
+   *  fixed the moment its President's Certificate is bought -- NOT when it
+   *  floats. Floating is a later, separate event (60% sold), and a company
+   *  can sit parred-but-unfloated for a long stretch of a Stock Round while
+   *  players decide whether to back it.
+   *
+   *  The tray previously derived its markers by WATCHING the market grid:
+   *  when a token appeared on a par cell, it remembered it. That could only
+   *  ever show companies already on the chart -- which is to say floated
+   *  ones -- so a parred, unfloated company was invisible on the very track
+   *  whose job is to record that it has been parred. The observed-position
+   *  cache is gone; this comes straight from `PublicCompanyState.par_value`,
+   *  which the contract sets at presidency purchase.
+   *
+   *  Optional so callers with no game state (the placeholder path) simply
+   *  render an empty track rather than needing a stub. */
+  parredCompanies?: ReadonlyArray<{ company_id: number; ticker: string; par_value: string | null }>;
   className?: string;
 }
 
@@ -1218,7 +1312,7 @@ interface CellOccupantGroup {
   occupants: MarketPositionEntry[];
 }
 
-export function StockMarketRenderer({ marketGrid, className }: StockMarketRendererProps) {
+export function StockMarketRenderer({ marketGrid, parredCompanies, className }: StockMarketRendererProps) {
   // Viewport maximization (design note #19 / Request F item 3), un-clamped
   // from viewport HEIGHT by design note #21/item 3: the grid's cell size is
   // no longer the fixed `CELL_SIZE_PX` constant -- a `ResizeObserver` on
@@ -1284,34 +1378,15 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
     return groups;
   }, [marketGrid.positions]);
 
-  // Disconnected Par/IPO Tray observation pass -- see design note #10.
-  // Whenever a live position sits exactly on one of the six real par
-  // cells, remember that `(company_id -> price)` pairing in the
-  // module-scoped `parMemoryStore` (so it survives this component
-  // unmounting on a tab switch) and re-snapshot local render state so the
-  // tray reflects it immediately, including markers observed in a PRIOR
-  // mount of this component.
-  const [parMarkersByPrice, setParMarkersByPrice] = useState<ReadonlyMap<number, ParMarker[]>>(() =>
-    snapshotParMemory(),
+  /* Design note #24: derived, not observed. The old version of this block
+   * watched `marketGrid.positions` for tokens landing on par cells and
+   * accumulated them in a module-scoped cache. That is gone -- it could
+   * only ever know about companies already ON the chart, which excluded
+   * exactly the parred-but-unfloated case the track is supposed to show. */
+  const parMarkersByPrice = useMemo(
+    () => buildParMarkers(parredCompanies ?? []),
+    [parredCompanies],
   );
-  useEffect(() => {
-    let observedSomethingNew = false;
-    for (const position of marketGrid.positions) {
-      const parPrice = PAR_VALUE_LADDER_BY_CELL.get(cellKey(position.x, position.y));
-      if (parPrice === undefined) continue;
-      const existing = parMemoryStore.get(position.company_id);
-      if (existing && existing.price === parPrice && existing.ticker === position.ticker) continue;
-      parMemoryStore.set(position.company_id, {
-        companyId: position.company_id,
-        ticker: position.ticker,
-        price: parPrice,
-      });
-      observedSomethingNew = true;
-    }
-    if (observedSomethingNew) {
-      setParMarkersByPrice(snapshotParMemory());
-    }
-  }, [marketGrid.positions]);
 
   return (
     <div style={styles.root} className={className}>
@@ -1328,6 +1403,16 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
           to `ParIpoTray` below (see design note #19/item 2). Removing it
           from here also hands `boardArea` its full available height. */}
 
+      {/* Design note #25: matrix and par track SIDE BY SIDE.
+          The tray used to sit in a row beneath the matrix next to a rules
+          legend. The matrix is far taller than it is wide at most window
+          sizes, so that left a tall column of dead space to its right while
+          pushing the track off the bottom of the screen. The track now
+          fills that whitespace, and the legend is deleted outright -- every
+          zone cell already carries its rule as a `title` tooltip, so the
+          legend was a second copy of text the grid itself provides on
+          hover. */}
+      <div style={styles.boardRow}>
       <div style={styles.boardArea}>
         <div ref={gridWrapperRef} style={styles.gridWrapper}>
           <div
@@ -1402,6 +1487,13 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
               zoneLabel && zoneDescription ? `${zoneLabel}: ${zoneDescription}` : undefined,
               certificateLimitNote,
               cell.isGameEndCell ? "GAME END -- reaching this cell ends the game" : undefined,
+              // Design note #43: what the arrow in the corner means.
+              cell.isRightCliff
+                ? "Right cliff: a price that would move right moves UP instead."
+                : undefined,
+              cell.isLeftCliff
+                ? "Left cliff: a price that would move left moves DOWN instead."
+                : undefined,
             ].filter(Boolean);
             return (
               <div
@@ -1436,6 +1528,33 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
                 }}
                 title={titleParts.join(" -- ")}
               >
+                {/* ---- Design note #43: cliff arrows ---------------------
+                    The board's edges are RULES, and until now the only
+                    place they were stated was a tooltip nobody hovers. A
+                    price against the right edge moves UP when it would move
+                    right; against the left edge it moves DOWN when it would
+                    move left. Two glyphs in the corner say that at a glance.
+
+                    Colour follows consequence, not direction of travel:
+                    green up on the right because being pushed up is good
+                    for a shareholder, red down on the left because being
+                    pushed down is not. Both sit in the top-right corner as
+                    specified -- a row's leftmost and rightmost cells are
+                    never the same cell except in a one-cell row, and this
+                    board has none, so they cannot collide. */}
+                {cell.isRightCliff && (
+                  <span style={{ ...styles.cliffArrow, ...styles.cliffArrowUp }} aria-hidden="true">
+                    &#9650;
+                  </span>
+                )}
+                {cell.isLeftCliff && (
+                  <span
+                    style={{ ...styles.cliffArrow, ...styles.cliffArrowDown }}
+                    aria-hidden="true"
+                  >
+                    &#9660;
+                  </span>
+                )}
                 <span
                   style={{
                     ...styles.priceText,
@@ -1540,7 +1659,7 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
                         left: `calc(50% + ${offset.x}px - ${tokenDiameterPx / 2}px)`,
                         zIndex: 10 + index,
                       }}
-                      title={`${occupant.ticker} -- $${occupant.price ?? "?"}`}
+                      title={`${corporationLabel(occupant.ticker)} -- $${occupant.price ?? "?"}`}
                     >
                       {occupant.ticker}
                     </span>
@@ -1551,19 +1670,12 @@ export function StockMarketRenderer({ marketGrid, className }: StockMarketRender
           })}
           </div>
         </div>
+      </div>
 
-        {/* Row beneath the matrix (design note #23(3)(b)): Disconnected
-            Par/IPO Tray (design note #10) side by side with the Market
-            Rules Legend (design note #19/item 2) -- a separate panel, not a
-            modification of the main grid's own real par cells (design note
-            #4), matching the physical game's own separate par track
-            component. Moved out from beside the grid so the grid itself can
-            claim the panel's full width, giving the new larger station-
-            token markers (design note #23(3)(a)) room to render clearly. */}
-        <div style={styles.belowGridRow}>
-          <ParIpoTray markersByPrice={parMarkersByPrice} />
-          <MarketRulesLegend />
-        </div>
+      {/* Design note #25: the par track, in the whitespace beside the
+          matrix. `flex: 0 0 auto` so it keeps its natural width and the
+          grid's own `ResizeObserver` measures only what is left. */}
+      <ParIpoTray markersByPrice={parMarkersByPrice} />
       </div>
     </div>
   );
@@ -1628,20 +1740,6 @@ const styles: Record<string, React.CSSProperties> = {
   // there's no width pressure keeping them small. Swatch size bumped
   // alongside them purely for visual proportion against the larger text,
   // not because this item named it directly.
-  legendSwatch: {
-    display: "inline-block",
-    width: "26px",
-    height: "26px",
-    borderRadius: "6px",
-    border: "1.5px solid #3a4152",
-    flexShrink: 0,
-  },
-  legendLabel: {
-    fontSize: FONT_SIZE.display,
-    fontWeight: 700,
-    color: "#c8cbd6",
-    flexShrink: 0,
-  },
   legendText: {
     fontSize: FONT_SIZE.heading,
     fontWeight: 600,
@@ -1656,7 +1754,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "16px",
-    flex: 1,
+    // Design note #26: takes the pane, minus the slim tray.
+    flex: "1 1 auto",
+    minWidth: 0,
   },
   // Wraps just the grid so `ResizeObserver` measures only the space
   // actually available to the price matrix -- see design note #19/item 3.
@@ -1675,24 +1775,38 @@ const styles: Record<string, React.CSSProperties> = {
   // Market Rules Legend now sit side by side (a WIDTH flex basis) instead
   // of stacked in a column beside the grid (the old `sideColumn`'s HEIGHT
   // flex basis). ----
-  belowGridRow: {
+  /** Design note #25: matrix + par track on one row. Wraps on a narrow
+   *  window so the track drops below rather than squeezing the grid. */
+  /** Design note #26: the MATRIX dominates. `boardArea` already carries
+   *  `flex: 1`, but the tray's old `flex: 0 0 340px` claimed a fixed third
+   *  of a 1000px pane -- so the chart, which is the entire point of the
+   *  tab, got two thirds at best. The tray is now a slim fixed column and
+   *  the matrix takes everything else. `minWidth: 0` on the matrix is what
+   *  actually lets it shrink-and-grow correctly: without it a flex child
+   *  refuses to go below its content width and the tray gets squeezed
+   *  instead. */
+  boardRow: {
     display: "flex",
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "flex-start",
-    gap: "16px",
+    gap: "12px",
+    width: "100%",
   },
   // ---- Disconnected Par/IPO Tray -- see design notes #10/#17. ----
   parTray: {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
-    padding: "20px 22px",
-    // Width flex basis now (design note #23(3)(b)) -- side by side with
-    // `legendColumn` in `belowGridRow`, wrapping to its own row on a narrow
-    // viewport.
-    flex: "1 1 340px",
-    minWidth: "300px",
+    padding: "12px 14px",
+    // Design note #26: SLIM and fixed. `1 1 340px` let it grow into space
+    // the matrix should have had; `0 0 168px` pins it to just enough for a
+    // price and a row of ticker chips, so everything else goes to the
+    // chart. It still wraps to its own row on a genuinely narrow window
+    // (`boardRow` has `flexWrap`), which is the right failure mode -- a
+    // 168px tray beside a crushed matrix helps nobody.
+    flex: "0 0 168px",
+    minWidth: "168px",
     backgroundColor: "#161922",
     border: "1.5px solid #2a2e3a",
     borderRadius: "10px",
@@ -1711,16 +1825,6 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#161922",
     border: "1.5px solid #2a2e3a",
     borderRadius: "10px",
-  },
-  legendColumnItem: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-  },
-  legendColumnItemHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
   },
   parTrayHeader: {
     display: "flex",
@@ -1741,6 +1845,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.35,
   },
   parTrayRow: {
+    // Design note #26: compact rows for the narrow column.
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -1856,6 +1961,21 @@ const styles: Record<string, React.CSSProperties> = {
   // `#6f7480`, now the single text color for every `"Normal"`-tagged cell
   // (including the six par-ladder cells, which no longer get their own
   // separate `priceTextPar` dark-on-gold color -- that style is removed).
+  /* Design note #43: absolutely positioned in the cell's top-right corner,
+     so the arrow never displaces the price text -- which is dynamically
+     sized off the measured cell and would reflow if a sibling took width.
+     `styles.cell` is already `position: relative` for the par frame. */
+  cliffArrow: {
+    position: "absolute",
+    top: "1px",
+    right: "2px",
+    lineHeight: 1,
+    fontSize: "9px",
+    pointerEvents: "none",
+    textShadow: "0 0 2px rgba(0,0,0,0.8)",
+  },
+  cliffArrowUp: { color: "#4ade80" },
+  cliffArrowDown: { color: "#f87171" },
   priceText: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: "9px",

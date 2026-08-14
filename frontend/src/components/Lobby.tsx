@@ -82,6 +82,7 @@ import type { Coin } from "@cosmjs/stargate";
 import type { ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 
 import { useWallet } from "../context/WalletContext";
+import { ConnectWalletButton } from "./ConnectWalletButton";
 import {
   NATIVE_DENOM,
   NATIVE_DENOM_DISPLAY,
@@ -514,14 +515,14 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               CreateGameRoom: {
                 virtual_bank_start: room.virtualBankStart,
                 // `max_players` fixes the denominator for EVERY player's
-                // starting VGP capital (msg.rs), so it is the room's
+                // starting capital (msg.rs), so it is the room's
                 // configured size, never the current headcount -- using the
                 // latter would hand different players different capital.
                 max_players: room.maxPlayers,
               },
             },
             "auto",
-            `18Cosmos room "${room.name}"`,
+            `1830 Juno: create room "${room.name}"`,
             funds,
           );
         } catch (error) {
@@ -575,7 +576,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           contractAddress,
           { JoinGameRoom: { game_id: room.chainGameId } },
           "auto",
-          `18Cosmos join room ${room.chainGameId}`,
+          `1830 Juno: join room ${room.chainGameId}`,
           funds,
         );
 
@@ -598,7 +599,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     <div style={styles.root}>
       <header style={styles.brandHeader}>
         <div>
-          <h1 style={styles.brandTitle}>18Cosmos</h1>
+          <h1 style={styles.brandTitle}>1830: Juno Edition</h1>
           <p style={styles.brandSubtitle}>Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch</p>
         </div>
 
@@ -627,14 +628,17 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              style={disabledButtonStyle(styles.primaryButton, wallet.status === "connecting")}
-              onClick={() => void wallet.connect()}
-              disabled={wallet.status === "connecting"}
-            >
-              {wallet.status === "connecting" ? "Connecting..." : "Connect Keplr"}
-            </button>
+            // The burner-wallet security recommendation ships with the
+            // button (see `ConnectWalletButton.tsx` design note #0), so the
+            // lobby's connect path shows it just like the in-game top bar's
+            // does. Calling `wallet.connect()` directly here is exactly the
+            // omission that component exists to make impossible.
+            <ConnectWalletButton
+              buttonStyle={disabledButtonStyle(
+                styles.primaryButton,
+                wallet.status === "connecting",
+              )}
+            />
           )}
         </div>
       </header>

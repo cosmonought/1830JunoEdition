@@ -29,11 +29,11 @@
 //    Financial Ledger's "Hardware Shop inventory") must render an honest
 //    "not yet exposed by the contract" state instead of a fabricated
 //    number -- see `ContextualSubPanel.tsx`/`FinancialLedger.tsx`.
-// 3. **Certificates are a derived ESTIMATE, not a real backend count.**
+// 3. **Certificates are DERIVED but EXACT -- not a backend count.**
 //    `src/state.rs` has an internal `count_player_certificates()` helper,
 //    but it is used only inside `trading.rs`/`auction.rs`'s own limit
-//    checks -- no query surfaces its result. `estimateCertificateCount`
-//    below reconstructs an APPROXIMATE count from what genuinely is
+//    checks -- no query surfaces its result. `certificateCount` below
+//    reconstructs the count exactly from what genuinely is
 //    queryable (`private_companies[].owner`, `public_companies[].player_
 //    holdings`/`.president`). A player's president's 20% certificate in a
 //    company counts as exactly ONE certificate against the limit -- verified
@@ -224,10 +224,27 @@ export interface QueryCapableClient {
 /* Derived helpers -- see design note #3                              */
 /* ------------------------------------------------------------------ */
 
-/** Approximate certificate count for `playerAddress` -- see design note #3
- *  for exactly what this does and does not model. Always present this
- *  value to a user as an estimate (e.g. "~N"), never as an exact count. */
-export function estimateCertificateCount(playerAddress: string, state: GameStateResponse): number {
+/**
+ * EXACT certificate count for `playerAddress`.
+ *
+ * Renamed from `estimateCertificateCount`, and the "~N" presentation it
+ * required is gone with it. The name was inherited from a pass where the
+ * president's-certificate rule was unconfirmed and the count really was a
+ * guess. That rule is now confirmed against three independent sources
+ * (design note #3) and implemented below, and every input --
+ * `private_companies[].owner`, `public_companies[].player_holdings`,
+ * `.president` -- is queryable exact state. Nothing here approximates
+ * anything.
+ *
+ * Equivalent to `(total public % / 10) - presidencies held + privates
+ * held`: a president's 20% share is a single physical certificate, so it
+ * counts once rather than twice.
+ *
+ * The one thing it still cannot do is see a certificate the QUERIES do not
+ * expose -- but no such certificate exists in the current schema, so that
+ * is a statement about future changes, not about present accuracy.
+ */
+export function certificateCount(playerAddress: string, state: GameStateResponse): number {
   let count = 0;
   for (const priv of state.private_companies) {
     if (priv.owner === playerAddress) count += 1;
@@ -249,6 +266,109 @@ export function estimateCertificateCount(playerAddress: string, state: GameState
     }
   }
   return count;
+}
+
+/** The printed 1830 certificate limit, by player count. Mirrors
+ *  `RulesReference.tsx`'s `CERT_LIMIT_BY_PLAYERS`. */
+const CERT_LIMIT_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
+  2: 28,
+  3: 20,
+  4: 16,
+  5: 13,
+  6: 11,
+};
+
+/** How many certificates a player may hold, given the room's size.
+ *  `null` for a player count the printed table does not cover, so a caller
+ *  renders "--" rather than inventing a ceiling. */
+export function certificateLimit(state: GameStateResponse): number | null {
+  return CERT_LIMIT_BY_PLAYER_COUNT[state.player_addresses.length] ?? null;
+}
+
+export interface CertificateBreakdown {
+  /** Certificates that count against the limit. */
+  counted: number;
+  /** Certificates held in a Yellow, Orange or Brown zone corporation, which
+   *  are exempt from the limit. */
+  exempt: number;
+  /** `counted + exempt` -- what `certificateCount` returns. */
+  total: number;
+  /** The room's ceiling, or `null` if the player count is off the table. */
+  limit: number | null;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 7: THE CERTIFICATE LIMIT EXEMPTION
+ * ==================================================================
+ *
+ * Shares of a corporation whose market price sits in the Yellow, Orange or
+ * Brown zone do not count toward a player's certificate limit. That is a
+ * MARKET-POSITION rule, not an ownership rule: the same certificate counts
+ * today and stops counting tomorrow if the price moves up into a zone, with
+ * nothing about the certificate itself changing.
+ *
+ * WHY THE ZONE ARRIVES AS A CALLBACK. The zone table lives in
+ * `StockMarketRenderer.tsx` (`marketZoneForPrice`), and `utils/` may not
+ * import from `components/` -- the one-way rule this codebase holds. Taking
+ * `zoneForPrice` as a parameter keeps that boundary intact AND keeps this
+ * function pure and testable, rather than copying the price-to-zone table
+ * into a second place where it could drift from the board a player is
+ * looking at.
+ *
+ * OMITTING THE CALLBACK IS A VALID CALL, not a degraded one: the caller
+ * simply has no market data (an unfloated-only room, or a live game where
+ * `GetMarketGrid` has not been wired). Everything is then counted, which is
+ * the correct conservative answer -- a corporation with no market position
+ * is not in any zone.
+ *
+ * PRIVATE COMPANIES ARE NEVER EXEMPT. They have no market price at all, so
+ * there is no zone for them to be in; they always count.
+ */
+export function certificateBreakdown(
+  playerAddress: string,
+  state: GameStateResponse,
+  /** Live market price per `company_id`. Omit when unknown. */
+  marketPrices?: Readonly<Record<number, number | null>> | null,
+  /** Price -> zone. Pass `marketZoneForPrice`; see design note #7 for why
+   *  this is injected rather than imported. */
+  zoneForPrice?: (price: number | null | undefined) => string | null,
+): CertificateBreakdown {
+  let counted = 0;
+  let exempt = 0;
+
+  for (const priv of state.private_companies) {
+    if (priv.owner === playerAddress) counted += 1;
+  }
+
+  for (const pub of state.public_companies) {
+    const holding = pub.player_holdings.find((h) => h.player === playerAddress);
+    if (!holding || holding.percentage <= 0) continue;
+
+    // Same physical-card arithmetic as `certificateCount` -- the
+    // president's 20% is ONE card, the rest are 10% cards.
+    const cards =
+      pub.president === playerAddress
+        ? 1 + Math.ceil(Math.max(0, holding.percentage - 20) / 10)
+        : Math.max(1, Math.ceil(holding.percentage / 10));
+
+    const zone =
+      marketPrices && zoneForPrice ? zoneForPrice(marketPrices[pub.company_id]) : null;
+    if (zone === "Yellow" || zone === "Orange" || zone === "Brown") exempt += cards;
+    else counted += cards;
+  }
+
+  return { counted, exempt, total: counted + exempt, limit: certificateLimit(state) };
+}
+
+/** `"4 (+2 exempt) / 13"`, or `"4 / 13"` when nothing is exempt, or
+ *  `"4"` when the room size has no printed limit. One formatter so the
+ *  Player Index and the Game Ledger cannot render the same fact two ways. */
+export function formatCertificateCount(breakdown: CertificateBreakdown): string {
+  const head =
+    breakdown.exempt > 0
+      ? `${breakdown.counted} (+${breakdown.exempt} exempt)`
+      : `${breakdown.counted}`;
+  return breakdown.limit === null ? head : `${head} / ${breakdown.limit}`;
 }
 
 /** Every public company `playerAddress` currently holds any nonzero share
@@ -494,13 +614,13 @@ export interface WaterfallPrivateStatus {
   bids: WaterfallBidEntry[];
 }
 
-/** The currently-in-progress mini-auction's live status (2+ tied bidders on
+/** The currently-in-progress mini-auction's live status (2+ competing bidders on
  *  a single private) -- mirrors `msg.rs`'s `WaterfallMiniAuctionStatus`
  *  exactly. `null` on `WaterfallStateResponse.mini_auction` whenever no
  *  mini-auction is active. */
 export interface WaterfallMiniAuctionStatus {
   private_id: number;
-  /** The tied bidders, in the room's seating (turn) order. */
+  /** The competing bidders, in the room's seating (turn) order. */
   bidders: string[];
   /** Whose turn it currently is within `bidders` -- always someone other
    *  than `high_bidder`, whose own turns are auto-skipped. */

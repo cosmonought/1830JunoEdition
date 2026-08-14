@@ -446,11 +446,11 @@ export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorT
  *  as a cost figure, so the bare number reads cleanly on its own. Feeds
  *  BOTH render paths (the plain-hex box and `drawTerrainCompoundBadge`)
  *  unchanged, since both just render whatever string this constant holds. */
-/** Real 1830's printed water/river build fee, in VGP.
+/** Real 1830's printed water/river build fee, in.
  *  Mirrors `hexmap::RIVER_BUILD_FEE` exactly. */
 export const RIVER_BUILD_FEE = 80;
 
-/** Real 1830's printed mountain build fee, in VGP.
+/** Real 1830's printed mountain build fee, in.
  *  Mirrors `hexmap::MOUNTAIN_BUILD_FEE` exactly. */
 export const MOUNTAIN_BUILD_FEE = 120;
 

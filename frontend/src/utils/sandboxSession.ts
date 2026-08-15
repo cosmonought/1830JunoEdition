@@ -76,7 +76,7 @@ import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
-import { depotInventory } from "./gamePhase";
+import { depotInventory, derivePhase } from "./gamePhase";
 import { stationTokenPrice } from "./stationTokens";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
 import {
@@ -332,6 +332,23 @@ const HEX_COORDS_BY_LABEL: ReadonlyMap<string, { q: number; r: number }> = new M
  * rather than a station, with its own era-scaled value. Every real route in
  * 1830 that leaves the map ends on one.
  */
+/**
+ * Whether this hex is a REVENUE CENTRE -- a city, a town, or a red
+ * off-board terminal -- and therefore costs a train one of its stops.
+ *
+ * Design note #289: asked of the board rather than of the price list. The
+ * companion to `isRouteTerminusHex` below, which has always worked this way
+ * and which this now agrees with: everything that may END a route is a
+ * stop, plus towns, which are stops a route may only pass through.
+ */
+export function isRevenueCentreHex(mapGrid: MapGridResponse, hexLabel: string): boolean {
+  if (OFFBOARD_LABELS[hexLabel]) return true;
+  const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
+  if (!coords) return false;
+  const archetype = archetypeForHex(mapGrid, coords.q, coords.r);
+  return archetype !== "Plain";
+}
+
 export function isRouteTerminusHex(mapGrid: MapGridResponse, hexLabel: string): boolean {
   if (OFFBOARD_LABELS[hexLabel]) return true;
   const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
@@ -442,20 +459,45 @@ export function sandboxRouteBreakdown(
   const seen = new Set<string>();
   const stops: { hex: string; value: number }[] = [];
   let revenue = 0;
-  let centres = 0;
   for (const stop of path) {
     if (seen.has(stop.hex)) continue;
     seen.add(stop.hex);
-    const value = hexStopValue(mapGrid, stop.hex, era);
-    revenue += value;
-    // Plain track pays nothing and is not a stop. This is the whole rule,
-    // and it is also what keeps `stops` to the hexes worth reading.
-    if (value > 0) {
-      centres += 1;
-      stops.push({ hex: stop.hex, value });
-    }
+    revenue += hexStopValue(mapGrid, stop.hex, era);
+    /* ==================================================================
+     *  DESIGN NOTE 289: A STOP IS WHAT A HEX *IS*, NOT WHAT IT PAYS
+     * ==================================================================
+     *
+     * REPORTED: a 2-train is allowed to run E23 -> F24 -> F22.
+     *
+     * The report blamed F24 -- Fall River, a preprinted gray town -- on the
+     * theory that gray towns were not being recognised. Measured, F24 is
+     * fine: it prices at $10 and counts. The hex that does not count is
+     * F22, a printed CITY that prices at $0, so the route reported two
+     * stops for three revenue centres and a 2-train was waved through.
+     *
+     * The cause is this line, which counted a centre when `value > 0`.
+     * That conflates two questions:
+     *
+     *   IS THIS A STOP?   A property of the hex -- does it hold a city, a
+     *                     town, or a red off-board terminal. Fixed by the
+     *                     board.
+     *   WHAT DOES IT PAY? A number, which varies by era, by tile laid, and
+     *                     which this build does not always know.
+     *
+     * Fourteen of the board's printed cities and seven of its towns carry
+     * no value until a tile is laid on them. Every one of those was
+     * invisible to the capacity check while being perfectly visible as a
+     * route terminus -- `isRouteTerminusHex` has always asked the
+     * ARCHETYPE. The two tests disagreed about the same hex, and the
+     * capacity one was the lenient half.
+     *
+     * Counting the archetype makes them agree. A $0 city still costs the
+     * train a stop, which is the rule, and it still appears in the readout
+     * -- at $0, which is honest about a hex nobody has built up yet. */
+    const centre = isRevenueCentreHex(mapGrid, stop.hex);
+    if (centre) stops.push({ hex: stop.hex, value: hexStopValue(mapGrid, stop.hex, era) });
   }
-  return { revenue, centres, hexes: seen.size, stops };
+  return { revenue, centres: stops.length, hexes: seen.size, stops };
 }
 
 /** Total the selected stops. Exported for the route value readout, which
@@ -582,6 +624,121 @@ function withTrains(
  * the first row with stock left. Reading it rather than deriving a second
  * answer is what keeps this a bookkeeping helper instead of a rules engine.
  */
+/* ==================================================================
+ *  DESIGN NOTE 284: A PHASE CHANGE IS AN EVENT, NOT A LABEL
+ * ==================================================================
+ *
+ * REPORTED: phase changes do not purge rusted trains or trim fleets when
+ * limits decrease.
+ *
+ * They did not, and the gap was invisible because everything AROUND it
+ * worked. `derivePhase` reads the phase off the highest train in play,
+ * `depotInventory` marks a tier `rusted` once the trigger tier is current,
+ * and the chips and countdowns all render correctly. So the UI said "2-
+ * trains have rusted" while every corporation's roster still held them, and
+ * the fleet counter still charged them against the limit.
+ *
+ * A rust is a STATE CHANGE, and nothing was performing it. The displays
+ * were describing a transition the model had never made.
+ *
+ * THREE THINGS FIRE, IN THIS ORDER, and the order is load-bearing:
+ *
+ *   1. RUST. The first 4-train destroys every 2-train; the first 6
+ *      destroys every 3 AND every 4. `RUSTED_BY` in `gamePhase.ts` is the
+ *      one table, read rather than restated.
+ *   2. TRIM. 1830's limit falls to 3 in Phase 4 and 2 from Phase 5, and a
+ *      corporation over the new limit discards down to it -- cheapest
+ *      first, because the rules make the president choose and the cheapest
+ *      is the choice a player would defend.
+ *   3. Rust before trim, always. Rusting usually does the trimming for
+ *      free (the fleet that was over the limit was over it BECAUSE of the
+ *      trains that just died), and trimming first would discard a train
+ *      the rust was about to take anyway.
+ *
+ * SCRAPPED TRAINS GO NOWHERE. 1830 returns a discarded train to the bank
+ * pool for resale, but this build's depot is derived from what is OWNED
+ * (`gamePhase.ts` design note #4) rather than stored as a count -- so
+ * removing a train from a roster already puts it back in the depot's
+ * arithmetic. Writing it somewhere else as well would double it.
+ */
+
+/** Rust order, cheapest first -- the discard preference too. */
+const TIER_SEQUENCE: readonly string[] = ["2", "3", "4", "5", "6", "D"];
+
+const TIER_COST: Readonly<Record<string, number>> = {
+  "2": 80, "3": 180, "4": 300, "5": 450, "6": 630, D: 1_100,
+};
+
+/** Which tiers the arrival of `tier` destroys.
+ *
+ *  Inverted from `gamePhase.ts`'s `RUSTED_BY` rather than restated: that
+ *  table drives every rust readout on screen, and a second copy here is a
+ *  second thing to keep in step with 1830. */
+function tiersRustedBy(tier: string): string[] {
+  const rusted: string[] = [];
+  for (const candidate of TIER_SEQUENCE) {
+    if (RUSTS_ON[candidate] === tier) rusted.push(candidate);
+  }
+  return rusted;
+}
+
+/** `gamePhase.ts`'s `RUSTED_BY`, mirrored -- see `tiersRustedBy`. */
+const RUSTS_ON: Readonly<Record<string, string | undefined>> = {
+  "2": "4",
+  "3": "6",
+  "4": "D",
+};
+
+/** The train limit once `tier` is the phase -- `TIER_PRESENTATION`'s own
+ *  figures, which `depotInventory` already reports per tier. */
+function limitForTier(state: GameStateResponse, tier: string): number {
+  return depotInventory(state).find((row) => row.tier === tier)?.trainLimit ?? Infinity;
+}
+
+/**
+ * Applies a phase change's consequences to every corporation.
+ *
+ * `arrivingTier` is the tier just bought. Returns the state unchanged when
+ * that purchase triggers nothing, which is the common case -- most
+ * purchases are not the first of their tier.
+ */
+export function applyPhaseChange(
+  state: GameStateResponse,
+  arrivingTier: string,
+): GameStateResponse {
+  const doomed = new Set(tiersRustedBy(arrivingTier));
+  const limit = limitForTier(state, arrivingTier);
+
+  let changed = false;
+  const companies = state.public_companies.map((company) => {
+    const owned = company.owned_trains;
+    // `undefined` means the chain does not report rosters. Trimming a fleet
+    // this build cannot see would invent one.
+    if (owned == null) return company;
+
+    // 1. Rust.
+    let fleet = doomed.size === 0 ? [...owned] : owned.filter((model) => !doomed.has(model));
+
+    // 2. Trim, cheapest first.
+    if (Number.isFinite(limit) && fleet.length > limit) {
+      const byValue = [...fleet].sort(
+        (a, b) => (TIER_COST[a] ?? 0) - (TIER_COST[b] ?? 0),
+      );
+      const discard = byValue.slice(0, fleet.length - limit);
+      for (const model of discard) {
+        const at = fleet.indexOf(model);
+        if (at >= 0) fleet.splice(at, 1);
+      }
+    }
+
+    if (fleet.length === owned.length) return company;
+    changed = true;
+    return { ...company, owned_trains: fleet };
+  });
+
+  return changed ? { ...state, public_companies: companies } : state;
+}
+
 function buyDepotTrain(state: GameStateResponse, companyId: number): GameStateResponse {
   const tier = depotInventory(state).find(
     (row) => row.remaining === null || row.remaining > 0,
@@ -591,7 +748,38 @@ function buyDepotTrain(state: GameStateResponse, companyId: number): GameStateRe
   if (!tier) return state;
   const charged = adjustTreasury(state, companyId, -tier.cost);
   const banked = adjustBank(charged, tier.cost);
-  return withTrains(banked, companyId, (trains) => [...trains, tier.tier]);
+  const before = derivePhase(state)?.tier ?? null;
+  const delivered = withTrains(banked, companyId, (trains) => [...trains, tier.tier]);
+  const after = derivePhase(delivered)?.tier ?? null;
+
+  /* ==================================================================
+   *  DESIGN NOTE 284b: ONLY ON THE PURCHASE THAT CHANGES THE PHASE
+   * ==================================================================
+   *
+   * The first cut applied the consequences to EVERY depot purchase, and it
+   * deadlocked the sandbox in a way worth recording, because the mechanism
+   * is peculiar to this build.
+   *
+   * The depot's remaining stock is DERIVED from what corporations own
+   * (`gamePhase.ts` design note #4) rather than stored as a count. So
+   * trimming a fleet does not merely discard a train -- it puts that train
+   * back into the depot's arithmetic. A corporation buying its fifth
+   * 2-train against a limit of four was trimmed straight back to four, the
+   * depot read one more 2-train available, and the next purchase repeated
+   * it. Forty purchases later the phase had not moved off 2. Caught by an
+   * end-to-end loop that expected a 4-train to arrive and watched it never
+   * happen.
+   *
+   * The rule was always about a phase CHANGE, so it fires on one: the
+   * arriving train is compared against the phase before it landed, and
+   * nothing happens unless the tier actually advanced. That is also the
+   * literal reading of 1830 -- "the FIRST 4-train" -- rather than an
+   * approximation of it.
+   *
+   * Applied AFTER delivery, because the arriving train is what defines the
+   * new phase. The buyer's own new train is never at risk: nothing rusts
+   * the tier that just arrived. */
+  return after !== null && after !== before ? applyPhaseChange(delivered, after) : delivered;
 }
 
 /** Moves ONE train of `modelType` from `sellerId` to `buyerId` and `price`
@@ -1023,6 +1211,18 @@ export interface SandboxMarketContext {
    *
    *  Takes and returns a CELL, not a price: see `SandboxMarketMark`. */
   projectSale?: (from: SandboxMarketMark, blocks: number) => SandboxMarketMark | null;
+  /** `StockMarketRenderer.projectDividendCellMove`, injected the same way.
+   *
+   *  Design note #291: the dividend decision MOVES THE TOKEN, and until now
+   *  nothing in the sandbox did it. `applySandboxAction` settles the cash
+   *  and says explicitly that the price is `market.rs`'s -- true of the
+   *  ladder's ledges and cliffs, and it left the ORDINARY step unmodelled
+   *  too, so a withhold looked identical to no decision at all. That is the
+   *  one market move a single message fully determines. */
+  projectDividend?: (
+    from: SandboxMarketMark,
+    choice: "pay" | "withhold",
+  ) => SandboxMarketMark | null;
 }
 
 export function applySandboxMarketAction(
@@ -1073,10 +1273,21 @@ export function applySandboxMarketAction(
     };
   }
 
-  /* Dividends move the token too, and the projection for that already
-     exists -- but `DeclareDividends` is settled by `applySandboxAction`'s
-     own arm, which the caller passes the resulting price to. Routing it
-     through here as well would give one move two owners. */
+  if ("DeclareDividends" in msg) {
+    /* Design note #291: RIGHT on a payout, LEFT on a withhold. The cash is
+       still `applySandboxAction`'s -- this owns only the marker, which is
+       the same split every other arm here follows. */
+    const { protocol_id, distribute } = msg.DeclareDividends;
+    const mark = prices[protocol_id] ?? null;
+    if (mark === null || !ctx?.projectDividend) return unchanged;
+    const landed = ctx.projectDividend(mark, distribute ? "pay" : "withhold");
+    if (!landed || (landed.x === mark.x && landed.y === mark.y)) return unchanged;
+    return {
+      prices: { ...prices, [protocol_id]: landed },
+      tradePrice: null,
+      moved: { companyId: protocol_id, from: mark.price, to: landed.price },
+    };
+  }
 
   return unchanged;
 }

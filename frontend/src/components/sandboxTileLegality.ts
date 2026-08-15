@@ -83,6 +83,7 @@ import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardD
 import {
   HEX_NEIGHBOR_OFFSETS,
   archetypeForHex,
+  isBoardHex,
   liveEdges,
   liveEdgesForHex,
   rotateConnections,
@@ -493,6 +494,50 @@ function orientationJoinsNetwork(
   return false;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 7: TRACK CANNOT RUN OFF THE EDGE OF THE BOARD
+ * ==================================================================
+ *
+ * REPORTED: F20 and other border hexes permit rotations that run track off
+ * the playable board edge.
+ *
+ * They did, because nothing in this filter had any notion of where the
+ * board ENDS. Every other test here asks about the tile (its colour, its
+ * centres, its letter code) or about the hex it is going on (what is
+ * already there, what the network reaches). None of them asks whether the
+ * hex on the other side of a proposed connection exists.
+ *
+ * Measured before the fix: F20 has one edge pointing at a coordinate that
+ * is not on the board, and 34 of the 72 yellow tile-and-orientation
+ * combinations offered there put track on it. Thirty-four board hexes have
+ * at least one such edge, so this is a whole rim of the map rather than one
+ * awkward corner.
+ *
+ * A rail to nowhere is not merely untidy. It is track the corporation paid
+ * for that can never carry a train, and the picker was presenting those
+ * rotations beside legal ones with nothing to tell them apart.
+ *
+ * THE RED OFF-BOARD HEXES ARE ON THE BOARD. A1, F2, J2 and the rest are
+ * real coordinates in `STATIC_BOARD_HEXES` that track may legally point at
+ * -- they are where routes terminate. So the test is membership of the
+ * board's own coordinate set, not "is this hex playable", and getting that
+ * backwards would forbid every connection to the map's most valuable
+ * destinations.
+ */
+function staysOnBoard(
+  q: number,
+  r: number,
+  entry: TileCatalogEntry,
+  orientation: number,
+): boolean {
+  for (const edge of liveEdges(rotateConnections(entry.connections, orientation))) {
+    const offset = HEX_NEIGHBOR_OFFSETS[edge];
+    if (!offset) continue;
+    if (!isBoardHex(q + offset[0], r + offset[1])) return false;
+  }
+  return true;
+}
+
 export function filterSandboxPlacements(
   placements: readonly LegalTilePlacement[],
   { mapGrid, q, r, era, networkHexes }: SandboxLegalityContext,
@@ -545,6 +590,9 @@ export function filterSandboxPlacements(
 
     // 4. Colour step.
     if (TIER_RANK[entry.color] !== existingRank + 1) return false;
+
+    // 4b. Design note #7: no rail pointing off the edge of the board.
+    if (!staysOnBoard(q, r, entry, orientation)) return false;
 
     // 5. Path preservation, per orientation.
     if (existing && !preservesRouting(existing, laid?.orientation ?? 0, entry, orientation)) {

@@ -52,6 +52,7 @@ import {
   liveEdgesForHex,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { neighbourAcross, traversalsFrom } from "./trackSegments";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 
 /** `"q,r"` -- the key every consumer of this module indexes by. */
@@ -63,24 +64,15 @@ const BOARD_KEYS: ReadonlySet<string> = new Set(
   STATIC_BOARD_HEXES.map((hex) => hexKey(hex.q, hex.r)),
 );
 
-/** Design note #1: joined only when both hexes agree. */
-function connectedNeighbours(
-  mapGrid: MapGridResponse,
-  q: number,
-  r: number,
-): Array<{ q: number; r: number }> {
-  const out: Array<{ q: number; r: number }> = [];
-  for (const edge of liveEdgesForHex(mapGrid, q, r)) {
-    const offset = HEX_NEIGHBOR_OFFSETS[edge];
-    if (!offset) continue;
-    const nq = q + offset[0];
-    const nr = r + offset[1];
-    if (!BOARD_KEYS.has(hexKey(nq, nr))) continue;
-    if (!liveEdgesForHex(mapGrid, nq, nr).includes((edge + 3) % 6)) continue;
-    out.push({ q: nq, r: nr });
-  }
-  return out;
-}
+/* `connectedNeighbours` is GONE with design note #4. It answered "which
+   hexes does this one carry rail toward", which is the hex-as-a-node model
+   that let a network bleed across a crossover's two separate straights.
+   `trackSegments.neighbourAcross` replaces it and keeps the both-sides
+   rule; the missing half -- WHICH rail -- comes from `traversalsFrom`.
+
+   Deleted rather than left unused so nothing can quietly start calling the
+   old model again. `extensionNeighbours` below is a different question and
+   stays. */
 
 /* ==================================================================
  *  DESIGN NOTE 3: A TILE LAY EXTENDS A ROUTE; IT DOES NOT TOUCH A HEX
@@ -203,25 +195,73 @@ export interface LayableHexResult {
  *  board says I can build here but the token button says I cannot" happens.
  *
  *  Empty when the corporation has no token on a real board hex. */
+/* ==================================================================
+ *  DESIGN NOTE 4: A NETWORK FOLLOWS RAILS, NOT HEX ADJACENCY
+ * ==================================================================
+ *
+ * REPORTED: legal network expansion bleeds across the disconnected tracks
+ * on tiles that carry more than one.
+ *
+ * It did, and the cause is one line further down than it looks. The walk
+ * below was hex-to-hex: reach a hex, then reach every hex it carries rail
+ * toward. That treats a hex as a NODE where everything meets, which is true
+ * of most tiles and false of exactly the ones this matters on -- #20 is two
+ * separate straights, the OO tiles are two separate stations, New York is
+ * two spurs that never touch. Reaching such a hex on one rail was taken as
+ * reaching everything beyond ALL of its rails.
+ *
+ * Measured on the real board before the fix: a three-hex patch with #20 in
+ * the middle reported the far hex as networked, across two rails with no
+ * connection between them. A corporation was being offered tile lays it
+ * could not legally make, on the one screen whose whole job is to say which
+ * lays are worth considering.
+ *
+ * THE WALK IS OVER (HEX, ARRIVAL EDGE) STATES NOW. Arriving at a hex by one
+ * edge only licenses the exits that edge actually joins --
+ * `traversalsFrom`, which resolves the authored rails rather than the edge
+ * mask. A crossover is entered twice, once per straight, and each visit
+ * carries only its own onward reach.
+ *
+ * THE STATION HEXES THEMSELVES ARE UNRESTRICTED, and that is not a
+ * shortcut: a route starts AT a token, inside the city, so every rail
+ * leaving that city is available to it. There is no arrival edge to
+ * constrain a start.
+ */
 export function reachableNetwork(
   mapGrid: MapGridResponse,
   stationHexes: ReadonlyArray<readonly [number, number]>,
 ): Set<string> {
   const network = new Set<string>();
-  const queue: Array<{ q: number; r: number }> = [];
+  /** `q,r:arrivalEdge` -- one hex may legitimately be entered several ways. */
+  const visited = new Set<string>();
+  const queue: Array<{ q: number; r: number; arrivalEdge: number | null }> = [];
+
   for (const [q, r] of stationHexes) {
     if (!BOARD_KEYS.has(hexKey(q, r))) continue;
     network.add(hexKey(q, r));
-    queue.push({ q, r });
+    // `null` arrival: a station is entered from inside, so every rail on it
+    // is available.
+    queue.push({ q, r, arrivalEdge: null });
   }
 
   while (queue.length > 0) {
     const at = queue.shift()!;
-    for (const next of connectedNeighbours(mapGrid, at.q, at.r)) {
-      const key = hexKey(next.q, next.r);
-      if (network.has(key)) continue;
-      network.add(key);
-      queue.push(next);
+    const stateKey = `${hexKey(at.q, at.r)}:${at.arrivalEdge ?? "start"}`;
+    if (visited.has(stateKey)) continue;
+    visited.add(stateKey);
+
+    /* Which edges may this visit leave by? From a station, all of them.
+       Having arrived on a rail, only the edges that rail reaches. */
+    const exits =
+      at.arrivalEdge === null
+        ? liveEdgesForHex(mapGrid, at.q, at.r)
+        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).map((t) => t.exitEdge);
+
+    for (const edge of exits) {
+      const next = neighbourAcross(mapGrid, at.q, at.r, edge);
+      if (!next) continue;
+      network.add(hexKey(next.q, next.r));
+      queue.push({ q: next.q, r: next.r, arrivalEdge: next.arrivalEdge });
     }
   }
   return network;

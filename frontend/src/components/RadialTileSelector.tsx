@@ -121,6 +121,21 @@ export interface RadialTileSelectorProps {
    *  nothing move will assume the gesture is broken rather than that it is
    *  already correct. */
   legalRotationCount?: number;
+  /* ==================================================================
+   *  DESIGN NOTE 271b: WHERE THE PIECES ALREADY THERE WILL END UP
+   * ==================================================================
+   *
+   * The ring previews the TILE and says nothing about the tokens standing
+   * on the hex it replaces. On an ordinary empty hex there is nothing to
+   * say; on a president's own home city being split into two by an OO
+   * upgrade, the one thing they want to know is which half their station
+   * ends up in -- and they were finding out by looking at the board
+   * afterwards.
+   *
+   * A string rather than a structure: this component renders a caption, and
+   * `utils/tokenMigration.ts` owns what the sentence should be. `null` on
+   * every hex with no tokens, which is most of them. */
+  tokenNote?: string | null;
   onSelectCandidate: (tileId: number, orientation: number) => void;
   onConfirm: () => void;
   /** Step back one stage -- design note #2. */
@@ -128,7 +143,12 @@ export interface RadialTileSelectorProps {
   onDismiss: () => void;
 }
 
-const THUMB = 54;
+/* Design note #174b: the thumbnail, and with it the whole ring, is sized
+   for a 1080p board rather than a 4K one. `ringRadiusFor` solves the radius
+   FROM this number (design note #174 below), so shrinking the thumbnail
+   shrinks the ring proportionally and the spacing maths needs no edit --
+   which is the property that note was written to get. 54 -> 38. */
+const THUMB = 38;
 
 /* ===================================================================
  *  DESIGN NOTE 174: THE RADIUS IS SOLVED FOR, NOT PICKED
@@ -159,9 +179,9 @@ const THUMB = 54;
  */
 
 /** Clear of the hex and of the action buttons above it. */
-const MIN_RADIUS = 104;
+const MIN_RADIUS = 76;
 /** Thumbnail width plus the smallest gap that still reads as a gap. */
-const NEEDED_SPACING = THUMB + 22;
+const NEEDED_SPACING = THUMB + 14;
 
 /** The radius this many candidates need in order not to touch. */
 export function ringRadiusFor(count: number): number {
@@ -213,6 +233,21 @@ export interface RadialConfirmRingProps {
   title: string;
   /** The one-line explanation under the title. */
   hint: string;
+  /* ==================================================================
+   *  DESIGN NOTE 290: A SLOT WITH A JOB, WHICH `tag` NEVER HAD
+   * ==================================================================
+   *
+   * Design note #270 deleted a generic `tag` slot on the grounds that a
+   * prop with no callers is not flexibility but the bug waiting to be
+   * re-enabled. That still stands, and this is not that slot returning
+   * under a new name -- `tag` was a formatting hook with no subject, and
+   * this states one specific fact: what happens to the pieces already on
+   * the hex when the previewed tile lands.
+   *
+   * The test the old slot failed is the one this passes: it has a caller,
+   * and the caller could not say this any other way. */
+  note?: string;
+
   /* DESIGN NOTE 270: THE `tag` SLOT IS GONE TOO.
      Design note #260 stopped PASSING "(unvalidated)" and left the slot that
      rendered it, on the reasoning that some future caller might want an
@@ -246,6 +281,7 @@ export function RadialConfirmRing({
   canvasEl,
   title,
   hint,
+  note,
   showConfirm,
   canConfirm,
   confirmDisabledReason,
@@ -354,7 +390,7 @@ export function RadialConfirmRing({
              radius grows with the candidate count, a large ring would put
              its 12 o'clock thumbnail ABOVE a fixed button row and the two
              would collide. */}
-        <div style={{ ...styles.actions, top: `${-radius - 54}px` }}>
+        <div style={{ ...styles.actions, top: `${-radius - 38}px` }}>
           {showConfirm && (
             <button
               type="button"
@@ -386,6 +422,8 @@ export function RadialConfirmRing({
         <div style={{ ...styles.caption, top: `${-radius}px` }}>
           <span style={styles.captionHex}>{title}</span>
           <span style={styles.captionHint}>{hint}</span>
+          {/* Design note #290: the migration line, when there is one. */}
+          {note && <span style={styles.captionNote}>{note}</span>}
         </div>
 
         {children}
@@ -406,6 +444,7 @@ export function RadialTileSelector({
   confirmDisabledReason,
   provisional = false,
   legalRotationCount,
+  tokenNote = null,
   onSelectCandidate,
   onConfirm,
   onCancel,
@@ -445,6 +484,9 @@ export function RadialTileSelector({
             ? "No legal upgrade here"
             : `${tiles.length} option${tiles.length === 1 ? "" : "s"}`
       }
+      // Design note #271b: only while a tile is actually being previewed --
+      // before that there is no destination to describe.
+      note={previewing ? (tokenNote ?? undefined) : undefined}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
       canConfirm={canConfirm}
@@ -585,13 +627,18 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "row",
     gap: "10px",
   },
+  /* Design note #174b: the confirm/cancel discs come down with the ring
+     they orbit. 44px was a comfortable touch target on a 4K panel and is
+     an oversized one on a 13" laptop, where it sat larger than the tile
+     thumbnails it was confirming. 34px still clears the ~24px minimum a
+     pointer needs. */
   fab: {
-    width: "44px",
-    height: "44px",
+    width: "34px",
+    height: "34px",
     borderRadius: "999px",
     borderWidth: "2px",
     borderStyle: "solid",
-    fontSize: "20px",
+    fontSize: "16px",
     lineHeight: 1,
     fontFamily: "inherit",
     cursor: "pointer",
@@ -635,6 +682,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   captionHint: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
+  /* Design note #290: brighter than the hint it sits under. The hint
+     explains the CONTROL; this reports a consequence of using it, which is
+     the more consequential of the two and was previously not said at all. */
+  captionNote: {
+    fontSize: FONT_SIZE.micro,
+    color: "#e0b062",
+    lineHeight: 1.35,
+    maxWidth: "260px",
+  },
   candidate: {
     pointerEvents: "auto",
     position: "absolute",

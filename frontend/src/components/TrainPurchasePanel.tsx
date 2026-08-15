@@ -124,14 +124,12 @@ export function trainPriceError(raw: string): string | null {
   return null;
 }
 
-/** Counts per model, in roster order, for the badge row. */
-function countByModel(trains: readonly string[]): Array<{ model: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (const model of trains) counts.set(model, (counts.get(model) ?? 0) + 1);
-  return Array.from(counts, ([model, count]) => ({ model, count })).sort((a, b) =>
-    a.model.localeCompare(b.model, undefined, { numeric: true }),
-  );
-}
+/* `countByModel` is GONE with design note #282. It collapsed a roster into
+   model-and-count for the trade badges, and nothing else ever wanted that
+   shape -- the corporation table has always drawn one chip per train.
+   Deleted rather than left unused so the grouped rendering cannot quietly
+   come back. */
+
 
 export interface TrainPurchasePanelProps {
   /** Every tier, from `gamePhase.depotInventory` -- already carrying the
@@ -154,6 +152,14 @@ export interface TrainPurchasePanelProps {
   onProposeTrade: (proposal: TrainTradeProposal) => void;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
+  /** Whether the corporate-trade accordion starts open. Defaults to closed,
+   *  which is the shipping behaviour -- design note #0's argument that the
+   *  bank is the common case and the trade section is the exception.
+   *
+   *  Exists so the section can be rendered without a DOM to click it open
+   *  with. A test that cannot reach a surface cannot check it, and this
+   *  section carries the train-limit gate. */
+  defaultCorporateOpen?: boolean;
 }
 
 export function TrainPurchasePanel({
@@ -166,13 +172,24 @@ export function TrainPurchasePanel({
   onBuyFromBank,
   onProposeTrade,
   labelForAddress,
+  defaultCorporateOpen = false,
 }: TrainPurchasePanelProps) {
   /* ---- Bank section state ---- */
   const [quantityText, setQuantityText] = useState("1");
 
   /* ---- Corporate section state ---- */
-  const [corporateOpen, setCorporateOpen] = useState(false);
-  const [selection, setSelection] = useState<{ sellerId: number; model: string } | null>(null);
+  const [corporateOpen, setCorporateOpen] = useState(defaultCorporateOpen);
+  /* Design note #282: `position` indexes into the seller's `owned_trains`,
+     which is what tells two identical models apart. The dispatch still
+     names only the model -- `BuyTrainFromCorporation` has no notion of
+     which copy, and one 3-train is interchangeable with another -- so this
+     exists purely so the badge the player clicked is the badge that looks
+     selected. */
+  const [selection, setSelection] = useState<{
+    sellerId: number;
+    model: string;
+    position: number;
+  } | null>(null);
   const [priceText, setPriceText] = useState("1");
 
   // Design note #182 (App.tsx): the depot sells the cheapest tier it still
@@ -209,7 +226,53 @@ export function TrainPurchasePanel({
    * between 1 and 0" is nonsense; "Train limit reached" is the actual
    * situation, and it is a reason to move on rather than to retype.
    */
+  /* ==================================================================
+   *  DESIGN NOTE 296: THE NUMBER WAS ALREADY IN THE FUTURE TENSE
+   * ==================================================================
+   *
+   * REPORTED: the train-limit readout confuses players -- it shows the
+   * limit that will apply AFTER the purchase, labelled as though it were
+   * the current one.
+   *
+   * The previous pass renamed it "Corp train limit", which fixed a
+   * different confusion (bank stock versus corporation ceiling) and left
+   * this one untouched -- arguably made it worse, since a more confident
+   * label on a wrong-tense number is a more convincing wrong answer.
+   *
+   * THE BUG IS IN THE VALUE, NOT ONLY THE WORDS. `trainLimit` reads
+   * `nextTier.trainLimit`, and `DepotTier.trainLimit` is documented as
+   * "trains one corporation may hold ONCE THIS TIER IS THE CURRENT PHASE".
+   * The next tier is not the current phase whenever the depot has moved on
+   * -- so in Phase 3 with the 2s and 3s sold out, the panel read "/ 3"
+   * while the real limit was 4. Measured on the real fixture before this
+   * note was written.
+   *
+   * Both figures are now derived and named:
+   *
+   *   `currentTrainLimit` -- the phase the corporation is in RIGHT NOW.
+   *   `limitAfterPurchase` -- the phase the next purchase brings.
+   *
+   * They are equal on the ordinary purchase (buying a 3-train during Phase
+   * 3 changes nothing) and differ on exactly the purchase that advances the
+   * phase, which is the one worth warning about.
+   *
+   * ENFORCEMENT STAYS ON THE AFTER-VALUE, deliberately. Buying the first
+   * 4-train starts Phase 4 and the limit drops with it, so a corporation
+   * cannot end that purchase holding more than the new ceiling -- capping
+   * against the old one would offer a quantity the rules take back. What
+   * was wrong was never the arithmetic; it was that the screen did not say
+   * which moment the number belonged to. */
   const ownedTrainCount = buyer?.owned_trains?.length ?? 0;
+  const currentTrainLimit = useMemo(
+    () => depot.find((row) => row.isCurrent)?.trainLimit ?? null,
+    [depot],
+  );
+  const limitAfterPurchase = nextTier?.trainLimit ?? null;
+  /** The selected purchase advances the phase into a TIGHTER ceiling. */
+  const limitDropsOnPurchase =
+    currentTrainLimit !== null &&
+    limitAfterPurchase !== null &&
+    limitAfterPurchase !== currentTrainLimit;
   const trainLimit = nextTier?.trainLimit ?? Infinity;
   const limitHeadroom = Math.max(0, trainLimit - ownedTrainCount);
   const atTrainLimit = limitHeadroom === 0;
@@ -259,7 +322,9 @@ export function TrainPurchasePanel({
     nextTier === null || atTrainLimit
       ? null
       : limitHeadroom < depotSupply
-        ? `Room for ${limitHeadroom} more before the ${trainLimit}-train limit.`
+        ? (limitDropsOnPurchase
+            ? `Room for ${limitHeadroom} more -- this purchase drops the limit to ${limitAfterPurchase}.`
+            : `Room for ${limitHeadroom} more before the ${trainLimit}-train limit.`)
         : depotSupply < 99 && depotSupply <= 2
           ? `Only ${depotSupply} left in the depot.`
           : null;
@@ -277,12 +342,49 @@ export function TrainPurchasePanel({
           // corporation at its limit must sell or scrap before it can buy,
           // which is a different action in a different panel -- so this says
           // what is true rather than asking for a smaller number.
-          `Train limit reached -- ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
+          (limitDropsOnPurchase
+            ? `Buying a ${nextTier?.tier}-train would start the next phase and cut the limit to ${limitAfterPurchase}, and ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount}. Sell or scrap first.`
+            : `Train limit reached -- ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`)
         : !quantityValid
           ? `Enter a whole number between 1 and ${Math.max(1, supplyCap)}.`
           : bankTotal > treasury
             ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} -- it cannot pay $${bankTotal}.`
             : null;
+
+  /* ==================================================================
+   *  DESIGN NOTE 281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK
+   * ==================================================================
+   *
+   * REPORTED: the UI permits buying trains from other corporations even at
+   * or over the train limit.
+   *
+   * It did, and the shape of the miss is instructive: design note #230 had
+   * already enforced the cap -- on the BANK section, thoroughly, with a
+   * headroom figure, a clamped quantity field and a named reason. The
+   * corporate section a few hundred lines below shared none of it, because
+   * the cap had been reasoned about as a property of buying FROM THE DEPOT
+   * rather than as a property of the corporation's fleet.
+   *
+   * 1830 caps what a corporation may HOLD. Where the train comes from is
+   * irrelevant -- four through Phases 2-3, three in Phase 4, two from Phase
+   * 5, however it was acquired. A corporation at its limit buying from a
+   * rival ends up over the limit exactly as it would buying from the bank,
+   * and the contract would refuse it either way.
+   *
+   * So the same `atTrainLimit` gates both, and the reason is the same
+   * sentence -- it is the same rule, and giving it two wordings would imply
+   * two rules.
+   *
+   * IT DISABLES RATHER THAN HIDING. The rival's trains are still worth
+   * seeing: knowing who holds what is what tells a president they need to
+   * scrap before they can trade. A vanished section would answer a question
+   * nobody asked by removing the one they did. */
+  const tradeBlockedReason: string | null =
+    blockedReason ??
+    (atTrainLimit
+      ? `Train limit reached -- ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase. Scrap or sell a train before buying another.`
+      : null);
+  const canTrade = canAct && sessionReady && tradeBlockedReason === null;
 
   /* ==================================================================
    *  DESIGN NOTE 232: ONLY LIST CORPORATIONS THAT HAVE SOMETHING TO SELL
@@ -330,7 +432,7 @@ export function TrainPurchasePanel({
 
   const priceProblem = trainPriceError(priceText);
   const canPropose =
-    sessionReady && canAct && !blockedReason && !!selectedSeller && !priceProblem;
+    canTrade && !!selectedSeller && !priceProblem;
 
   return (
     <div style={styles.root}>
@@ -379,7 +481,43 @@ export function TrainPurchasePanel({
                     : `${tier.remaining ?? tier.total} / ${tier.total} left`}
                 </span>
                 {tier.rusted && <span style={styles.depotFlag}>rusted</span>}
-                {!tier.rusted && isNext && <span style={styles.depotFlagNext}>on sale</span>}
+                {!tier.rusted && isNext && <span style={styles.depotFlagNext}>For Sale</span>}
+                {/* ==================================================
+                     DESIGN NOTE 283: WHAT HAPPENS TO THIS TIER, NEXT
+                    ==================================================
+
+                    A depot card said how many were left and, once they
+                    were gone, nothing. Sold out is not the end of a tier's
+                    story -- it is the middle. The 3-trains leaving the
+                    depot is the moment every 3-train ON THE BOARD becomes
+                    a liability, and the card went quiet exactly then.
+
+                    So the fate rides on every card that has one, sold out
+                    or not, and the tiers that have none say so. "Permanent"
+                    is worth its own badge rather than an absence: a player
+                    weighing $630 for a 6-train against $300 for a 4 is
+                    weighing precisely the fact that one of them never dies,
+                    and an empty space does not state it.
+
+                    NOT SHOWN ONCE IT HAS ALREADY HAPPENED -- the `rusted`
+                    flag above says that, in the past tense, and a countdown
+                    to something that has occurred is noise. */}
+                {!tier.rusted &&
+                  (tier.rustPhaseLabel !== null ? (
+                    <span
+                      style={styles.depotFlagRustSoon}
+                      title={`Every ${tier.tier}-train in play is destroyed when the first ${tier.rustedBy}-train is bought, which is also what starts ${tier.rustPhaseLabel}.`}
+                    >
+                      Rusts on {tier.rustPhaseLabel}
+                    </span>
+                  ) : (
+                    <span
+                      style={styles.depotFlagPermanent}
+                      title={`${tier.tier}-trains never rust -- nothing in 1830 removes them from play.`}
+                    >
+                      Permanent
+                    </span>
+                  ))}
               </div>
             );
           })}
@@ -388,8 +526,23 @@ export function TrainPurchasePanel({
         {nextTier ? (
           <>
             <div style={styles.buyRow}>
+              {/* ==================================================
+                   DESIGN NOTE 294: TWO NUMBERS, TWO SUBJECTS
+                  ==================================================
+
+                  "Quantity" sat immediately beside a "Trains 2 / 4"
+                  readout, and the pair was routinely read as one thing --
+                  players could not tell whether the 4 was the depot's
+                  stock, the corporation's ceiling, or what the ceiling
+                  would be after buying.
+
+                  They are facts about different subjects: one counts
+                  cardboard in the bank, the other caps a corporation's
+                  holdings this phase. Naming the subject on each is the
+                  whole fix -- neither number was wrong, and neither said
+                  whose it was. */}
               <label style={styles.quantityLabel} htmlFor="depot-quantity">
-                Quantity
+                Buy from bank
               </label>
               {/* ==================================================================
                    DESIGN NOTE 247: A DROPDOWN THAT LISTS WHAT IS BUYABLE
@@ -441,19 +594,46 @@ export function TrainPurchasePanel({
                   list stops where it does, and it was only available on the
                   Operating Round strip at the top of the screen -- a
                   different panel from the one enforcing it. */}
+              {/* Design note #296: the label states WHICH MOMENT the number
+                  describes. On an ordinary purchase these are the same
+                  figure and it reads as the plain current limit; on the
+                  purchase that advances the phase it says so, in amber,
+                  because the ceiling is about to move under the player. */}
               <span
                 style={styles.limitReadout}
-                title={`1830 caps holdings at ${trainLimit} per corporation in this phase.`}
+                title={
+                  limitDropsOnPurchase
+                    ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} -- anything above ${limitAfterPurchase} is discarded when the phase turns.`
+                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains 1830 allows one corporation in this phase. Separate from the depot's own stock above.`
+                }
               >
-                <span style={styles.limitLabel}>Trains</span>
+                <span
+                  style={{
+                    ...styles.limitLabel,
+                    ...(limitDropsOnPurchase ? styles.limitLabelFuture : {}),
+                  }}
+                >
+                  {limitDropsOnPurchase ? "Train Limit After Purchase" : "Current Train Limit"}
+                </span>
                 <span
                   style={{
                     ...styles.limitValue,
                     ...(atTrainLimit ? styles.limitValueFull : {}),
+                    ...(limitDropsOnPurchase ? styles.limitValueFuture : {}),
                   }}
                 >
-                  {ownedTrainCount} / {trainLimit}
+                  {limitDropsOnPurchase
+                    ? `${limitAfterPurchase}`
+                    : `${ownedTrainCount} / ${trainLimit}`}
                 </span>
+                {/* The fact the label alone cannot carry: what it is
+                    changing FROM. Without it "After Purchase: 3" is a
+                    number with no baseline to read it against. */}
+                {limitDropsOnPurchase && (
+                  <span style={styles.limitWas}>
+                    now {currentTrainLimit} &middot; holds {ownedTrainCount}
+                  </span>
+                )}
               </span>
 
               {bindingCeiling && <span style={styles.ceilingNote}>{bindingCeiling}</span>}
@@ -517,7 +697,7 @@ export function TrainPurchasePanel({
 
         {corporateOpen && (
           <div style={styles.accordionBody}>
-            {blockedReason && <p style={styles.problem}>{blockedReason}</p>}
+            {tradeBlockedReason && <p style={styles.problem}>{tradeBlockedReason}</p>}
             {!canAct && (
               <p style={styles.note}>
                 Only the operating corporation&apos;s President may make an offer.
@@ -535,7 +715,6 @@ export function TrainPurchasePanel({
               )}
               {sellers.map((company) => {
                 const trains = company.owned_trains;
-                const groups = trains ? countByModel(trains) : null;
                 return (
                   <div key={company.company_id} style={styles.rosterRow}>
                     <span style={styles.rosterName}>
@@ -554,41 +733,73 @@ export function TrainPurchasePanel({
                       </span>
                     </span>
                     <span style={styles.badgeRow}>
-                      {groups === null ? (
+                      {/* ==================================================
+                           DESIGN NOTE 282: ONE BADGE PER TRAIN
+                          ==================================================
+
+                          These were grouped -- a single "3" badge wearing an
+                          "x2" superscript for a corporation holding two
+                          3-trains. Compact, and wrong for what this row is:
+                          a rack of things to click.
+
+                          A count is a summary, and a summary is the right
+                          shape when the reader wants to know HOW MANY. Here
+                          the reader wants to know WHICH, because each badge
+                          is an offer they are about to make on one specific
+                          train. "3 x2" makes the player do arithmetic to
+                          learn that two separate purchases are available,
+                          and it renders two purchasable objects as one
+                          object with a footnote.
+
+                          It also mismatched the fleet everywhere else on
+                          screen: the corporation table's own train chips
+                          have always drawn one chip per train, so the same
+                          roster read as "3 3" there and "3 x2" here.
+
+                          `owned_trains` is already a list with duplicates
+                          that are meaningful -- this just stops collapsing
+                          it. `countByModel` is gone with it. */}
+                      {trains == null ? (
                         // `undefined` means the chain did not say, which is
                         // emphatically not "owns nothing" -- reporting it as
                         // an empty roster would make trading look broken
                         // rather than unsupported.
                         <span style={styles.badgeNone}>trains not reported by this chain</span>
                       ) : (
-                        groups.map(({ model, count }) => {
+                        trains.map((model, position) => {
+                          // Design note #282: the POSITION is the identity.
+                          // Two 3-trains are two trains, and a key on the
+                          // model alone would collide between them.
                           const isSelected =
                             selection?.sellerId === company.company_id &&
-                            selection?.model === model;
+                            selection?.model === model &&
+                            selection?.position === position;
                           return (
                             <button
-                              key={model}
+                              key={`${model}-${position}`}
                               type="button"
-                              disabled={!canAct || !sessionReady || blockedReason !== null}
+                              disabled={!canTrade}
                               onClick={() => {
-                                setSelection({ sellerId: company.company_id, model });
+                                setSelection({
+                                  sellerId: company.company_id,
+                                  model,
+                                  position,
+                                });
                                 setPriceText("1");
                               }}
                               style={{
                                 ...styles.badge,
                                 ...(isSelected ? styles.badgeSelected : {}),
-                                ...(!canAct || blockedReason !== null
-                                  ? styles.badgeDisabled
-                                  : {}),
+                                ...(!canTrade ? styles.badgeDisabled : {}),
                               }}
                               title={
-                                canAct
-                                  ? `Offer for one of ${company.ticker}'s ${model}-trains.`
-                                  : `${company.ticker} holds ${count} ${model}-train${count === 1 ? "" : "s"}.`
+                                canTrade
+                                  ? `Offer for this ${model}-train of ${company.ticker}'s.`
+                                  : (tradeBlockedReason ??
+                                    `${company.ticker} holds this ${model}-train.`)
                               }
                             >
                               {model}
-                              {count > 1 && <span style={styles.badgeCount}>x{count}</span>}
                             </button>
                           );
                         })
@@ -614,7 +825,7 @@ export function TrainPurchasePanel({
                     id="trade-price"
                     value={priceText}
                     inputMode="numeric"
-                    disabled={!canAct || !sessionReady || blockedReason !== null}
+                    disabled={!canTrade}
                     onChange={(event) => setPriceText(event.target.value)}
                     style={styles.priceInput}
                     aria-label="Offer price"
@@ -822,6 +1033,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   depotSupply: { fontSize: FONT_SIZE.micro, color: "#8a919e", whiteSpace: "nowrap" },
   depotSupplyEmpty: { color: "#c8a24a" },
+  /* Design note #283: amber for a coming loss, slate for a permanence.
+     Deliberately quieter than `depotFlag`'s rusted red -- one is a warning
+     about the future and the other reports a fact about the past, and a
+     card can carry either but never both. */
+  depotFlagRustSoon: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    color: "#e0b062",
+    letterSpacing: "0.03em",
+    whiteSpace: "nowrap",
+  },
+  depotFlagPermanent: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    color: "#8fb0d9",
+    letterSpacing: "0.03em",
+  },
   depotFlag: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", fontStyle: "italic" },
   depotFlagNext: { fontSize: FONT_SIZE.micro, color: "#7ee0a1", fontWeight: 700 },
 
@@ -858,6 +1086,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
   },
   limitValueFull: { color: "#c8a24a" },
+  /* Design note #296: the future-tense treatment. Amber on BOTH the label
+     and the value, because the pair is one statement -- an amber number
+     under a grey "Current Train Limit" would be the same wrong reading in
+     a different colour. Amber rather than red: the ceiling is moving, which
+     is a consequence to plan around, not an error. */
+  limitLabelFuture: { color: "#e0b062" },
+  limitValueFuture: { color: "#e0b062" },
+  /** The baseline the after-value is measured against. */
+  limitWas: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8a919e",
+    fontVariantNumeric: "tabular-nums",
+  },
   ceilingNote: { fontSize: FONT_SIZE.small, color: "#8a919e" },
   /* `quantityInput` is gone with design note #247's number field. */
   priceInput: {

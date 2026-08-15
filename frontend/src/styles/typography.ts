@@ -45,52 +45,76 @@
 //  THE SCALE
 // ===================================================================
 //
-// Two passes have run over these numbers. The first was roughly 1.25x over
-// the original hand-written sizes (10-11px badges, 12px metadata, 13px
-// body), which had been chosen for information density and were correctly
-// reported as hard to read. The second added a further +2px to every step
-// after the first pass still read small on a normal monitor.
+// ===================================================================
+//  DESIGN NOTE 3: THE THIRD PASS, AND WHY IT GOES THE OTHER WAY
+// ===================================================================
 //
-// Net effect versus the original: body 13 -> 18px, controls 14 -> 19px,
-// pills 10-11 -> 15px. Body text now sits comfortably above the ~16px
-// browsers default to, and nothing in the DOM chrome is below 15px.
+// REPORTED: the interface has to be viewed at 50% browser zoom to look
+// proportionate on a 1080p screen or a 13" laptop.
 //
-// EVERY step moves together, on purpose. Bumping only the sizes that
-// someone complained about is what produces a scale where the "small" and
-// "body" steps are one pixel apart and no longer mean anything.
+// Two passes had run before this one, both upward. The note below records
+// them: roughly 1.25x over the original hand-written sizes, then a further
+// +2px on every step. Net, body went 13 -> 18px, controls 14 -> 19px,
+// badges 10-11 -> 15px, the brand title 26 -> 34px. Compounded, that is
+// about 1.4x -- and a UI drawn 1.4x too large is one a player fixes with
+// the zoom control, which is exactly what happened.
+//
+// THE PREVIOUS FEEDBACK WAS PROBABLY MEASURING THE SAME PROBLEM FROM THE
+// OTHER SIDE, and it is worth saying so rather than treating this as a
+// simple reversal. "Hard to read" and "needs 50% zoom" are not opposite
+// complaints if the reader was already zoomed out to fit the board on
+// screen: shrinking the page to see the map makes the text small, the fix
+// applied was to grow the text, and growing the text made the page need
+// more shrinking. Each pass made the next one necessary.
+//
+// So this pass sets the type scale to desktop-dense targets AND caps the
+// board to the viewport (`HexGridRenderer` design note #30), which is the
+// half that was missing. Text at a normal size only stays readable if the
+// page is not being zoomed out to accommodate something else.
+//
+// WHERE THE NUMBERS COME FROM: 13px body and 14px controls are the density
+// desktop tools converge on; 11-12px for badges and metadata; 16px for
+// section headings. Every step moves together, for the reason the note
+// below already gives -- bumping only the sizes someone complained about
+// is what produces a scale whose steps no longer mean anything.
 
 /** Font sizes. The comment on each records what it replaced, so a future
  *  reader can tell whether a given call site is on the scale or was missed. */
 export const FONT_SIZE = {
-  /** Tiny status pills and inline tags. Originally 10-11px. */
-  micro: "15px",
-  /** Secondary metadata, timestamps, helper text. Originally 12px. */
-  small: "17px",
-  /** Default body text and list rows. Originally 13px. */
-  body: "18px",
+  /** Tiny status pills and inline tags. 10-11 -> 15 -> 11px. */
+  micro: "11px",
+  /** Secondary metadata, timestamps, helper text. 12 -> 17 -> 12px. */
+  small: "12px",
+  /** Default body text and list rows. 13 -> 18 -> 13px. */
+  body: "13px",
   /** Buttons, inputs, selects -- anything the user clicks or types into.
-   *  Originally 14px. Deliberately a step ABOVE `body`: an under-sized
+   *  14 -> 19 -> 14px. Deliberately a step ABOVE `body`: an under-sized
    *  control is both harder to read and harder to hit than under-sized
    *  prose. */
-  control: "19px",
-  /** Emphasised rows, seat names, ticker preview. Originally 15px. */
-  strong: "20px",
-  /** Panel and section headings. Originally 17px. */
-  heading: "23px",
-  /** The one brand title. Originally 26px. */
-  display: "34px",
+  control: "14px",
+  /** Emphasised rows, seat names, ticker preview. 15 -> 20 -> 15px. */
+  strong: "15px",
+  /** Panel and section headings. 17 -> 23 -> 16px. */
+  heading: "16px",
+  /** The one brand title. 26 -> 34 -> 22px. */
+  display: "22px",
 } as const;
 
 /** Padding for interactive controls, scaled to match `FONT_SIZE.control`.
- *  Bumping text without bumping the box it sits in produces cramped
- *  controls that read as a bug rather than as a larger font. */
+ *
+ *  These move WITH the font, always. The inverse of the note above: text
+ *  shrunk without shrinking the box around it leaves controls that are
+ *  small AND still tall, which is the worst of both -- the density never
+ *  arrives and the type just looks lost. A 14px label in 7px vertical
+ *  padding is a ~30px control, which is what puts an action strip inside
+ *  the 44-52px band the layout targets. */
 export const CONTROL_PADDING = {
-  /** Buttons. */
-  button: "11px 20px",
-  /** Small/secondary buttons and pills. */
-  buttonSmall: "7px 14px",
-  /** Text inputs and selects. */
-  input: "11px 14px",
+  /** Buttons. 11px 20px -> */
+  button: "7px 14px",
+  /** Small/secondary buttons and pills. 7px 14px -> */
+  buttonSmall: "4px 10px",
+  /** Text inputs and selects. 11px 14px -> */
+  input: "6px 10px",
 } as const;
 
 /** Line height for multi-line prose. Bare numbers, not `px`, so they scale

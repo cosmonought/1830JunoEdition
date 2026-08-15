@@ -1401,13 +1401,26 @@ export function drawDitMarker(
  *  white squares = every revenue badge (city, town, and off-board alike).
  *  `"diamond"` stays a valid `drawBadgeShape`/`badgeRadiusForLabel` option
  *  (dead code, not deleted) in case a future pass wants shape-coding back. */
-export const VALUE_BADGE_SHAPE: Readonly<
-  Record<"SmallTown" | "DoubleTown" | "MajorCityHub" | "DoubleCityHub", "square" | "diamond">
-> = {
+/** Design note #288: the two landmark hub terrains are here so an upgraded
+ *  G19 or E23 has a shape like every other city. Square, because that is
+ *  what every city on this board draws -- the field is kept because design
+ *  note #62's shape coding is a real axis even where it currently has one
+ *  value. */
+export type ValueBadgeTerrain =
+  | "SmallTown"
+  | "DoubleTown"
+  | "MajorCityHub"
+  | "DoubleCityHub"
+  | "NewYorkHub"
+  | "BostonHub";
+
+export const VALUE_BADGE_SHAPE: Readonly<Record<ValueBadgeTerrain, "square" | "diamond">> = {
   SmallTown: "square",
   DoubleTown: "square",
   MajorCityHub: "square",
   DoubleCityHub: "square",
+  NewYorkHub: "square",
+  BostonHub: "square",
 };
 
 /** Draws a revenue-badge shape (design note #62): a solid white
@@ -1617,7 +1630,12 @@ export function drawValueBadge(
   // how `center` itself was computed via `axialToPixel`).
   q: number,
   r: number,
-  terrain: "SmallTown" | "DoubleTown" | "MajorCityHub" | "DoubleCityHub",
+  /* Design note #288 (`HexGridRenderer.tsx`): the two LANDMARK hub terrains
+     join the union. They were excluded because the landmark badge pass was
+     meant to catch them first, and design note #133 later made that pass
+     yield to a laid tile -- which left an upgraded G19 or E23 with no badge
+     at all. `terrainBaseValue` already answers for both. */
+  terrain: ValueBadgeTerrain,
   size: number,
   // Design note #35/items 2-3: an explicit $ figure that overrides
   // `terrainBaseValue(terrain)`'s flat default, for the specific named hexes
@@ -1728,7 +1746,7 @@ export function drawValueBadgeAt(
   ctx: CanvasRenderingContext2D,
   badgeCenter: { x: number; y: number },
   size: number,
-  terrain: "SmallTown" | "DoubleTown" | "MajorCityHub" | "DoubleCityHub",
+  terrain: ValueBadgeTerrain,
   value: number,
 ): void {
   const label = `${value}`;

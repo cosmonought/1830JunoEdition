@@ -206,6 +206,30 @@ export interface WaterfallAuctionDashboardProps {
   /** Optional address -> display name, matching `StockRoundPanel`'s prop of
    *  the same name. Used only by the sold badge. */
   playerLabel?: (address: string) => string | null;
+  /* ==================================================================
+   *  DESIGN NOTE 30: HOTSEAT HAS NO WALLET TO COMPARE AGAINST
+   * ==================================================================
+   *
+   * REPORTED: the Auction round is completely non-interactive in Sandbox.
+   *
+   * Every control here is gated on `current_turn === connectedWalletAddress`
+   * -- correct online, where the question "is this my turn" means "is the
+   * seat on turn the one I signed in as". The sandbox has no wallet, so
+   * `connectedWalletAddress` is empty, the comparison is false for every
+   * seat, and the whole screen renders as somebody else's turn forever.
+   *
+   * Pass-and-play asks a different question: not "is this seat mine" but
+   * "is anyone at this keyboard allowed to act for the seat on turn". In
+   * hotseat the answer is always yes -- that is what pass-and-play IS.
+   *
+   * A SEPARATE FLAG RATHER THAN A FAKE ADDRESS. The tempting shortcut is to
+   * hand the sandbox `connectedWalletAddress = current_turn` and let the
+   * existing comparison pass. That would also make every "YOU" badge and
+   * own-bid highlight follow the turn around the table, which is exactly
+   * the confusion requirement 1 is about -- the seats would stop being
+   * distinguishable again. `hotseat` unlocks the CONTROLS and leaves the
+   * identity comparisons alone. */
+  hotseat?: boolean;
   /** Dispatches `ExecuteMsg::WaterfallBuyLowest`. */
   onBuyLowest: () => void;
   /** Dispatches `ExecuteMsg::WaterfallBidHigher`. */
@@ -251,6 +275,7 @@ export function WaterfallAuctionDashboard({
   connectedWalletAddress,
   sessionReady,
   playerLabel,
+  hotseat = false,
   onBuyLowest,
   onBidHigher,
   onMiniAuctionRaise,
@@ -314,13 +339,15 @@ export function WaterfallAuctionDashboard({
    * lowest-offered private, bought outright) or Place Bid with its input,
    * and a card under a live mini-auction shows Raise and Drop-out in the
    * same place. Nothing is hidden and nothing needs opening. */
+  /* Design note #30: in hotseat the seat on turn is always actionable; the
+     wallet comparison only decides it when there IS a wallet. */
   const isMyMainTurn =
-    !!connectedWalletAddress &&
     !!waterfallState &&
     !miniAuction &&
-    waterfallState.current_turn === connectedWalletAddress;
+    (hotseat || (!!connectedWalletAddress && waterfallState.current_turn === connectedWalletAddress));
   const isMyMiniTurn =
-    !!connectedWalletAddress && !!miniAuction && miniAuction.current_turn === connectedWalletAddress;
+    !!miniAuction &&
+    (hotseat || (!!connectedWalletAddress && miniAuction.current_turn === connectedWalletAddress));
 
   if (!waterfallState) {
     return (
@@ -364,6 +391,7 @@ export function WaterfallAuctionDashboard({
               <PrivateCard
                 key={entry.priv.private_id}
                 priv={entry.priv}
+                playerLabel={playerLabel}
                 connectedWalletAddress={connectedWalletAddress}
                 miniAuction={miniAuction}
                 sessionReady={sessionReady}
@@ -410,7 +438,7 @@ export function WaterfallAuctionDashboard({
                 {miniAuction ? "Mini-Auction Turn" : "Waterfall Turn"}
               </span>
               <span style={styles.turnBannerAddress}>
-                {truncate(miniAuction ? miniAuction.current_turn : waterfallState.current_turn)}
+                {nameFor(miniAuction ? miniAuction.current_turn : waterfallState.current_turn, playerLabel)}
               </span>
             </div>
 
@@ -439,8 +467,25 @@ export function WaterfallAuctionDashboard({
                   return (
                     <div key={player} style={isTurnHolder ? styles.seatingRowActive : styles.seatingRow}>
                       <span style={styles.seatingIndex}>{index + 1}.</span>
-                      <span style={styles.seatingAddress}>{truncate(player)}</span>
-                      {player === connectedWalletAddress && <span style={styles.youBadge}>YOU</span>}
+                      <span style={styles.seatingAddress}>{nameFor(player, playerLabel)}</span>
+                      {/* ==================================================
+                           DESIGN NOTE 32: IN HOTSEAT THERE IS NO "YOU"
+                          ==================================================
+
+                          The badge marks which seat the connected wallet
+                          owns, which is the useful fact online and a
+                          meaningless one at a shared keyboard -- every seat
+                          is yours in turn. Worse, it followed the auto-
+                          follow cursor around the table, so "YOU" moved
+                          from Alice to Bob to Carol and marked nothing.
+
+                          What a pass-and-play player needs instead is who
+                          is UP, which is what `ON TURN` says. Online both
+                          appear, and they answer different questions. */}
+                      {isTurnHolder && <span style={styles.turnBadge}>ON TURN</span>}
+                      {!hotseat && player === connectedWalletAddress && (
+                        <span style={styles.youBadge}>YOU</span>
+                      )}
                     </div>
                   );
                 })}
@@ -460,6 +505,7 @@ export default WaterfallAuctionDashboard;
 /* ------------------------------------------------------------------ */
 
 function PrivateCard({
+  playerLabel,
   priv,
   connectedWalletAddress,
   miniAuction,
@@ -473,6 +519,9 @@ function PrivateCard({
 }: {
   priv: WaterfallPrivateStatus;
   connectedWalletAddress: string | null | undefined;
+  /** Design note #31: the card renders bidder names, so it needs the same
+   *  resolver the dashboard around it uses. */
+  playerLabel?: (address: string) => string | null;
   miniAuction: WaterfallMiniAuctionStatus | null;
   sessionReady: boolean;
   isMyMainTurn: boolean;
@@ -667,7 +716,7 @@ function PrivateCard({
                 }
               >
                 <span style={styles.bidRowName}>
-                  {truncate(bid.bidder, 6, 4)}
+                  {nameFor(bid.bidder, playerLabel, 6, 4)}
                   {isTurn && <span style={styles.youBadge}>TURN</span>}
                   {isLeader && <span style={styles.leaderBadge}>LEADER</span>}
                 </span>
@@ -691,7 +740,7 @@ function PrivateCard({
                   border; a third announcement of the same fact, directly
                   under the bidder list, was pure repetition. */}
               <span style={styles.cardActionsHint}>
-                High bid ${miniAuction.high_bid} by {truncate(miniAuction.high_bidder, 6, 4)}
+                High bid ${miniAuction.high_bid} by {nameFor(miniAuction.high_bidder, playerLabel, 6, 4)}
                 {" \u00b7 min raise "}
                 ${minimumRaise}
               </span>
@@ -734,7 +783,7 @@ function PrivateCard({
               </div>
               {!isMyMiniTurn && (
                 <span style={styles.cardActionsHint}>
-                  Waiting for {truncate(miniAuction.current_turn, 6, 4)}.
+                  Waiting for {nameFor(miniAuction.current_turn, playerLabel, 6, 4)}.
                 </span>
               )}
             </>
@@ -819,7 +868,7 @@ function SoldPrivateCard({
   sold: { private_id: number; name: string; cost: string; owner: string | null };
   playerLabel?: (address: string) => string | null;
 }) {
-  const ownerLabel = playerLabel?.(sold.owner ?? "") ?? truncate(sold.owner ?? "", 6, 4);
+  const ownerLabel = nameFor(sold.owner ?? "", playerLabel, 6, 4);
   return (
     <div style={styles.privateCardSold}>
       <div style={styles.privateCardHeader}>
@@ -852,6 +901,39 @@ function SoldPrivateCard({
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                      */
 /* ------------------------------------------------------------------ */
+
+/* ==================================================================
+ *  DESIGN NOTE 31: THE SANDBOX SEATS WERE DISTINCT AND LOOKED IDENTICAL
+ * ==================================================================
+ *
+ * REPORTED: players and turn order all display as a generic `juno...00`
+ * address instead of Alice, Bob, Carol.
+ *
+ * The addresses were never the problem -- `SANDBOX_PLAYERS` holds four
+ * genuinely different strings and `sandboxPlayerLabel` maps them to names.
+ * What collapsed them was TRUNCATION. All four are the same literal prefix
+ * padded to the same length with zeros, so `truncate` takes `juno1san` from
+ * the front and `0000` from the back of every one and returns the identical
+ * string four times.
+ *
+ * `playerLabel` was already threaded into this component -- and used in
+ * exactly one place, the sold-private owner. The turn banner, the seating
+ * list, the bid rows and the mini-auction lines all called `truncate`
+ * directly, which is why the screen the player actually reads was the one
+ * showing four identical addresses.
+ *
+ * `nameFor` is now the only way an address reaches the DOM here. It falls
+ * through to truncation for a real wallet, which is the right answer there
+ * -- a live game has no name table and 8/5 of a real address IS
+ * distinguishing. */
+function nameFor(
+  address: string,
+  playerLabel: ((address: string) => string | null) | undefined,
+  lead = 8,
+  trail = 5,
+): string {
+  return playerLabel?.(address) ?? truncate(address, lead, trail);
+}
 
 function truncate(address: string, lead = 8, trail = 5): string {
   if (address.length <= lead + trail + 3) return address;
@@ -1571,6 +1653,17 @@ const styles: Record<string, React.CSSProperties> = {
   },
   seatingAddress: {
     flex: "1 1 auto",
+  },
+  /* Design note #32: the seat that must act now. Reads as a state rather
+     than an identity, which is what distinguishes it from `youBadge`. */
+  turnBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    color: "#0d1117",
+    backgroundColor: "#7ee0a1",
+    borderRadius: "4px",
+    padding: "1px 5px",
   },
   youBadge: {
     fontSize: FONT_SIZE.micro,

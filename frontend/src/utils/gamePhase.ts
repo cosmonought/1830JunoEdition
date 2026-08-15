@@ -235,6 +235,30 @@ export interface DepotTier {
   soldOut: boolean;
   /** These have rusted and left play entirely. */
   rusted: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 8: A TIER'S FATE IS A PROPERTY OF THE TIER
+   * ==================================================================
+   *
+   * REPORTED: sold-out depot tiers vanish or lack phase progression
+   * context.
+   *
+   * `rustOutlook` already computes exactly this, and the depot cards did
+   * not read it -- they showed stock and a "rusted" flag, so a tier that
+   * had sold out but not yet rusted said nothing at all about what was
+   * coming. That is the moment a player most needs to know: the last
+   * 3-train has left the depot, every 3-train on the board dies when the
+   * first 6 is bought, and the card was silent.
+   *
+   * Carried on `DepotTier` rather than looked up beside it so the card and
+   * the countdown cannot disagree about which tier rusts when -- the same
+   * argument design note #5 made for the phase-shift figure. */
+  /** The tier whose first purchase destroys this one, or `null` when this
+   *  tier is permanent. 5s, 6s and Diesels never rust. */
+  rustedBy: TrainTier | null;
+  /** The PHASE that arrives with that purchase -- "Rusts on Phase 4". The
+   *  phase a tier triggers is named by the tier itself, so this is the
+   *  trigger's own label rather than a second table. */
+  rustPhaseLabel: string | null;
 }
 
 const DEPOT_COST: Readonly<Record<TrainTier, number>> = {
@@ -288,6 +312,17 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
         phase.known &&
         rustedByTier !== undefined &&
         currentIndex >= TIER_ORDER.indexOf(rustedByTier),
+      // Design note #8: carried, so the card and the countdown cannot
+      // disagree about which purchase kills this tier.
+      rustedBy: rustedByTier ?? null,
+      /* The phase named by the tier that triggers the rust. Buying the
+         first 4-train IS the arrival of Phase 4, so the trigger's own
+         phase label is the answer -- no second table, and no way for the
+         two to drift. */
+      rustPhaseLabel:
+        rustedByTier === undefined
+          ? null
+          : (PHASE_SHIFT_TARGET[TIER_ORDER[TIER_ORDER.indexOf(rustedByTier) - 1]]?.phase ?? null),
     };
   });
 }

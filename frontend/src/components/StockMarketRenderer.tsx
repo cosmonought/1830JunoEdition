@@ -1049,6 +1049,30 @@ export function projectShareSaleMove(
   return { price, x, y };
 }
 
+/**
+ * Where the token lands on a dividend decision -- one column RIGHT when the
+ * corporation pays, one LEFT when it withholds.
+ *
+ * The cell-carrying counterpart to `projectDividendMove`, for the same
+ * reason `projectShareSaleMove` takes a cell: this chart repeats prices
+ * across rows, so stepping from "the cell at $76" is ambiguous and the
+ * caller tracks the marker's actual position (`SandboxMarketMark`).
+ *
+ * SAME SCOPE CAVEAT as the other two. This is the ordinary move. The
+ * ledges, the right cliff and the end-of-round sold-out rise are
+ * `market.rs`'s, and where the step would leave the chart the marker stays
+ * put -- a clamp, never an invented cell.
+ */
+export function projectDividendCellMove(
+  from: { x: number; y: number },
+  choice: "pay" | "withhold",
+): { price: number; x: number; y: number } | null {
+  const start = cellAt(from.x, from.y);
+  if (!start) return null;
+  const next = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
+  return next ? { price: next.price, x: next.x, y: next.y } : start;
+}
+
 export function marketZoneForPrice(price: number | null | undefined): ZoneType | null {
   if (price == null || !Number.isFinite(price)) return null;
   return PRICE_GRID.find((candidate) => candidate.price === price)?.zoneType ?? null;

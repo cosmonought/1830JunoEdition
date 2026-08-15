@@ -1551,6 +1551,31 @@ export function singleNodeNameplateAnchor(
  * So the two are now separate functions with names that say which is which.
  * Anything that INDEXES, COMPARES or TRAVELS uses this one.
  */
+/** Every real coordinate on the authentic 1830 board, as `"q,r"`. */
+const BOARD_COORD_KEYS: ReadonlySet<string> = new Set(
+  STATIC_BOARD_HEXES.map((hex) => `${hex.q},${hex.r}`),
+);
+
+/**
+ * Whether `(q, r)` is a real position on the board at all.
+ *
+ * THE RED OFF-BOARD HEXES COUNT AS ON THE BOARD, and the naming is
+ * genuinely confusing enough to be worth stating: A1, F2, J2 and the rest
+ * are "off-board" in 1830's sense of lying outside the operating map, but
+ * they are real `STATIC_BOARD_HEXES` entries at real coordinates, they are
+ * drawn, and track legally runs to them -- they are where routes terminate.
+ * What this excludes is a coordinate with no hex at all, which is what lies
+ * past the rim.
+ *
+ * Lives here rather than in a route utility because it is a question about
+ * board GEOMETRY, and both the routing layer and the tile-legality filter
+ * ask it -- putting it in either one would make the other import across a
+ * layer boundary.
+ */
+export function isBoardHex(q: number, r: number): boolean {
+  return BOARD_COORD_KEYS.has(`${q},${r}`);
+}
+
 export function boardHexLabel(q: number, r: number): string | null {
   const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
   if (landmark) return landmark.label;
@@ -1840,10 +1865,19 @@ export function describeHexWithValue(
   }
 
   if (boardHex) {
-    // Design note #136 (F-2): resolved by COORDINATE through the mirror of
-    // `hexmap::terrain_build_fee`, not by looking the hex's display type up
-    // in a label table.
-    const terrainFee = terrainBuildFeeAt(q, r);
+    /* Design note #136 (F-2): resolved by COORDINATE through the mirror of
+       `hexmap::terrain_build_fee`, not by looking the hex's display type up
+       in a label table.
+
+       DESIGN NOTE 287: IT IS A PRICE, SO IT STOPS BEING NEWS ONCE PAID.
+       This showed on every hover for the life of the game. A river or
+       mountain fee is charged ONCE, by the tile lay that crosses it -- so
+       on a hex that already carries a tile the figure is not a cost the
+       player faces, it is a receipt for one somebody already settled.
+       Sitting in the same parenthesis as the hex's live route value, it
+       read as money still owed. */
+    const alreadyBuilt = mapGrid.tiles.some((tile) => tile.q === q && tile.r === r);
+    const terrainFee = alreadyBuilt ? 0 : terrainBuildFeeAt(q, r);
     if (terrainFee > 0) result = `${result} (Terrain Cost: $${terrainFee})`;
   }
 

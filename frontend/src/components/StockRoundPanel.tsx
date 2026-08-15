@@ -77,6 +77,25 @@ export interface StockRoundPanelProps {
   onSellShares: (protocolId: number, percentage: number) => void;
   sessionReady: boolean;
   isMyTurn: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 34: HOTSEAT, AND WHO IS UP
+   * ==================================================================
+   *
+   * REPORTED: the Stock round is non-interactive in Sandbox, and it is
+   * unclear whose turn it is.
+   *
+   * The second half is the one this panel actually had: the header said
+   * "Waiting for your turn..." whenever `isMyTurn` was false and named
+   * nobody, so on a shared keyboard it was a prompt to wait for yourself.
+   * With every seat truncating to the same address (design note #31 in the
+   * auction dashboard) there was no way to tell who it was waiting FOR.
+   *
+   * `hotseat` swaps that message for the seat's NAME, and suppresses the
+   * "waiting" framing entirely -- at a shared keyboard nobody is waiting,
+   * somebody just needs to pick up the mouse. */
+  hotseat?: boolean;
+  /** Whose turn it is, already resolved to a name. */
+  activePlayerLabel?: string | null;
   /** F-6: the connected wallet, needed to find THIS player's own stake in
    *  `player_holdings` and so bound the sell sizes to what they can actually
    *  cover. `null` when disconnected, which zeroes every option -- correct,
@@ -1156,6 +1175,8 @@ export function StockRoundPanel({
   onSellShares,
   sessionReady,
   isMyTurn,
+  hotseat = false,
+  activePlayerLabel = null,
   connectedAddress,
   marketPrices,
   playerLabel,
@@ -1198,7 +1219,17 @@ export function StockRoundPanel({
     <div style={styles.root}>
       <div style={styles.headerRow}>
         <span style={styles.headerTitle}>Stock Round</span>
-        {!isMyTurn && <span style={styles.headerHint}>Waiting for your turn...</span>}
+        {/* Design note #34: name the seat rather than address an absent
+            "you". Online the wallet check still decides; in hotseat the
+            question is only ever which seat is up. */}
+        {hotseat
+          ? activePlayerLabel !== null && (
+              <span style={styles.headerActive}>
+                <span style={styles.headerActiveLabel}>Now acting</span>
+                <span style={styles.headerActiveName}>{activePlayerLabel}</span>
+              </span>
+            )
+          : !isMyTurn && <span style={styles.headerHint}>Waiting for your turn...</span>}
       </div>
 
       {/* ---- Corporation roster + per-card actions (design notes #8/#10) */}
@@ -1590,6 +1621,22 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#e6e8ef",
+  },
+  /* Design note #34: the active seat, stated positively. Green because it
+     is an invitation to act, not a warning -- `headerHint` below is the
+     grey "wait" treatment it replaces in hotseat. */
+  headerActive: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  headerActiveLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: "#8a919e",
+  },
+  headerActiveName: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    color: "#7ee0a1",
   },
   headerHint: {
     fontSize: FONT_SIZE.small,

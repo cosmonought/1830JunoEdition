@@ -535,7 +535,7 @@ import HexGridRenderer, {
   type HexClickQueryState,
 } from "./components/HexGridRenderer";
 import { liveEdgesForHex } from "./components/hexGeometry";
-import { autoTraceRoute, bridgeWaypoints } from "./utils/routeAutoTrace";
+import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork } from "./utils/trackReach";
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
 import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
@@ -558,6 +558,7 @@ import {
 import { corporationFullName } from "./utils/corporationNames";
 import StockMarketRenderer, {
   marketCellForPrice,
+  projectDividendCellMove,
   projectShareSaleMove,
   marketZoneForPrice,
   marketZoneTextColor,
@@ -626,6 +627,7 @@ import {
 } from "./utils/gamePhase";
 import type { TileColorTier } from "./components/hexTileCatalog";
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
+import { describeTokenMigration, previewTokenMigration } from "./utils/tokenMigration";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
   OperatingSubPhaseStepper,
@@ -727,6 +729,11 @@ const MOCK_LAY_TILE_PROTOCOL_ID = 4; // B&O, per public_company::CORE_PUBLIC_COM
  *  only drives which model is highlighted/labeled in the tray, not which
  *  model actually gets purchased. Keep this in exact sync with the Rust
  *  array if it ever changes. */
+/** Design note #285: the cap for a train this build's catalog does not
+ *  know. The smallest real train in 1830, so an unknown model is refused
+ *  where a 2-train would be rather than being uncapped. */
+const SMALLEST_TRAIN_CAPACITY = 2;
+
 const MOCK_TRAIN_CATALOG: ReadonlyArray<{
   modelType: string;
   costVgp: number;
@@ -1274,6 +1281,7 @@ function ContextualActionBar({
   onSkipSubPhase,
   onOpenPrivateTrade,
   ownsAnyTrain,
+  mustBuyTrain,
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
@@ -1346,6 +1354,10 @@ function ContextualActionBar({
   onOpenPrivateTrade: () => void;
   /** Drives the Routes skip button's disabled state -- see its `title`. */
   ownsAnyTrain: boolean;
+  /** Design note #293b: the corporation's roster is REPORTED and EMPTY, so
+   *  1830's mandatory purchase applies. Distinct from `!ownsAnyTrain`,
+   *  which is also true when the chain simply did not say. */
+  mustBuyTrain: boolean;
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
@@ -1531,7 +1543,39 @@ function ContextualActionBar({
           // depot will sell and which corporations hold what. Duplicating
           // either here as a generic "Buy Train" would be a second control
           // for one action, and the vaguer of the two.
-          { key: "end-turn", label: "End Turn", onClick: onEndOperatingTurn },
+          /* ==================================================================
+             DESIGN NOTE 293: A CORPORATION MUST OWN A TRAIN
+            ==================================================================
+
+             REPORTED: a corporation with no trains can click End Turn in the
+             Buy Trains step without buying one.
+
+             1830 does not let it. A corporation that owns no train MUST buy
+             one, and if its treasury cannot cover the cheapest in the depot
+             the president pays the difference personally -- the emergency
+             purchase. There is no branch of that rule where the turn simply
+             ends.
+
+             THE POVERTY CASE IS THE ONE THAT MATTERS, and it is why this is
+             not merely disabled when the corporation could afford a train.
+             Being unable to pay is precisely when a player wants the exit,
+             and precisely when 1830 refuses it: the obligation falls to the
+             president rather than lapsing. So the button stays disabled on
+             an empty treasury too, and the tooltip names the president's
+             purchase rather than implying the step is stuck.
+
+             The gate is "owns a train", not "has bought one this turn" --
+             a corporation that acquired one by trade has satisfied the rule
+             just as completely. */
+          {
+            key: "end-turn",
+            label: "End Turn",
+            onClick: onEndOperatingTurn,
+            disabled: mustBuyTrain,
+            title: !mustBuyTrain
+              ? "Finish this corporation's turn and pass to the next in the queue."
+              : "A corporation must own a train. Buy one from the Bank Depot or another corporation -- if the treasury cannot cover it, the president buys it out of pocket.",
+          },
         ];
         break;
     }
@@ -1863,7 +1907,11 @@ function ContextualActionBar({
                           : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`
                       }
                     >
-                      {activeCorporation.trains.length} / {phase.trainLimit}
+                      {/* A bare "2 / 4" beside a row of train chips reads as
+                          a second count OF those chips. Naming it is the
+                          whole fix: the number was never ambiguous to
+                          anyone who already knew what it was. */}
+                      Train limit: {activeCorporation.trains.length} / {phase.trainLimit}
                     </span>
                   )}
                 </span>
@@ -3093,6 +3141,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   }, [gameState, actingProtocolId]);
 
   /* ==================================================================
+   *  DESIGN NOTE 293b: "OWNS NONE" IS NOT "WE WERE NOT TOLD"
+   * ==================================================================
+   *
+   * `ownsAnyTrain` above reports `false` for a chain that does not carry
+   * `owned_trains`, and its own note explains why that is the safe
+   * direction THERE: it leaves a skip enabled and the contract as the
+   * authority.
+   *
+   * It is the unsafe direction here. This gates END TURN, so reading
+   * "unknown" as "owns none" would lock a corporation's turn against a
+   * contract that never said anything -- a deadlock with no override, on
+   * the one control that ends the turn.
+   *
+   * The two questions therefore get two values. The obligation only exists
+   * when the roster is REPORTED and EMPTY; ignorance permits, because the
+   * cost of a wrong "must buy" is a stuck game and the cost of a wrong
+   * "may leave" is a move the contract will refuse on its own. */
+  const mustBuyTrain = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    const owned = company?.owned_trains;
+    if (owned == null) return false;
+    return owned.length === 0;
+  }, [gameState, actingProtocolId]);
+
+  /* ==================================================================
    *  DESIGN NOTE 207: THE TRAIN BEING RUN IS OBSERVED, NOT PICKED
    * ==================================================================
    *
@@ -3506,6 +3581,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   }, [viewerAddress, gameState]);
 
   useDocumentTitleFlash(isMyTurn);
+
+  /** Whose turn it is, as a name. `null` outside a seat-driven round or
+   *  when the room has not started -- the header then shows nothing rather
+   *  than an empty label. */
+  const activeSeatLabel = useMemo(() => {
+    if (!gameState) return null;
+    const seat = actingSeatIndex(gameState);
+    if (seat === null) return null;
+    const address = gameState.player_addresses[seat];
+    if (!address) return null;
+    return sandboxPlayerLabel(address) ?? truncateAddress(address);
+  }, [gameState]);
 
   // In-Place Accordion Ticker / Inline Control Strip state -- design note
   // #18, converted from a modal to an in-place accordion by design note
@@ -4069,7 +4156,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      tools the panel's toggle is showing as chosen. They are separate
      because they answer different questions: one gates an input, the other
      labels a state, and both auto and manual want the input on. */
-  const [routeBuildMode, setRouteBuildMode] = useState<RouteBuildMode>("manual");
+  /* Design note #286: opens on AUTO. `RouteBuildMode`'s own note argued for
+     "manual" because it is what the map does anyway once the planner is
+     engaged, so an unselected-looking control would have been describing
+     the mode it was already in. True, and it optimised for the wrong
+     player: drafting by hand is the expert path, and the tracer's answer is
+     the better starting point for everyone else -- including an expert, who
+     can edit it. Auto also SHOWS something on arrival rather than an empty
+     table. */
+  const [routeBuildMode, setRouteBuildMode] = useState<RouteBuildMode>("auto");
 
   // Design note #33: hiding the toggle is not enough -- route mode also
   // rewires the Rail Map's click handling, so a mode left ON when its phase
@@ -4085,9 +4180,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     setRouteDrafts({});
     setActiveTrainIndex(0);
     setRouteFeedback(null);
-    // Back to the default for the next corporation's turn: a fresh route is
-    // the player's to draw until they ask for a draft.
-    setRouteBuildMode("manual");
+    // Back to the default for the next corporation's turn -- design note
+    // #286: a draft to edit rather than a blank table.
+    setRouteBuildMode("auto");
   }, [inRunTrainsSubPhase]);
 
   /* Design note #266: entering the step ENGAGES the builder.
@@ -4101,6 +4196,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (!inRunTrainsSubPhase) return;
     setRouteSelectMode(true);
   }, [inRunTrainsSubPhase]);
+
+
 
   /** Design note #275: clears ONE train's route, or every train's when
    *  given `null` -- the panel offers both, because a player fixing one bad
@@ -4162,61 +4259,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     }
 
     /* ==================================================================
-     *  DESIGN NOTE 275: DRAFT FOR EVERY TRAIN, NOT THE BIGGEST ONE
+     *  DESIGN NOTE 280: THE BEST SET, CHOSEN JOINTLY
      * ==================================================================
      *
-     * This traced once, for `selectedHardwareModel`, and wrote the result
-     * into the single `routePoints`. On a corporation with three trains
-     * that is one route out of three -- and pressing Auto-Route again just
-     * recomputed the same one, because nothing recorded that a route had
-     * been drafted.
+     * Design note #275 drafted one train at a time, biggest first, handing
+     * each the hexes its predecessors took. Two things were wrong with that
+     * and both are now `assignRouteSet`'s (its own design notes #4 and #7):
      *
-     * BIGGEST TRAIN FIRST, and greedily. `ownedTrainRoster` is already in
-     * tier order, so the train with the most reach picks its route while
-     * the network is untouched and the smaller ones fill in around it.
-     * That is not optimal -- the joint allocation is
-     * `pathfinding::trace_best_route_set`'s and stays there -- but it is
-     * the right greedy order: giving a 2-train first pick of the best
-     * two-stop run can strand a 5-train with nothing worth running.
+     *   IT BARRED WHOLE HEXES. Two trains may legally cross one hex on
+     *   different curves, and may reach the two separate stations of an OO
+     *   tile. Occupancy is per RAIL now.
      *
-     * Each train is barred from the hexes its predecessors took
-     * (`autoTraceRoute`'s design note #4), which is what makes the set
-     * non-conflicting. */
-    const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
-    const claimed = new Set<string>();
-    const drafted: Record<number, RoutePoint[]> = {};
-    let firstReason: string | null = null;
-
-    for (const train of ownedTrainRoster) {
-      const trace = autoTraceRoute({
-        mapGrid,
-        era,
-        // A route must touch a city this corporation has a token in, so its
-        // tokens are the only legal places to start looking.
-        startHexes: corporation?.station_token_hexes ?? [],
-        // The train being run caps the stops. `999` is the Diesel's unlimited.
+     *   IT DECIDED IN ORDER. The best route for the 5-train may be the only
+     *   route the 3-train could have run, and a greedy pass cannot see that
+     *   because it commits the 5-train before looking at the 3. The set is
+     *   chosen jointly against the combined payout.
+     *
+     * This loop is therefore gone entirely -- what remains is unpacking the
+     * answer into per-train drafts. */
+    const result = assignRouteSet({
+      mapGrid,
+      era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+      // A route must touch a city this corporation has a token in, so its
+      // tokens are the only legal places to start looking.
+      startHexes: corporation?.station_token_hexes ?? [],
+      trains: ownedTrainRoster.map((train) => ({
+        trainIndex: train.trainIndex,
+        // `999` is the Diesel's unlimited; 4 is the safe default for a model
+        // this build's catalog does not know.
         maxRevenueCentres: train.maxDistance ?? 4,
-        excludeHexes: claimed,
-      });
-      if (trace.reason !== null || trace.path.length < 2) {
-        // Reported ONCE, and only if nothing at all could be drafted. A
-        // three-train corporation whose network only supports two routes
-        // has been served well, not failed, and a warning per empty train
-        // would bury the two it did draw.
-        if (firstReason === null) firstReason = trace.reason;
-        continue;
-      }
-      drafted[train.trainIndex] = trace.path.map((point) => ({
+      })),
+    });
+
+    const drafted: Record<number, RoutePoint[]> = {};
+    for (const assignment of result.assignments) {
+      drafted[assignment.trainIndex] = assignment.path.map((point) => ({
         q: point.q,
         r: point.r,
         hexLabel: point.hexLabel,
       }));
-      for (const point of trace.path) claimed.add(`${point.q},${point.r}`);
     }
 
     const anyDrafted = Object.keys(drafted).length > 0;
     if (!anyDrafted) {
-      setRouteFeedback(firstReason ?? NO_TRAIN_ROUTE_REASON);
+      setRouteFeedback(result.reason ?? NO_TRAIN_ROUTE_REASON);
       return;
     }
 
@@ -4238,6 +4324,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
        `RoutePlannerPanel`'s design note #3. */
     setRouteFeedback(null);
   }, [gameState, actingProtocolId, mapGrid, currentPhase, ownedTrainRoster]);
+
+  /* Design note #286: OPENING ON AUTO MEANS ACTUALLY DRAFTING.
+     A toggle set to Auto-Route above an empty table is worse than opening
+     on Manual -- it claims a draft exists. `handleSelectRouteBuildMode`
+     only runs the tracer when the player CLICKS auto, so arriving in that
+     mode has to run it too.
+
+     Guarded per corporation rather than per render: the tracer is a search,
+     and re-running it after every board change would overwrite a route the
+     player has since edited by hand. One draft on arrival, then it is
+     theirs. */
+  const autoDraftedForRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!inRunTrainsSubPhase) {
+      autoDraftedForRef.current = null;
+      return;
+    }
+    if (routeBuildMode !== "auto") return;
+    if (autoDraftedForRef.current === actingProtocolId) return;
+    autoDraftedForRef.current = actingProtocolId;
+    handleAutoRoute();
+  }, [inRunTrainsSubPhase, routeBuildMode, actingProtocolId, handleAutoRoute]);
 
   /* Design note #266: the segmented toggle's handler. Auto is a mode the
      player selects AND the act of drafting -- selecting it re-runs the
@@ -4483,7 +4591,43 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         points.length < 2
           ? null
           : sandboxRouteBreakdown(mapGrid, routePointsToWaypoints(points), era);
-      const centres = breakdown?.centres ?? 0;
+      /* ==================================================================
+       *  DESIGN NOTE 285: THE STOP COUNT IS THE STOP LIST
+       * ==================================================================
+       *
+       * REPORTED: a 2-train running City -> Town -> City reads "2/2 stops"
+       * in Manual mode and can be submitted, while Auto-Route rejects it.
+       *
+       * The arithmetic was audited across the whole board before changing
+       * anything, and it holds: `sandboxRouteBreakdown` counts every hex
+       * that pays, towns included, so that route reports three stops in
+       * both modes and no reachable hex on the board prices at $0. The
+       * manual bridge includes the town too. There was no divergence to
+       * find in the counting itself.
+       *
+       * WHAT THERE WAS is a hole one level up, and it produces exactly the
+       * reported symptom -- a route that cannot be blocked:
+       *
+       *   `maxDistance` comes from `MOCK_TRAIN_CATALOG`, and a model the
+       *   catalog does not know returns `undefined`. The old test read
+       *   `maxDistance !== undefined && centres > maxDistance`, so an
+       *   unrecognised train had NO capacity at all: every route passed,
+       *   however many stops it visited, and the readout printed a bare
+       *   count with no limit beside it. Any chain reporting a model this
+       *   build does not carry -- or any future train -- lands there.
+       *
+       * The cap now falls back rather than vanishing. An unknown train is
+       * treated as the smallest real one, which is the conservative
+       * direction: it can refuse a route the contract would have allowed,
+       * and it cannot wave through one the contract will refuse.
+       *
+       * AND THE COUNT IS NOW `stops.length` -- literally the list the panel
+       * renders. The two were already equal by construction, and equal by
+       * construction is a thing that stops being true when someone edits
+       * one of them. Reading the array the reader is looking at removes the
+       * possibility. */
+      const centres = breakdown?.stops.length ?? 0;
+      const cap = train.maxDistance ?? SMALLEST_TRAIN_CAPACITY;
       const last = points[points.length - 1];
       return {
         trainIndex: train.trainIndex,
@@ -4496,10 +4640,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
            honest answer there is that the question does not apply. */
         value: ownsAnyTrain ? (breakdown?.revenue ?? null) : null,
         revenueCentres: centres,
-        exceedsMaxDistance:
-          train.maxDistance !== undefined &&
-          train.maxDistance !== 999 &&
-          centres > train.maxDistance,
+        // Design note #285: `999` is the Diesel's genuine "unlimited"; an
+        // absent figure is ignorance and must not read as one.
+        exceedsMaxDistance: cap !== 999 && centres > cap,
         // Design note #256/#264: only meaningful once there is a route.
         endsOffTerminus:
           points.length >= 2 && last !== undefined
@@ -4736,6 +4879,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
            reaching into wallets, so one number is charged and logged. */
         const marketResult = applySandboxMarketAction(sandboxMarketRef.current, msg, {
           projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
+          // Design note #291: the dividend decision moves the marker too.
+          projectDividend: (from, choice) => projectDividendCellMove(from, choice),
         });
         if (marketResult.prices !== sandboxMarketRef.current) {
           sandboxMarketRef.current = marketResult.prices;
@@ -5787,14 +5932,62 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const autoSkipReason = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
-    if (orSubPhase === "Routes" || orSubPhase === "Dividends") {
+    if (orSubPhase === "Routes") {
       return ownsAnyTrain ? null : "it owns no trains, so there is no route to run";
     }
+    /* ==================================================================
+     *  DESIGN NOTE 292: A TRAINLESS DIVIDEND IS DECIDED, NOT SKIPPED
+     * ==================================================================
+     *
+     * Dividends used to share the Routes reason and take the same exit --
+     * `AdvanceOperatingSubPhase`, which moves the cursor and settles
+     * nothing. For a corporation that ran no trains that is the wrong
+     * exit, and design note #44 a few hundred lines below says why without
+     * having connected the two: "every corporation moves LEFT on its first
+     * turn, because it has no train yet and so cannot pay out". Skipping
+     * meant it did not move at all, so the tutorial explained a market
+     * lesson the board had not taught.
+     *
+     * 1830 has no third option here. Revenue of $0 is still revenue
+     * declared, and withholding it is what a trainless corporation does --
+     * which is the decision that steps the marker left. So the step
+     * dispatches the real `DeclareDividends` rather than stepping past it.
+     *
+     * Handled below rather than through `autoSkipReason`, because the two
+     * are different actions: one advances a cursor, the other declares. */
+    if (orSubPhase === "Dividends" && !ownsAnyTrain) return null;
     if (orSubPhase === "Hardware" && atTrainLimitNow) {
       return "it is already at its train limit";
     }
     return null;
   }, [gameState, spectator, orSubPhase, ownsAnyTrain, atTrainLimitNow]);
+
+  /* Design note #292: the forced withhold. Same once-per-(corporation,step)
+     guard as the auto-skip beside it, and for the same reason -- online the
+     cursor is poll-driven, so an unguarded effect would broadcast a
+     declaration on every render until the next poll landed. */
+  const forcedWithholdRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") return;
+    if (spectator) return;
+    if (orSubPhase !== "Dividends" || ownsAnyTrain) return;
+    const key = `${actingProtocolId}:withhold`;
+    if (forcedWithholdRef.current.has(key)) return;
+    forcedWithholdRef.current.add(key);
+    logInfo(
+      "Auto-Withhold",
+      "No trains ran, so there is nothing to pay out -- $0 withheld and the share price steps left.",
+    );
+    handleWithholdRevenue();
+  }, [
+    gameState,
+    spectator,
+    orSubPhase,
+    ownsAnyTrain,
+    actingProtocolId,
+    handleWithholdRevenue,
+    logInfo,
+  ]);
 
   const autoSkippedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -6014,6 +6207,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   /** While a preview is on the board, the canvas belongs to ROTATION -- the
    *  query interceptor is disarmed exactly as it is for route and token
    *  modes, so a rotation costs no chain round-trip. */
+  /* Design note #0 in `utils/tokenMigration.ts`: the destination of every
+     token on the hex under the previewed tile. Recomputed as the player
+     cycles tiles, because a different tile can carry a different number of
+     cities. */
+  const radialTokenNote = useMemo(() => {
+    if (!radialSelector || !previewTile) return null;
+    return describeTokenMigration(
+      previewTokenMigration(
+        mapGrid,
+        radialSelector.q,
+        radialSelector.r,
+        gameState?.public_companies ?? [],
+        previewTile.tileId,
+      ),
+    );
+  }, [radialSelector, previewTile, mapGrid, gameState]);
+
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
 
   /** Confirm. Sandbox lays locally; a chain-backed room dispatches. */
@@ -6321,6 +6531,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   onSkipSubPhase={handleSkipSubPhase}
                   onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
                   ownsAnyTrain={ownsAnyTrain}
+                  mustBuyTrain={mustBuyTrain}
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
@@ -6383,6 +6594,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 gameState={gameState}
                 connectedWalletAddress={viewerAddress}
                 playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                // Design note #30 in that file: pass-and-play has no wallet
+                // to compare a turn against, so the seat on turn is always
+                // the one this keyboard may act for.
+                hotseat={sandbox}
                 sessionReady={controlsEnabled}
                 onBuyLowest={handleWaterfallBuyLowest}
                 onBidHigher={handleWaterfallBidHigher}
@@ -6550,6 +6765,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     // card saying $76 beside a token sitting on $71.
                     marketPrices={sandbox ? sandboxMarketPrices : undefined}
                     playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                    hotseat={sandbox}
+                    // Design note #34 in that file: the header names the
+                    // seat that is up rather than telling the player to
+                    // wait for themselves.
+                    activePlayerLabel={activeSeatLabel}
                     // Design note #41: the roster is readable in every
                     // phase, but shares only trade in a Stock Round.
                     actionsLockedReason={
@@ -6953,6 +7173,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             setPreviewTile({ q: radialSelector.q, r: radialSelector.r, tileId, orientation })
           }
           legalRotationCount={legalRotations.length}
+          // Design note #0 in `utils/tokenMigration.ts`: where the tokens
+          // already standing on this hex end up. `null` on the ordinary
+          // empty hex, which is most of them.
+          tokenNote={radialTokenNote}
           onConfirm={handleConfirmRadialLay}
           onCancel={() => setPreviewTile(null)}
           onDismiss={handleDismissRadial}
@@ -7595,8 +7819,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "10px",
-    padding: "10px 16px",
+    gap: "8px",
+    /* Design note #295: the action strip's own height. At 10px vertical
+       padding around a 19px control this bar ran past 60px; with the type
+       scale at 14px it lands inside the 44-52px band the layout targets,
+       and `maxHeight` stops a wrapped row from silently growing past it. */
+    padding: "6px 12px",
     backgroundColor: "#1b2130",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -7704,8 +7932,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "10px 18px",
-    padding: "8px 12px",
+    gap: "8px 14px",
+    // Design note #295: the corporation status strip, same band.
+    padding: "5px 10px",
+    minHeight: "44px",
     borderRadius: "8px",
     backgroundColor: "#171c28",
     border: "1px solid #2b3242",
@@ -7797,8 +8027,11 @@ const styles: Record<string, React.CSSProperties> = {
     // lets the actions size to their content rather than stretching.
     gridTemplateColumns: "1fr auto 1fr",
     alignItems: "center",
-    gap: "12px",
+    gap: "10px",
+    // Design note #295: a fixed band rather than a floor alone -- the
+    // floor was already 44px and nothing stopped the row exceeding it.
     minHeight: "44px",
+    maxHeight: "52px",
   },
   orPanelRailLeft: {
     display: "flex",

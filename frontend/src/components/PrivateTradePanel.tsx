@@ -1,0 +1,557 @@
+// frontend/src/components/PrivateTradePanel.tsx
+//
+// The Private Company trade engine: a corporation proposes, the owner
+// consents.
+//
+// ===================================================================
+//  DESIGN NOTE 0: THE CONSENT STEP IS NOT ON CHAIN YET -- READ THIS
+// ===================================================================
+//
+// In 1830 a corporation buying a private company from a player is a
+// NEGOTIATION. Both sides must agree: the president names a price, the
+// owner takes it or refuses. This component implements that.
+//
+// `ExecuteMsg::BuyPrivateCompany { game_id, protocol_id, private_id, price }`
+// DOES NOT. It is single-party -- `trading.rs::execute_buy_private_company`
+// authorises the buying corporation's president, checks the phase gate, the
+// sub-phase cursor, the treasury and the price band, and then moves the
+// private. The seller is read (`private.owner`) but never asked.
+//
+// So the proposal below is CLIENT-SIDE STATE, and the two deployments
+// differ in what that can honestly mean:
+//
+//   SANDBOX -- the local reducer is the only authority there is, so the
+//   full two-party flow is real. The proposal is raised, the prompt
+//   appears, and accepting settles the trade. Nothing is being faked
+//   relative to an authority, because there is no other authority.
+//
+//   A LIVE ROOM -- the seller CANNOT be sent this proposal. No message
+//   carries it and no query surfaces it, so their client would never learn
+//   it exists. Showing them an Accept button would be theatre. The prompt
+//   is therefore shown to the PROPOSER and labelled as what it actually is:
+//   a confirmation step before a purchase the contract will execute
+//   unilaterally. `onConfirmUnilateral` is deliberately named to make a
+//   call site that treats it as consent look wrong.
+//
+// THE BACKEND SHAPE THIS NEEDS ALREADY EXISTS, one feature over. Train
+// trading between corporations with different presidents records a
+// `TrainOffer` and waits for `AcceptTrainOffer`/`RejectTrainOffer`, with
+// `RescindTrainOffer` and a `GetTrainOffers` query
+// (`msg.rs`). A `PrivateCompanyOffer` mirroring it would make this
+// component's live path as real as its sandbox one. That is a backend
+// change and out of scope here; recorded so the gap is actionable rather
+// than merely known.
+//
+// ===================================================================
+//  DESIGN NOTE 1: THE PRICE BAND IS MIRRORED, NOT INVENTED
+// ===================================================================
+//
+// `trading.rs`: "Pricing guardrails: `price` must land in [50%, 200%] of
+// face value". The input below clamps to the same band and says so, so a
+// player finds out at the point of typing rather than from a rejected
+// transaction.
+//
+// This is client-side validation of a rule the contract also enforces --
+// ordinarily the thing this codebase avoids. It is acceptable HERE for the
+// same reason `evaluateHexForTileLaying`'s four gates are (`hexGeometry.ts`
+// design note on click eligibility): the band is a STATIC arithmetic
+// property of one number, not a stateful judgement about the board. It
+// cannot go stale between render and dispatch, and the contract still has
+// the final say.
+
+import React, { useMemo, useState } from "react";
+
+import type { PrivateCompanyState } from "../utils/gameState";
+import { FONT_SIZE } from "../styles/typography";
+
+/** A live proposal. Client-side only -- design note #0. */
+export interface PrivateTradeProposal {
+  privateId: number;
+  privateName: string;
+  /** The wallet that owns it, and therefore the party whose consent 1830
+   *  requires. */
+  ownerAddress: string;
+  /** Display name for the owner, when one is known. */
+  ownerLabel: string;
+  buyerProtocolId: number;
+  buyerTicker: string;
+  price: number;
+}
+
+/** The band the contract enforces, mirrored -- design note #1. */
+export const PRIVATE_PRICE_MIN_FACTOR = 0.5;
+export const PRIVATE_PRICE_MAX_FACTOR = 2;
+
+export function privatePriceBounds(faceValue: number): { min: number; max: number } {
+  // Integer VGP either side. `ceil` on the floor and `floor` on the ceiling
+  // so a rounded bound can never fall OUTSIDE the band the contract checks
+  // -- rounding the other way would offer a price that looks legal here and
+  // is rejected on chain, which is the one failure this mirror exists to
+  // prevent.
+  return {
+    min: Math.ceil(faceValue * PRIVATE_PRICE_MIN_FACTOR),
+    max: Math.floor(faceValue * PRIVATE_PRICE_MAX_FACTOR),
+  };
+}
+
+/** Privates a corporation may propose for.
+ *
+ *  A private qualifies only if a PLAYER holds it: `trading.rs` reads
+ *  `private.owner` and fails with no seller when it is absent, so one
+ *  already bought by a corporation (`owner_protocol_id`) or closed is not a
+ *  candidate. Filtering here means those never appear rather than appearing
+ *  and failing. */
+export function eligiblePrivatesForPurchase(
+  privates: readonly PrivateCompanyState[],
+): PrivateCompanyState[] {
+  return privates.filter(
+    (entry) => !entry.closed && entry.owner !== null && entry.owner_protocol_id === null,
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Propose                                                            */
+/* ------------------------------------------------------------------ */
+
+export interface ProposePrivatePurchaseProps {
+  open: boolean;
+  buyerTicker: string;
+  privates: readonly PrivateCompanyState[];
+  /** Renders a wallet as a readable name. */
+  labelForAddress: (address: string) => string;
+  /** The buying corporation's treasury, so an unaffordable price is caught
+   *  before it is proposed. */
+  treasury: number;
+  onPropose: (privateId: number, price: number) => void;
+  onClose: () => void;
+}
+
+export function ProposePrivatePurchase({
+  open,
+  buyerTicker,
+  privates,
+  labelForAddress,
+  treasury,
+  onPropose,
+  onClose,
+}: ProposePrivatePurchaseProps) {
+  const eligible = useMemo(() => eligiblePrivatesForPurchase(privates), [privates]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [priceText, setPriceText] = useState("");
+
+  const selected = eligible.find((entry) => entry.private_id === selectedId) ?? null;
+  const faceValue = selected ? Number(selected.cost) : 0;
+  const bounds = privatePriceBounds(faceValue);
+  const price = Number(priceText);
+
+  // Each failure named separately. "Invalid price" would leave the player
+  // guessing which of four things was wrong.
+  const priceProblem: string | null = !selected
+    ? "Choose a private company first."
+    : priceText.trim() === ""
+      ? `Enter a price between $${bounds.min} and $${bounds.max}.`
+      : !Number.isFinite(price) || !Number.isInteger(price)
+        ? "Price must be a whole number."
+        : price < bounds.min
+          ? `$${price} is below 50% of face value ($${bounds.min} minimum).`
+          : price > bounds.max
+            ? `$${price} is above 200% of face value ($${bounds.max} maximum).`
+            : price > treasury
+              ? `${buyerTicker}'s treasury holds $${treasury} -- it cannot pay $${price}.`
+              : null;
+
+  if (!open) return null;
+
+  return (
+    <div
+      style={styles.backdrop}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Propose a private company purchase"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div style={styles.card}>
+        <div style={styles.header}>
+          <span style={styles.heading}>{buyerTicker} proposes a purchase</span>
+          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
+            &#10006;
+          </button>
+        </div>
+
+        <p style={styles.body}>
+          A corporation may buy a private company from its owner between 50% and 200% of face
+          value. The owner has to agree.
+        </p>
+
+        {eligible.length === 0 ? (
+          <p style={styles.empty}>
+            No private company is available. Every one is either already owned by a corporation,
+            closed, or still unsold in the auction.
+          </p>
+        ) : (
+          <div style={styles.list}>
+            {eligible.map((entry) => {
+              const isSelected = entry.private_id === selectedId;
+              const entryBounds = privatePriceBounds(Number(entry.cost));
+              return (
+                <button
+                  key={entry.private_id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(entry.private_id);
+                    // Seed at face value: the neutral offer, and the one a
+                    // player most often wants. Starting blank makes them
+                    // type a number before they can see whether it is in
+                    // range.
+                    setPriceText(String(entry.cost));
+                  }}
+                  style={{ ...styles.row, ...(isSelected ? styles.rowSelected : {}) }}
+                >
+                  <span style={styles.rowName}>{entry.name}</span>
+                  <span style={styles.rowMeta}>
+                    face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
+                  </span>
+                  <span style={styles.rowOwner}>
+                    held by {entry.owner ? labelForAddress(entry.owner) : "nobody"}
+                  </span>
+                  <span style={styles.rowBand}>
+                    ${entryBounds.min} - ${entryBounds.max}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {selected && (
+          <label style={styles.priceRow}>
+            <span style={styles.priceLabel}>Offer price</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={priceText}
+              min={bounds.min}
+              max={bounds.max}
+              step={1}
+              onChange={(event) => setPriceText(event.target.value)}
+              style={styles.priceInput}
+              aria-label={`Offer price, between ${bounds.min} and ${bounds.max}`}
+            />
+            <span style={styles.priceBand}>
+              ${bounds.min} - ${bounds.max}
+            </span>
+          </label>
+        )}
+
+        {priceProblem && selectedId !== null && (
+          <p style={styles.problem}>{priceProblem}</p>
+        )}
+
+        <div style={styles.footer}>
+          <button type="button" style={styles.secondaryButton} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            style={{
+              ...styles.primaryButton,
+              ...(priceProblem ? styles.buttonDisabled : {}),
+            }}
+            disabled={priceProblem !== null}
+            onClick={() => {
+              if (priceProblem || !selected) return;
+              onPropose(selected.private_id, price);
+            }}
+            title={priceProblem ?? `Offer $${price} for ${selected?.name}.`}
+          >
+            Propose Purchase
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Accept / reject                                                    */
+/* ------------------------------------------------------------------ */
+
+export interface PrivateTradePromptProps {
+  proposal: PrivateTradeProposal | null;
+  /** True when the viewer is the private's owner -- i.e. the party 1830
+   *  says must answer. In sandbox this is forced true so one person can
+   *  drive both sides (design note #2). */
+  viewerIsOwner: boolean;
+  /** Design note #0: `false` in a live room, where accepting cannot record
+   *  the seller's consent because no message carries it. Changes the
+   *  wording from a negotiation to a confirmation -- it does NOT change who
+   *  may click. */
+  consentIsBinding: boolean;
+  onAccept: () => void;
+  onReject: () => void;
+}
+
+/* ===================================================================
+ *  DESIGN NOTE 2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER
+ * ===================================================================
+ *
+ * A hotseat sandbox has one wallet and one human. Requiring the owner's
+ * client to answer would make this flow untestable there -- which is the
+ * one place it most needs to be testable, since it is the only place the
+ * whole two-party sequence can currently run end to end.
+ *
+ * So in sandbox the prompt is shown to whoever is looking, and the seat
+ * switcher already establishes that "who you are" is a local choice there.
+ * The prompt still NAMES the owner, so the person clicking Accept is
+ * always told whose decision they are standing in for.
+ */
+export function PrivateTradePrompt({
+  proposal,
+  viewerIsOwner,
+  consentIsBinding,
+  onAccept,
+  onReject,
+}: PrivateTradePromptProps) {
+  if (!proposal) return null;
+
+  return (
+    <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offer">
+      <div style={styles.promptHeader}>
+        <span style={styles.promptDot} aria-hidden="true" />
+        <span style={styles.promptTitle}>
+          {consentIsBinding ? "Offer received" : "Confirm purchase"}
+        </span>
+      </div>
+
+      <p style={styles.promptBody}>
+        <strong>{proposal.buyerTicker}</strong> wants to buy{" "}
+        <strong>{proposal.privateName}</strong> for <strong>${proposal.price}</strong>.
+      </p>
+
+      <p style={styles.promptWho}>
+        {viewerIsOwner
+          ? `This is ${proposal.ownerLabel}'s decision.`
+          : `Waiting on ${proposal.ownerLabel}.`}
+      </p>
+
+      {/* Design note #0: stated plainly rather than implied by a greyed
+          control. A player told this is a negotiation, whose counterparty
+          was never actually asked, has been misled by the UI. */}
+      {!consentIsBinding && (
+        <p style={styles.promptCaveat}>
+          The contract executes this purchase directly -- `BuyPrivateCompany` has no accept step,
+          so {proposal.ownerLabel} is not consulted on chain. Accepting buys it outright.
+        </p>
+      )}
+
+      <div style={styles.promptActions}>
+        <button
+          type="button"
+          onClick={onReject}
+          style={{ ...styles.promptButton, ...styles.promptReject }}
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          onClick={onAccept}
+          disabled={!viewerIsOwner}
+          style={{
+            ...styles.promptButton,
+            ...(viewerIsOwner ? styles.promptAccept : styles.buttonDisabled),
+          }}
+          title={
+            viewerIsOwner
+              ? `Sell ${proposal.privateName} to ${proposal.buyerTicker} for $${proposal.price}.`
+              : `Only ${proposal.ownerLabel} can accept this offer.`
+          }
+        >
+          Accept
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Styles                                                             */
+/* ------------------------------------------------------------------ */
+
+const styles: Record<string, React.CSSProperties> = {
+  backdrop: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 70,
+    backgroundColor: "rgba(6, 9, 16, 0.62)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px",
+  },
+  card: {
+    width: "min(560px, 100%)",
+    maxHeight: "84vh",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    padding: "18px 20px",
+    borderRadius: "12px",
+    border: "1px solid #3a4150",
+    backgroundColor: "#141a26",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+  },
+  header: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
+  heading: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#e2e6ee" },
+  closeButton: {
+    marginLeft: "auto",
+    width: "30px",
+    height: "30px",
+    borderRadius: "999px",
+    border: "1px solid #4a5163",
+    backgroundColor: "#232936",
+    color: "#c8cdd8",
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  body: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.5 },
+  empty: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.5 },
+  list: { display: "flex", flexDirection: "column", gap: "6px" },
+  row: {
+    display: "grid",
+    gridTemplateColumns: "1fr auto",
+    gap: "2px 12px",
+    textAlign: "left",
+    padding: "9px 12px",
+    borderRadius: "8px",
+    border: "1px solid #3a4150",
+    backgroundColor: "#1b2130",
+    color: "#e2e6ee",
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  rowSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
+  rowName: { fontSize: FONT_SIZE.strong, fontWeight: 700 },
+  rowBand: {
+    fontSize: FONT_SIZE.micro,
+    color: "#7ee0a1",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    textAlign: "right",
+  },
+  rowMeta: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
+  rowOwner: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", textAlign: "right" },
+  priceRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
+  priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
+  priceInput: {
+    width: "130px",
+    padding: "8px 10px",
+    borderRadius: "6px",
+    border: "1px solid #4a5163",
+    backgroundColor: "#0f1420",
+    color: "#e2e6ee",
+    fontSize: FONT_SIZE.control,
+    fontFamily: "inherit",
+  },
+  priceBand: {
+    fontSize: FONT_SIZE.small,
+    color: "#7ee0a1",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
+  footer: {
+    display: "flex",
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: "8px",
+    marginTop: "4px",
+  },
+  primaryButton: {
+    padding: "9px 18px",
+    borderRadius: "8px",
+    border: "1px solid #4ade80",
+    backgroundColor: "#16a34a",
+    color: "#ffffff",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  secondaryButton: {
+    padding: "9px 18px",
+    borderRadius: "8px",
+    border: "1px solid #4a5163",
+    backgroundColor: "#232936",
+    color: "#c8cdd8",
+    fontSize: FONT_SIZE.control,
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
+  // the disabled look is computed.
+  buttonDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+    backgroundColor: "#1f2937",
+    borderColor: "#374151",
+    color: "#6b7280",
+  },
+
+  promptRoot: {
+    position: "fixed",
+    right: "20px",
+    bottom: "20px",
+    zIndex: 65,
+    width: "min(400px, calc(100vw - 40px))",
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "1px solid #3a5a8a",
+    backgroundColor: "#141a26",
+    boxShadow: "0 10px 34px rgba(0,0,0,0.6)",
+  },
+  promptHeader: { display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" },
+  promptDot: {
+    width: "9px",
+    height: "9px",
+    borderRadius: "999px",
+    backgroundColor: "#38bdf8",
+    flexShrink: 0,
+  },
+  promptTitle: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 800,
+    color: "#9ec5ff",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+  },
+  promptBody: { margin: 0, fontSize: FONT_SIZE.body, color: "#e2e6ee", lineHeight: 1.5 },
+  promptWho: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa0ac" },
+  promptCaveat: {
+    margin: 0,
+    fontSize: FONT_SIZE.small,
+    color: "#c9b98a",
+    lineHeight: 1.45,
+  },
+  promptActions: {
+    display: "flex",
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: "8px",
+  },
+  promptButton: {
+    padding: "7px 16px",
+    borderRadius: "8px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  promptAccept: { backgroundColor: "#16a34a", borderColor: "#4ade80", color: "#ffffff" },
+  promptReject: { backgroundColor: "#3a1f22", borderColor: "#b91c1c", color: "#fda4af" },
+};

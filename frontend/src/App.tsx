@@ -154,19 +154,24 @@
 // 11. **Manual Route Point UI.** A new "Select Route Points" toggle sits on
 //    the Contextual Top Action Bar, always visible (independent of round
 //    type/OR sub-phase, like "Undo Last Action" -- design note #8), and only
-//    meaningful on the Rail Map tab. HONEST LIMITATION, read before relying
-//    on this: this contract has NO `ExecuteMsg`/`QueryMsg` that accepts or
-//    validates a caller-submitted path at all -- `operations.rs`'s Operating
-//    Round revenue action always computes each corporation's route
-//    automatically and exhaustively via `pathfinding::trace_best_route`'s
-//    own breadth-first search (see `msg.rs`'s doc comment on that flow and
-//    `pathfinding.rs`'s module doc comment #3); there is no "submit this
-//    exact path" message for `LayTile`'s sibling gameplay actions to call,
-//    and building one would be a genuine new contract feature, not a
-//    frontend wiring gap. So "verify against our contract route
-//    constraints" cannot mean a real round-trip query here -- what this
-//    toggle actually does is a client-side, honestly-scoped SCOUTING aid:
-//    while active, `HexGridRenderer`'s existing `onHexClick` callback
+//    meaningful on the Rail Map tab.
+//
+//    **THE LIMITATION THAT USED TO STAND HERE IS RESOLVED (Step 4.5).** This
+//    note previously read, correctly at the time: "this contract has NO
+//    `ExecuteMsg`/`QueryMsg` that accepts or validates a caller-submitted
+//    path at all... building one would be a genuine new contract feature,
+//    not a frontend wiring gap." That feature was subsequently built.
+//    `ExecuteMsg::RunManualRoute` validates a declared path step by step --
+//    connectivity, the corporation's own station, rival token blockades, and
+//    the train's distance budget -- and Batch 3 replaced its original
+//    `hex_path: string[]` with `path: RouteWaypoint[]`, so a stop can name
+//    WHICH station on a two-city hex it means. `handleRunTrains` now sends
+//    the route the player actually built (via `routePointsToWaypoints`)
+//    instead of discarding it, which is what this toggle was always for.
+//
+//    The client-side checks below remain, and are still worth having: they
+//    catch a bad path before it costs a signature and a gas fee, rather than
+//    duplicating the contract's authority. While active, `HexGridRenderer`'s existing `onHexClick` callback
 //    (already a plain prop on that component, previously unused by this
 //    file -- see its own doc comment) is wired to `handleRouteHexClick`
 //    instead of the LayTile click-interceptor (`queryClient`/
@@ -188,12 +193,13 @@
 //    `MOCK_TRAIN_CATALOG`, itself a mirror of a real `COMPANY_HARDWARE`
 //    train's route-length limit), flagging `routeExceedsMaxDistance` when
 //    the manually-built path is longer than that train could legally run.
-//    Everything else a true validation would need -- whether each hop
-//    actually follows laid track with a connecting edge, whether the path
-//    starts/ends at the corporation's own token, whether it's actually the
-//    highest-value route -- is exactly what `trace_best_route` computes
-//    on-chain and is deliberately NOT reimplemented here, rather than
-//    silently faking a "verified" result this contract has no way to back.
+//    Everything else a true validation needs -- whether each hop actually
+//    follows laid track with a connecting edge, whether the path touches the
+//    corporation's own station, whether a rival blockade sits in the way --
+//    is checked ON-CHAIN by `RunManualRoute` and is deliberately NOT
+//    reimplemented here. A second copy of those rules in TypeScript could
+//    only drift from the authority, and the contract rejects a bad route
+//    cleanly with a named error the Action Log already surfaces.
 // 12. **Global Dashboard Text & Layout Upscaling (final visual theme pass,
 //    item 5).** A pure typography/spacing pass across every surrounding
 //    control panel -- no new components, no behavior changes -- so the
@@ -528,29 +534,69 @@ import HexGridRenderer, {
   type MapGridResponse,
   type HexClickQueryState,
 } from "./components/HexGridRenderer";
+import { liveEdgesForHex } from "./components/hexGeometry";
+import { autoTraceRoute, bridgeWaypoints } from "./utils/routeAutoTrace";
+import { layableHexes, reachableNetwork } from "./utils/trackReach";
+import { countPhrase, describeGameplayAction } from "./utils/actionLog";
+import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
+import {
+  bestContrastTextColor,
+  glowColorFor,
+  stationTickerColor,
+} from "./components/hexContractTypes";
+import { TrainChips } from "./components/TrainBadges";
+import { RoutePlannerPanel, RouteModeToggle } from "./components/RoutePlannerPanel";
+import type { RouteBuildMode, TrainRouteDraft } from "./components/RoutePlannerPanel";
+import StationTokenRow from "./components/StationTokenRow";
+import {
+  evaluateStationPlacement,
+  nextStationTokenCost,
+  placeableStationHexes,
+  stationTokenSlots,
+  type StationTokenSlot,
+} from "./utils/stationTokens";
+import { corporationFullName } from "./utils/corporationNames";
 import StockMarketRenderer, {
   marketCellForPrice,
+  projectShareSaleMove,
+  marketZoneForPrice,
+  marketZoneTextColor,
+  marketZoneTooltip,
+  projectDividendMove,
+  type MarketProjection,
   type MarketGridResponse,
 } from "./components/StockMarketRenderer";
-import TileSelectionPopup, {
-  type TileSelectionPopupProps,
-} from "./components/TileSelectionPopup";
+// Design note #162: `TileSelectionPopup` is no longer rendered or imported
+// -- the radial selector replaced it, and its two callbacks went with it.
+// The file is retained on disk, unreferenced, until the radial path has been
+// exercised against a live chain.
+import RadialTileSelector, { RadialTokenConfirm } from "./components/RadialTileSelector";
+import {
+  PrivateTradePrompt,
+  ProposePrivatePurchase,
+  type PrivateTradeProposal,
+} from "./components/PrivateTradePanel";
 import TopTicker from "./components/TopTicker";
 import InlineQuickChat from "./components/InlineQuickChat";
 import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 import TrainTradePanel from "./components/TrainTradePanel";
+import TrainPurchasePanel, {
+  TrainTradePrompt,
+  type TrainTradeProposal,
+} from "./components/TrainPurchasePanel";
 import WaterfallAuctionDashboard from "./components/WaterfallAuctionDashboard";
 import StockRoundPanel from "./components/StockRoundPanel";
 import {
   useGameStatePolling,
   useTrainOffersPolling,
   useWaterfallStatePolling,
-  playerSellablePrivateCompanies,
   type RoundType,
-  type PrivateCompanyState,
   type TileColor,
+  type GameStateResponse,
+  type WaterfallStateResponse,
+  actingSeatIndex,
 } from "./utils/gameState";
 // Design note #22: `truncateChatAddress` and the `ChatMessage` type are no
 // longer imported here. Both were only ever used to CONSTRUCT chat messages
@@ -559,22 +605,67 @@ import {
 // rather than a raw address, which is what `truncateChatAddress` was for).
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
 import { CONTROL_PADDING, FONT_SIZE, LINE_HEIGHT } from "./styles/typography";
-import { TURN_PULSE_INK_RGB } from "./styles/palette";
-import { derivePhase, rustOutlook, type GamePhase } from "./utils/gamePhase";
+import {
+  ALERT_CRITICAL_BG,
+  ALERT_CRITICAL_BORDER,
+  ALERT_CRITICAL_INK,
+  ALERT_WARN_BG,
+  ALERT_WARN_BORDER,
+  ALERT_WARN_INK,
+  TURN_PULSE_INK_RGB,
+} from "./styles/palette";
+import {
+  depotInventory,
+  derivePhase,
+  phaseAlertLevel,
+  rustOutlook,
+  type GamePhase,
+  type PhaseTint,
+  type TierRustOutlook,
+  type TrainTier,
+} from "./utils/gamePhase";
+import type { TileColorTier } from "./components/hexTileCatalog";
+import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
+import type { LegalTilePlacement } from "./components/hexContractTypes";
+import {
+  OperatingSubPhaseStepper,
+  OPERATING_SUB_PHASE_LABELS,
+  OPERATING_SUB_PHASE_ORDER,
+  initialOrSubPhase,
+  visibleSubPhases,
+  type OperatingSubPhase,
+} from "./components/OperatingSubPhaseStepper";
 import { useDocumentTitleFlash } from "./utils/turnAlert";
 import {
-  SANDBOX_MARKET_PRICES,
+  sandboxInitialMarketPrices,
+  sandboxMarketPriceTable,
+  type SandboxMarketPrices,
   SANDBOX_PLAYERS,
-  sandboxGameState,
+  sandboxScenarioState,
+  sandboxScenario,
+  DEFAULT_SANDBOX_SCENARIO,
+  type SandboxTrainFixture,
+  type SandboxScenarioId,
   sandboxMarketPositions,
   sandboxPlayerLabel,
   sandboxWaterfallState,
 } from "./utils/sandboxState";
-import type { GameplayExecuteMsg } from "./utils/sessionKey";
+import type { GameplayExecuteMsg, RouteWaypointDto } from "./utils/sessionKey";
+import {
+  applySandboxAction,
+  applySandboxMarketAction,
+  applySandboxWaterfallAction,
+  applySandboxLayTile,
+  isRouteTerminusHex,
+  sandboxRouteBreakdown,
+  SANDBOX_NOMINAL_TOKEN_COST,
+} from "./utils/sandboxSession";
+import SandboxToolbar from "./components/SandboxToolbar";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
 import TutorialModal, {
+  TutorialLibrary,
   OPERATING_ROUND_TUTORIAL,
   STOCK_MARKET_TUTORIAL,
   STOCK_ROUND_TUTORIAL,
@@ -604,7 +695,12 @@ import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
  *  to. */
 const MOCK_GRID_GAME_ID = 1;
 const MOCK_BUY_STOCK_PAR_VALUE = "100"; // top of the standard 1830 par ladder
-const MOCK_DECLARE_DIVIDENDS_REVENUE = "0"; // no revenue-entry UI yet -- see design note #4
+/* `MOCK_DECLARE_DIVIDENDS_REVENUE` is GONE -- design note #198.
+   It was `"0"`, dispatched on every dividend declaration regardless of what
+   the corporation had just earned, while the panel beside the buttons showed
+   the real figure. Deleted rather than left unused so nothing can quietly
+   start sending a constant again; `handleDeclareDividendsChoice` reads
+   `last_route_revenue` from the corporation being acted for. */
 // Same placeholder rationale as design note #1/#4 above: there's no
 // company-selector UI yet, so the Interactive Tile-Selection Popup's
 // GetLegalTilePlacements/LayTile calls -- and now the Operating-Round-scoped
@@ -613,6 +709,12 @@ const MOCK_DECLARE_DIVIDENDS_REVENUE = "0"; // no revenue-entry UI yet -- see de
 // "always floatable" company in the Rust test suite (src/tests.rs), not
 // because of any in-game significance -- swap for real company-selection
 // state once that flow exists, same as MOCK_BUY_STOCK_PROTOCOL_ID.
+/** Design note #250: one sentence, three refusal sites. Stated once so the
+ *  builder, the auto-drafter and the dispatch cannot describe the same
+ *  situation three slightly different ways. */
+const NO_TRAIN_ROUTE_REASON =
+  "This corporation owns no trains, so it has no route to run. Buy a train in the Buy Trains step first.";
+
 const MOCK_LAY_TILE_PROTOCOL_ID = 4; // B&O, per public_company::CORE_PUBLIC_COMPANIES
 
 /** Hand-kept mirror of `hardware::TRAIN_CATALOG` (`(model_type, baseline
@@ -639,23 +741,18 @@ const MOCK_TRAIN_CATALOG: ReadonlyArray<{
   { modelType: "D", costVgp: 1_100, maxDistance: 999, bankQuantity: 20 },
 ];
 
-/** The four legal, chronologically-ordered action sub-phases within one
- *  corporation's Operating Round turn (Track -> Tokens -> Dividends ->
- *  Hardware) -- see design note #10/item 2. This is purely CLIENT-SIDE UI
- *  sequencing (matching design note #4's "mock action parameters, not mock
- *  plumbing" convention): the backend has no notion of a sub-phase within a
- *  single corporation's turn (`GameSession::sub_round_index` tracks which
- *  Operating Round block this is, a different and coarser concept -- see
- *  `operations.rs`), so nothing here is read from or written to chain
- *  state. It exists only to guide which buttons the Contextual Top Action
- *  Bar shows next. */
-type OperatingSubPhase =
-  | "BuyPrivate"
-  | "Track"
-  | "Tokens"
-  | "Routes"
-  | "Dividends"
-  | "Hardware";
+/* `OperatingSubPhase` and its ordered label table MOVED to
+   `components/OperatingSubPhaseStepper.tsx` (imported above).
+
+   They were declared here and the stepper needed all three -- the union,
+   the order and the labels. Re-declaring them there would have created the
+   second copy of a sequence the contract gates on
+   (`or_phase::OR_PHASE_ORDER`), which is the one thing this ordering must
+   not have. The stepper owns them now and this file imports; nothing about
+   the values changed.
+
+   `RulesReference.tsx` still keeps its own independent copy, deliberately
+   -- that file takes no game-state coupling at all (its design note #112). */
 
 /* ------------------------------------------------------------------ */
 /* Mock map preview data -- see design note #2                        */
@@ -992,6 +1089,34 @@ interface RoutePoint {
   q: number;
   r: number;
   hexLabel: string;
+  /** Step 4.5 Batch 3, item 1: which station on this hex the stop is.
+   *
+   *  `undefined` -- the normal case -- means "this hex has one stop, or
+   *  none": a town, plain connector track, or a single-city tile. Only a
+   *  genuinely multi-city hex (New York's #62, the OO tiles) needs it, and
+   *  the map has no two-city picker yet, so nothing sets it today. It is
+   *  carried on the point rather than bolted on at dispatch time so that
+   *  `routePointsToWaypoints` stays a pure rename of fields, and so adding
+   *  that picker later is a change to ONE click handler rather than to the
+   *  payload shape. */
+  cityNode?: number;
+}
+
+/** Converts the map's in-progress route into the contract's
+ *  `RunManualRoute` payload -- Step 4.5 Batch 3, item 1.
+ *
+ *  This is the single place the UI's route representation becomes the wire
+ *  format, so the deprecated `hex_path: string[]` shape cannot survive
+ *  anywhere by accident. `city_node` is omitted entirely (rather than sent
+ *  as `null`) when a point names no station: the field is `Option<usize>`
+ *  with `#[serde(default)]`-style optionality on the Rust side, and an
+ *  absent key is the cleaner encoding of "unspecified". */
+function routePointsToWaypoints(points: readonly RoutePoint[]): RouteWaypointDto[] {
+  return points.map((point) =>
+    point.cityNode === undefined
+      ? { hex: point.hexLabel }
+      : { hex: point.hexLabel, city_node: point.cityNode },
+  );
 }
 
 /** Standard axial-coordinate hex distance -- the number of hex-to-hex steps
@@ -1008,52 +1133,132 @@ function axialHexDistance(a: { q: number; r: number }, b: { q: number; r: number
   return (Math.abs(dq) + Math.abs(dq + dr) + Math.abs(dr)) / 2;
 }
 
-/** Ordered display metadata for `OperatingSubPhase` -- see design note #10.
- *  `index`/`total` feed the "Phase N of 4: <name>" label so the bar visibly
- *  communicates progress through a corporation's turn, not just its current
- *  button set. */
-const OPERATING_SUB_PHASE_LABELS: Readonly<Record<OperatingSubPhase, { index: number; name: string }>> = {
-  // Design note #144: mirrors `or_phase::OR_PHASE_ORDER` in the contract,
-  // which is now the AUTHORITY rather than a description. Every one of these
-  // six actions is gated on-chain against a persisted cursor, so this is no
-  // longer a UI convention the chain merely tolerates -- a client that walks
-  // a different order will have its transactions rejected with
-  // `WrongOperatingSubPhase`.
-  //
-  // `BuyPrivate` leads the turn but its action is locked until Phase 3; the
-  // contract starts the cursor at `Track` while the era is Yellow, and
-  // `initialOrSubPhase` below mirrors that so the bar does not open on a
-  // phase the chain says does not exist yet.
-  BuyPrivate: { index: 1, name: "Buy Private" },
-  Track: { index: 2, name: "Track" },
-  Tokens: { index: 3, name: "Tokens" },
-  // Design note #142: `Routes` is its own phase now. It used to be folded
-  // into `Dividends`, with "Run Trains" sitting as the first of three buttons
-  // there -- so the bar said "Dividends" while the action the player actually
-  // had to take first was running trains, and the two are not the same
-  // decision. Running trains COMPUTES the revenue; declaring dividends
-  // chooses what to DO with it, and cannot be answered before the first is
-  // done. Bundling them asked the player to make the second choice while the
-  // header named only that choice and the number it depends on did not exist
-  // yet.
-  Routes: { index: 4, name: "Routes" },
-  Dividends: { index: 5, name: "Dividends" },
-  Hardware: { index: 6, name: "Hardware" },
-};
 
-/** Where a corporation's turn starts, mirroring
- *  `or_phase::initial_sub_phase` -- `Track` before Phase 3, because
- *  `BuyPrivate`'s action is locked until then and the contract's cursor
- *  starts there too. */
-function initialOrSubPhase(era: string | null | undefined): OperatingSubPhase {
-  return era === "Yellow" || !era ? "Track" : "BuyPrivate";
+
+
+/* ===================================================================
+ *  DESIGN NOTE 197: THE MARKET MOVE LINE
+ * ===================================================================
+ *
+ * Two changes, and the second is a rules affordance rather than styling.
+ *
+ * FORMAT. It read "Market move: ↗ to $82", which states the destination and
+ * hides the departure -- the one comparison the dividend decision turns on.
+ * It now reads "Market move: $76 ⬆ $82": both prices, the arrow between
+ * them, in the direction the token travels.
+ *
+ * COLOUR AND TOOLTIP. A price that lands in a Yellow, Orange or Brown cell
+ * carries real rule consequences -- certificate-limit exemption, the 60%
+ * ownership cap, multi-share bank-pool buys -- and the chart has always
+ * shown that by tinting the cell. A player reading this panel is looking at
+ * a NUMBER, not at the chart, so the fact was invisible exactly when it
+ * mattered: paying out to step from a Normal cell into the Yellow zone is a
+ * different decision from stepping to any other cell, and nothing said so.
+ *
+ * Each price is therefore tinted with its own zone's ink and carries that
+ * zone's rule as a tooltip. `marketZoneForPrice` is the same lookup the
+ * chart colours itself from, so this panel and the board can never disagree
+ * about which prices are Brown -- see design note #196 for why the flat text
+ * ink is a separate export from the cell gradient.
+ *
+ * THE TWO PRICES ARE TINTED INDEPENDENTLY, which is the whole point: the
+ * interesting case is precisely the one where they differ.
+ */
+function ZonedPrice({ price }: { price: number | null }) {
+  if (price === null) return <>--</>;
+  const zone = marketZoneForPrice(price);
+  const color = marketZoneTextColor(zone);
+  const tooltip = marketZoneTooltip(zone);
+  return (
+    <span
+      style={color ? { color, fontWeight: 700, cursor: "help" } : undefined}
+      title={tooltip ?? undefined}
+    >
+      ${price}
+    </span>
+  );
 }
 
-/** Total Operating Round sub-phases, derived rather than written twice --
- *  the "Phase N of M" label reads `M` from here, so adding a phase above
- *  cannot leave a stale denominator behind (design note #142: the previous
- *  hardcoded "of 4" was exactly that hazard). */
-const OPERATING_SUB_PHASE_TOTAL = Object.keys(OPERATING_SUB_PHASE_LABELS).length;
+function MarketMoveLine({
+  currentPrice,
+  projection,
+  direction,
+}: {
+  currentPrice: number | null;
+  projection: MarketProjection | null;
+  /** Which way the token travels: paying out steps right, withholding left. */
+  direction: "pay" | "withhold";
+}) {
+  /* ================================================================
+   *  DESIGN NOTE 214: THE ARROW CARRIES THE MEANING
+   * ================================================================
+   *
+   * The arrows were a vertical pair -- U+2B06 UP and U+2B07 DOWN -- in the
+   * same neutral grey as the surrounding text. Two problems, and the second
+   * is the one that mattered.
+   *
+   * DIRECTIONALITY. 1830's chart moves a token ALONG ITS ROW: paying out
+   * steps right, withholding steps left. A purely vertical arrow describes
+   * neither of those, and on a chart where vertical movement is what
+   * SELLING does, an up arrow is actively the wrong gesture. The diagonals
+   * (U+2197 up-right, U+2198 down-right) read as "onward and better" versus
+   * "onward and worse", which is what the two choices actually are.
+   *
+   * COLOUR. Both arrows were grey, so at a glance the two columns of this
+   * panel looked identical and the player had to read the prices to tell
+   * which was which. Green for the rise and red for the fall is the one
+   * colour convention every player already has, and it lets the choice be
+   * made peripherally.
+   *
+   * THE PRICES KEEP THEIR OWN COLOURS. Design note #197 tints each price by
+   * its market ZONE -- a rules fact -- and that must not be overwritten by
+   * the direction, which is a different fact about a different thing. So the
+   * arrow is the only glyph the direction colours, and it is deliberately
+   * heavier than the text around it so it wins the glance without needing
+   * the prices to shout.
+   */
+  const rising = direction === "pay";
+  const arrow = rising ? "↗" : "↘";
+
+  // No chart position at all -- an unfloated corporation, or a price the
+  // grid has no cell for. Saying so beats printing an arrow between two
+  // dashes, which would read as a move to nowhere.
+  if (projection === null || currentPrice === null) {
+    return (
+      <span style={styles.dividendMove}>
+        Market move: not on the market chart
+      </span>
+    );
+  }
+
+  return (
+    <span style={styles.dividendMove}>
+      Market move: <ZonedPrice price={currentPrice} />{" "}
+      <span
+        style={{
+          ...styles.dividendMoveArrow,
+          ...(rising ? styles.dividendMoveArrowUp : styles.dividendMoveArrowDown),
+        }}
+        // The arrow is decoration for a sighted reader and the whole
+        // direction for everyone else, so it is labelled rather than hidden.
+        role="img"
+        aria-label={rising ? "rises to" : "falls to"}
+      >
+        {arrow}
+      </span>{" "}
+      <ZonedPrice price={projection.price} />
+      {/* The edge of the chart. The format is unchanged -- both prices and
+          the arrow are still there, and they are simply equal -- with the
+          reason appended, because a line reading "$100 ↗ $100" with no
+          explanation looks like a bug rather than a ceiling. */}
+      {!projection.moves && (
+        <span style={styles.dividendMoveNote}>
+          {rising ? " (already at the top of its row)" : " (already at the bottom of its row)"}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function ContextualActionBar({
   roundType,
@@ -1062,31 +1267,34 @@ function ContextualActionBar({
   onPassTurn,
   passDisabledReason,
   onPlaceStationTokenHint,
+  stationTokenCost,
+  activeCorporation,
+  tokenTargetMode,
+  setTokenTargetMode,
   onSkipSubPhase,
-  onBuyPrivateHint,
+  onOpenPrivateTrade,
   ownsAnyTrain,
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
+  dividendRevenue,
+  dividendRevenueIsThisTurn,
+  dividendPerShare,
+  dividendPayouts,
+  rustOutlookForBar,
+  dividendPrice,
+  payProjection,
+  withholdProjection,
   selectedHardwareModel,
-  onSelectHardwareModel,
-  onBuyTrain,
   onEndOperatingTurn,
   onUndoLastAction,
-  routeSelectMode,
-  onToggleRouteSelectMode,
-  routePoints,
-  routeHopCount,
-  routeMaxDistance,
-  routeExceedsMaxDistance,
+  routeBuildMode,
+  onSelectRouteBuildMode,
+  onSelectRouteTrain,
+  trainDrafts,
+  activeTrainIndex,
   routeFeedback,
   onClearRoute,
-  sellablePrivates,
-  selectedPrivateId,
-  onSelectPrivate,
-  privatePriceVgp,
-  onPrivatePriceChange,
-  onBuyPrivateCompany,
   currentGlobalEra,
   isMyTurn,
   phase,
@@ -1102,43 +1310,89 @@ function ContextualActionBar({
    *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
   passDisabledReason: string | null;
   onPlaceStationTokenHint: () => void;
+  /** Design note #181: what a token costs this corporation, for the button
+   *  label. A number rather than a formatted string so the caller cannot
+   *  quietly change the currency here. */
+  stationTokenCost: number;
+  /** Design note #228: who is acting, and the three figures that gate what
+   *  they can do this turn. `null` before the first `GetGameState` resolves
+   *  or when the operating queue names a company this build does not know --
+   *  the card then says so rather than rendering blanks. */
+  activeCorporation: {
+    companyId: number;
+    ticker: string;
+    fullName: string | null;
+    presidentLabel: string | null;
+    treasury: number;
+    /** Design note #237: the whole allowance, one entry per token, with its
+     *  own escalating price. Replaces the `stationsLeft`/`stationLimit`
+     *  pair, which could only express a fraction. */
+    stationSlots: readonly StationTokenSlot[];
+    trains: readonly string[];
+  } | null;
+  /** Design note #159: whether station-token targeting is armed, and the
+   *  setter behind the banner's own Cancel. Passed rather than owned here
+   *  because the CANVAS is the other half of this mode and lives in the
+   *  parent. */
+  tokenTargetMode: boolean;
+  setTokenTargetMode: (on: boolean) => void;
   /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`
    *  message. Every skip is now an on-chain, replayable event -- the old
    *  client-only `setOrSubPhase` calls advanced the UI while the contract's
    *  cursor stayed put, which under G-14 enforcement would have desynced the
    *  bar from what the chain would actually accept. */
   onSkipSubPhase: () => void;
-  onBuyPrivateHint: () => void;
+  /** Opens the propose-purchase sheet -- design note #165. */
+  onOpenPrivateTrade: () => void;
   /** Drives the Routes skip button's disabled state -- see its `title`. */
   ownsAnyTrain: boolean;
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
+  /** Design note #188: the acting corporation's last route revenue, and the
+   *  per-10%-share split of it. */
+  dividendRevenue: number;
+  /** Design note #278: whether `dividendRevenue` was earned on THIS turn.
+   *  `false` only when this corporation is known to have skipped the Routes
+   *  step, which makes a carried-over figure from a previous Operating
+   *  Round non-binding. */
+  dividendRevenueIsThisTurn: boolean;
+  dividendPerShare: number;
+  /** Who receives what, already resolved to display names. */
+  dividendPayouts: ReadonlyArray<{ holder: string; percentage: number; amount: number }>;
+  /** Design note #259: per-tier rust countdown, so the bar's train chips
+   *  read identically to the Round Detail table's. */
+  rustOutlookForBar: Readonly<Record<TrainTier, TierRustOutlook>> | null;
+  /** Design note #197: the price the token sits on NOW. The market move line
+   *  states both ends of the step, and this is the departure. `null` for a
+   *  corporation with no position on the chart. */
+  dividendPrice: number | null;
+  /** Where the stock token lands under each choice, or `null` when the
+   *  current price is not on the chart. */
+  payProjection: MarketProjection | null;
+  withholdProjection: MarketProjection | null;
   selectedHardwareModel: string;
-  onSelectHardwareModel: (modelType: string) => void;
-  onBuyTrain: () => void;
   onEndOperatingTurn: () => void;
   onUndoLastAction: () => void;
-  /** Manual Route Point UI -- see design note #11. Always visible,
-   *  independent of round type, matching "Undo Last Action"'s own placement
-   *  convention. */
-  routeSelectMode: boolean;
-  onToggleRouteSelectMode: () => void;
-  routePoints: readonly RoutePoint[];
-  routeHopCount: number;
-  routeMaxDistance: number | undefined;
-  routeExceedsMaxDistance: boolean;
+  /** Design note #266: which drafting tool built the path on screen. The
+   *  old `routeSelectMode` boolean plus a separate Auto Route ACTION became
+   *  one two-position mode -- see `RoutePlannerPanel`'s design note #1. */
+  routeBuildMode: RouteBuildMode;
+  onSelectRouteBuildMode: (mode: RouteBuildMode) => void;
+  onSelectRouteTrain: (trainIndex: number) => void;
+  /** Design note #275: one priced draft per owned train, INCLUDING
+   *  duplicate models -- three 3-trains are three entries. */
+  trainDrafts: readonly TrainRouteDraft[];
+  /** Which train the map's clicks are drafting for. */
+  activeTrainIndex: number;
+  /** Design note #266/#4: why the builder refused the last map click, or
+   *  `null`. Distinct from the standing legality reasons the panel derives
+   *  for itself -- only the click handler knows this one. */
   routeFeedback: string | null;
-  onClearRoute: () => void;
+  onClearRoute: (trainIndex: number | null) => void;
   /** Buy Private Company Action Tray -- design note #14. Already filtered
    *  down to what `activePlayerAddress` actually still owns and could sell
    *  (`playerSellablePrivateCompanies`), not the full room-wide list. */
-  sellablePrivates: PrivateCompanyState[];
-  selectedPrivateId: number | null;
-  onSelectPrivate: (privateId: number) => void;
-  privatePriceVgp: number;
-  onPrivatePriceChange: (priceVgp: number) => void;
-  onBuyPrivateCompany: () => void;
   currentGlobalEra: TileColor | null;
   /** Active Player Turn Notifications -- design note #18/item 4. Applies
    *  the shared `app-turn-pulse-glow` keyframe (see `styles.appRoot`'s own
@@ -1149,6 +1403,50 @@ function ContextualActionBar({
    *  design note #40 for why it moved here from the header. */
   phase?: GamePhase | null;
 }) {
+  // Design note #7 (`gamePhase.ts`): the ONE severity decision, shared with
+  // the train chips. Computed here rather than inline in the JSX because
+  // both the badge's style and its wording branch on it.
+  const phaseAlert = phaseAlertLevel(phase ?? null);
+
+  /* Design note #236: the acting corporation's own colours, resolved once.
+   *
+   * `bestContrastTextColor` is the same per-fill choice the map's station
+   * tokens make for their acronyms, so this bar and the tokens it describes
+   * agree about what is legible on that brand colour -- rather than this
+   * asserting white and being wrong on C&O's orange.
+   *
+   * SECONDARY TEXT IS THE SAME INK AT REDUCED ALPHA, never a fixed grey. A
+   * grey that reads as "quieter" on PRR's dark red is nearly invisible on
+   * C&O's orange; alpha over the actual background holds its relationship to
+   * whatever is behind it.
+   *
+   * NO CORPORATION -> the neutral dark this bar always had. That state is
+   * reachable before the first `GetGameState` resolves, and colouring it
+   * from `stationTickerColor(0)`'s fallback grey would dress an empty bar as
+   * though a company were acting. */
+  const corporationBarInk = React.useMemo(() => {
+    if (!activeCorporation) {
+      return {
+        background: "#171c28",
+        border: "#2b3242",
+        ink: "#eaf2ff",
+        inkMuted: "rgba(234, 242, 255, 0.66)",
+      };
+    }
+    const background = stationTickerColor(activeCorporation.companyId);
+    const ink = bestContrastTextColor(background);
+    const light = ink === "#FFFFFF";
+    return {
+      background,
+      // A translucent black edge darkens any hue by the same amount, so one
+      // rule gives every corporation a border rather than eight hand-picked
+      // shades that would drift from the palette they are derived from.
+      border: "rgba(0, 0, 0, 0.35)",
+      ink,
+      inkMuted: light ? "rgba(255, 255, 255, 0.74)" : "rgba(0, 0, 0, 0.66)",
+    };
+  }, [activeCorporation]);
+
   // Round-type-specific buttons -- see design note #8 for exactly which
   // real ExecuteMsg each one dispatches, and why "Place Station Token" is
   // deliberately non-dispatching. Design note #10/item 2: within an
@@ -1162,12 +1460,6 @@ function ContextualActionBar({
     switch (orSubPhase) {
       case "Track":
         contextualButtons = [
-          {
-            key: "skip-track",
-            label: "Skip Track Lay",
-            onClick: onSkipSubPhase,
-            title: "No tile to lay this turn -- click a hex on the Rail Map instead to lay one.",
-          },
         ];
         break;
       case "BuyPrivate":
@@ -1178,54 +1470,67 @@ function ContextualActionBar({
           {
             key: "buy-private",
             label: "Buy Private Company",
-            onClick: onBuyPrivateHint,
+            onClick: onOpenPrivateTrade,
             title: "Select a private company below to purchase it into this corporation's treasury.",
           },
-          { key: "skip-private", label: "Skip Private Purchase", onClick: onSkipSubPhase },
         ];
         break;
       case "Tokens":
         contextualButtons = [
           {
             key: "station",
-            label: "Place Station Token",
+            // Design note #181: the PRICE is on the button. A token costs
+            // real treasury and the amount varies by corporation, so
+            // "Place Station Token" asked the player to commit to a spend
+            // whose size the UI knew and did not say.
+            label: `Place Station Token for $${stationTokenCost}`,
             onClick: onPlaceStationTokenHint,
-            title: "Click any hex on the Rail Map to open the tile/station placement popup.",
+            title: `Costs $${stationTokenCost} from this corporation's treasury. Click a city hex on the Rail Map to place it.`,
           },
-          { key: "skip-tokens", label: "Skip Tokens", onClick: onSkipSubPhase },
         ];
         break;
       case "Routes":
-        // Design note #142: its own phase. Running trains is what PRODUCES
-        // the revenue figure; the dividend decision below is what is done
-        // with it. A player who sees "Routes" knows the outstanding task is
-        // to run, not to choose a payout that has nothing to pay out yet.
-        contextualButtons = [
-          { key: "trains", label: "Run Trains (mock)", onClick: onRunTrains },
-          {
-            key: "skip-routes",
-            label: "Skip Routes",
-            onClick: onSkipSubPhase,
-            // Design note #144: the contract REFUSES this skip for a
-            // corporation that owns any train -- a train must be run. Disabled
-            // rather than hidden, with the reason, so the rule is visible at
-            // the moment it binds instead of surfacing as a rejected tx.
-            disabled: ownsAnyTrain,
-            title: ownsAnyTrain
-              ? "This corporation owns a train, and a train must be run -- Routes cannot be skipped."
-              : "No train owned, so there is nothing to run.",
-          },
-        ];
+        /* Design note #142: its own phase. Running trains is what PRODUCES
+           the revenue figure; the dividend decision below is what is done
+           with it.
+
+           NO CONTEXTUAL BUTTON -- design note #266. "Run Selected Route"
+           used to sit here, in the centre column, ABOVE the panel showing
+           the route it would submit and the readout saying whether that
+           route was legal. It is now the bottom row of `RoutePlannerPanel`,
+           directly under the path it runs and carrying the amount it pays.
+           Leaving a copy here would be a second control for one action --
+           and the vaguer of the two, since only the panel's copy knows the
+           figure. */
+        contextualButtons = [];
         break;
       case "Dividends":
         contextualButtons = [
-          { key: "pay-dividends", label: "Pay Dividends", onClick: onPayDividends },
-          { key: "withhold-revenue", label: "Withhold Revenue", onClick: onWithholdRevenue },
+          {
+            key: "pay-dividends",
+            // Design note #188: the per-share figure is the number the
+            // decision turns on, and it was the one thing the button did
+            // not say. 1830 splits revenue ten ways -- one share is 10% --
+            // so a $180 route pays $18 a share.
+            label: `Pay Dividends ($${dividendPerShare} per share)`,
+            onClick: onPayDividends,
+            title: `Splits $${dividendRevenue} between every shareholder at $${dividendPerShare} per 10% share.`,
+          },
+          {
+            key: "withhold-revenue",
+            label: "Withhold to Corporate Treasury",
+            onClick: onWithholdRevenue,
+            title: `Keeps all $${dividendRevenue} in the corporation's treasury. Shareholders receive nothing.`,
+          },
         ];
         break;
       case "Hardware":
         contextualButtons = [
-          { key: "train", label: "Buy Train (mock)", onClick: onBuyTrain },
+          // Both ways of acquiring a train live in `TrainPurchasePanel`
+          // (design note #203), which is the only place that knows what the
+          // depot will sell and which corporations hold what. Duplicating
+          // either here as a generic "Buy Train" would be a second control
+          // for one action, and the vaguer of the two.
           { key: "end-turn", label: "End Turn", onClick: onEndOperatingTurn },
         ];
         break;
@@ -1244,7 +1549,6 @@ function ContextualActionBar({
     contextualButtons = [];
   }
 
-  const phaseLabel = roundType === "OperatingRound" ? OPERATING_SUB_PHASE_LABELS[orSubPhase] : null;
 
   /* ==================================================================
    *  DESIGN NOTE 33: THE ROUTE TOGGLE IS A RUN-TRAINS TOOL, NOT A
@@ -1275,6 +1579,16 @@ function ContextualActionBar({
    * force-clears `routeSelectMode` whenever this condition goes false; see
    * the `useEffect` next to the `routeSelectMode` state declaration. */
   const showRouteToggle = roundType === "OperatingRound" && orSubPhase === "Routes";
+
+  /* Design note #278: the Dividends step's Pay-or-Withhold binary. Derived
+     here rather than passed in, because both halves -- the step and the
+     revenue -- are already props, and a second boolean saying what they
+     jointly mean is a thing that can disagree with them. */
+  const dividendChoiceForced =
+    roundType === "OperatingRound" &&
+    orSubPhase === "Dividends" &&
+    dividendRevenue > 0 &&
+    dividendRevenueIsThisTurn;
 
   /* ==================================================================
    *  DESIGN NOTE 31: ONE BAR, EVERYWHERE
@@ -1307,13 +1621,479 @@ function ContextualActionBar({
   return (
     <>
     <div style={{ ...styles.actionBar, ...(isMyTurn ? styles.actionBarTurnPulse : {}) }}>
+      {/* The "Phase N of 6: Track" suffix is GONE, and its removal is the
+          point rather than a simplification.
+
+          The stepper below numbers from the steps this era actually has
+          (design note #2 there): five in the Yellow era, six from Phase 3.
+          This label numbered from the fixed six-entry table. So the moment
+          the stepper shipped, the bar read "Phase 2 of 6: Track" directly
+          above a strip whose first chip said "1 Lay Track" -- two different
+          numbers for the same step, six inches apart.
+
+          Reconciling them would mean two places computing one position.
+          The strip already shows the position, the progress AND the
+          sequence, so the text is redundant as well as contradictory; the
+          honest fix is for one of them to stop making the claim. */}
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
-          ? `Operating Round${phaseLabel ? ` -- Phase ${phaseLabel.index} of ${OPERATING_SUB_PHASE_TOTAL}: ${phaseLabel.name}` : ""}`
+          ? "Operating Round"
           : roundType === "StockRound"
             ? "Stock Round"
             : "No live round"}
       </span>
+      {/* Operating Round turn stepper. Renders directly under the round
+          label it elaborates: the label says WHICH step, the strip says
+          where that step sits in the turn. Operating Round only -- there is
+          no sub-phase sequence in a Stock Round or the auction, and a strip
+          showing one would be inventing structure.
+
+          Design note #212: the strip is a READ-ONLY indicator in every
+          mode now, sandbox included. The only control on it is Skip, which
+          dispatches the real `AdvanceOperatingSubPhase` -- see that
+          component's design note #1 for why a clickable sandbox strip made
+          the one place that tests the turn order unable to test it. */}
+      {/* Design note #159: the targeting badge. A crosshair on the canvas
+          only reads while the pointer is OVER the canvas -- a player who
+          armed the mode and then looked at a panel has no way to tell it is
+          still on. This says so where the controls are. */}
+      {tokenTargetMode && (
+        <div style={styles.tokenTargetBanner} role="status">
+          <span style={styles.tokenTargetDot} aria-hidden="true" />
+          Placing station token -- click a city hex on the Rail Map.
+          <button
+            type="button"
+            style={styles.tokenTargetCancel}
+            onClick={() => setTokenTargetMode(false)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {/* ===================================================================
+           DESIGN NOTE 164: THE OPERATING ROUND PANEL IS TWO ROWS
+          ===================================================================
+
+          It used to be one long wrapping strip: Pass Turn, a divider, every
+          action for the current sub-phase, another divider, Undo, the route
+          mode toggle, a spacer, the phase badge, the shift warning. On a
+          narrow window that wrapped, and because the number of contextual
+          buttons CHANGES with the sub-phase, the badges moved every time the
+          turn advanced. A warning that relocates as the game progresses is a
+          warning players stop tracking.
+
+          Now: a stepper row, then an action row laid out as a THREE-COLUMN
+          GRID -- `1fr auto 1fr`. The centre column holds the sub-phase
+          actions and is genuinely centred on the panel, not merely centred
+          in whatever space the sides left over, because the two `1fr` rails
+          are equal by construction however wide their contents get. The
+          badges dock left and the always-available utilities dock right, and
+          neither can push the actions off-centre.
+
+          THE FOUR "SKIP" BUTTONS ARE GONE. `Skip Track Lay`, `Skip Private
+          Purchase`, `Skip Tokens` and `Skip Routes` all called
+          `onSkipSubPhase` -- the exact handler the stepper's own "Advance
+          Sub-Phase" button calls. Four names for one action, one of them
+          present in every phase, which is what made the action row read as
+          a pile of controls rather than as "what can I do here". Advancing
+          is a property of the TURN, so it lives with the stepper that shows
+          the turn; the action row now holds only things that actually
+          change game state. */}
+      {roundType === "OperatingRound" ? (
+        <div style={styles.orPanel}>
+          {/* ===================================================================
+               DESIGN NOTE 228: WHOSE TURN IS IT, AND WHAT DO THEY HAVE
+              ===================================================================
+
+              A player presiding over three corporations had no single place
+              telling them which one is acting. The information existed --
+              the Round Detail table below the board highlights the active
+              row, and the corporation roster carries treasuries -- but both
+              are elsewhere on the page, and the action bar, which is where
+              every decision is actually made, named no company at all. So
+              the commonest question in an Operating Round ("am I spending
+              PRR's money or NYC's?") required looking away from the controls
+              that spend it.
+
+              FOUR FACTS, chosen because each one gates a decision on this
+              very bar rather than because they were available:
+
+                TREASURY   caps every action in the turn -- a tile's terrain
+                           cost, a token, a train.
+                STATIONS   how many tokens are left and what the next one
+                           costs, which is the Tokens step's whole decision
+                           and was previously only on the button.
+                TRAINS     what can run in the Routes step, and what the
+                           train limit permits buying in Hardware.
+
+              Rendered as a strip above the stepper: it describes the whole
+              turn, and the stepper describes where in that turn you are. */}
+          {/* ==================================================================
+               DESIGN NOTE 236: THE BAR WEARS THE CORPORATION'S COLOUR
+              ==================================================================
+
+              Two changes, and the second is why the first matters.
+
+              THE COLOUR IS THE IDENTITY NOW. This was a fixed dark navy with
+              a small brand-coloured dot -- the same slab for every
+              corporation, so telling PRR's turn from NYC's meant reading the
+              ticker. The bar now takes `stationTickerColor`, the exact
+              palette the station tokens on the map are drawn from, so the
+              strip and the tokens the player is placing are visibly the same
+              company. A player running three corporations can tell whose
+              turn it is peripherally, which is the whole complaint.
+
+              THE DOT WENT WITH IT. A brand-coloured dot on a brand-coloured
+              bar is invisible, and it was only ever a miniature of the
+              signal the bar now carries at full size.
+
+              INK IS DERIVED, NOT ASSERTED. `bestContrastTextColor` is the
+              same per-fill choice the map tokens use for their acronyms, so
+              B&M's dark slate gets white text and C&O's orange gets black
+              without either being hardcoded. Secondary text takes the same
+              ink at reduced alpha rather than a fixed grey, which would go
+              illegible on half the palette. */}
+          <div
+            style={{
+              ...styles.orContextCard,
+              backgroundColor: corporationBarInk.background,
+              borderColor: corporationBarInk.border,
+            }}
+          >
+            <span style={styles.orContextIdentity}>
+              <span style={{ ...styles.orContextTicker, color: corporationBarInk.ink }}>
+                {activeCorporation?.ticker ?? "No corporation"}
+              </span>
+              {activeCorporation?.fullName && (
+                <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
+                  {activeCorporation.fullName}
+                </span>
+              )}
+              {activeCorporation?.presidentLabel && (
+                <span style={{ ...styles.orContextPresident, color: corporationBarInk.inkMuted }}>
+                  {"\u{1F451} "}
+                  {activeCorporation.presidentLabel}
+                </span>
+              )}
+            </span>
+
+            {activeCorporation && (
+              <span style={styles.orContextFacts}>
+                <span style={styles.orContextFact} title="Everything this corporation can spend this turn.">
+                  <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
+                    Treasury
+                  </span>
+                  <span style={{ ...styles.orContextFactValue, color: corporationBarInk.ink }}>
+                    ${activeCorporation.treasury}
+                  </span>
+                </span>
+
+                {/* ==================================================================
+                     DESIGN NOTE 237: TOKENS, NOT A FRACTION
+                    ==================================================================
+
+                    This read `2/4 - $40 ea`, which was wrong about the money
+                    and shaped wrong for the decision. The price is not flat:
+                    the home token is free, the second is $40 and every one
+                    after that is $100 (`utils/stationTokens.ts` design note
+                    #0), so "$40 ea" understated a third token by 60%.
+
+                    The row draws the corporation's whole allowance as
+                    circles in placement order, each captioned with its own
+                    cost, spent ones greyed in place. See
+                    `StationTokenRow.tsx` for why it needs its own inset
+                    surface on a brand-coloured bar. */}
+                <span style={styles.orContextFact}>
+                  <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
+                    Stations
+                  </span>
+                  <StationTokenRow
+                    slots={activeCorporation.stationSlots}
+                    color={corporationBarInk.background}
+                    ink={corporationBarInk.ink}
+                    inkMuted={corporationBarInk.inkMuted}
+                    emptyLabel="no allowance reported"
+                  />
+                </span>
+
+                <span style={styles.orContextFact}>
+                  <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
+                    Trains
+                  </span>
+                  {/* The same chips the Round Detail table draws, so a train
+                      reads identically wherever it appears -- including the
+                      amber tint on a tier that is about to rust. */}
+                  {activeCorporation.trains.length === 0 ? (
+                    <span style={{ ...styles.orContextFactNone, color: corporationBarInk.inkMuted }}>
+                      none
+                    </span>
+                  ) : (
+                    <TrainChips
+                      trains={activeCorporation.trains}
+                      phase={phase ?? null}
+                      surface="dark"
+                      // Design note #259: the rust countdown, matching the
+                      // Round Detail table below the board. Without
+                      // `outlook` a chip's tooltip names WHAT will destroy
+                      // it but not HOW SOON -- and "rusts when the first
+                      // 4-train is bought" is a different decision from
+                      // "rusts in one more purchase". The figure was
+                      // already computed for the table; this bar simply
+                      // was not being handed it.
+                      outlook={rustOutlookForBar}
+                    />
+                  )}
+                  {/* Design note #248: the limit, beside the fleet it caps.
+                      The chips say WHICH trains; this says how much room is
+                      left, which is the figure that decides whether the Buy
+                      Trains step has anything in it. Amber at the ceiling,
+                      because that is the state that ends the step. */}
+                  {phase?.trainLimit !== undefined && (
+                    <span
+                      style={{
+                        ...styles.orContextFactValue,
+                        color:
+                          activeCorporation.trains.length >= phase.trainLimit
+                            ? "#e0c97a"
+                            : corporationBarInk.ink,
+                      }}
+                      title={
+                        activeCorporation.trains.length >= phase.trainLimit
+                          ? `At the limit -- ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically.`
+                          : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`
+                      }
+                    >
+                      {activeCorporation.trains.length} / {phase.trainLimit}
+                    </span>
+                  )}
+                </span>
+              </span>
+            )}
+          </div>
+
+          <div style={styles.orPanelStepperRow}>
+            {/* Design note #235: UNDO lives on the sub-phase line now. It is
+                the only control that moves the turn cursor BACKWARDS, so it
+                belongs beside the strip that displays that cursor -- the two
+                things that move the same pointer, together. */}
+            <OperatingSubPhaseStepper
+              current={orSubPhase}
+              era={currentGlobalEra}
+              trailing={
+                <button
+                  type="button"
+                  style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+                  onClick={onUndoLastAction}
+                  disabled={!sessionReady}
+                  title="Step the turn back. Always available, independent of round type."
+                >
+                  Undo
+                </button>
+              }
+            />
+          </div>
+
+          <div style={styles.orPanelActionRow}>
+            {/* LEFT RAIL -- docked status. Fixed home, so the phase badge and
+                the rust warning sit in the same place all game. */}
+            <div style={styles.orPanelRailLeft}>
+              {phase && (
+                <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
+                  {phase.label}
+                </span>
+              )}
+              {phaseAlert && (
+                <span
+                  className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
+                  style={{
+                    ...styles.phaseShiftBadge,
+                    ...(phaseAlert === "critical"
+                      ? styles.phaseShiftBadgeCritical
+                      : styles.phaseShiftBadgeWarn),
+                  }}
+                  title={
+                    phase?.shiftWarning ??
+                    (phase?.depotRemaining === 0
+                      ? `No ${phase.tier}-Trains left in the Bank Depot.`
+                      : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
+                  }
+                >
+                  {phaseAlert === "critical" ? (
+                    <>&#9888; Phase Shift Imminent</>
+                  ) : (
+                    <>&#9888; Phase Shift in 2 Buys</>
+                  )}
+                </span>
+              )}
+            </div>
+
+            {/* CENTRE -- only what this sub-phase can actually do. */}
+            <div style={styles.orPanelActions}>
+              {/* ===================================================================
+                   DESIGN NOTE 279: NO PLACEHOLDER WHERE A CONTROL SHOULD BE
+                  ===================================================================
+
+                  This row used to fall back to "No button for this step --
+                  use Skip to move on." whenever a sub-phase contributed no
+                  contextual buttons.
+
+                  Design note #180 wrote it to replace an even worse string
+                  ("Nothing to do in this step"), and it kept that string's
+                  central mistake: it describes the PANEL rather than the
+                  player's options. Every step of an Operating Round has
+                  something to do -- lay track, place a token, draw a route,
+                  buy a train -- and a line saying otherwise was only ever
+                  true of this one div.
+
+                  It also aged badly. By the time the Run Routes controls had
+                  moved into their own panel, `Routes` was the only step
+                  reaching this branch -- so the one place the string
+                  actually rendered was a step with a whole route planner
+                  directly beneath it, telling the player there was nothing
+                  here but Skip.
+
+                  Deleted outright, and the Routes controls moved onto this
+                  line (below) so the branch has content rather than a
+                  caption about its absence. The Track hint survives because
+                  it is the opposite kind of string: it says where the
+                  action IS (on the map), which is a thing the player cannot
+                  otherwise know. */}
+              {contextualButtons.length === 0 && orSubPhase === "Track" && (
+                <span style={styles.orPanelNoActions}>
+                  Select a hex on the map to lay or upgrade track. Click the preview to rotate.
+                </span>
+              )}
+              {contextualButtons.map((btn) => (
+                <button
+                  key={btn.key}
+                  type="button"
+                  style={styles.actionBarButton}
+                  onClick={btn.onClick}
+                  disabled={btn.disabled || !sessionReady}
+                  title={btn.title}
+                >
+                  {btn.label}
+                </button>
+              ))}
+
+              {/* ===================================================================
+                   DESIGN NOTE 279: THE ROUTE MODE TOGGLE IS A TOOLBAR CONTROL
+                  ===================================================================
+
+                  Run Routes was the only sub-phase whose primary controls
+                  lived somewhere other than this line. The toggle sat at the
+                  top of `RoutePlannerPanel`, inside its border, above a
+                  table of drafted routes -- which reads as a property of
+                  those routes rather than as the tool that makes them.
+
+                  It sits here now, immediately before Skip, because those
+                  two ARE the choice on arriving at this step: pick how to
+                  build a route, or decline to build one. The panel below
+                  keeps everything that describes a route.
+
+                  See `RoutePlannerPanel`'s design note #7 for why the
+                  component itself still lives there rather than being
+                  rebuilt here. */}
+              {showRouteToggle && (
+                <RouteModeToggle
+                  mode={routeBuildMode}
+                  onSelectMode={onSelectRouteBuildMode}
+                  ownsAnyTrain={ownsAnyTrain}
+                  controlsEnabled={sessionReady}
+                  noTrainReason={NO_TRAIN_ROUTE_REASON}
+                />
+              )}
+
+              {/* ==================================================================
+                   DESIGN NOTE 258: SKIP IS AN ACTION, SO IT SITS WITH THE ACTIONS
+                  ==================================================================
+
+                  Design note #235 moved Skip onto the action ROW for the
+                  right reason -- it is the alternative to whatever this step
+                  offers -- but dropped it into the right RAIL, which is the
+                  docked-utilities column. The row is a three-column grid
+                  (`1fr auto 1fr`), so anything in that rail is pinned to the
+                  far edge: Skip ended up flush right, half a panel away from
+                  the buttons it is an alternative to.
+
+                  It sits in the CENTRE column now, last in the group.
+                  Declining is the fallback, so it reads after the things it
+                  is a fallback to rather than competing for the first
+                  glance.
+
+                  ==================================================================
+                   DESIGN NOTE 263: EXCEPT ON THE LAST STEP, WHERE IT IS A TWIN
+                  ==================================================================
+
+                  Buy Trains is the final sub-phase of a corporation's turn,
+                  and it already carries "End Turn". Skip and End Turn there
+                  are the same gesture wearing two labels: nothing follows
+                  Buy Trains, so "move past this step without acting" IS
+                  "finish this turn". Two buttons for one outcome is worse
+                  than a redundant control -- it implies a distinction, and a
+                  player who reads one has to work out what the other would
+                  do differently.
+
+                  So Skip is hidden on `Hardware` and End Turn is the sole
+                  advancement, which is also the honest label: the turn is
+                  what ends. Every earlier step keeps Skip, because on those
+                  it genuinely does something End Turn does not -- move one
+                  step and leave the rest of the turn intact. */}
+              {/* ===================================================================
+                   DESIGN NOTE 278: A CORPORATION THAT EARNED CANNOT DECLINE
+                  ===================================================================
+
+                  Skip was available on the Dividends step regardless of what
+                  the trains had just earned, which offers a third option
+                  1830 does not have. Once a corporation runs a route for
+                  more than $0 the money EXISTS, and the rules give exactly
+                  two places it can go: out to the shareholders, or into the
+                  treasury. There is no third door where it evaporates.
+
+                  Worse than merely wrong, it was the ONE step where skipping
+                  silently destroyed value. Skipping Track or Tokens forgoes
+                  an opportunity; skipping a declared $180 would have thrown
+                  away $180 the corporation had already earned, and nothing
+                  on screen said so.
+
+                  So Skip disappears when there is revenue to allocate, and
+                  the Pay/Withhold pair -- already the only two contextual
+                  buttons on this step -- becomes the whole choice.
+
+                  IT STAYS AT $0, which is the case the rule does not cover.
+                  A corporation that ran nothing, or ran a route worth
+                  nothing, has no money to allocate and no reason to be held
+                  on this step; `DeclareDividends` for zero is a message with
+                  no effect, so Skip is the honest control there. That is
+                  also why this tests the REVENUE rather than the sub-phase:
+                  the question is whether anything was earned, not which
+                  step the cursor is on. */}
+              {orSubPhase !== "Hardware" && !dividendChoiceForced && (
+                <button
+                  type="button"
+                  style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+                  onClick={onSkipSubPhase}
+                  disabled={!sessionReady}
+                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. Dispatches AdvanceOperatingSubPhase -- the contract moves its own cursor one step.`}
+                >
+                  Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
+                </button>
+              )}
+            </div>
+
+            {/* RIGHT RAIL -- always-available utilities, never sub-phase
+                specific, so they do not belong in the centre. */}
+            <div style={styles.orPanelRailRight}>
+              {/* Design note #266: the Auto Route / Manual Route pair used to
+                  live here, in the docked-utilities rail. They are not
+                  utilities -- they are the first step of the Run Routes
+                  task -- and they now head `RoutePlannerPanel` below as one
+                  segmented control. See that file's design note #0 for why
+                  the three regions became one column. */}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div style={styles.actionBarButtons}>
         {/* Design note #31: Pass leads -- it is the action available in
             every phase, and the one a player reaches for most. */}
@@ -1352,35 +2132,11 @@ function ContextualActionBar({
         >
           Undo Last Action
         </button>
-        {/* Manual Route Point UI toggle -- design notes #11 and #33. Scoped
-            to the Routes sub-phase; see design note #33 for why "harmless
-            everywhere else" was not actually true. */}
-        {showRouteToggle && (
-          <>
-            <span style={styles.actionBarDivider} />
-            <button
-              type="button"
-              role="switch"
-              aria-checked={routeSelectMode}
-              style={{
-                ...styles.actionBarButton,
-                ...(routeSelectMode ? styles.routeToggleButtonActive : {}),
-              }}
-              onClick={onToggleRouteSelectMode}
-              title="Click a chain of neighbouring hexes on the Rail Map to sketch a route for the train you are about to run."
-            >
-              <span style={styles.routeToggleSwitchTrack}>
-                <span
-                  style={{
-                    ...styles.routeToggleSwitchThumb,
-                    ...(routeSelectMode ? styles.routeToggleSwitchThumbActive : {}),
-                  }}
-                />
-              </span>
-              Select Route Points
-            </button>
-          </>
-        )}
+        {/* The route mode toggle used to render here too. It is
+            `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
+            in this NON-Operating-Round branch it was unreachable markup.
+            Removed rather than left as a second copy to keep in step with
+            the live one in the OR panel above. */}
 
         {/* Design note #40: the phase badge, pinned right. `marginLeft:
             auto` on the spacer rather than on the badge itself, because the
@@ -1392,23 +2148,44 @@ function ContextualActionBar({
             {phase.label}
           </span>
         )}
-        {phase?.shiftImminent && (
+        {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
+            used to render identically at two purchases and at one, so the
+            last purchase before a rust -- the single most consequential
+            moment in an 1830 game -- looked exactly like the moment before
+            it. It now reads the same `phaseAlertLevel` helper the train
+            chips do, so the bar and the chips escalate together.
+
+            The wording escalates with the colour: "Imminent" is a claim
+            about the next purchase, and it was previously being made one
+            purchase too early. */}
+        {phaseAlert && (
           <span
-            style={styles.phaseShiftBadge}
+            className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
+            style={{
+              ...styles.phaseShiftBadge,
+              ...(phaseAlert === "critical"
+                ? styles.phaseShiftBadgeCritical
+                : styles.phaseShiftBadgeWarn),
+            }}
             // The exact consequence, per tier. Falls back to a plain
             // depot-count statement for the 2-train case, which empties
             // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
             title={
-              phase.shiftWarning ??
-              (phase.depotRemaining === 0
+              phase?.shiftWarning ??
+              (phase?.depotRemaining === 0
                 ? `No ${phase.tier}-Trains left in the Bank Depot.`
-                : `Only one ${phase.tier}-Train left in the Bank Depot.`)
+                : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
             }
           >
-            &#9888; Phase Shift Imminent
+            {phaseAlert === "critical" ? (
+              <>&#9888; Phase Shift Imminent</>
+            ) : (
+              <>&#9888; Phase Shift in 2 Buys</>
+            )}
           </span>
         )}
       </div>
+      )}
     </div>
 
     {/* ---- Contextual trays -- design note #31 --------------------------
@@ -1422,130 +2199,114 @@ function ContextualActionBar({
           `MOCK_TRAIN_CATALOG`'s own doc comment), so selecting a card here
           only changes which model is highlighted/labeled; the purchase
           itself still targets whichever unit the pool auto-assigns. */}
-      {roundType === "OperatingRound" && orSubPhase === "Hardware" && (
-        <div style={styles.hardwareTray}>
-          {MOCK_TRAIN_CATALOG.map((train) => (
-            <button
-              key={train.modelType}
-              type="button"
-              style={{
-                ...styles.hardwareTrayCard,
-                ...(selectedHardwareModel === train.modelType ? styles.hardwareTrayCardSelected : {}),
-              }}
-              onClick={() => onSelectHardwareModel(train.modelType)}
-              disabled={!sessionReady}
-              title={`Max route distance ${train.maxDistance === 999 ? "unlimited" : train.maxDistance}, ${train.bankQuantity} in the bank`}
-            >
-              <span style={styles.hardwareTrayCardModel}>{train.modelType}-train</span>
-              <span style={styles.hardwareTrayCardCost}>${train.costVgp}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {/* Buy Private Company Action Tray -- see design note #14. Hidden
-          outside Phase 3+ (mirrors the contract's own
-          PrivatePurchaseLockedBeforePhase3 gate) and hidden if there's
-          nothing left for the active player to sell. */}
-      {roundType === "OperatingRound" &&
-        orSubPhase === "Hardware" &&
-        currentGlobalEra !== null &&
-        currentGlobalEra !== "Yellow" &&
-        sellablePrivates.length > 0 && (
-          <div style={styles.privateCompanyTray}>
-            <span style={styles.privateCompanyTrayLabel}>Buy Private Company:</span>
-            <select
-              style={styles.privateCompanySelect}
-              value={selectedPrivateId ?? ""}
-              onChange={(e) => onSelectPrivate(Number(e.target.value))}
-              disabled={!sessionReady}
-            >
-              {sellablePrivates.map((priv) => (
-                <option key={priv.private_id} value={priv.private_id}>
-                  {priv.name} (face value ${priv.cost})
-                </option>
-              ))}
-            </select>
-            {(() => {
-              const selected = sellablePrivates.find((p) => p.private_id === selectedPrivateId);
-              if (!selected) return null;
-              const faceValue = Number(selected.cost);
-              // Mirrors trading::execute_buy_private_company's own 50%-200%
-              // bound exactly (design note #14) -- purely a UX guardrail,
-              // the contract re-enforces the identical bound on-chain.
-              const floor = Math.ceil(faceValue / 2);
-              const ceiling = faceValue * 2;
-              return (
-                <div style={styles.privateCompanyPriceRow}>
-                  <input
-                    type="range"
-                    min={floor}
-                    max={ceiling}
-                    step={1}
-                    value={privatePriceVgp}
-                    onChange={(e) => onPrivatePriceChange(Number(e.target.value))}
-                    disabled={!sessionReady}
-                  />
-                  <span style={styles.privateCompanyPriceValue}>
-                    ${privatePriceVgp} ({floor}-{ceiling})
-                  </span>
-                  <button
-                    type="button"
-                    style={styles.actionBarButton}
-                    onClick={onBuyPrivateCompany}
-                    disabled={!sessionReady}
-                    title="Buys this company at the price selected above."
-                  >
-                    Buy
-                  </button>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-      {routeSelectMode && (
-        <div style={styles.routePanel}>
-          <span style={styles.routePanelHint}>
-            Click a chain of neighboring hexes on the Rail Map to build a route. This is a
-            client-side scouting aid only -- the contract has no query to submit or verify a
-            manual path; the real route is always computed automatically on-chain (see design
-            note #11).
-          </span>
-          <div style={styles.routePanelPath}>
-            {routePoints.length === 0 ? (
-              <span style={styles.routePanelEmpty}>No route points selected yet.</span>
+      {/* Design note #188: the consequence of each option, laid out before
+          the player commits. Two things they could not otherwise see: WHO
+          gets paid and how much, and WHERE the stock token lands. Both are
+          computable from state already on screen, and both were being left
+          for the player to work out. */}
+      {roundType === "OperatingRound" && orSubPhase === "Dividends" && (
+        <div style={styles.dividendPanel}>
+          <div style={styles.dividendColumn}>
+            <span style={styles.dividendHeading}>
+              Pay out ${dividendRevenue} &middot; ${dividendPerShare}/share
+            </span>
+            {dividendPayouts.length === 0 ? (
+              <span style={styles.dividendNote}>
+                No shareholders on record -- the whole payout would go to the bank pool.
+              </span>
             ) : (
-              routePoints.map((point, index) => (
-                <React.Fragment key={`${point.q},${point.r}`}>
-                  {index > 0 && <span style={styles.routePanelArrow}>&rarr;</span>}
-                  <span style={styles.routePanelPoint}>{point.hexLabel}</span>
-                </React.Fragment>
+              dividendPayouts.map((row) => (
+                <span key={row.holder} style={styles.dividendRow}>
+                  <span>{row.holder}</span>
+                  <span style={styles.dividendAmount}>
+                    ${row.amount} <span style={styles.dividendPct}>({row.percentage}%)</span>
+                  </span>
+                </span>
               ))
             )}
+            <MarketMoveLine
+              currentPrice={dividendPrice}
+              projection={payProjection}
+              direction="pay"
+            />
           </div>
-          <div style={styles.routePanelMeta}>
-            <span
-              style={{
-                ...styles.routePanelHopCount,
-                ...(routeExceedsMaxDistance ? styles.routePanelHopCountExceeded : {}),
-              }}
-            >
-              {routeHopCount} hop{routeHopCount === 1 ? "" : "s"}
-              {routeMaxDistance !== undefined &&
-                ` / max ${routeMaxDistance === 999 ? "unlimited" : routeMaxDistance} (${selectedHardwareModel}-train)`}
+
+          <div style={styles.dividendColumn}>
+            <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
+            <span style={styles.dividendNote}>
+              The full amount stays in the corporation's treasury. Shareholders receive nothing
+              this Operating Round.
             </span>
-            {routeExceedsMaxDistance && (
-              <span style={styles.routePanelWarning}>
-                Exceeds the selected train's max route distance.
-              </span>
-            )}
-            {routeFeedback && <span style={styles.routePanelWarning}>{routeFeedback}</span>}
-            {routePoints.length > 0 && (
-              <button type="button" style={styles.routePanelClearButton} onClick={onClearRoute}>
-                Clear Route
-              </button>
-            )}
+            <MarketMoveLine
+              currentPrice={dividendPrice}
+              projection={withholdProjection}
+              direction="withhold"
+            />
           </div>
         </div>
+      )}
+      {/* ===================================================================
+           DESIGN NOTE 203: THE HARDWARE TRAY MOVED OUT OF THE BAR
+          ===================================================================
+
+          Design note #182 correctly reduced a six-card selector to the ONE
+          train 1830's cheapest-first depot will actually sell. What it could
+          not fix, sitting inside the action bar, is that the depot was only
+          half the step: a corporation in the Hardware sub-phase can buy from
+          the bank OR from another corporation, and the second half lived in
+          a completely separate panel further down the page.
+
+          Both halves are now `TrainPurchasePanel`, rendered by the shell --
+          see that file's design note #0 for why they are two sections rather
+          than one control, and #1 for the quantity field this tray had
+          nowhere to put. The bar keeps only "End Turn" for this step, which
+          is the one thing here that is a button rather than a panel. */}
+      {/* ===================================================================
+           DESIGN NOTE 165: THE INLINE BUY-PRIVATE TRAY IS GONE
+          ===================================================================
+
+          It was a select, a range slider and a Buy button wedged into the
+          action bar, and it modelled the purchase as a UNILATERAL act: pick
+          a private, drag a price, buy it. In 1830 that transaction needs the
+          owner's agreement, and a slider you drag past somebody else's
+          property does not represent one.
+
+          `ProposePrivatePurchase` replaces it -- a real sheet with the
+          eligible privates, each showing its owner and its legal band, and
+          a typed price rather than a drag. Typing matters here: the band is
+          50-200% of face value, so a $100 private has a 51-value range and
+          a slider makes hitting an exact intended figure fiddly.
+
+          The tray also sat under the HARDWARE sub-phase, which is wrong --
+          `trading.rs`'s own sub-phase gate puts private purchase FIRST in
+          the turn, before track. The button now lives in the `BuyPrivate`
+          step where the contract expects it. */}
+      {/* ===================================================================
+           DESIGN NOTE 266: THE RUN ROUTES STEP IS ONE PANEL NOW
+          ===================================================================
+
+          Everything this step needs moved into `RoutePlannerPanel` -- the
+          mode toggle that was in the right rail, the run button that was in
+          the centre column, and the waypoint readout that was here. See
+          that file's design note #0 for the reading-order argument.
+
+          It renders on the whole `Routes` sub-phase rather than only while
+          route mode is engaged. The old panel was gated on
+          `routeSelectMode`, which made the toggle that turns route mode on
+          live somewhere else by necessity -- a control cannot switch on the
+          panel it is inside. Rendering on the sub-phase breaks that loop. */}
+      {showRouteToggle && (
+        <RoutePlannerPanel
+          drafts={trainDrafts}
+          activeTrainIndex={trainDrafts.length === 0 ? null : activeTrainIndex}
+          onSelectTrain={onSelectRouteTrain}
+          onClearRoute={onClearRoute}
+          onRunRoute={onRunTrains}
+          ownsAnyTrain={ownsAnyTrain}
+          controlsEnabled={sessionReady}
+          noTrainReason={NO_TRAIN_ROUTE_REASON}
+          clickFeedback={routeFeedback}
+        />
       )}
       {!sessionReady && (
         <span style={styles.sidebarHint}>Initialize the session key above to enable these actions.</span>
@@ -1656,13 +2417,58 @@ function isTabAvailable(tab: MainTab, roundType: RoundType | null): boolean {
   return orderedMainTabs(roundType).some((entry) => entry.id === tab);
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 213: ONE ANSWER TO "WHICH TAB IS THIS ROUND PLAYED ON"
+ * ==================================================================
+ *
+ * REPORTED BUG: leaving the auction for a Stock Round dumped the player on
+ * the Rail Map instead of the Stock & Auction surface.
+ *
+ * The cause was two effects disagreeing, and the loser winning. The
+ * transition effect correctly sent a new Stock Round to `"corps"`. The
+ * availability guard right below it -- which exists because the tab SET
+ * changes shape by phase, so the active tab can cease to exist under the
+ * player -- then ran in the same commit, still reading `activeMainTab` as
+ * `"phase"` (React has not re-rendered, so the value the first effect set is
+ * not visible yet), found that `"phase"` is not in a Stock Round's tab list,
+ * and redirected to a hardcoded `"map"`. Declared second, so it landed
+ * second, so the Rail Map won every time.
+ *
+ * Reordering the effects would "fix" it by luck and break again the moment
+ * anything else set a tab. The real defect is that the guard had its own
+ * opinion about where to land, and that opinion was a constant. Both callers
+ * now ask this one function, so whichever runs last, they agree.
+ *
+ * The mapping is design note #28's own split, stated once: the auction has a
+ * dedicated phase surface; a Stock Round's surface IS the Stocks roster
+ * (design note #41 -- there is no `"phase"` entry that round to land on);
+ * an Operating Round is played on the rail map.
+ */
+function surfaceTabFor(roundType: RoundType | null): MainTab {
+  switch (roundType) {
+    case "WaterfallAuction":
+      return "phase";
+    case "StockRound":
+      return "corps";
+    case "OperatingRound":
+      return "map";
+    default:
+      // Round type not yet known (first paint, or offline). The rail map is
+      // the one surface that renders without any chain data.
+      return "map";
+  }
+}
+
 function MainTabBar({
   activeTab,
   onSelect,
   roundType,
+  onOpenTutorials,
 }: {
   activeTab: MainTab;
   onSelect: (tab: MainTab) => void;
+  /** Opens the on-demand tutorial library -- design note #158. */
+  onOpenTutorials: () => void;
   /** Design note #28: decides both which tabs exist and their order.
    *  `null` before the first `GetGameState` resolves. */
   roundType: RoundType | null;
@@ -1695,6 +2501,23 @@ function MainTabBar({
           {tab.label}
         </button>
       ))}
+
+      {/* Design note #158: the Tutorials front door.
+          Pinned right, past an auto margin, and deliberately NOT styled as a
+          fifth tab -- it does not change which screen you are on, it opens a
+          reader over whichever screen you are already on. Giving it the tab
+          treatment would have implied a navigation it does not perform, and
+          put a permanently-unselected tab next to four that highlight. */}
+      <span style={{ marginLeft: "auto" }} />
+      <button
+        type="button"
+        className="nav-tab"
+        style={styles.tutorialsButton}
+        onClick={onOpenTutorials}
+        title="Read any tutorial at any time -- the auction, the Stock Round, the Operating Round, or the stock market."
+      >
+        &#63; Tutorials
+      </button>
     </div>
   );
 }
@@ -1749,6 +2572,46 @@ const TURN_PULSE_KEYFRAMES_CSS = `
     box-shadow: inset 0 0 40px rgba(${TURN_PULSE_INK_RGB}, 0.28),
                 0 0 30px rgba(${TURN_PULSE_INK_RGB}, 0.4);
   }
+}
+`;
+
+/* The phase-shift badge's CRITICAL step -- one purchase from the shift.
+ *
+ * Opacity rather than the box-shadow glow the other two pulses use. This
+ * badge sits inline in a crowded action bar, where a spreading glow would
+ * bleed over the controls either side of it; the turn overlay and the
+ * auction card both own their whitespace and can afford one.
+ *
+ * The pulse bottoms out at 0.55, not 0. A warning that blinks fully out is
+ * unreadable for half its cycle, and this one carries text the player needs
+ * to actually read.
+ *
+ * Reduced motion drops the animation and keeps the static crimson, exactly
+ * as `WaterfallAuctionDashboard.tsx` does: the player still sees WHICH step
+ * of the countdown they are on, just without the movement. Escalation must
+ * survive the animation being switched off, which is the other reason the
+ * two steps differ in colour and not merely in whether they pulse. */
+/** `GamePhase.tint` -> the tile tier that phase has unlocked.
+ *
+ *  `tint` is already the exact three-value era `gamePhase.ts`'s
+ *  `TIER_PRESENTATION` assigns (Phase 2 yellow; Phases 3-4 green; Phases
+ *  5/6/D brown), so this is a case change rather than a second opinion about
+ *  which era it is. Written as a table anyway rather than a string cast, so
+ *  a fourth `PhaseTint` would fail to compile here instead of silently
+ *  producing a `TileColorTier` that does not exist. */
+const ERA_FOR_PHASE_TINT: Readonly<Record<PhaseTint, TileColorTier>> = {
+  yellow: "Yellow",
+  green: "Green",
+  brown: "Brown",
+};
+
+const PHASE_SHIFT_PULSE_CSS = `
+@keyframes app-phase-shift-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-phase-shift-critical { animation: none !important; }
 }
 `;
 
@@ -1817,6 +2680,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // main thing it exists to exercise -- it simply has nothing to talk to.
   const sandbox = mode === "sandbox";
 
+  /* ==================================================================
+   *  DESIGN NOTE 220: THE SANDBOX HAS NO SESSION KEY, AND NEVER WILL
+   * ==================================================================
+   *
+   * REPORTED BUG: "the Buy Station Token button does not do anything -- it
+   * does not change the cursor, nor does it allow placement."
+   *
+   * The button was fine. So was the cursor, and so was the click path. Every
+   * control in the Contextual Action Bar renders
+   * `disabled={btn.disabled || !sessionReady}`, and `sessionReady` was
+   * `session.sessionStatus === "ready"` -- which becomes true only after a
+   * player initialises an `x/authz` session key against a connected wallet.
+   *
+   * THE SANDBOX HAS NO WALLET BY CONSTRUCTION (design note #24: "not 'may
+   * this viewer act?' but 'is there a chain at all?'"). `sessionStatus`
+   * therefore sits at `"uninitialized"` forever, and every button in the bar
+   * was permanently disabled. Not visibly so, either -- `actionBarButton`
+   * carries no disabled styling of its own, because inline styles cannot
+   * express `:disabled` (Lobby.tsx design note #3), so the controls looked
+   * completely normal and silently swallowed every click.
+   *
+   * That explains a whole family of "this button does nothing" reports at
+   * once, and it is why the same complaint kept coming back after the
+   * handlers behind those buttons were fixed: the handlers were never
+   * reached.
+   *
+   * The gate itself is right for a LIVE room -- dispatching without a
+   * session key would fail at signing time. It is simply the wrong question
+   * in the sandbox, where `runGameplayAction` short-circuits into the local
+   * reducer and never signs, broadcasts or touches a wallet at all. One
+   * derived value now asks the honest question -- "can this build dispatch
+   * anything?" -- and every panel reads it, so the two cannot drift apart
+   * again the way `TrainPurchasePanel` already had to work around locally.
+   */
+  const controlsEnabled = session.sessionStatus === "ready" || sandbox;
+
   /* ---------------- Sandbox phase toggle -- design note #25 ---------- */
   //
   // The sandbox could reach the rail map but nothing else. Both
@@ -1832,7 +2731,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // only ever depict one phase. It is rendered only when `sandbox` is true
   // and it feeds only `sandboxGameState` -- there is no code path by which
   // it can touch a real room's state.
-  const [sandboxPhase, setSandboxPhase] = useState<RoundType>("WaterfallAuction");
+  /* Design note #177 (SandboxToolbar): the sandbox testbed is chosen by
+     SCENARIO now -- round type, era and train tier together -- because the
+     three have to agree and picking only the round type left the era
+     pinned to Green, which made the yellow and brown tile catalogs
+     unreachable. `sandboxPhase` is derived from it so every existing reader
+     is unchanged. */
+  const [sandboxScenarioId, setSandboxScenarioId] =
+    useState<SandboxScenarioId>(DEFAULT_SANDBOX_SCENARIO);
+  const sandboxPhase = sandboxScenario(sandboxScenarioId).phase;
+
+  /* Design note #246: which train distribution the fixture uses. A SECOND
+     axis alongside the scenario, not a sixth scenario -- which era you are
+     testing and who owns trains are independent questions. Seeded to the
+     historic distribution so nothing changes until a tester asks. */
+  const [sandboxTrainFixture, setSandboxTrainFixture] =
+    useState<SandboxTrainFixture>("default");
+
+  /* ===================================================================
+   *  DESIGN NOTE 178: UNDO IS A SNAPSHOT STACK, AND ONLY IN SANDBOX
+   * ===================================================================
+   *
+   * `sandboxSession.ts` refused to model undo, and its reasoning was right
+   * for the place it was written: "undo is a full replay of the contract's
+   * event log, and the sandbox has no log." A REDUCER cannot undo itself --
+   * it sees one message and the state it produces, never the state it
+   * replaced.
+   *
+   * But the owner of the state can. Every sandbox action goes through one
+   * function, so pushing the OUTGOING state onto a stack before replacing
+   * it costs one line and gives exact, unlimited, single-step undo -- no
+   * inverse operation per message type, and therefore nothing to get wrong
+   * per message type either.
+   *
+   * SANDBOX ONLY, and that is not a shortcut. On chain the contract owns
+   * history; `UndoLastAction` is a real message and the server decides what
+   * it means. Restoring a local snapshot there would desync the UI from the
+   * chain, which is worse than an undo button that defers.
+   *
+   * The map grid rides along, because a tile lay changes both and undoing
+   * one without the other would leave a tile on a board whose treasury had
+   * never paid for it.
+   */
+  const [, setSandboxHistory] = useState<
+    Array<{ state: GameStateResponse; mapGrid: MapGridResponse; subPhase: OperatingSubPhase }>
+  >([]);
+  /** Bounded so a long hotseat session cannot grow the stack without limit.
+   *  Deep enough that undo covers a whole corporation's turn. */
+  const SANDBOX_HISTORY_LIMIT = 50;
+
+  /* ---------------- Sandbox hotseat seat switcher -------------------- */
+  //
+  // Which of the four sandbox seats the client is currently pretending to
+  // be, and whether that choice should track the game's own turn pointer.
+  // See `SandboxToolbar` for the interaction design and why auto-follow
+  // defaults on.
+  const [sandboxSeatIndex, setSandboxSeatIndex] = useState(0);
+  const [sandboxAutoFollow, setSandboxAutoFollow] = useState(true);
+
+  /** Picking a seat by hand turns auto-follow OFF. The two settings are in
+   *  direct conflict -- one says "show me whoever is up", the other says
+   *  "show me Carol" -- and a manual pick that got overwritten on the next
+   *  action would make the control useless for the only job it has. */
+  const handleSelectSandboxSeat = useCallback((index: number) => {
+    setSandboxSeatIndex(index);
+    setSandboxAutoFollow(false);
+  }, []);
+
+  const handleToggleSandboxAutoFollow = useCallback(() => {
+    setSandboxAutoFollow((previous) => !previous);
+  }, []);
 
   /** Who the dashboard should think it is looking at.
    *
@@ -1853,7 +2821,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    *  `runGameplayAction` refuses before building a message at all. A
    *  pretend identity that could sign would be a genuinely dangerous
    *  shortcut; one that can only light up a button is not. */
-  const viewerAddress = sandbox ? SANDBOX_PLAYERS[0] : wallet.address;
+  //  HOTSEAT UPDATE. This used to be hardcoded to `SANDBOX_PLAYERS[0]`, which
+  //  worked exactly until the simulated turn moved off seat 0 -- at which
+  //  point every turn-gated control on the dashboard went dead and stayed
+  //  dead, because no wallet could ever become the active player. The seat is
+  //  now switchable (see `SandboxToolbar`), so the whole loop is reachable
+  //  solo.
+  //
+  //  The read-only caveat above is UNCHANGED and still load-bearing: this
+  //  identity lights up controls and decides whose figures to show. It never
+  //  signs. `runGameplayAction` still refuses to build a chain message in
+  //  sandbox; it routes to the local reducer instead.
+  const viewerAddress = sandbox
+    ? (SANDBOX_PLAYERS[sandboxSeatIndex] ?? SANDBOX_PLAYERS[0])
+    : wallet.address;
 
 
   // Design note #22. Read once at mount rather than subscribed to: the name
@@ -1945,9 +2926,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const [orSubPhase, setOrSubPhase] = useState<OperatingSubPhase>(() =>
     initialOrSubPhase(null),
   );
-  const [selectedHardwareModel, setSelectedHardwareModel] = useState<string>(
-    MOCK_TRAIN_CATALOG[0].modelType,
-  );
 
   // Stock Round (SR) control state -- see `StockRoundPanel.tsx` design
   // note #1. Purely UI state; the real dispatch runs through
@@ -1989,11 +2967,313 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Memoised because `gameState` sits in the dependency array of a dozen
   // hooks below. Rebuilding the object every render would give it a new
   // identity each time and re-fire all of them continuously.
-  const sandboxState = useMemo(
-    () => (sandbox ? sandboxGameState(sandboxPhase, gameId) : null),
-    [sandbox, sandboxPhase, gameId],
+  // Hotseat sandbox: this used to be a `useMemo` recomputed from the phase,
+  // which made it immutable by construction -- every dispatched action had
+  // nowhere to write, so the sandbox could only ever depict one frozen
+  // moment. It is now real state, seeded from the same fixture and advanced
+  // by `applySandboxAction`.
+  //
+  // The seeding effect below keys on the phase toggle: switching phase is a
+  // DEBUG action meaning "show me that screen", so it deliberately discards
+  // whatever the hotseat loop had accumulated and starts that phase clean.
+  // Preserving mutations across a phase jump would produce states the real
+  // game can never reach.
+  const [sandboxState, setSandboxState] = useState<GameStateResponse | null>(() =>
+    sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
   );
+
+  /* Design note #265: a synchronous mirror of the two sandbox atoms.
+   *
+   * `useState` values do not refresh inside one synchronous block, which
+   * broke two things: a loop of dispatches (the multi-train purchase) applied
+   * every message to the same base state, and the auction's charge was read
+   * from one hook's updater before another hook's updater had written it.
+   * A ref is written at dispatch time, so each action sees the last one's
+   * result and the log can describe what actually resulted.
+   *
+   * The state remains the RENDERING source of truth -- the ref exists so the
+   * dispatch path has something to read, not so components can bypass
+   * React. Both are written together, always. */
+  const sandboxStateRef = useRef<GameStateResponse | null>(null);
+  const sandboxWaterfallRef = useRef<WaterfallStateResponse | null>(null);
+  useEffect(() => {
+    sandboxStateRef.current = sandboxState;
+  }, [sandboxState]);
+  useEffect(() => {
+    setSandboxState(
+      sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
+    );
+    // Switching scenario is a fresh testbed: drop any in-flight preview,
+    // selector or undo history rather than carrying state from a board that
+    // no longer exists.
+    setSandboxHistory([]);
+    // Design note #246: flipping the trade fixture re-seeds too. It changes
+    // who owns what, which is board state rather than a view setting, so
+    // applying it to a board mid-hotseat would leave trains appearing in
+    // rosters with no action having created them.
+  }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId]);
+
   const gameState = sandboxState ?? liveGameState;
+
+  // Design note #36: derived, not queried -- see `utils/gamePhase.ts`
+  // design note #1 for why `current_global_era` cannot answer this.
+  //
+  // DECLARED HERE, above `runGameplayAction`, rather than down with the
+  // other render-time derivations: that callback's sandbox branch prices a
+  // route from the board and the era, so both must exist by the time it is
+  // constructed. `const` bindings are not hoisted, and the callback closes
+  // over them directly rather than through a ref.
+  const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);
+
+  /* ===================================================================
+   *  DESIGN NOTE 169: ACT AS THE CORPORATION WHOSE TURN IT IS
+   * ===================================================================
+   *
+   * Every Operating Round action in this file targeted
+   * `MOCK_LAY_TILE_PROTOCOL_ID` -- a hardcoded `4`, chosen as a stand-in
+   * long before there was a turn queue to consult. The sandbox fixture
+   * meanwhile opens its Operating Round on `active_operating_order[0]`,
+   * which is protocol 1 (PRR).
+   *
+   * So the UI was acting AS B&O while the turn belonged to PRR, and the two
+   * disagreements that produced are exactly the reported lockout:
+   *
+   *   - `LayTile` and every other OR dispatch named the wrong corporation.
+   *     On chain that is `NotYourOperatingTurn`. In sandbox it charged B&O's
+   *     treasury -- which is `0`, because B&O is `floated: false` and has
+   *     never been capitalised.
+   *   - The Buy Private sheet read B&O's treasury to decide what the
+   *     corporation could afford, and got zero.
+   *
+   * THE PRESIDENCIES WERE NEVER MISSING. `sandboxState.ts` assigns one to
+   * every corporation and maps it through `SANDBOX_PLAYERS[corp.president]`,
+   * so `actingSeatIndex` resolved PRR's president (Alice, seat 0) correctly
+   * all along, and auto-follow moved the hotseat to her. The identity that
+   * was wrong was the CORPORATION's, not the player's.
+   *
+   * Derived from the queue, with the old constant as the fallback for a
+   * room whose Operating Round has not been started yet (an empty
+   * `active_operating_order`), so nothing that previously rendered starts
+   * rendering `undefined`. */
+  const actingProtocolId = useMemo(() => {
+    const queued = gameState?.active_operating_order[gameState.active_corporation_index];
+    return queued ?? MOCK_LAY_TILE_PROTOCOL_ID;
+  }, [gameState]);
+
+  // Design note #144: drives the Routes skip button's disabled state. The
+  // contract refuses that skip for any corporation owning a train, so the
+  // button is disabled with the reason rather than dispatching a transaction
+  // that is certain to be rejected.
+  /** The whole depot, tier by tier -- `depotInventory` already applies
+   *  1830's cheapest-first queue rule and the remaining-stock arithmetic
+   *  (its design note #4), so `TrainPurchasePanel` renders it rather than
+   *  deriving a second answer.
+   *
+   *  Design note #203: this used to be narrowed to the ONE purchasable tier
+   *  before it left this component, which is what the old one-card tray
+   *  needed. The panel shows every tier -- a player deciding whether to buy
+   *  the depot's last 3-train needs to see what a 4-train costs and which
+   *  tier is about to rust, and both are facts about tiers they cannot
+   *  currently buy. */
+  const depot = useMemo(() => depotInventory(gameState), [gameState]);
+
+  const ownsAnyTrain = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    // Audit G-15c closed the gap this used to stub out: `owned_trains` now
+    // arrives on `PublicCompanyState`, so the Routes skip button can be
+    // disabled for a corporation that genuinely holds a train.
+    //
+    // `undefined` still means "this chain does not say" (a contract predating
+    // the field), NOT "owns nothing" -- in that case report `false`, leaving
+    // the skip enabled and the contract as the authority. Erring the other
+    // way would disable a legal skip with no override.
+    return (company?.owned_trains?.length ?? 0) > 0;
+  }, [gameState, actingProtocolId]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 207: THE TRAIN BEING RUN IS OBSERVED, NOT PICKED
+   * ==================================================================
+   *
+   * This was `useState(MOCK_TRAIN_CATALOG[0].modelType)` -- a 2-train,
+   * always, with a setter wired to a tray selector that design note #182
+   * removed. So the route builder's capacity readout said "max 2 stops
+   * (2-train)" for a corporation running a 5, and `handleAutoRoute` would
+   * have drafted to the wrong cap.
+   *
+   * The best train a corporation OWNS is the honest answer and needs no
+   * control at all: a player running trains runs their biggest one, and if
+   * they own none there is nothing to run. Derived rather than selected also
+   * means it cannot go stale after a purchase.
+   *
+   * `MOCK_TRAIN_CATALOG`'s ORDER is the tier order, so the highest index a
+   * corporation holds is its best train. Falling back to the first entry
+   * when it owns nothing keeps the readout showing a real limit instead of
+   * blanking -- and a corporation with no train cannot reach the Routes step
+   * with anything to declare anyway. */
+  /* ==================================================================
+   *  DESIGN NOTE 227: THE PLAYER PICKS THE TRAIN, NOT THE APP
+   * ==================================================================
+   *
+   * Design note #207 replaced a broken `useState` (stuck on "2-train"
+   * forever) with the corporation's BEST owned train, derived. That was the
+   * right fix for the readout being wrong, and the wrong shape for the
+   * feature: a corporation routinely owns several trains and runs each of
+   * them on its own route, so "which train is this path for" is a choice the
+   * player makes, not a fact the app can observe.
+   *
+   * It matters mechanically, not just cosmetically -- the train's number is
+   * the cap on how many revenue centres the route may visit, so charting a
+   * path for a 3-train while the builder validates against a 5 lets a player
+   * assemble a route the contract will refuse.
+   *
+   * So the selection is STATE again, seeded from the best train and reset
+   * whenever the acting corporation changes. The derivation survives as the
+   * DEFAULT rather than as the answer: opening the builder on a corporation's
+   * biggest train is the common case, and the selector is there for the rest.
+   *
+   * `null` means "not chosen yet", which the resolver below turns into the
+   * default. Storing the default eagerly would make it impossible to tell a
+   * deliberate pick from a stale one after the corporation changed.
+   */
+  const bestOwnedTrain = useMemo(() => {
+    const owned =
+      gameState?.public_companies.find((company) => company.company_id === actingProtocolId)
+        ?.owned_trains ?? [];
+    let best = MOCK_TRAIN_CATALOG[0].modelType;
+    let bestIndex = -1;
+    for (const model of owned) {
+      // `MOCK_TRAIN_CATALOG`'s ORDER is the tier order, so the highest index
+      // a corporation holds is its best train.
+      const index = MOCK_TRAIN_CATALOG.findIndex((train) => train.modelType === model);
+      if (index > bestIndex) {
+        bestIndex = index;
+        best = model;
+      }
+    }
+    return best;
+  }, [gameState, actingProtocolId]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 275: THE ROSTER, NOT THE SET OF MODELS
+   * ==================================================================
+   *
+   * This used to deduplicate -- "two 3-trains are one CHOICE, and offering
+   * '3' and '3' would be two buttons that do the same thing". That was
+   * right about the old question and wrong about the game: the two buttons
+   * do NOT do the same thing once each train is drafting its own route.
+   * Three 3-trains are three trains, three routes and three chips.
+   *
+   * Ordered by tier so the roster reads big-train-first, and carrying the
+   * INDEX because that is the only thing telling one 3-train from another.
+   */
+  const ownedTrainRoster = useMemo(() => {
+    const owned =
+      gameState?.public_companies.find((company) => company.company_id === actingProtocolId)
+        ?.owned_trains ?? [];
+    const rank = (model: string) =>
+      MOCK_TRAIN_CATALOG.findIndex((train) => train.modelType === model);
+    return owned
+      .map((model, ownedIndex) => ({
+        // Design note #275: the identity. Stable against re-sorting below,
+        // because it is the position in `owned_trains` rather than here.
+        trainIndex: ownedIndex,
+        model,
+        maxDistance: MOCK_TRAIN_CATALOG.find((train) => train.modelType === model)?.maxDistance,
+      }))
+      // Unknown models sort last rather than to the front, which is where a
+      // `-1` from `findIndex` would otherwise put them.
+      .sort((a, b) => (rank(a.model) < 0 ? 99 : rank(a.model)) - (rank(b.model) < 0 ? 99 : rank(b.model)));
+  }, [gameState, actingProtocolId]);
+
+  /** Design note #228: the acting corporation, resolved once for the
+   *  Operating Round context strip.
+   *
+   *  STATIONS LEFT is `station_token_limit` minus the tokens already on the
+   *  board, which is the figure the player needs -- the limit alone answers
+   *  a question nobody asks. Floored at zero rather than allowed negative:
+   *  a chain reporting more placed tokens than the limit is a contract bug,
+   *  and rendering "-1 stations" would report it as a UI one. */
+  const activeCorporationContext = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    if (!company) return null;
+    return {
+      companyId: company.company_id,
+      ticker: company.ticker,
+      fullName: corporationFullName(company.ticker) ?? null,
+      presidentLabel: company.president
+        ? (sandboxPlayerLabel(company.president) ?? truncateAddress(company.president))
+        : null,
+      treasury: Number(company.treasury) || 0,
+      // Design note #237: the row needs every token and its own price, not a
+      // remaining-count. `stationTokenSlots` owns 1830's schedule.
+      stationSlots: stationTokenSlots(company),
+      trains: company.owned_trains ?? [],
+    };
+  }, [gameState, actingProtocolId]);
+
+  /** Design note #237: what the NEXT station token costs THIS corporation.
+   *
+   *  Was the flat `SANDBOX_NOMINAL_TOKEN_COST` -- $40 for every placement,
+   *  forever. 1830 charges nothing for the home token, $40 for the second
+   *  and $100 for every one after, so the constant was correct exactly once
+   *  per corporation and understated the third by 60%.
+   *
+   *  `null` means the allowance is spent. The button falls back to the
+   *  second-token price for its label in that state rather than printing
+   *  "$null" -- it is disabled by the placement check either way, and a
+   *  disabled control showing a plausible figure beats one showing a hole. */
+  const activeStationCompany = gameState?.public_companies.find(
+    (company) => company.company_id === actingProtocolId,
+  );
+  const stationTokenCost =
+    nextStationTokenCost(activeStationCompany) ?? SANDBOX_NOMINAL_TOKEN_COST;
+
+  const [pickedRouteTrain, setPickedRouteTrain] = useState<string | null>(null);
+
+  // A pick belongs to the corporation that made it. Clearing on a change of
+  // acting corporation stops a 5-train selection surviving onto a company
+  // that owns nothing bigger than a 3 -- which would silently validate the
+  // next player's route against a train they do not have.
+  useEffect(() => {
+    setPickedRouteTrain(null);
+  }, [actingProtocolId]);
+
+  const selectedHardwareModel =
+    pickedRouteTrain !== null && ownedTrainRoster.some((t) => t.model === pickedRouteTrain)
+      ? pickedRouteTrain
+      : bestOwnedTrain;
+
+  // The live board. STATE, not `useMemo`, so `applySandboxLayTile` can
+  // replace it with a NEW object -- that identity change is what
+  // `HexGridRenderer`'s draw effect watches, and mutating `tiles` in place
+  // would leave the reference untouched and the canvas would never repaint.
+  const [mapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
+
+  // Auto-Follow Turn. Moves the simulated seat to whoever may actually act,
+  // which is a PHASE-DEPENDENT question and not simply
+  // `active_player_index`:
+  //
+  //   - Waterfall Auction / Stock Round: seats act in order, so the turn
+  //     pointer is the answer.
+  //   - Operating Round: the queue names CORPORATIONS, and the human who may
+  //     act is whoever presides over the one currently up. The seat pointer
+  //     is not meaningful here and routinely points at a player with nothing
+  //     to do.
+  //
+  // `actingSeatIndex` owns that distinction. It returns `null` when the seat
+  // cannot be resolved -- an Operating Round whose current corporation has no
+  // president -- and the seat is then deliberately left where it is rather
+  // than reset to zero, which would yank the view away mid-inspection.
+  useEffect(() => {
+    if (!sandbox || !sandboxAutoFollow || !sandboxState) return;
+    const next = actingSeatIndex(sandboxState);
+    if (next === null) return;
+    setSandboxSeatIndex((current) => (current === next ? current : next));
+  }, [sandbox, sandboxAutoFollow, sandboxState]);
 
   // Pre-Game Waterfall Auction (`waterfall.rs`): a second, independent poll
   // against `QueryMsg::GetWaterfallState`, only actually enabled while
@@ -2021,13 +3301,62 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     isWaterfallPhase,
   );
 
-  // Design note #25. Returns `null` outside the auction phase, mirroring
-  // the real poll, so the auction dashboard's own "no auction running"
-  // branch still gets exercised when the toggle is on another phase.
-  const sandboxWaterfall = useMemo(
+  /* ==================================================================
+   *  DESIGN NOTE 261: THE AUCTION NEEDED TO BE STATE, NOT A MEMO
+   * ==================================================================
+   *
+   * REPORTED: no Auction button does anything.
+   *
+   * This was a `useMemo` over `(sandbox, sandboxPhase, gameId)` -- so the
+   * dashboard re-rendered the same frozen fixture after every click, and the
+   * five auction handlers dispatched into a reducer that had no arm for the
+   * response shape they affect. Two halves of one gap: no place to put a
+   * change, and nothing computing one.
+   *
+   * It is STATE now, seeded from the same fixture and advanced by
+   * `applySandboxWaterfallAction`. Re-seeded on a scenario or phase change
+   * for exactly the reason the game state is (design note #25): switching
+   * scenario means "show me that screen", not "carry my half-finished
+   * auction into it".
+   */
+  const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(
     () => (sandbox ? sandboxWaterfallState(sandboxPhase, gameId) : null),
-    [sandbox, sandboxPhase, gameId],
   );
+  useEffect(() => {
+    setSandboxWaterfall(sandbox ? sandboxWaterfallState(sandboxPhase, gameId) : null);
+  }, [sandbox, sandboxPhase, gameId]);
+  useEffect(() => {
+    sandboxWaterfallRef.current = sandboxWaterfall;
+  }, [sandboxWaterfall]);
+
+  /* Design note #272: the third sandbox atom. The chart used to be a frozen
+     `useMemo` over the fixture table, so no trade could ever move a token;
+     it is state now, advanced by `applySandboxMarketAction` on the same
+     dispatch that advances the other two. Same ref treatment as the other
+     two, for design note #265's reason -- a loop of dispatches must see
+     each other's results. */
+  const [sandboxMarket, setSandboxMarket] = useState<SandboxMarketPrices>(() =>
+    sandboxInitialMarketPrices(marketCellForPrice),
+  );
+  // Re-seeded on a scenario change for the same reason the other two are:
+  // picking a scenario means "show me that screen", not "carry my moved
+  // tokens into it".
+  useEffect(() => {
+    setSandboxMarket(sandboxInitialMarketPrices(marketCellForPrice));
+  }, [sandbox, sandboxScenarioId, gameId]);
+  const sandboxMarketRef = useRef<SandboxMarketPrices>(sandboxMarket);
+  useEffect(() => {
+    sandboxMarketRef.current = sandboxMarket;
+  }, [sandboxMarket]);
+
+  /* Design note #2 in `sandboxState.ts`: the cards want prices, the chart
+     wants cells, and both now come off the same object so they cannot
+     disagree again. */
+  const sandboxMarketPrices = useMemo(
+    () => sandboxMarketPriceTable(sandboxMarket),
+    [sandboxMarket],
+  );
+
   const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
   // Resets the Contextual Top Action Bar's OR sub-phase back to "Track"
@@ -2035,9 +3364,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // changes) or the room leaves an Operating Round entirely -- see design
   // note #10/item 2. Deliberately keyed on these two live poll fields, not
   // on every poll tick, so it fires exactly once per actual turn change.
+  /* ===================================================================
+   *  DESIGN NOTE 175: THE SANDBOX OPENS ON TRACK
+   * ===================================================================
+   *
+   * THIS, not an address mismatch, is what was locking the green check.
+   * Measured rather than inferred: in the sandbox fixture the acting
+   * corporation is PRR, its president is Alice, auto-follow puts the hotseat
+   * on Alice, and `president === viewerAddress` evaluates TRUE. Every
+   * identity check passes. The gate that failed was the sub-phase one --
+   * `initialOrSubPhase` returns `BuyPrivate` from Phase 3 on (mirroring
+   * `or_phase::initial_sub_phase`), the fixture runs in the Green era, and
+   * confirming a tile lay requires `Track`.
+   *
+   * That is CORRECT for a live room and stays correct there: the contract
+   * persists its own cursor, opens the turn at `BuyPrivate`, and rejects a
+   * lay submitted out of order. Weakening it would make the bar disagree
+   * with the chain.
+   *
+   * The sandbox has no cursor to disagree with. It is a testing surface
+   * whose whole purpose is reaching the board quickly, and opening it on a
+   * step where the picker is locked -- with the remedy one unexplained
+   * click away in a different control -- fails at that. Same justification
+   * as the seat switcher and the legality filter before it: sandbox gets
+   * the affordance precisely because there is no authority there to
+   * contradict.
+   *
+   * A player can still walk back to `BuyPrivate` on the stepper, so nothing
+   * is unreachable -- only the default changed.
+   */
   useEffect(() => {
-    setOrSubPhase(initialOrSubPhase(gameState?.current_global_era));
-  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era]);
+    setOrSubPhase(
+      sandbox ? "Track" : initialOrSubPhase(gameState?.current_global_era),
+    );
+  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, sandbox]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -2054,18 +3414,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     const previousRoundType = prevRoundTypeRef.current;
     if (currentRoundType !== previousRoundType) {
       prevRoundTypeRef.current = currentRoundType;
-      // Design note #28: jump to the surface the new round is played on --
-      // the phase tab for auction/stock, the rail map for an OR (which has
-      // no phase tab of its own).
-      if (currentRoundType === "WaterfallAuction") {
-        setActiveMainTab("phase");
-      } else if (currentRoundType === "StockRound") {
-        // Design note #41: a Stock Round's surface is the Stocks tab, not
-        // a phase tab -- there is no `"phase"` entry that round to land on.
-        setActiveMainTab("corps");
-      } else if (currentRoundType === "OperatingRound") {
-        setActiveMainTab("map");
-      }
+      // Design note #213: jump to the surface the new round is played on.
+      // The four-way branch that stood here is now one lookup shared with
+      // the availability guard below, which is what stops the two from
+      // disagreeing about where a Stock Round lands.
+      setActiveMainTab(surfaceTabFor(currentRoundType));
     }
   }, [gameState?.current_round_type]);
 
@@ -2079,7 +3432,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   useEffect(() => {
     const roundType = gameState?.current_round_type ?? null;
     if (!isTabAvailable(activeMainTab, roundType)) {
-      setActiveMainTab("map");
+      // Design note #213: the ROUND'S OWN SURFACE, not a hardcoded `"map"`.
+      // This effect and the transition effect above both run in the commit
+      // where the round type changes, and this one still sees the tab the
+      // player was on rather than the one just chosen -- so a constant here
+      // silently overrode that choice. Asking the same function means the
+      // redirect agrees with the transition instead of undoing it.
+      setActiveMainTab(surfaceTabFor(roundType));
     }
   }, [activeMainTab, gameState?.current_round_type]);
 
@@ -2092,10 +3451,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // only reader was the readout just deleted -- a write path to a value
   // nothing displays is how a "harmless" leftover becomes a puzzle later.
 
-  const activePlayerAddress = useMemo(() => {
-    if (!gameState) return null;
-    return gameState.player_addresses[gameState.active_player_index] ?? null;
-  }, [gameState]);
+  /* `activePlayerAddress` went with design note #165's tray. It answered
+     "whose privates can be sold right now", which only made sense while the
+     tray was scoped to the acting player; the proposal sheet shops across
+     every player's holdings, so the question no longer has a caller. */
 
   // Active Player Turn Notifications -- design note #18/item 4, now
   // MANDATORY and non-optional (design note #21 -- the opt-out
@@ -2128,28 +3487,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   //
   // Every field this needs is already on the polled `GameStateResponse`; no
   // backend change and no extra query.
+  // The phase-dependent logic this used to spell out inline now lives in
+  // `actingSeatIndex` (`utils/gameState.ts`), because the sandbox's
+  // Auto-Follow needs the SAME answer to a slightly different question --
+  // "which seat may act" rather than "may I act". Two hand-written copies of
+  // the Operating-Round-means-the-president rule would be two things to keep
+  // in step, and the failure would be silent: the toolbar would follow one
+  // player while the controls enabled for another.
+  //
+  // `null` means no seat may act at all -- an Operating Round with an empty
+  // queue, or a floated-but-presidentless corporation. Nobody's turn, rather
+  // than everybody's, which is what makes the fallback to the Stock Round
+  // pointer deliberately absent.
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
-
-    if (gameState.current_round_type === "OperatingRound") {
-      const activeCompanyId =
-        gameState.active_operating_order[gameState.active_corporation_index];
-      // An Operating Round with an empty order, or an index past its end, has
-      // no acting corporation -- nobody's turn, rather than everybody's.
-      // Falling back to the Stock Round pointer here would resurrect exactly
-      // the bug this fixes, so it deliberately does not.
-      if (activeCompanyId === undefined) return false;
-      const president = gameState.public_companies.find(
-        (company) => company.company_id === activeCompanyId,
-      )?.president;
-      // A floated-but-presidentless corporation (no qualifying 20% holder)
-      // alerts nobody, which is correct: there is no human authorised to act
-      // for it, and the contract would reject them if they tried.
-      return !!president && president === viewerAddress;
-    }
-
-    // Stock Round and Waterfall Auction both run on the player pointer.
-    return gameState.player_addresses[gameState.active_player_index] === viewerAddress;
+    const seat = actingSeatIndex(gameState);
+    return seat !== null && gameState.player_addresses[seat] === viewerAddress;
   }, [viewerAddress, gameState]);
 
   useDocumentTitleFlash(isMyTurn);
@@ -2231,44 +3584,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     void sendChatMessage(text);
   }, [chatDraft, sendChatMessage]);
 
-  // Buy Private Company Action Tray -- design note #14. Recomputed from the
-  // live poll every time `activePlayerAddress` changes hands or the room's
-  // private-company ownership changes (e.g. after a successful purchase
-  // triggers `refreshGameState`).
-  const sellablePrivates = useMemo(() => {
-    if (!gameState || !activePlayerAddress) return [];
-    return playerSellablePrivateCompanies(activePlayerAddress, gameState);
-  }, [gameState, activePlayerAddress]);
+  /* REMOVED with design note #165: `sellablePrivates`,
+     `selectedPrivateId`, `privatePriceVgp`, their seeding effect, and
+     `handleSelectPrivate`.
 
-  const [selectedPrivateId, setSelectedPrivateId] = useState<number | null>(null);
-  const [privatePriceVgp, setPrivatePriceVgp] = useState<number>(0);
+     All five existed to drive the inline tray's dropdown-and-slider. The
+     proposal sheet owns its own selection and price, and reads the whole
+     `private_companies` list directly so it can show privates owned by ANY
+     player -- which is the point. `sellablePrivates` was scoped to
+     `activePlayerAddress`, i.e. to what the acting player could sell
+     THEMSELVES, which is the wrong set for a corporation shopping among
+     everyone's holdings and is why the old tray could not express the
+     trade it was named after. */
 
-  // Keeps the dropdown's selection (and the price slider's value) valid as
-  // `sellablePrivates` changes -- defaults to the first sellable private's
-  // exact face value, same "seed at face value" starting point real 1830
-  // itself uses as the default asking price.
-  useEffect(() => {
-    if (sellablePrivates.length === 0) {
-      setSelectedPrivateId(null);
-      return;
-    }
-    const stillValid = sellablePrivates.some((p) => p.private_id === selectedPrivateId);
-    if (!stillValid) {
-      setSelectedPrivateId(sellablePrivates[0].private_id);
-      setPrivatePriceVgp(Number(sellablePrivates[0].cost));
-    }
-  }, [sellablePrivates, selectedPrivateId]);
-
-  const handleSelectPrivate = useCallback(
-    (privateId: number) => {
-      setSelectedPrivateId(privateId);
-      const chosen = sellablePrivates.find((p) => p.private_id === privateId);
-      if (chosen) {
-        setPrivatePriceVgp(Number(chosen.cost));
-      }
-    },
-    [sellablePrivates],
-  );
 
   const roundLabel = useMemo(() => {
     if (!gameState) return null;
@@ -2294,9 +3622,178 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     { q: number; r: number; tileId: number; orientation: number } | null
   >(null);
 
+  /** The board's DOM node, for anchoring the radial ring to the canvas
+   *  rather than to the viewport. A callback ref rather than `useRef` so a
+   *  re-mount re-measures instead of holding a stale node. */
+  const [boardEl, setBoardEl] = useState<HTMLDivElement | null>(null);
+
+  /** Design note #199: the ONE condition under which the tile selector
+   *  exists at all. Track is this UI's name for the contract's Lay Track
+   *  sub-phase (`OPERATING_SUB_PHASE_LABELS.Track` renders as "Lay Track").
+   *
+   *  Spectators are excluded here as well as by `runGameplayAction`'s own
+   *  gate, for the same reason the action bar is hidden from them: a control
+   *  they can open and never use is noise, not courtesy. */
+  const tileSelectorArmed =
+    !spectator &&
+    (gameState?.current_round_type ?? null) === "OperatingRound" &&
+    orSubPhase === "Track";
+
+  /* ==================================================================
+   *  DESIGN NOTE 224: ONLY LIGHT WHAT THIS CORPORATION CAN REACH
+   * ==================================================================
+   *
+   * The board-dimming set for the Lay Track sub-phase -- `trackReach`'s own
+   * design note #0 covers what it does and does not claim.
+   *
+   * `undefined` OUTSIDE LAY TRACK, which is what switches the veil off
+   * entirely: no dimming, no click gate, the board exactly as it was. The
+   * renderer treats an absent set that way by construction (design note
+   * #223 there), so there is one condition here rather than a flag pair that
+   * could disagree.
+   *
+   * ALSO `undefined` WHEN THE REACH IS UNKNOWABLE. `layableHexes` reports
+   * `unconstrained` for a corporation with no token on the board -- one that
+   * has floated but not yet placed its home, or any state reached before the
+   * first `GetGameState` resolves. Dimming everything then would tell the
+   * player they may build nowhere, which is both wrong and
+   * indistinguishable from the feature being broken. The hint is dropped and
+   * the contract stays the authority, which is the safe direction to fail.
+   */
+  const layTrackFocus = useMemo(() => {
+    if (!tileSelectorArmed) return undefined;
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    const reach = layableHexes({
+      mapGrid,
+      stationHexes: corporation?.station_token_hexes ?? [],
+    });
+    if (reach.unconstrained) return undefined;
+    /* Design note #241: the corporation's OWN NETWORK stays lit alongside
+       the legal placements. Choosing where to extend is a judgement about
+       the route the extension joins, and veiling that route left the legal
+       hexes lit and the reason for preferring one of them in the dark.
+       Unioned here rather than inside the renderer because this is the
+       layer that has both halves. */
+    const visible = new Set<string>(reach.network);
+    reach.hexes.forEach((key) => visible.add(key));
+    // `network` is carried alongside for the rotation filter, which needs
+    // the hexes that ACTUALLY CARRY TRACK -- not `visible`, which also holds
+    // the empty extension candidates. A tile cannot join a bare hex.
+    return {
+      visible,
+      highlighted: reach.hexes,
+      network: reach.network,
+      // Design note #252/#253: the acting corporation's colour, lifted if it
+      // is too dark to read as light against the veiled board.
+      glowColor: glowColorFor(stationTickerColor(actingProtocolId)),
+    };
+  }, [tileSelectorArmed, gameState, actingProtocolId, mapGrid]);
+
+
+  /* Design note #199, layer 3: a ring left open when the turn moves on. The
+     sub-phase can advance without a board click -- the stepper's Advance
+     button, a token placed, another player's action arriving on a poll -- so
+     closing on the next click would leave the carousel floating over a board
+     that has moved past it. */
+  useEffect(() => {
+    if (tileSelectorArmed) return;
+    setRadialSelector(null);
+    setPreviewTile(null);
+  }, [tileSelectorArmed]);
+
   const handleHexClickQuery = useCallback((state: HexClickQueryState) => {
     setHexClickQuery(state);
-  }, []);
+
+    /* ================================================================
+     *  DESIGN NOTE 199: THE TILE SELECTOR IS A LAY TRACK TOOL, FULL STOP
+     * ================================================================
+     *
+     * Design note #163 ("Universal Planning Mode") made the ring openable in
+     * every phase, on the reasoning that INSPECTING a hex is harmless and
+     * only DISPATCHING needs gating. The reasoning was sound and the result
+     * was not: a tool that opens on every click, in every round, and then
+     * refuses at the last step is a tool that reads as broken. Worse, it
+     * competes for the click during the Tokens and Routes sub-phases, where
+     * the board's click means something else entirely -- the player is
+     * aiming at a city to place a token and gets a tile carousel.
+     *
+     * The gate is now STRICT and it is applied at the point the ring opens,
+     * not at the point it confirms. Three layers, all of them necessary:
+     *
+     *   1. HERE -- a resolved query never opens the ring outside `Track`.
+     *   2. The renderer's four interceptor props (`queryClient` and friends)
+     *      are withheld outside `Track`, so on a live chain the click does
+     *      not even fire `GetLegalTilePlacements`. Gating only here would
+     *      leave every stray click costing a query round-trip.
+     *   3. `<RadialTileSelector>` is not mounted outside `Track`, so a ring
+     *      already open when the sub-phase advances closes with it rather
+     *      than floating over a board that has moved on.
+     *
+     * `canLayTileNow` is deliberately NOT the condition. That value also
+     * refuses when it is not your turn, and a player should still be able to
+     * browse upgrades on somebody else's Track step -- which is the half of
+     * design note #163 worth keeping. The sub-phase is the whole gate. */
+    if (!tileSelectorArmed) {
+      setRadialSelector(null);
+      setPreviewTile(null);
+      return;
+    }
+
+    // Design note #162/#163: a resolved hex click OPENS THE RADIAL SELECTOR.
+    //
+    // Both answer shapes feed the same selector -- `"success"` carries the
+    // contract's verbatim `placements`, `"offline"` the local catalog
+    // mirror, and `provisional` is the only thing that distinguishes them
+    // downstream. `"blocked"` and `"loading"` are not openings: the first
+    // is a transient nudge with its own timer above, the second has nothing
+    // to show yet.
+    //
+    // Design note #172: `"not-a-hex"` is a CLOSING. Clicking open water is
+    // the most natural "never mind" gesture there is, and it used to do
+    // nothing at all -- the renderer returned before reporting anything, so
+    // an open ring just sat there. It now falls into the same `else` as
+    // every other non-opening status, which closes.
+    if (state.status === "success" || state.status === "offline") {
+      setPreviewTile(null);
+      // Converted to a board-relative offset at capture time -- the raw
+      // client point is only correct until something scrolls.
+      setRadialSelector({
+        q: state.q,
+        r: state.r,
+        hexLabel: state.hexLabel,
+        // Design note #171: the HEX CENTRE, not the cursor. Already in
+        // canvas-CSS pixels and already through the live pan/zoom
+        // transform, so the ring sits on the hex however the board is
+        // scrolled, panned or zoomed.
+        offsetX: state.centroidX,
+        offsetY: state.centroidY,
+        provisional: state.status === "offline",
+        placements: state.status === "success" ? state.response.placements : state.placements,
+      });
+    } else {
+      setRadialSelector(null);
+      setPreviewTile(null);
+    }
+    // `boardEl` dropped: design note #171 replaced the `getBoundingClientRect`
+    // arithmetic that needed it with the centroid the renderer now reports,
+    // so this closure reads nothing from the DOM at all any more.
+  }, [tileSelectorArmed]);
+
+  /* Design note #162: CLICK THE PREVIEW TO ROTATE IT.
+   *
+   * Rotation belongs on the tile, not in a panel: you are looking at the
+   * hex to decide whether the tile fits, and every pixel of travel to a
+   * separate control is travel away from the thing being judged.
+   *
+   * 60 degrees CLOCKWISE per click, wrapping at six -- so the gesture is
+   * also its own reset, and a player who overshoots keeps clicking rather
+   * than hunting for a second, opposite control.
+   *
+   * Only fires for a click on the hex the selector is open on. A click on
+   * any OTHER hex is a new selection and falls through to the normal
+   * interceptor. */
 
   // Design note #141: a blocked cue is a transient nudge, not a state the
   // player has to dismiss. Every other `hexClickQuery` status ends by the
@@ -2319,10 +3816,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return () => window.clearTimeout(timer);
   }, [hexClickQuery]);
 
-  const handleCloseTilePopup = useCallback(() => {
-    setHexClickQuery(null);
-    setPreviewTile(null);
-  }, []);
 
   // Manual Route Point UI state -- see design note #11. `routeSelectMode`
   // gates whether `<HexGridRenderer>` below is wired for route-point
@@ -2333,14 +3826,250 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Design note #44: armed by finishing a first Operating Round as a
   // president. One-way -- `TutorialModal` handles dismissal and remembering.
   const [marketTutorialArmed, setMarketTutorialArmed] = useState(false);
-  const [routeSelectMode, setRouteSelectMode] = useState(false);
-  const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
-  const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
 
-  const handleToggleRouteSelectMode = useCallback(() => {
-    setRouteSelectMode((prev) => !prev);
-    setRouteFeedback(null);
-  }, []);
+  // Design note #158: the Tutorials front door's open/closed state. Separate
+  // from the four `TutorialModal`s' own state, and deliberately so -- those
+  // track "has this player been shown this yet", which is a different
+  // question from "is the reader open right now".
+  const [tutorialLibraryOpen, setTutorialLibraryOpen] = useState(false);
+
+  // Design note #159: station-token targeting mode. Same shape as
+  // `routeSelectMode` -- while it is on, the board's query-firing click
+  // interceptor is disarmed and clicks route to a token handler instead.
+  const [tokenTargetMode, setTokenTargetMode] = useState(false);
+
+  /* ===================================================================
+   *  DESIGN NOTE 201: A TOKEN IS CONFIRMED, NOT DROPPED
+   * ===================================================================
+   *
+   * Clicking a city used to place the token and charge the treasury in the
+   * same gesture. That is the only irreversible, money-spending board action
+   * in this app with no confirmation step -- laying a tile, which costs
+   * comparable money and is equally permanent, has always asked for a green
+   * check first.
+   *
+   * The click now STAGES a placement. Nothing is dispatched, nothing is
+   * charged, the sub-phase does not advance, and targeting mode stays armed
+   * so clicking a different city simply re-aims. The green check is the only
+   * thing that commits.
+   *
+   * The anchor is the hex CENTROID the renderer reports (design note #171),
+   * not the cursor, so the ring sits on the hex however the board is
+   * scrolled, panned or zoomed -- the same value the tile selector stores
+   * for the same reason.
+   */
+  const [pendingToken, setPendingToken] = useState<{
+    q: number;
+    r: number;
+    hexLabel: string;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+
+  /* ==================================================================
+   *  DESIGN NOTE 240: THE SAME VEIL, FOR TOKENS
+   * ==================================================================
+   *
+   * Design note #223 built the board-dimming machinery for the Lay Track
+   * step: light what the corporation may act on, veil the rest, refuse
+   * clicks outside the set. Station placement has exactly the same shape --
+   * a small set of legal targets scattered across a hundred hexes -- and had
+   * none of it, so a player armed the token cursor and then hunted for a
+   * city their network reached by eye.
+   *
+   * Reusing the veil rather than adding a second highlight mechanism means
+   * the two steps behave identically, and the refusal a click gets is the
+   * same refusal in both. The SET differs, and that is the whole difference:
+   * track may be laid on hexes the network reaches OR touches, while a token
+   * needs a city with a free, unreserved slot ON the network.
+   *
+   * ONLY WHILE TARGETING IS ARMED. The veil is a strong visual statement and
+   * it should appear when the player has asked to place a token, not for the
+   * whole Tokens step -- during which they may simply be reading the board. */
+  const tokenTargetFocus = useMemo(() => {
+    if (!tokenTargetMode) return undefined;
+    if (!activeStationCompany) return undefined;
+    const highlighted = placeableStationHexes({
+      mapGrid,
+      company: activeStationCompany,
+      allCompanies: gameState?.public_companies ?? [],
+      boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
+    });
+    // Design note #241: same three tiers as the tile lay. A token placement
+    // is judged against the network it joins, so that network stays lit.
+    const visible = new Set<string>(
+      reachableNetwork(mapGrid, activeStationCompany.station_token_hexes),
+    );
+    highlighted.forEach((key) => visible.add(key));
+    return {
+      visible,
+      highlighted,
+      glowColor: glowColorFor(stationTickerColor(actingProtocolId)),
+    };
+  }, [tokenTargetMode, activeStationCompany, actingProtocolId, gameState, mapGrid]);
+
+
+  /* ===================================================================
+   *  DESIGN NOTE 166: THE PRIVATE COMPANY TRADE, AND WHO ACTUALLY AGREES
+   * ===================================================================
+   *
+   * Two pieces of client-side state: the proposal sheet's open flag, and
+   * the live proposal itself. Both are LOCAL -- see
+   * `PrivateTradePanel.tsx` design note #0 for why the consent half cannot
+   * be anything else today. `ExecuteMsg::BuyPrivateCompany` is single-party;
+   * the contract never asks the seller.
+   *
+   * The consequence for this file is narrow and worth stating: `proposal`
+   * is not synchronised to anything. In a live room the seller's client
+   * will never see it, which is why the prompt tells the proposer that
+   * accepting buys the private outright rather than pretending a
+   * counterparty agreed.
+   */
+  const [privateTradeOpen, setPrivateTradeOpen] = useState(false);
+  const [privateProposal, setPrivateProposal] = useState<PrivateTradeProposal | null>(null);
+
+  /* ===================================================================
+   *  DESIGN NOTE 205: TWO CONSENT FLOWS, ONE SHAPE, DIFFERENT BACKENDS
+   * ===================================================================
+   *
+   * A train trade and a private company purchase are the same interaction
+   * from the player's side -- name a price, the counterparty answers -- and
+   * the app now presents them identically (see `TrainPurchasePanel`'s
+   * `TrainTradePrompt` and `PrivateTradePanel`'s `PrivateTradePrompt`, kept
+   * deliberately alike). What differs is what the chain can carry, and the
+   * difference is worth stating because it decides where this state lives:
+   *
+   *   TRAINS -- the contract has the full flow.
+   *   `BuyTrainFromCorporation` settles instantly when one player presides
+   *   over both corporations and otherwise RECORDS an offer, which
+   *   `AcceptTrainOffer`/`RejectTrainOffer`/`RescindTrainOffer` answer and
+   *   `GetTrainOffers` publishes. Online, this file dispatches and the
+   *   seller's own client sees the offer arrive. Nothing local is needed.
+   *
+   *   PRIVATES -- the contract has half of it. `BuyPrivateCompany` is
+   *   single-party: it reads `private.owner` and never asks them. See
+   *   `PrivateTradePanel`'s design note #0.
+   *
+   * `sandboxTrainProposal` therefore exists for exactly ONE deployment: the
+   * offline sandbox, which has no chain to record an offer in and no second
+   * client to show it to. It is the local stand-in for the offer register,
+   * and it is scoped to the sandbox rather than shared with the live path so
+   * that a live room can never end up answering a proposal the chain does
+   * not know about.
+   */
+  const [sandboxTrainProposal, setSandboxTrainProposal] =
+    useState<TrainTradeProposal | null>(null);
+
+  /* ===================================================================
+   *  DESIGN NOTE 163: UNIVERSAL PLANNING MODE
+   * ===================================================================
+   *
+   * Opening the tile selector used to require being the acting president in
+   * the Track sub-phase, because opening it and laying from it were the
+   * same gesture. That made the board unreadable exactly when a player most
+   * needs to read it: on somebody else's turn, or during a Stock Round,
+   * while deciding what a corporation will be able to build next round.
+   *
+   * The two are now separate. INSPECTING is always allowed -- click any hex,
+   * see its legal upgrades, preview one, rotate it, judge the fit.
+   * DISPATCHING is gated, and only the green check is affected.
+   *
+   * Nothing about this loosens a rule. A preview is client-side state that
+   * touches no message; `canLayTileNow` guards the one place a transaction
+   * is produced, and the contract independently rejects an out-of-turn lay
+   * regardless of what this UI allows.
+   */
+  const [radialSelector, setRadialSelector] = useState<{
+    q: number;
+    r: number;
+    hexLabel: string;
+    /** Offset of the click INSIDE the board element. Board-relative, so a
+     *  page scroll cannot detach the ring from its hex. */
+    offsetX: number;
+    offsetY: number;
+    /** These candidates came from the local catalog, not from a chain. */
+    provisional: boolean;
+    /** Verbatim `GetLegalTilePlacements`, when a chain answered. */
+    placements: readonly LegalTilePlacement[];
+  } | null>(null);
+  const [routeSelectMode, setRouteSelectMode] = useState(false);
+  /* ==================================================================
+   *  DESIGN NOTE 275: ONE ROUTE PER TRAIN, KEYED BY TRAIN
+   * ==================================================================
+   *
+   * REPORTED: the router runs a single train even when the corporation owns
+   * three.
+   *
+   * `routePoints` was one array, so the app could hold exactly one route at
+   * a time -- which is not what a 1830 corporation does. It runs every
+   * train it owns in one turn, each on its own route, and the dividend is
+   * the sum.
+   *
+   * KEYED BY INDEX INTO `owned_trains`, not by model. That is the whole
+   * subtlety: a corporation with three 3-trains has three trains, and
+   * "the 3-train's route" does not identify any of them. `runnableTrains`
+   * had deduplicated the roster on the reasoning that "two 3-trains are one
+   * CHOICE" -- correct while the question was which train to validate ONE
+   * route against, wrong the moment the question became which train this
+   * route belongs to.
+   *
+   * A `Record` keyed by that index rather than an array parallel to the
+   * roster: the roster changes under this (a train rusts, one is bought
+   * mid-turn) and a parallel array would silently reassign every route to
+   * the wrong train when it did. Stale keys are simply ignored when the
+   * drafts are read back. */
+  const [routeDrafts, setRouteDrafts] = useState<Readonly<Record<number, RoutePoint[]>>>({});
+  const [activeTrainIndex, setActiveTrainIndex] = useState<number>(0);
+  const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
+  /* ==================================================================
+   *  DESIGN NOTE 278: DID THIS CORPORATION ACTUALLY RUN THIS TURN?
+   * ==================================================================
+   *
+   * The Dividends rule turns on whether revenue was EARNED THIS TURN, and
+   * `last_route_revenue` cannot answer that on its own. Its own doc comment
+   * is explicit: it reads as "what it earned last time", written on every
+   * run and zeroed only by a run that found no route. A corporation that
+   * banked $180 in OR1 and then skips Routes entirely in OR2 still reports
+   * $180 -- so testing the field alone would force a Pay/Withhold choice on
+   * a company that has not run a train this round, which is the opposite of
+   * the rule and would dispatch a declaration with nothing behind it.
+   *
+   * So the turn's own history is observed: `true` once routes are declared,
+   * `false` once the Routes step is skipped, and the whole record is
+   * discarded when the acting corporation changes.
+   *
+   * `null` MEANS UNKNOWN, AND UNKNOWN ENFORCES. A page reload mid-turn
+   * leaves no observation, and the two possible mistakes are not equal --
+   * wrongly hiding Skip strands a player on a step, wrongly showing it
+   * destroys money they have already earned. Unknown therefore falls back
+   * to the field, which is the conservative side of the rule this note
+   * exists to enforce. */
+  const [routesRunThisTurn, setRoutesRunThisTurn] = useState<{
+    protocolId: number;
+    ran: boolean;
+  } | null>(null);
+  useEffect(() => {
+    setRoutesRunThisTurn(null);
+  }, [actingProtocolId]);
+  /* Design note #275: read by the canvas click handler, which must see the
+     CURRENT draft without being rebuilt on every click. Mirrors, written
+     alongside the state exactly as the sandbox atoms are (design note
+     #265) -- the state stays the rendering source of truth. */
+  const routeDraftsRef = useRef<Readonly<Record<number, RoutePoint[]>>>(routeDrafts);
+  const activeTrainIndexRef = useRef<number>(activeTrainIndex);
+  useEffect(() => {
+    routeDraftsRef.current = routeDrafts;
+  }, [routeDrafts]);
+  useEffect(() => {
+    activeTrainIndexRef.current = activeTrainIndex;
+  }, [activeTrainIndex]);
+  /* Design note #266: WHICH TOOL DREW WHAT IS ON SCREEN.
+     `routeSelectMode` stays as the CANVAS flag -- whether map clicks are
+     being routed to the builder -- and this says which of the two drafting
+     tools the panel's toggle is showing as chosen. They are separate
+     because they answer different questions: one gates an input, the other
+     labels a state, and both auto and manual want the input on. */
+  const [routeBuildMode, setRouteBuildMode] = useState<RouteBuildMode>("manual");
 
   // Design note #33: hiding the toggle is not enough -- route mode also
   // rewires the Rail Map's click handling, so a mode left ON when its phase
@@ -2353,123 +4082,538 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   useEffect(() => {
     if (inRunTrainsSubPhase) return;
     setRouteSelectMode(false);
-    setRoutePoints([]);
+    setRouteDrafts({});
+    setActiveTrainIndex(0);
     setRouteFeedback(null);
+    // Back to the default for the next corporation's turn: a fresh route is
+    // the player's to draw until they ask for a draft.
+    setRouteBuildMode("manual");
   }, [inRunTrainsSubPhase]);
 
-  const handleClearRoute = useCallback(() => {
-    setRoutePoints([]);
+  /* Design note #266: entering the step ENGAGES the builder.
+     The panel is now on screen for the whole sub-phase, and a visible
+     builder whose map clicks go nowhere is worse than no builder -- the
+     player clicks a city, nothing happens, and the only clue is a control
+     they already appear to have selected. There is nothing else to click
+     the map for during Run Routes: tiles belong to Track and tokens to
+     Tokens, both of which have already passed. */
+  useEffect(() => {
+    if (!inRunTrainsSubPhase) return;
+    setRouteSelectMode(true);
+  }, [inRunTrainsSubPhase]);
+
+  /** Design note #275: clears ONE train's route, or every train's when
+   *  given `null` -- the panel offers both, because a player fixing one bad
+   *  route should not lose the two good ones beside it. */
+  const handleClearRoute = useCallback((trainIndex: number | null) => {
+    setRouteDrafts((prev) => {
+      if (trainIndex === null) return {};
+      if (!(trainIndex in prev)) return prev;
+      const next = { ...prev };
+      delete next[trainIndex];
+      return next;
+    });
+    setRouteFeedback(null);
+    // Clearing hands the route back to the player -- which is exactly what
+    // the button's tooltip promises ("This allows you to manually enter a
+    // route for this train"), so the toggle has to agree with it.
+    setRouteBuildMode("manual");
+  }, []);
+
+  /** Design note #275: which train the map is drafting for. */
+  const handleSelectRouteTrain = useCallback((trainIndex: number) => {
+    setActiveTrainIndex(trainIndex);
     setRouteFeedback(null);
   }, []);
 
+  /* ==================================================================
+   *  DESIGN NOTE 202: AUTO ROUTE IS A DRAFTING TOOL
+   * ==================================================================
+   *
+   * The button had been disabled since Audit G-13 removed
+   * `ExecuteOperatingRound`, with a tooltip explaining that the contract's
+   * own pathfinder has no message reaching it. That is true of the CONTRACT
+   * and irrelevant to the BUTTON: a player asking for a route to be drawn
+   * for them is asking the UI to pre-fill the manual builder, which needs no
+   * chain at all. The result leaves through the same `RunManualRoute` the
+   * player could have clicked out by hand, and the contract validates it
+   * exactly as it validates a hand-built one.
+   *
+   * So this fills in the route drafts and then gets out of the way. It is
+   * explicitly a SUGGESTION -- `autoTraceRoute`'s own design note #0 lists
+   * what it does not check, and every one of those remains
+   * `pathfinding.rs`'s -- and the player can extend, trim or clear whatever
+   * it drew. Naming it "Auto Route" rather than "Best Route" is deliberate
+   * for the same reason design note #186 refused "Calculate BEST Route": a
+   * client-side claim of optimality that the contract disagreed with would
+   * be worse than no button.
+   */
+  const handleAutoRoute = useCallback(() => {
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    /* Design note #250: NO TRAIN, NO ROUTE. A corporation with an empty
+       roster has nothing to run, so drafting one would produce a priced
+       path it can never declare -- a revenue figure with no train behind
+       it, which is the "mock revenue" this block exists to stop. */
+    if ((corporation?.owned_trains?.length ?? 0) === 0) {
+      setRouteFeedback(NO_TRAIN_ROUTE_REASON);
+      return;
+    }
+
+    /* ==================================================================
+     *  DESIGN NOTE 275: DRAFT FOR EVERY TRAIN, NOT THE BIGGEST ONE
+     * ==================================================================
+     *
+     * This traced once, for `selectedHardwareModel`, and wrote the result
+     * into the single `routePoints`. On a corporation with three trains
+     * that is one route out of three -- and pressing Auto-Route again just
+     * recomputed the same one, because nothing recorded that a route had
+     * been drafted.
+     *
+     * BIGGEST TRAIN FIRST, and greedily. `ownedTrainRoster` is already in
+     * tier order, so the train with the most reach picks its route while
+     * the network is untouched and the smaller ones fill in around it.
+     * That is not optimal -- the joint allocation is
+     * `pathfinding::trace_best_route_set`'s and stays there -- but it is
+     * the right greedy order: giving a 2-train first pick of the best
+     * two-stop run can strand a 5-train with nothing worth running.
+     *
+     * Each train is barred from the hexes its predecessors took
+     * (`autoTraceRoute`'s design note #4), which is what makes the set
+     * non-conflicting. */
+    const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
+    const claimed = new Set<string>();
+    const drafted: Record<number, RoutePoint[]> = {};
+    let firstReason: string | null = null;
+
+    for (const train of ownedTrainRoster) {
+      const trace = autoTraceRoute({
+        mapGrid,
+        era,
+        // A route must touch a city this corporation has a token in, so its
+        // tokens are the only legal places to start looking.
+        startHexes: corporation?.station_token_hexes ?? [],
+        // The train being run caps the stops. `999` is the Diesel's unlimited.
+        maxRevenueCentres: train.maxDistance ?? 4,
+        excludeHexes: claimed,
+      });
+      if (trace.reason !== null || trace.path.length < 2) {
+        // Reported ONCE, and only if nothing at all could be drafted. A
+        // three-train corporation whose network only supports two routes
+        // has been served well, not failed, and a warning per empty train
+        // would bury the two it did draw.
+        if (firstReason === null) firstReason = trace.reason;
+        continue;
+      }
+      drafted[train.trainIndex] = trace.path.map((point) => ({
+        q: point.q,
+        r: point.r,
+        hexLabel: point.hexLabel,
+      }));
+      for (const point of trace.path) claimed.add(`${point.q},${point.r}`);
+    }
+
+    const anyDrafted = Object.keys(drafted).length > 0;
+    if (!anyDrafted) {
+      setRouteFeedback(firstReason ?? NO_TRAIN_ROUTE_REASON);
+      return;
+    }
+
+    setRouteDrafts(drafted);
+    // Park the cursor on a train that actually has a route, so the panel's
+    // highlighted row and the Clear Route button both refer to something.
+    const firstDrafted = ownedTrainRoster.find((train) => drafted[train.trainIndex]);
+    if (firstDrafted) setActiveTrainIndex(firstDrafted.trainIndex);
+    // Turning the canvas flag on is part of the answer, not a side effect:
+    // the drafted path is meant to be editable, and editing it means map
+    // clicks have to reach the builder.
+    setRouteSelectMode(true);
+    /* Design note #266: NO SUCCESS MESSAGE. This used to set
+       "Auto Route drafted 5 hexes worth $180. Edit it by clicking hexes, or
+       clear it and build your own." -- a red string, on the happy path,
+       restating the hex chain and the value that the panel renders two rows
+       above it, then explaining the panel's own controls. Every fact in it
+       is now on screen as a fact rather than as a sentence about one. See
+       `RoutePlannerPanel`'s design note #3. */
+    setRouteFeedback(null);
+  }, [gameState, actingProtocolId, mapGrid, currentPhase, ownedTrainRoster]);
+
+  /* Design note #266: the segmented toggle's handler. Auto is a mode the
+     player selects AND the act of drafting -- selecting it re-runs the
+     tracer, which is what makes re-selecting it after editing a way to
+     start over from the machine's answer. */
+  const handleSelectRouteBuildMode = useCallback(
+    (mode: RouteBuildMode) => {
+      setRouteBuildMode(mode);
+      setRouteFeedback(null);
+      setRouteSelectMode(true);
+      if (mode === "auto") handleAutoRoute();
+    },
+    [handleAutoRoute],
+  );
+
   const handleRouteHexClick = useCallback(
-    (info: { q: number; r: number; hexLabel: string; clientX: number; clientY: number }) => {
-      const point: RoutePoint = { q: info.q, r: info.r, hexLabel: info.hexLabel };
-      setRoutePoints((prev) => {
+    (info: {
+      q: number;
+      r: number;
+      hexLabel: string;
+      boardLabel: string | null;
+      clientX: number;
+      clientY: number;
+    }) => {
+      /* ==================================================================
+       *  DESIGN NOTE 243: THE WAYPOINT CARRIES THE LABEL, NOT THE NAME
+       * ==================================================================
+       *
+       * REPORTED BUG: auto-route prices a route correctly and manual route
+       * resolves to $0.
+       *
+       * This stored `info.hexLabel` -- which is `describeHex`'s DISPLAY
+       * string, "New York (G19)" -- as the waypoint's label. Two things
+       * followed, and only the first was visible:
+       *
+       *   IT PRICED AT ZERO. `sandboxRouteBreakdown` looks each stop up in a
+       *   table keyed on the canonical label, so every stop missed and the
+       *   whole route totalled nothing. `autoTraceRoute` builds its labels
+       *   from `STATIC_BOARD_HEXES` and therefore priced identical routes
+       *   correctly -- which is precisely the asymmetry reported, and the
+       *   reason it looked like two different revenue calculations when it
+       *   was always one being fed two different kinds of string.
+       *
+       *   IT WOULD HAVE BEEN REJECTED ON CHAIN. The same value goes into
+       *   `RunManualRoute`'s `path[].hex`. The contract resolves that
+       *   against its own hex table, so a submitted manual route named a hex
+       *   that does not exist.
+       *
+       * `boardLabel` is the identifier (design note #242). `hexLabel` stays
+       * the display string and is still what the feedback messages below
+       * quote, because "Altoona (H12) has no track" reads better than
+       * "H12 has no track".
+       */
+      const boardLabel = info.boardLabel;
+      if (boardLabel === null) return;
+      const point: RoutePoint = { q: info.q, r: info.r, hexLabel: boardLabel };
+
+      /* Design note #266: EDITING A DRAFT MAKES IT YOURS. The moment a
+         click lands, the path is no longer the one `autoTraceRoute`
+         returned, and a toggle still reading "Auto-Route" would be
+         describing a route that no longer exists. The drafted hexes stay --
+         drafting into an editable builder is the entire point -- but the
+         label stops crediting the tracer for them. */
+      setRouteBuildMode("manual");
+
+      /* ==================================================================
+       *  DESIGN NOTE 256: A ROUTE RUNS BETWEEN TWO PAYING STOPS
+       * ==================================================================
+       *
+       * REPORTED: routes should start and end at a city, town or red
+       * off-board hex rather than anywhere the player happens to click.
+       *
+       * 1830's definition of a route is a run between two REVENUE CENTRES,
+       * with any amount of plain track in between. The builder enforced only
+       * that each click had track on it, so a route could begin and end on
+       * bare connectors -- which the contract then refused for failing the
+       * two-centre minimum, after the player had drawn the whole thing.
+       *
+       * The FIRST click is refused outright when it is not a revenue centre:
+       * there is no ambiguity about what it is, and refusing it costs the
+       * player one misplaced click rather than a whole path. The LAST is
+       * left to the readout and the Run button -- it cannot be enforced on
+       * click, because every intermediate click is momentarily "the last"
+       * and refusing plain track mid-draw would make it impossible to cross
+       * any.
+       */
+      /* Design note #264: A TOWN IS NOT A TERMINUS.
+         This used to test `hexStopValue > 0` -- "does this hex pay
+         anything" -- which is the right question for revenue and the wrong
+         one for termination. Towns pay, and 1830 does not let a route begin
+         or end on one: they are passed THROUGH, adding their value to a run
+         between two cities. `isRouteTerminusHex` asks the question that
+         actually applies. */
+      // Design note #275: the ACTIVE train's draft. Every rule below is
+      // about one train's own chain, so they all read this rather than a
+      // single global route.
+      const current = routeDraftsRef.current[activeTrainIndexRef.current] ?? [];
+      if (current.length === 0 && !isRouteTerminusHex(mapGrid, boardLabel)) {
+        setRouteFeedback(
+          `${info.hexLabel} cannot START a route. Routes begin at a city or a red off-board hex -- towns and plain track are passed through.`,
+        );
+        return;
+      }
+
+      /* Design note #186: A WAYPOINT NEEDS TRACK.
+       *
+       * Any hex could be added, including bare ground the corporation has
+       * never built on -- so a "route" could be drawn across empty prairie,
+       * priced, and submitted. The adjacency check below refuses a
+       * DISCONNECTED chain; it has nothing to say about a connected chain of
+       * hexes with no rails on them.
+       *
+       * Preprinted track counts: the gray hexes and the landmarks ship with
+       * rails the board draws and trains may run on, so `liveEdgesForHex` --
+       * which reads a laid tile's rotated mask AND the preprinted geometry --
+       * is the right test rather than "is there a tile record". */
+      if (liveEdgesForHex(mapGrid, info.q, info.r).length === 0) {
+        setRouteFeedback(
+          `${info.hexLabel} has no track. Lay a tile there first, or pick a hex the network already runs through.`,
+        );
+        return;
+      }
+
+      setRouteDrafts((all) => {
+        const trainIndex = activeTrainIndexRef.current;
+        const prev = all[trainIndex] ?? [];
+        const write = (next: RoutePoint[]) => ({ ...all, [trainIndex]: next });
         const last = prev[prev.length - 1];
         // Clicking the most recently added point again is a quick one-step
         // undo, rather than a no-op or a rejected duplicate.
         if (last && last.q === point.q && last.r === point.r) {
           setRouteFeedback(null);
-          return prev.slice(0, -1);
+          return write(prev.slice(0, -1));
         }
         if (prev.length === 0) {
           setRouteFeedback(null);
-          return [point];
+          return write([point]);
         }
-        // Real route constraint this CAN check client-side: a route is a
-        // connected chain of hexes, so a new point must be a direct
-        // neighbor of the current last point -- see design note #11 for
-        // what this feature deliberately does NOT attempt to verify.
-        if (axialHexDistance(last, point) !== 1) {
+
+        // Clicking a hex the route already passes through, other than the
+        // last one, would make the chain visit it twice -- and 1830 pays a
+        // hex once per pass, so the drawing and the pricing would disagree.
+        // Refused with the reason rather than silently ignored.
+        if (prev.some((entry) => entry.q === point.q && entry.r === point.r)) {
           setRouteFeedback(
-            `${point.hexLabel} isn't adjacent to ${last.hexLabel} -- route points must chain through neighboring hexes.`,
+            `${point.hexLabel} is already on this route. A route may not visit the same hex twice -- click ${last.hexLabel} to step back instead.`,
           );
-          return prev;
+          return all;
+        }
+
+        /* Design note #276: ADJACENT CLICKS ARE UNCHANGED.
+           A neighbouring hex is appended exactly as before, which is what
+           keeps hex-by-hex drawing available for disambiguating a branch --
+           the bridge below only fills gaps the player chose to leave. */
+        if (axialHexDistance(last, point) === 1) {
+          setRouteFeedback(null);
+          return write([...prev, point]);
+        }
+
+        /* ==================================================================
+         *  DESIGN NOTE 276: THE GAP BETWEEN TWO STOPS IS NOT A DECISION
+         * ==================================================================
+         *
+         * REPORTED: manual routing forces a click on every plain track hex
+         * between two cities.
+         *
+         * The old rule here refused any non-adjacent click outright --
+         * "route points must chain through neighboring hexes" -- which is a
+         * true statement about routes and the wrong thing to ask of a
+         * player. The chain has to be connected; it does not have to be
+         * typed in one hex at a time, and on a built-up board nineteen of
+         * every twenty clicks had exactly one legal answer.
+         *
+         * `bridgeWaypoints` walks the live track between the two, preferring
+         * plain track over a shortcut through some third city (see its own
+         * design note #5 for why that preference matters -- an unasked-for
+         * city costs both revenue and a stop of the train's capacity).
+         *
+         * A FAILED BRIDGE IS STILL REFUSED, and says so. Two hexes with no
+         * rails between them are not a route, and filling that gap with a
+         * straight line would be the class of plausible fiction this
+         * codebase has deleted twice already. */
+        const bridge = bridgeWaypoints(
+          mapGrid,
+          last,
+          point,
+          // A route is a simple path, so the bridge may not loop back
+          // through hexes the player has already routed over.
+          new Set(prev.map((entry) => `${entry.q},${entry.r}`)),
+        );
+        if (!bridge) {
+          setRouteFeedback(
+            `No track path from ${last.hexLabel} to ${point.hexLabel}. Lay the missing tiles, or click through the hexes you want the route to take.`,
+          );
+          return all;
         }
         setRouteFeedback(null);
-        return [...prev, point];
+        return write([...prev, ...bridge]);
       });
     },
-    [],
+    // `mapGrid` joins for design note #186's track check -- a stale closure
+    // would judge a waypoint against the board as it was before the last
+    // tile lay, and refuse a hex the player has just built on.
+    //
+    // The draft and the active train are read through REFS (design note
+    // #275), so neither joins this list. They change on every click, and a
+    // handler identity that changed with them would rebuild the canvas's
+    // click prop mid-draw -- the same staleness trap `routePoints.length`
+    // used to sit in, one level up. The ERA is not needed either: design
+    // note #264 replaced the value test with an archetype test, and whether
+    // a hex holds a city does not change with the phase.
+    [mapGrid],
   );
 
-  const routeHopCount = Math.max(0, routePoints.length - 1);
+/* `routeHopCount` is GONE (design note #156). It counted hops between
+   selected hexes and was compared against a train's number, which is the
+   classic 18xx misreading: a 2-train is limited to two REVENUE CENTRES, not
+   two hexes of travel. `routeBreakdown.centres` replaced it as the capacity
+   figure and `routeBreakdown.hexes` as the "how far did I click" figure --
+   deleted rather than left unused so nothing can quietly start comparing
+   against it again. */
 
-  // F-1: the player's in-progress manual route, handed to the canvas as a
-  // drawable overlay -- design note #137 in `HexGridRenderer.tsx`.
+  // Live preview of what the selected stops are worth. Recomputed as the
+  // player clicks, which is the whole point -- a number that only appears
+  // after dispatch cannot be used to compare two candidate routes.
   //
-  // Until now `routePoints` existed only as a TEXT list in the side panel. A
-  // player assembling a route by clicking hexes got a column of labels and no
-  // indication on the map of the path they were building, which is precisely
-  // the feedback the map exists to give.
-  //
-  // `useMemo` on `routePoints` alone: this array's identity is part of
-  // `HexGridRenderer`'s draw-effect dependency list, so rebuilding it on every
-  // render would repaint the whole canvas on every unrelated state change in
-  // this very large component.
-  //
-  // Fewer than two points yields `[]`, and `drawRouteOverlays` also skips any
-  // entry with `hexes.length < 2` -- a route needs at least one hop to be a
-  // line, and a single clicked hex is not yet a route.
+  // Below two points there is no route to price, and showing "$0" for a
+  // single click would read as "this city is worthless" rather than "you
+  // have not drawn a route yet".
+  /* ==================================================================
+   *  DESIGN NOTE 275: EVERY DRAFT, PRICED
+   * ==================================================================
+   *
+   * One memo over the whole roster rather than the old single
+   * `routeBreakdown`. Each entry is what `RoutePlannerPanel` renders as one
+   * row and what `handleRunTrains` dispatches as one message, so the panel,
+   * the total and the dispatch cannot disagree about which routes count. */
+  const trainDrafts = useMemo<TrainRouteDraft[]>(() => {
+    const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
+    return ownedTrainRoster.map((train) => {
+      const points = routeDrafts[train.trainIndex] ?? [];
+      const breakdown =
+        points.length < 2
+          ? null
+          : sandboxRouteBreakdown(mapGrid, routePointsToWaypoints(points), era);
+      const centres = breakdown?.centres ?? 0;
+      const last = points[points.length - 1];
+      return {
+        trainIndex: train.trainIndex,
+        model: train.model,
+        maxDistance: train.maxDistance,
+        hexLabels: points.map((point) => point.hexLabel),
+        stops: breakdown?.stops ?? [],
+        /* Design note #250: `null`, not `0`, for a corporation with no
+           trains -- zero is a real answer meaning "worth nothing" and the
+           honest answer there is that the question does not apply. */
+        value: ownsAnyTrain ? (breakdown?.revenue ?? null) : null,
+        revenueCentres: centres,
+        exceedsMaxDistance:
+          train.maxDistance !== undefined &&
+          train.maxDistance !== 999 &&
+          centres > train.maxDistance,
+        // Design note #256/#264: only meaningful once there is a route.
+        endsOffTerminus:
+          points.length >= 2 && last !== undefined
+            ? !isRouteTerminusHex(mapGrid, last.hexLabel)
+            : false,
+      };
+    });
+  }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain]);
+
+  /* Design note #275: one overlay per drafted train, so the board shows the
+     whole turn at once rather than whichever route was drawn last.
+
+     THE COLOUR IS SHARED. All of them are this corporation's routes, so all
+     of them wear its colour (design note #254) -- distinguishing them by
+     hue would invent a second meaning for a channel that already answers
+     "whose turn is this". The ACTIVE train's route is the one the player is
+     editing, and that is what the panel's row highlight says. */
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
-    if (routePoints.length < 2) return [];
-    return [
-      {
-        // One overlay, because a manually-declared route IS one train's run.
-        // The multi-train case (`trace_best_route_set` returns one route per
-        // train) maps onto this same prop as several entries with different
-        // colours -- no shape change needed when that lands.
-        trainLabel: "Selected Route",
-        // Amber, matching the route-select UI's own accent, so the ribbon on
-        // the map reads as the same feature as the panel that built it.
-        color: "#e0a54a",
-        hexes: routePoints.map((point) => [point.q, point.r] as [number, number]),
-      },
-    ];
-  }, [routePoints]);
-  const routeMaxDistanceForSelectedHardware = MOCK_TRAIN_CATALOG.find(
-    (t) => t.modelType === selectedHardwareModel,
-  )?.maxDistance;
-  const routeExceedsMaxDistance =
-    routeMaxDistanceForSelectedHardware !== undefined &&
-    routeMaxDistanceForSelectedHardware !== 999 &&
-    routeHopCount > routeMaxDistanceForSelectedHardware;
+    const color = glowColorFor(stationTickerColor(actingProtocolId));
+    const overlays: RouteOverlay[] = [];
+    for (const train of ownedTrainRoster) {
+      const points = routeDrafts[train.trainIndex] ?? [];
+      // `drawRouteOverlays` skips anything shorter, but filtering here keeps
+      // the array identity stable for the canvas's dependency check.
+      if (points.length < 2) continue;
+      overlays.push({
+        trainLabel: `${train.model}-Train`,
+        color,
+        hexes: points.map((point) => [point.q, point.r] as [number, number]),
+      });
+    }
+    return overlays;
+  }, [ownedTrainRoster, routeDrafts, actingProtocolId]);
 
-  const handleTileDispatched = useCallback<NonNullable<TileSelectionPopupProps["onDispatched"]>>(
-    (result) => {
-      const id = nextLogEntryId++;
-      const timestamp = new Date().toLocaleTimeString();
-      // Design note #18/item 3: real sortable epoch, stamped alongside the
-      // existing display-only `timestamp` string -- see `utils/feed.ts`
-      // design note #2.
-      const timestampMs = Date.now();
-      const label = `LayTile #${result.tileId} (orientation ${result.orientation})`;
-      if (result.status === "success") {
-        setActionLog((log) => [
-          {
-            id,
-            label,
-            status: "success",
-            detail: `tx ${truncateAddress(result.response.transactionHash, 8, 6)}`,
-            timestamp,
-            timestampMs,
-          },
-          ...log,
-        ]);
-        refreshGameState();
-      } else {
-        setActionLog((log) => [
-          { id, label, status: "error", detail: result.message, timestamp, timestampMs },
-          ...log,
-        ]);
-      }
-    },
-    [refreshGameState],
+  /* REMOVED with design note #162: `handleTileDispatched` and
+     `handleCloseTilePopup`.
+
+     Both were `TileSelectionPopup`'s callbacks. That component dispatched
+     its own `LayTile` and reported the outcome back so this file could fold
+     it into the Action Log; the radial selector instead routes its confirm
+     through `runGameplayAction`, which already logs every dispatch on the
+     one path every other control in this app uses. One fewer dispatch
+     route, and the log entry now comes from the same place as all the
+     others rather than from a second, parallel one. */
+
+
+  // Design note #2 in `utils/sandboxState.ts`: in sandbox the chart is
+  // DERIVED from the same corporations table the Stock Round cards read,
+  // so the two can no longer disagree. `MOCK_MARKET_GRID` remains only for
+  // the non-sandbox placeholder path (design note #2 at the top of this
+  // file -- illustrative data never produced by a live query).
+  const marketGrid = useMemo<MarketGridResponse>(
+    () =>
+      sandbox
+        ? {
+            game_id: gameId,
+            // Design note #272: `sandboxMarket`, not the fixture constant.
+            // The old dependency list was `[sandbox, gameId]` -- neither of
+            // which ever changes mid-session, which is precisely why the
+            // chart could not move.
+            positions: sandboxMarketPositions(sandboxMarket),
+          }
+        : MOCK_MARKET_GRID,
+    [sandbox, gameId, sandboxMarket],
   );
+
+  const logInfo = useCallback((label: string, detail: string) => {
+    const id = nextLogEntryId++;
+    const timestamp = new Date().toLocaleTimeString();
+    const timestampMs = Date.now();
+    setActionLog((log) => [{ id, label, status: "info", detail, timestamp, timestampMs }, ...log]);
+  }, []);
 
   const runGameplayAction = useCallback(
-    async (label: string, msg: GameplayExecuteMsg) => {
+    async (fallbackLabel: string, msg: GameplayExecuteMsg) => {
+      /* ==================================================================
+       *  DESIGN NOTE 262: THE LOG DESCRIBES THE EVENT, NOT THE MESSAGE
+       * ==================================================================
+       *
+       * Every call site used to hand in its own label, and they were the
+       * contract's variant names -- "RunManualRoute", "BuyHardwareFromPool
+       * (mock)", "DeclareDividends: Pay (mock)". None of them said WHO
+       * acted, several leaked internals, and the "(mock)" suffixes outlived
+       * the mocks they were warning about.
+       *
+       * Deriving the label here rather than at the call site is the point:
+       * one place turns a message into a sentence, so a new dispatch cannot
+       * forget to write one and an old one cannot drift from what it sends.
+       * `describeGameplayAction` reads the state BEFORE the action applies,
+       * which is the only state available at dispatch time and the more
+       * useful one to report against (its design note #1).
+       *
+       * The passed label survives as the fallback for messages with nothing
+       * better to say -- a vaguer sentence than the variant name would be a
+       * downgrade dressed as an improvement. */
+      const describeContext = {
+        gameState,
+        mapGrid,
+        era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+        labelForAddress: (address: string) =>
+          sandboxPlayerLabel(address) ?? truncateAddress(address),
+        marketPrices: Object.fromEntries(
+          (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
+        ),
+        projectPrice: (price: number, choice: "pay" | "withhold") =>
+          projectDividendMove(price, choice)?.price ?? null,
+      };
+      /* Design note #265: seeded from the BEFORE state, then re-derived
+         against the resolved one inside the sandbox branch. A live chain has
+         no resolved state to offer at dispatch time, so this is what it
+         keeps -- which is why `afterState` is optional in the context rather
+         than required. */
+      let label = describeGameplayAction(msg, describeContext) ?? fallbackLabel;
+
       const id = nextLogEntryId++;
       const timestamp = new Date().toLocaleTimeString();
       const timestampMs = Date.now();
@@ -2491,15 +4635,160 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // in `player_addresses` -- but failing here is instant, free and
       // legible, where failing on-chain costs a signature and returns an
       // error about turn order.
-      if (spectator || sandbox) {
+      // Sandbox: apply the action to the LOCAL reducer instead of signing
+      // anything. Nothing is broadcast and no wallet is touched -- the
+      // message never leaves this function -- but the mock state advances, so
+      // the turn moves, balances change, and the UI re-renders exactly as it
+      // would against a chain.
+      //
+      // Deliberately still not a chain dispatch: `applySandboxAction` moves
+      // turn pointers and counters, and knows no rules. See
+      // `utils/sandboxSession.ts` design note 0 for why that boundary is the
+      // whole design rather than an unfinished edge.
+      if (sandbox) {
+        /* ==================================================================
+         *  DESIGN NOTE 265: THE LOG REPORTS WHAT HAPPENED, NOT WHAT WAS ASKED
+         * ==================================================================
+         *
+         * REPORTED: the log reads the state before the action resolves --
+         * "2/5 remaining" logged at the moment a purchase is clicked, rather
+         * than the 1/5 that is true once it lands.
+         *
+         * Design note #1 in `actionLog.ts` argued for describing the BEFORE
+         * state, on the grounds that it is the only state available at
+         * dispatch time. That is true on a chain and was never true here: the
+         * sandbox reducer is synchronous, so the resolved state is one
+         * function call away. The argument was right about the constraint and
+         * wrong about which side of it the sandbox sits on.
+         *
+         * THIS BLOCK NOW RESOLVES FIRST AND LOGS SECOND. It also fixes two
+         * real bugs that the functional-updater style was hiding:
+         *
+         *   THE CHARGE CROSSED THE ATOMS IN THE WRONG ORDER. The waterfall's
+         *   charge was captured inside `setSandboxWaterfall`'s updater and
+         *   read inside `setSandboxState`'s. React invokes each hook's queue
+         *   as that hook is evaluated during render, and `sandboxState` is
+         *   declared FIRST -- so the charge was read before it was written,
+         *   and an auction purchase never actually debited the buyer.
+         *
+         *   A LOOP OF DISPATCHES COLLAPSED. `handleBuyTrainsFromBank` awaits
+         *   N purchases in a row, and `sandboxState` in this closure does not
+         *   refresh between iterations. Reading it directly would have
+         *   applied every purchase to the same base state.
+         *
+         * A REF fixes both: it is written synchronously, so each dispatch
+         * sees the previous one's result, and the ordering is explicit rather
+         * than dependent on hook declaration order.
+         */
+        const before = sandboxStateRef.current;
+
+        // Design note #178: UNDO. Snapshot before mutating -- except for
+        // undo itself, which would otherwise push the state it is about to
+        // discard and make the button a no-op that consumes a stack slot.
+        if (!("UndoLastAction" in msg) && before) {
+          setSandboxHistory((stack) =>
+            [...stack, { state: before, mapGrid, subPhase: orSubPhase }].slice(
+              -SANDBOX_HISTORY_LIMIT,
+            ),
+          );
+        }
+
+        /* Design note #261: the auction's own atom, advanced alongside the
+           game state. `applySandboxWaterfallAction` returns the cash it
+           implies rather than reaching across into player wallets, so the
+           charge is applied here through the ordinary path. */
+        let after = before;
+        const waterfallBefore = sandboxWaterfallRef.current;
+        if (waterfallBefore) {
+          const result = applySandboxWaterfallAction(
+            waterfallBefore,
+            msg,
+            before?.player_addresses ?? [],
+          );
+          sandboxWaterfallRef.current = result.waterfall;
+          setSandboxWaterfall(result.waterfall);
+
+          if (result.charge && after) {
+            const { player, amount } = result.charge;
+            after = {
+              ...after,
+              player_cash: after.player_cash.map((entry: { player: string; cash_vgp: string }) =>
+                entry.player === player
+                  ? {
+                      ...entry,
+                      cash_vgp: String(Math.max(0, (Number(entry.cash_vgp) || 0) - amount)),
+                    }
+                  : entry,
+              ),
+            };
+          }
+          if (result.won) {
+            logInfo(
+              "Private Won",
+              `${sandboxPlayerLabel(result.won.player) ?? truncateAddress(result.won.player)} won ${result.won.name} for $${result.won.price}.`,
+            );
+          }
+        }
+
+        /* Design note #272/#273: the market atom, advanced BEFORE the game
+           state because the game state needs the price it reports. Same
+           contract as the waterfall's: this returns the figure rather than
+           reaching into wallets, so one number is charged and logged. */
+        const marketResult = applySandboxMarketAction(sandboxMarketRef.current, msg, {
+          projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
+        });
+        if (marketResult.prices !== sandboxMarketRef.current) {
+          sandboxMarketRef.current = marketResult.prices;
+          setSandboxMarket(marketResult.prices);
+        }
+        if (marketResult.moved) {
+          const { companyId, from, to } = marketResult.moved;
+          const ticker =
+            before?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+            `#${companyId}`;
+          logInfo("Market Move", `${ticker} fell from $${from} to $${to} on the sale.`);
+        }
+
+        if (after) {
+          after = applySandboxAction(after, msg, {
+            // Only `RunManualRoute` reads this, to total the printed value of
+            // the stops the player picked instead of paying a flat nominal
+            // for every route regardless of length.
+            mapGrid,
+            era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+            // Design note #273: what the chart says this share is worth, so
+            // the wallet and the market agree about one trade.
+            sharePrice: marketResult.tradePrice ?? undefined,
+          });
+          sandboxStateRef.current = after;
+          setSandboxState(after);
+        }
+
+        // Design note #265: described against the RESOLVED state.
+        label =
+          describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
+
+        setActionLog((log) => [
+          {
+            id,
+            label,
+            status: "success",
+            detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
+            timestamp,
+            timestampMs,
+          },
+          ...log,
+        ]);
+        return;
+      }
+
+      if (spectator) {
         setActionLog((log) => [
           {
             id,
             label,
             status: "info",
-            detail: sandbox
-              ? "Offline sandbox -- no chain connected, so nothing was dispatched."
-              : "Spectator mode -- watching only. Join from the lobby to play.",
+            detail: "Spectator mode -- watching only. Join from the lobby to play.",
             timestamp,
             timestampMs,
           },
@@ -2534,25 +4823,68 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         );
       }
     },
-    [session, refreshGameState, spectator, sandbox],
+    // `mapGrid`/`currentPhase` join the list because the sandbox branch now
+    // reads both to price a route. Omitting them would close over the board
+    // as it was when this callback was last built, so a route run after a
+    // tile lay would be scored against the PRE-LAY map -- the exact stale
+    // number the tester exists to make visible.
+    // `orSubPhase` joins them for design note #178's undo snapshot, which
+    // records the cursor alongside the state so an undone tile lay also
+    // restores the step the turn was on.
+    // `logInfo` joins for design note #261's auction, which announces a won
+    // private. The seating order the auction reducer needs is no longer a
+    // dependency: design note #265 reads it off `sandboxStateRef`, which is
+    // current by construction rather than as-of the last render -- one of
+    // the staleness classes the ref was introduced to close.
+    [
+      session,
+      refreshGameState,
+      spectator,
+      sandbox,
+      mapGrid,
+      currentPhase,
+      orSubPhase,
+      logInfo,
+      // Design note #262: the label is derived from live state, so a stale
+      // closure here would name the corporation that WAS acting and quote
+      // the price the chart HAD -- a log that is wrong in exactly the way
+      // the old variant-name labels never could be.
+      gameState,
+      marketGrid.positions,
+    ],
   );
 
-  const logInfo = useCallback((label: string, detail: string) => {
-    const id = nextLogEntryId++;
-    const timestamp = new Date().toLocaleTimeString();
-    const timestampMs = Date.now();
-    setActionLog((log) => [{ id, label, status: "info", detail, timestamp, timestampMs }, ...log]);
-  }, []);
 
   const handlePassTurn = useCallback(
     () => runGameplayAction("PassTurn", { PassTurn: { game_id: gameId } }),
     [runGameplayAction, gameId],
   );
 
-  const handleUndoLastAction = useCallback(
-    () => runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } }),
-    [runGameplayAction, gameId],
-  );
+  const handleUndoLastAction = useCallback(() => {
+    // Design note #178: in sandbox, pop the snapshot stack. Online, dispatch
+    // the real message and let the contract decide what undo means -- a
+    // local restore there would put the UI out of step with the chain.
+    if (sandbox) {
+      setSandboxHistory((stack) => {
+        const previous = stack[stack.length - 1];
+        if (!previous) {
+          logInfo("Undo", "Nothing to undo -- this is the start of the scenario.");
+          return stack;
+        }
+        sandboxStateRef.current = previous.state;
+        setSandboxState(previous.state);
+        setMapGrid(previous.mapGrid);
+        setOrSubPhase(previous.subPhase);
+        // Any in-flight preview belonged to the state just discarded.
+        setPreviewTile(null);
+        setRadialSelector(null);
+        logInfo("Undo", "Reverted the last sandbox action.");
+        return stack.slice(0, -1);
+      });
+      return;
+    }
+    runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } });
+  }, [sandbox, runGameplayAction, gameId, logInfo]);
 
   // Design note (Stock & Auction pass): reads real UI-driven selection state
   // from `StockRoundPanel` (`srSelectedProtocolId`/`srSource`/`srParValue`)
@@ -2650,20 +4982,99 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [runGameplayAction, gameId],
   );
 
-  const handleRunTrains = useCallback(() => {
-    runGameplayAction("ExecuteOperatingRound (mock)", {
-      // No per-company payout picker UI yet (see design note #4) -- an
-      // empty choice list is a real, valid call (every company simply
-      // retains), not a fabricated one.
-      ExecuteOperatingRound: { game_id: gameId, public_company_choices: [] },
-    });
+  const handleRunTrains = useCallback(async () => {
+    /* Design note #250: the same block on the dispatch path. Guarding only
+       the builder would leave a route drafted before the last train was
+       sold still declarable. */
+    if (!ownsAnyTrain) {
+      setRouteFeedback(NO_TRAIN_ROUTE_REASON);
+      return;
+    }
+
+    /* ==================================================================
+     *  DESIGN NOTE 275: ONE MESSAGE PER TRAIN
+     * ==================================================================
+     *
+     * `RunManualRoute` carries ONE `path`, because it declares one train's
+     * run -- so a corporation running three trains sends three messages.
+     * That is the contract's shape and not a limitation to work around:
+     * each route is validated on its own, and a rejected third route does
+     * not undo two accepted ones.
+     *
+     * Awaited in sequence rather than fired in parallel. The sandbox
+     * reducer is synchronous through a ref (design note #265) so the
+     * ordering matters there, and on a live chain sequential signing is
+     * what the wallet expects anyway -- `handleBuyTrainsFromBank` sends its
+     * N purchases exactly this way.
+     *
+     * INVALID DRAFTS ARE SKIPPED, NOT REFUSED. The panel's total already
+     * excludes them and says so; blocking the whole dispatch because one of
+     * three routes ends on a town would make the good two hostage to the
+     * bad one. */
+    const runnable = trainDrafts.filter(
+      (draft) =>
+        draft.value !== null &&
+        draft.value > 0 &&
+        !draft.exceedsMaxDistance &&
+        !draft.endsOffTerminus,
+    );
+
+    if (runnable.length === 0) {
+      const drafted = trainDrafts.filter((draft) => draft.hexLabels.length > 0);
+      if (drafted.length === 0) {
+        setRouteFeedback(
+          "Select at least two connected hexes on the Rail Map to declare a route.",
+        );
+        return;
+      }
+      /* Design note #256: the LAST stop, reported here rather than on click.
+         Every intermediate click is momentarily the last one, so refusing
+         plain track during the draw would make it impossible to cross any --
+         but a route that ENDS on a connector is one the contract will refuse,
+         and finding that out from a rejected transaction is the outcome this
+         check exists to avoid. */
+      const offTerminus = drafted.find((draft) => draft.endsOffTerminus);
+      if (offTerminus) {
+        const last = offTerminus.hexLabels[offTerminus.hexLabels.length - 1];
+        setRouteFeedback(
+          `${last} cannot END a route. Routes finish at a city or a red off-board hex -- click one to finish, or click ${last} again to step back.`,
+        );
+        return;
+      }
+      setRouteFeedback("No drafted route can run yet.");
+      return;
+    }
+
+    for (const draft of runnable) {
+      const points = routeDraftsRef.current[draft.trainIndex] ?? [];
+      if (points.length < 2) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await runGameplayAction("RunManualRoute", {
+        RunManualRoute: {
+          game_id: gameId,
+          protocol_id: actingProtocolId,
+          path: routePointsToWaypoints(points),
+          // The dividend decision belongs to the Dividends sub-phase, which
+          // is the very next step -- so the revenue is withheld into the
+          // treasury here and paid out (or not) there. Declaring a payout
+          // from the Routes step would make the separate Dividends buttons
+          // meaningless.
+          payout_strategy: "Withhold",
+        },
+      });
+    }
+
+    // Design note #278: this corporation HAS run, so any revenue on it is
+    // this turn's and the dividend choice is binding.
+    setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: true });
+
     // Design note #142: advance Routes -> Dividends once trains have run.
     // Optimistic, matching this file's existing convention (design note #4)
     // of not gating local UI sequencing on a chain round-trip -- and now
     // necessary rather than cosmetic, since running trains is the step that
     // produces the figure the Dividends phase decides about.
     setOrSubPhase("Dividends");
-  }, [runGameplayAction, gameId]);
+  }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain]);
 
   // Generalized over `distribute` (design note #10/item 2 -- Phase 3's
   // explicit "Pay Dividends" vs "Withhold Revenue" buttons are the same
@@ -2672,19 +5083,46 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // this file's existing convention (design note #4) of not gating local UI
   // state on live tx confirmation -- the Action Log entry above already
   // reports success/failure independently.
+  /* ==================================================================
+   *  DESIGN NOTE 198: THE DIVIDEND WAS ALWAYS THE SAME $180
+   * ==================================================================
+   *
+   * `revenue_amount` was `MOCK_DECLARE_DIVIDENDS_REVENUE` -- a fixed
+   * constant left over from before routes were wired -- so whatever a
+   * corporation had actually just earned, it declared the mock figure. The
+   * panel directly above the buttons showed the REAL revenue and its real
+   * per-share split, and then the button sent a different number. Two
+   * figures for one decision, three inches apart, and the one the player
+   * could see was not the one that travelled.
+   *
+   * It now reads `last_route_revenue` off the corporation the action targets
+   * -- the same field `dividendRevenue` renders from, so the panel and the
+   * message cannot disagree. Read INSIDE the callback rather than closed
+   * over from the derived value further down this component: that value is
+   * declared after this callback, and naming it in a dependency array here
+   * would evaluate it before its own initialiser had run. */
   const handleDeclareDividendsChoice = useCallback(
     (distribute: boolean) => {
-      runGameplayAction(distribute ? "DeclareDividends: Pay (mock)" : "DeclareDividends: Withhold (mock)", {
-        DeclareDividends: {
-          game_id: gameId,
-          protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
-          revenue_amount: MOCK_DECLARE_DIVIDENDS_REVENUE,
-          distribute,
+      const corporation = gameState?.public_companies.find(
+        (entry) => entry.company_id === actingProtocolId,
+      );
+      const revenue = Number(corporation?.last_route_revenue ?? 0) || 0;
+      runGameplayAction(
+        distribute
+          ? `DeclareDividends: Pay $${revenue}`
+          : `DeclareDividends: Withhold $${revenue}`,
+        {
+          DeclareDividends: {
+            game_id: gameId,
+            protocol_id: actingProtocolId,
+            revenue_amount: String(revenue),
+            distribute,
+          },
         },
-      });
+      );
       setOrSubPhase("Hardware");
     },
-    [runGameplayAction, gameId],
+    [runGameplayAction, gameId, actingProtocolId, gameState],
   );
   const handlePayDividends = useCallback(
     () => handleDeclareDividendsChoice(true),
@@ -2695,30 +5133,168 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [handleDeclareDividendsChoice],
   );
 
-  const handleBuyTrain = useCallback(
-    () =>
-      runGameplayAction("BuyHardwareFromPool (mock)", {
-        BuyHardwareFromPool: { game_id: gameId, protocol_id: MOCK_LAY_TILE_PROTOCOL_ID },
-      }),
-    [runGameplayAction, gameId],
+  /* ==================================================================
+   *  DESIGN NOTE 204: QUANTITY IS N MESSAGES, NOT A BATCH
+   * ==================================================================
+   *
+   * `ExecuteMsg::BuyHardwareFromPool` carries no quantity field, so "buy 2"
+   * is two messages. Exactly the shape of `handleBuyShare`'s multi-buy
+   * (design note #42) and for the same reasons: `runGameplayAction` awaits
+   * each broadcast, so purchase N+1 is only attempted once N has been
+   * accepted, and each is its own Action Log line because it really is a
+   * separate purchase.
+   *
+   * SEQUENTIAL MATTERS MORE HERE THAN FOR SHARES. Buying the depot's last
+   * train of a tier advances the phase and can rust an entire generation of
+   * trains off the board. Firing a quantity in parallel would race that
+   * transition -- the second purchase would be priced and validated against
+   * a depot the first had not finished emptying.
+   *
+   * `tier` is taken for the log line only. The contract picks the model
+   * itself (`hardware.rs` module doc comment #2, "No model selection"), and
+   * the panel only ever offers the tier the depot's queue is already on, so
+   * the two cannot disagree -- but naming it here would be inventing a
+   * parameter the message does not have.
+   */
+  const handleBuyTrainsFromBank = useCallback(
+    async (tier: string, quantity: number) => {
+      const times = Math.max(1, Math.floor(quantity));
+      const before = depotInventory(gameState).find((row) => row.tier === tier);
+
+      for (let i = 0; i < times; i += 1) {
+        await runGameplayAction(
+          times > 1
+            ? `BuyHardwareFromPool: ${tier}-train (${i + 1} of ${times})`
+            : `BuyHardwareFromPool: ${tier}-train`,
+          { BuyHardwareFromPool: { game_id: gameId, protocol_id: actingProtocolId } },
+        );
+      }
+
+      /* Design note #262: ONE summary for a multi-train purchase.
+         Each message is its own transaction and gets its own line, which is
+         accurate -- but "bought a 3-train" three times in a row buries the
+         thing the player actually did. This adds the aggregate above them:
+         what it cost in total, and what the depot has left afterwards. Only
+         when there is an aggregate to state; for a single train the per
+         message line already says everything. */
+      if (times > 1 && before) {
+        const ticker =
+          gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
+            ?.ticker ?? `Corporation #${actingProtocolId}`;
+        const remaining =
+          before.remaining === null
+            ? "unlimited"
+            : `${Math.max(0, before.remaining - times)}/${before.total}`;
+        logInfo(
+          "Trains Bought",
+          `${ticker} bought ${countPhrase(times, `${tier}-train`)} for $${before.cost * times}. ` +
+            `Remaining depot supply: ${remaining}.`,
+        );
+      }
+    },
+    [runGameplayAction, gameId, actingProtocolId, gameState, logInfo],
   );
 
   // Buy Private Company Action Tray -- design note #14. `protocol_id` uses
   // the same `MOCK_LAY_TILE_PROTOCOL_ID` stand-in every other OR action on
   // this bar already targets (design note #1); `price` is stringified for
   // the same big-int-safety reason every other `Uint128` field is.
-  const handleBuyPrivateCompany = useCallback(() => {
-    const selected = sellablePrivates.find((p) => p.private_id === selectedPrivateId);
-    if (!selected) return;
-    runGameplayAction(`BuyPrivateCompany: ${selected.name} @ $${privatePriceVgp} (mock)`, {
+  /** Raise a proposal. Dispatches NOTHING -- design note #166. The purchase
+   *  message is sent only if the offer is accepted. */
+  /* ==================================================================
+   *  DESIGN NOTE 206: BUYING YOUR OWN PRIVATE NEEDS NOBODY'S PERMISSION
+   * ==================================================================
+   *
+   * Every proposal opened the consent prompt, including the commonest one in
+   * the game: a president selling a private company they personally own into
+   * the corporation they run. There is exactly one person involved in that
+   * transaction and the app was asking them to agree with themselves --
+   * a modal whose only possible answer is yes, in the middle of a turn.
+   *
+   * This is the same fork `train_trade.rs` already draws for trains
+   * (design note #205): one party means settle now, two parties mean ask.
+   * Applying it here makes the two flows behave alike, which matters because
+   * they look alike.
+   *
+   * THE COMPARISON IS AGAINST THE BUYING CORPORATION'S PRESIDENT, not
+   * against the viewer's wallet. The president is who the contract
+   * authorises for `BuyPrivateCompany`, and in a hotseat sandbox the viewer
+   * is whoever the seat switcher last selected -- so testing the viewer
+   * would auto-complete or prompt depending on which seat happened to be on
+   * screen, which is not a property of the trade at all.
+   */
+  const handleProposePrivatePurchase = useCallback(
+    (privateId: number, price: number) => {
+      const target = gameState?.private_companies.find((p) => p.private_id === privateId);
+      if (!target || !target.owner) return;
+      const buyer = gameState?.public_companies.find(
+        (c) => c.company_id === actingProtocolId,
+      );
+      const buyerTicker = buyer?.ticker ?? `#${actingProtocolId}`;
+      const ownerLabel = sandboxPlayerLabel(target.owner) ?? truncateAddress(target.owner);
+      setPrivateTradeOpen(false);
+
+      // The president of the buying corporation already owns it: one party,
+      // nothing to negotiate, so the purchase completes outright.
+      if (buyer?.president && buyer.president === target.owner) {
+        runGameplayAction(`BuyPrivateCompany: ${target.name} @ $${price}`, {
+          BuyPrivateCompany: {
+            game_id: gameId,
+            protocol_id: actingProtocolId,
+            private_id: privateId,
+            price: String(price),
+          },
+        });
+        logInfo(
+          "Buy Private Company",
+          `${buyerTicker} bought ${target.name} from ${ownerLabel} for $${price} -- its own President owned it, so it completed immediately.`,
+        );
+        return;
+      }
+
+      setPrivateProposal({
+        privateId,
+        privateName: target.name,
+        ownerAddress: target.owner,
+        ownerLabel,
+        buyerProtocolId: actingProtocolId,
+        buyerTicker,
+        price,
+      });
+      logInfo(
+        "Propose Purchase",
+        `Offered $${price} for ${target.name}. Awaiting ${ownerLabel}'s answer.`,
+      );
+    },
+    [gameState, logInfo, actingProtocolId, runGameplayAction, gameId],
+  );
+
+  /** Accepted. THIS is where the real message goes -- the one the contract
+   *  has always had, now sent only after both sides have said yes (in
+   *  sandbox) or after the buyer has confirmed knowing the seller was not
+   *  asked (in a live room). */
+  const handleAcceptPrivateOffer = useCallback(() => {
+    if (!privateProposal) return;
+    const { privateId, privateName, price, buyerProtocolId } = privateProposal;
+    runGameplayAction(`BuyPrivateCompany: ${privateName} @ $${price}`, {
       BuyPrivateCompany: {
         game_id: gameId,
-        protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
-        private_id: selected.private_id,
-        price: String(privatePriceVgp),
+        protocol_id: buyerProtocolId,
+        private_id: privateId,
+        price: String(price),
       },
     });
-  }, [runGameplayAction, gameId, sellablePrivates, selectedPrivateId, privatePriceVgp]);
+    setPrivateProposal(null);
+  }, [privateProposal, runGameplayAction, gameId]);
+
+  const handleRejectPrivateOffer = useCallback(() => {
+    if (!privateProposal) return;
+    logInfo(
+      "Offer Rejected",
+      `${privateProposal.ownerLabel} declined $${privateProposal.price} for ${privateProposal.privateName}.`,
+    );
+    setPrivateProposal(null);
+  }, [privateProposal, logInfo]);
 
   // Pre-Game Waterfall Auction Action Tray (`WaterfallAuctionDashboard.tsx`)
   // -- five real `ExecuteMsg` dispatches, `waterfall.rs`'s own five turn
@@ -2764,14 +5340,127 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
 
   // Deliberately non-dispatching -- see design note #8 for why "Place
   // Station Token" has no single-button ExecuteMsg of its own.
-  const handlePlaceStationTokenHint = useCallback(
-    () =>
+  // Design note #159: this was a HINT -- it logged a line telling the player
+  // to click a hex, and the hex click opened the tile picker, which lays
+  // track and has nothing to do with tokens. There was no way to place a
+  // token from this UI at all.
+  //
+  // It is now a real mode toggle. Turning it on disarms the tile picker and
+  // points the next board click at `handleTokenHexClick` below.
+  const handlePlaceStationTokenHint = useCallback(() => {
+    setTokenTargetMode((current) => {
+      const next = !current;
       logInfo(
         "Place Station Token",
-        "No standalone dispatch for this -- click a hex on the Rail Map to open the tile/station placement popup (LayTile).",
-      ),
-    [logInfo],
+        next
+          ? "Targeting mode ON -- click a city hex on the Rail Map to place the token. Click the button again to cancel."
+          : "Targeting mode cancelled.",
+      );
+      return next;
+    });
+  }, [logInfo]);
+
+  /** A board click while token targeting is on. Takes the same
+   *  `{ q, r, hexLabel, clientX, clientY }` info object `onHexClick` hands
+   *  every consumer, so it drops into the same slot `handleRouteHexClick`
+   *  already occupies. */
+  const handleTokenHexClick = useCallback(
+    ({
+      q,
+      r,
+      hexLabel,
+      centroidX,
+      centroidY,
+    }: {
+      q: number;
+      r: number;
+      hexLabel: string;
+      centroidX: number;
+      centroidY: number;
+    }) => {
+      /* ==================================================================
+       *  DESIGN NOTE 238: THE THREE REFUSALS, BEFORE ANYTHING IS SIGNED
+       * ==================================================================
+       *
+       * This checked only `isTokenableHex` -- "does this hex have a city" --
+       * so a token could be staged on a city the corporation's track does
+       * not reach, on one whose slots are already full, and on another
+       * company's reserved home. All three are refused on chain, but only
+       * after a signature, and the error that came back named a contract
+       * variant rather than the situation.
+       *
+       * `evaluateStationPlacement` applies the same three rules here and
+       * returns the sentence explaining which one bit. Its own design note
+       * #2 is explicit about what it does NOT claim to judge, so the
+       * contract remains the authority rather than gaining a rival. */
+      const placement = activeStationCompany
+        ? evaluateStationPlacement({
+            mapGrid,
+            q,
+            r,
+            company: activeStationCompany,
+            allCompanies: gameState?.public_companies ?? [],
+          })
+        : { allowed: isTokenableHex(mapGrid, q, r), reason: null };
+
+      if (!placement.allowed) {
+        setRouteFeedback(
+          placement.reason ??
+            `${hexLabel} has no city to place a token in. Pick a city hex, or lay a city tile there first.`,
+        );
+        return;
+      }
+      setRouteFeedback(null);
+      // Design note #201: STAGE, do not place. Targeting mode stays on, so a
+      // click on another city re-aims rather than being swallowed by an open
+      // confirmation for a hex the player has changed their mind about.
+      setPendingToken({ q, r, hexLabel, offsetX: centroidX, offsetY: centroidY });
+    },
+    [mapGrid, activeStationCompany, gameState],
   );
+
+  /** The green check. THIS is where the token is placed and the treasury
+   *  charged -- design note #201. */
+  const handleConfirmTokenPlacement = useCallback(() => {
+    if (!pendingToken) return;
+    const { q, r } = pendingToken;
+    setPendingToken(null);
+    setTokenTargetMode(false);
+    // A corporation places at most one token per turn, so the Tokens step
+    // is done -- the same "the action completes the step" rule the tile
+    // lay follows. Routes is next in `OPERATING_SUB_PHASE_ORDER`.
+    setOrSubPhase("Routes");
+    runGameplayAction("PlaceStationToken", {
+      PlaceStationToken: {
+        game_id: gameId,
+        protocol_id: actingProtocolId,
+        q,
+        r,
+      },
+    });
+  }, [pendingToken, gameId, runGameplayAction, actingProtocolId]);
+
+  /** The red X. Discards the staging and leaves targeting armed, so the
+   *  player is back where they were rather than having to re-open the mode. */
+  const handleCancelTokenPlacement = useCallback(() => {
+    setPendingToken(null);
+  }, []);
+
+  // A staged placement must not outlive the mode that produced it -- the
+  // same hazard design note #33 documents for the route toggle. Cleared
+  // whenever targeting ends by any route (the Cancel banner, the sub-phase
+  // advancing, the token being placed).
+  useEffect(() => {
+    if (!tokenTargetMode) setPendingToken(null);
+  }, [tokenTargetMode]);
+
+  // Leaving the Tokens step with targeting still on would leave the board
+  // silently rewired -- the same hazard design note #33 documents for the
+  // route toggle, and it is fixed the same way: the mode cannot outlive the
+  // phase that offers it.
+  useEffect(() => {
+    if (orSubPhase !== "Tokens" && tokenTargetMode) setTokenTargetMode(false);
+  }, [orSubPhase, tokenTargetMode, actingProtocolId]);
 
   // Phase-navigation-only handlers (design note #10/item 2) -- these don't
   // dispatch anything themselves; they just log an informational Action Log
@@ -2791,16 +5480,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // No optimistic `setOrSubPhase` here on purpose: `orSubPhase` is driven off
   // the polled game state, so the bar advances when the chain says it did.
   // Guessing would reintroduce exactly the desync this removes.
-  const handleSkipSubPhase = useCallback(
-    () =>
-      runGameplayAction("AdvanceOperatingSubPhase", {
-        AdvanceOperatingSubPhase: {
-          game_id: gameId,
-          protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
-        },
-      }),
-    [runGameplayAction, gameId],
-  );
+  /* Design note #179: ADVANCE HAS TO MOVE SOMETHING.
+   *
+   * This dispatched `AdvanceOperatingSubPhase` and stopped. Online that is
+   * right -- the contract owns the cursor and the next poll reports the new
+   * one. In sandbox there is no poll and no contract, so the message went
+   * into the local reducer, which cannot help either: the sub-phase is
+   * CLIENT-SIDE state (`orSubPhase`, this file), deliberately not on
+   * `GameStateResponse`, so a reducer over that response has nothing to
+   * step. The button dispatched, logged, and visibly did nothing.
+   *
+   * The cursor's owner moves it. `OPERATING_SUB_PHASE_ORDER` is the same
+   * sequence the stepper renders, and `visibleSubPhases` drops `BuyPrivate`
+   * before Phase 3 -- so advancing walks the steps the player can actually
+   * see rather than a hidden one. */
+  const handleSkipSubPhase = useCallback(() => {
+    /* Design note #278: skipping Routes is the observation that makes a
+       stale `last_route_revenue` harmless -- whatever the field says, this
+       corporation did not run this turn, so there is nothing to allocate
+       and Skip stays available on the Dividends step that follows. */
+    if (orSubPhase === "Routes") {
+      setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: false });
+    }
+    runGameplayAction("AdvanceOperatingSubPhase", {
+      AdvanceOperatingSubPhase: {
+        game_id: gameId,
+        protocol_id: actingProtocolId,
+      },
+    });
+    if (!sandbox) return;
+    setOrSubPhase((current) => {
+      const steps = visibleSubPhases(gameState?.current_global_era);
+      const at = steps.indexOf(current);
+      // Past the last step the turn is over, so hold rather than wrapping
+      // back to Track -- wrapping would let a corporation lay a second tile.
+      if (at < 0 || at >= steps.length - 1) return current;
+      return steps[at + 1];
+    });
+  }, [runGameplayAction, gameId, actingProtocolId, sandbox, gameState, orSubPhase]);
 
   // Audit G-15. Each refreshes the offer list on completion: the whole point
   // of these four is that they change what BOTH players can do next, and the
@@ -2810,7 +5527,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       runGameplayAction("BuyTrainFromCorporation", {
         BuyTrainFromCorporation: {
           game_id: gameId,
-          buyer_protocol_id: MOCK_LAY_TILE_PROTOCOL_ID,
+          buyer_protocol_id: actingProtocolId,
           seller_protocol_id: input.sellerProtocolId,
           model_type: input.modelType,
           price: input.price,
@@ -2818,8 +5535,89 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, gameId, refreshTrainOffers],
+    [runGameplayAction, gameId, refreshTrainOffers, actingProtocolId],
   );
+
+  /** A train badge clicked and a price typed -- `TrainPurchasePanel`'s
+   *  `onProposeTrade`.
+   *
+   *  THE FORK IS WHO HAS TO AGREE, and it is decided here rather than in the
+   *  panel because only this file knows which deployment it is in:
+   *
+   *    SAME PRESIDENT -- one player controls both corporations, so there is
+   *    nobody to ask. `train_trade.rs` settles this case on the spot and
+   *    writes no offer, and the sandbox reducer's `BuyTrainFromCorporation`
+   *    arm does the same, so dispatching immediately is correct in both.
+   *
+   *    DIFFERENT PRESIDENTS, ONLINE -- dispatch, and the contract records an
+   *    offer the seller's own client will poll and answer. Real two-party
+   *    consent, carried by the chain.
+   *
+   *    DIFFERENT PRESIDENTS, SANDBOX -- there is no chain to record it in,
+   *    so the proposal is held locally and the prompt is shown. Accepting
+   *    then sends the same `BuyTrainFromCorporation` the online path sends
+   *    up front; rejecting sends nothing at all. Design note #205. */
+  const handleProposeTrainTrade = useCallback(
+    (proposal: TrainTradeProposal) => {
+      const buyer = gameState?.public_companies.find(
+        (entry) => entry.company_id === proposal.buyerProtocolId,
+      );
+      const samePresident =
+        !!buyer?.president && buyer.president === proposal.sellerPresident;
+
+      if (samePresident || !sandbox) {
+        handleMakeTrainOffer({
+          sellerProtocolId: proposal.sellerProtocolId,
+          modelType: proposal.modelType,
+          price: proposal.price,
+        });
+        logInfo(
+          "Train Trade",
+          samePresident
+            ? `${proposal.buyerTicker} bought a ${proposal.modelType}-train from ${proposal.sellerTicker} for $${proposal.price} -- same President, so it completed immediately.`
+            : `${proposal.buyerTicker} offered $${proposal.price} to ${proposal.sellerTicker} for a ${proposal.modelType}-train. Awaiting ${proposal.sellerPresidentLabel}.`,
+        );
+        return;
+      }
+
+      setSandboxTrainProposal(proposal);
+      logInfo(
+        "Train Offer",
+        `${proposal.buyerTicker} offered $${proposal.price} for one of ${proposal.sellerTicker}'s ${proposal.modelType}-trains. Awaiting ${proposal.sellerPresidentLabel}.`,
+      );
+    },
+    [gameState, sandbox, handleMakeTrainOffer, logInfo],
+  );
+
+  /** Accepted in the sandbox. THIS is where the real message goes -- the one
+   *  the contract has always had, sent only after both sides have said yes. */
+  const handleAcceptSandboxTrainOffer = useCallback(() => {
+    if (!sandboxTrainProposal) return;
+    const proposal = sandboxTrainProposal;
+    setSandboxTrainProposal(null);
+    runGameplayAction(
+      `BuyTrainFromCorporation: ${proposal.modelType}-train @ $${proposal.price}`,
+      {
+        BuyTrainFromCorporation: {
+          game_id: gameId,
+          buyer_protocol_id: proposal.buyerProtocolId,
+          seller_protocol_id: proposal.sellerProtocolId,
+          model_type: proposal.modelType,
+          price: proposal.price,
+        },
+      },
+    );
+  }, [sandboxTrainProposal, runGameplayAction, gameId]);
+
+  const handleRejectSandboxTrainOffer = useCallback(() => {
+    if (!sandboxTrainProposal) return;
+    logInfo(
+      "Offer Rejected",
+      `${sandboxTrainProposal.sellerPresidentLabel} declined $${sandboxTrainProposal.price} for ${sandboxTrainProposal.sellerTicker}'s ${sandboxTrainProposal.modelType}-train.`,
+    );
+    setSandboxTrainProposal(null);
+  }, [sandboxTrainProposal, logInfo]);
+
 
   const handleAcceptTrainOffer = useCallback(
     (offerId: number) => {
@@ -2851,31 +5649,165 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [runGameplayAction, gameId, refreshTrainOffers],
   );
 
-  const handleBuyPrivateHint = useCallback(() => {
-    logInfo(
-      "Buy Private Company",
-      "Select a private company and price in the panel below, then confirm the purchase.",
+  /* ==================================================================
+   *  DESIGN NOTE 218: THE COUNTERPARTY GETS THE SAME PROMPT ONLINE
+   * ==================================================================
+   *
+   * The consent modal was sandbox-only, on the reasoning that a live room
+   * does not need one: the contract records the offer and the seller's
+   * president can answer it from `TrainTradePanel`'s pending-offer ledger.
+   *
+   * That is true about the MESSAGES and wrong about the interaction. The
+   * ledger is a row in a panel that renders only during the Hardware
+   * sub-phase, on the workspace tabs -- so the one player whose answer the
+   * game is waiting on is also the player most likely not to be looking at
+   * it. Meanwhile the BUYER's turn is blocked on that answer
+   * (`operations::PendingTrainOfferBlocksTurn`), so an unnoticed row stalls
+   * the table with no indication of why.
+   *
+   * A pending offer addressed to you is an interruption, and it should
+   * interrupt. This derives the same `TrainTradePrompt` the sandbox shows
+   * from the CHAIN's own offer register -- `GetTrainOffers`, already polled
+   * -- whenever the viewer presides over the selling corporation. One
+   * component, one affordance, two sources.
+   *
+   * WHAT DIFFERS FROM SANDBOX, and it is only the plumbing: accepting sends
+   * the real `AcceptTrainOffer` and rejecting the real `RejectTrainOffer`,
+   * both addressed by `offer_id`, rather than settling local state. The
+   * ledger stays exactly as it was -- it still lists every offer in the room
+   * including the ones this player is not party to, which the prompt
+   * deliberately does not (design note #1 there: a pending offer is public
+   * information, but only one person is being asked).
+   *
+   * ONE AT A TIME. `find` rather than a queue: `train_trade.rs` permits one
+   * outstanding offer per buying corporation, and stacking prompts for
+   * several sellers would be a modal pile-up for a state the contract makes
+   * rare. The next offer surfaces when this one is answered.
+   */
+  /** Design note #233: the offers this viewer is party to -- as the seller
+   *  who must answer, or as the buyer whose turn is held open by their own
+   *  outstanding offer. Anything else in the room is somebody else's
+   *  negotiation and does not warrant a panel on this player's buy screen.
+   *
+   *  IN SANDBOX EVERY OFFER QUALIFIES, for the same reason the consent
+   *  prompt is answerable there by whoever is looking (`PrivateTradePanel`
+   *  design note #2): one human drives every seat, so "offers addressed to
+   *  me" is not a distinction that exists. */
+  const viewerTrainOffers = useMemo(() => {
+    if (sandbox) return trainOffers;
+    if (!viewerAddress) return [];
+    return trainOffers.filter(
+      (offer) =>
+        offer.seller_president === viewerAddress || offer.buyer_president === viewerAddress,
     );
-  }, [logInfo]);
+  }, [sandbox, viewerAddress, trainOffers]);
 
-  // Design note #144: drives the Routes skip button's disabled state. The
-  // contract refuses that skip for any corporation owning a train, so the
-  // button is disabled with the reason rather than dispatching a transaction
-  // that is certain to be rejected.
-  const ownsAnyTrain = useMemo(() => {
+  const liveTrainOffer = useMemo(() => {
+    if (sandbox || !viewerAddress) return null;
+    const offer = trainOffers.find((entry) => entry.seller_president === viewerAddress);
+    if (!offer) return null;
+    const tickerFor = (id: number) =>
+      gameState?.public_companies.find((company) => company.company_id === id)?.ticker ?? `#${id}`;
+    const proposal: TrainTradeProposal = {
+      sellerProtocolId: offer.seller_protocol_id,
+      sellerTicker: tickerFor(offer.seller_protocol_id),
+      sellerPresident: offer.seller_president,
+      sellerPresidentLabel:
+        sandboxPlayerLabel(offer.seller_president ?? "") ??
+        truncateAddress(offer.seller_president ?? ""),
+      buyerProtocolId: offer.buyer_protocol_id,
+      buyerTicker: tickerFor(offer.buyer_protocol_id),
+      modelType: offer.model_type,
+      price: offer.price,
+    };
+    return { offerId: offer.offer_id, proposal };
+  }, [sandbox, viewerAddress, trainOffers, gameState]);
+
+  const handleAcceptLiveTrainOffer = useCallback(() => {
+    if (!liveTrainOffer) return;
+    handleAcceptTrainOffer(liveTrainOffer.offerId);
+  }, [liveTrainOffer, handleAcceptTrainOffer]);
+
+  const handleRejectLiveTrainOffer = useCallback(() => {
+    if (!liveTrainOffer) return;
+    handleRejectTrainOffer(liveTrainOffer.offerId);
+  }, [liveTrainOffer, handleRejectTrainOffer]);
+
+
+
+  /* ==================================================================
+   *  DESIGN NOTE 249: A STEP WITH NOTHING IN IT SHOULD NOT BE A CLICK
+   * ==================================================================
+   *
+   * REPORTED: a corporation with no trains has to skip Run Routes and
+   * Dividends by hand, and one at its train limit has to skip Buy Trains.
+   *
+   * Every Operating Round turn walks the same six steps, and for a great
+   * many corporations three of them are foregone conclusions. A company that
+   * owns no train cannot run a route, so it cannot have revenue, so it
+   * cannot declare a dividend -- two steps whose only available action is
+   * "move on". Early in an 1830 game most corporations are in exactly that
+   * position for several rounds, which turns a turn into a sequence of
+   * acknowledgements.
+   *
+   * WHY NOT HIDE THE STEPS INSTEAD. Because the contract's cursor still
+   * walks them -- `or_phase::OR_PHASE_ORDER` is fixed, and a client that
+   * jumped its display past a step the chain is still sitting on would
+   * desync the bar from what the chain will accept (design note #144). The
+   * cursor has to MOVE, which means dispatching the same
+   * `AdvanceOperatingSubPhase` the Skip button sends. So the skip still
+   * happens; it just happens without asking.
+   *
+   * FIRING ONCE IS THE WHOLE DIFFICULTY. Online, `handleSkipSubPhase` does
+   * not move `orSubPhase` locally -- the cursor is poll-driven -- so a naive
+   * effect would re-fire on every render until the next poll landed and
+   * broadcast a transaction each time. The ref below records which
+   * (corporation, step) pairs have already been auto-skipped, so each is
+   * attempted exactly once however many times this re-renders.
+   *
+   * KEYED ON THE CORPORATION TOO, not just the step: the next company in the
+   * queue reaches the same step needing its own decision, and a step-only
+   * key would silently suppress it.
+   */
+  const atTrainLimitNow = useMemo(() => {
     const company = gameState?.public_companies.find(
-      (entry) => entry.company_id === MOCK_LAY_TILE_PROTOCOL_ID,
+      (entry) => entry.company_id === actingProtocolId,
     );
-    // Audit G-15c closed the gap this used to stub out: `owned_trains` now
-    // arrives on `PublicCompanyState`, so the Routes skip button can be
-    // disabled for a corporation that genuinely holds a train.
-    //
-    // `undefined` still means "this chain does not say" (a contract predating
-    // the field), NOT "owns nothing" -- in that case report `false`, leaving
-    // the skip enabled and the contract as the authority. Erring the other
-    // way would disable a legal skip with no override.
-    return (company?.owned_trains?.length ?? 0) > 0;
-  }, [gameState]);
+    const owned = company?.owned_trains?.length;
+    // `undefined` means the chain does not report ownership. Skipping a step
+    // on a guess would take the player's turn away from them, so an unknown
+    // fleet is never treated as full.
+    if (owned === undefined) return false;
+    const limit = depot.find((tier) => tier.isCurrent)?.trainLimit;
+    if (limit === undefined) return false;
+    return owned >= limit;
+  }, [gameState, actingProtocolId, depot]);
+
+  /** Why this step has no decision in it, or `null` when it does. */
+  const autoSkipReason = useMemo<string | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
+    if (spectator) return null;
+    if (orSubPhase === "Routes" || orSubPhase === "Dividends") {
+      return ownsAnyTrain ? null : "it owns no trains, so there is no route to run";
+    }
+    if (orSubPhase === "Hardware" && atTrainLimitNow) {
+      return "it is already at its train limit";
+    }
+    return null;
+  }, [gameState, spectator, orSubPhase, ownsAnyTrain, atTrainLimitNow]);
+
+  const autoSkippedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!autoSkipReason) return;
+    const key = `${actingProtocolId}:${orSubPhase}`;
+    if (autoSkippedRef.current.has(key)) return;
+    autoSkippedRef.current.add(key);
+    logInfo(
+      "Auto-Skip",
+      `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} -- ${autoSkipReason}.`,
+    );
+    handleSkipSubPhase();
+  }, [autoSkipReason, actingProtocolId, orSubPhase, handleSkipSubPhase, logInfo]);
 
   // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`
   // dispatch the Stock Round's "Pass Turn" button uses (per `msg.rs`'s own
@@ -2926,26 +5858,245 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     }
   }, [handlePassTurn, viewerAddress, gameState]);
 
-  const mapGrid = useMemo(() => MOCK_MAP_GRID, []);
-  // Design note #2 in `utils/sandboxState.ts`: in sandbox the chart is
-  // DERIVED from the same corporations table the Stock Round cards read,
-  // so the two can no longer disagree. `MOCK_MARKET_GRID` remains only for
-  // the non-sandbox placeholder path (design note #2 at the top of this
-  // file -- illustrative data never produced by a live query).
-  const marketGrid = useMemo<MarketGridResponse>(
-    () =>
-      sandbox
-        ? { game_id: gameId, positions: sandboxMarketPositions(marketCellForPrice) }
-        : MOCK_MARKET_GRID,
-    [sandbox, gameId],
+  // The board. Was `useMemo(() => MOCK_MAP_GRID, [])` -- immutable by
+  // construction, which is why laying a tile in sandbox appeared to do
+  // nothing: the picker confirmed, and there was no board to write to.
+  //
+  // State now, so `applySandboxLayTile` can replace it with a NEW object.
+  // That identity change is what `HexGridRenderer`'s draw effect watches;
+  // mutating the existing `tiles` array in place would leave the reference
+  // untouched and the canvas would never repaint.
+
+  /** Applies a confirmed sandbox tile lay: paints the board, charges the
+   *  corporation, and moves the turn on.
+   *
+   *  Three separate things, because they live in three separate places --
+   *  the tile grid is its own query document, the treasury is on game state,
+   *  and the sub-phase cursor is App-local. Routing the charge through
+   *  `runGameplayAction` rather than adjusting the treasury directly keeps
+   *  ONE dispatch path: the same `LayTile` message a live game sends, the
+   *  same Action Log entry, the same reducer. */
+  const handleSandboxLayTile = useCallback(
+    (q: number, r: number, tileId: number, orientation: number) => {
+      setMapGrid((current) => applySandboxLayTile(current, q, r, tileId, orientation));
+
+      runGameplayAction("LayTile (sandbox)", {
+        LayTile: {
+          game_id: gameId,
+          protocol_id: actingProtocolId,
+          q,
+          r,
+          tile_id: tileId,
+          orientation,
+        },
+      });
+
+      // A corporation lays one tile per turn, so the Track step is done. This
+      // mirrors what `hexmap::execute_lay_tile` does on chain (it advances
+      // the cursor off `Track` on success) rather than inventing a sandbox
+      // sequencing rule.
+      setOrSubPhase("Tokens");
+      setPreviewTile(null);
+    },
+    [runGameplayAction, gameId, actingProtocolId],
   );
 
-  // Design note #36: derived, not queried -- see `utils/gamePhase.ts`
-  // design note #1 for why `current_global_era` cannot answer this.
-  const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);
+  /* Design note #163: the ONE gate. Everything else in the radial selector
+     works regardless of whose turn it is. */
+  const tileLayDisabledReason = useMemo(() => {
+    if (spectator) return "Planning Mode: Tile lay disabled -- you are spectating.";
+    if (gameState?.current_round_type !== "OperatingRound") {
+      return "Planning Mode: Tile lay disabled -- track is laid in an Operating Round.";
+    }
+    if (orSubPhase !== "Track") {
+      // DIRECTION-AWARE. This said "past the Track step" unconditionally,
+      // which is wrong in the commonest case: from Phase 3 the turn OPENS on
+      // `BuyPrivate`, so a player arriving at a fresh Operating Round was
+      // told they had missed a step they had not reached yet -- and given no
+      // hint that Advance Sub-Phase was the remedy.
+      const order = OPERATING_SUB_PHASE_ORDER;
+      const before = order.indexOf(orSubPhase) < order.indexOf("Track");
+      return before
+        ? `Planning Mode: Tile lay disabled -- the turn is still on ${orSubPhase}. Advance to Lay Track first.`
+        : `Planning Mode: Tile lay disabled -- this corporation is past the Track step (now ${orSubPhase}).`;
+    }
+    // `actingSeatIndex` resolves the ACTING corporation's president during an
+    // Operating Round, which is exactly the person entitled to lay here.
+    const acting = gameState ? actingSeatIndex(gameState) : null;
+    if (acting === null || gameState?.player_addresses[acting] !== viewerAddress) {
+      return "Planning Mode: Tile lay disabled -- not your corporation's turn.";
+    }
+    return null;
+  }, [spectator, gameState, orSubPhase, viewerAddress]);
+  const canLayTileNow = tileLayDisabledReason === null;
+
+  /** What the ring offers. A chain answer is used verbatim; a local one is
+      narrowed by `filterSandboxPlacements`, which is the only opinion
+      available on that path (that module's design note #0). */
+  const radialCandidates = useMemo<readonly LegalTilePlacement[]>(() => {
+    if (!radialSelector) return [];
+    if (!radialSelector.provisional) return radialSelector.placements;
+    return filterSandboxPlacements(radialSelector.placements, {
+      mapGrid,
+      q: radialSelector.q,
+      r: radialSelector.r,
+      // Design note #6 in that file: an orientation is only offered if its
+      // track actually meets this corporation's network. Without it the
+      // rotate gesture cycles through angles that look legal and are not.
+      // `undefined` when the reach is unknown, which leaves the previous
+      // behaviour rather than emptying the carousel.
+      networkHexes: layTrackFocus?.network,
+      // The era comes from `currentPhase.tint`, the SAME derivation the
+      // phase badge displays, rather than a second reading of
+      // `current_global_era`.
+      era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+    });
+  }, [radialSelector, mapGrid, currentPhase, layTrackFocus?.network]);
+
+  /* ===================================================================
+   *  DESIGN NOTE 173: ROTATE THROUGH LEGAL ANGLES ONLY
+   * ===================================================================
+   *
+   * Click-to-rotate stepped `(orientation + 1) % 6` -- every angle, legal
+   * or not. On an edge hex that walks the tile's track off the board, and
+   * on an upgrade it walks straight through rotations that sever the track
+   * underneath. The player then has to recognise an illegal angle by eye
+   * and keep clicking past it, which is precisely the judgement the picker
+   * is supposed to be making for them.
+   *
+   * The legal set is not recomputed here. `radialCandidates` is already
+   * `(tile_id, orientation)` PAIRS -- `filterSandboxPlacements` evaluates
+   * path preservation per rotation (its design note #4), and a chain answer
+   * is per-rotation by construction. So the legal angles for the previewed
+   * tile are simply the ones already present for that tile id, and there is
+   * no second opinion to drift.
+   *
+   * Sorted, so the cycle runs in a predictable direction rather than in
+   * whatever order the source happened to list them. */
+  const legalRotations = useMemo<number[]>(() => {
+    if (previewTile === null) return [];
+    const angles = radialCandidates
+      .filter((placement) => placement.tile_id === previewTile.tileId)
+      .map((placement) => placement.orientation);
+    return Array.from(new Set(angles)).sort((a, b) => a - b);
+  }, [radialCandidates, previewTile]);
+
+  const handleDismissRadial = useCallback(() => {
+    setRadialSelector(null);
+    setPreviewTile(null);
+  }, []);
+
+  const handlePreviewRotate = useCallback(
+    ({ q, r }: { q: number; r: number }) => {
+      // A click on a DIFFERENT hex while a preview is up means "I have
+      // changed my mind about which hex" -- close, and let the next click
+      // open the selector there. Rotating a tile the player is no longer
+      // looking at would be the wrong reading of that gesture.
+      if (!radialSelector || q !== radialSelector.q || r !== radialSelector.r) {
+        handleDismissRadial();
+        return;
+      }
+      setPreviewTile((current) => {
+        if (!current) return current;
+        // Design note #173: step to the next LEGAL angle, wrapping. With
+        // one legal rotation this is a no-op, which is correct -- there is
+        // nowhere else the tile may face -- and with none it leaves the
+        // orientation alone rather than inventing one.
+        if (legalRotations.length === 0) return current;
+        const at = legalRotations.indexOf(current.orientation);
+        const next = legalRotations[(at + 1) % legalRotations.length];
+        return next === current.orientation ? current : { ...current, orientation: next };
+      });
+    },
+    [radialSelector, handleDismissRadial, legalRotations],
+  );
+
+  /** While a preview is on the board, the canvas belongs to ROTATION -- the
+   *  query interceptor is disarmed exactly as it is for route and token
+   *  modes, so a rotation costs no chain round-trip. */
+  const previewRotateArmed = radialSelector !== null && previewTile !== null;
+
+  /** Confirm. Sandbox lays locally; a chain-backed room dispatches. */
+  const handleConfirmRadialLay = useCallback(() => {
+    if (!radialSelector || !previewTile || !canLayTileNow) return;
+    const { q, r } = radialSelector;
+    const { tileId, orientation } = previewTile;
+    if (sandbox) {
+      handleSandboxLayTile(q, r, tileId, orientation);
+    } else {
+      runGameplayAction("LayTile", {
+        LayTile: { game_id: gameId, protocol_id: actingProtocolId, q, r, tile_id: tileId, orientation },
+      });
+    }
+    handleDismissRadial();
+  }, [
+    radialSelector,
+    previewTile,
+    canLayTileNow,
+    sandbox,
+    handleSandboxLayTile,
+    runGameplayAction,
+    gameId,
+    handleDismissRadial,
+    actingProtocolId,
+  ]);
+
+
   // Design note #4 in `TrainBadges.tsx`: the shared per-tier countdown, so
   // the action bar tag and every chip quote the same number.
   const currentRustOutlook = useMemo(() => rustOutlook(gameState), [gameState]);
+
+
+  /* Design note #188: the dividend decision, costed. All four figures come
+     from state already on screen -- the corporation's last route revenue,
+     its holdings table, and its market price -- so none of this is a new
+     source of truth, only arithmetic the player was being left to do. */
+  const dividendCorp = gameState?.public_companies.find(
+    (c) => c.company_id === actingProtocolId,
+  );
+  const dividendRevenue = Number(dividendCorp?.last_route_revenue ?? 0) || 0;
+  /* Ten shares to a corporation, so a 10% certificate takes a tenth. Floored
+     rather than rounded: 1830 pays whole units, and rounding UP would have
+     the corporation pay out more than it earned. */
+  const dividendPerShare = Math.floor(dividendRevenue / 10);
+
+  /* Design note #278: whether the Pay/Withhold choice is binding. `false`
+     when this corporation is known to have skipped Routes -- see the state's
+     own note for why `null` (unknown) counts as having run. */
+  const dividendRevenueIsThisTurn =
+    !(routesRunThisTurn?.protocolId === actingProtocolId && routesRunThisTurn.ran === false);
+  const dividendPayouts = useMemo(() => {
+    if (!dividendCorp) return [];
+    const rows = dividendCorp.player_holdings.map((entry) => ({
+      holder: sandboxPlayerLabel(entry.player) ?? truncateAddress(entry.player),
+      percentage: entry.percentage,
+      amount: dividendPerShare * (entry.percentage / 10),
+    }));
+    // The bank pool is paid too -- its share goes to the bank, and omitting
+    // it would make the listed payouts fail to add up to the revenue.
+    if (dividendCorp.bank_pool_percentage > 0) {
+      rows.push({
+        holder: "Bank Pool",
+        percentage: dividendCorp.bank_pool_percentage,
+        amount: dividendPerShare * (dividendCorp.bank_pool_percentage / 10),
+      });
+    }
+    return rows.sort((a, b) => b.percentage - a.percentage);
+  }, [dividendCorp, dividendPerShare]);
+
+  const dividendPrice = useMemo(() => {
+    const cell = marketGrid?.positions.find((p) => p.company_id === actingProtocolId);
+    return cell ? Number(cell.price) : null;
+  }, [marketGrid, actingProtocolId]);
+  const payProjection = useMemo(
+    () => projectDividendMove(dividendPrice, "pay"),
+    [dividendPrice],
+  );
+  const withholdProjection = useMemo(
+    () => projectDividendMove(dividendPrice, "withhold"),
+    [dividendPrice],
+  );
+
 
   // Design note #28: the phase tab shares the workspace shell (canvas pane
   // + contextual panel) with the map and market tabs.
@@ -2966,7 +6117,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           flash (the OTHER half of this notification) has no DOM footprint
           at all -- see the `useDocumentTitleFlash(isMyTurn)` call above. */}
       <style>{TURN_PULSE_KEYFRAMES_CSS}</style>
+      <style>{PHASE_SHIFT_PULSE_CSS}</style>
       {isMyTurn && <div style={styles.turnPulseOverlay} aria-hidden="true" />}
+
+      {/* Hotseat dev toolbar. Rendered ONLY in the sandbox branch, so it is
+          structurally impossible to reach in a live game -- the same
+          containment the phase switcher it absorbed already relied on. Sits
+          above every other chrome element because it changes what the whole
+          screen means: which player you are looking at. */}
+      {sandbox && (
+        <SandboxToolbar
+          gameState={sandboxState}
+          seatIndex={sandboxSeatIndex}
+          onSelectSeat={handleSelectSandboxSeat}
+          autoFollow={sandboxAutoFollow}
+          onToggleAutoFollow={handleToggleSandboxAutoFollow}
+          scenario={sandboxScenarioId}
+          onSelectScenario={setSandboxScenarioId}
+          trainFixture={sandboxTrainFixture}
+          onToggleTrainFixture={() =>
+            setSandboxTrainFixture((current) => (current === "spread" ? "default" : "spread"))
+          }
+        />
+      )}
 
       {/* Design note #32: FTUE. Mounted at the shell level, not inside the
           phase panels, so a modal survives its panel unmounting on a tab
@@ -3030,35 +6203,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
-            {/* Design note #25: the phase switcher. Debug-only -- on a real
-                chain the round type is contract state and nothing in the UI
-                may set it. Rendered inside the `sandbox` branch so it is
-                structurally impossible to reach in a live game. */}
-            <span style={styles.roomStripLabel}>Phase</span>
-            <div style={styles.phaseToggleGroup} role="group" aria-label="Sandbox phase">
-              {(
-                [
-                  ["WaterfallAuction", "🔨 Auction"],
-                  ["StockRound", "💹 Stock Round"],
-                  ["OperatingRound", "🚂 Operating Round"],
-                ] as ReadonlyArray<[RoundType, string]>
-              ).map(([phase, label]) => (
-                <button
-                  key={phase}
-                  type="button"
-                  onClick={() => setSandboxPhase(phase)}
-                  aria-pressed={sandboxPhase === phase}
-                  style={{
-                    ...styles.phaseToggleButton,
-                    ...(sandboxPhase === phase ? styles.phaseToggleButtonActive : {}),
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* The phase switcher that stood here MOVED into
+                `SandboxToolbar`, which now owns every sandbox-only control.
+                Two separate places to change sandbox settings -- one in the
+                room strip, one in a banner -- is worse than one, and the
+                seat switcher has to live in the banner because it needs the
+                room for four buttons. */}
             <span style={styles.roomStripLabel}>
-              Mock state &middot; nothing dispatches
+              Mock state &middot; hotseat controls above
             </span>
           </>
         ) : (
@@ -3081,6 +6233,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         activeTab={activeMainTab}
         onSelect={setActiveMainTab}
         roundType={gameState?.current_round_type ?? null}
+        onOpenTutorials={() => setTutorialLibraryOpen(true)}
+      />
+      {/* Design note #158: the on-demand reader. Rendered alongside the four
+          auto-opening modals rather than inside the tab bar -- it is a modal
+          over the whole shell, not a part of the navigation that summons
+          it. */}
+      <TutorialLibrary
+        open={tutorialLibraryOpen}
+        onClose={() => setTutorialLibraryOpen(false)}
       />
 
       {/* In-Place Accordion Ticker + Inline Control Strip -- design notes
@@ -3139,7 +6300,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 <ContextualActionBar
                   roundType={gameState?.current_round_type ?? null}
                   orSubPhase={orSubPhase}
-                  sessionReady={session.sessionStatus === "ready"}
+                  sessionReady={controlsEnabled}
                   // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`
                   // and `PassTurn` are different contract messages, not one
                   // action with two names -- sending the wrong one would
@@ -3153,32 +6314,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       : null
                   }
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
+                  stationTokenCost={stationTokenCost}
+                  activeCorporation={activeCorporationContext}
+                  tokenTargetMode={tokenTargetMode}
+                  setTokenTargetMode={setTokenTargetMode}
                   onSkipSubPhase={handleSkipSubPhase}
-                  onBuyPrivateHint={handleBuyPrivateHint}
+                  onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
                   ownsAnyTrain={ownsAnyTrain}
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
+                  dividendRevenue={dividendRevenue}
+                  dividendRevenueIsThisTurn={dividendRevenueIsThisTurn}
+                  dividendPerShare={dividendPerShare}
+                  dividendPayouts={dividendPayouts}
+                  rustOutlookForBar={currentRustOutlook}
+                  dividendPrice={dividendPrice}
+                  payProjection={payProjection}
+                  withholdProjection={withholdProjection}
                   selectedHardwareModel={selectedHardwareModel}
-                  onSelectHardwareModel={setSelectedHardwareModel}
-                  onBuyTrain={handleBuyTrain}
                   onEndOperatingTurn={handleEndOperatingTurn}
                   onUndoLastAction={handleUndoLastAction}
                   phase={currentPhase}
-                  routeSelectMode={routeSelectMode}
-                  onToggleRouteSelectMode={handleToggleRouteSelectMode}
-                  routePoints={routePoints}
-                  routeHopCount={routeHopCount}
-                  routeMaxDistance={routeMaxDistanceForSelectedHardware}
-                  routeExceedsMaxDistance={routeExceedsMaxDistance}
+                  routeBuildMode={routeBuildMode}
+                  onSelectRouteBuildMode={handleSelectRouteBuildMode}
+                  onSelectRouteTrain={handleSelectRouteTrain}
+                  trainDrafts={trainDrafts}
+                  activeTrainIndex={activeTrainIndex}
                   routeFeedback={routeFeedback}
                   onClearRoute={handleClearRoute}
-                  sellablePrivates={sellablePrivates}
-                  selectedPrivateId={selectedPrivateId}
-                  onSelectPrivate={handleSelectPrivate}
-                  privatePriceVgp={privatePriceVgp}
-                  onPrivatePriceChange={setPrivatePriceVgp}
-                  onBuyPrivateCompany={handleBuyPrivateCompany}
                   currentGlobalEra={gameState?.current_global_era ?? null}
                   isMyTurn={isMyTurn}
                 />
@@ -3219,7 +6383,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 gameState={gameState}
                 connectedWalletAddress={viewerAddress}
                 playerLabel={sandbox ? sandboxPlayerLabel : undefined}
-                sessionReady={session.sessionStatus === "ready"}
+                sessionReady={controlsEnabled}
                 onBuyLowest={handleWaterfallBuyLowest}
                 onBidHigher={handleWaterfallBidHigher}
                 onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
@@ -3241,9 +6405,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     viewer's, so a seller still sees this during the buyer's
                     Hardware phase -- which is the only time their answer is
                     wanted. */}
+                {/* Design note #203: the Buy Trains step's own panel -- the
+                    bank depot and the corporate marketplace, in that order,
+                    with the second collapsed. Same `orSubPhase === "Hardware"`
+                    gate the offer ledger below uses. */}
                 {gameState?.current_round_type === "OperatingRound" &&
                   orSubPhase === "Hardware" && (
+                  <TrainPurchasePanel
+                    depot={depot}
+                    buyer={
+                      gameState.public_companies.find(
+                        (company) => company.company_id === actingProtocolId,
+                      ) ?? null
+                    }
+                    companies={gameState.public_companies}
+                    sessionReady={controlsEnabled}
+                    // Design note #2 in `PrivateTradePanel`: a hotseat
+                    // sandbox is one human at one wallet, so gating on the
+                    // viewer's address would make the whole flow untestable
+                    // in the one place it can be run end to end.
+                    canAct={
+                      sandbox ||
+                      (viewerAddress !== null &&
+                        gameState.public_companies.find(
+                          (company) => company.company_id === actingProtocolId,
+                        )?.president === viewerAddress)
+                    }
+                    blockedReason={
+                      trainOffers.some((offer) => offer.buyer_protocol_id === actingProtocolId)
+                        ? "One offer at a time -- answer or rescind the outstanding one first."
+                        : null
+                    }
+                    onBuyFromBank={handleBuyTrainsFromBank}
+                    onProposeTrade={handleProposeTrainTrade}
+                    labelForAddress={(address) =>
+                      sandboxPlayerLabel(address) ?? truncateAddress(address)
+                    }
+                  />
+                )}
+                {/* ===================================================================
+                     DESIGN NOTE 233: THE LEDGER APPEARS WHEN THERE IS ONE
+                    ===================================================================
+
+                    This rendered on every Hardware step, empty, reading "No
+                    offers outstanding" -- a permanent panel whose permanent
+                    content was that it had nothing to show. Worse, it sat
+                    directly under the purchase panel, so the first thing a
+                    player saw when they went to buy a train was a heading
+                    about offers that did not exist.
+
+                    A pending offer is an EVENT. It arrives, it blocks a
+                    turn, it gets answered, it goes away -- so the panel that
+                    represents it should do the same. `viewerTrainOffers`
+                    below is the gate, and it is scoped to offers the viewer
+                    is actually party to rather than to any offer in the
+                    room, because this is the surface where they ANSWER one.
+                    The prompt (design note #218) is the interruption; this
+                    is the record beside it.
+
+                    Design note #1 in that file argued a pending offer is
+                    public information and should be visible to everyone.
+                    That is still true and is what the Action Log carries; a
+                    dedicated panel on the buy screen is a different claim --
+                    that you have something to do here. */}
+                {gameState?.current_round_type === "OperatingRound" &&
+                  orSubPhase === "Hardware" &&
+                  viewerTrainOffers.length > 0 && (
                   <TrainTradePanel
+                    // Design note #6 in that file: the compose form moved to
+                    // `TrainPurchasePanel`; this renders the offer LEDGER.
+                    composeEnabled={false}
                     offers={trainOffers}
                     companies={(gameState?.public_companies ?? []).map((company) => ({
                       company_id: company.company_id,
@@ -3259,7 +6490,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       gameState.active_operating_order[gameState.active_corporation_index] ?? null
                     }
                     connectedAddress={viewerAddress}
-                    sessionReady={session.sessionStatus === "ready"}
+                    sessionReady={controlsEnabled}
                     onMakeOffer={handleMakeTrainOffer}
                     onAccept={handleAcceptTrainOffer}
                     onReject={handleRejectTrainOffer}
@@ -3298,7 +6529,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     onSelectParValue={setSrParValue}
                     onBuyShare={handleBuyShare}
                     onSellShares={handleSellShares}
-                    sessionReady={session.sessionStatus === "ready"}
+                    sessionReady={controlsEnabled}
                     isMyTurn={isMyTurn}
                     connectedAddress={viewerAddress}
                     // Design note #31 in that file: powers the front-face
@@ -3312,7 +6543,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     // passes `undefined` and the roster renders a dash,
                     // which is honest about not knowing rather than
                     // inventing a price.
-                    marketPrices={sandbox ? SANDBOX_MARKET_PRICES : undefined}
+                    // Design note #2 in `sandboxState.ts`: ONE price, two
+                    // renderers. This read the frozen `SANDBOX_MARKET_PRICES`
+                    // constant while the chart now reads the live atom, which
+                    // is the exact drift that note exists to prevent -- a
+                    // card saying $76 beside a token sitting on $71.
+                    marketPrices={sandbox ? sandboxMarketPrices : undefined}
                     playerLabel={sandbox ? sandboxPlayerLabel : undefined}
                     // Design note #41: the roster is readable in every
                     // phase, but shares only trade in a Stock Round.
@@ -3344,8 +6580,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     
                     Naming the two tabs that OWN a board means a future tab
                     has to ask for one rather than inherit it. */}
+                {/* Design note #1 in `RadialTileSelector`: the radial ring
+                    anchors to the board pane's live rect rather than to the
+                    viewport, so a page scroll moves the two together instead
+                    of leaving the menu behind. A callback ref, so a re-mount
+                    re-measures rather than holding a stale node. */}
                 {(activeMainTab === "map" || activeMainTab === "stock") && (
-                <div style={styles.boardPane}>
+                <div style={styles.boardPane} ref={setBoardEl}>
                   {activeMainTab === "map" ? (
                     <HexGridRenderer
                       mapGrid={mapGrid}
@@ -3377,11 +6618,65 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // `GetLegalTilePlacements` at a contract that does not
                       // exist and every click would surface a query error
                       // instead of a tile picker.
-                      queryClient={routeSelectMode || spectator || sandbox ? undefined : queryClient}
-                      contractAddress={routeSelectMode || sandbox ? undefined : CONTRACT_ADDRESS}
-                      gameId={routeSelectMode ? undefined : gameId}
-                      protocolId={routeSelectMode ? undefined : MOCK_LAY_TILE_PROTOCOL_ID}
-                      onHexClick={routeSelectMode ? handleRouteHexClick : undefined}
+                      // Design note #159: token targeting disarms the tile
+                      // picker exactly as route mode does. Both modes want
+                      // the same thing -- the click, and not the picker --
+                      // so they gate the same four props.
+                      // Design note #162: `previewRotateArmed` joins route
+                      // and token mode as a third reason to disarm the
+                      // query interceptor. All three want the raw click
+                      // rather than a tile picker.
+                      // Design note #199, layer 2: `!tileSelectorArmed` joins
+                      // the three mode flags. Outside the Lay Track sub-phase
+                      // the interceptor is disarmed entirely, so a stray board
+                      // click costs no `GetLegalTilePlacements` round-trip and
+                      // cannot open a carousel over a board whose click means
+                      // something else.
+                      queryClient={
+                        !tileSelectorArmed ||
+                        routeSelectMode ||
+                        tokenTargetMode ||
+                        previewRotateArmed ||
+                        spectator ||
+                        sandbox
+                          ? undefined
+                          : queryClient
+                      }
+                      contractAddress={
+                        !tileSelectorArmed ||
+                        routeSelectMode ||
+                        tokenTargetMode ||
+                        previewRotateArmed ||
+                        sandbox
+                          ? undefined
+                          : CONTRACT_ADDRESS
+                      }
+                      gameId={
+                        !tileSelectorArmed ||
+                        routeSelectMode ||
+                        tokenTargetMode ||
+                        previewRotateArmed
+                          ? undefined
+                          : gameId
+                      }
+                      protocolId={
+                        !tileSelectorArmed ||
+                        routeSelectMode ||
+                        tokenTargetMode ||
+                        previewRotateArmed
+                          ? undefined
+                          : actingProtocolId
+                      }
+                      cursorMode={tokenTargetMode ? "token" : "default"}
+                      onHexClick={
+                        tokenTargetMode
+                          ? handleTokenHexClick
+                          : routeSelectMode
+                            ? handleRouteHexClick
+                            : previewRotateArmed
+                              ? handlePreviewRotate
+                              : undefined
+                      }
                       onHexClickQuery={handleHexClickQuery}
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
@@ -3394,6 +6689,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // HexGridRenderer's own stable empty-array default.
                       publicCompanies={gameState?.public_companies}
                       routeOverlays={manualRouteOverlay}
+                      // Design note #224: the Lay Track veil.
+                      // Design note #240: one veil, two steps. Track lay
+                      // lights what the network can build on; token
+                      // targeting lights the cities it may claim.
+                      // Design note #269: the tile picker and the token
+                      // ring are both anchored to a hex, and the hover
+                      // tooltip anchors to the same one. Whichever is open
+                      // owns that spot; the tooltip stands down. Mounted
+                      // here rather than inferred in the renderer because
+                      // both rings are mounted by this file.
+                      suppressHoverTooltip={
+                        (tileSelectorArmed && radialSelector !== null) || pendingToken !== null
+                      }
+                      layFocus={layTrackFocus ?? tokenTargetFocus}
                     />
                   ) : (
                     <StockMarketRenderer
@@ -3511,54 +6820,142 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           (that component's own design note #1) rather than routing through
           `runGameplayAction`, so the gate inside that function does not
           cover it. Not mounting it is what covers it. */}
-      {activeMainTab === "map" && !spectator && hexClickQuery?.status === "success" && (
-        <TileSelectionPopup
-          gameId={gameId}
-          protocolId={MOCK_LAY_TILE_PROTOCOL_ID}
-          q={hexClickQuery.q}
-          r={hexClickQuery.r}
-          hexLabel={hexClickQuery.hexLabel}
-          placements={hexClickQuery.response.placements}
-          anchorClientX={hexClickQuery.clientX}
-          anchorClientY={hexClickQuery.clientY}
-          onPreviewChange={setPreviewTile}
-          onDispatched={handleTileDispatched}
-          onClose={handleCloseTilePopup}
+      {/* ===================================================================
+           DESIGN NOTE 162: THE IN-SITU RADIAL SELECTOR REPLACES THE POPUP
+          ===================================================================
+
+          `TileSelectionPopup` -- a ~900px floating card carrying a scrolling
+          carousel, era tabs, a rotation panel and a dispatch button -- is no
+          longer rendered. It answered "which tiles exist" well and "does
+          this tile fit HERE" not at all, because judging fit means looking
+          at the hex and its neighbours, and the card covered them.
+
+          The two branches it had (chain-backed `"success"` and local
+          `"offline"`) collapse into ONE here. That merge is safe because
+          the distinction never lived in the presentation: it is carried by
+          `provisional`, which labels the ring, and by `canConfirm`, which
+          decides whether a lay can be dispatched at all. Keeping two nearly
+          identical JSX blocks was how the old spectator bug got in -- one
+          branch grew a `!spectator` guard the other did not need, and the
+          asymmetry was invisible.
+
+          The file itself is retained, unrendered, until the radial path has
+          been exercised against a live chain. Deleting a component whose
+          replacement has only been run offline would leave no way back. */}
+      {/* Design note #165/#166: the two halves of the trade engine. The
+          sheet is where an offer is composed; the prompt is where it is
+          answered. Rendered at the shell level rather than inside the
+          action bar because both outlive the panel that opened them -- the
+          prompt in particular has to survive the sub-phase advancing. */}
+      <ProposePrivatePurchase
+        open={privateTradeOpen}
+        buyerTicker={
+          gameState?.public_companies.find((c) => c.company_id === actingProtocolId)
+            ?.ticker ?? "This corporation"
+        }
+        privates={gameState?.private_companies ?? []}
+        labelForAddress={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+        treasury={Number(
+          gameState?.public_companies.find((c) => c.company_id === actingProtocolId)
+            ?.treasury ?? 0,
+        )}
+        onPropose={handleProposePrivatePurchase}
+        onClose={() => setPrivateTradeOpen(false)}
+      />
+      {/* ===================================================================
+           THE TRAIN CONSENT PROMPT -- design notes #205 and #218
+          ===================================================================
+
+          ONE component, TWO sources, and which one is live is decided by
+          which deployment this is:
+
+            SANDBOX  `sandboxTrainProposal` -- local state, because there is
+                     no chain to record an offer in and no second client to
+                     show it to (design note #205).
+            ONLINE   `liveTrainOffer` -- derived from the contract's own
+                     offer register via `GetTrainOffers`, so the prompt
+                     reaches the actual counterparty on their own machine
+                     (design note #218).
+
+          They are mutually exclusive by construction: `liveTrainOffer`
+          returns `null` in sandbox and `sandboxTrainProposal` is only ever
+          set outside it, so this can never show two offers at once. */}
+      <TrainTradePrompt
+        proposal={liveTrainOffer?.proposal ?? sandboxTrainProposal}
+        // Sandbox: one human, one wallet, and the seat switcher already
+        // establishes that "who you are" is a local choice there -- so the
+        // prompt is answerable by whoever is looking. It still NAMES the
+        // seller, so the person clicking Accept is told whose decision they
+        // are standing in for.
+        //
+        // Online: `liveTrainOffer` only exists when the viewer IS the
+        // seller's president, so reaching this with a live offer already
+        // means the right person is being asked.
+        viewerIsSeller={
+          liveTrainOffer !== null ||
+          sandbox ||
+          sandboxTrainProposal?.sellerPresident === viewerAddress
+        }
+        onAccept={liveTrainOffer ? handleAcceptLiveTrainOffer : handleAcceptSandboxTrainOffer}
+        onReject={liveTrainOffer ? handleRejectLiveTrainOffer : handleRejectSandboxTrainOffer}
+      />
+      <PrivateTradePrompt
+        proposal={privateProposal}
+        // Design note #2 in that file: sandbox is one human at one wallet,
+        // so the prompt is answerable by whoever is looking -- otherwise the
+        // only place this flow can run end to end is the one place it
+        // cannot be tested. Online, only the actual owner may accept.
+        viewerIsOwner={sandbox || privateProposal?.ownerAddress === viewerAddress}
+        // Design note #0 in that file: `BuyPrivateCompany` has no accept
+        // step, so outside sandbox this is a confirmation and says so.
+        consentIsBinding={sandbox}
+        onAccept={handleAcceptPrivateOffer}
+        onReject={handleRejectPrivateOffer}
+      />
+      {/* Design note #201: the station token's confirm ring -- the same
+          component the tile selector renders through (design note #200), so
+          the red X and green check are identical by construction rather
+          than by matching two sets of styles. */}
+      {activeMainTab === "map" && pendingToken && (
+        <RadialTokenConfirm
+          anchorOffsetX={pendingToken.offsetX}
+          anchorOffsetY={pendingToken.offsetY}
+          canvasEl={boardEl}
+          hexLabel={pendingToken.hexLabel}
+          cost={stationTokenCost}
+          ticker={
+            gameState?.public_companies.find((c) => c.company_id === actingProtocolId)?.ticker ??
+            "this corporation"
+          }
+          canConfirm={controlsEnabled}
+          confirmDisabledReason="Initialize the session key to place a token."
+          onConfirm={handleConfirmTokenPlacement}
+          onCancel={handleCancelTokenPlacement}
         />
       )}
-      {/* Offline fallback (HexGridRenderer design note #120): no chain
-          client is wired up, so `GetLegalTilePlacements` was never called
-          and these tiles came from the local catalog mirror, filtered by era
-          and nothing else. Rendered through the SAME popup deliberately --
-          the point is that the picker works while developing against no
-          backend -- but flagged `offline`, which makes the popup label
-          itself provisional and refuse to dispatch. Kept as a separate
-          branch from the `"success"` one above rather than merged with a
-          ternary, so the authoritative path stays visibly untouched. */}
-      {/* Design note #23: and this branch especially. A spectator gets
-          `queryClient={undefined}`, and HexGridRenderer treats a missing
-          client as "no chain to ask" (its design note #139) -- which routes
-          every board click straight into THIS offline branch. So without
-          `!spectator` here, disabling the query interceptor would have had
-          the exact opposite of the intended effect: instead of no popup, a
-          spectator would get the offline tile picker on every click. It
-          refuses to dispatch on its own (that component's `offline` prop),
-          so nothing could actually have been laid -- but a picker offering a
-          watcher tiles they cannot place is a worse answer than no picker. */}
-      {activeMainTab === "map" && !spectator && hexClickQuery?.status === "offline" && (
-        <TileSelectionPopup
-          offline
-          gameId={gameId}
-          protocolId={MOCK_LAY_TILE_PROTOCOL_ID}
-          q={hexClickQuery.q}
-          r={hexClickQuery.r}
-          hexLabel={hexClickQuery.hexLabel}
-          placements={hexClickQuery.placements}
-          anchorClientX={hexClickQuery.clientX}
-          anchorClientY={hexClickQuery.clientY}
-          onPreviewChange={setPreviewTile}
-          onDispatched={handleTileDispatched}
-          onClose={handleCloseTilePopup}
+      {/* Design note #199, layer 3: not mounted outside the Lay Track step. */}
+      {activeMainTab === "map" && tileSelectorArmed && radialSelector && (
+        <RadialTileSelector
+          anchorOffsetX={radialSelector.offsetX}
+          anchorOffsetY={radialSelector.offsetY}
+          canvasEl={boardEl}
+          hexLabel={radialSelector.hexLabel}
+          candidates={radialCandidates}
+          selectedTileId={previewTile?.tileId ?? null}
+          orientation={previewTile?.orientation ?? 0}
+          canConfirm={canLayTileNow}
+          confirmDisabledReason={tileLayDisabledReason ?? undefined}
+          provisional={radialSelector.provisional}
+          // The ring hands back that tile's FIRST legal orientation
+          // (design note #173), so the preview never opens on an angle the
+          // rotate cycle would then refuse to return to.
+          onSelectCandidate={(tileId, orientation) =>
+            setPreviewTile({ q: radialSelector.q, r: radialSelector.r, tileId, orientation })
+          }
+          legalRotationCount={legalRotations.length}
+          onConfirm={handleConfirmRadialLay}
+          onCancel={() => setPreviewTile(null)}
+          onDismiss={handleDismissRadial}
         />
       )}
     </div>
@@ -3813,6 +7210,10 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     flexShrink: 0,
   },
+  // Design note #7 (`gamePhase.ts`): the shell is shared, the two severity
+  // steps below supply the colour. Both read the same `ALERT_*` constants as
+  // `TrainBadges.tsx`'s chips, so the bar and the chips cannot escalate to
+  // different colours for the same countdown.
   phaseShiftBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
@@ -3821,12 +7222,20 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#a8551a",
-    backgroundColor: "#3a2410",
-    color: "#f0b070",
     whiteSpace: "nowrap",
     flexShrink: 0,
     cursor: "help",
+  },
+  phaseShiftBadgeWarn: {
+    borderColor: ALERT_WARN_BORDER,
+    backgroundColor: ALERT_WARN_BG,
+    color: ALERT_WARN_INK,
+  },
+  phaseShiftBadgeCritical: {
+    borderColor: ALERT_CRITICAL_BORDER,
+    backgroundColor: ALERT_CRITICAL_BG,
+    color: ALERT_CRITICAL_INK,
+    animation: "app-phase-shift-pulse 1.4s ease-in-out infinite",
   },
   /* Design note #47: muted by default, brightening on hover -- a credit
      should be findable without competing with the game's own chrome. */
@@ -4118,6 +7527,20 @@ const styles: Record<string, React.CSSProperties> = {
   /* The active tab is the only WHITE-edged thing in the bar, and the only
      one with a lift. It also keeps `#1E293B` so it still docks seamlessly
      into the panel below (design note #7 in `TopTicker.tsx`). */
+  tutorialsButton: {
+    padding: "8px 16px",
+    borderRadius: "8px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a5a8a",
+    backgroundColor: "#16202e",
+    color: "#9ec5ff",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
   mainTabButtonActive: {
     backgroundColor: "#1E293B",
     color: "#ffffff",
@@ -4267,74 +7690,188 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#caa42a",
     transform: "translateX(14px)",
   },
-  routePanel: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "12px 14px",
-    borderRadius: "8px",
-    backgroundColor: "#161922",
-    border: "1px dashed #3a3f4b",
-  },
-  routePanelHint: {
-    fontSize: FONT_SIZE.body,
-    color: "#8a90a0",
-    lineHeight: 1.4,
-  },
-  routePanelPath: {
+  /* Design note #266: twenty `route*` style keys were deleted here along
+     with the panel they dressed -- the dashed-border box, the waypoint
+     pills, the train chips, the hop counter, the two red warning styles and
+     the Auto/Manual pair. They now live in `RoutePlannerPanel.tsx`, next to
+     the only markup that ever used them. */
+  /* Design note #228: the active-corporation strip. A row rather than a
+     boxed card -- it sits directly above the stepper inside a panel that
+     already has a border, and nesting a second frame would read as a
+     separate widget instead of as this panel's own heading. */
+  orContextCard: {
     display: "flex",
     flexDirection: "row",
-    flexWrap: "wrap",
     alignItems: "center",
-    gap: "6px",
+    flexWrap: "wrap",
+    gap: "10px 18px",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    backgroundColor: "#171c28",
+    border: "1px solid #2b3242",
   },
-  routePanelEmpty: {
-    fontSize: FONT_SIZE.control,
-    color: "#6f7480",
-    fontStyle: "italic",
+  orContextIdentity: { display: "inline-flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
+  /* `orContextDot` is GONE -- design note #236. The whole bar is the
+     corporation's colour now, so a dot of that same colour drawn on it was
+     invisible by construction. */
+  /* Colours on these five are supplied per-render from
+     `corporationBarInk` -- see design note #236. What stays here is
+     everything that does not depend on which corporation is acting. */
+  orContextTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800 },
+  orContextName: { fontSize: FONT_SIZE.small },
+  orContextPresident: { fontSize: FONT_SIZE.small, whiteSpace: "nowrap" },
+  /* Design note #236: the figures CONTINUE FROM THE LEFT.
+     This carried `marginLeft: auto`, which flung them to the far edge of the
+     panel. On a wide window that left a gulf between the corporation's name
+     and its own numbers, so reading "PRR ... $640" meant crossing the bar,
+     and the three figures ended up further from the label they belong to
+     than from the window edge. They now flow inline after the identity,
+     which is how the sentence actually reads: this corporation, then what it
+     has. */
+  orContextFacts: {
+    display: "inline-flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: "6px 18px",
   },
-  routePanelPoint: {
+  orContextFact: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  orContextFactLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+  },
+  orContextFactValue: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontVariantNumeric: "tabular-nums",
+  },
+  orContextFactAside: { fontSize: FONT_SIZE.micro, fontWeight: 400 },
+  orContextFactNone: { fontSize: FONT_SIZE.small, fontStyle: "italic" },
+  tokenTargetBanner: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "10px",
+    padding: "7px 14px",
+    borderRadius: "8px",
+    border: "1px solid #3a5a8a",
+    backgroundColor: "#16202e",
+    color: "#9ec5ff",
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
-    color: "#f4ecd8",
-    padding: "4px 10px",
+  },
+  tokenTargetDot: {
+    width: "9px",
+    height: "9px",
     borderRadius: "999px",
-    backgroundColor: "#242833",
-    border: "1px solid #3a3f4b",
+    backgroundColor: "#38bdf8",
+    flexShrink: 0,
   },
-  routePanelArrow: {
-    fontSize: FONT_SIZE.control,
-    color: "#6f7480",
-  },
-  routePanelMeta: {
-    display: "flex",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: "12px",
-  },
-  routePanelHopCount: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.body,
-    color: "#9aa0ac",
-  },
-  routePanelHopCountExceeded: {
-    color: "#ff8a75",
-  },
-  routePanelWarning: {
-    fontSize: FONT_SIZE.body,
-    color: "#ff8a75",
-  },
-  routePanelClearButton: {
-    fontSize: FONT_SIZE.body,
-    padding: "5px 12px",
-    borderRadius: "8px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#c7cbd4",
+  tokenTargetCancel: {
+    marginLeft: "auto",
+    padding: "3px 10px",
+    borderRadius: "6px",
+    border: "1px solid #4a5163",
+    backgroundColor: "#232936",
+    color: "#c8cdd8",
+    fontSize: FONT_SIZE.small,
+    fontFamily: "inherit",
     cursor: "pointer",
   },
+  /* Design note #164: the two-row Operating Round panel. */
+  orPanel: { display: "flex", flexDirection: "column", gap: "6px", width: "100%" },
+  orPanelStepperRow: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottom: "1px solid #2b3242",
+    paddingBottom: "4px",
+  },
+  orPanelActionRow: {
+    display: "grid",
+    // THE WHOLE POINT. Equal `1fr` rails mean the centre column is centred
+    // on the PANEL, not on the leftovers -- so the action buttons stay put
+    // however wide the badges or the utilities grow. `auto` in the middle
+    // lets the actions size to their content rather than stretching.
+    gridTemplateColumns: "1fr auto 1fr",
+    alignItems: "center",
+    gap: "12px",
+    minHeight: "44px",
+  },
+  orPanelRailLeft: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
+    justifySelf: "start",
+  },
+  orPanelRailRight: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
+    justifySelf: "end",
+  },
+  orPanelActions: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
+  dividendPanel: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "12px",
+    padding: "10px 12px",
+    borderRadius: "8px",
+    border: "1px solid #2b3242",
+    backgroundColor: "#161b27",
+  },
+  dividendColumn: { display: "flex", flexDirection: "column", gap: "4px" },
+  dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#e2e6ee" },
+  dividendRow: {
+    display: "flex",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: "12px",
+    fontSize: FONT_SIZE.small,
+    color: "#c8cdd8",
+  },
+  dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700 },
+  dividendPct: { color: "#6f7480", fontWeight: 400 },
+  dividendNote: { fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.4 },
+  dividendMove: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#9ec5ff", marginTop: "4px" },
+  /* Design note #214: the arrow is the one glyph in the line that carries a
+     DIRECTION, so it is the one that takes the direction's colour. Sized up
+     and weighted past the prices either side of it: those are tinted by
+     market zone (a rules fact), and if the arrow merely matched them the
+     line would read as three coloured things competing rather than one
+     movement between two values.
+
+     `lineHeight: 1` because the diagonal glyphs sit taller than the digits
+     and would otherwise push this row's baseline down relative to the
+     Withhold column beside it. */
+  dividendMoveArrow: {
+    fontWeight: 900,
+    fontSize: "1.15em",
+    lineHeight: 1,
+    padding: "0 2px",
+  },
+  dividendMoveArrowUp: { color: "#4ade80" },
+  dividendMoveArrowDown: { color: "#f87171" },
+  dividendMoveNote: { color: "#8a90a0", fontWeight: 400 },
+  depotSupply: { fontSize: FONT_SIZE.small, color: "#9aa0ac" },
+  /* Design note #279: the Track step's "the action is on the map" hint, and
+     nothing else. This used to carry a second string saying the step had no
+     button at all -- a caption about an empty div, which is exactly what
+     that note deleted. An empty centre column is now allowed to be empty. */
+  orPanelNoActions: { fontSize: FONT_SIZE.small, color: "#6f7480", fontStyle: "italic" },
   // ---- Operating Round Phase 4 hardware marketplace tray -- see design
   // note #10/item 2, upscaled alongside the rest of the action bar (design
   // note #12/item 5). ----

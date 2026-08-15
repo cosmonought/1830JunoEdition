@@ -356,6 +356,47 @@ export function rustOutlook(
   return out;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 7: ONE COUNTDOWN, ONE ESCALATION
+ * ==================================================================
+ *
+ * Design note #5 made the phase-shift and rust readouts agree on the
+ * NUMBER. They still disagreed on the URGENCY, because each derived its own
+ * severity from a different expression:
+ *
+ *   the train chips  ->  depotRemaining === 0 ? red : === 1 ? amber : none
+ *   the action bar   ->  shiftImminent (depotRemaining <= 1), one flat style
+ *
+ * Those happen to describe the same two thresholds, but only the chips
+ * distinguished them. The action bar fired the identical badge at two
+ * purchases and at one -- so the single most consequential moment in an
+ * 1830 game, the last purchase before a rust, looked exactly like the
+ * moment before it. A warning that does not escalate is not a warning; it
+ * is a permanent fixture that players stop seeing.
+ *
+ * `phaseAlertLevel` is now the ONE place that decision is made, and it is
+ * expressed in purchases rather than depot stock so it reads as the
+ * question actually being asked. Every caller escalates in lockstep because
+ * there is nothing left to keep in sync.
+ */
+export type PhaseAlertLevel = "warn" | "critical";
+
+/** How loudly to warn about the coming phase shift, or `null` for "not
+ *  yet / never".
+ *
+ *  `critical` is the LAST purchase before the shift, `warn` the one before
+ *  that. Returns `null` for Diesel (nothing follows it) and on a chain that
+ *  does not report train ownership, since `purchasesUntilPhaseChange` is
+ *  already `null` in both cases -- an unknown countdown must not render as
+ *  an urgent one. */
+export function phaseAlertLevel(phase: GamePhase | null): PhaseAlertLevel | null {
+  const purchases = phase?.purchasesUntilPhaseChange;
+  if (purchases == null) return null;
+  if (purchases <= 1) return "critical";
+  if (purchases === 2) return "warn";
+  return null;
+}
+
 /** Normalises a contract train model string to a tier. Tolerates casing and
  *  the `"4-train"` style some display code uses; returns `null` for
  *  anything unrecognised rather than guessing a tier. */

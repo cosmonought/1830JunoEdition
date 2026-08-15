@@ -42,16 +42,34 @@ use crate::operations::{self, OperationsError};
 use crate::pathfinding;
 use crate::query;
 use crate::state::{
-    HardwareAsset, ProtocolMarketState, RoundType, TerrainType, Tile, TileColor, BANK_POOL_SHARES,
+    HardwareAsset, ProtocolMarketState, RoundType, TerrainType, Tile, TileColor,
+    ZoneType, BANK_POOL_SHARES,
     COMPANY_HARDWARE,
     GAME_LOG, HARDWARE_POOL, IPO_POOL_SHARES, MAP_GRID, MARKET_GRID, PLAYER_CASH_VGP,
-    PLAYER_SHARES, PRIVATE_BIDS, PRIVATE_COMPANIES, PROTOCOL_LAST_TOKEN_SUBROUND, PROTOCOL_MARKET,
+    PLAYER_SHARES, PLAYER_SR_SALES, PRIVATE_BIDS, PRIVATE_COMPANIES, PROTOCOL_LAST_TOKEN_SUBROUND,
+    PROTOCOL_MARKET,
     PROTOCOL_NETWORK_HEXES, PROTOCOL_PAR_VALUE, PROTOCOL_PRESIDENT, PROTOCOL_STATION_HEXES,
     PUBLIC_COMPANIES, REMAINING_TILES, SESSIONS, TRAINS_PURCHASED_COUNT, WATERFALL_MINI_AUCTION,
 };
 use crate::trading::TradingError;
 use crate::train_trade::TrainTradeError;
 use crate::waterfall::WaterfallError;
+
+/// A `RouteWaypoint` for an ordinary, unambiguous stop -- a hex whose
+/// artwork has at most one station, which is nearly the whole board.
+///
+/// Step 4.5 Batch 3, item 1 turned `RunManualRoute`'s `hex_path:
+/// Vec<String>` into `path: Vec<RouteWaypoint>`. Every pre-existing route in
+/// this file runs over single-city hexes, so each of their labels maps to
+/// `city_node: None` and this helper keeps those call sites as readable as
+/// the bare string list they replaced. Tests that genuinely care WHICH
+/// station a stop is spell the waypoint out in full instead.
+fn way(hex: &str) -> crate::msg::RouteWaypoint {
+    crate::msg::RouteWaypoint {
+        hex: hex.to_string(),
+        city_node: None,
+    }
+}
 
 /// Reads a `String`-valued response attribute by key, panicking with a
 /// clear message if it's missing -- keeps the assertions below readable.
@@ -167,7 +185,7 @@ fn full_game_simulation() {
     let player_three = Addr::unchecked("player_three");
     let player_four = Addr::unchecked("player_four");
 
-    let creator_info = mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM));
+    let creator_info = mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM));
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -194,7 +212,7 @@ fn full_game_simulation() {
     for player in [&player_two, &player_three, &player_four] {
         // Uniform Ante Rule: every joiner must attach exactly the same
         // 1,000,000 ujuno ante the creator deposited above.
-        let join_info = mock_info(player.as_str(), &coins(1_000_000, NATIVE_DENOM));
+        let join_info = mock_info(player.as_str(), &coins(2_000_000, NATIVE_DENOM));
         execute(
             deps.as_mut(),
             env.clone(),
@@ -630,7 +648,7 @@ fn pathfinding_revenue_only_counts_town_and_city_terrain_not_plain_or_mountain_t
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -838,7 +856,7 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(buyer.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(buyer.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -860,9 +878,12 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
     assert_eq!(prr_before.treasury, Uint128::zero());
 
     // The very first IPO purchase must choose a par value -- $100, the top
-    // of the standard ladder, so every certificate below costs exactly
-    // $100, matching the numbers this test asserts on.
-    execute(
+    // of the standard ladder, so every ordinary certificate below costs
+    // exactly $100, matching the numbers this test asserts on.
+    //
+    // Step 4.5 Batch 1, item 6: this opening purchase is the 20%
+    // President's Certificate, not a 10% share, and it costs 2 x par = $200.
+    let opening_res = execute(
         deps.as_mut(),
         env.clone(),
         mock_info(buyer.as_str(), &[]),
@@ -871,15 +892,19 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("buyer's first IPO purchase, with a valid par_value, should succeed");
+    assert_eq!(attr(&opening_res, "presidents_certificate"), "true");
+    assert_eq!(attr(&opening_res, "price_paid"), "200");
+    assert_eq!(attr(&opening_res, "buyer_percentage"), "20");
 
-    // Buy 4 more certificates (50% total): still below the 60% float
-    // threshold, and still below the 60% single-player certificate limit,
-    // so every one of these must succeed without floating PRR. par_value is
-    // omitted -- it's already been set and stays fixed.
-    for _ in 0..4 {
+    // Buy 3 more ordinary certificates (20% + 30% = 50% total): still below
+    // the 60% float threshold, and still below the 60% single-player
+    // ownership cap, so every one of these must succeed without floating
+    // PRR. par_value is omitted -- it's already been set and stays fixed.
+    for _ in 0..3 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -889,6 +914,7 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
                 protocol_id: PRR_COMPANY_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("buyer should be able to buy PRR certificates below the float threshold");
@@ -901,8 +927,9 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
         "PRR must not float before real-player ownership reaches 60%"
     );
 
-    // The 6th certificate pushes the buyer's (and thus the total
-    // player-owned) stake to exactly 60% -- PRR must float on this exact
+    // The 5th purchase (the 4th ordinary 10% certificate on top of the 20%
+    // President's Certificate) pushes the buyer's -- and thus the total
+    // player-owned -- stake to exactly 60%. PRR must float on this exact
     // call, with no additional action needed.
     let float_res = execute(
         deps.as_mut(),
@@ -913,10 +940,12 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
-    .expect("the 6th certificate purchase (60%) should succeed and float PRR");
+    .expect("the purchase that reaches 60% should succeed and float PRR");
     assert_eq!(attr(&float_res, "newly_floated"), "true");
+    assert_eq!(attr(&float_res, "buyer_percentage"), "60");
 
     let prr_after = PUBLIC_COMPANIES
         .load(&deps.storage, (game_id, PRR_COMPANY_ID))
@@ -926,9 +955,10 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
         "PRR should be floated the instant real-player ownership hits 60%"
     );
     assert_eq!(prr_after.total_shares_issued, 10);
-    // Treasury = 10x the $100 par value every one of these six IPO
-    // certificates was bought at (the pool never emptied -- only 60% of PRR
-    // was ever sold -- so no sold-out bump ever moved the market marker).
+    // Treasury = 10x the $100 par value, which is a function of the par
+    // value alone and so is unchanged by Batch 1's opening-purchase rule
+    // (the pool never emptied -- only 60% of PRR was ever sold -- so no
+    // sold-out bump ever moved the market marker either).
     assert_eq!(prr_after.treasury, Uint128::new(1_000));
 
     // The buyer's 60% stake also easily clears PRESIDENT_MIN_PERCENTAGE
@@ -938,7 +968,11 @@ fn public_company_floats_at_sixty_percent_player_ownership() {
         .unwrap();
     assert_eq!(president, buyer);
 
-    // Spent exactly 6 x $100 = $600 of the buyer's $1200 starting capital.
+    // Spent $200 for the 20% President's Certificate plus 4 x $100 for the
+    // ordinary certificates = $600 of the buyer's $1200 starting capital.
+    // Identical to the pre-Batch-1 total (6 x $100), because a President's
+    // Certificate is priced at exactly two ordinary shares -- reaching 60%
+    // costs the same either way, it just takes one fewer transaction.
     let buyer_balance = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, buyer.clone()))
         .unwrap();
@@ -972,7 +1006,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -988,7 +1022,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -1006,11 +1040,18 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("player_a's first IPO purchase, with a valid par_value, should succeed");
     assert_eq!(attr(&first_buy, "source"), "ipo");
-    assert_eq!(attr(&first_buy, "price_paid"), "67");
+    // Step 4.5 Batch 1, item 6: the opening purchase is the 20% President's
+    // Certificate at exactly 2 x par = $134, not one 10% share at $67. The
+    // par value itself is still recorded as $67 -- 2x is the price of this
+    // one card, not a change to the corporation's par.
+    assert_eq!(attr(&first_buy, "presidents_certificate"), "true");
+    assert_eq!(attr(&first_buy, "price_paid"), "134");
+    assert_eq!(attr(&first_buy, "buyer_percentage"), "20");
     assert_eq!(
         PROTOCOL_PAR_VALUE
             .load(&deps.storage, (game_id, CPR_COMPANY_ID))
@@ -1030,8 +1071,9 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
     .expect("player_b should be able to pass their turn back to player_a");
 
     // A second IPO purchase omits par_value entirely -- it's already set --
-    // and still pays the same fixed $67, bringing player_a to 20% (enough
-    // to become President).
+    // and still pays the same fixed $67. This is an ORDINARY 10% share (the
+    // President's Certificate has already been issued), bringing player_a
+    // from 20% to 30%.
     let second_buy = execute(
         deps.as_mut(),
         env.clone(),
@@ -1041,6 +1083,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_a's second IPO purchase should reuse the already-chosen par value");
@@ -1049,7 +1092,8 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
     let player_a_balance_after_ipo = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_a.clone()))
         .unwrap();
-    assert_eq!(player_a_balance_after_ipo, Uint128::new(1_200 - 67 - 67));
+    // $134 for the President's Certificate, then $67 for one ordinary share.
+    assert_eq!(player_a_balance_after_ipo, Uint128::new(1_200 - 134 - 67));
 
     let president = PROTOCOL_PRESIDENT
         .load(&deps.storage, (game_id, CPR_COMPANY_ID))
@@ -1076,6 +1120,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_b's first IPO purchase should succeed");
@@ -1095,6 +1140,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_b's second IPO purchase should succeed");
@@ -1104,8 +1150,9 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
         .unwrap();
     assert_eq!(player_b_balance_after_ipo, Uint128::new(1_200 - 67 - 67));
 
-    // Both players now hold 20% -- a tie, so the incumbent (player_a) stays
-    // President (see `recalculate_president`'s tie-break rule).
+    // player_a holds 30% (President's Certificate + one share), player_b
+    // holds 20% (two ordinary shares), so player_a is the outright largest
+    // holder and stays President.
     let president_after_player_b_buys = PROTOCOL_PRESIDENT
         .load(&deps.storage, (game_id, CPR_COMPANY_ID))
         .unwrap();
@@ -1129,15 +1176,15 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
         },
     )
     .expect("CPR's President should be able to declare a dividend");
-    // player_a holds 20% of CPR at this moment: payout = 100 * 20% = 20.
-    // (player_b also holds 20% and gets their own, separate $20 cut -- that
+    // player_a holds 30% of CPR at this moment: payout = 100 * 30% = 30.
+    // (player_b holds 20% and gets their own, separate $20 cut -- that
     // doesn't change player_a's own payout.)
     let player_a_balance_after_dividend = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_a.clone()))
         .unwrap();
     assert_eq!(
         player_a_balance_after_dividend,
-        player_a_balance_after_ipo + Uint128::new(20)
+        player_a_balance_after_ipo + Uint128::new(30)
     );
     let player_b_balance_after_dividend = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_b.clone()))
@@ -1180,14 +1227,16 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
         player_a_balance_after_dividend + Uint128::new(71)
     );
 
-    // Selling gave up player_a's 20% (down to 10%, below
-    // PRESIDENT_MIN_PERCENTAGE) -- but exactly because player_b already
-    // held 20%, the presidency transfers to player_b rather than the seat
-    // going vacant.
+    // The sale takes player_a from 30% to 20%, exactly level with player_b.
+    // A tie keeps the incumbent (see `recalculate_president`'s tie-break
+    // rule), so player_a retains the seat. The genuine presidency HANDOVER
+    // -- a President selling below a rival -- is the dedicated subject of
+    // `president_dump_transfers_the_presidency_to_the_new_largest_holder`
+    // further down; this test's subject is par-vs-market pricing.
     let president_after_sell = PROTOCOL_PRESIDENT
         .may_load(&deps.storage, (game_id, CPR_COMPANY_ID))
         .unwrap();
-    assert_eq!(president_after_sell, Some(player_b.clone()));
+    assert_eq!(president_after_sell, Some(player_a.clone()));
 
     // `SellStock` didn't advance the turn pointer, so it's still player_a's
     // turn -- pass it to player_b before their next turn-gated action.
@@ -1210,6 +1259,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Bank,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -1242,6 +1292,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Bank,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_b's Bank purchase should succeed and pay the market price");
@@ -1257,10 +1308,11 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
     );
 
     // The Bank pool is empty again (player_a's one dumped certificate was
-    // just bought back by player_b); the IPO pool reflects all four IPO
-    // buys from the start (100% - 4*10% = 60%); and CPR is still far short
-    // of the 60% float threshold (player_a's 10% + player_b's 30% = 40%),
-    // so none of this should have floated it.
+    // just bought back by player_b); the IPO pool reflects the four IPO buys
+    // from the start -- player_a's 20% President's Certificate plus three
+    // ordinary 10% shares, so 100% - 50% = 50%; and CPR is still short of
+    // the 60% float threshold (player_a's 20% + player_b's 30% = 50%), so
+    // none of this should have floated it.
     assert_eq!(
         BANK_POOL_SHARES
             .load(&deps.storage, (game_id, CPR_COMPANY_ID))
@@ -1271,7 +1323,7 @@ fn ipo_purchases_pay_par_bank_purchases_pay_market_value() {
         IPO_POOL_SHARES
             .load(&deps.storage, (game_id, CPR_COMPANY_ID))
             .unwrap(),
-        60
+        50
     );
     let cpr = PUBLIC_COMPANIES
         .load(&deps.storage, (game_id, CPR_COMPANY_ID))
@@ -1309,7 +1361,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
     let create_a = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -1331,7 +1383,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
         env.clone(),
         // Uniform Ante Rule: must match room A's creator (player_a)
         // 1,000,000 ujuno ante.
-        mock_info(player_a2.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_a2.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id: game_id_a },
     )
     .expect("player_a2 should be able to join room A");
@@ -1341,7 +1393,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
     let create_b = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -1365,7 +1417,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
         env.clone(),
         // Uniform Ante Rule: must match room B's creator (player_b)
         // 1,000,000 ujuno ante.
-        mock_info(player_c.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_c.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id: game_id_b },
     )
     .expect("player_c should be able to join room B");
@@ -1384,6 +1436,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("player_a's first IPO purchase in room A should succeed");
@@ -1396,6 +1449,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_a2's first IPO purchase in room A should succeed");
@@ -1408,6 +1462,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_a's second IPO purchase in room A should succeed");
@@ -1420,6 +1475,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_a2's second IPO purchase in room A should succeed");
@@ -1437,6 +1493,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("player_b's first IPO purchase in room B should succeed");
@@ -1449,6 +1506,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_c's first IPO purchase in room B should succeed");
@@ -1461,6 +1519,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_b's second IPO purchase in room B should succeed");
@@ -1473,6 +1532,7 @@ fn concurrent_game_rooms_have_independent_market_positions() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("player_c's second IPO purchase in room B should succeed");
@@ -1572,7 +1632,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(buyer.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(buyer.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -1586,7 +1646,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
         deps.as_mut(),
         env.clone(),
         // Uniform Ante Rule: must match the creator's 1,000,000 ujuno ante.
-        mock_info(second_player.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(second_player.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("second_player should be able to join");
@@ -1597,9 +1657,14 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
     // active player at index 0); every purchase advances the pointer to
     // second_player, so second_player passes right back after each one to
     // keep the buyer's next purchase legal. par_values holds each of the
-    // first 5 purchases' par_value argument: only the very first-ever IPO
+    // first 4 purchases' par_value argument: only the very first-ever IPO
     // buy needs one set.
-    let par_values = [Some(Uint128::new(100)), None, None, None, None];
+    //
+    // Step 4.5 Batch 1, item 6: that first buy is the 20% President's
+    // Certificate, so these four purchases reach 50% (20 + 3 x 10) and it is
+    // the FIFTH that crosses 60% and floats PRR -- one fewer transaction
+    // than before, for the same $600 of capital.
+    let par_values = [Some(Uint128::new(100)), None, None, None];
     for par_value in par_values {
         execute(
             deps.as_mut(),
@@ -1610,6 +1675,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
                 protocol_id: PRR_COMPANY_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value,
+                quantity: None,
             },
         )
         .expect("buyer should be able to buy PRR certificates below the float threshold");
@@ -1623,7 +1689,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
     }
 
     // Snapshot every piece of state `reapply_game_log` is responsible for
-    // recomputing, immediately before the float-triggering 6th purchase.
+    // recomputing, immediately before the float-triggering 5th purchase.
     let balance_before_float = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, buyer.clone()))
         .unwrap();
@@ -1635,7 +1701,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
         .unwrap();
     assert_eq!(shares_before_float, 50);
 
-    // The 6th certificate pushes real-player ownership to exactly 60%,
+    // The 5th purchase pushes real-player ownership to exactly 60%,
     // floating PRR -- exactly like
     // `public_company_floats_at_sixty_percent_player_ownership`.
     let float_res = execute(
@@ -1647,9 +1713,10 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
-    .expect("the 6th certificate purchase (60%) should succeed and float PRR");
+    .expect("the purchase that reaches 60% should succeed and float PRR");
     assert_eq!(attr(&float_res, "newly_floated"), "true");
 
     let prr_after_float = PUBLIC_COMPANIES
@@ -1662,8 +1729,8 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
     let log_before_undo = GAME_LOG.load(&deps.storage, game_id).unwrap();
     assert_eq!(
         log_before_undo.len(),
-        11,
-        "5 turn-gated BuyStock/PassTurn pairs (10 entries) plus the 6th, \
+        9,
+        "4 turn-gated BuyStock/PassTurn pairs (8 entries) plus the 5th, \
          float-triggering BuyStock should have been recorded to the log"
     );
 
@@ -1680,10 +1747,10 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
         ExecuteMsg::UndoLastAction { game_id },
     )
     .expect("second_player should be able to undo the last action in their game room");
-    assert_eq!(attr(&undo_res, "remaining_log_length"), "10");
+    assert_eq!(attr(&undo_res, "remaining_log_length"), "8");
 
     let log_after_undo = GAME_LOG.load(&deps.storage, game_id).unwrap();
-    assert_eq!(log_after_undo.len(), 10);
+    assert_eq!(log_after_undo.len(), 8);
 
     // The float-triggering purchase must be fully un-done: PRR back to
     // unfloated, zero treasury, zero issued shares.
@@ -1698,7 +1765,7 @@ fn undo_last_action_reverts_the_float_triggering_purchase() {
     assert_eq!(prr_after_undo.treasury, Uint128::zero());
 
     // The buyer's cash, share count, and the IPO pool must all be back to
-    // their exact pre-6th-purchase snapshot -- proof this is a full
+    // their exact pre-5th-purchase snapshot -- proof this is a full
     // reset-and-replay, not just a log truncation.
     let balance_after_undo = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, buyer.clone()))
@@ -1747,7 +1814,7 @@ fn pass_turn_is_gated_to_the_active_player_and_wraps_around() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -1760,7 +1827,7 @@ fn pass_turn_is_gated_to_the_active_player_and_wraps_around() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_two.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_two.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_two should be able to join");
@@ -1845,7 +1912,7 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -1861,7 +1928,7 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -1880,6 +1947,7 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -1939,15 +2007,17 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
     // Cycle a full round of passes to prove `consecutive_passes` increments
     // on each one (the opposite of what a trade does to it): player_a
     // passes (index -> 1, streak -> 1), then player_b passes (index -> 0,
-    // streak -> 2).
-    execute(
+    // streak -> 2 == the room's player count).
+    let first_pass = execute(
         deps.as_mut(),
         env.clone(),
         mock_info(player_a.as_str(), &[]),
         ExecuteMsg::PassTurn { game_id },
     )
     .expect("player_a should be able to pass their turn");
-    execute(
+    assert_eq!(attr(&first_pass, "consecutive_passes"), "1");
+
+    let closing_pass = execute(
         deps.as_mut(),
         env.clone(),
         mock_info(player_b.as_str(), &[]),
@@ -1955,14 +2025,32 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
     )
     .expect("player_b should be able to pass their turn");
 
+    // Step 4.5 Batch 1, item 4: that second pass is the whole room passing
+    // consecutively, which is the classic 18xx end-of-Stock-Round condition
+    // -- so the round CONCLUDES on this call. `conclude_stock_round`
+    // evaluates every floated corporation for the 100%-sold-out price rise
+    // (none here: no corporation has floated in this scenario) and then
+    // resets the streak to `0`, which is what stops the condition from
+    // re-firing on every subsequent pass.
+    //
+    // Before Batch 1 this streak simply kept climbing and nothing ever read
+    // it -- `state.rs` described `consecutive_passes` as "the storage slot a
+    // future Stock-Round-ends feature would read".
+    assert_eq!(attr(&closing_pass, "stock_round_concluded"), "true");
+    assert_eq!(attr(&closing_pass, "sold_out_risers"), "0");
+    assert_eq!(attr(&closing_pass, "consecutive_passes"), "0");
+
     let session_after_passes = SESSIONS.load(&deps.storage, game_id).unwrap();
     assert_eq!(session_after_passes.active_player_index, 0);
-    assert_eq!(session_after_passes.consecutive_passes, 2);
+    assert_eq!(
+        session_after_passes.consecutive_passes, 0,
+        "concluding the Stock Round resets the all-pass streak"
+    );
 
     // player_a (now correctly the active player again) wins the Schuylkill
     // Valley private. This must succeed, advance the pointer to player_b,
-    // and reset consecutive_passes back to 0 -- breaking the streak just
-    // built up.
+    // and leave consecutive_passes at 0 (a trade always breaks/clears the
+    // streak, whether or not one was in progress).
     let balance_before_bid = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_a.clone()))
         .unwrap();
@@ -1993,7 +2081,7 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
     );
     assert_eq!(
         session_after_bid.consecutive_passes, 0,
-        "a successful trade should reset the all-pass streak back to 0"
+        "a successful trade always leaves the all-pass streak at 0"
     );
 
     // Now it's player_b's turn -- player_a attempting any of the three
@@ -2008,6 +2096,7 @@ fn out_of_turn_trades_are_rejected_and_successful_trades_advance_the_turn_pointe
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -2084,7 +2173,7 @@ fn buy_stock_rejects_purchase_exceeding_global_certificate_limit() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 6,
@@ -2099,7 +2188,7 @@ fn buy_stock_rejects_purchase_exceeding_global_certificate_limit() {
             deps.as_mut(),
             env.clone(),
             // Uniform Ante Rule: must match player_one's 1,000,000 ujuno ante.
-            mock_info(name, &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(name, &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .expect("joiner should be able to join");
@@ -2139,6 +2228,7 @@ fn buy_stock_rejects_purchase_exceeding_global_certificate_limit() {
             protocol_id: 3, // CPR -- a company player_one holds none of yet
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -2210,7 +2300,7 @@ fn buy_stock_hard_blocks_at_certificate_limit_but_exempts_zone_purchases() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 6,
@@ -2224,7 +2314,7 @@ fn buy_stock_hard_blocks_at_certificate_limit_but_exempts_zone_purchases() {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(name, &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(name, &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .expect("joiner should be able to join");
@@ -2274,6 +2364,7 @@ fn buy_stock_hard_blocks_at_certificate_limit_but_exempts_zone_purchases() {
             protocol_id: ERIE_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -2313,6 +2404,25 @@ fn buy_stock_hard_blocks_at_certificate_limit_but_exempts_zone_purchases() {
     BANK_POOL_SHARES
         .save(deps.as_mut().storage, (game_id, CO_ID), &100u8)
         .unwrap();
+    // Step 4.5 Batch 1, item 6: C&O must already be OPEN for this to be an
+    // ordinary Bank purchase. A corporation with a vacant presidency and no
+    // issued shares can only be bought into via its 20% President's
+    // Certificate out of the IPO, so seed another player as its incumbent
+    // President -- which is also the realistic shape of a Bank pool existing
+    // at all (somebody had to buy shares before any could be sold back).
+    // These shares belong to player_2, so player_one's own certificate count
+    // is unchanged and this test's subject stays isolated.
+    let player_two = Addr::unchecked("player_2");
+    PLAYER_SHARES
+        .save(
+            deps.as_mut().storage,
+            (game_id, CO_ID, player_two.clone()),
+            &20u8,
+        )
+        .unwrap();
+    PROTOCOL_PRESIDENT
+        .save(deps.as_mut().storage, (game_id, CO_ID), &player_two)
+        .unwrap();
 
     let exempt_res = execute(
         deps.as_mut(),
@@ -2323,6 +2433,7 @@ fn buy_stock_hard_blocks_at_certificate_limit_but_exempts_zone_purchases() {
             protocol_id: CO_ID,
             source: SharePurchaseSource::Bank,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("a Yellow-zone certificate should bypass the Global Certificate Limit entirely");
@@ -2369,7 +2480,7 @@ fn buy_stock_rejects_purchase_exceeding_corporate_ownership_cap() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(buyer.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(buyer.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -2392,10 +2503,14 @@ fn buy_stock_rejects_purchase_exceeding_corporate_ownership_cap() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("first buy should set the par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: that first buy was the 20% President's
+    // Certificate, so only FOUR more ordinary 10% certificates are needed to
+    // reach the 60% cap (it used to take five on top of a 10% opener).
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -2405,6 +2520,7 @@ fn buy_stock_rejects_purchase_exceeding_corporate_ownership_cap() {
                 protocol_id: PRR_COMPANY_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("subsequent buys at the already-set par value should succeed");
@@ -2428,6 +2544,7 @@ fn buy_stock_rejects_purchase_exceeding_corporate_ownership_cap() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -2483,7 +2600,7 @@ fn sell_stock_does_not_advance_turn_but_buy_stock_does() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -2499,7 +2616,7 @@ fn sell_stock_does_not_advance_turn_but_buy_stock_does() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -2562,18 +2679,32 @@ fn sell_stock_does_not_advance_turn_but_buy_stock_does() {
         "a second sell on the same turn must still not advance the turn pointer"
     );
 
-    // The two sells left BANK_POOL_SHARES at 20% for PRR, enough for a
-    // Bank-source buy. Only BuyStock (not SellStock) should finally
-    // advance the turn pointer to player_b.
+    // Only BuyStock (not SellStock) should finally advance the turn pointer
+    // to player_b.
+    //
+    // Step 4.5 Batch 1, item 3: this purchase used to be a Bank-source buy
+    // of PRR itself, out of the very 20% pool player_a's two sells had just
+    // created. That is now illegal -- it is precisely the wash trade the
+    // Stock Round Buyback Lockout exists to stop (sell to crater the price,
+    // buy back cheaper in the same round), and it would be rejected with
+    // `StockBuybackLockout`. See
+    // `stock_buyback_lockout_blocks_rebuying_a_corporation_sold_this_round`
+    // for that rule's own dedicated test.
+    //
+    // The turn-pacing mechanic this test is actually about is unaffected:
+    // any legal purchase ends the turn, so player_a opens NYC instead --
+    // a different corporation, never sold by player_a, so not locked out.
+    const NYC_COMPANY_ID: u32 = 2;
     execute(
         deps.as_mut(),
         env.clone(),
         mock_info(player_a.as_str(), &[]),
         ExecuteMsg::BuyStock {
             game_id,
-            protocol_id: PRR_COMPANY_ID,
-            source: SharePurchaseSource::Bank,
-            par_value: None,
+            protocol_id: NYC_COMPANY_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("player_a's buy should succeed and end their turn");
@@ -2613,7 +2744,7 @@ fn lay_tile_enforces_era_color_locking_and_upgrade_topology_retention() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -2701,10 +2832,15 @@ fn lay_tile_enforces_era_color_locking_and_upgrade_topology_retention() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -2714,6 +2850,7 @@ fn lay_tile_enforces_era_color_locking_and_upgrade_topology_retention() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -2871,7 +3008,7 @@ fn lay_tile_enforces_path_connectivity_to_token_station() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -2997,7 +3134,7 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -3044,10 +3181,15 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -3057,6 +3199,7 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -3076,19 +3219,24 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
     //
     // Funding this float needs a second player: winning the B&O private
     // (220) plus fully floating PRR (600) already commits $820 of
-    // player_one's own $1200 starting capital, leaving only $380 -- not
-    // enough to solo-fund NNH's own $600 float the way PRR's was. player_two
-    // joins and the six IPO certificates alternate turn-for-turn between
-    // the two players (`BuyStock` advances the turn pointer to the next
-    // REGISTERED player on every successful call, so once a second player
-    // is registered, consecutive purchases must alternate) -- which
-    // conveniently also splits the $600 cost three certificates ($300) to
-    // a side, well within both budgets.
+    // player_one's own $1200 starting capital, leaving only $380. player_two
+    // joins and the IPO certificates alternate turn-for-turn between the two
+    // players (`BuyStock` advances the turn pointer to the next REGISTERED
+    // player on every successful call, so once a second player is
+    // registered, consecutive purchases must alternate).
+    //
+    // Step 4.5 Batch 1, item 6: NNH is floated at the LOWEST par value ($67)
+    // rather than PRR's $100. player_one opens it with the 20% President's
+    // Certificate at 2 x par = $134 and then takes two ordinary $67 shares,
+    // spending $268 of their remaining $380 -- at $100 par the same shape
+    // would have cost them $400 and overdrawn the account. Floating NNH now
+    // costs $402 in total (134 + 4 x 67) instead of $600, split $268 /
+    // $134 between player_one (40%) and player_two (20%).
     let player_two = Addr::unchecked("player_two");
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_two.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_two.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_two should be able to join");
@@ -3100,14 +3248,15 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
             game_id,
             protocol_id: NNH_ID,
             source: SharePurchaseSource::Ipo,
-            par_value: Some(Uint128::new(100)),
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
-    .expect("NNH's first IPO purchase should succeed");
+    .expect("NNH's opening President's Certificate purchase should succeed");
     // The turn pointer is now on player_two (this room's 2nd registered
-    // player) -- alternate the remaining 5 purchases to match, ending on
-    // player_two's 3rd certificate, which crosses the 60% float threshold.
-    let nnh_buyers = [&player_two, &player_one, &player_two, &player_one, &player_two];
+    // player) -- alternate the remaining 4 purchases to match, ending on
+    // player_one's 3rd certificate, which crosses the 60% float threshold.
+    let nnh_buyers = [&player_two, &player_one, &player_two, &player_one];
     for buyer in nnh_buyers {
         execute(
             deps.as_mut(),
@@ -3118,6 +3267,7 @@ fn station_tokens_granted_free_at_float_for_defined_home_and_for_nnh() {
                 protocol_id: NNH_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("NNH's subsequent IPO purchases should succeed and float it at 60%");
@@ -3187,7 +3337,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -3285,10 +3435,15 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -3298,6 +3453,7 @@ fn execute_place_station_token_enforces_city_reachability_duplicate_and_subround
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -3597,7 +3753,7 @@ fn lay_tile_enforces_landmark_reservation() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -3772,7 +3928,7 @@ fn lay_tile_enforces_oo_double_city_reservation() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -3919,7 +4075,7 @@ fn lay_tile_enforces_boston_b_label_restriction() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4028,10 +4184,15 @@ fn lay_tile_enforces_boston_b_label_restriction() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -4041,6 +4202,7 @@ fn lay_tile_enforces_boston_b_label_restriction() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -4121,7 +4283,7 @@ fn lay_tile_enforces_baltimore_b_label_restriction() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4229,10 +4391,15 @@ fn lay_tile_enforces_baltimore_b_label_restriction() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -4242,6 +4409,7 @@ fn lay_tile_enforces_baltimore_b_label_restriction() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -4327,7 +4495,7 @@ fn lay_tile_enforces_b_label_restriction_brown_tier() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4475,7 +4643,7 @@ fn lay_tile_enforces_new_york_ny_label_restriction() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4568,10 +4736,15 @@ fn lay_tile_enforces_new_york_ny_label_restriction() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -4581,6 +4754,7 @@ fn lay_tile_enforces_new_york_ny_label_restriction() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -4658,7 +4832,7 @@ fn lay_tile_enforces_new_york_ny_label_restriction_brown_tier() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4804,7 +4978,7 @@ fn lay_tile_enforces_oo_label_restriction_brown_tier() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -4981,7 +5155,7 @@ fn lay_tile_enforces_gray_hex_immutability() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5096,7 +5270,7 @@ fn lay_tile_enforces_gray_hex_immutability_on_bare_connector_hexes() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5189,7 +5363,7 @@ fn lay_tile_enforces_impassable_border_edges() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5336,7 +5510,7 @@ fn effective_tile_and_value_covers_every_real_gray_hex_not_just_the_override_six
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info("player_one", &coins(1_000_000, NATIVE_DENOM)),
+        mock_info("player_one", &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5397,7 +5571,7 @@ fn lay_tile_rejects_any_placement_at_an_offboard_hex() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5604,7 +5778,7 @@ fn lay_tile_terrain_fee_comes_from_the_hex_and_upgrades_are_free() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5695,10 +5869,15 @@ fn lay_tile_terrain_fee_comes_from_the_hex_and_upgrades_are_free() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(67)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -5708,6 +5887,7 @@ fn lay_tile_terrain_fee_comes_from_the_hex_and_upgrades_are_free() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -5812,7 +5992,7 @@ fn calculate_operating_order_sorts_by_price_and_breaks_ties_by_arrival_recency()
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5926,7 +6106,7 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -5996,10 +6176,15 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its $100 par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -6009,6 +6194,7 @@ fn begin_operating_round_computes_price_order_and_gates_out_of_turn_corporate_ac
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -6234,7 +6420,7 @@ fn end_operating_round_turn_advances_queue_and_closes_the_macro_round() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -6304,10 +6490,15 @@ fn end_operating_round_turn_advances_queue_and_closes_the_macro_round() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its $100 par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -6317,6 +6508,7 @@ fn end_operating_round_turn_advances_queue_and_closes_the_macro_round() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -6522,7 +6714,7 @@ fn begin_operating_round_paces_multiple_operating_rounds_for_higher_train_tiers(
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -6546,10 +6738,15 @@ fn begin_operating_round_paces_multiple_operating_rounds_for_higher_train_tiers(
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its $100 par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -6559,6 +6756,7 @@ fn begin_operating_round_paces_multiple_operating_rounds_for_higher_train_tiers(
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -6712,7 +6910,7 @@ fn query_game_state_reflects_live_player_cash_treasuries_and_ownership() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -6725,7 +6923,7 @@ fn query_game_state_reflects_live_player_cash_treasuries_and_ownership() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_two.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_two.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_two should be able to join");
@@ -6747,16 +6945,19 @@ fn query_game_state_reflects_live_player_cash_treasuries_and_ownership() {
     )
     .expect("player_one's bid should win Baltimore & Ohio and float the public B&O");
 
-    // Six alternating IPO purchases of PRR at $100 par float it at exactly
-    // 60%, split three certificates (30%) each between player_two (who
-    // buys first, since the turn just passed to them) and player_one.
+    // Five alternating IPO purchases of PRR at $100 par float it at exactly
+    // 60%. player_two buys first (the turn just passed to them), so
+    // player_two takes the opening 20% President's Certificate at 2 x par =
+    // $200 (Step 4.5 Batch 1, item 6) and then two ordinary $100 shares --
+    // 40% for $400 -- while player_one takes the other two shares, 20% for
+    // $200. The split is no longer even, which is the point: whoever opens a
+    // corporation starts two certificates ahead of everyone else.
     let buyers = [
         &player_two,
         &player_one,
         &player_two,
         &player_one,
         &player_two,
-        &player_one,
     ];
     for (i, buyer) in buyers.iter().enumerate() {
         execute(
@@ -6772,6 +6973,7 @@ fn query_game_state_reflects_live_player_cash_treasuries_and_ownership() {
                 } else {
                     None
                 },
+                quantity: None,
             },
         )
         .unwrap_or_else(|err| panic!("PRR purchase #{i} by {buyer} should succeed: {err}"));
@@ -6865,7 +7067,7 @@ fn query_game_state_reflects_live_player_cash_treasuries_and_ownership() {
             .iter()
             .map(|h| (h.player.clone(), h.percentage))
             .collect::<Vec<_>>(),
-        vec![(player_one.clone(), 30), (player_two.clone(), 30)]
+        vec![(player_one.clone(), 20), (player_two.clone(), 40)]
     );
 
     let bo_private = state
@@ -6905,7 +7107,7 @@ fn query_market_grid_reflects_live_positions_and_prices() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -6949,10 +7151,15 @@ fn query_market_grid_reflects_live_positions_and_prices() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its $100 par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -6962,6 +7169,7 @@ fn query_market_grid_reflects_live_positions_and_prices() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -7026,7 +7234,7 @@ fn query_map_grid_and_markdown_reflect_laid_tiles_and_landmarks() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -7226,7 +7434,7 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(231_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -7239,17 +7447,22 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(231_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
 
     const CPR_COMPANY_ID: u32 = 3;
 
-    // player_a buys CPR's very first-ever IPO certificate (10%) at the
-    // top standard par value, $100 -- both a legal par choice and one
-    // that makes the on-chain share-value division ($100 * 10% = $10
-    // exactly) land on a whole number.
+    // player_a buys CPR's very first-ever IPO certificate at the top
+    // standard par value, $100 -- both a legal par choice and one that makes
+    // the on-chain share-value arithmetic land on whole numbers.
+    //
+    // Step 4.5 Batch 1, item 6: that first certificate is the 20%
+    // President's Certificate at 2 x par = $200, not a 10% share at $100.
+    // Net worth is unaffected either way -- the player swaps exactly as much
+    // cash as they gain in stock -- which is precisely what makes this a
+    // good test of the appraiser.
     execute(
         deps.as_mut(),
         env.clone(),
@@ -7259,18 +7472,19 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
             protocol_id: CPR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("player_a's IPO purchase should succeed");
 
-    // player_a: starting $1,200 cash - $100 IPO purchase = $1,100 cash,
-    // plus one 10% CPR certificate priced at CPR's live $100 market cell =
-    // $100 share value -> $1,200 net worth (unchanged: they swapped $100 of
-    // cash for $100 of stock).
+    // player_a: starting $1,200 cash - $200 President's Certificate = $1,000
+    // cash, plus a 20% CPR holding -- TWO certificates, each priced at CPR's
+    // live $100 market cell = $200 share value -> $1,200 net worth
+    // (unchanged: they swapped $200 of cash for $200 of stock).
     let player_a_cash = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_a.clone()))
         .unwrap();
-    assert_eq!(player_a_cash, Uint128::new(1_100));
+    assert_eq!(player_a_cash, Uint128::new(1_000));
     // player_b: untouched -- $1,200 cash, no shares, $1,200 net worth.
     let player_b_cash = PLAYER_CASH_VGP
         .load(&deps.storage, (game_id, player_b.clone()))
@@ -7284,21 +7498,24 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
     let player_a_net_worth: PlayerNetWorthResponse =
         query::query_player_net_worth(deps.as_ref(), game_id, player_a.to_string())
             .expect("querying player_a's net worth should succeed");
-    assert_eq!(player_a_net_worth.cash_vgp, Uint128::new(1_100));
+    assert_eq!(player_a_net_worth.cash_vgp, Uint128::new(1_000));
     assert_eq!(
         player_a_net_worth.stock_portfolio_value,
-        Uint128::new(100),
-        "10% of a $100-par company is ONE certificate at the full $100 \
-         market price -- not $10 (Audit G-1)"
+        Uint128::new(200),
+        "each 10% block of a $100-par company is ONE certificate valued at \
+         the full $100 market price -- not $10 (Audit G-1) -- so a 20% \
+         President's holding appraises at $200"
     );
     assert_eq!(player_a_net_worth.net_worth, Uint128::new(1_200));
 
-    // Total net worth = $1,200 + $1,200 = $2,400. Pool (player_a's $231,000
-    // + player_b's matching $231,000 ante = $462,000) / total ($2,400) =
-    // $192.5 per point, applied as exact integer math per player:
-    //   player_a payout = 462,000 * 1,200 / 2,400 = $231,000
-    //   player_b payout = 462,000 * 1,200 / 2,400 = $231,000
-    //   distributed      = $462,000 = the entire pool -- zero dust.
+    // Total net worth = $1,200 + $1,200 = $2,400. Both antes are exactly
+    // `escrow::MINIMUM_ANTE` (2,000,000 ujuno -- which also demonstrates the
+    // floor is inclusive), and this room was instantiated with a 0% subsidy,
+    // so the whole gross reaches the pool:
+    //   pool             = 2,000,000 + 2,000,000 = 4,000,000 ujuno
+    //   player_a payout  = 4,000,000 * 1,200 / 2,400 = 2,000,000
+    //   player_b payout  = 4,000,000 * 1,200 / 2,400 = 2,000,000
+    //   distributed      = 4,000,000 = the entire pool -- zero dust.
     let payout_res = execute(
         deps.as_mut(),
         env.clone(),
@@ -7307,7 +7524,7 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
     )
     .expect("the room creator should be able to close out the game");
 
-    assert_eq!(attr(&payout_res, "total_juno_pool_distributed"), "462000");
+    assert_eq!(attr(&payout_res, "total_juno_pool_distributed"), "4000000");
     assert_eq!(attr(&payout_res, "dust_swept_to_treasury"), "0");
     assert_eq!(
         payout_res.messages.len(),
@@ -7320,7 +7537,7 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
             assert_eq!(to_address, player_a.as_str());
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, NATIVE_DENOM);
-            assert_eq!(amount[0].amount, Uint128::new(231_000));
+            assert_eq!(amount[0].amount, Uint128::new(2_000_000));
         }
         other => panic!("expected a BankMsg::Send to player_a, got: {other:?}"),
     }
@@ -7329,7 +7546,7 @@ fn end_game_and_distribute_computes_payout_from_on_chain_cash_and_share_value() 
             assert_eq!(to_address, player_b.as_str());
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, NATIVE_DENOM);
-            assert_eq!(amount[0].amount, Uint128::new(231_000));
+            assert_eq!(amount[0].amount, Uint128::new(2_000_000));
         }
         other => panic!("expected a BankMsg::Send to player_b, got: {other:?}"),
     }
@@ -7385,7 +7602,7 @@ fn declare_dividends_auto_triggers_game_end_at_350_price() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -7398,7 +7615,7 @@ fn declare_dividends_auto_triggers_game_end_at_350_price() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -7561,7 +7778,7 @@ fn legal_tile_placements_reflects_connectivity_and_landmark_rules() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -7883,7 +8100,7 @@ fn legal_tile_placements_reflects_topology_retention_upgrade_rules() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -8049,15 +8266,21 @@ fn legal_tile_placements_reflects_topology_retention_upgrade_rules() {
     assert_eq!(attr(&upgrade_res, "is_upgrade"), "true");
 }
 
-/// Exercises the Inactivity Timeout Safety Valve
-/// (`ExecuteMsg::ClaimTimeoutRefund`): rejected outright before 48 hours
-/// have elapsed since `GameSession::last_action_timestamp`; a qualifying
-/// action (`PassTurn`) refreshes that timestamp, delaying eligibility;
-/// and, once the mock block time is advanced past the threshold, any
-/// registered player (not just the room's creator) can close the room and
-/// refund each player's *exact* original real-JUNO ante -- not a
-/// recomputed or proportional VGP-based split, unlike
-/// `EndGameAndDistribute`.
+/// **Step 4.5 Batch 3, item 3: the permissionless 48-hour escape hatch.**
+///
+/// Exercises `ExecuteMsg::AnnulGame`'s non-creator tier: rejected outright
+/// before 48 hours have elapsed since `GameSession::last_action_timestamp`;
+/// a qualifying action (`PassTurn`) refreshes that timestamp, delaying
+/// eligibility; and, once the mock block time is advanced past the
+/// threshold, any registered player -- not just the room's creator -- can
+/// close the room and refund each player's *exact* original real-JUNO ante,
+/// not a recomputed or proportional VGP-based split the way
+/// `EndGameAndDistribute` does.
+///
+/// The creator's own any-time tier is covered by
+/// `annul_game_lets_the_creator_abort_immediately_but_not_a_bystander`.
+/// This test was `claim_timeout_refund_after_48_hours_of_inactivity_refunds_every_player`
+/// before Batch 3 folded that message into `AnnulGame`.
 #[test]
 fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
     let mut deps = mock_dependencies();
@@ -8076,13 +8299,13 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
     let player_a = Addr::unchecked("player_a");
     let player_b = Addr::unchecked("player_b");
 
-    // player_a deposits 5,000 ujuno to create the room; the Uniform Ante
-    // Rule (`execute_join_game_room`) requires player_b to join with that
-    // exact same amount.
+    // player_a deposits exactly `escrow::MINIMUM_ANTE` to create the room;
+    // the Uniform Ante Rule (`execute_join_game_room`) requires player_b to
+    // join with that exact same amount.
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(5_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -8095,18 +8318,26 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(5_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join with a matching ante");
 
-    // Immediately after creation, no time has elapsed at all --
-    // ClaimTimeoutRefund must be rejected.
+    // Immediately after creation, no time has elapsed at all, so the
+    // permissionless tier is closed and player_b must be rejected.
+    //
+    // Step 4.5 Batch 3, item 3: the caller here is player_B specifically.
+    // Under the old `ClaimTimeoutRefund` this assertion used player_a, which
+    // still worked because that message had no creator path at all. It would
+    // now pass for the wrong reason -- player_a is the room's creator and may
+    // annul at any time, so the call would SUCCEED and the `unwrap_err()`
+    // would panic. Only a non-creator can demonstrate that the clock is
+    // being enforced.
     let too_early_err = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &[]),
-        ExecuteMsg::ClaimTimeoutRefund { game_id },
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::AnnulGame { game_id },
     )
     .unwrap_err();
     assert!(
@@ -8144,11 +8375,11 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
         deps.as_mut(),
         env.clone(),
         mock_info(player_b.as_str(), &[]),
-        ExecuteMsg::ClaimTimeoutRefund { game_id },
+        ExecuteMsg::AnnulGame { game_id },
     )
-    .expect("ClaimTimeoutRefund should succeed once 48 hours have elapsed with no action");
+    .expect("AnnulGame should succeed for any player once 48 hours have elapsed");
 
-    assert_eq!(attr(&refund_res, "total_refunded"), "10000");
+    assert_eq!(attr(&refund_res, "total_refunded"), "4000000");
     assert_eq!(
         refund_res.messages.len(),
         2,
@@ -8160,7 +8391,7 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
             assert_eq!(to_address, player_a.as_str());
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, NATIVE_DENOM);
-            assert_eq!(amount[0].amount, Uint128::new(5_000));
+            assert_eq!(amount[0].amount, Uint128::new(2_000_000));
         }
         other => panic!("expected a BankMsg::Send to player_a, got: {other:?}"),
     }
@@ -8169,7 +8400,7 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
             assert_eq!(to_address, player_b.as_str());
             assert_eq!(amount.len(), 1);
             assert_eq!(amount[0].denom, NATIVE_DENOM);
-            assert_eq!(amount[0].amount, Uint128::new(5_000));
+            assert_eq!(amount[0].amount, Uint128::new(2_000_000));
         }
         other => panic!("expected a BankMsg::Send to player_b, got: {other:?}"),
     }
@@ -8183,7 +8414,7 @@ fn claim_timeout_refund_after_48_hours_of_inactivity_refunds_exact_antes() {
         deps.as_mut(),
         env.clone(),
         mock_info(player_a.as_str(), &[]),
-        ExecuteMsg::ClaimTimeoutRefund { game_id },
+        ExecuteMsg::AnnulGame { game_id },
     )
     .unwrap_err();
     assert!(
@@ -8223,7 +8454,7 @@ fn join_game_room_rejects_any_ante_that_does_not_match_the_creators_deposit() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(creator.as_str(), &coins(10_000, NATIVE_DENOM)),
+        mock_info(creator.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 6,
@@ -8237,14 +8468,16 @@ fn join_game_room_rejects_any_ante_that_does_not_match_the_creators_deposit() {
         .load(&deps.storage, game_id)
         .unwrap()
         .total_juno_pool;
-    assert_eq!(pool_before, Uint128::new(10_000));
+    // Instantiated with a 0% subsidy, so the whole gross deposit reaches
+    // the pool.
+    assert_eq!(pool_before, Uint128::new(2_000_000));
 
-    // One ujuno short of the creator's 10,000 ujuno ante -- must be
+    // One ujuno short of the creator's 2,000,000 ujuno ante -- must be
     // rejected, down to the exact micro-token.
     let low_err = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(low_bidder.as_str(), &coins(9_999, NATIVE_DENOM)),
+        mock_info(low_bidder.as_str(), &coins(1_999_999, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap_err();
@@ -8258,7 +8491,7 @@ fn join_game_room_rejects_any_ante_that_does_not_match_the_creators_deposit() {
     let high_err = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(high_bidder.as_str(), &coins(10_001, NATIVE_DENOM)),
+        mock_info(high_bidder.as_str(), &coins(2_000_001, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap_err();
@@ -8295,14 +8528,15 @@ fn join_game_room_rejects_any_ante_that_does_not_match_the_creators_deposit() {
     let exact_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(exact_joiner.as_str(), &coins(10_000, NATIVE_DENOM)),
+        mock_info(exact_joiner.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("a deposit matching the creator's exact ante should be accepted");
-    assert_eq!(attr(&exact_res, "deposit_amount"), "10000");
+    assert_eq!(attr(&exact_res, "deposit_amount"), "2000000");
 
     let session_after_join = SESSIONS.load(&deps.storage, game_id).unwrap();
-    assert_eq!(session_after_join.total_juno_pool, Uint128::new(20_000));
+    // Two matching 2,000,000 ujuno antes, 0% subsidy.
+    assert_eq!(session_after_join.total_juno_pool, Uint128::new(4_000_000));
     assert_eq!(session_after_join.player_addresses.len(), 2);
 }
 
@@ -8350,7 +8584,7 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -8377,10 +8611,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
             protocol_id: PRR_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("PRR's first IPO purchase should set its par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -8390,6 +8629,7 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
                 protocol_id: PRR_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("PRR's subsequent IPO purchases should succeed and float it at 60%");
@@ -8563,10 +8803,15 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
             protocol_id: NYC_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(71)),
+            quantity: None,
         },
     )
     .expect("NYC's first IPO purchase should set its par value and succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -8576,6 +8821,7 @@ fn hardware_buy_rusts_lower_tier_and_enforces_train_limit() {
                 protocol_id: NYC_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("NYC's subsequent IPO purchases should succeed and float it at 60%");
@@ -8691,7 +8937,7 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -8856,7 +9102,7 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID,
-            hex_path: vec!["D8".to_string(), "E7".to_string()],
+            path: vec![way("D8"), way("E7")],
             payout_strategy: PayoutStrategy::DeclareDividends,
         },
     )
@@ -8904,7 +9150,7 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID,
-            hex_path: vec!["E7".to_string(), "E9".to_string()],
+            path: vec![way("E7"), way("E9")],
             payout_strategy: PayoutStrategy::DeclareDividends,
         },
     )
@@ -8941,7 +9187,7 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID,
-            hex_path: vec!["D8".to_string(), "E9".to_string()],
+            path: vec![way("D8"), way("E9")],
             payout_strategy: PayoutStrategy::DeclareDividends,
         },
     )
@@ -8983,7 +9229,7 @@ fn run_manual_route_validates_and_scores_custom_player_path() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID,
-            hex_path: vec!["D8".to_string(), "E7".to_string()],
+            path: vec![way("D8"), way("E7")],
             payout_strategy: PayoutStrategy::DeclareDividends,
         },
     )
@@ -9050,7 +9296,7 @@ fn run_manual_route_withhold_credits_company_treasury() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9198,7 +9444,7 @@ fn run_manual_route_withhold_credits_company_treasury() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID,
-            hex_path: vec!["D8".to_string(), "E7".to_string()],
+            path: vec![way("D8"), way("E7")],
             payout_strategy: PayoutStrategy::Withhold,
         },
     )
@@ -9280,7 +9526,7 @@ fn query_player_net_worth_accurately_sums_cash_and_live_stock_portfolio() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(buyer.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(buyer.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9321,10 +9567,15 @@ fn query_player_net_worth_accurately_sums_cash_and_live_stock_portfolio() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("buyer's first IPO purchase, with a valid par_value, should succeed");
-    for _ in 0..5 {
+    // Step 4.5 Batch 1, item 6: the opening purchase above was the 20%
+    // President's Certificate, so only FOUR more ordinary 10% certificates
+    // are needed to reach 60% -- and the total cost is unchanged, since a
+    // President's Certificate is priced at exactly two ordinary shares.
+    for _ in 0..4 {
         execute(
             deps.as_mut(),
             env.clone(),
@@ -9334,6 +9585,7 @@ fn query_player_net_worth_accurately_sums_cash_and_live_stock_portfolio() {
                 protocol_id: PRR_COMPANY_ID,
                 source: SharePurchaseSource::Ipo,
                 par_value: None,
+                quantity: None,
             },
         )
         .expect("buyer should be able to buy PRR certificates up through the float threshold");
@@ -9369,7 +9621,7 @@ fn query_player_net_worth_accurately_sums_cash_and_live_stock_portfolio() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -9489,7 +9741,7 @@ fn corporate_private_purchase_enforces_phase_and_value_limits() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(seller.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(seller.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9502,7 +9754,7 @@ fn corporate_private_purchase_enforces_phase_and_value_limits() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(president.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(president.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("president should be able to join");
@@ -9685,7 +9937,7 @@ fn waterfall_genesis_phase_and_query_state_ordering() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9739,7 +9991,7 @@ fn waterfall_buy_lowest_success() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9750,7 +10002,7 @@ fn waterfall_buy_lowest_success() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p2.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p2.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap();
@@ -9803,7 +10055,7 @@ fn waterfall_cannot_bid_on_lowest_and_bid_too_low_rejected() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9814,7 +10066,7 @@ fn waterfall_cannot_bid_on_lowest_and_bid_too_low_rejected() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p2.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p2.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap();
@@ -9896,7 +10148,7 @@ fn waterfall_cannot_bid_on_lowest_and_bid_too_low_rejected() {
 }
 
 #[test]
-fn waterfall_pass_illegal_without_any_standing_bid() {
+fn waterfall_pass_is_legal_from_a_cold_start() {
     let mut deps = mock_dependencies();
     let env = mock_env();
     instantiate(
@@ -9914,7 +10166,7 @@ fn waterfall_pass_illegal_without_any_standing_bid() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -9925,25 +10177,39 @@ fn waterfall_pass_illegal_without_any_standing_bid() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p2.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p2.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap();
 
-    let pass_err = execute(
+    // Step 4.5 Batch 4: this used to be rejected with `PassNotAllowed`
+    // unless some private already carried a bid, which made the opening
+    // position of the game a forced move -- you could buy or bid, but not
+    // decline. Passing from a cold start is now legal, which is what lets a
+    // table walk the price down to something it actually wants.
+    let pass_res = execute(
         deps.as_mut(),
         env.clone(),
         mock_info(p1.as_str(), &[]),
         ExecuteMsg::WaterfallPass { game_id },
     )
-    .unwrap_err();
+    .expect("passing must be legal even with no bid standing anywhere");
+
+    // An ordinary pass in a 2-player room: one of two, so nothing else has
+    // happened yet beyond the turn moving on.
     assert!(
-        matches!(
-            pass_err,
-            ContractError::Waterfall(WaterfallError::PassNotAllowed { .. })
-        ),
-        "expected Waterfall(PassNotAllowed), got: {pass_err:?}"
+        !pass_res.attributes.iter().any(|a| a.key == "waterfall_all_pass_round"),
+        "one pass out of two is not a full round"
     );
+    let session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(session.consecutive_waterfall_passes, 1);
+    assert_eq!(session.active_player_index, 1, "the turn moves to player 2");
+    assert!(session.waterfall_auction_active, "a single pass ends nothing");
+
+    // And every private is still at its printed face value -- the price only
+    // moves once the WHOLE table has passed in a row.
+    let sv = PRIVATE_COMPANIES.load(&deps.storage, (game_id, 1)).unwrap();
+    assert_eq!(sv.cost, Uint128::new(20));
 }
 
 #[test]
@@ -9966,7 +10232,7 @@ fn waterfall_single_bid_cascade_auto_wins() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 3,
@@ -9978,7 +10244,7 @@ fn waterfall_single_bid_cascade_auto_wins() {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(p.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(p.as_str(), &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .unwrap();
@@ -10065,7 +10331,7 @@ fn waterfall_multi_bid_mini_auction_resolves_and_refunds_losers() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 3,
@@ -10077,7 +10343,7 @@ fn waterfall_multi_bid_mini_auction_resolves_and_refunds_losers() {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(p.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(p.as_str(), &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .unwrap();
@@ -10196,7 +10462,7 @@ fn waterfall_multi_bid_mini_auction_resolves_and_refunds_losers() {
 }
 
 #[test]
-fn waterfall_full_pass_round_ends_early_and_refunds_standing_bids() {
+fn waterfall_full_pass_round_runs_the_waterfall_instead_of_ending() {
     let mut deps = mock_dependencies();
     let env = mock_env();
     instantiate(
@@ -10216,7 +10482,7 @@ fn waterfall_full_pass_round_ends_early_and_refunds_standing_bids() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 4,
@@ -10228,7 +10494,7 @@ fn waterfall_full_pass_round_ends_early_and_refunds_standing_bids() {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(p.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(p.as_str(), &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .unwrap();
@@ -10250,74 +10516,84 @@ fn waterfall_full_pass_round_ends_early_and_refunds_standing_bids() {
     .unwrap();
 
     // Players 2, 3, 4, then player 1 again all pass in turn -- a full round
-    // of 4 consecutive passes (this room's player count) ends the whole
-    // Waterfall Auction early, even though no private was ever bought or
-    // won outright.
+    // of 4 consecutive passes (this room's player count).
+    //
+    // Step 4.5 Batch 4: this USED to end the whole Waterfall Auction early,
+    // refunding every standing bid. That terminated the phase in exactly the
+    // situation where the real game is only getting started. It now runs the
+    // canonical 1830 waterfall instead -- the price drops and play resumes.
+    let mut final_pass = None;
     for p in [&p2, &p3, &p4, &p1] {
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(p.as_str(), &[]),
-            ExecuteMsg::WaterfallPass { game_id },
-        )
-        .unwrap_or_else(|err| panic!("{p}'s pass should be legal: {err}"));
+        final_pass = Some(
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                mock_info(p.as_str(), &[]),
+                ExecuteMsg::WaterfallPass { game_id },
+            )
+            .unwrap_or_else(|err| panic!("{p}'s pass should be legal: {err}")),
+        );
     }
+    let final_pass = final_pass.expect("four passes were dispatched");
 
-    // Player 1's escrowed $40 bid on private #2 must be refunded -- it was
-    // never resolved by the cascade, since the cascade never reached
-    // private #2 (private #1, the actual lowest, was never bought).
-    let p1_cash = PLAYER_CASH_VGP.load(&deps.storage, (game_id, p1.clone())).unwrap();
-    assert_eq!(p1_cash, Uint128::new(600), "player 1's unresolved bid should be fully refunded");
+    // The cheapest UNOWNED private -- Schuylkill Valley, #1, printed at $20
+    // -- drops by $5. Only the cheapest one moves.
+    assert_eq!(attr(&final_pass, "waterfall_all_pass_round"), "true");
+    assert_eq!(attr(&final_pass, "waterfall_price_drop_private_id"), "1");
+    assert_eq!(attr(&final_pass, "waterfall_price_drop_new_cost"), "15");
+    let sv = PRIVATE_COMPANIES.load(&deps.storage, (game_id, 1)).unwrap();
+    assert_eq!(sv.cost, Uint128::new(15));
+    // Every other private is untouched.
+    let cslr = PRIVATE_COMPANIES.load(&deps.storage, (game_id, 2)).unwrap();
+    assert_eq!(cslr.cost, Uint128::new(40));
+
+    // Nobody owns a private yet, so the revenue half of the rule paid
+    // nothing -- there was nobody to pay.
     assert!(
-        PRIVATE_BIDS.may_load(&deps.storage, (game_id, 2, p1.clone())).unwrap().is_none()
+        !final_pass.attributes.iter().any(|a| a.key == "private_revenue_recipient"),
+        "no private is owned, so no revenue can have been paid"
     );
 
-    // No private was ever won, so every one of the six core privates
-    // remains unowned.
+    // Player 1's $40 bid on private #2 is STILL ESCROWED. The auction did not
+    // conclude, so there is nothing to refund -- that bid is still live and
+    // the cascade may yet reach it.
+    let p1_cash = PLAYER_CASH_VGP.load(&deps.storage, (game_id, p1.clone())).unwrap();
+    assert_eq!(p1_cash, Uint128::new(600 - 40), "the bid stays escrowed while the auction runs");
+    assert_eq!(
+        PRIVATE_BIDS.load(&deps.storage, (game_id, 2, p1.clone())).unwrap(),
+        Uint128::new(40)
+    );
+
+    // Still unowned, and the auction is still open for business.
     for private_id in 1u32..=6 {
         let private = PRIVATE_COMPANIES.load(&deps.storage, (game_id, private_id)).unwrap();
         assert_eq!(private.owner, None, "private #{private_id} should remain unowned");
     }
-
     let session = SESSIONS.load(&deps.storage, game_id).unwrap();
-    assert!(!session.waterfall_auction_active);
-    assert_eq!(session.current_round_type, RoundType::StockRound);
-    assert_eq!(session.consecutive_waterfall_passes, 0);
-    // `last_private_winner` was never set, so Priority Deal is left at its
-    // untouched genesis default (the room creator, index 0) rather than
-    // being derived relative to a nonexistent "last winner".
-    assert_eq!(session.priority_deal_index, 0);
-    assert_eq!(session.active_player_index, 0);
+    assert!(
+        session.waterfall_auction_active,
+        "a full round of passes runs the waterfall; it does not end the auction"
+    );
+    assert_eq!(session.current_round_type, RoundType::WaterfallAuction);
+    assert_eq!(session.consecutive_waterfall_passes, 0, "the streak resets and play resumes");
+    // The turn moved on to player 2, who now faces the reduced price.
+    assert_eq!(session.active_player_index, 1);
 
-    // The Waterfall Auction is over; its own messages now correctly reject.
-    let post_conclude_err = execute(
+    // And the discounted company really is buyable at the NEW price: player 2
+    // takes Schuylkill Valley for $15 rather than its printed $20.
+    let buy_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &[]),
+        mock_info(p2.as_str(), &[]),
         ExecuteMsg::WaterfallBuyLowest { game_id },
     )
-    .unwrap_err();
-    assert!(matches!(
-        post_conclude_err,
-        ContractError::Waterfall(WaterfallError::WaterfallNotActive { .. })
-    ));
-
-    // The legacy continuous-bid auction (`BidOnPrivate`) is now the correct
-    // fallback path for the still-unowned private #1: it's player 1's turn
-    // (`active_player_index == 0`), and it succeeds now that the Waterfall
-    // Auction is no longer active.
-    let legacy_res = execute(
-        deps.as_mut(),
-        env.clone(),
-        mock_info(p1.as_str(), &[]),
-        ExecuteMsg::BidOnPrivate {
-            game_id,
-            private_id: 1,
-            bid_amount: Uint128::new(20),
-        },
-    )
-    .expect("BidOnPrivate should work again as a fallback once the Waterfall Auction concludes");
-    assert_eq!(attr(&legacy_res, "private_id"), "1");
+    .expect("the discounted private should be buyable at its reduced price");
+    assert_eq!(attr(&buy_res, "private_1_price"), "15");
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p2.clone())).unwrap(),
+        Uint128::new(600 - 15),
+        "player 2 pays the discounted price, not the printed one"
+    );
 }
 
 #[test]
@@ -10340,7 +10616,7 @@ fn waterfall_full_playthrough_floats_bo_and_assigns_priority_deal() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 3,
@@ -10352,7 +10628,7 @@ fn waterfall_full_playthrough_floats_bo_and_assigns_priority_deal() {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(p.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+            mock_info(p.as_str(), &coins(2_000_000, NATIVE_DENOM)),
             ExecuteMsg::JoinGameRoom { game_id },
         )
         .unwrap();
@@ -10428,6 +10704,7 @@ fn waterfall_full_playthrough_floats_bo_and_assigns_priority_deal() {
             protocol_id: 4,
             source: SharePurchaseSource::Ipo,
             par_value: None,
+            quantity: None,
         },
     )
     .expect("Stock Round trading should work now that the Waterfall Auction has concluded");
@@ -10452,7 +10729,7 @@ fn waterfall_gates_stock_round_and_operating_round_and_legacy_auction_actions() 
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p1.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p1.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -10463,7 +10740,7 @@ fn waterfall_gates_stock_round_and_operating_round_and_legacy_auction_actions() 
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(p2.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(p2.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .unwrap();
@@ -10477,6 +10754,7 @@ fn waterfall_gates_stock_round_and_operating_round_and_legacy_auction_actions() 
             protocol_id: 1,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -10567,7 +10845,7 @@ fn net_worth_includes_unclosed_private_company_face_value() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -10580,7 +10858,7 @@ fn net_worth_includes_unclosed_private_company_face_value() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -10682,7 +10960,7 @@ fn withheld_dividends_credit_the_spendable_public_company_treasury() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -10695,7 +10973,7 @@ fn withheld_dividends_credit_the_spendable_public_company_treasury() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -10816,7 +11094,7 @@ fn multi_certificate_sales_settle_entirely_at_the_pre_sale_price() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -10830,7 +11108,7 @@ fn multi_certificate_sales_settle_entirely_at_the_pre_sale_price() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -10977,7 +11255,7 @@ fn stock_round_one_forbids_all_share_sales() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -10992,7 +11270,7 @@ fn stock_round_one_forbids_all_share_sales() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -11014,14 +11292,17 @@ fn stock_round_one_forbids_all_share_sales() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .expect("buying stock in Stock Round 1 must remain legal");
+    // Step 4.5 Batch 1, item 6: PRR's opening purchase is the 20%
+    // President's Certificate.
     assert_eq!(
         PLAYER_SHARES
             .load(&deps.storage, (game_id, PRR_COMPANY_ID, player_a.clone()))
             .unwrap(),
-        10
+        20
     );
 
     // Hand the turn back to player_a.
@@ -11032,6 +11313,23 @@ fn stock_round_one_forbids_all_share_sales() {
         ExecuteMsg::PassTurn { game_id },
     )
     .expect("player_b should be able to pass");
+
+    // Step 4.5 Batch 1, item 6 fallout: player_a now holds PRR's 20%
+    // President's Certificate rather than a single 10% share, which means
+    // they hold the President seat -- and a President may only sell below
+    // 20% if somebody else can legally absorb the presidency (the
+    // President/Validator Transfer rule, `trading.rs` module doc comment
+    // #11). Seed player_b with a qualifying 20% stake directly, so the SR2
+    // sale further down is rejected -- or not -- purely on round-phase
+    // grounds, never on successor grounds. That isolation is the whole
+    // point of this test.
+    PLAYER_SHARES
+        .save(
+            deps.as_mut().storage,
+            (game_id, PRR_COMPANY_ID, player_b.clone()),
+            &20u8,
+        )
+        .unwrap();
 
     // SELLING that same certificate in SR1 is not.
     let sell_err = execute(
@@ -11058,7 +11356,7 @@ fn stock_round_one_forbids_all_share_sales() {
         PLAYER_SHARES
             .load(&deps.storage, (game_id, PRR_COMPANY_ID, player_a.clone()))
             .unwrap(),
-        10,
+        20,
         "a rejected sale must not move any shares"
     );
     assert_eq!(
@@ -11082,11 +11380,12 @@ fn stock_round_one_forbids_all_share_sales() {
         },
     )
     .expect("the same sale must succeed once the room reaches SR2");
+    // 20% (the President's Certificate) less the 10% just sold.
     assert_eq!(
         PLAYER_SHARES
             .load(&deps.storage, (game_id, PRR_COMPANY_ID, player_a.clone()))
             .unwrap(),
-        0
+        10
     );
     assert_eq!(
         BANK_POOL_SHARES
@@ -11122,7 +11421,7 @@ fn stock_actions_are_rejected_outside_a_stock_round() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11136,7 +11435,7 @@ fn stock_actions_are_rejected_outside_a_stock_round() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -11169,6 +11468,7 @@ fn stock_actions_are_rejected_outside_a_stock_round() {
             protocol_id: PRR_COMPANY_ID,
             source: SharePurchaseSource::Ipo,
             par_value: Some(Uint128::new(100)),
+            quantity: None,
         },
     )
     .unwrap_err();
@@ -11244,7 +11544,7 @@ fn tile_inventory_is_seeded_and_blocks_placement_once_depleted() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11379,7 +11679,7 @@ fn upgrading_a_tile_returns_the_replaced_tile_to_the_tray() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11504,7 +11804,7 @@ fn president_may_sell_while_remaining_the_largest_holder() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11518,7 +11818,7 @@ fn president_may_sell_while_remaining_the_largest_holder() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -11586,7 +11886,7 @@ fn president_dump_transfers_the_presidency_to_the_new_largest_holder() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11600,7 +11900,7 @@ fn president_dump_transfers_the_presidency_to_the_new_largest_holder() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -11680,7 +11980,7 @@ fn president_cannot_dump_when_no_successor_would_reach_twenty_percent() {
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_a.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_a.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -11694,7 +11994,7 @@ fn president_cannot_dump_when_no_successor_would_reach_twenty_percent() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_b.as_str(), &coins(1_000, NATIVE_DENOM)),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_b should be able to join");
@@ -12454,7 +12754,7 @@ fn blockaded_city_route_scenario() -> (
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -12571,7 +12871,7 @@ fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID_BLOCKADE,
-            hex_path: vec!["D8".to_string(), "D10".to_string(), "D12".to_string()],
+            path: vec![way("D8"), way("D10"), way("D12")],
             payout_strategy: PayoutStrategy::Withhold,
         },
     )
@@ -12615,7 +12915,7 @@ fn run_manual_route_may_end_at_a_fully_blockaded_rival_city() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID_BLOCKADE,
-            hex_path: vec!["D8".to_string(), "D10".to_string()],
+            path: vec![way("D8"), way("D10")],
             payout_strategy: PayoutStrategy::Withhold,
         },
     )
@@ -12666,7 +12966,7 @@ fn run_manual_route_may_start_at_a_fully_blockaded_rival_city() {
             protocol_id: BO_PUBLIC_ID_BLOCKADE,
             // The same two hexes as the accepted route in the test above,
             // listed the other way round.
-            hex_path: vec!["D10".to_string(), "D8".to_string()],
+            path: vec![way("D10"), way("D8")],
             payout_strategy: PayoutStrategy::Withhold,
         },
     )
@@ -12715,7 +13015,7 @@ fn run_manual_route_runs_through_the_city_once_the_blockade_is_lifted() {
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id: BO_PUBLIC_ID_BLOCKADE,
-            hex_path: vec!["D8".to_string(), "D10".to_string(), "D12".to_string()],
+            path: vec![way("D8"), way("D10"), way("D12")],
             payout_strategy: PayoutStrategy::Withhold,
         },
     )
@@ -13385,7 +13685,7 @@ fn train_trade_scenario() -> (
     let create_res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_one.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::CreateGameRoom {
             virtual_bank_start: Uint128::new(12_000),
             max_players: 2,
@@ -13397,7 +13697,7 @@ fn train_trade_scenario() -> (
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(player_two.as_str(), &coins(1_000_000, NATIVE_DENOM)),
+        mock_info(player_two.as_str(), &coins(2_000_000, NATIVE_DENOM)),
         ExecuteMsg::JoinGameRoom { game_id },
     )
     .expect("player_two should join");
@@ -13426,6 +13726,7 @@ fn train_trade_scenario() -> (
                     treasury: Uint128::new(1_000),
                     is_floated: true,
                     total_shares_issued: 10,
+                    last_route_revenue: Uint128::zero(),
                 },
             )
             .unwrap();
@@ -14179,4 +14480,3086 @@ fn a_corporation_may_sell_its_last_train_and_is_then_registered_as_stranded() {
     let mut buyer = tt_models(&deps.storage, game_id, TT_BUYER);
     buyer.sort();
     assert_eq!(buyer, vec!["2", "4"]);
+}
+
+// ===================================================================
+// Step 4.5 -- Batch 1: Financial State Machine, Share Trading Rules,
+// and Stock Market Matrix.
+//
+// The seven tests below are the acceptance suite for Batch 1. Each maps
+// to one numbered requirement; the helpers immediately following cut the
+// boilerplate every one of them would otherwise repeat.
+//
+// A note on the room shape most of these use: `max_players: 2` (or 6, where
+// the certificate limit is the subject) with only the CREATOR ever joining.
+// `GameSession::max_players` is what fixes both the per-player starting
+// capital and the Global Certificate Limit, while `player_addresses` is what
+// the turn pointer cycles through -- so a solo room gives full control over
+// the cap being tested while letting `advance_turn` wrap straight back to
+// index 0, which keeps these tests about the RULE under test instead of
+// about turn choreography. Several pre-existing tests in this file already
+// use exactly this shape.
+// ===================================================================
+
+/// Boots a contract, creates a room, and skips the Waterfall Auction --
+/// the identical five-step preamble all seven Batch 1 tests open with.
+/// Returns `(deps, env, creator, game_id)`.
+fn batch1_room(
+    max_players: u8,
+) -> (
+    cosmwasm_std::OwnedDeps<
+        cosmwasm_std::testing::MockStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    cosmwasm_std::Env,
+    Addr,
+    u64,
+) {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 50,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let creator = Addr::unchecked("creator");
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(creator.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    (deps, env, creator, game_id)
+}
+
+/// Real, verbatim-sourced coordinates on the 1830 chart, one per zone band
+/// (`market::REAL_MARKET_ROWS`). Hard-coding these in one place means a
+/// future edit to the chart data breaks `batch1_zone_cells_are_the_real_ones`
+/// loudly rather than silently changing what six other tests think they are
+/// testing.
+const BROWN_CELL: (u32, u32) = (2, 3); // $30
+const ORANGE_CELL: (u32, u32) = (3, 3); // $40
+const YELLOW_CELL: (u32, u32) = (4, 3); // $50
+const NORMAL_CELL: (u32, u32) = (6, 5); // $67, the default/par cell
+
+/// Guards every other Batch 1 test's assumptions about which chart cells
+/// carry which zone band. If this fails, the four constants above are stale
+/// and the zone-behavior tests below are no longer testing what they claim.
+#[test]
+fn batch1_zone_cells_are_the_real_ones() {
+    let (deps, _env, _creator, _game_id) = batch1_room(2);
+
+    for (coords, expected_zone, expected_price) in [
+        (BROWN_CELL, ZoneType::BrownZone, 30u128),
+        (ORANGE_CELL, ZoneType::OrangeZone, 40),
+        (YELLOW_CELL, ZoneType::YellowZone, 50),
+        (NORMAL_CELL, ZoneType::Normal, 67),
+    ] {
+        let cell = MARKET_GRID
+            .load(&deps.storage, coords)
+            .unwrap_or_else(|_| panic!("{coords:?} must be a seeded cell"));
+        assert_eq!(
+            cell.zone_type, expected_zone,
+            "cell {coords:?} should be {expected_zone:?}"
+        );
+        assert_eq!(cell.price, Uint128::new(expected_price));
+    }
+
+    // Zone semantics are nested: each band grants everything the weaker
+    // bands grant, plus one more waiver. This is the table
+    // `check_holding_limit` / `check_cert_limit` / the multi-buy invariant
+    // all read from.
+    assert!(!ZoneType::Normal.waives_certificate_limit());
+    assert!(!ZoneType::Normal.waives_ownership_cap());
+    assert!(!ZoneType::Normal.permits_multiple_buy());
+
+    assert!(ZoneType::YellowZone.waives_certificate_limit());
+    assert!(!ZoneType::YellowZone.waives_ownership_cap());
+    assert!(!ZoneType::YellowZone.permits_multiple_buy());
+
+    assert!(ZoneType::OrangeZone.waives_certificate_limit());
+    assert!(ZoneType::OrangeZone.waives_ownership_cap());
+    assert!(!ZoneType::OrangeZone.permits_multiple_buy());
+
+    assert!(ZoneType::BrownZone.waives_certificate_limit());
+    assert!(ZoneType::BrownZone.waives_ownership_cap());
+    assert!(ZoneType::BrownZone.permits_multiple_buy());
+}
+
+/// **Batch 1, item 1: Atomic Multi-Buy in the Brown Zone.**
+///
+/// Buying three certificates in ONE action is legal only where the real game
+/// permits it -- a Brown-band market position, bought out of the open-market
+/// Bank pool -- and when it happens it settles atomically: one debit at
+/// `3 x price`, one share transfer, one pool decrement, with no price drift
+/// between the three certificates.
+///
+/// The three rejection paths are the substance of the invariant, and each is
+/// checked to have touched nothing: wrong zone, wrong source (the IPO never
+/// permits a multi-buy, in any band), and a nonsense quantity.
+#[test]
+fn test_atomic_brown_zone_multi_buy() {
+    let (mut deps, env, buyer, game_id) = batch1_room(2);
+
+    const PRR_ID: u32 = 1;
+
+    // Open PRR properly (item 6) so the multi-buy below is an ordinary
+    // purchase and not tangled up with the President's Certificate rule.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect("opening PRR with its President's Certificate should succeed");
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        20
+    );
+
+    // Drop PRR's marker into the Brown band and give the Bank pool
+    // something to sell.
+    market::set_protocol_position(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        BROWN_CELL.0,
+        BROWN_CELL.1,
+    )
+    .expect("pinning PRR to the Brown cell should succeed");
+    BANK_POOL_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &50u8)
+        .unwrap();
+
+    let cash_before = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, buyer.clone()))
+        .unwrap();
+
+    // ---- The legal multi-buy: 3 certificates at $30 each.
+    let multi = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: Some(3),
+        },
+    )
+    .expect("a 3-certificate Bank purchase in the Brown Zone must be permitted");
+
+    assert_eq!(attr(&multi, "certificates_bought"), "3");
+    assert_eq!(attr(&multi, "percentage_acquired"), "30");
+    assert_eq!(attr(&multi, "market_zone"), "BrownZone");
+    // 3 x $30 -- one price for the whole block, never a walking sum.
+    assert_eq!(attr(&multi, "price_paid"), "90");
+    assert_eq!(attr(&multi, "buyer_percentage"), "50");
+    assert_eq!(attr(&multi, "pool_percentage_remaining"), "20");
+
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, buyer.clone()))
+            .unwrap(),
+        cash_before - Uint128::new(90),
+        "the whole block must be debited in one atomic subtraction"
+    );
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        50
+    );
+    assert_eq!(
+        BANK_POOL_SHARES.load(&deps.storage, (game_id, PRR_ID)).unwrap(),
+        20
+    );
+    // The marker did not move: a purchase is not a price movement.
+    let after_multi = market::current_cell(&deps.storage, game_id, PRR_ID).unwrap();
+    assert_eq!((after_multi.x, after_multi.y), BROWN_CELL);
+
+    // ---- Rejection 1: right source, WRONG ZONE.
+    //
+    // Top the Bank pool back up to 50% first. The successful multi-buy above
+    // left only 20% in it, and pool liquidity is resolved inside the source
+    // branch -- BEFORE the multi-buy invariant, which needs `zone_type` and
+    // so can only be checked once that branch has returned. A 3-certificate
+    // attempt against a 20% pool would therefore be rejected with
+    // `InsufficientPoolShares`, which is perfectly true but is not the rule
+    // this assertion is about. Removing the confound is what makes the
+    // rejection below unambiguous evidence for the zone rule.
+    BANK_POOL_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &50u8)
+        .unwrap();
+    market::set_protocol_position(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        NORMAL_CELL.0,
+        NORMAL_CELL.1,
+    )
+    .expect("pinning PRR back to a Normal cell should succeed");
+
+    let cash_before_rejections = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, buyer.clone()))
+        .unwrap();
+
+    let wrong_zone = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: Some(3),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            wrong_zone,
+            ContractError::Trading(TradingError::MultiBuyNotPermitted { .. })
+        ),
+        "expected Trading(MultiBuyNotPermitted) outside the Brown Zone, got: {wrong_zone:?}"
+    );
+
+    // ---- Rejection 2: right zone, WRONG SOURCE. The IPO sells one
+    // certificate per action no matter where the marker sits.
+    market::set_protocol_position(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        BROWN_CELL.0,
+        BROWN_CELL.1,
+    )
+    .expect("pinning PRR back to the Brown cell should succeed");
+
+    let wrong_source = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: None,
+            quantity: Some(3),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            wrong_source,
+            ContractError::Trading(TradingError::MultiBuyNotPermitted { .. })
+        ),
+        "expected Trading(MultiBuyNotPermitted) for an IPO multi-buy, got: {wrong_source:?}"
+    );
+
+    // ---- Rejection 3: a nonsense quantity is caught before anything else.
+    let zero_quantity = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: Some(0),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            zero_quantity,
+            ContractError::Trading(TradingError::InvalidBuyQuantity { .. })
+        ),
+        "expected Trading(InvalidBuyQuantity) for quantity 0, got: {zero_quantity:?}"
+    );
+
+    // Every rejection above is a hard block: no cash moved, no shares moved.
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, buyer.clone()))
+            .unwrap(),
+        cash_before_rejections
+    );
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        50
+    );
+}
+
+/// **Batch 1, item 2, first half: the Yellow/Orange certificate-limit
+/// exemption.**
+///
+/// A player sitting exactly at the Global Certificate Limit may still buy
+/// certificates of a corporation whose marker is in an exempt band -- and,
+/// the half that was previously missing, certificates already held in an
+/// exempt band stop counting against the limit too, which frees up room to
+/// buy an ordinary `Normal`-band certificate that was blocked a moment
+/// earlier.
+#[test]
+fn test_yellow_orange_zone_cert_limit_exemption() {
+    // A 6-player room caps every player at 11 certificates.
+    let (mut deps, env, buyer, game_id) = batch1_room(6);
+
+    const PRR_ID: u32 = 1;
+    const NYC_ID: u32 = 2;
+    const CPR_ID: u32 = 3;
+    const CO_ID: u32 = 5;
+    const ERIE_ID: u32 = 6;
+    const BM_ID: u32 = 8;
+
+    // Seed the buyer to exactly the 11-certificate cap on Normal-band
+    // companies: President of PRR and NYC at 60% each -- (1 + 4) certificates
+    // apiece, the President's card counting once -- plus one ordinary CPR
+    // certificate. All three sit at the default Normal par cell.
+    for company_id in [PRR_ID, NYC_ID] {
+        PLAYER_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id, buyer.clone()), &60u8)
+            .unwrap();
+        PROTOCOL_PRESIDENT
+            .save(deps.as_mut().storage, (game_id, company_id), &buyer)
+            .unwrap();
+    }
+    PLAYER_SHARES
+        .save(deps.as_mut().storage, (game_id, CPR_ID, buyer.clone()), &10u8)
+        .unwrap();
+
+    // Two already-open corporations parked in exempt bands, each with a Bank
+    // pool to sell from. The buyer holds their President's certificates, so
+    // these are ordinary purchases (item 6) -- and, critically, those
+    // holdings must NOT count toward the limit while the markers sit here.
+    for (company_id, cell) in [(CO_ID, YELLOW_CELL), (BM_ID, ORANGE_CELL)] {
+        market::set_protocol_position(deps.as_mut().storage, game_id, company_id, cell.0, cell.1)
+            .expect("pinning the company's market position should succeed");
+        PLAYER_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id, buyer.clone()), &20u8)
+            .unwrap();
+        PROTOCOL_PRESIDENT
+            .save(deps.as_mut().storage, (game_id, company_id), &buyer)
+            .unwrap();
+        BANK_POOL_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id), &50u8)
+            .unwrap();
+    }
+
+    // ---- At the cap, an ordinary Normal-band certificate is refused.
+    let blocked = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: ERIE_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            blocked,
+            ContractError::Trading(TradingError::ExceededCertificateLimit { .. })
+        ),
+        "expected Trading(ExceededCertificateLimit) at the cap, got: {blocked:?}"
+    );
+
+    // ---- A Yellow-band certificate is exempt and goes through.
+    let yellow_buy = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: CO_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .expect("a Yellow-band certificate must be exempt from the hand limit");
+    assert_eq!(attr(&yellow_buy, "market_zone"), "YellowZone");
+    assert_eq!(attr(&yellow_buy, "buyer_percentage"), "30");
+
+    // ---- So is an Orange-band one (Orange grants everything Yellow does).
+    let orange_buy = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: BM_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .expect("an Orange-band certificate must be exempt from the hand limit");
+    assert_eq!(attr(&orange_buy, "market_zone"), "OrangeZone");
+    assert_eq!(attr(&orange_buy, "buyer_percentage"), "30");
+
+    // ---- The half that was previously missing. Move CPR -- an ordinary
+    // holding the buyer has had all along -- into the Yellow band. Nothing
+    // about the buyer's portfolio changed, but one certificate has stopped
+    // counting, so the SAME ERIE purchase that was refused above must now
+    // succeed. This only works if `check_cert_limit` filters the running
+    // total, not merely the incoming certificate.
+    market::set_protocol_position(
+        deps.as_mut().storage,
+        game_id,
+        CPR_ID,
+        YELLOW_CELL.0,
+        YELLOW_CELL.1,
+    )
+    .expect("pinning CPR to the Yellow cell should succeed");
+
+    let now_allowed = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: ERIE_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect(
+        "with CPR's certificate now zone-exempt the buyer is at 10 of 11, \
+         so the previously-blocked ERIE certificate must be allowed",
+    );
+    assert_eq!(attr(&now_allowed, "presidents_certificate"), "true");
+}
+
+/// **Batch 1, item 2, second half: the Orange band lifts the 60% ownership
+/// cap -- all the way to 100%, and not one point further.**
+#[test]
+fn test_orange_zone_over_60_percent_ownership() {
+    let (mut deps, env, buyer, game_id) = batch1_room(2);
+
+    const PRR_ID: u32 = 1;
+
+    // Open PRR and take it to exactly 60% out of the IPO: the President's
+    // Certificate (20%) plus four ordinary certificates.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect("opening PRR should succeed");
+    for _ in 0..4 {
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(buyer.as_str(), &[]),
+            ExecuteMsg::BuyStock {
+                game_id,
+                protocol_id: PRR_ID,
+                source: SharePurchaseSource::Ipo,
+                par_value: None,
+                quantity: None,
+            },
+        )
+        .expect("buying up to the 60% cap should succeed");
+    }
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        60
+    );
+
+    // In the Normal band, 70% is refused -- the ordinary 60% cap.
+    let capped = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            capped,
+            ContractError::Trading(TradingError::CertificateLimitExceeded { .. })
+        ),
+        "expected Trading(CertificateLimitExceeded) past 60% in the Normal band, got: {capped:?}"
+    );
+
+    // Move PRR into the Orange band and open a Bank pool. The same holder
+    // may now go past 60%, all the way to owning the corporation outright.
+    market::set_protocol_position(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        ORANGE_CELL.0,
+        ORANGE_CELL.1,
+    )
+    .expect("pinning PRR to the Orange cell should succeed");
+    BANK_POOL_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &50u8)
+        .unwrap();
+
+    for expected_total in [70u8, 80, 90, 100] {
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(buyer.as_str(), &[]),
+            ExecuteMsg::BuyStock {
+                game_id,
+                protocol_id: PRR_ID,
+                source: SharePurchaseSource::Bank,
+                par_value: None,
+                quantity: None,
+            },
+        )
+        .unwrap_or_else(|err| {
+            panic!("the Orange band must permit holding {expected_total}%: {err}")
+        });
+        assert_eq!(attr(&res, "buyer_percentage"), expected_total.to_string());
+    }
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        100,
+        "the Orange band permits a single player to hold 100% of a corporation"
+    );
+
+    // But "unlimited" means "no 60% cap", never "more than exists". The
+    // Bank pool still has 10% left, so this fails on the ownership
+    // invariant rather than on liquidity.
+    assert_eq!(
+        BANK_POOL_SHARES.load(&deps.storage, (game_id, PRR_ID)).unwrap(),
+        10
+    );
+    let over_full = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            over_full,
+            ContractError::Trading(TradingError::HoldingExceedsTotalIssue { .. })
+        ),
+        "expected Trading(HoldingExceedsTotalIssue) past 100%, got: {over_full:?}"
+    );
+}
+
+/// **Batch 1, item 3: the Stock Round Buyback Lockout.**
+///
+/// Selling a corporation bars the seller from buying back into it for the
+/// rest of the Stock Round -- the wash trade of dumping stock to crater a
+/// price and immediately repurchasing it cheaper. The lockout is scoped to
+/// the seller (not the corporation) and clears when the round ends.
+#[test]
+fn test_stock_buyback_lockout_in_same_sr() {
+    let (mut deps, env, player_a, game_id) = batch1_room(2);
+    advance_past_first_stock_round(&mut deps.storage, game_id);
+
+    let player_b = Addr::unchecked("player_b");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .expect("player_b should be able to join");
+
+    const PRR_ID: u32 = 1;
+    const NYC_ID: u32 = 2;
+
+    // Seed holdings directly: this test is about the lockout, not about how
+    // the stock was acquired. player_b's 20% keeps a legal President
+    // successor on hand so the sale can never fail for that reason instead.
+    PLAYER_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID, player_a.clone()), &40u8)
+        .unwrap();
+    PLAYER_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID, player_b.clone()), &20u8)
+        .unwrap();
+    // Seeding shares directly skips the IPO purchase that would normally
+    // have chosen PRR's par value, so set it explicitly. Without it, the
+    // purchase further down that pushes total player ownership back to 60%
+    // would trip the flotation path and fail with `MissingParValueAtFloat`
+    // -- a setup artifact that has nothing to do with the lockout.
+    PROTOCOL_PAR_VALUE
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &Uint128::new(67))
+        .unwrap();
+
+    assert!(
+        PLAYER_SR_SALES
+            .may_load(&deps.storage, (game_id, player_a.clone()))
+            .unwrap()
+            .is_none(),
+        "nobody has sold anything yet"
+    );
+
+    // ---- The sale arms the lockout.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::SellStock {
+            game_id,
+            protocol_id: PRR_ID,
+            percentage: 10,
+        },
+    )
+    .expect("player_a's sale should succeed");
+    assert_eq!(
+        PLAYER_SR_SALES
+            .load(&deps.storage, (game_id, player_a.clone()))
+            .unwrap(),
+        vec![PRR_ID]
+    );
+
+    // ---- Buying back the same corporation, same round: refused. The Bank
+    // pool holds exactly the 10% just dumped, so this fails on the lockout
+    // and not for want of anything to buy.
+    assert_eq!(
+        BANK_POOL_SHARES.load(&deps.storage, (game_id, PRR_ID)).unwrap(),
+        10
+    );
+    let cash_before = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, player_a.clone()))
+        .unwrap();
+    let locked_out = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .unwrap_err();
+    match &locked_out {
+        ContractError::Trading(TradingError::StockBuybackLockout { corporation, .. }) => {
+            assert_eq!(corporation, "PRR", "the error should name the corporation");
+        }
+        other => panic!("expected Trading(StockBuybackLockout), got: {other:?}"),
+    }
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, player_a.clone()))
+            .unwrap(),
+        cash_before,
+        "a locked-out purchase must be a hard block"
+    );
+
+    // ---- The lockout is per corporation, not a blanket trading freeze:
+    // a DIFFERENT corporation is still perfectly buyable, and this ends
+    // player_a's turn.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: NYC_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect("a corporation player_a never sold must stay buyable");
+
+    // ---- The lockout is also per PLAYER: player_b never sold PRR, so
+    // player_b may buy it out of the very pool player_a's dump created.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .expect("a player who did not sell PRR is not locked out of it");
+
+    // ---- Ending the Stock Round clears the lockout. Both players pass
+    // consecutively, which is the round's natural end (item 4).
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("player_a should be able to pass");
+    let closing_pass = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("player_b should be able to pass");
+    assert_eq!(attr(&closing_pass, "stock_round_concluded"), "true");
+
+    assert!(
+        PLAYER_SR_SALES
+            .may_load(&deps.storage, (game_id, player_a.clone()))
+            .unwrap()
+            .is_none(),
+        "concluding the Stock Round must clear every player's lockout"
+    );
+
+    // And the previously-refused purchase is now legal. The turn pointer is
+    // back on player_a (two passes in a two-player room wrap all the way
+    // around), and player_a's own sale bought the pool back up to 10% again
+    // when player_b bought from it... so top the pool up directly rather
+    // than depending on that bookkeeping.
+    BANK_POOL_SHARES
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &10u8)
+        .unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .expect("once the Stock Round has ended, the seller may buy back in");
+}
+
+/// **Batch 1, item 4: the 100%-sold-out end-of-Stock-Round price rise.**
+///
+/// When every player passes consecutively the Stock Round ends, and every
+/// floated corporation whose shares are entirely in player hands -- empty
+/// IPO pool AND empty Bank pool -- moves one cell up the chart. A
+/// corporation with anything left in either pool does not move.
+#[test]
+fn test_100_percent_sold_out_end_of_sr_rise() {
+    let (mut deps, env, player_a, game_id) = batch1_room(2);
+
+    let player_b = Addr::unchecked("player_b");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .expect("player_b should be able to join");
+
+    const SOLD_OUT_ID: u32 = 1; // PRR -- 100% in player hands
+    const PARTIAL_ID: u32 = 2; // NYC -- 40% still in the IPO
+
+    // Seed both corporations floated and parked on the same Normal cell, so
+    // the only thing distinguishing them is how much stock is still in a
+    // pool.
+    for (company_id, ticker, ipo_remaining, a_pct, b_pct) in [
+        (SOLD_OUT_ID, "PRR", 0u8, 60u8, 40u8),
+        (PARTIAL_ID, "NYC", 40u8, 40u8, 20u8),
+    ] {
+        PUBLIC_COMPANIES
+            .save(
+                deps.as_mut().storage,
+                (game_id, company_id),
+                &crate::state::PublicCompany {
+                    company_id,
+                    ticker: ticker.to_string(),
+                    current_x: NORMAL_CELL.0,
+                    current_y: NORMAL_CELL.1,
+                    treasury: Uint128::new(670),
+                    is_floated: true,
+                    total_shares_issued: 10,
+                    last_route_revenue: Uint128::zero(),
+                },
+            )
+            .unwrap();
+        IPO_POOL_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id), &ipo_remaining)
+            .unwrap();
+        BANK_POOL_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id), &0u8)
+            .unwrap();
+        PLAYER_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id, player_a.clone()), &a_pct)
+            .unwrap();
+        PLAYER_SHARES
+            .save(deps.as_mut().storage, (game_id, company_id, player_b.clone()), &b_pct)
+            .unwrap();
+        market::set_protocol_position(
+            deps.as_mut().storage,
+            game_id,
+            company_id,
+            NORMAL_CELL.0,
+            NORMAL_CELL.1,
+        )
+        .expect("pinning the company's market position should succeed");
+    }
+
+    let start_price = MARKET_GRID.load(&deps.storage, NORMAL_CELL).unwrap().price;
+    let one_row_up = MARKET_GRID
+        .load(&deps.storage, (NORMAL_CELL.0, NORMAL_CELL.1 + 1))
+        .unwrap()
+        .price;
+    // Setup assumption about the real chart: $67 -> $71 going up column 6.
+    assert_eq!(start_price, Uint128::new(67));
+    assert_eq!(one_row_up, Uint128::new(71));
+
+    // ---- The round ends only once EVERY player has passed in a row. One
+    // pass is not enough.
+    let first_pass = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("player_a should be able to pass");
+    assert!(
+        !first_pass.attributes.iter().any(|a| a.key == "stock_round_concluded"),
+        "a single pass in a two-player room must not end the round"
+    );
+    assert_eq!(
+        market::current_cell(&deps.storage, game_id, SOLD_OUT_ID).unwrap().price,
+        start_price
+    );
+
+    // ---- The second pass closes the round and applies the rise.
+    let closing_pass = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("player_b should be able to pass");
+
+    assert_eq!(attr(&closing_pass, "stock_round_concluded"), "true");
+    assert_eq!(attr(&closing_pass, "sold_out_risers"), "1");
+    assert_eq!(attr(&closing_pass, "sold_out_protocol_id"), SOLD_OUT_ID.to_string());
+    assert_eq!(attr(&closing_pass, "sold_out_new_price"), one_row_up.to_string());
+    assert_eq!(attr(&closing_pass, "sold_out_new_y"), (NORMAL_CELL.1 + 1).to_string());
+
+    let risen = market::current_cell(&deps.storage, game_id, SOLD_OUT_ID).unwrap();
+    assert_eq!((risen.x, risen.y), (NORMAL_CELL.0, NORMAL_CELL.1 + 1));
+    assert_eq!(risen.price, one_row_up);
+
+    // The partially-held corporation did not move -- 40% of it is still
+    // sitting in its own IPO.
+    let unmoved = market::current_cell(&deps.storage, game_id, PARTIAL_ID).unwrap();
+    assert_eq!((unmoved.x, unmoved.y), NORMAL_CELL);
+    assert_eq!(unmoved.price, start_price);
+
+    // The rise fires ONCE per round, not on every subsequent pass: the
+    // conclusion reset the streak, so a further pass is streak 1 again.
+    let next_pass = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("player_a should be able to pass again");
+    assert!(
+        !next_pass.attributes.iter().any(|a| a.key == "stock_round_concluded"),
+        "the round must not re-conclude on the very next pass"
+    );
+    assert_eq!(
+        market::current_cell(&deps.storage, game_id, SOLD_OUT_ID).unwrap().price,
+        one_row_up,
+        "the sold-out corporation must not have risen a second time"
+    );
+}
+
+/// **Batch 1, item 5: Cliffs and Ledges deflection geometry.**
+///
+/// The four chart boundaries do NOT behave alike. A blocked horizontal
+/// movement deflects into a vertical one (Right Cliff up, Left Cliff down);
+/// a blocked vertical movement simply clamps (Bottom Ledge, Top Ceiling).
+/// Exercised directly against `market::apply_market_movement_detailed` so
+/// each case is isolated from the trading rules that would normally trigger
+/// it.
+#[test]
+fn test_cliffs_and_ledges_movement_deflection() {
+    let (mut deps, _env, _creator, game_id) = batch1_room(2);
+
+    const PRR_ID: u32 = 1;
+
+    /// Parks the marker at `from` and attempts exactly one movement,
+    /// returning the full outcome. A plain `fn` rather than a closure: a
+    /// closure taking `&mut dyn Storage` gets a single inferred lifetime
+    /// rather than a higher-ranked one, which makes calling it twice against
+    /// `deps.as_mut().storage` a borrow error.
+    fn attempt(
+        storage: &mut dyn cosmwasm_std::Storage,
+        game_id: u64,
+        from: (u32, u32),
+        movement: market::MarketMovement,
+    ) -> market::MarketMoveOutcome {
+        market::set_protocol_position(storage, game_id, PRR_ID, from.0, from.1)
+            .expect("pinning the marker should succeed");
+        market::apply_market_movement_detailed(storage, game_id, PRR_ID, movement)
+            .expect("a movement from a seeded cell should never error")
+    }
+
+    // ---- RIGHT CLIFF. Row 0 of the chart is only four cells wide (x = 3..6),
+    // so a marker on its last cell has nothing to its right. In real 1830
+    // the movement is not lost: it lifts the marker one row instead, which
+    // is the only way a company parked on a short row ever climbs into the
+    // wider rows above it.
+    let right_cliff = attempt(deps.as_mut().storage, game_id, (6, 0), market::MarketMovement::Right);
+    assert!(right_cliff.moved(), "a Right Cliff must still move the marker");
+    assert!(right_cliff.deflected, "the movement must be recorded as deflected");
+    assert_eq!(right_cliff.applied, Some(market::MarketMovement::Up));
+    assert_eq!((right_cliff.cell.x, right_cliff.cell.y), (6, 1));
+
+    // ---- LEFT CLIFF. Column 0 is the chart's left edge, so a withheld
+    // dividend at x = 0 has nowhere to go sideways -- it drops the marker a
+    // row instead. This is the staircase a repeatedly-withholding company
+    // walks down.
+    let left_cliff = attempt(deps.as_mut().storage, game_id, (0, 4), market::MarketMovement::Left);
+    assert!(left_cliff.moved(), "a Left Cliff must still move the marker");
+    assert!(left_cliff.deflected);
+    assert_eq!(left_cliff.applied, Some(market::MarketMovement::Down));
+    assert_eq!((left_cliff.cell.x, left_cliff.cell.y), (0, 3));
+
+    // ---- BOTTOM LEDGE. Vertical movements do NOT deflect. A marker on the
+    // chart's lowest printed cell in its column stays exactly where it is --
+    // the bottom edge is a ledge, not a cliff, and nothing falls off the
+    // board.
+    let bottom_ledge = attempt(deps.as_mut().storage, game_id, (0, 3), market::MarketMovement::Down);
+    assert!(!bottom_ledge.moved(), "the Bottom Ledge must clamp, not move");
+    assert!(!bottom_ledge.deflected, "a clamp is not a deflection");
+    assert_eq!(bottom_ledge.applied, None);
+    assert_eq!((bottom_ledge.cell.x, bottom_ledge.cell.y), (0, 3));
+    // Row 3 really is this column's floor -- (0, 2) is blank on the real
+    // ragged chart -- and $10 really is the chart's floor price.
+    assert!(MARKET_GRID.may_load(&deps.storage, (0, 2)).unwrap().is_none());
+    assert_eq!(bottom_ledge.cell.price, Uint128::new(10));
+
+    // The true bottom row behaves identically.
+    let true_bottom = attempt(deps.as_mut().storage, game_id, (3, 0), market::MarketMovement::Down);
+    assert!(!true_bottom.moved());
+    assert_eq!((true_bottom.cell.x, true_bottom.cell.y), (3, 0));
+
+    // ---- TOP CEILING. Symmetrically clamped, at $350.
+    let top_ceiling = attempt(deps.as_mut().storage, game_id, (18, 10), market::MarketMovement::Up);
+    assert!(!top_ceiling.moved(), "the Top Ceiling must clamp");
+    assert_eq!(top_ceiling.applied, None);
+    assert_eq!(
+        top_ceiling.cell.price,
+        Uint128::new(market::GAME_END_PRICE_TRIGGER),
+        "the chart's highest cell is the $350 game-end trigger"
+    );
+
+    // ---- The corner case: a Right Cliff whose own deflection is blocked by
+    // the Top Ceiling. Deflection never chains into a third direction, so
+    // the marker simply holds station at $350.
+    let corner = attempt(deps.as_mut().storage, game_id, (18, 10), market::MarketMovement::Right);
+    assert!(!corner.moved(), "the top-right corner has nowhere to go");
+    assert!(!corner.deflected);
+    assert_eq!(corner.cell.price, Uint128::new(350));
+
+    // ---- An ordinary, unobstructed movement is not marked as deflected.
+    let plain = attempt(deps.as_mut().storage, game_id, NORMAL_CELL, market::MarketMovement::Right);
+    assert!(plain.moved());
+    assert!(!plain.deflected);
+    assert_eq!(plain.applied, Some(market::MarketMovement::Right));
+    assert_eq!((plain.cell.x, plain.cell.y), (NORMAL_CELL.0 + 1, NORMAL_CELL.1));
+}
+
+/// **Batch 1, item 6: the President's Certificate invariant.**
+///
+/// A corporation with no President and no issued shares can be entered
+/// exactly one way: by buying its 20% President's Certificate, singly, out
+/// of the IPO, for exactly twice its par value. Ordinary 10% shares are not
+/// available -- from either pool -- until that has happened.
+#[test]
+fn test_presidents_certificate_initial_purchase_invariant() {
+    let (mut deps, env, buyer, game_id) = batch1_room(2);
+
+    const PRR_ID: u32 = 1;
+    const NYC_ID: u32 = 2;
+    const CPR_ID: u32 = 3;
+    const PAR: u128 = 100;
+
+    // ---- The opening purchase IS the President's Certificate. The caller
+    // does not ask for it and cannot decline it.
+    let opening = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(PAR)),
+            quantity: None,
+        },
+    )
+    .expect("the opening purchase of an unopened corporation should succeed");
+
+    assert_eq!(attr(&opening, "presidents_certificate"), "true");
+    assert_eq!(attr(&opening, "presidents_certificate_percentage"), "20");
+    assert_eq!(attr(&opening, "percentage_acquired"), "20");
+    assert_eq!(
+        attr(&opening, "price_paid"),
+        (PAR * 2).to_string(),
+        "the President's Certificate costs exactly 2 x par"
+    );
+    // One physical card, not two -- which is what the Global Certificate
+    // Limit counts.
+    assert_eq!(attr(&opening, "certificates_bought"), "1");
+    assert_eq!(attr(&opening, "buyer_percentage"), "20");
+    assert_eq!(attr(&opening, "pool_percentage_remaining"), "80");
+
+    assert_eq!(
+        PLAYER_SHARES
+            .load(&deps.storage, (game_id, PRR_ID, buyer.clone()))
+            .unwrap(),
+        20
+    );
+    assert_eq!(
+        PROTOCOL_PRESIDENT.load(&deps.storage, (game_id, PRR_ID)).unwrap(),
+        buyer,
+        "opening a corporation makes the buyer its President"
+    );
+    assert_eq!(
+        PROTOCOL_PAR_VALUE.load(&deps.storage, (game_id, PRR_ID)).unwrap(),
+        Uint128::new(PAR),
+        "2x is the price of one card, not a change to the corporation's par"
+    );
+
+    // ---- Once open, the next purchase is an ordinary 10% share at par.
+    let ordinary = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .expect("an ordinary share should be available once the corporation is open");
+    assert!(
+        !ordinary.attributes.iter().any(|a| a.key == "presidents_certificate"),
+        "only the FIRST purchase is a President's Certificate"
+    );
+    assert_eq!(attr(&ordinary, "percentage_acquired"), "10");
+    assert_eq!(attr(&ordinary, "price_paid"), PAR.to_string());
+    assert_eq!(attr(&ordinary, "buyer_percentage"), "30");
+
+    // ---- The opening purchase cannot be a multi-buy. A corporation is
+    // opened with one card.
+    let multi_open = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: NYC_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(PAR)),
+            quantity: Some(2),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            multi_open,
+            ContractError::Trading(TradingError::PresidentsCertificateRequired { .. })
+        ),
+        "expected Trading(PresidentsCertificateRequired) for a multi-quantity opening, got: {multi_open:?}"
+    );
+    assert!(
+        PROTOCOL_PAR_VALUE
+            .may_load(&deps.storage, (game_id, NYC_ID))
+            .unwrap()
+            .is_none(),
+        "the rejected opening must not have set NYC's par value"
+    );
+
+    // ---- Nor can an unopened corporation be entered through the Bank pool,
+    // even with stock artificially sitting in it. The message names the real
+    // reason rather than reporting an unrelated liquidity failure.
+    BANK_POOL_SHARES
+        .save(deps.as_mut().storage, (game_id, CPR_ID), &50u8)
+        .unwrap();
+    let bank_open = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(buyer.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: CPR_ID,
+            source: SharePurchaseSource::Bank,
+            par_value: None,
+            quantity: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            bank_open,
+            ContractError::Trading(TradingError::PresidentsCertificateRequired { .. })
+        ),
+        "expected Trading(PresidentsCertificateRequired) for a Bank-pool opening, got: {bank_open:?}"
+    );
+    assert_eq!(
+        PLAYER_SHARES
+            .may_load(&deps.storage, (game_id, CPR_ID, buyer.clone()))
+            .unwrap()
+            .unwrap_or(0),
+        0,
+        "the rejected Bank purchase must be a hard block"
+    );
+}
+
+// ===================================================================
+// Step 4.5 -- Batch 2: City-Granular Pathfinding, Train Lifecycles,
+// and Operations.
+//
+// Two of Batch 2's four rules were ALREADY correctly implemented before
+// this pass, by Audit G-9/G-13 (train limits) and by the original hardware
+// module (the rust matrix). Their tests below are therefore regression
+// locks, not proofs of new code -- they exist so a future edit cannot
+// quietly undo a rule nobody is currently watching. Where an existing test
+// already covers part of the same ground it is named, rather than the
+// coverage being silently duplicated.
+// ===================================================================
+
+/// Seeds a floated corporation directly: `PUBLIC_COMPANIES` (floated, with
+/// `treasury`), `PROTOCOL_PRESIDENT`, and a `COMPANY_HARDWARE` roster built
+/// from bare model strings.
+///
+/// Direct seeding rather than played-out flotation because every Batch 2
+/// hardware test's subject is the train lifecycle, and playing out a real
+/// float would spend stock-round cash and move market markers that those
+/// tests would then have to account for without ever asserting on. The
+/// rust sweep filters purely on `HardwareAsset::model_type` and the train
+/// limit counts purely on roster length, so the zeroed `cost`/
+/// `max_route_distance` here are genuinely immaterial to what is measured.
+fn batch2_seed_corporation(
+    storage: &mut dyn cosmwasm_std::Storage,
+    game_id: u64,
+    protocol_id: u32,
+    ticker: &str,
+    president: &Addr,
+    treasury: u128,
+    models: &[&str],
+) {
+    PUBLIC_COMPANIES
+        .save(
+            storage,
+            (game_id, protocol_id),
+            &crate::state::PublicCompany {
+                company_id: protocol_id,
+                ticker: ticker.to_string(),
+                current_x: 6,
+                current_y: 5,
+                treasury: Uint128::new(treasury),
+                is_floated: true,
+                total_shares_issued: 10,
+                last_route_revenue: Uint128::zero(),
+            },
+        )
+        .unwrap();
+    PROTOCOL_PRESIDENT
+        .save(storage, (game_id, protocol_id), president)
+        .unwrap();
+    let roster: Vec<HardwareAsset> = models
+        .iter()
+        .map(|model_type| HardwareAsset {
+            model_type: (*model_type).to_string(),
+            cost: Uint128::zero(),
+            max_route_distance: 0,
+        })
+        .collect();
+    COMPANY_HARDWARE
+        .save(storage, (game_id, protocol_id), &roster)
+        .unwrap();
+}
+
+/// Replaces the depot with exactly one train of `model_type`, so the next
+/// `BuyHardwareFromPool` is guaranteed to draw that specific tier rather
+/// than whatever the catalog's FIFO order happens to have reached.
+fn batch2_seed_depot(
+    storage: &mut dyn cosmwasm_std::Storage,
+    game_id: u64,
+    model_type: &str,
+) {
+    let (_, cost, distance, _qty) = crate::hardware::TRAIN_CATALOG
+        .iter()
+        .copied()
+        .find(|(model, ..)| *model == model_type)
+        .expect("a Batch 2 test may only seed a real catalog train");
+    HARDWARE_POOL
+        .save(
+            storage,
+            game_id,
+            &vec![HardwareAsset {
+                model_type: model_type.to_string(),
+                cost: Uint128::new(cost),
+                max_route_distance: distance,
+            }],
+        )
+        .unwrap();
+}
+
+/// The models a corporation currently owns, sorted for stable comparison.
+fn batch2_models(
+    storage: &dyn cosmwasm_std::Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> Vec<String> {
+    let mut models: Vec<String> = COMPANY_HARDWARE
+        .may_load(storage, (game_id, protocol_id))
+        .unwrap()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|asset| asset.model_type)
+        .collect();
+    models.sort();
+    models
+}
+
+/// Boots a contract and an empty room for the Batch 2 hardware tests.
+fn batch2_room() -> (
+    cosmwasm_std::OwnedDeps<
+        cosmwasm_std::testing::MockStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    cosmwasm_std::Env,
+    Addr,
+    u64,
+) {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 50,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let president = Addr::unchecked("president");
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    (deps, env, president, game_id)
+}
+
+/// **Batch 2, item 1: city-granular traversal.**
+///
+/// Asserted against the two decision functions the DFS actually calls,
+/// rather than by building a board with a loop through a two-city hex. That
+/// is a deliberate choice: the rule lives in `HexInfo::transit_passability`
+/// and `HexInfo::arrival_city_node`, and a board-level assertion would prove
+/// the same thing far less directly while depending on a dozen unrelated
+/// geometry facts (tile rotations, home placement, connectivity) that have
+/// nothing to do with city granularity and would make the test fail for the
+/// wrong reasons. The end-to-end half -- that a real traced route never
+/// reuses track, within or across trains -- is asserted on a real board at
+/// the bottom.
+///
+/// The first section is the requirement's own framing: a scenario where
+/// hex-granular reasoning PASSES and city-granular reasoning correctly
+/// FAILS.
+#[test]
+fn test_city_granular_pathfinding_rejects_ghost_routing() {
+    use crate::hexmap::{tile_city_slot_counts, tile_paths_for, tile_segment_cities};
+    use crate::pathfinding::{hex_info_for_test, hex_passability, Passability};
+
+    // ---- Part 1: THE GHOST ROUTE, caught.
+    //
+    // Tile 62 (brown New York) carries two 2-slot cities on physically
+    // separate track: city 0 owns edges 0-1, city 1 owns edges 2-3. Fill
+    // city 0 completely with rival tokens and leave city 1 wide open.
+    let slots = tile_city_slot_counts(62);
+    assert_eq!(slots, &[2, 2], "guards this test's premise");
+    let paths = tile_paths_for(62).expect("tile 62 is in the catalog");
+    assert_eq!(paths, &[(0u8, 1u8), (2u8, 3u8)]);
+
+    let per_city = vec![Passability::StopOnly, Passability::Open];
+    let info = hex_info_for_test(
+        paths.to_vec(),
+        tile_segment_cities(62, paths.len()),
+        per_city.clone(),
+    );
+
+    // A HEX-GRANULAR engine asks one question of the whole hex, and gets a
+    // green light -- because SOME city on the tile still has a free slot.
+    // Routing a train in over city 0's blockaded track and out the far side
+    // on that same track is the ghost route: it rides rails inside a station
+    // it has no access to.
+    assert_eq!(
+        hex_passability(&per_city),
+        Passability::Open,
+        "a hex-level roll-up sees an open slot somewhere on the tile and admits transit -- \
+         this is precisely the reasoning that permits ghost routing"
+    );
+
+    // The CITY-GRANULAR engine asks per segment, and refuses that exact
+    // move. Segment 0 is city 0's track: closed. The train may still END its
+    // route there and score the city -- what it may not do is pass through.
+    assert_eq!(
+        info.transit_passability(0),
+        Passability::StopOnly,
+        "city 0 is fully tokened by rivals, so its own track is not run-through-able"
+    );
+    // And the blockade is scoped to the city that earned it -- city 1's
+    // track on the very same hex stays open, which is what makes tokening a
+    // contested city a targeted defensive move rather than a hex-wide wall.
+    assert_eq!(info.transit_passability(1), Passability::Open);
+
+    // ---- Part 2: THE PATH HISTORY is keyed per city node.
+    //
+    // This is what `PartialRoute::visited_nodes` stores. Tile 62's two
+    // segments resolve to two DISTINCT nodes, so a route may serve both of
+    // New York's stations without either one being mistaken for the other.
+    assert_eq!(info.arrival_city_node(&[0]), Some(0));
+    assert_eq!(info.arrival_city_node(&[1]), Some(1));
+    assert_ne!(
+        info.arrival_city_node(&[0]),
+        info.arrival_city_node(&[1]),
+        "the two stations of a two-city hex must be separately trackable"
+    );
+
+    // A one-city hub with many spokes (#63, one city, several segments) is
+    // the opposite case and the one that must NOT loosen: every segment
+    // resolves to the SAME node, so arriving on a different spoke is still
+    // the same stop and is refused a second visit.
+    let hub_paths = tile_paths_for(63).expect("tile 63 is in the catalog");
+    let hub = hex_info_for_test(
+        hub_paths.to_vec(),
+        tile_segment_cities(63, hub_paths.len()),
+        vec![Passability::Open],
+    );
+    assert!(hub_paths.len() > 1, "guards this test's premise");
+    for segment_index in 0..hub_paths.len() {
+        assert_eq!(
+            hub.arrival_city_node(&[segment_index]),
+            Some(0),
+            "every spoke of a single-city hub is the same stop"
+        );
+    }
+
+    // Where the correspondence is unknown, the node collapses back to the
+    // whole hex -- the conservative answer, which can only ever refuse a
+    // visit, never invent one.
+    let unknown = hex_info_for_test(
+        vec![(0, 3), (1, 4)],
+        vec![None, None],
+        vec![Passability::Open, Passability::Open],
+    );
+    assert_eq!(unknown.arrival_city_node(&[0]), None);
+    assert_eq!(unknown.arrival_city_node(&[1]), None);
+
+    // A hex with no cities at all is likewise a single node.
+    let plain_paths = tile_paths_for(9).expect("tile 9 is in the catalog");
+    let plain = hex_info_for_test(
+        plain_paths.to_vec(),
+        tile_segment_cities(9, plain_paths.len()),
+        Vec::new(),
+    );
+    assert_eq!(plain.arrival_city_node(&[0]), None);
+
+    // ---- Part 3: the node key behaves as a set key.
+    //
+    // This is the exact operation `expand` performs against
+    // `visited_nodes`: two different cities on one hex do not collide, the
+    // same city twice does.
+    let mut visited: std::collections::HashSet<(i32, i32, Option<u8>)> =
+        std::collections::HashSet::new();
+    assert!(visited.insert((5, 5, Some(0))), "first station is new");
+    assert!(
+        visited.insert((5, 5, Some(1))),
+        "the OTHER station on the same hex is a genuinely different stop"
+    );
+    assert!(
+        !visited.insert((5, 5, Some(0))),
+        "the same station twice must collide -- this is the rule that survives"
+    );
+    assert!(
+        visited.insert((6, 5, Some(0))),
+        "city 0 of a DIFFERENT hex is unrelated"
+    );
+
+    // ---- Part 4: end-to-end, the segment invariant on a real board.
+    //
+    // "Multiple trains owned by the same corporation must not share the
+    // exact same track segment anywhere on the map." Also asserted from the
+    // other direction by
+    // `trace_best_route_set_never_lets_two_trains_reuse_the_same_track_segment`;
+    // here it is checked WITHIN each route as well as across them, since the
+    // node-granular history is what makes a within-route revisit expressible
+    // at all.
+    let mut deps = mock_dependencies();
+    let game_id: u64 = 1;
+    const PROTOCOL: u32 = 4;
+
+    g9_seed_tile(&mut deps.storage, game_id, 0, 0, 1, 0);
+    g9_seed_tile(&mut deps.storage, game_id, 1, 0, 4, 0);
+    g9_seed_tile(&mut deps.storage, game_id, -1, 1, 4, 1);
+    g9_seed_tile(&mut deps.storage, game_id, 1, -1, 4, 1);
+    g9_seed_tile(&mut deps.storage, game_id, -1, 0, 4, 0);
+    g9_seed_company(
+        &mut deps.storage,
+        game_id,
+        PROTOCOL,
+        (0, 0),
+        &[("3", 3), ("3", 3)],
+    );
+
+    let (_total, routes) =
+        pathfinding::trace_best_route_set(&deps.storage, game_id, PROTOCOL).unwrap();
+    assert!(!routes.is_empty(), "this board has at least one legal route");
+
+    let mut all_segments: Vec<(i32, i32, (u8, u8))> = Vec::new();
+    for route in &routes {
+        let mut within: Vec<(i32, i32, (u8, u8))> = Vec::new();
+        for segment in &route.segments {
+            assert!(
+                !within.contains(segment),
+                "one train ran the same segment {segment:?} twice inside a single route"
+            );
+            within.push(*segment);
+            assert!(
+                !all_segments.contains(segment),
+                "segment {segment:?} was run by two different trains in one Operating Round"
+            );
+            all_segments.push(*segment);
+        }
+    }
+}
+
+/// **Batch 2, item 2: the train limit is a hard gate, evaluated before any
+/// rusting can widen it.**
+///
+/// A corporation sitting at its cap may not buy, full stop -- even when the
+/// very purchase it is attempting would rust away its own older trains and
+/// leave it comfortably under the cap a moment later. The rule is about the
+/// state at the moment of purchase, not a projected state afterwards.
+///
+/// `hardware_buy_rusts_lower_tier_and_enforces_train_limit` reaches this
+/// same case through a full played-out game; this one isolates it with
+/// direct seeding so a failure points at the rule rather than at the setup.
+#[test]
+fn test_train_limit_blocks_purchase_even_if_it_causes_rust() {
+    let (mut deps, env, president, game_id) = batch2_room();
+
+    const PRR_ID: u32 = 1;
+
+    // The room's highest tier ever purchased is a 3-train, so the current
+    // cap is 4 (`TRAIN_LIMIT_BY_PHASE`'s `("3", 4)` row). PRR holds exactly
+    // four 2-trains: at the cap, not over it.
+    batch2_seed_corporation(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        "PRR",
+        &president,
+        1_000,
+        &["2", "2", "2", "2"],
+    );
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "2".to_string()), &6u32)
+        .unwrap();
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "3".to_string()), &5u32)
+        .unwrap();
+
+    // The depot's next train is the room's FIRST-EVER 4-train. Buying it
+    // would rust every 2-train on the board -- including all four of PRR's
+    // own, which would drop PRR from 4 trains to 1.
+    batch2_seed_depot(deps.as_mut().storage, game_id, "4");
+    assert_eq!(
+        TRAINS_PURCHASED_COUNT
+            .may_load(&deps.storage, (game_id, "4".to_string()))
+            .unwrap()
+            .unwrap_or(0),
+        0,
+        "guards the premise: this must be the first-ever 4-train"
+    );
+
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let blocked = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: PRR_ID,
+        },
+    )
+    .unwrap_err();
+    match blocked {
+        ContractError::Hardware(HardwareError::TrainLimitExceeded {
+            protocol_id,
+            owned,
+            limit,
+            phase,
+        }) => {
+            assert_eq!(protocol_id, PRR_ID);
+            assert_eq!(owned, 4);
+            assert_eq!(limit, 4);
+            assert_eq!(
+                phase, "3",
+                "the cap is read from the phase as it stands BEFORE this purchase"
+            );
+        }
+        other => panic!("expected Hardware(TrainLimitExceeded), got: {other:?}"),
+    }
+
+    // Nothing moved: no rusting, no treasury debit, no depot draw, and the
+    // 4-train is still recorded as never purchased.
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, PRR_ID),
+        vec!["2", "2", "2", "2"],
+        "a rejected purchase must not rust anything"
+    );
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, PRR_ID))
+            .unwrap()
+            .treasury,
+        Uint128::new(1_000)
+    );
+    assert_eq!(HARDWARE_POOL.load(&deps.storage, game_id).unwrap().len(), 1);
+    assert_eq!(
+        TRAINS_PURCHASED_COUNT
+            .may_load(&deps.storage, (game_id, "4".to_string()))
+            .unwrap()
+            .unwrap_or(0),
+        0,
+        "the blocked purchase must not have recorded a 4-train as ever purchased"
+    );
+
+    // ---- The counterfactual, which is what makes the rejection meaningful.
+    //
+    // Drop PRR to THREE trains -- one under the cap -- and run the identical
+    // purchase. It now succeeds, and the rust sweep it triggers really does
+    // clear away every 2-train, leaving PRR holding just the new 4-train.
+    // So the space the blocked purchase "would have freed" was genuinely
+    // there; the engine refused to look ahead to it, which is the rule.
+    COMPANY_HARDWARE
+        .save(
+            deps.as_mut().storage,
+            (game_id, PRR_ID),
+            &vec![
+                HardwareAsset {
+                    model_type: "2".to_string(),
+                    cost: Uint128::zero(),
+                    max_route_distance: 0,
+                },
+                HardwareAsset {
+                    model_type: "2".to_string(),
+                    cost: Uint128::zero(),
+                    max_route_distance: 0,
+                },
+                HardwareAsset {
+                    model_type: "2".to_string(),
+                    cost: Uint128::zero(),
+                    max_route_distance: 0,
+                },
+            ],
+        )
+        .unwrap();
+
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let allowed = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: PRR_ID,
+        },
+    )
+    .expect("one under the cap, the identical purchase must go through");
+    assert_eq!(attr(&allowed, "model_type"), "4");
+    assert_eq!(attr(&allowed, "rusting_triggered"), "true");
+    assert_eq!(attr(&allowed, "rusted_model"), "2");
+
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, PRR_ID),
+        vec!["4"],
+        "the rust sweep really would have made room -- the cap check simply refuses to \
+         count on it"
+    );
+}
+
+/// **Batch 2, item 3: the full 1830 rust cascade, end to end.**
+///
+/// One victim corporation is seeded with one train of every tier and never
+/// buys anything. Three separate buyers then trigger the three rust events
+/// in order, and the victim's roster is checked after each. The buyers are
+/// separate corporations on purpose: each rust event lowers the phase train
+/// limit, so a single buyer would hit its own cap partway through and the
+/// test would stop measuring rusting.
+#[test]
+fn test_full_rust_matrix_cascade() {
+    use crate::hardware::RUST_TRIGGERS;
+
+    // The matrix itself, as a table. 5-trains, 6-trains and Diesels appear
+    // nowhere on the right-hand side, which is exactly the claim that they
+    // are permanent.
+    assert_eq!(RUST_TRIGGERS.len(), 3, "1830 has exactly three rust events");
+    assert_eq!(RUST_TRIGGERS[0], ("4", "2"), "the first 4-train rusts 2-trains");
+    assert_eq!(RUST_TRIGGERS[1], ("6", "3"), "the first 6-train rusts 3-trains");
+    assert_eq!(RUST_TRIGGERS[2], ("D", "4"), "the first Diesel rusts 4-trains");
+    for (_, rusted) in RUST_TRIGGERS.iter().copied() {
+        assert!(
+            !matches!(rusted, "5" | "6" | "D"),
+            "{rusted}-trains must never rust -- they are permanent in 1830"
+        );
+    }
+
+    let (mut deps, env, president, game_id) = batch2_room();
+
+    const VICTIM: u32 = 2; // NYC -- holds one of everything, buys nothing.
+    const BUYER_4: u32 = 1;
+    const BUYER_6: u32 = 3;
+    const BUYER_D: u32 = 5;
+
+    batch2_seed_corporation(
+        deps.as_mut().storage,
+        game_id,
+        VICTIM,
+        "NYC",
+        &president,
+        0,
+        &["2", "3", "4", "5"],
+    );
+    for (protocol_id, ticker) in [(BUYER_4, "PRR"), (BUYER_6, "CPR"), (BUYER_D, "C&O")] {
+        batch2_seed_corporation(
+            deps.as_mut().storage,
+            game_id,
+            protocol_id,
+            ticker,
+            &president,
+            5_000,
+            &[],
+        );
+    }
+    // Phase 3 to start, so the first buyer's cap (4) is not the binding
+    // constraint. Every buyer owns zero trains, so no cap ever binds here.
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "2".to_string()), &6u32)
+        .unwrap();
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "3".to_string()), &5u32)
+        .unwrap();
+
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, VICTIM),
+        vec!["2", "3", "4", "5"]
+    );
+
+    // ---- First 4-train: rusts every 2-train map-wide.
+    batch2_seed_depot(deps.as_mut().storage, game_id, "4");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BUYER_4,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let bought_4 = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BUYER_4,
+        },
+    )
+    .expect("the first 4-train purchase should succeed");
+    assert_eq!(attr(&bought_4, "rusted_model"), "2");
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, VICTIM),
+        vec!["3", "4", "5"],
+        "the 2-train is gone map-wide, and nothing else moved"
+    );
+
+    // ---- First 6-train: rusts every 3-train map-wide. The 4-train the
+    // previous step introduced is untouched.
+    batch2_seed_depot(deps.as_mut().storage, game_id, "6");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BUYER_6,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let bought_6 = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BUYER_6,
+        },
+    )
+    .expect("the first 6-train purchase should succeed");
+    assert_eq!(attr(&bought_6, "rusted_model"), "3");
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, VICTIM),
+        vec!["4", "5"]
+    );
+
+    // ---- First Diesel: rusts every 4-train map-wide -- including the one
+    // BUYER_4 bought two steps ago, which is what "map-wide" means.
+    batch2_seed_depot(deps.as_mut().storage, game_id, "D");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BUYER_D,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let bought_d = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BUYER_D,
+        },
+    )
+    .expect("the first Diesel purchase should succeed");
+    assert_eq!(attr(&bought_d, "rusted_model"), "4");
+
+    // The victim is left holding exactly its 5-train: three cascades have
+    // run and the permanent tier survived all of them.
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, VICTIM),
+        vec!["5"],
+        "5-trains are permanent -- nothing in the matrix rusts them"
+    );
+    assert!(
+        batch2_models(&deps.storage, game_id, BUYER_4).is_empty(),
+        "the Diesel rusted BUYER_4's own 4-train too -- rusting is map-wide, not \
+         scoped to the corporations that did not trigger it"
+    );
+    assert_eq!(batch2_models(&deps.storage, game_id, BUYER_6), vec!["6"]);
+    assert_eq!(batch2_models(&deps.storage, game_id, BUYER_D), vec!["D"]);
+
+    // Rusted trains leave the game -- they are NOT returned to the depot for
+    // resale. The depot holds only what has not been bought.
+    assert!(
+        HARDWARE_POOL
+            .load(&deps.storage, game_id)
+            .unwrap()
+            .iter()
+            .all(|asset| !matches!(asset.model_type.as_str(), "2" | "3" | "4")),
+        "rusted units must never reappear in the depot -- a rusted train leaves the \
+         game entirely, it is not returned to the bank for resale"
+    );
+
+    // Re-buying an already-released tier must NOT re-run its sweep: the
+    // trigger is the FIRST-EVER unit, tracked in TRAINS_PURCHASED_COUNT,
+    // which rusting never decrements.
+    batch2_seed_depot(deps.as_mut().storage, game_id, "4");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BUYER_4,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let second_4 = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BUYER_4,
+        },
+    )
+    .expect("a second 4-train purchase should succeed");
+    assert!(
+        !second_4.attributes.iter().any(|a| a.key == "rusting_triggered"),
+        "only the first-ever unit of a tier triggers its rust sweep"
+    );
+    assert_eq!(
+        batch2_models(&deps.storage, game_id, VICTIM),
+        vec!["5"],
+        "the victim's 5-train survives a repeat purchase too"
+    );
+}
+
+/// **Batch 2, item 4: `last_route_revenue` is stored on every route run and
+/// surfaced to the client.**
+///
+/// Checked for both payout strategies, because the requirement is
+/// explicitly "whether paying out or withholding" -- the figure recorded is
+/// what the trains EARNED, and what happens to that money afterwards must
+/// not change it. Board geometry is lifted verbatim from
+/// `run_manual_route_withhold_credits_company_treasury`, which is where it
+/// is explained.
+#[test]
+fn test_last_route_revenue_storage() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 50,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let player_one = Addr::unchecked("player_one");
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    const BO_PUBLIC_ID: u32 = 4;
+
+    // A freshly spawned corporation has never run routes.
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, BO_PUBLIC_ID))
+            .unwrap()
+            .last_route_revenue,
+        Uint128::zero(),
+        "a corporation that has never run routes reports zero, not a stale figure"
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BidOnPrivate {
+            game_id,
+            private_id: 6, // Baltimore & Ohio
+            bid_amount: Uint128::new(220),
+        },
+    )
+    .expect("player_one's bid should win Baltimore & Ohio and float the public B&O");
+
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+        },
+    )
+    .expect("B&O's President should be able to buy the next Hardware unit");
+
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::LayTile {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            q: 2,
+            r: 3,
+            tile_id: 9,
+            orientation: 1,
+        },
+    )
+    .expect("B&O's home tile should be free to lay");
+
+    let e7_orientation =
+        lowest_legal_orientation(&deps.storage, game_id, BO_PUBLIC_ID, 1, 4, 58);
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::LayTile {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            q: 1,
+            r: 4,
+            tile_id: 58,
+            orientation: e7_orientation,
+        },
+    )
+    .expect("E7 should legally connect back to the D8 home tile");
+
+    // ---- Run 1: WITHHOLD. The revenue goes to the treasury, and the figure
+    // is recorded.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("begin_operating_round should succeed with B&O floated");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
+    let withheld = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            path: vec![way("D8"), way("E7")],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .expect("the D8 -> E7 route should validate and score");
+    assert_eq!(attr(&withheld, "revenue_amount"), "10");
+
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, BO_PUBLIC_ID))
+            .unwrap()
+            .last_route_revenue,
+        Uint128::new(10),
+        "a withheld run still records what the trains earned"
+    );
+
+    // ---- The client-facing half: the figure rides on `PublicCompanyState`,
+    // which `GetGameState` returns one of per corporation.
+    let state: GameStateResponse = from_json(
+        &query_entry_point(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::GetGameState { game_id },
+        )
+        .expect("GetGameState should succeed"),
+    )
+    .expect("GetGameState's response should deserialize as GameStateResponse");
+    let bo_state = state
+        .public_companies
+        .iter()
+        .find(|c| c.company_id == BO_PUBLIC_ID)
+        .expect("B&O should appear in public_companies");
+    assert_eq!(
+        bo_state.last_route_revenue,
+        Uint128::new(10),
+        "the Operating Round table's last column reads this field"
+    );
+    // Every other corporation has run nothing and reports zero.
+    for company in &state.public_companies {
+        if company.company_id != BO_PUBLIC_ID {
+            assert_eq!(company.last_route_revenue, Uint128::zero());
+        }
+    }
+
+    // ---- Run 2: DECLARE DIVIDENDS. The same trains earn the same revenue
+    // over the same track; only its destination differs, so the recorded
+    // figure must be identical.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("a second operating round should begin");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
+    let paid_out = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            path: vec![way("D8"), way("E7")],
+            payout_strategy: PayoutStrategy::DeclareDividends,
+        },
+    )
+    .expect("the same route should validate again under the payout strategy");
+    assert_eq!(attr(&paid_out, "revenue_amount"), "10");
+
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, BO_PUBLIC_ID))
+            .unwrap()
+            .last_route_revenue,
+        Uint128::new(10),
+        "a paid-out run records the same earnings a withheld one does -- what happens \
+         to the money is a separate decision from what was earned"
+    );
+}
+
+// ===================================================================
+// Step 4.5 -- Batch 3: Route Schema, Escrow Annulment, Timeouts.
+// ===================================================================
+
+/// **Batch 3, item 1: the strongly-typed route schema.**
+///
+/// A `RouteWaypoint` says which STATION a stop is, not merely which hex. The
+/// two things that buys, both asserted here:
+///
+/// 1. A `city_node` naming a city the hex does not have is refused outright
+///    rather than coerced to city 0 -- paying revenue for a station that
+///    does not exist is worse than rejecting a malformed route.
+/// 2. The route's uniqueness key is the STOP. The same station twice is
+///    still a duplicate; that is the rule that had to survive the schema
+///    change, since it is the only thing stopping a President from listing
+///    one town four times and being paid for it.
+#[test]
+fn test_route_waypoint_schema_validates_city_nodes() {
+    use crate::msg::RouteWaypoint;
+
+    let (mut deps, env, player_one, game_id) = batch2_room();
+
+    const BO_PUBLIC_ID: u32 = 4;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BidOnPrivate {
+            game_id,
+            private_id: 6, // Baltimore & Ohio
+            bid_amount: Uint128::new(220),
+        },
+    )
+    .expect("player_one's bid should win Baltimore & Ohio and float the public B&O");
+
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+        },
+    )
+    .expect("B&O should be able to buy its first train");
+
+    // The same D8 -> E7 board every other manual-route test uses.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::LayTile {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            q: 2,
+            r: 3,
+            tile_id: 9,
+            orientation: 1,
+        },
+    )
+    .expect("B&O's home tile should be free to lay");
+
+    let e7_orientation =
+        lowest_legal_orientation(&deps.storage, game_id, BO_PUBLIC_ID, 1, 4, 58);
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Track,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::LayTile {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            q: 1,
+            r: 4,
+            tile_id: 58,
+            orientation: e7_orientation,
+        },
+    )
+    .expect("E7 should legally connect back to the D8 home tile");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("begin_operating_round should succeed with B&O floated");
+
+    // ---- A city_node the hex does not have is rejected. E7 is a
+    // single-town hex, so it has no city 3 (and no city 0 either).
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        BO_PUBLIC_ID,
+        crate::state::OperatingSubPhase::Routes,
+    );
+    let bad_node = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            path: vec![
+                way("D8"),
+                RouteWaypoint {
+                    hex: "E7".to_string(),
+                    city_node: Some(3),
+                },
+            ],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .unwrap_err();
+    match bad_node {
+        ContractError::Operations(OperationsError::NoSuchCityOnHex {
+            label, city_node, ..
+        }) => {
+            assert_eq!(label, "E7");
+            assert_eq!(city_node, 3);
+        }
+        other => panic!("expected Operations(NoSuchCityOnHex), got: {other:?}"),
+    }
+
+    // ---- The same STOP twice is still a duplicate. This is the invariant
+    // the schema change had to preserve: `RouteWaypoint` made repeated
+    // HEXES expressible, and it must not have made repeated STOPS legal.
+    let repeated_stop = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            path: vec![way("D8"), way("E7"), way("E7")],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            repeated_stop,
+            ContractError::Operations(OperationsError::DuplicateHexInRoute { .. })
+        ),
+        "expected Operations(DuplicateHexInRoute), got: {repeated_stop:?}"
+    );
+
+    // ---- An ordinary route still works, and reports both the legacy
+    // `hex_path` attribute and the new stop-granular `route_stops`.
+    let ok = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_one.as_str(), &[]),
+        ExecuteMsg::RunManualRoute {
+            game_id,
+            protocol_id: BO_PUBLIC_ID,
+            path: vec![way("D8"), way("E7")],
+            payout_strategy: PayoutStrategy::Withhold,
+        },
+    )
+    .expect("an ordinary single-station route must still validate");
+    assert_eq!(attr(&ok, "revenue_amount"), "10");
+    assert_eq!(attr(&ok, "hex_path"), "D8->E7");
+    assert_eq!(
+        attr(&ok, "route_stops"),
+        "D8->E7",
+        "with no city nodes named, the stop list reads exactly like the hex list"
+    );
+}
+
+/// **Batch 3, item 4: the Ante Floor, and what it does NOT change.**
+#[test]
+fn test_minimum_ante_floor_and_uniform_ante_rule() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 0,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let host = Addr::unchecked("host");
+
+    // ---- One ujuno under the floor is refused.
+    let under = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(
+            host.as_str(),
+            &coins(crate::escrow::MINIMUM_ANTE.u128() - 1, NATIVE_DENOM),
+        ),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .unwrap_err();
+    match under {
+        ContractError::InsufficientAnte { minimum, got } => {
+            assert_eq!(minimum, crate::escrow::MINIMUM_ANTE);
+            assert_eq!(got, crate::escrow::MINIMUM_ANTE - Uint128::one());
+        }
+        other => panic!("expected InsufficientAnte, got: {other:?}"),
+    }
+
+    // ---- Exactly the floor is accepted: the bound is inclusive.
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(
+            host.as_str(),
+            &coins(crate::escrow::MINIMUM_ANTE.u128(), NATIVE_DENOM),
+        ),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("a deposit of exactly MINIMUM_ANTE must open a room");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+
+    // The creator's exact gross deposit is now the room's recorded stake.
+    let session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(
+        session.room_ante,
+        crate::escrow::MINIMUM_ANTE,
+        "the creator's deposit becomes the table's stake"
+    );
+
+    // ---- The floor does NOT replace the Uniform Ante Rule. A joiner who
+    // clears the floor but does not MATCH the room still fails -- these are
+    // two different checks and the second is unchanged by Batch 3.
+    let over = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(
+            "joiner",
+            &coins(crate::escrow::MINIMUM_ANTE.u128() + 1, NATIVE_DENOM),
+        ),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(over, ContractError::InvalidAnteAmount { .. }),
+        "clearing the floor is not the same as matching the room; expected \
+         InvalidAnteAmount, got: {over:?}"
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(
+            "joiner",
+            &coins(crate::escrow::MINIMUM_ANTE.u128(), NATIVE_DENOM),
+        ),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .expect("an exactly-matching ante joins");
+}
+
+/// **Batch 3, items 2 and 3: who may annul, and what annulment pays.**
+///
+/// The creator may abort at any time; a bystander may not, until the room
+/// has been silent for 48 hours. And in both cases the refund is each
+/// player's own ante -- never the proportional net-worth split, which is
+/// what separates an annulment from an ended game.
+#[test]
+fn annul_game_lets_the_creator_abort_immediately_but_not_a_bystander() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 0,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let host = Addr::unchecked("host");
+    let guest = Addr::unchecked("guest");
+    let stranger = Addr::unchecked("stranger");
+
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(host.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: 2,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(guest.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::JoinGameRoom { game_id },
+    )
+    .expect("guest should be able to join");
+
+    // ---- A non-player cannot annul, timeout or not.
+    let outsider = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(stranger.as_str(), &[]),
+        ExecuteMsg::AnnulGame { game_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(outsider, ContractError::NotAPlayer { .. }),
+        "expected NotAPlayer, got: {outsider:?}"
+    );
+
+    // ---- A registered non-creator cannot annul before the timeout.
+    let too_soon = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(guest.as_str(), &[]),
+        ExecuteMsg::AnnulGame { game_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(too_soon, ContractError::TimeoutNotYetElapsed { .. }),
+        "expected TimeoutNotYetElapsed, got: {too_soon:?}"
+    );
+
+    // ---- The creator may, immediately. No waiting period, because there is
+    // nobody to protect from them: everyone gets exactly their own money
+    // back, so annulling early gains the host nothing.
+    let annulled = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(host.as_str(), &[]),
+        ExecuteMsg::AnnulGame { game_id },
+    )
+    .expect("the room creator may annul at any time");
+
+    assert_eq!(attr(&annulled, "authority"), "room_creator");
+    assert_eq!(attr(&annulled, "timed_out"), "false");
+    assert_eq!(attr(&annulled, "total_refunded"), "4000000");
+    assert_eq!(annulled.messages.len(), 2, "one BankMsg::Send per player");
+
+    // Each player gets their own ante back -- equal here because the Uniform
+    // Ante Rule makes them equal, and read from each player's own record
+    // rather than by dividing the pool.
+    for message in &annulled.messages {
+        match &message.msg {
+            CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+                assert!(to_address == host.as_str() || to_address == guest.as_str());
+                assert_eq!(amount.len(), 1);
+                assert_eq!(amount[0].denom, NATIVE_DENOM);
+                assert_eq!(amount[0].amount, Uint128::new(2_000_000));
+            }
+            other => panic!("expected a BankMsg::Send, got: {other:?}"),
+        }
+    }
+
+    let after = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert!(!after.is_active, "an annulled room is closed");
+    assert_eq!(after.total_juno_pool, Uint128::zero());
+
+    // ---- And it is not repeatable.
+    let again = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(host.as_str(), &[]),
+        ExecuteMsg::AnnulGame { game_id },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(again, ContractError::GameNotActive { .. }),
+        "expected GameNotActive, got: {again:?}"
+    );
+}
+
+// ===================================================================
+// Step 4.5 -- Batch 4: canonical Auction Waterfall + dynamic Priority Deal.
+// ===================================================================
+
+/// Boots a contract and a `players`-seat room, all antes paid, still in the
+/// Pre-Game Waterfall Auction. Returns the seats in turn order.
+fn batch4_waterfall_room(
+    players: usize,
+) -> (
+    cosmwasm_std::OwnedDeps<
+        cosmwasm_std::testing::MockStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    cosmwasm_std::Env,
+    Vec<Addr>,
+    u64,
+) {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info("admin", &[]),
+        InstantiateMsg {
+            subsidy_fee_percentage: 0,
+        },
+    )
+    .expect("instantiate should succeed");
+
+    let seats: Vec<Addr> = (0..players)
+        .map(|i| Addr::unchecked(format!("b4_p{i}")))
+        .collect();
+
+    let create_res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(seats[0].as_str(), &coins(2_000_000, NATIVE_DENOM)),
+        ExecuteMsg::CreateGameRoom {
+            virtual_bank_start: Uint128::new(12_000),
+            max_players: players as u8,
+        },
+    )
+    .expect("create_game_room should succeed");
+    let game_id: u64 = attr(&create_res, "game_id").parse().unwrap();
+
+    for seat in seats.iter().skip(1) {
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(seat.as_str(), &coins(2_000_000, NATIVE_DENOM)),
+            ExecuteMsg::JoinGameRoom { game_id },
+        )
+        .expect("joiner should be able to join");
+    }
+
+    (deps, env, seats, game_id)
+}
+
+/// **Batch 4, item 1: the $5 drop AND the revenue payout.**
+///
+/// Both halves of the all-pass rule matter, and they pull in opposite
+/// directions -- that tension is the point. Waiting makes the next company
+/// cheaper for the player who waits, and simultaneously pays income to every
+/// player who already committed. A test that only checked the price drop
+/// would miss the half that makes passing cost something.
+#[test]
+fn test_auction_waterfall_all_pass_drops_price_and_pays_revenue() {
+    let (mut deps, env, seats, game_id) = batch4_waterfall_room(2);
+    let (p1, p2) = (seats[0].clone(), seats[1].clone());
+
+    // 2 players -> $1,200 starting cash each.
+    const START_CASH: u128 = 1_200;
+
+    // p1 buys Schuylkill Valley (#1) at its printed $20, so there is
+    // somebody for the revenue half of the rule to pay. The cascade then
+    // stops at #2, which has no bids.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(p1.as_str(), &[]),
+        ExecuteMsg::WaterfallBuyLowest { game_id },
+    )
+    .expect("p1 should be able to buy the cheapest private at face value");
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p1.clone())).unwrap(),
+        Uint128::new(START_CASH - 20)
+    );
+
+    // The turn advanced to p2. A full round of passes is p2 then p1.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(p2.as_str(), &[]),
+        ExecuteMsg::WaterfallPass { game_id },
+    )
+    .expect("p2's pass should be legal");
+    let waterfall = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(p1.as_str(), &[]),
+        ExecuteMsg::WaterfallPass { game_id },
+    )
+    .expect("p1's pass completes the round and runs the waterfall");
+
+    assert_eq!(attr(&waterfall, "waterfall_all_pass_round"), "true");
+
+    // ---- Half one: the cheapest UNOWNED private drops $5. That is now
+    // Champlain & St. Lawrence (#2) at $40, since #1 is owned.
+    assert_eq!(attr(&waterfall, "waterfall_price_drop_private_id"), "2");
+    assert_eq!(attr(&waterfall, "waterfall_price_drop_new_cost"), "35");
+    assert_eq!(
+        PRIVATE_COMPANIES.load(&deps.storage, (game_id, 2)).unwrap().cost,
+        Uint128::new(35)
+    );
+    // The already-owned one is NOT discounted -- it is not for sale.
+    assert_eq!(
+        PRIVATE_COMPANIES.load(&deps.storage, (game_id, 1)).unwrap().cost,
+        Uint128::new(20)
+    );
+
+    // ---- Half two: every owned private pays its printed revenue. Schuylkill
+    // Valley prints $5, and p1 owns it.
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p1.clone())).unwrap(),
+        Uint128::new(START_CASH - 20 + 5),
+        "the owner of a private is paid its revenue when the table passes"
+    );
+    // p2 owns nothing, so p2 is paid nothing -- passing is not a dividend.
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p2.clone())).unwrap(),
+        Uint128::new(START_CASH)
+    );
+
+    // The auction continues; it did not conclude.
+    let session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert!(session.waterfall_auction_active);
+    assert_eq!(session.consecutive_waterfall_passes, 0);
+}
+
+/// **Batch 4, item 1: the $0 floor forces the company on somebody.**
+///
+/// This is what guarantees the auction terminates at all. Schuylkill Valley
+/// is printed at $20, so four full rounds of passes walk it 20 -> 15 -> 10
+/// -> 5 -> 0, and the fourth round hands it over free rather than letting the
+/// table keep declining forever.
+#[test]
+fn test_auction_waterfall_zero_dollar_force_assignment() {
+    let (mut deps, env, seats, game_id) = batch4_waterfall_room(2);
+    let (p1, p2) = (seats[0].clone(), seats[1].clone());
+
+    const START_CASH: u128 = 1_200;
+
+    // Four full rounds of passes. In a 2-player room the turn returns to p1
+    // at the top of every round, so p1 always passes first and p2's pass is
+    // always the one that completes the round.
+    let mut last = None;
+    for expected_cost in ["15", "10", "5", "0"] {
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(p1.as_str(), &[]),
+            ExecuteMsg::WaterfallPass { game_id },
+        )
+        .expect("p1's pass should be legal");
+        let closing = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(p2.as_str(), &[]),
+            ExecuteMsg::WaterfallPass { game_id },
+        )
+        .expect("p2's pass completes the round");
+        assert_eq!(
+            attr(&closing, "waterfall_price_drop_new_cost"),
+            expected_cost,
+            "each full round of passes drops the cheapest private by exactly $5"
+        );
+        last = Some(closing);
+    }
+    let last = last.expect("four rounds were played");
+
+    // At $0 the company is forced on whoever's turn it now is. The turn
+    // advanced to p1 at the top of this round, so p1 is the one who has to
+    // take it.
+    assert_eq!(attr(&last, "waterfall_forced_free_assignment"), "true");
+    let sv = PRIVATE_COMPANIES.load(&deps.storage, (game_id, 1)).unwrap();
+    assert_eq!(sv.cost, Uint128::zero(), "the price floors at $0, never below");
+    assert_eq!(sv.owner, Some(p1.clone()), "it is forced on the player whose turn it is");
+
+    // Free means free: not one ujuno of VGP left p1's cash.
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p1.clone())).unwrap(),
+        Uint128::new(START_CASH),
+        "a $0 company costs nothing"
+    );
+    assert_eq!(
+        PLAYER_CASH_VGP.load(&deps.storage, (game_id, p2.clone())).unwrap(),
+        Uint128::new(START_CASH)
+    );
+
+    // The turn advanced past the forced taker, and the auction rolls on to
+    // the next-cheapest company.
+    let session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert!(session.waterfall_auction_active, "five privates are still unowned");
+    assert_eq!(session.active_player_index, 1, "the turn moves past the forced taker");
+    assert_eq!(session.consecutive_waterfall_passes, 0);
+}
+
+/// **Batch 4, item 2: the Priority Deal follows the last ACTOR, not the last
+/// passer.**
+///
+/// The 1830 rule is that the deal passes to the seat immediately left of
+/// whoever took the last committing action of the Stock Round. Here player B
+/// (seat 1) acts last, so the deal must land on player C (seat 2) -- even
+/// though A, B and C all passed afterwards, and even though B is neither the
+/// first nor the last player to pass.
+#[test]
+fn test_priority_deal_advances_to_left_of_last_actor() {
+    let (mut deps, env, seats, game_id) = batch4_waterfall_room(3);
+    let (player_a, player_b, player_c) =
+        (seats[0].clone(), seats[1].clone(), seats[2].clone());
+
+    // Skip straight to a Stock Round -- the waterfall's own Priority Deal
+    // assignment is a separate rule with its own tests, and this one is
+    // about what happens when a STOCK ROUND ends.
+    skip_waterfall_auction(&mut deps.storage, game_id);
+
+    const PRR_ID: u32 = 1;
+    const NYC_ID: u32 = 2;
+
+    let before = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(before.priority_deal_index, 0, "genesis: the creator holds it");
+    assert!(
+        before.last_active_player_index.is_none(),
+        "nobody has acted in this Stock Round yet"
+    );
+
+    // A acts (seat 0), then B acts (seat 1). B is now the last actor.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: PRR_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect("player A opens PRR");
+    assert_eq!(
+        SESSIONS.load(&deps.storage, game_id).unwrap().last_active_player_index,
+        Some(0)
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::BuyStock {
+            game_id,
+            protocol_id: NYC_ID,
+            source: SharePurchaseSource::Ipo,
+            par_value: Some(Uint128::new(67)),
+            quantity: None,
+        },
+    )
+    .expect("player B opens NYC");
+    assert_eq!(
+        SESSIONS.load(&deps.storage, game_id).unwrap().last_active_player_index,
+        Some(1),
+        "B is now the last player to have taken a committing action"
+    );
+
+    // Everyone passes: C, then A, then B. The third consecutive pass ends
+    // the round. Note that B passes LAST -- which must not matter, because
+    // a pass is not an action.
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_c.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("C passes");
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_a.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("A passes");
+    let closing = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(player_b.as_str(), &[]),
+        ExecuteMsg::PassTurn { game_id },
+    )
+    .expect("B's pass is the third in a row and ends the Stock Round");
+
+    assert_eq!(attr(&closing, "stock_round_concluded"), "true");
+    assert_eq!(
+        attr(&closing, "priority_deal_index"),
+        "2",
+        "the deal moves to the seat LEFT of the last actor (B, seat 1) -- that is C, seat 2"
+    );
+
+    let after = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(after.priority_deal_index, 2);
+    assert_eq!(
+        after.player_addresses[after.priority_deal_index as usize],
+        player_c,
+        "player C holds the Priority Deal"
+    );
+    assert!(
+        after.last_active_player_index.is_none(),
+        "the record clears so the next round cannot inherit this round's actor"
+    );
+
+    // ---- A round in which NOBODY acts must not rotate anything. Three more
+    // passes end a second Stock Round with no buy or sell in it at all, and
+    // the deal has to stay put: there is no last actor to seat relative to.
+    for seat in [&player_c, &player_a, &player_b] {
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(seat.as_str(), &[]),
+            ExecuteMsg::PassTurn { game_id },
+        )
+        .expect("an empty round of passes is legal");
+    }
+    let after_empty = SESSIONS.load(&deps.storage, game_id).unwrap();
+    assert_eq!(
+        after_empty.priority_deal_index, 2,
+        "an empty Stock Round leaves the Priority Deal exactly where it was"
+    );
+}
+
+// ===================================================================
+// Private Company Revenue Routing Audit.
+// ===================================================================
+
+/// **Private company revenue follows OWNERSHIP, and stops dead at Phase 5.**
+///
+/// `operations::pay_private_company_revenues` has three behaviours, and this
+/// walks the same private through all three in sequence rather than
+/// asserting them in isolation -- the point is that the destination CHANGES
+/// under the corporation purchase, and then stops entirely, for one company
+/// whose printed revenue never changed at all.
+///
+/// 1. Player-owned -> the owner's `PLAYER_CASH_VGP`.
+/// 2. Corporation-owned (after `BuyPrivateCompany`) -> that corporation's
+///    `PublicCompany::treasury`, and NOT the former owner's wallet.
+/// 3. Closed by the Phase 5 trigger (the room's first 5-train) -> nobody is
+///    paid, ever again.
+#[test]
+fn test_private_company_revenue_routes_to_corp_treasury_after_purchase() {
+    let (mut deps, env, president, game_id) = batch2_room();
+
+    const PRR_ID: u32 = 1;
+    const SV_ID: u32 = 1; // Schuylkill Valley: $20 face value, $5 revenue.
+    const SV_REVENUE: u128 = 5;
+
+    batch2_seed_corporation(
+        deps.as_mut().storage,
+        game_id,
+        PRR_ID,
+        "PRR",
+        &president,
+        1_000,
+        &[],
+    );
+    // The corporation needs a home hex on record, or `calculate_operating_order`
+    // has nothing to queue.
+    PROTOCOL_NETWORK_HEXES
+        .save(deps.as_mut().storage, (game_id, PRR_ID), &vec![(2, 3)])
+        .unwrap();
+
+    // Schuylkill Valley starts owned by the player.
+    let mut sv = PRIVATE_COMPANIES.load(&deps.storage, (game_id, SV_ID)).unwrap();
+    assert_eq!(sv.revenue_per_or, Uint128::new(SV_REVENUE), "guards the premise");
+    sv.owner = Some(president.clone());
+    PRIVATE_COMPANIES
+        .save(deps.as_mut().storage, (game_id, SV_ID), &sv)
+        .unwrap();
+
+    // Phase 3 (Green) is the gate on `BuyPrivateCompany`. Seeded directly --
+    // this test's subject is revenue ROUTING, not how an era advances.
+    let mut session = SESSIONS.load(&deps.storage, game_id).unwrap();
+    session.current_global_era = crate::state::TileColor::Green;
+    SESSIONS.save(deps.as_mut().storage, game_id, &session).unwrap();
+
+    // ---- 1. PLAYER-OWNED: revenue lands in the player's wallet.
+    let cash_before = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, president.clone()))
+        .unwrap();
+    let treasury_before = PUBLIC_COMPANIES
+        .load(&deps.storage, (game_id, PRR_ID))
+        .unwrap()
+        .treasury;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("an Operating Round should begin with PRR floated");
+
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, president.clone()))
+            .unwrap(),
+        cash_before + Uint128::new(SV_REVENUE),
+        "a player-owned private pays its owner directly"
+    );
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, PRR_ID))
+            .unwrap()
+            .treasury,
+        treasury_before,
+        "and pays the corporation nothing"
+    );
+
+    // ---- 2. The corporation buys it out from under its owner.
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::BuyPrivate,
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyPrivateCompany {
+            game_id,
+            protocol_id: PRR_ID,
+            private_id: SV_ID,
+            // Within the legal 50%-200% band for a $20 face value.
+            price: Uint128::new(20),
+        },
+    )
+    .expect("Phase 3 permits a corporation to absorb a player-owned private");
+
+    let sv_after_purchase = PRIVATE_COMPANIES.load(&deps.storage, (game_id, SV_ID)).unwrap();
+    assert_eq!(sv_after_purchase.owner, None, "no longer player-owned");
+    assert_eq!(
+        sv_after_purchase.owner_protocol_id,
+        Some(PRR_ID),
+        "the two ownership fields are mutually exclusive"
+    );
+
+    // ---- CORPORATION-OWNED: the same private now pays the treasury.
+    let cash_before_2 = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, president.clone()))
+        .unwrap();
+    let treasury_before_2 = PUBLIC_COMPANIES
+        .load(&deps.storage, (game_id, PRR_ID))
+        .unwrap()
+        .treasury;
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("a second Operating Round should begin");
+
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, PRR_ID))
+            .unwrap()
+            .treasury,
+        treasury_before_2 + Uint128::new(SV_REVENUE),
+        "a corporation-owned private pays into the corporate treasury"
+    );
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, president.clone()))
+            .unwrap(),
+        cash_before_2,
+        "the former owner is paid nothing -- they sold the income stream, not just the card"
+    );
+
+    // ---- 3. PHASE 5 closes it. The room's first 5-train advances the era to
+    // Brown, which closes every still-open private regardless of who owns it.
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "2".to_string()), &6u32)
+        .unwrap();
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "3".to_string()), &5u32)
+        .unwrap();
+    TRAINS_PURCHASED_COUNT
+        .save(deps.as_mut().storage, (game_id, "4".to_string()), &4u32)
+        .unwrap();
+    batch2_seed_depot(deps.as_mut().storage, game_id, "5");
+    crate::or_phase::force_sub_phase(
+        &mut deps.storage,
+        game_id,
+        PRR_ID,
+        crate::state::OperatingSubPhase::Hardware,
+    );
+    let bought_5 = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BuyHardwareFromPool {
+            game_id,
+            protocol_id: PRR_ID,
+        },
+    )
+    .expect("PRR should be able to buy the room's first 5-train");
+    assert_eq!(attr(&bought_5, "model_type"), "5");
+    assert_eq!(attr(&bought_5, "new_global_era"), "Brown");
+
+    assert!(
+        PRIVATE_COMPANIES
+            .load(&deps.storage, (game_id, SV_ID))
+            .unwrap()
+            .closed,
+        "the Phase 5 trigger closes every private, corporation-owned included"
+    );
+
+    // ---- And the payouts stop. Nobody is paid, from either side.
+    let cash_before_3 = PLAYER_CASH_VGP
+        .load(&deps.storage, (game_id, president.clone()))
+        .unwrap();
+    let treasury_before_3 = PUBLIC_COMPANIES
+        .load(&deps.storage, (game_id, PRR_ID))
+        .unwrap()
+        .treasury;
+
+    let third_or = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(president.as_str(), &[]),
+        ExecuteMsg::BeginOperatingRound { game_id },
+    )
+    .expect("a third Operating Round should begin");
+
+    assert!(
+        !third_or.attributes.iter().any(|a| {
+            a.key == "private_revenue_recipient" || a.key == "private_revenue_recipient_protocol_id"
+        }),
+        "a closed private pays nobody"
+    );
+    assert_eq!(
+        PUBLIC_COMPANIES
+            .load(&deps.storage, (game_id, PRR_ID))
+            .unwrap()
+            .treasury,
+        treasury_before_3
+    );
+    assert_eq!(
+        PLAYER_CASH_VGP
+            .load(&deps.storage, (game_id, president.clone()))
+            .unwrap(),
+        cash_before_3
+    );
 }

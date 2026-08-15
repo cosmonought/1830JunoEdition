@@ -98,6 +98,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /* Contract data mirror -- see design note #1                         */
 /* ------------------------------------------------------------------ */
 
+/** Hover text for the inline Priority Deal `#1` marker.
+ *
+ *  Defined once and shared by every surface that renders the marker
+ *  (`FinancialLedger`'s Player Assets table, `ContextualSubPanel`'s Stock
+ *  Round Player Index) so the two cannot drift into explaining the same
+ *  indicator two different ways -- which is exactly what happens when a
+ *  tooltip string is retyped per call site. */
+export const PRIORITY_DEAL_TOOLTIP = "Priority Deal: Starts the next Stock Round.";
+
 export type TileColor = "Yellow" | "Green" | "Brown";
 /** Pre-Game Waterfall Auction (`waterfall.rs`): every room now genesis-starts
  *  in `"WaterfallAuction"`, before `"StockRound"` is ever reachable -- see
@@ -126,6 +135,19 @@ export interface PublicCompanyState {
   treasury: string;
   total_shares_issued: number;
   par_value: string | null;
+  /** Total revenue this corporation's trains earned on their most recent
+   *  route run -- `msg.rs::PublicCompanyState.last_route_revenue`.
+   *
+   *  Written by `operations::execute_run_manual_route` on EVERY run, paid
+   *  out or withheld alike, and reset to zero by a run that found no legal
+   *  route. So it always reads as "what it earned last time", never a stale
+   *  high-water mark. `"0"` for a corporation that has never run.
+   *
+   *  Optional because a contract predating the field returns no key at all,
+   *  and `undefined` must stay distinguishable from a real `"0"`: the first
+   *  means "this build cannot tell you", the second means "it earned
+   *  nothing". `LastRoutePayout` renders the two differently. */
+  last_route_revenue?: string;
   president: string | null;
   ipo_pool_percentage: number;
   bank_pool_percentage: number;
@@ -201,6 +223,39 @@ export interface GameStateResponse {
   public_companies: PublicCompanyState[];
   private_companies: PrivateCompanyState[];
 }
+
+/** The seat that should be holding the controls right now, given the phase.
+ *
+ *  Two different pointers answer "who acts next" in 1830, and which one is
+ *  correct depends entirely on the round:
+ *
+ *  - **Waterfall Auction and Stock Round** are seat-driven. Players act in
+ *    seating order, so `active_player_index` is the answer directly.
+ *  - **Operating Rounds** are corporation-driven. The queue
+ *    (`active_operating_order`) names companies, not people, and the human
+ *    who may act is whoever presides over the company currently up. The seat
+ *    pointer is not meaningful here and can easily point at a player with
+ *    nothing to do.
+ *
+ *  Returns `null` when the acting seat cannot be resolved -- an Operating
+ *  Round whose current corporation has no president on record, for
+ *  instance. Callers should leave the seat where it is rather than guess. */
+export function actingSeatIndex(state: GameStateResponse): number | null {
+  if (state.player_addresses.length === 0) return null;
+
+  if (state.current_round_type === "OperatingRound") {
+    const companyId = state.active_operating_order[state.active_corporation_index];
+    if (companyId === undefined) return null;
+    const company = state.public_companies.find((c) => c.company_id === companyId);
+    const president = company?.president;
+    if (!president) return null;
+    const seat = state.player_addresses.indexOf(president);
+    return seat === -1 ? null : seat;
+  }
+
+  return state.active_player_index;
+}
+
 
 /** `QueryMsg::PlayerNetWorth`'s response -- mirrors
  *  `msg.rs::PlayerNetWorthResponse` exactly. See design note #6. */

@@ -109,11 +109,107 @@ export const LANDMARK_TRACKS: Readonly<Record<string, ReadonlyArray<{ edges: rea
  *  BOARD hexes, not of layable tile stock, and keep their own
  *  `BOARD_HEX_FILL`/`PRINTED_HEX_FILL` entries. `TileColorTier` has exactly
  *  three members and this map is total over them. */
+/* ===================================================================
+ *  DESIGN NOTE 152: THE THREE TIERS MUST BE TELLABLE APART AT A GLANCE
+ * ===================================================================
+ *
+ * The old set was Yellow `#f0d9a0`, Green `#c9e0b4`, Brown `#d8bc9a` --
+ * three desaturated pastels within a few points of each other. Yellow and
+ * Brown in particular (`#f0d9a0` vs `#d8bc9a`) differ by about as much as
+ * two shades of the same beige, which on a board where the tier IS the
+ * information -- which era a hex has reached, and therefore what may be
+ * laid on it next -- is the one distinction that must never be subtle.
+ *
+ * Yellow is now a real saturated yellow and Brown a real brown, so the
+ * three tiers separate on HUE and LIGHTNESS at once rather than on a few
+ * points of warmth.
+ *
+ * GREEN IS DELIBERATELY UNCHANGED. It was never part of the reported
+ * confusion, it already separates cleanly from both new values, and
+ * restyling it would be an unrequested change to a third of the board.
+ */
+/* ===================================================================
+ *  DESIGN NOTE 161: THE CANONICAL 1830 PALETTE
+ * ===================================================================
+ *
+ * These are the physical game's own three tile colours, specified directly
+ * rather than approximated. They supersede design note #152's set, which
+ * was chosen to solve a narrower problem (Yellow and Brown were nearly
+ * indistinguishable) and picked plausible values rather than the real ones.
+ *
+ * Green moves for the first time here. #152 deliberately left it alone
+ * because it was not part of that confusion; this note is a full palette
+ * specification, so all three change together and the earlier reasoning no
+ * longer applies.
+ *
+ * ONE MEASUREMENT WORTH KNOWING, since it is not fixable by choosing
+ * better values: Green and Brown sit at a 1.47:1 LUMINANCE ratio and are
+ * separated almost entirely by hue. For a red-green colourblind viewer
+ * those two tiers are close to indistinguishable by fill alone. The tier is
+ * also carried by the rim colours below, by the tile number in the picker,
+ * and by the fact that a hex's available upgrades are filtered to its tier
+ * -- so no decision in this app depends on telling those two fills apart by
+ * eye. Recorded because it is a real property of the canonical colours, not
+ * something introduced here.
+ */
 export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
-  Yellow: "#f0d9a0",
-  Green: "#c9e0b4",
-  Brown: "#d8bc9a",
+  // Unified with `PRINTED_HEX_FILL.Yellow` below -- see its own note. A
+  // preprinted yellow hex and a laid yellow tile are the same tier and must
+  // be the same colour; they were `#e8d488` and `#f0d9a0`, which read as two
+  // different kinds of yellow sitting next to each other.
+  Yellow: "#FDE900",
+  Green: "#71BF44",
+  Brown: "#CB7745",
 };
+
+/* ===================================================================
+ *  DESIGN NOTE 153: TRACK INK IS PER-TIER, AND HAS TO BE
+ * ===================================================================
+ *
+ * Every tile in this renderer strokes its track `#2b2b2b`, near-black. That
+ * is correct on the two light tiers and unreadable on the new Brown:
+ * `#2b2b2b` on `#713f12` is roughly a 1.6:1 contrast ratio, which is below
+ * the threshold at which a thin line is visible at all. Darkening Brown
+ * without moving the ink would have traded one confusion (which tier is
+ * this?) for a worse one (where does the track go?).
+ *
+ * So the ink follows the tier. Warm off-white on Brown lands near 7:1,
+ * comfortably legible, and reads as the same drawn line rather than as a
+ * different kind of track.
+ *
+ * Only the TRACK moves. Station circles are white discs with their own dark
+ * rim and gain contrast on a dark tile; dit markers never appear on Brown
+ * (no Brown tile carries `SmallTown`/`DoubleTown` terrain); revenue badges
+ * paint their own background.
+ */
+export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
+  // Design note #161 UNIFIED THESE AGAIN, and the reason is worth keeping.
+  //
+  // #153 split the ink per tier because Brown was then `#713f12`, dark
+  // enough that near-black track on it measured ~1.6:1 and effectively
+  // disappeared. The canonical Brown `#CB7745` is a much lighter clay, so
+  // dark ink is correct on all three again: 13.9:1 on Yellow, 7.7:1 on
+  // Green, 5.2:1 on Brown -- comfortably past the 3:1 a thick graphical
+  // line needs, on every tier.
+  //
+  // THE TABLE STAYS even though all three values now agree. It is what
+  // makes "ink is a function of the tier" a structural fact rather than a
+  // coincidence, and it is the thing that caught the problem the last time
+  // a fill moved. A future palette change edits one table instead of
+  // hunting `strokeStyle` literals through the renderer.
+  //
+  // Slightly deeper than the old `#2b2b2b` (the non-tile default below),
+  // which buys Brown a full contrast step for free.
+  Yellow: "#1a1a1a",
+  Green: "#1a1a1a",
+  Brown: "#1a1a1a",
+};
+
+/** The track ink for a tile whose tier is unknown -- an id missing from the
+ *  catalog mirror. Matches the historic default, so every existing
+ *  non-tile track call (preprinted gray hexes, landmark stubs, off-board
+ *  stubs) is byte-identical to before. */
+export const DEFAULT_TRACK_INK = "#2b2b2b";
 
 /* Design note #122 deleted `TERRAIN_FILL` from here. It mapped each
    TerrainType to its own tile background, and was the direct cause of the
@@ -124,10 +220,20 @@ export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
    always used `BOARD_HEX_FILL`/`PRINTED_HEX_FILL`, which are untouched. */
 
 
+/** The rim around a laid tile. Design note #161: each is a darkened form of
+ *  its own fill, so the edge reads as that tile's own outline rather than as
+ *  a separate colour laid over it.
+ *
+ *  Tuned against the FILL rather than against the board, because the rim's
+ *  job is to bound the tile: neighbouring hexes are themselves tiles far
+ *  more often than they are empty board, so a rim tuned for the dark
+ *  backdrop would be the wrong choice everywhere the board is actually
+ *  built up. Yellow lands at 4.3:1 on its own fill, Green 3.4:1, Brown
+ *  3.4:1 -- all past the 3:1 a graphical boundary needs. */
 export const COLOR_TIER_STROKE: Readonly<Record<TileColorTier, string>> = {
-  Yellow: "#caa42a",
-  Green: "#3f8f4f",
-  Brown: "#8a5a2b",
+  Yellow: "#7a6a00",
+  Green: "#2f5e1a",
+  Brown: "#5c2f13",
 };
 
 /* ------------------------------------------------------------------ */
@@ -448,6 +554,32 @@ export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorT
  *  unchanged, since both just render whatever string this constant holds. */
 /** Real 1830's printed water/river build fee, in.
  *  Mirrors `hexmap::RIVER_BUILD_FEE` exactly. */
+/* ==================================================================
+ *  DESIGN NOTE 223: THE LAY TRACK VEIL'S THREE VALUES
+ * ==================================================================
+ *
+ * `HexGridRenderer` dims every hex the acting corporation cannot build on
+ * during the Lay Track sub-phase. These are its constants, here rather than
+ * inline in the draw pass for the same reason every other board colour is:
+ * a value used once today is a value copied twice tomorrow.
+ *
+ * THE ALPHA IS THE WHOLE DESIGN DECISION. 0.55 is deliberately a veil rather
+ * than a blackout: a player judging whether to extend north still needs to
+ * READ the dimmed board -- where the cities are, which hexes already carry
+ * track, where the mountains are -- because that is what makes the choice
+ * between the lit hexes. 18xx.games dims to roughly this depth for the same
+ * reason. Opaque would turn a highlight into a blindfold.
+ *
+ * The ink is the board's own deep navy rather than neutral black, so the
+ * veil reads as the map receding rather than as a grey sheet over it.
+ */
+export const LAY_TRACK_DIM_ALPHA = 0.55;
+export const LAY_TRACK_DIM_INK = "#070b14";
+/** The ring on a buildable hex. Green, matching the tile picker's own
+ *  confirm affordance (`fabConfirm`), so "you may act here" is one colour
+ *  across the board and the ring that appears when you click it. */
+export const LAY_TRACK_HIGHLIGHT_INK = "#4ade80";
+
 export const RIVER_BUILD_FEE = 80;
 
 /** Real 1830's printed mountain build fee, in.
@@ -525,11 +657,18 @@ export const BOARD_HEX_STROKE: Readonly<Record<BoardHexType, string>> = {
  *  elsewhere in this file, for visual consistency). */
 export const PRINTED_HEX_FILL: Readonly<Record<"Gray" | "Yellow", string>> = {
   Gray: "#8a8f94",
-  Yellow: "#e8d488",
+  // Design note #152: THE SAME VALUE as `ERA_TILE_FILL.Yellow`, not a
+  // near-match. These two paint the same claim -- "this hex is at the
+  // Yellow tier" -- and differed only because they were tuned in separate
+  // passes. Written as the literal rather than referencing `ERA_TILE_FILL`
+  // so this table stays a plain lookup with no import cycle; the note is
+  // what keeps them together, and the sandbox legality filter's
+  // `PREPRINTED_TIER_BY_LABEL` already treats them as one tier.
+  Yellow: "#FDE900",
 };
 export const PRINTED_HEX_STROKE: Readonly<Record<"Gray" | "Yellow", string>> = {
   Gray: "#4a4e52",
-  Yellow: "#caa42a",
+  Yellow: "#7a6a00",
 };
 
 /** One pre-printed gray hex's fixed track + city/town marker -- see design

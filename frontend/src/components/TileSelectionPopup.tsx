@@ -238,6 +238,26 @@ export interface TileSelectionPopupProps {
    *  dispatch. Defaults to `false`, so the ordinary contract-backed path is
    *  entirely unaffected. */
   offline?: boolean;
+  /** Offline Sandbox hotseat mode.
+   *
+   *  **This is a NARROWER claim than `offline`, and the difference is the
+   *  whole point.** `offline` means "no chain answered, so these tiles are
+   *  unvalidated" -- true here too, and the provisional labelling stays on.
+   *  What `offline` ALSO meant, until this prop existed, was "there is
+   *  nowhere for a placement to go", and that is no longer true: the sandbox
+   *  has a local reducer that accepts the lay and repaints the board.
+   *
+   *  So `sandbox` re-enables Confirm and routes it to `onSandboxLay` instead
+   *  of `execGameplay`. A plain `offline` popup -- a spectator, or a dev
+   *  whose RPC dropped mid-session -- still hard-refuses, because for those
+   *  two there genuinely is no destination and a placement would be a lie.
+   *
+   *  Ignored unless `offline` is also set; a chain-backed popup has no use
+   *  for it. */
+  sandbox?: boolean;
+  /** Where a sandbox placement goes instead of the chain. Called with the
+   *  confirmed tile and rotation; the host applies it to the local board. */
+  onSandboxLay?: (placement: { tileId: number; orientation: number }) => void;
 }
 
 /** Live viewport size, for design note #7's flip-aware positioning.
@@ -452,14 +472,22 @@ export function TileSelectionPopup({
   onDispatched,
   onClose,
   offline = false,
+  sandbox = false,
+  onSandboxLay,
 }: TileSelectionPopupProps) {
   const { execGameplay, sessionStatus } = useGameSession();
 
+  // Design note #162: the sandbox legality narrowing and the empty-tray
+  // explanation that used to sit here are GONE, along with this component's
+  // rendering. `RadialTileSelector` owns both now, and this file is retained
+  // unrendered only until the radial path has been exercised against a live
+  // chain. Keeping a second, diverging copy of the filter wired up to a
+  // component nothing mounts would be the drift hazard, not insurance
+  // against it.
   const allGroups = useMemo(() => groupPlacementsByTile(placements), [placements]);
 
-  // Design note #8: OFFLINE-ONLY era filter. `null` means "show everything",
-  // which is the only value the contract-backed path ever takes -- see the
-  // tab strip's own comment for why this must not exist online.
+  // The era tab strip's filter (design note #8), unchanged. `groups` is what
+  // the carousel renders.
   const [eraFilter, setEraFilter] = useState<TileColorTier | null>(null);
   const availableEras = useMemo(() => {
     const present = new Set(allGroups.map((group) => group.tier).filter(Boolean));
@@ -469,6 +497,7 @@ export function TileSelectionPopup({
     () => (eraFilter ? allGroups.filter((group) => group.tier === eraFilter) : allGroups),
     [allGroups, eraFilter],
   );
+  const emptyReason: string | null = null;
 
   const [selectedTileId, setSelectedTileId] = useState<number | null>(groups[0]?.tileId ?? null);
   const [orientationIndex, setOrientationIndex] = useState(0);
@@ -575,12 +604,30 @@ export function TileSelectionPopup({
   };
 
   const handleConfirmPlacement = async () => {
+    // ---- Sandbox: apply locally and stop. Deliberately BEFORE the offline
+    // hard stop below, and deliberately never touching `execGameplay`.
+    //
+    // Requirement: a sandbox confirm must not await a wallet promise that
+    // can only reject. There is no session, no signer and no chain, so
+    // calling the dispatch path would hang on a request nobody can answer
+    // and then surface a Keplr error for a game that is not on a chain. The
+    // local callback is synchronous and the popup closes on the spot.
+    if (sandbox) {
+      if (selectedTileId === null || selectedOrientation === null) return;
+      onSandboxLay?.({ tileId: selectedTileId, orientation: selectedOrientation });
+      onClose();
+      return;
+    }
+
     // Design note #6: a hard stop, not merely a disabled button. The button
     // below is already disabled in offline mode, but this path is what
     // actually guarantees an unvalidated, locally-invented placement can
     // never reach `execGameplay` -- there is no contract behind these tiles
     // to have approved them, and `hexmap::execute_lay_tile` would reject
     // most of them outright.
+    //
+    // Still reached by a NON-sandbox offline popup (a spectator, or a
+    // dropped RPC), which is exactly who it was written for.
     if (offline) return;
     if (selectedTileId === null || selectedOrientation === null || sessionStatus !== "ready") {
       return;
@@ -699,12 +746,17 @@ export function TileSelectionPopup({
   );
   const hasBeenDragged = drag.offset.dx !== 0 || drag.offset.dy !== 0;
 
-  const dispatchDisabled =
-    offline ||
-    selectedTileId === null ||
-    selectedOrientation === null ||
-    sessionStatus !== "ready" ||
-    dispatchState.status === "pending";
+  // A sandbox confirm needs a selection and nothing else: there is no
+  // session to be "ready" and no dispatch that can be "pending", so folding
+  // those two in would disable the button permanently for the one mode that
+  // is supposed to be interactive.
+  const dispatchDisabled = sandbox
+    ? selectedTileId === null || selectedOrientation === null
+    : offline ||
+      selectedTileId === null ||
+      selectedOrientation === null ||
+      sessionStatus !== "ready" ||
+      dispatchState.status === "pending";
 
   const tileCount = groups.length;
   // Design note #9: `rotationHint` is REMOVED, not merely unrendered. It
@@ -839,10 +891,20 @@ export function TileSelectionPopup({
             lineHeight: 1.45,
           }}
         >
-          <strong>Offline preview &mdash; not validated.</strong> No chain connection, so the
-          contract was never asked. This is the whole local catalog, browsable by era &mdash;
-          era locks, connectivity, hex reservations, upgrade steps and tray supply have{" "}
-          <em>not</em> been checked, and placement is disabled.
+          <strong>
+            {sandbox ? "Sandbox preview" : "Offline preview"} &mdash; not validated.
+          </strong>{" "}
+          No chain connection, so the contract was never asked. This is the whole local
+          catalog, browsable by era &mdash; era locks, connectivity, hex reservations,
+          upgrade steps and tray supply have <em>not</em> been checked
+          {sandbox ? (
+            <>
+              . You can still place it: the sandbox will accept tiles the real game would
+              refuse, which is exactly what makes it useful for exercising the picker.
+            </>
+          ) : (
+            <>, and placement is disabled.</>
+          )}
         </div>
       )}
 
@@ -928,6 +990,19 @@ export function TileSelectionPopup({
               paddingBottom: 12,
             }}
           >
+            {emptyReason && (
+              <p
+                style={{
+                  margin: 0,
+                  padding: "14px 12px",
+                  fontSize: FONT_SIZE.small,
+                  color: "#c9b98a",
+                  lineHeight: 1.45,
+                }}
+              >
+                {emptyReason}
+              </p>
+            )}
             {groups.map((group) => {
               const isSelected = group.tileId === selectedTileId;
               // The selected tile renders at its LIVE rotation, in place --
@@ -1142,11 +1217,13 @@ export function TileSelectionPopup({
             whiteSpace: "nowrap",
           }}
         >
-          {offline
-            ? "Placement unavailable (offline)"
-            : dispatchState.status === "pending"
-              ? "Broadcasting..."
-              : "Confirm Placement"}
+          {sandbox
+            ? "Confirm Lay (sandbox)"
+            : offline
+              ? "Placement unavailable (offline)"
+              : dispatchState.status === "pending"
+                ? "Broadcasting..."
+                : "Confirm Placement"}
         </button>
       </div>
     </div>

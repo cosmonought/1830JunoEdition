@@ -106,6 +106,28 @@ export const WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
       "waterfall actions.",
   },
   {
+    title: "When everybody passes",
+    body:
+      "Passing does not stall the auction -- it moves it. If every player passes in a row " +
+      "without anyone buying or bidding, three things happen before your turn comes back " +
+      "around:\n" +
+      "• The face value of the lowest unowned private company drops by $5. The auction is " +
+      "designed to keep getting cheaper until somebody finally wants it.\n" +
+      "• Every private company already owned immediately pays its printed revenue to its " +
+      "owner. Passing is not free for the players still waiting: it pays the players who " +
+      "already bought.\n" +
+      "• If that price ever reaches $0, the player whose turn it is has no choice -- they must " +
+      "take the company for free.",
+  },
+  {
+    title: "So passing has a cost",
+    body:
+      "Those two facts together are the whole tension of this phase. Waiting makes the cheapest " +
+      "company cheaper, which is good for you -- but it also hands income to everyone who " +
+      "already committed, which is good for them. A private you keep refusing eventually " +
+      "becomes free, and then it becomes yours whether you wanted it or not.",
+  },
+  {
     title: "Watch your cash",
     body:
       "You start this Auction with a set amount of personal cash (e.g., $600 in a 4-player " +
@@ -163,6 +185,37 @@ export const STOCK_ROUND_TUTORIAL: readonly TutorialPage[] = [
       "• End-of-Round Market Rise: If 100% of a corporation's shares are held by players at " +
       "the end of the Stock Round (both IPO and Bank Pool are completely empty), its stock price " +
       "rises vertically by 1 cell!",
+  },
+  {
+    title: "Passing is not permanent",
+    body:
+      "Passing gives up your current turn, not the rest of the round. The moment any other " +
+      "player buys or sells, the round keeps going and the turn comes back around to you -- and " +
+      "you are free to act on it, having just watched what everyone else did.\n" +
+      "This makes an early pass a real tactic rather than a surrender: you can decline to " +
+      "commit, see whether a rival floats the corporation you were eyeing, and still buy in " +
+      "on your next turn.",
+  },
+  {
+    title: "How a Stock Round actually ends",
+    body:
+      "A Stock Round ends only when EVERY player passes consecutively, with no buy or sell in " +
+      "between. One purchase anywhere resets that count to zero and the round continues.\n" +
+      "So the round does not run for a fixed number of turns -- it runs until nobody in the " +
+      "room wants to do anything else. If you are waiting for the round to end, remember that " +
+      "one more purchase by anyone starts the whole counting over.",
+  },
+  {
+    title: "The Priority Deal",
+    body:
+      "Whoever holds the Priority Deal acts FIRST in the next Stock Round -- first pick of the " +
+      "IPO, first chance to open a corporation at the par value you want. Look for the cyan " +
+      "#1 beside a player's name in the Player Index and in Game Ledger > Player Assets.\n" +
+      "It is not a reward for passing, and it is not random. At the end of a Stock Round the " +
+      "Priority Deal moves to the player seated immediately to the LEFT of whoever took the " +
+      "last action of that round. Acting last therefore hands the next round's opening move to " +
+      "your neighbour -- which is sometimes a price worth paying, and sometimes exactly the " +
+      "mistake that loses you the corporation you were building toward.",
   },
 ];
 
@@ -317,12 +370,259 @@ export const STOCK_MARKET_TUTORIAL: readonly TutorialPage[] = [
 
 /** Every topic key this app registers, so `resetTutorials()` can clear the
  *  whole set without a caller having to remember the list. */
+/* ===================================================================
+ *  DESIGN NOTE 158: THE TUTORIALS HAD NO FRONT DOOR
+ * ===================================================================
+ *
+ * Every tutorial in this file opens exactly once -- automatically, when its
+ * phase first becomes active, if the player has not seen it and has not
+ * switched tutorials off. That is a good default and a terrible only
+ * option: dismiss the Operating Round explainer while you think you have
+ * understood it, discover ten minutes later that you have not, and there is
+ * no way back to it. The content exists and is unreachable.
+ *
+ * `TUTORIAL_LIBRARY` gives it a front door. It is the same four page sets,
+ * addressed by name instead of by phase, and it deliberately does NOT
+ * consult the "seen" flags or the global off switch -- those exist to stop
+ * tutorials INTERRUPTING, and a player who clicked "Tutorials" is not being
+ * interrupted, they are asking.
+ */
+export interface TutorialTopic {
+  topicKey: string;
+  heading: string;
+  /** One line on the picker, so a player can tell which of the four
+   *  answers the question they actually have. */
+  blurb: string;
+  pages: readonly TutorialPage[];
+}
+
+export const TUTORIAL_LIBRARY: readonly TutorialTopic[] = [
+  {
+    topicKey: "waterfall-auction",
+    heading: "Waterfall Auction",
+    blurb: "How the private companies are bid for before the game proper starts.",
+    pages: WATERFALL_AUCTION_TUTORIAL,
+  },
+  {
+    topicKey: "stock-round",
+    heading: "Stock Round",
+    blurb: "Buying and selling shares, floating a corporation, and the Priority Deal.",
+    pages: STOCK_ROUND_TUTORIAL,
+  },
+  {
+    topicKey: "operating-round",
+    heading: "Operating Round",
+    blurb: "A corporation's turn: track, tokens, routes, dividends and trains.",
+    pages: OPERATING_ROUND_TUTORIAL,
+  },
+  {
+    topicKey: "stock-market",
+    heading: "The Stock Market",
+    blurb: "How share prices move, and what the zones on the chart mean.",
+    pages: STOCK_MARKET_TUTORIAL,
+  },
+];
+
 export const ALL_TUTORIAL_TOPICS: readonly string[] = [
   "waterfall-auction",
   "stock-round",
   "operating-round",
   "stock-market",
 ];
+
+/* ------------------------------------------------------------------ */
+/* The on-demand library -- design note #158                          */
+/* ------------------------------------------------------------------ */
+
+export interface TutorialLibraryProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+/** The Tutorials front door: pick a topic, read it, come back to the list.
+ *
+ *  Renders the SAME page shell `TutorialModal` does, via `TutorialPager`
+ *  below, so a tutorial read from here is not a second, subtly different
+ *  presentation of the same words. What differs is only how you get in and
+ *  what happens when you leave: no "seen" flag is written and no
+ *  "turn tutorials off" checkbox is offered, because neither applies to
+ *  content the player went looking for. */
+export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
+  const [topicKey, setTopicKey] = useState<string | null>(null);
+
+  // Escape backs out one level -- to the list from a topic, and out of the
+  // library from the list. Matching the modal's own convention that Escape
+  // never traps you, while still not throwing away your place in one step.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setTopicKey((current) => {
+        if (current === null) onClose();
+        return null;
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // Reopening the library should land on the list, not wherever it was left.
+  useEffect(() => {
+    if (!open) setTopicKey(null);
+  }, [open]);
+
+  if (!open) return null;
+
+  const topic = TUTORIAL_LIBRARY.find((entry) => entry.topicKey === topicKey) ?? null;
+
+  return (
+    <div
+      style={styles.backdrop}
+      role="dialog"
+      aria-modal="true"
+      aria-label={topic ? topic.heading : "Tutorials"}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div style={styles.card}>
+        {topic ? (
+          <TutorialPager
+            heading={topic.heading}
+            pages={topic.pages}
+            onDone={() => setTopicKey(null)}
+            doneLabel="Back to tutorials"
+          />
+        ) : (
+          <>
+            <div style={styles.header}>
+              <span style={styles.heading}>Tutorials</span>
+            </div>
+            <div style={styles.body}>
+              <p style={styles.pageBody}>
+                Read any of these at any time. Opening one from here does not change whether it
+                still appears automatically when its phase begins.
+              </p>
+              {TUTORIAL_LIBRARY.map((entry) => (
+                <button
+                  key={entry.topicKey}
+                  type="button"
+                  onClick={() => setTopicKey(entry.topicKey)}
+                  style={styles.libraryRow}
+                >
+                  <span style={styles.libraryRowHeading}>{entry.heading}</span>
+                  <span style={styles.libraryRowBlurb}>{entry.blurb}</span>
+                  <span style={styles.libraryRowCount}>{entry.pages.length} pages</span>
+                </button>
+              ))}
+            </div>
+            <div style={styles.footer}>
+              <button type="button" onClick={onClose} style={styles.primaryButton}>
+                Close
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The page-turner shell, shared by the auto-opening modal and the library
+ *  so the two cannot drift into two different readers for one set of
+ *  words. */
+function TutorialPager({
+  heading,
+  pages,
+  onDone,
+  doneLabel,
+  footerExtra,
+}: {
+  heading: string;
+  pages: readonly TutorialPage[];
+  onDone: () => void;
+  doneLabel: string;
+  /** The auto-opening modal's "turn tutorials off" control. The library
+   *  passes nothing -- see `TutorialLibrary`'s own note. */
+  footerExtra?: React.ReactNode;
+}) {
+  const [pageIndex, setPageIndex] = useState(0);
+  const page = pages[Math.min(pageIndex, pages.length - 1)];
+  const isLast = pageIndex >= pages.length - 1;
+  if (!page) return null;
+
+  return (
+    <>
+      <div style={styles.header}>
+        <span style={styles.heading}>{heading}</span>
+        <span style={styles.stepCount}>
+          {pageIndex + 1} / {pages.length}
+        </span>
+      </div>
+
+      <div style={styles.body}>
+        <span style={styles.pageTitle}>{page.title}</span>
+        {/* Design note #4: bodies may carry hard line breaks. The Operating
+            Round pages are numbered step lists and bullet lists, and
+            collapsing them into one run-on paragraph would undo the only
+            structure they have. Split rather than `white-space: pre-line`
+            so blank lines cannot open ragged vertical gaps, and so each
+            line is a real block with its own spacing. */}
+        {page.body.split("\n").map((line, index) => (
+          <p key={index} style={styles.pageBody}>
+            {line}
+          </p>
+        ))}
+      </div>
+
+      {/* Dots double as navigation -- a player who wants to re-read page 1
+          should not have to click Back twice. */}
+      <div style={styles.dots}>
+        {pages.map((entry, index) => (
+          <button
+            key={entry.title}
+            type="button"
+            aria-label={`Go to step ${index + 1}`}
+            aria-current={index === pageIndex}
+            onClick={() => setPageIndex(index)}
+            style={{ ...styles.dot, ...(index === pageIndex ? styles.dotActive : {}) }}
+          />
+        ))}
+      </div>
+
+      {footerExtra}
+
+      <div style={styles.footer}>
+        <button
+          type="button"
+          onClick={() => setPageIndex((index) => Math.max(0, index - 1))}
+          disabled={pageIndex === 0}
+          style={{
+            ...styles.secondaryButton,
+            // Inline styles cannot express `:disabled` (Lobby.tsx design
+            // note #3), so the disabled look is computed.
+            ...(pageIndex === 0 ? styles.buttonDisabled : {}),
+          }}
+        >
+          Back
+        </button>
+        {isLast ? (
+          <button type="button" onClick={onDone} style={styles.primaryButton}>
+            {doneLabel}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPageIndex((index) => Math.min(pages.length - 1, index + 1))}
+            style={styles.primaryButton}
+          >
+            Next
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
 
 export interface TutorialModalProps {
   /** Stable topic id -- also the per-topic "already seen" storage key. */
@@ -337,7 +637,6 @@ export interface TutorialModalProps {
 export function TutorialModal({ topicKey, heading, pages, active }: TutorialModalProps) {
   const seenKey = SEEN_PREFIX + topicKey;
   const [open, setOpen] = useState(false);
-  const [pageIndex, setPageIndex] = useState(0);
   const [turnOff, setTurnOff] = useState(false);
 
   // Opens once, when the phase becomes active, if tutorials are on and this
@@ -346,7 +645,6 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
   useEffect(() => {
     if (!active) return;
     if (tutorialsDisabled() || readFlag(seenKey)) return;
-    setPageIndex(0);
     setOpen(true);
   }, [active, seenKey]);
 
@@ -369,9 +667,6 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
 
   if (!open || pages.length === 0) return null;
 
-  const page = pages[Math.min(pageIndex, pages.length - 1)];
-  const isLast = pageIndex >= pages.length - 1;
-
   return (
     <div
       style={styles.backdrop}
@@ -385,86 +680,34 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
       }}
     >
       <div style={styles.card}>
-        <div style={styles.header}>
-          <span style={styles.heading}>{heading}</span>
-          <span style={styles.stepCount}>
-            {pageIndex + 1} / {pages.length}
-          </span>
-        </div>
+        {/* Design note #158: the page-turner is `TutorialPager`, shared with
+            `TutorialLibrary`. It was inlined here until that note added the
+            on-demand reader, at which point keeping it inline would have
+            meant two independently-maintained copies of the same
+            dots/Back/Next shell -- two readers for one set of words.
 
-        <div style={styles.body}>
-          <span style={styles.pageTitle}>{page.title}</span>
-          {/* Design note #4: bodies may carry hard line breaks. The Operating
-              Round pages are numbered step lists and bullet lists, and
-              collapsing them into one run-on paragraph would undo the only
-              structure they have. Split rather than `white-space: pre-line`
-              so blank lines cannot open ragged vertical gaps, and so each
-              line is a real block with its own spacing. */}
-          {page.body.split("\n").map((line, index) => (
-            <p key={index} style={styles.pageBody}>
-              {line}
-            </p>
-          ))}
-        </div>
-
-        {/* Dots double as navigation -- a player who wants to re-read page 1
-            should not have to click Back twice. */}
-        <div style={styles.dots}>
-          {pages.map((entry, index) => (
-            <button
-              key={entry.title}
-              type="button"
-              aria-label={`Go to step ${index + 1}`}
-              aria-current={index === pageIndex}
-              onClick={() => setPageIndex(index)}
-              style={{ ...styles.dot, ...(index === pageIndex ? styles.dotActive : {}) }}
-            />
-          ))}
-        </div>
-
-        <label style={styles.turnOffRow}>
-          <input
-            type="checkbox"
-            checked={turnOff}
-            onChange={(event) => setTurnOff(event.target.checked)}
-          />
-          <span>Turn tutorials off</span>
-        </label>
-
-        <div style={styles.footer}>
-          <button
-            type="button"
-            onClick={() => setPageIndex((index) => Math.max(0, index - 1))}
-            disabled={pageIndex === 0}
-            style={{
-              ...styles.secondaryButton,
-              // Inline styles cannot express `:disabled` (Lobby.tsx design
-              // note #3), so the disabled look is computed.
-              ...(pageIndex === 0 ? styles.buttonDisabled : {}),
-            }}
-          >
-            Back
-          </button>
-          {isLast ? (
-            <button type="button" onClick={dismiss} style={styles.primaryButton}>
-              Got it
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setPageIndex((index) => Math.min(pages.length - 1, index + 1))}
-              style={styles.primaryButton}
-            >
-              Next
-            </button>
-          )}
-        </div>
+            `pageIndex` moved into the pager with it, which is why this
+            component no longer holds one. */}
+        <TutorialPager
+          heading={heading}
+          pages={pages}
+          onDone={dismiss}
+          doneLabel="Got it"
+          footerExtra={
+            <label style={styles.turnOffRow}>
+              <input
+                type="checkbox"
+                checked={turnOff}
+                onChange={(event) => setTurnOff(event.target.checked)}
+              />
+              <span>Turn tutorials off</span>
+            </label>
+          }
+        />
       </div>
     </div>
   );
 }
-
-export default TutorialModal;
 
 /* ------------------------------------------------------------------ */
 /* Inline styles                                                      */
@@ -535,6 +778,29 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   footer: { display: "flex", justifyContent: "flex-end", gap: "8px" },
+  libraryRow: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "3px",
+    width: "100%",
+    textAlign: "left",
+    padding: "10px 12px",
+    marginTop: "8px",
+    borderRadius: "8px",
+    border: "1px solid #3a4150",
+    backgroundColor: "#1b2130",
+    color: "#e2e6ee",
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  libraryRowHeading: { fontSize: FONT_SIZE.strong, fontWeight: 700 },
+  libraryRowBlurb: { fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.4 },
+  libraryRowCount: {
+    fontSize: FONT_SIZE.micro,
+    color: "#6f7480",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
   primaryButton: {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
@@ -561,3 +827,5 @@ const styles: Record<string, React.CSSProperties> = {
   },
   buttonDisabled: { opacity: 0.4, cursor: "not-allowed" },
 };
+
+export default TutorialModal;

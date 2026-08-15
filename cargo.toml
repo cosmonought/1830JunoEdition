@@ -13,6 +13,13 @@ schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
 thiserror = "1.0.49"
 
+[dev-dependencies]
+# End-to-end integration harness (`tests/e2e.rs`). Pinned to the 0.20 line
+# deliberately: cw-multi-test 1.x and 2.x require cosmwasm-std 2.x, and this
+# contract is built against cosmwasm-std 1.5. Bumping this without bumping
+# that produces a dependency resolution error, not a subtle failure.
+cw-multi-test = "0.20"
+
 [features]
 # for more explicit smart contract library compilation
 library = []

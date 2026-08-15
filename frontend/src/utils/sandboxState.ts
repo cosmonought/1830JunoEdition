@@ -58,6 +58,7 @@
 // guarantee rather than relying on it accidentally.
 
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import type { TileColorTier } from "../components/hexTileCatalog";
 import type {
   GameStateResponse,
   PublicCompanyState,
@@ -372,24 +373,121 @@ export interface SandboxMarketPosition {
  * direction. Same for a price the chart has no cell for: skipped rather
  * than parked at the origin.
  */
-export function sandboxMarketPositions(
-  cellForPrice: (price: number) => { x: number; y: number } | null,
-): SandboxMarketPosition[] {
+export function sandboxMarketPositions(marks: SandboxMarketPrices): SandboxMarketPosition[] {
   const positions: SandboxMarketPosition[] = [];
   for (const corp of SANDBOX_CORPORATIONS) {
-    if (!corp.floated || corp.market === null) continue;
-    const cell = cellForPrice(corp.market);
-    if (!cell) continue;
+    const mark = marks[corp.id] ?? null;
+    // Design note #272: the cell comes off the mark. `cellForPrice` used to
+    // be taken as a parameter and called here on every render; it is now
+    // used once, at seed time, so a walked token stays where it walked.
+    if (!corp.floated || mark === null) continue;
     positions.push({
       company_id: corp.id,
       ticker: corp.ticker,
-      x: cell.x,
-      y: cell.y,
-      price: String(corp.market),
+      x: mark.x,
+      y: mark.y,
+      price: String(mark.price),
     });
   }
   return positions;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 272: THE MARKET IS ITS OWN ATOM, BECAUSE IT IS ON CHAIN
+ * ==================================================================
+ *
+ * REPORTED: no action can be performed in the Stock Phase in the sandbox.
+ *
+ * Buying and selling did work -- cash moved, shares moved. What did not
+ * move was the STOCK MARKET, and on the screen that is mostly stock market
+ * that reads as nothing happening at all. `App.tsx` built its
+ * `MarketGridResponse` from a `useMemo` over the static
+ * `SANDBOX_CORPORATIONS` table with `[sandbox, gameId]` dependencies, so
+ * the chart was frozen from first render by construction. Every token sat
+ * where the fixture put it for the life of the session.
+ *
+ * WHY A SEPARATE ATOM RATHER THAN A FIELD ON `GameStateResponse`. The
+ * obvious fix is to hang a price off `PublicCompanyState` and let the one
+ * reducer move it. That type is a MIRROR of `msg.rs`, and the contract
+ * deliberately keeps the market in a different query (`GetMarketGrid`) --
+ * so adding the field would make the sandbox's state shape diverge from
+ * the one the live path receives, and every component reading it would be
+ * reading something a real chain never sends. The split is inconvenient
+ * here for exactly the reason it is correct there.
+ *
+ * So the market gets the same treatment `sandboxWaterfall` already has: its
+ * own atom, its own reducer, advanced alongside the game state by the same
+ * dispatch. Three mocks, three shapes, matching the three queries.
+ */
+
+/** Where one corporation's marker stands: the price AND the cell.
+ *
+ *  THE CELL IS CARRIED, NOT RE-DERIVED, and that is the whole reason this
+ *  is a record rather than a bare number. `marketCellForPrice` returns the
+ *  FIRST cell with a given price, and this chart repeats prices across
+ *  rows -- so a token walked from $112 at (7,10) down to $90 at (7,8) would
+ *  be re-rendered at (5,10), the first $90 on the board. The price would be
+ *  right and the marker would have jumped two columns sideways, which reads
+ *  as a rendering bug and is the kind of thing that gets reported as one.
+ *
+ *  The contract has the same property and solves it the same way:
+ *  `GetMarketGrid` returns `(x, y)` because it tracks the cell a marker has
+ *  actually walked to, rather than re-deriving a position from a price. */
+export interface SandboxMarketMark {
+  price: number;
+  x: number;
+  y: number;
+}
+
+/** Live market position by `company_id`. `null` for a corporation that has
+ *  not floated and therefore has no position on the chart at all. */
+export type SandboxMarketPrices = Readonly<Record<number, SandboxMarketMark | null>>;
+
+/** The opening chart, as a mutable starting point.
+ *
+ *  `cellForPrice` is injected for the usual reason -- `utils/` must not
+ *  import `components/`. It is used HERE, at seed time, and never again:
+ *  after this the cell travels with the mark. */
+export function sandboxInitialMarketPrices(
+  cellForPrice: (price: number) => { x: number; y: number } | null,
+): SandboxMarketPrices {
+  const marks: Record<number, SandboxMarketMark | null> = {};
+  for (const corp of SANDBOX_CORPORATIONS) {
+    const cell = corp.market === null ? null : cellForPrice(corp.market);
+    marks[corp.id] = corp.market === null || !cell ? null : { price: corp.market, ...cell };
+  }
+  return marks;
+}
+
+/** Just the prices, for the corporation cards -- design note #2's "one
+ *  price, two renderers", now with the chart and the cards reading one
+ *  object rather than two tables. */
+export function sandboxMarketPriceTable(
+  marks: SandboxMarketPrices,
+): Readonly<Record<number, number | null>> {
+  return Object.fromEntries(
+    Object.entries(marks).map(([id, mark]) => [Number(id), mark?.price ?? null]),
+  );
+}
+
+/** 1830's real per-corporation station allowance, home token included --
+ *  keyed by `public_company::CORE_PUBLIC_COMPANIES`' own `company_id`.
+ *
+ *  Mirrors the table `RulesReference.tsx` states in prose. A small literal
+ *  here rather than an import from that file for the same reason every other
+ *  figure in this fixture is a literal: the mock must not depend on a
+ *  rendering component, and the harness asserts the resulting rows are
+ *  internally consistent. */
+const STATION_TOKEN_ALLOWANCE: Readonly<Record<number, number>> = {
+  1: 4, // PRR
+  2: 4, // NYC
+  3: 4, // CPR
+  4: 3, // B&O
+  5: 3, // C&O
+  6: 3, // ERIE
+  7: 2, // NNH
+  8: 2, // B&M
+};
 
 function buildPublicCompanies(): PublicCompanyState[] {
   return SANDBOX_CORPORATIONS.map((corp) => {
@@ -402,6 +500,10 @@ function buildPublicCompanies(): PublicCompanyState[] {
       // One certificate is 10%, per rules.md's SR transaction rule.
       total_shares_issued: soldToPlayers / 10,
       par_value: corp.par === null ? null : String(corp.par),
+      // A floated company has operated and so has a figure to show; an
+      // unfloated one has never run, which is a real `"0"` rather than the
+      // `undefined` that means "this build cannot tell you".
+      last_route_revenue: corp.floated ? "90" : "0",
       owned_trains: corp.trains,
       president: corp.president === null ? null : SANDBOX_PLAYERS[corp.president],
       // Whatever players do not hold is split between the IPO and the bank
@@ -421,7 +523,15 @@ function buildPublicCompanies(): PublicCompanyState[] {
         corp.floated && corp.homeHex
           ? ([axialForLabel(corp.homeHex)].filter(Boolean) as Array<[number, number]>)
           : [],
-      station_token_limit: 4,
+      /* Design note #237: THE ALLOWANCE IS PER CORPORATION.
+         This was a flat `4` for all eight, which made the new token row
+         draw the same four circles for everybody -- including B&M and NNH,
+         which get two. A fixture that hands every company the largest
+         allowance in the game cannot exercise the case the row exists for
+         (a corporation running out), and it contradicts
+         `RulesReference.tsx`, which has carried the real table all along:
+         PRR/NYC/CPR 4, B&O/C&O/ERIE 3, NNH/B&M 2 -- home token included. */
+      station_token_limit: STATION_TOKEN_ALLOWANCE[corp.id] ?? 3,
     } satisfies PublicCompanyState;
   });
 }
@@ -464,6 +574,240 @@ function buildPrivateCompanies(phase: RoundType): PrivateCompanyState[] {
  * four -- otherwise the turn-gated controls would all render disabled and
  * there would be nothing to polish.
  */
+/* ===================================================================
+ *  DESIGN NOTE 176: FIVE SCENARIOS, ONE FIXTURE
+ * ===================================================================
+ *
+ * The sandbox was one board: a Phase 3, Green-era Operating Round. That is
+ * a reasonable default and a poor testbed, because most of what there is to
+ * test is not reachable from it. The yellow tile catalog, the brown
+ * catalog, a Stock Round's buy/sell controls and the auction's whole
+ * dashboard were each one hardcoded constant away and none of them could be
+ * opened.
+ *
+ * A scenario is deliberately NOT a separate hand-written board. It is the
+ * one fixture plus a small, declared delta -- which round type, which era,
+ * and which train tier the corporations own. Writing five independent
+ * fixtures would mean five sets of presidencies, holdings and treasuries to
+ * keep internally consistent, and the sandbox has already been bitten twice
+ * by a fixture describing a board 1830 cannot reach (an unfloated company
+ * in the operating queue; two players holding shares with no president).
+ * One fixture, five deltas, one place for those invariants to live.
+ *
+ * THE TRAIN TIER IS THE ERA'S REAL DRIVER, and this is the part worth not
+ * getting wrong. `derivePhase` reads the highest tier any corporation OWNS
+ * -- `current_global_era` is a separate field the contract also tracks, and
+ * the two must agree or the phase badge and the tile filter will disagree
+ * about which era it is. Each scenario therefore sets BOTH, from one
+ * declaration, rather than letting a caller set one and forget the other.
+ */
+export type SandboxScenarioId =
+  | "auction"
+  | "stock"
+  | "or-yellow"
+  | "or-green"
+  | "or-brown";
+
+export interface SandboxScenario {
+  id: SandboxScenarioId;
+  label: string;
+  /** One line in the dropdown, so a tester picks by what it exercises
+   *  rather than by guessing what the name implies. */
+  blurb: string;
+  phase: RoundType;
+  era: TileColorTier;
+  /** The highest train tier in play. Drives `derivePhase`, and is kept in
+   *  step with `era` by construction -- see design note #176. */
+  trainTier: string;
+}
+
+export const SANDBOX_SCENARIOS: readonly SandboxScenario[] = [
+  {
+    id: "auction",
+    label: "Private Auction",
+    blurb: "Phase 1 - bidding and passing on the six privates",
+    phase: "WaterfallAuction",
+    era: "Yellow",
+    trainTier: "2",
+  },
+  {
+    id: "stock",
+    label: "Stock Round",
+    blurb: "Phase 2 - buying and selling shares, floating corporations",
+    phase: "StockRound",
+    era: "Yellow",
+    trainTier: "2",
+  },
+  {
+    id: "or-yellow",
+    label: "Operating Round - Yellow",
+    blurb: "Phase 2 - yellow tile catalog, 2-trains",
+    phase: "OperatingRound",
+    era: "Yellow",
+    trainTier: "2",
+  },
+  {
+    id: "or-green",
+    label: "Operating Round - Green",
+    blurb: "Phase 3 - green upgrades unlocked, 3-trains",
+    phase: "OperatingRound",
+    era: "Green",
+    trainTier: "3",
+  },
+  {
+    id: "or-brown",
+    label: "Operating Round - Brown",
+    blurb: "Phase 5 - brown upgrades unlocked, 5-trains, privates closed",
+    phase: "OperatingRound",
+    era: "Brown",
+    trainTier: "5",
+  },
+];
+
+/** 1830's printed depot counts, mirroring `gamePhase.ts`'s `DEPOT_TOTALS`.
+ *  Duplicated as a small literal rather than imported to keep this fixture
+ *  module free of a dependency on the phase-derivation code it feeds --
+ *  and the harness asserts the resulting scenarios leave real stock, which
+ *  is the property that actually matters. */
+const DEPOT_TOTAL_FOR_TIER: Readonly<Record<string, number>> = {
+  "2": 6,
+  "3": 5,
+  "4": 4,
+  "5": 3,
+  "6": 2,
+};
+
+export const DEFAULT_SANDBOX_SCENARIO: SandboxScenarioId = "or-green";
+
+export function sandboxScenario(id: SandboxScenarioId): SandboxScenario {
+  return SANDBOX_SCENARIOS.find((s) => s.id === id) ?? SANDBOX_SCENARIOS[3];
+}
+
+/** The fixture for a scenario -- design note #176. */
+/* ==================================================================
+ *  DESIGN NOTE 246: A FIXTURE FOR THE TRADE SCREEN
+ * ==================================================================
+ *
+ * REPORTED: the "Buy from Corporation" UI cannot be tested, because the
+ * sandbox starts with no corporation owning a train.
+ *
+ * True, and it is the FLEET CAP below doing it. That cap hands trains out
+ * in queue order until the depot would be emptied, which for a Green
+ * scenario is three trains -- and the fixture's first corporation alone
+ * wants four, so PRR takes all three and every other company opens with
+ * none. `TrainPurchasePanel`'s roster then correctly lists nobody (design
+ * note #232 filters to corporations that actually own trains), so the
+ * accordion is empty and the whole trade flow is unreachable.
+ *
+ * The cap is right and should stay: its own note records the bug it fixed,
+ * a testbed whose first purchase immediately triggers the next phase. What
+ * was missing is a way to ask for a DIFFERENT distribution.
+ *
+ * `trainFixture` is that. `"spread"` gives the first two floated
+ * corporations a 2-train and a 3-train each -- a mixed fleet, so the trade
+ * panel's badges have more than one model to show and the "one train at a
+ * time" limit is exercisable -- while leaving everyone else and the depot
+ * alone. It is deliberately a SEPARATE axis from the scenario rather than a
+ * sixth scenario: which era you are in and who owns trains are independent
+ * questions, and folding them together would mean five more dropdown
+ * entries to express one boolean.
+ */
+export type SandboxTrainFixture = "default" | "spread";
+
+/** How many corporations `"spread"` equips, and with what. Two is the
+ *  minimum that makes a TRADE testable -- one to buy and one to sell -- and
+ *  more would start eating the depot the fleet cap exists to protect. */
+const SPREAD_FIXTURE_FLEET: readonly string[] = ["2", "3"];
+const SPREAD_FIXTURE_COMPANIES = 2;
+
+export function sandboxScenarioState(
+  id: SandboxScenarioId,
+  gameId: number,
+  /** Design note #246. Defaults to the historic distribution, so every
+   *  existing caller and every existing screenshot is unchanged. */
+  trainFixture: SandboxTrainFixture = "default",
+): GameStateResponse {
+  const scenario = sandboxScenario(id);
+  const base = sandboxGameState(scenario.phase, gameId);
+
+  /* THE FLEET IS CAPPED, and the reason is a bug this fixture had.
+   *
+   * The first cut retiered every owned train to the scenario's tier,
+   * preserving the count. The fixture's corporations own ten trains between
+   * them, and 1830's depot holds only six 2-trains, five 3s and three 5s --
+   * so every scenario opened with its OWN tier already sold out, and
+   * `depotInventory` correctly reported the next tier up as the only thing
+   * buyable. A "Phase 3" testbed whose first purchase immediately triggers
+   * Phase 4 is not testing Phase 3.
+   *
+   * The cap leaves at least two in the depot, so the depot panel has a real
+   * current-tier train to sell and the phase-shift warning is not already
+   * firing on arrival. Corporations past the cap simply own fewer trains,
+   * which costs a testbed nothing. */
+  const depotTotal = DEPOT_TOTAL_FOR_TIER[scenario.trainTier] ?? 4;
+  const fleetCap = Math.max(1, depotTotal - 2);
+  let handedOut = 0;
+
+  /* Design note #246: the trade fixture equips the first two FLOATED
+     corporations, in operating order, so the two it picks are the two a
+     tester is most likely to be acting as. Unfloated companies are skipped
+     -- one cannot operate, so a train in its roster would describe a board
+     1830 cannot reach, which is the failure this fixture module has been
+     bitten by twice (`sandboxState` design notes #6 and #169). */
+  const spreadTargets = new Set<number>(
+    trainFixture === "spread"
+      ? base.active_operating_order
+          .filter((companyId) =>
+            base.public_companies.some(
+              (company) => company.company_id === companyId && company.is_floated,
+            ),
+          )
+          .slice(0, SPREAD_FIXTURE_COMPANIES)
+      : [],
+  );
+
+  /* THE FIXTURE'S TRAINS COUNT AGAINST THE CAP, and this is the correction
+   * that makes the whole thing safe.
+   *
+   * A first cut handed the spread fleets out and then ran the ordinary cap
+   * loop from zero for everybody else. `depotInventory` derives remaining
+   * stock from what corporations OWN, so the two allocations stacked: the
+   * spread issued two 3-trains, the loop issued its full three more, and the
+   * five-train 3-depot came out at ZERO. That is precisely the state the cap
+   * above exists to prevent -- a Green testbed whose Buy-from-Bank panel has
+   * nothing at the current tier to sell and whose first purchase would jump
+   * the phase. Fixing one panel by breaking the one beside it.
+   *
+   * Seeding `handedOut` with the current-tier trains the fixture already
+   * issued keeps ONE budget across both allocations, so the depot ends up
+   * with the same headroom either way. */
+  handedOut = spreadTargets.size * SPREAD_FIXTURE_FLEET.filter((tier) => tier === scenario.trainTier).length;
+
+  return {
+    ...base,
+    current_global_era: scenario.era,
+    public_companies: base.public_companies.map((company) => {
+      if (spreadTargets.has(company.company_id)) {
+        return { ...company, owned_trains: [...SPREAD_FIXTURE_FLEET] };
+      }
+      const wanted = (company.owned_trains ?? []).length;
+      const granted = Math.max(0, Math.min(wanted, fleetCap - handedOut));
+      handedOut += granted;
+      return {
+        ...company,
+        owned_trains: Array.from({ length: granted }, () => scenario.trainTier),
+      };
+    }),
+    // Phase 5 closes every private company (`hardware.rs` module doc
+    // comment #12). Modelled, because the Buy Private sheet reads `closed`
+    // and a Brown scenario that still offered privates for sale would be
+    // testing a state the rules forbid.
+    private_companies: base.private_companies.map((entry) =>
+      scenario.era === "Brown" ? { ...entry, closed: true } : entry,
+    ),
+  };
+}
+
 export function sandboxGameState(phase: RoundType, gameId: number): GameStateResponse {
   return {
     game_id: gameId,
@@ -481,7 +825,20 @@ export function sandboxGameState(phase: RoundType, gameId: number): GameStateRes
     // off-board values are live, early enough that Brown is not, so the
     // era-dependent branches are visibly doing something.
     current_global_era: "Green",
-    active_operating_order: [1, 2, 8, 7, 3, 4],
+    /* Design note #169 (App.tsx): ONLY FLOATED CORPORATIONS OPERATE.
+       This read `[1, 2, 8, 7, 3, 4]`, and 4 is B&O -- `floated: false`,
+       treasury `0`, still awaiting its 60%. An unfloated company cannot
+       take an Operating Round turn, so its presence here described a board
+       1830 cannot reach, and any consumer walking the queue to its end
+       would eventually hand the turn to a company with no money and no
+       right to it.
+
+       The remaining six are exactly the `floated: true` entries, in the
+       operating order the sandbox intends (highest market price first:
+       PRR 112, B&M 90, NYC 82, CPR 76, ERIE 76, NNH 67 -- with ERIE and
+       NNH placed by the fixture's own choice rather than derived, since
+       `calculate_operating_order`'s tie-break is the contract's). */
+    active_operating_order: [1, 8, 2, 3, 6, 7],
     active_corporation_index: 0,
     current_round_type: phase,
     macro_round_number: phase === "WaterfallAuction" ? 1 : 3,

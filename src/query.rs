@@ -215,6 +215,8 @@ pub fn query_game_state(deps: Deps, game_id: u64) -> StdResult<GameStateResponse
             is_floated: company.is_floated,
             treasury: company.treasury,
             total_shares_issued: company.total_shares_issued,
+            // Step 4.5 Batch 2, item 4.
+            last_route_revenue: company.last_route_revenue,
             par_value,
             president,
             ipo_pool_percentage,

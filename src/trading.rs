@@ -295,8 +295,51 @@
 //!     Waterfall Auction still gets that phase's own, more specific
 //!     `WaterfallAuctionInProgress` error pointing them at `waterfall.rs`'s
 //!     five dedicated messages.
+//! 19. **Step 4.5 Batch 1, item 1 -- Atomic Multi-Buy.** `BuyStock` gained a
+//!     `quantity: Option<u32>` field. `None` means one certificate, which is
+//!     exactly the pre-Batch-1 behavior, so every existing caller is
+//!     unaffected. A quantity above 1 is legal only from the Bank pool and
+//!     only while the corporation's marker sits in the Brown band
+//!     (`MultiBuyNotPermitted` otherwise), and settles as a single atomic
+//!     transaction: one debit of `quantity * price`, one share write, one
+//!     pool write, all after every validation has already passed. Note this
+//!     is a SECOND expression of the Brown-Zone privilege, alongside the
+//!     turn-pacing exception in #15 -- both are real, and both remain legal.
+//! 20. **Step 4.5 Batch 1, item 2 -- the two limits, separated.** The 60%
+//!     ownership cap and the Global Certificate Limit now live in named,
+//!     independently testable functions (`check_holding_limit`,
+//!     `check_cert_limit`) instead of being open-coded inside
+//!     `execute_buy_stock`. The behavioral change is in the certificate
+//!     limit: the Yellow/Orange/Brown exemption now filters the player's
+//!     ALREADY-HELD certificates out of the running total too, not just the
+//!     certificate being bought. See `check_cert_limit`'s doc comment for
+//!     why the old asymmetry was wrong in both directions. The ownership cap
+//!     additionally gained a hard 100% backstop
+//!     (`HoldingExceedsTotalIssue`): "unlimited" in the Orange/Brown bands
+//!     means "no 60% cap", never "more of a corporation than exists".
+//! 21. **Step 4.5 Batch 1, item 3 -- Stock Round Buyback Lockout.**
+//!     `execute_sell_stock` records the corporation into
+//!     `state::PLAYER_SR_SALES`; `execute_buy_stock` rejects any purchase of
+//!     a corporation in the caller's list with `StockBuybackLockout`. The
+//!     list clears at the Stock-Round-to-Operating-Round boundary, from both
+//!     `conclude_stock_round` and `operations::execute_begin_operating_round`.
+//!     This closes a wash-trade hole: a player could previously dump a
+//!     rival's stock to crater the price and immediately re-buy it cheaper in
+//!     the same round.
+//! 22. **Step 4.5 Batch 1, items 4 and 6 -- round conclusion and corporation
+//!     opening.** `conclude_stock_round` is this module's new
+//!     end-of-Stock-Round hook, fired by `gamelog::execute_pass_turn` the
+//!     moment every player has passed consecutively; it applies the
+//!     100%-sold-out price rise to every fully-held floated corporation and
+//!     clears the lockout. `execute_buy_stock`'s opening-purchase branch
+//!     enforces that the first certificate out of any corporation is the 20%
+//!     President's Certificate at exactly twice par -- see that function's
+//!     own doc comment, and note that Baltimore & Ohio is naturally exempt
+//!     because `auction::award_bo_president_share` has already granted it.
 
-use cosmwasm_std::{Addr, DepsMut, Env, MessageInfo, Response, StdError, Storage, Uint128};
+use cosmwasm_std::{
+    Addr, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
+};
 use thiserror::Error;
 
 use crate::auction::CORE_PRIVATE_COMPANIES;
@@ -306,10 +349,11 @@ use crate::msg::SharePurchaseSource;
 use crate::public_company::CORE_PUBLIC_COMPANIES;
 use crate::or_phase;
 use crate::state::{
-    count_player_certificates, GameSession, OperatingSubPhase, PrivateCompany, PublicCompany,
-    RoundType, TileColor,
+    count_player_certificates_with_exemptions, GameSession, MarketCell, OperatingSubPhase,
+    PrivateCompany, PublicCompany, RoundType, TileColor,
     ZoneType, BANK_POOL_SHARES, IPO_POOL_SHARES, MARKET_GRID, PLAYER_CASH_VGP, PLAYER_SHARES,
-    PRIVATE_COMPANIES, PROTOCOL_PAR_VALUE, PROTOCOL_PRESIDENT, PUBLIC_COMPANIES, SESSIONS,
+    PLAYER_SR_SALES, PRIVATE_COMPANIES, PROTOCOL_MARKET, PROTOCOL_PAR_VALUE, PROTOCOL_PRESIDENT,
+    PUBLIC_COMPANIES, SESSIONS,
 };
 
 /// One certificate = this percentage of a protocol, per rules.md's SR
@@ -330,6 +374,37 @@ pub const CERTIFICATE_LIMIT_PERCENTAGE: u8 = 60;
 /// seat for a protocol (rules.md: "the highest percentage of shares
 /// (minimum 20%)").
 pub const PRESIDENT_MIN_PERCENTAGE: u8 = 20;
+
+/// **Step 4.5 Batch 1, item 6.** The size of the President's Certificate --
+/// the single physical 20% card that opens a corporation. Numerically equal
+/// to `PRESIDENT_MIN_PERCENTAGE`, but a deliberately separate constant: that
+/// one is a *threshold* asked of any holding ("do you hold enough to preside
+/// at all"), this one is the *size of one specific card*. They coincide in
+/// 1830 and diverge in other 18xx titles, and conflating them would make the
+/// opening-purchase rule silently follow any future change to the presidency
+/// threshold.
+pub const PRESIDENT_CERTIFICATE_PERCENTAGE: u8 = 20;
+
+/// **Step 4.5 Batch 1, item 6.** The President's Certificate costs exactly
+/// this multiple of the corporation's chosen Par Value -- two shares' worth
+/// for one 20% card, which is the whole reason opening a corporation is a
+/// real capital commitment rather than a free option.
+pub const PRESIDENT_CERTIFICATE_PAR_MULTIPLIER: u128 = 2;
+
+/// **Step 4.5 Batch 1, item 1.** The `quantity` an omitted
+/// `ExecuteMsg::BuyStock { quantity: None }` resolves to: exactly one
+/// certificate, the pre-Batch-1 behavior of every existing call site.
+pub const DEFAULT_BUY_QUANTITY: u32 = 1;
+
+/// **Step 4.5 Batch 1, item 1.** The largest `quantity` a single `BuyStock`
+/// may name. `STANDARD_SHARE_COUNT` (10) certificates is an entire
+/// corporation, so anything above it can only be a caller error; rejecting it
+/// up front keeps `quantity * PERCENT_PER_SHARE` provably inside `u8` for
+/// every value that reaches the pool arithmetic. Note this is only the outer
+/// bound on the *message*: the Brown-Zone invariant below independently
+/// rejects any quantity above 1 that isn't a Bank purchase in the Brown band,
+/// and pool liquidity caps it again after that.
+pub const MAX_MULTI_BUY_QUANTITY: u32 = STANDARD_SHARE_COUNT as u32;
 
 /// Percentage of a protocol's shares that must be owned by real players
 /// (i.e. no longer sitting in `IPO_POOL_SHARES`/`BANK_POOL_SHARES`) before
@@ -518,6 +593,66 @@ pub enum TradingError {
         protocol_id: u32,
         new_total: u8,
         limit: u8,
+    },
+
+    /// **Step 4.5 Batch 1, item 2.** The Orange/Brown zones lift the 60%
+    /// ownership cap, but nothing lifts the fact that a corporation only has
+    /// 100% of itself to sell. This is the backstop that keeps
+    /// `check_holding_limit` total rather than merely permissive.
+    #[error(
+        "Buying would give the player {new_total} percent of protocol {protocol_id}, but only 100 percent of a corporation exists"
+    )]
+    HoldingExceedsTotalIssue { protocol_id: u32, new_total: u8 },
+
+    /// **Step 4.5 Batch 1, item 1.** `quantity` was `0`, or above
+    /// `MAX_MULTI_BUY_QUANTITY`.
+    #[error(
+        "quantity must be between 1 and {max} certificates; {requested} is not a legal purchase size"
+    )]
+    InvalidBuyQuantity { requested: u32, max: u32 },
+
+    /// **Step 4.5 Batch 1, item 1.** A multi-certificate purchase was
+    /// attempted somewhere the Brown-Zone Multiple-Buy exception does not
+    /// apply. Carries the zone and pool actually seen so the rejection is
+    /// self-diagnosing rather than requiring a separate market query.
+    ///
+    /// The pool field is `purchase_source`, NOT `source`: `thiserror` treats
+    /// any field literally named `source` as the error's underlying CAUSE and
+    /// generates an `Error::source()` impl for it, which then requires
+    /// `SharePurchaseSource: std::error::Error`. It is a plain data enum, not
+    /// an error, so that bound can never be satisfied. Renaming the field is
+    /// the fix -- `thiserror` 1.x has no opt-out attribute.
+    #[error(
+        "Buying {requested} certificates of protocol {protocol_id} in one action is not permitted: a multi-share purchase requires the corporation's market token to sit in the Brown Zone AND the shares to be drawn from the Open Market Bank pool (token is in {zone:?}, source was {purchase_source:?})"
+    )]
+    MultiBuyNotPermitted {
+        protocol_id: u32,
+        requested: u32,
+        zone: ZoneType,
+        purchase_source: SharePurchaseSource,
+    },
+
+    /// **Step 4.5 Batch 1, item 3.** The Stock Round Buyback Lockout: this
+    /// player already sold this corporation earlier in the same Stock Round.
+    #[error(
+        "{player} sold {corporation} (protocol {protocol_id}) earlier in this Stock Round and may not buy back into it until the Stock Round ends"
+    )]
+    StockBuybackLockout {
+        corporation: String,
+        protocol_id: u32,
+        player: String,
+    },
+
+    /// **Step 4.5 Batch 1, item 6.** An ordinary share was requested from a
+    /// corporation that has never been opened. The first certificate out of
+    /// any corporation is the President's Certificate, and it is bought
+    /// singly from the IPO at twice par -- see `execute_buy_stock`.
+    #[error(
+        "Protocol {protocol_id} has no President and no issued shares: its first purchase must be the {required_percentage} percent President's Certificate, bought as a single certificate from the IPO pool at exactly 2x its par value"
+    )]
+    PresidentsCertificateRequired {
+        protocol_id: u32,
+        required_percentage: u8,
     },
 
     #[error(
@@ -777,6 +912,307 @@ fn total_player_owned_percentage(
     Ok(total)
 }
 
+/// `protocol_id`'s human-readable ticker (e.g. "PRR"), for error messages
+/// that name a corporation rather than a numeric id. Falls back to the id
+/// itself for a protocol with no `PUBLIC_COMPANIES` entry, so this can never
+/// itself be the reason a call fails.
+fn corporation_ticker(
+    storage: &dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+) -> StdResult<String> {
+    Ok(PUBLIC_COMPANIES
+        .may_load(storage, (game_id, protocol_id))?
+        .map(|company| company.ticker)
+        .unwrap_or_else(|| format!("protocol {protocol_id}")))
+}
+
+// ===================================================================
+// Step 4.5 Batch 1, item 3: the Stock Round Buyback Lockout.
+// See `state::PLAYER_SR_SALES` for the storage design and why the set is a
+// sorted `Vec<u32>` rather than a `HashSet<String>`.
+// ===================================================================
+
+/// The corporations `player` has sold during the current Stock Round, sorted
+/// ascending. An absent entry reads as "sold nothing yet this round".
+pub fn stock_round_sales(
+    storage: &dyn Storage,
+    game_id: u64,
+    player: &Addr,
+) -> StdResult<Vec<u32>> {
+    Ok(PLAYER_SR_SALES
+        .may_load(storage, (game_id, player.clone()))?
+        .unwrap_or_default())
+}
+
+/// Records that `player` has sold `protocol_id` this Stock Round, locking
+/// them out of buying it back until the round ends. Idempotent: selling the
+/// same corporation three times in one round writes one entry, and the list
+/// is kept sorted so its serialized bytes are canonical (determinism).
+pub fn record_stock_round_sale(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    player: &Addr,
+    protocol_id: u32,
+) -> StdResult<()> {
+    let mut sold = stock_round_sales(storage, game_id, player)?;
+    if let Err(insert_at) = sold.binary_search(&protocol_id) {
+        sold.insert(insert_at, protocol_id);
+        PLAYER_SR_SALES.save(storage, (game_id, player.clone()), &sold)?;
+    }
+    Ok(())
+}
+
+/// True while `player` is barred from buying `protocol_id` -- i.e. they sold
+/// it earlier in this Stock Round and the round has not ended yet.
+pub fn is_buyback_locked_out(
+    storage: &dyn Storage,
+    game_id: u64,
+    player: &Addr,
+    protocol_id: u32,
+) -> StdResult<bool> {
+    Ok(stock_round_sales(storage, game_id, player)?
+        .binary_search(&protocol_id)
+        .is_ok())
+}
+
+/// Drops every player's Buyback Lockout for `game_id` -- the
+/// Stock-Round-to-Operating-Round boundary. Called from
+/// `conclude_stock_round` (the all-players-passed path) and, defensively,
+/// from `operations::execute_begin_operating_round`, so a lockout can never
+/// survive into a round it was never meant to constrain. Idempotent:
+/// removing an absent key is a no-op.
+pub fn clear_stock_round_sales(storage: &mut dyn Storage, game_id: u64, players: &[Addr]) {
+    for player in players {
+        PLAYER_SR_SALES.remove(storage, (game_id, player.clone()));
+    }
+}
+
+// ===================================================================
+// Step 4.5 Batch 1, item 2: the two limit invariants, named and isolated.
+// ===================================================================
+
+/// **The per-corporation ownership cap.** A single player may hold at most
+/// `CERTIFICATE_LIMIT_PERCENTAGE` (60%) of one corporation -- UNLESS its
+/// price marker currently sits in the Orange or Brown band, which lifts the
+/// cap entirely (`ZoneType::waives_ownership_cap`). Yellow does NOT lift it:
+/// Yellow waives the separate *hand* limit only. See `ZoneType`'s doc comment
+/// for the nested-band semantics.
+///
+/// The 100% backstop is checked FIRST and applies in every zone. "Unlimited"
+/// in 1830 means "no 60% cap", not "more than the corporation has".
+///
+/// A pure function of its arguments -- no storage, no side effects -- so the
+/// rule can be unit-tested directly and so `execute_buy_stock` can call it in
+/// its Checks phase without any possibility of writing state.
+pub fn check_holding_limit(
+    protocol_id: u32,
+    new_total_pct: u8,
+    zone_type: ZoneType,
+) -> Result<(), TradingError> {
+    if new_total_pct > FULL_POOL_PERCENTAGE {
+        return Err(TradingError::HoldingExceedsTotalIssue {
+            protocol_id,
+            new_total: new_total_pct,
+        });
+    }
+
+    if zone_type.waives_ownership_cap() {
+        return Ok(());
+    }
+
+    if new_total_pct > CERTIFICATE_LIMIT_PERCENTAGE {
+        return Err(TradingError::CertificateLimitExceeded {
+            protocol_id,
+            new_total: new_total_pct,
+            limit: CERTIFICATE_LIMIT_PERCENTAGE,
+        });
+    }
+
+    Ok(())
+}
+
+/// Every corporation in `game_id` whose price marker currently sits on a cell
+/// that waives the Global Certificate Limit -- the Yellow, Orange and Brown
+/// bands (`ZoneType::waives_certificate_limit`). Feeds
+/// `state::count_player_certificates_with_exemptions`, which skips these
+/// companies' certificates entirely when totalling a player's hand.
+///
+/// A corporation with no recorded market position (never opened) is not
+/// exempt: it contributes nothing to anyone's hand anyway, since nobody can
+/// hold shares in it yet.
+pub fn certificate_limit_exempt_companies(
+    storage: &dyn Storage,
+    game_id: u64,
+) -> Result<Vec<u32>, TradingError> {
+    let mut exempt: Vec<u32> = Vec::new();
+
+    for (company_id, _ticker) in CORE_PUBLIC_COMPANIES.iter().copied() {
+        let position = match PROTOCOL_MARKET.may_load(storage, (game_id, company_id))? {
+            Some(position) => position,
+            None => continue,
+        };
+        let cell = match MARKET_GRID
+            .may_load(storage, (position.current_x, position.current_y))?
+        {
+            Some(cell) => cell,
+            None => continue,
+        };
+        if cell.zone_type.waives_certificate_limit() {
+            exempt.push(company_id);
+        }
+    }
+
+    Ok(exempt)
+}
+
+/// **The Global Certificate Limit (hand limit).** Rejects a purchase that
+/// would push `buyer`'s total physical certificate count past the standard
+/// 1830 cap for a `max_players`-player game
+/// (`CERTIFICATE_LIMIT_BY_PLAYER_COUNT`). A STRICT hard block -- see module
+/// doc comment #12.
+///
+/// **What Batch 1 changed here (item 2).** The zone exemption used to skip
+/// this check wholesale whenever the *incoming* certificate was zone-exempt,
+/// while the running total it compared against still counted every
+/// zone-exempt certificate the player was already holding. That is
+/// inconsistent in both directions: it let an at-the-cap player add a Yellow
+/// certificate (correct) but then counted that same certificate against them
+/// on their very next purchase (incorrect). Now the exemption is applied
+/// once, uniformly: `certificate_limit_exempt_companies` filters the held
+/// total, and `purchase_is_zone_exempt` zeroes the incoming count.
+///
+/// `incoming_certificates` is the number of physical CARDS this purchase
+/// adds, not percentage points -- one for a President's Certificate (a 20%
+/// card is still one card, see `state::count_player_certificates`), otherwise
+/// the purchase's `quantity`.
+pub fn check_cert_limit(
+    storage: &dyn Storage,
+    game_id: u64,
+    buyer: &Addr,
+    max_players: u8,
+    incoming_certificates: u32,
+    purchase_is_zone_exempt: bool,
+) -> Result<(), TradingError> {
+    let private_ids: Vec<u32> = CORE_PRIVATE_COMPANIES
+        .iter()
+        .map(|(private_id, ..)| *private_id)
+        .collect();
+    let public_company_ids: Vec<u32> = CORE_PUBLIC_COMPANIES
+        .iter()
+        .map(|(company_id, _ticker)| *company_id)
+        .collect();
+    let exempt_company_ids = certificate_limit_exempt_companies(storage, game_id)?;
+
+    let current_certificates = count_player_certificates_with_exemptions(
+        storage,
+        game_id,
+        buyer,
+        &private_ids,
+        &public_company_ids,
+        PERCENT_PER_SHARE,
+        PRESIDENT_MIN_PERCENTAGE,
+        &exempt_company_ids,
+    )?;
+
+    let counted_incoming = if purchase_is_zone_exempt {
+        0
+    } else {
+        incoming_certificates
+    };
+    let would_hold_certificates = current_certificates
+        .checked_add(counted_incoming)
+        .ok_or(TradingError::Overflow {})?;
+
+    let certificate_limit = certificate_limit_for_player_count(max_players).unwrap_or(u32::MAX);
+    if would_hold_certificates > certificate_limit {
+        return Err(TradingError::ExceededCertificateLimit {
+            player: buyer.to_string(),
+            max_players,
+            limit: certificate_limit,
+            would_hold: would_hold_certificates,
+        });
+    }
+
+    Ok(())
+}
+
+// ===================================================================
+// Step 4.5 Batch 1, item 4: end-of-Stock-Round resolution.
+// ===================================================================
+
+/// **Concludes a Stock Round.** Called the moment every player has passed
+/// consecutively (`gamelog::execute_pass_turn`), which is the classic 18xx
+/// end-of-Stock-Round condition and -- until Batch 1 -- a condition this
+/// contract tracked in `GameSession::consecutive_passes` but never acted on.
+///
+/// Two things happen, in this order:
+/// 1. **The 100%-Sold-Out price rise (item 4).** Every floated corporation
+///    with an empty IPO pool AND an empty Bank pool -- i.e. 100% of its
+///    shares are in player hands -- advances one cell up the chart. Delegated
+///    to `market::apply_sold_out_price_rises`; see that function for the
+///    coordinate convention and for why it must be called exactly once per
+///    round.
+/// 2. **The Buyback Lockout clears (item 3).** Every player's
+///    `PLAYER_SR_SALES` entry is dropped, so the corporations they sold this
+///    round are freely buyable again next round.
+///
+/// Also resets `consecutive_passes` to `0`, which is what makes this
+/// idempotent in practice: the all-passed condition cannot re-fire on the
+/// next pass without a full fresh round of passes first.
+///
+/// Deliberately does NOT flip `current_round_type` to
+/// `RoundType::OperatingRound`. That transition belongs to
+/// `operations::execute_begin_operating_round`, which also computes the
+/// operating order and the paced sub-round count; splitting it would give
+/// this contract two competing definitions of when an Operating Round starts.
+/// Mutates `session` in place; the CALLER is responsible for persisting it.
+pub fn conclude_stock_round(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    session: &mut GameSession,
+) -> Result<Vec<(u32, MarketCell)>, TradingError> {
+    let company_ids: Vec<u32> = CORE_PUBLIC_COMPANIES
+        .iter()
+        .map(|(company_id, _ticker)| *company_id)
+        .collect();
+
+    let risen =
+        market::apply_sold_out_price_rises(storage, game_id, &company_ids, FULL_POOL_PERCENTAGE)?;
+
+    clear_stock_round_sales(storage, game_id, &session.player_addresses);
+
+    // ---- Step 4.5 Batch 4: the Priority Deal moves.
+    //
+    // The 1830 rule: the deal passes to the player seated immediately to the
+    // LEFT of whoever took the last action of the Stock Round. Acting last
+    // therefore hands your neighbour the opening move of the next round --
+    // which is what makes "should I take one more share?" a real question at
+    // the end of a round rather than a free option.
+    //
+    // "To the left" is `+ 1` in seating order, matching
+    // `waterfall::conclude_waterfall`'s identical treatment of the last
+    // private winner. `player_addresses` order IS the seating order
+    // throughout this contract.
+    //
+    // If NOBODY acted -- a full round of passes with no buy or sell at all,
+    // which is legal and ends the round immediately -- there is no last
+    // actor to seat relative to, so the deal simply stays where it is. That
+    // is the correct outcome: an empty round should not rotate anything.
+    let player_count = session.player_addresses.len() as u32;
+    if let Some(last_actor) = session.last_active_player_index {
+        if player_count > 0 {
+            session.priority_deal_index = (last_actor + 1) % player_count;
+        }
+    }
+    // Cleared either way, so the next round starts with no inherited actor.
+    session.last_active_player_index = None;
+
+    session.consecutive_passes = 0;
+
+    Ok(risen)
+}
+
 /// The pool-side storage write `execute_buy_stock` has resolved but not yet
 /// applied -- computed during that function's Checks phase (purely by
 /// reading state) and only written to storage in its Effects phase, once
@@ -795,7 +1231,7 @@ enum PoolEffect {
     },
 }
 
-/// Buys exactly one `PERCENT_PER_SHARE` certificate of `protocol_id`, from
+/// Buys `quantity` certificates of `protocol_id` in one atomic action, from
 /// either its IPO pool or its Open Market/Bank pool per `source` -- see
 /// module doc comment #8 for the full Par Value Selection design, and
 /// `msg::SharePurchaseSource`/`ExecuteMsg::BuyStock` for the field-level
@@ -803,6 +1239,38 @@ enum PoolEffect {
 /// into the game bank (`GameSession::virtual_bank_vgp`). If this purchase
 /// empties *both* pools (100% of the protocol now in player hands), the
 /// price marker advances up one row (sold-out bonus).
+///
+/// **Step 4.5 Batch 1 added four invariants to this handler**, all of them
+/// resolved during the Checks phase (module doc comment #13), so every
+/// rejection below leaves storage completely untouched:
+///
+/// - **Item 1, Atomic Multi-Buy.** `quantity` defaults to
+///   `DEFAULT_BUY_QUANTITY` (1). Any value above 1 requires BOTH a Brown-Zone
+///   market position AND `SharePurchaseSource::Bank`, or the call is rejected
+///   with `MultiBuyNotPermitted`. A legal multi-buy debits
+///   `quantity * price` in ONE subtraction, credits
+///   `quantity * PERCENT_PER_SHARE` in ONE write, and decrements the Bank
+///   pool by that same percentage in ONE write -- there is no partial state
+///   and the price never drifts mid-action.
+/// - **Item 2, zone invariants.** The 60% ownership cap and the Global
+///   Certificate Limit are now enforced through the named, separately
+///   testable `check_holding_limit` and `check_cert_limit`, which own the
+///   Yellow/Orange/Brown exemption rules.
+/// - **Item 3, Buyback Lockout.** Rejected outright if the buyer sold this
+///   corporation earlier in the same Stock Round.
+/// - **Item 6, President's Certificate.** The first purchase of a corporation
+///   with no President and no issued shares is NOT an ordinary 10% share: it
+///   is the 20% President's Certificate at exactly twice par, resolved
+///   automatically and buyable only singly, only from the IPO. Until it
+///   happens, every other purchase of that corporation is rejected with
+///   `PresidentsCertificateRequired`.
+// Eight parameters, one past clippy's default threshold. Every one is a
+// distinct, required piece of the `ExecuteMsg::BuyStock` contract and this
+// handler is called from exactly two places (`contract::execute`'s dispatch
+// and `gamelog::reapply_game_log`'s replay), both of which destructure the
+// message immediately beforehand -- bundling them into a struct would add an
+// indirection with no caller to benefit from it.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_buy_stock(
     deps: DepsMut,
     env: Env,
@@ -811,6 +1279,7 @@ pub fn execute_buy_stock(
     protocol_id: u32,
     source: SharePurchaseSource,
     par_value: Option<Uint128>,
+    quantity: Option<u32>,
 ) -> Result<Response, TradingError> {
     let mut session: GameSession = SESSIONS
         .may_load(deps.storage, game_id)?
@@ -834,12 +1303,76 @@ pub fn execute_buy_stock(
     }
     ensure_active_player(&session, game_id, &info.sender)?;
 
+    // ---- Item 1: normalize and bound `quantity` before it is used in any
+    // arithmetic. Bounding it here is what makes every later
+    // `quantity * PERCENT_PER_SHARE` provably fit in a `u8`.
+    let requested_quantity = quantity.unwrap_or(DEFAULT_BUY_QUANTITY);
+    if requested_quantity == 0 || requested_quantity > MAX_MULTI_BUY_QUANTITY {
+        return Err(TradingError::InvalidBuyQuantity {
+            requested: requested_quantity,
+            max: MAX_MULTI_BUY_QUANTITY,
+        });
+    }
+
+    // ---- Item 3: the Stock Round Buyback Lockout. Checked early -- before
+    // any pool, par or price resolution -- because it depends only on who is
+    // asking and what they sold, and a locked-out buyer should get the
+    // specific "you sold this already" error rather than incidentally
+    // tripping some later liquidity or funding check first.
+    if is_buyback_locked_out(deps.storage, game_id, &info.sender, protocol_id)? {
+        return Err(TradingError::StockBuybackLockout {
+            corporation: corporation_ticker(deps.storage, game_id, protocol_id)?,
+            protocol_id,
+            player: info.sender.to_string(),
+        });
+    }
+
+    // ---- Item 6: is this the corporation's opening purchase?
+    //
+    // The requirement is phrased "no shares currently issued (or president is
+    // null)", and the two halves are NOT equally trustworthy. Issued shares
+    // are the ground truth -- `PLAYER_SHARES` is what a purchase actually
+    // writes. `PROTOCOL_PRESIDENT` is DERIVED state:
+    // `recalculate_president` re-computes it from `PLAYER_SHARES` after every
+    // trade. Gating a rule on derived state when its own source is right
+    // there is strictly weaker, and here it is also a genuine hole: a
+    // President record that exists without any matching shares would make an
+    // untouched corporation read as "already open", and its 20% President's
+    // Certificate would never be sold at all -- the first buyer would open it
+    // with an ordinary 10% share for half the price. So this reads the source
+    // of truth and ignores the presidency entirely.
+    //
+    // Two conditions, both about stock rather than bookkeeping:
+    // - nobody holds any of it, AND
+    // - its IPO pool has never been drawn from.
+    //
+    // The second is what keeps this correct in the pathological direction
+    // too. Without it, a corporation whose stock had somehow all returned to
+    // the pools would read as unopened forever, and -- since its IPO would be
+    // empty -- every purchase would be refused with
+    // `PresidentsCertificateRequired`, deadlocking it. (That state is already
+    // unreachable in practice: the 50% Bank Pool Cap means a floated
+    // corporation's player-held stock can never be fully dumped. This is the
+    // belt to that braces.)
+    //
+    // Baltimore & Ohio stays correct under both conditions:
+    // `auction::award_bo_president_share` grants its President's Certificate
+    // for free the instant its private is won, leaving 20% issued and an IPO
+    // pool of 80 -- so B&O is never asked to buy a certificate it was handed.
+    let ipo_pct = IPO_POOL_SHARES
+        .may_load(deps.storage, (game_id, protocol_id))?
+        .unwrap_or(FULL_POOL_PERCENTAGE);
+    let nothing_issued = total_player_owned_percentage(
+        deps.storage,
+        game_id,
+        protocol_id,
+        &session.player_addresses,
+    )? == 0;
+    let is_opening_purchase = nothing_issued && ipo_pct == FULL_POOL_PERCENTAGE;
+
     let buyer_pct = PLAYER_SHARES
         .may_load(deps.storage, (game_id, protocol_id, info.sender.clone()))?
         .unwrap_or(0);
-    let new_buyer_pct = buyer_pct
-        .checked_add(PERCENT_PER_SHARE)
-        .ok_or(TradingError::Overflow {})?;
 
     // ---- Checks (continued): resolve this purchase's price, its pool's
     // remaining percentage after the buy, and the current market cell's
@@ -850,19 +1383,11 @@ pub fn execute_buy_stock(
     // path in this function has already returned (Checks-Effects-Interactions
     // -- module doc comment #13). `PoolEffect` carries forward whatever this
     // resolution decided should eventually be written.
-    let (price, new_pool_pct, zone_type, pool_effect) = match source {
+    let (total_cost, shares_acquired, new_pool_pct, zone_type, pool_effect) = match source {
         SharePurchaseSource::Ipo => {
-            let ipo_pct = IPO_POOL_SHARES
-                .may_load(deps.storage, (game_id, protocol_id))?
-                .unwrap_or(FULL_POOL_PERCENTAGE);
-            if ipo_pct < PERCENT_PER_SHARE {
-                return Err(TradingError::InsufficientPoolShares {
-                    protocol_id,
-                    pool: "IPO",
-                    available: ipo_pct,
-                    requested: PERCENT_PER_SHARE,
-                });
-            }
+            // `ipo_pct` is the single hoisted read from above -- the
+            // opening-purchase test needs it too, and reading the same key
+            // twice in one message would be pure waste.
 
             // Resolves the par value this purchase pays, and -- only on
             // this protocol's very first-ever IPO purchase -- the (par
@@ -893,8 +1418,50 @@ pub fn execute_buy_stock(
                 }
             };
 
+            // ---- Item 6: the President's Certificate.
+            //
+            // On a corporation's opening purchase the buyer does not get to
+            // choose what they are buying: it is the 20% President's
+            // Certificate, one card, at exactly 2x par. There is no message
+            // field to opt in or out, mirroring the physical game where a
+            // corporation cannot be opened by buying a single 10% share.
+            let (shares_acquired, total_cost) = if is_opening_purchase {
+                if requested_quantity != DEFAULT_BUY_QUANTITY {
+                    return Err(TradingError::PresidentsCertificateRequired {
+                        protocol_id,
+                        required_percentage: PRESIDENT_CERTIFICATE_PERCENTAGE,
+                    });
+                }
+                let cost = par
+                    .checked_mul(Uint128::new(PRESIDENT_CERTIFICATE_PAR_MULTIPLIER))
+                    .map_err(|_| TradingError::Overflow {})?;
+                (PRESIDENT_CERTIFICATE_PERCENTAGE, cost)
+            } else {
+                // `requested_quantity` is already bounded to
+                // `MAX_MULTI_BUY_QUANTITY` (10) above, so both conversions
+                // below are infallible in practice; they stay checked so a
+                // future change to that bound cannot silently wrap.
+                let shares = u8::try_from(requested_quantity)
+                    .ok()
+                    .and_then(|q| q.checked_mul(PERCENT_PER_SHARE))
+                    .ok_or(TradingError::Overflow {})?;
+                let cost = par
+                    .checked_mul(Uint128::from(requested_quantity))
+                    .map_err(|_| TradingError::Overflow {})?;
+                (shares, cost)
+            };
+
+            if ipo_pct < shares_acquired {
+                return Err(TradingError::InsufficientPoolShares {
+                    protocol_id,
+                    pool: "IPO",
+                    available: ipo_pct,
+                    requested: shares_acquired,
+                });
+            }
+
             let new_ipo_pct = ipo_pct
-                .checked_sub(PERCENT_PER_SHARE)
+                .checked_sub(shares_acquired)
                 .ok_or(TradingError::Overflow {})?;
 
             // The cell this purchase's zone-type check resolves against --
@@ -911,7 +1478,8 @@ pub fn execute_buy_stock(
             };
 
             (
-                par,
+                total_cost,
+                shares_acquired,
                 new_ipo_pct,
                 cell.zone_type,
                 PoolEffect::Ipo {
@@ -927,15 +1495,36 @@ pub fn execute_buy_stock(
                 });
             }
 
+            // ---- Item 6, the other half: "standard shares cannot be
+            // purchased until this initial condition is met" applies to the
+            // Bank pool too. In ordinary play this is unreachable -- an
+            // unopened corporation's Bank pool is empty, so the liquidity
+            // check just below would reject anyway -- but stating it
+            // explicitly means the invariant holds even against a directly
+            // seeded `BANK_POOL_SHARES`, and reports the real reason rather
+            // than a misleading "insufficient pool shares".
+            if is_opening_purchase {
+                return Err(TradingError::PresidentsCertificateRequired {
+                    protocol_id,
+                    required_percentage: PRESIDENT_CERTIFICATE_PERCENTAGE,
+                });
+            }
+
             let bank_pct = BANK_POOL_SHARES
                 .may_load(deps.storage, (game_id, protocol_id))?
                 .unwrap_or(0);
-            if bank_pct < PERCENT_PER_SHARE {
+
+            let shares_acquired = u8::try_from(requested_quantity)
+                .ok()
+                .and_then(|q| q.checked_mul(PERCENT_PER_SHARE))
+                .ok_or(TradingError::Overflow {})?;
+
+            if bank_pct < shares_acquired {
                 return Err(TradingError::InsufficientPoolShares {
                     protocol_id,
                     pool: "Bank",
                     available: bank_pct,
-                    requested: PERCENT_PER_SHARE,
+                    requested: shares_acquired,
                 });
             }
 
@@ -947,12 +1536,25 @@ pub fn execute_buy_stock(
             // fallback first.
             let cell = market::current_cell(deps.storage, game_id, protocol_id)?;
 
+            // Atomic multi-buy pricing (item 1): every certificate in the
+            // action settles at the SAME price -- the one the marker sits on
+            // when the action begins. The marker is not walked between
+            // certificates, so a 3-share Brown-Zone buy costs exactly 3x the
+            // listed price, never a drifting sum. This mirrors the identical
+            // fix already made on the sell side (module doc comment #6,
+            // Audit G-4).
+            let total_cost = cell
+                .price
+                .checked_mul(Uint128::from(requested_quantity))
+                .map_err(|_| TradingError::Overflow {})?;
+
             let new_bank_pct = bank_pct
-                .checked_sub(PERCENT_PER_SHARE)
+                .checked_sub(shares_acquired)
                 .ok_or(TradingError::Overflow {})?;
 
             (
-                cell.price,
+                total_cost,
+                shares_acquired,
                 new_bank_pct,
                 cell.zone_type,
                 PoolEffect::Bank { new_bank_pct },
@@ -960,17 +1562,30 @@ pub fn execute_buy_stock(
         }
     };
 
-    // See module doc comment #2: real 1830's "a single player may hold more
-    // than 60%" exception is granted by the Orange and Brown bands, not
-    // Yellow alone.
-    let ownership_cap_exempt = matches!(zone_type, ZoneType::OrangeZone | ZoneType::BrownZone);
-    if new_buyer_pct > CERTIFICATE_LIMIT_PERCENTAGE && !ownership_cap_exempt {
-        return Err(TradingError::CertificateLimitExceeded {
+    // ---- Item 1: the Atomic Multi-Buy invariant, checked centrally now
+    // that `zone_type` is resolved. Both conditions are required: the Brown
+    // band grants the exception, and only the open-market Bank pool is
+    // subject to it -- the IPO sells one certificate per action in every
+    // zone, at every price.
+    let multi_buy_permitted =
+        matches!(source, SharePurchaseSource::Bank) && zone_type.permits_multiple_buy();
+    if requested_quantity > DEFAULT_BUY_QUANTITY && !multi_buy_permitted {
+        return Err(TradingError::MultiBuyNotPermitted {
             protocol_id,
-            new_total: new_buyer_pct,
-            limit: CERTIFICATE_LIMIT_PERCENTAGE,
+            requested: requested_quantity,
+            zone: zone_type,
+            purchase_source: source,
         });
     }
+
+    let new_buyer_pct = buyer_pct
+        .checked_add(shares_acquired)
+        .ok_or(TradingError::Overflow {})?;
+
+    // ---- Item 2: the per-corporation ownership cap. 60% normally; lifted
+    // to the full 100% by the Orange and Brown bands, but never above it.
+    // See `check_holding_limit`.
+    check_holding_limit(protocol_id, new_buyer_pct, zone_type)?;
 
     // Global Certificate Limit (module doc comment #12): a STRICT, hard
     // block -- not a warning -- on the buyer's total physical certificate
@@ -995,56 +1610,45 @@ pub fn execute_buy_stock(
     // real, sourced zone data but never actually wired into an enforcement
     // check (see this function's own module doc comment #2, now updated) --
     // this pass is what gives it a genuine code hook.
-    let certificate_limit_exempt = matches!(
-        zone_type,
-        ZoneType::YellowZone | ZoneType::OrangeZone | ZoneType::BrownZone
-    );
-    if !certificate_limit_exempt {
-        let private_ids: Vec<u32> = CORE_PRIVATE_COMPANIES
-            .iter()
-            .map(|(private_id, ..)| *private_id)
-            .collect();
-        let public_company_ids: Vec<u32> = CORE_PUBLIC_COMPANIES
-            .iter()
-            .map(|(company_id, _ticker)| *company_id)
-            .collect();
-        let current_certificates = count_player_certificates(
-            deps.storage,
-            game_id,
-            &info.sender,
-            &private_ids,
-            &public_company_ids,
-            PERCENT_PER_SHARE,
-            PRESIDENT_MIN_PERCENTAGE,
-        )?;
-        let would_hold_certificates = current_certificates
-            .checked_add(1)
-            .ok_or(TradingError::Overflow {})?;
-        let certificate_limit =
-            certificate_limit_for_player_count(session.max_players).unwrap_or(u32::MAX);
-        if would_hold_certificates > certificate_limit {
-            return Err(TradingError::ExceededCertificateLimit {
-                player: info.sender.to_string(),
-                max_players: session.max_players,
-                limit: certificate_limit,
-                would_hold: would_hold_certificates,
-            });
-        }
-    }
+    //
+    // Batch 1 (item 2) moved the whole computation into `check_cert_limit`
+    // and made the zone exemption apply to the player's ALREADY-HELD
+    // certificates as well as the incoming one -- see that function's doc
+    // comment for exactly what was inconsistent before.
+    //
+    // `incoming_certificates` counts physical CARDS, not percentage points:
+    // a President's Certificate is one 20% card, so an opening purchase adds
+    // exactly one, while an ordinary purchase adds `quantity`.
+    let incoming_certificates = if is_opening_purchase {
+        1
+    } else {
+        requested_quantity
+    };
+    check_cert_limit(
+        deps.storage,
+        game_id,
+        &info.sender,
+        session.max_players,
+        incoming_certificates,
+        zone_type.waives_certificate_limit(),
+    )?;
 
+    // Atomic debit (item 1): ONE subtraction for the whole action, so a
+    // multi-buy the player cannot fully afford fails outright rather than
+    // partially settling.
     let buyer_balance = PLAYER_CASH_VGP
         .may_load(deps.storage, (game_id, info.sender.clone()))?
         .unwrap_or_default();
     let new_buyer_balance =
         buyer_balance
-            .checked_sub(price)
+            .checked_sub(total_cost)
             .map_err(|_| TradingError::InsufficientFunds {
                 player: info.sender.to_string(),
             })?;
 
     let new_virtual_bank_vgp = session
         .virtual_bank_vgp
-        .checked_add(price)
+        .checked_add(total_cost)
         .map_err(|_| TradingError::Overflow {})?;
 
     // ---- Effects: every check above has passed -- info.sender is the
@@ -1072,13 +1676,29 @@ pub fn execute_buy_stock(
 
     session.virtual_bank_vgp = new_virtual_bank_vgp;
 
+    // Step 4.5 Batch 4: record the last committing action for the Priority
+    // Deal. Captured BEFORE `advance_turn` below, because that call moves
+    // `active_player_index` off the buyer -- and this must name the buyer,
+    // not whoever happens to act next. (It also must be recorded on the
+    // Brown-Zone multi-buy path, which deliberately does NOT advance the
+    // turn; taking it from the pointer afterwards would be wrong in one
+    // case and right in the other, which is exactly the kind of difference
+    // that survives review.)
+    session.last_active_player_index = Some(session.active_player_index);
+
     // Brown Zone Multiple-Buy (module doc comment #15): a Bank-pool
     // purchase made while sitting on a Brown-zone cell does NOT end the
     // buyer's turn, so they may immediately buy again. Every other
     // purchase -- any IPO purchase, or a Bank purchase outside a Brown
     // cell -- advances the pointer as normal.
+    // (Batch 1 item 1 note: this stays true for a Brown-Zone Bank purchase
+    // of ANY quantity, including a single certificate. The atomic `quantity`
+    // path and this turn-pacing exception are two independent expressions of
+    // the same Brown-Zone privilege -- a player may take the whole block in
+    // one message, or one certificate at a time across several messages
+    // without surrendering their turn, and both must remain legal.)
     let is_brown_zone_bank_multi_buy =
-        matches!(source, SharePurchaseSource::Bank) && zone_type == ZoneType::BrownZone;
+        matches!(source, SharePurchaseSource::Bank) && zone_type.permits_multiple_buy();
 
     // A completed purchase is (ordinarily) a turn-gated action: advance the
     // pointer to the next player and clear any in-progress all-pass streak,
@@ -1119,9 +1739,31 @@ pub fn execute_buy_stock(
                 SharePurchaseSource::Bank => "bank",
             },
         )
-        .add_attribute("price_paid", price)
+        // `price_paid` is the TOTAL debited by this action. For the
+        // single-certificate purchases that were the only kind before
+        // Batch 1 this is unchanged (quantity 1 => total == unit price);
+        // for a multi-buy it is `quantity * unit price`, and for an opening
+        // purchase it is `2 * par`.
+        .add_attribute("price_paid", total_cost)
+        // `incoming_certificates` is the physical card count this action
+        // added: 1 for a President's Certificate, otherwise `quantity`.
+        .add_attribute("certificates_bought", incoming_certificates.to_string())
+        .add_attribute("percentage_acquired", shares_acquired.to_string())
         .add_attribute("buyer_percentage", new_buyer_pct.to_string())
-        .add_attribute("pool_percentage_remaining", new_pool_pct.to_string());
+        .add_attribute("pool_percentage_remaining", new_pool_pct.to_string())
+        .add_attribute("market_zone", format!("{zone_type:?}"));
+
+    // Item 6: flagged explicitly so a frontend can show "you have opened
+    // this corporation and are its President" rather than inferring it from
+    // a percentage.
+    if is_opening_purchase {
+        response = response
+            .add_attribute("presidents_certificate", "true")
+            .add_attribute(
+                "presidents_certificate_percentage",
+                PRESIDENT_CERTIFICATE_PERCENTAGE.to_string(),
+            );
+    }
 
     if is_brown_zone_bank_multi_buy {
         response = response.add_attribute("brown_zone_multiple_buy", "true");
@@ -1466,10 +2108,27 @@ pub fn execute_sell_stock(
     // ends it.
     reset_pass_streak(&mut session);
 
+    // Step 4.5 Batch 4: a sale is a committing action, so it counts for the
+    // Priority Deal exactly like a purchase does. `active_player_index` is
+    // still the seller here precisely because selling does not advance the
+    // turn, so no pre-capture is needed the way `execute_buy_stock` needs
+    // one.
+    session.last_active_player_index = Some(session.active_player_index);
+
     // Inactivity Timeout Safety Valve (see `state.rs`'s
     // `GameSession::last_action_timestamp` doc comment): a successful
     // SellStock call resets the room's 48-hour inactivity clock.
     session.last_action_timestamp = env.block.time.seconds();
+
+    // ---- Step 4.5 Batch 1, item 3: arm the Stock Round Buyback Lockout.
+    // From here until the Stock Round ends, this seller may not buy back
+    // into `protocol_id` -- `execute_buy_stock` rejects the attempt with
+    // `StockBuybackLockout`. Recorded on the SALE rather than derived later
+    // from the game log because the log is not the source of truth for a
+    // live round (and `UndoLastAction` rebuilds this map by replaying the
+    // log anyway, so the two stay consistent). Idempotent, so selling the
+    // same corporation twice in one round records one entry.
+    record_stock_round_sale(deps.storage, game_id, &info.sender, protocol_id)?;
 
     PLAYER_CASH_VGP.save(
         deps.storage,

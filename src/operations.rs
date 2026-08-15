@@ -221,9 +221,11 @@ use thiserror::Error;
 
 use crate::auction::CORE_PRIVATE_COMPANIES;
 use crate::hardware;
-use crate::hexmap::{axial_for_label, edge_between, rotate_connections, HEX_NEIGHBOR_OFFSETS};
+use crate::hexmap::{
+    axial_for_label, city_slot_counts_at, edge_between, rotate_connections, HEX_NEIGHBOR_OFFSETS,
+};
 use crate::market::{self, MarketError};
-use crate::msg::PayoutStrategy;
+use crate::msg::{PayoutStrategy, RouteWaypoint};
 use crate::pathfinding::{self, PathfindingError};
 use crate::public_company::CORE_PUBLIC_COMPANIES;
 use crate::or_phase;
@@ -234,7 +236,7 @@ use crate::state::{
     PLAYER_CASH_VGP, PLAYER_SHARES, PRIVATE_COMPANIES, PROTOCOL_MARKET, PROTOCOL_NETWORK_HEXES,
     PROTOCOL_PRESIDENT, PUBLIC_COMPANIES, SESSIONS,
 };
-use crate::trading::FULL_POOL_PERCENTAGE;
+use crate::trading::{self, FULL_POOL_PERCENTAGE};
 
 #[derive(Error, Debug)]
 pub enum OperationsError {
@@ -346,7 +348,20 @@ pub enum OperationsError {
     },
 
     // ---- Manual Route Validation -- see `execute_run_manual_route`. ----
-    #[error("RunManualRoute's hex_path cannot be empty")]
+    /// **Step 4.5 Batch 3, item 1.** A waypoint named a city index the hex's
+    /// artwork does not have -- e.g. `city_node: Some(1)` on a single-city
+    /// tile. Rejected rather than coerced to city 0: paying revenue for a
+    /// station that does not exist is worse than refusing a malformed route.
+    #[error(
+        "Hex {label} has {cities} city/cities, so city_node {city_node} does not exist there"
+    )]
+    NoSuchCityOnHex {
+        label: String,
+        city_node: usize,
+        cities: usize,
+    },
+
+    #[error("RunManualRoute's path cannot be empty")]
     EmptyRoutePath { protocol_id: u32 },
 
     #[error("\"{label}\" is not a real 1830 board hex label")]
@@ -471,7 +486,13 @@ pub fn calculate_operating_order(
 /// actually spawned. Called from both `execute_begin_operating_round` and
 /// `advance_operating_round_turn`'s next-sub-round branch -- see module
 /// doc comment #14 for why both call sites are needed.
-fn pay_private_company_revenues(
+/// `pub(crate)` since Step 4.5 Batch 4: `waterfall::execute_waterfall_pass`
+/// reuses this for the canonical 1830 all-pass rule, where every already-owned
+/// private pays its printed revenue the moment a full round of passes
+/// completes. That is a different TRIGGER from the Operating Round one, but it
+/// is the same PAYOUT, and two copies of "privates pay their owners" would be
+/// two places for the corporation-owned branch to drift.
+pub(crate) fn pay_private_company_revenues(
     storage: &mut dyn Storage,
     game_id: u64,
 ) -> Result<Vec<Attribute>, OperationsError> {
@@ -562,6 +583,16 @@ pub fn execute_begin_operating_round(
 
     session.active_operating_order = order.clone();
     session.active_corporation_index = 0;
+
+    // Step 4.5 Batch 1, item 3: the Stock Round Buyback Lockout is scoped to
+    // a single Stock Round and must never survive into the next one.
+    // `trading::conclude_stock_round` already clears it on the natural
+    // all-players-passed path, but this call is the one that is guaranteed to
+    // run on EVERY Stock-Round-to-Operating-Round transition -- including the
+    // creator-driven one that skips the pass-streak entirely. Clearing an
+    // already-clear lockout is a no-op, so running both is safe; running only
+    // the other one would not be.
+    trading::clear_stock_round_sales(deps.storage, game_id, &session.player_addresses);
 
     // Macro Round Tracker / Pacing Automation (design note #11): this call
     // is the room's one existing explicit "Stock Round concludes, Operating
@@ -942,10 +973,21 @@ fn advance_operating_round_turn(
 /// step-by-step against every rule the automatic BFS already enforces
 /// implicitly (`pathfinding.rs`'s module doc comments #1-#4):
 ///
-/// 1. **Parse.** Every label in `hex_path` must resolve to a real board hex
-///    via `hexmap::axial_for_label` (`InvalidHexLabel` otherwise), and no
-///    hex may repeat (`DuplicateHexInRoute` -- matches `trace_best_route`'s
-///    own `visited` set, a route can't loop back over its own track).
+/// 1. **Parse.** Every `RouteWaypoint::hex` must resolve to a real board hex
+///    via `hexmap::axial_for_label` (`InvalidHexLabel` otherwise), every
+///    `city_node` must name a city that hex actually has
+///    (`NoSuchCityOnHex`), and no STOP may repeat
+///    (`DuplicateHexInRoute`).
+///
+///    **Step 4.5 Batch 3, item 1 closed the gap that used to sit here.**
+///    Batch 2 moved `pathfinding`'s own history to `(hex, city_node)` keys,
+///    so the automatic tracer can serve both stations of a two-city hex. This
+///    validator could not: `hex_path` was a list of bare labels with no way
+///    to say WHICH of New York's stations an entry meant, so it had to refuse
+///    any repeated label rather than guess and risk paying for a stop the
+///    train never reached. `RouteWaypoint` carries the node explicitly, the
+///    ambiguity is gone, and the uniqueness key is now the stop rather than
+///    the hex -- the two route paths agree again.
 /// 2. **Touches the operating company's own station.** `pathfinding.rs`'s
 ///    existing model (module doc comment #1) treats a company's home
 ///    node/station as the first hex it ever laid track on
@@ -1028,7 +1070,7 @@ pub fn execute_run_manual_route(
     info: MessageInfo,
     game_id: u64,
     protocol_id: u32,
-    hex_path: Vec<String>,
+    path: Vec<RouteWaypoint>,
     payout_strategy: PayoutStrategy,
 ) -> Result<Response, OperationsError> {
     let mut session: GameSession = SESSIONS
@@ -1104,20 +1146,67 @@ pub fn execute_run_manual_route(
         });
     }
 
-    // ---- 1. Parse the alphanumeric hex path into axial coordinates. ----
-    if hex_path.is_empty() {
+    // ---- 1. Parse the waypoints into axial coordinates and city nodes. ----
+    if path.is_empty() {
         return Err(OperationsError::EmptyRoutePath { protocol_id });
     }
-    let mut axial_path: Vec<(i32, i32)> = Vec::with_capacity(hex_path.len());
+
+    // Step 4.5 Batch 3, item 1: `hex_path: Vec<String>` became
+    // `path: Vec<RouteWaypoint>`. `hex_path` survives here purely as the
+    // label list every error message and the response attribute already
+    // report against -- deriving it once keeps that reporting unchanged
+    // while the validation below works on the richer type.
+    let hex_path: Vec<String> = path.iter().map(|waypoint| waypoint.hex.clone()).collect();
+
+    let mut axial_path: Vec<(i32, i32)> = Vec::with_capacity(path.len());
     for label in &hex_path {
         let coord = axial_for_label(label).ok_or_else(|| OperationsError::InvalidHexLabel {
             label: label.clone(),
         })?;
         axial_path.push(coord);
     }
-    let mut seen: HashSet<(i32, i32)> = HashSet::new();
-    for (label, coord) in hex_path.iter().zip(axial_path.iter()) {
-        if !seen.insert(*coord) {
+
+    // Each waypoint's city node, validated against the artwork actually on
+    // that hex. `None` stays `None` -- the ordinary case for a town, a
+    // connector, or a single-city tile where naming the city adds nothing.
+    //
+    // A `Some(n)` naming a city the hex does not have is rejected outright
+    // rather than silently coerced: a client confused about the board should
+    // be told, not quietly paid for a stop that does not exist.
+    let mut node_path: Vec<Option<u8>> = Vec::with_capacity(path.len());
+    for (waypoint, &(q, r)) in path.iter().zip(axial_path.iter()) {
+        match waypoint.city_node {
+            None => node_path.push(None),
+            Some(city_node) => {
+                let cities = city_slot_counts_at(deps.storage, game_id, q, r)?.len();
+                if city_node >= cities {
+                    return Err(OperationsError::NoSuchCityOnHex {
+                        label: waypoint.hex.clone(),
+                        city_node,
+                        cities,
+                    });
+                }
+                // Narrowed once, after the bound check, to the `u8` every
+                // on-chain city registry uses.
+                node_path.push(Some(city_node as u8));
+            }
+        }
+    }
+
+    // ---- Duplicate STOPS, not duplicate hexes (Batch 3, item 1). ----
+    //
+    // This used to key on `(q, r)` alone, which made a repeated hex label an
+    // error no matter what it meant. That was the right call while the
+    // message could not distinguish New York's two stations -- guessing
+    // would have paid out for a stop the train never reached -- but it also
+    // made a legal two-station route inexpressible, and the automatic
+    // tracer has found those routes since Batch 2. With the city node
+    // carried explicitly the ambiguity is gone, so the key is now the STOP:
+    // the same station twice is still refused, two different stations on one
+    // hex are not.
+    let mut seen: HashSet<(i32, i32, Option<u8>)> = HashSet::new();
+    for ((label, coord), node) in hex_path.iter().zip(axial_path.iter()).zip(node_path.iter()) {
+        if !seen.insert((coord.0, coord.1, *node)) {
             return Err(OperationsError::DuplicateHexInRoute {
                 label: label.clone(),
             });
@@ -1306,6 +1395,25 @@ pub fn execute_run_manual_route(
         PayoutStrategy::Withhold => "withhold",
     };
 
+    // ---- Step 4.5 Batch 2, item 4: record this run's revenue.
+    //
+    // Written HERE, before the payout/withhold branch below, precisely
+    // because the requirement is "whether paying out or withholding". This
+    // is the figure the corporation's trains EARNED; what happens to it next
+    // is a separate decision and must not change what gets recorded. Writing
+    // it once, up front, is also the only way to record it on the paths that
+    // never reach a branch at all: a zero-revenue run (no legal route) still
+    // overwrites the previous round's figure, which is the correct reading of
+    // "last route revenue" -- a corporation that ran nothing this round
+    // earned nothing this round, and must not keep displaying a stale number
+    // from two rounds ago.
+    //
+    // The Withhold branch below saves `company` again after crediting the
+    // treasury and moving the marker; because it mutates the SAME struct,
+    // this field survives that write untouched.
+    company.last_route_revenue = revenue_amount;
+    PUBLIC_COMPANIES.save(deps.storage, (game_id, protocol_id), &company)?;
+
     // Audit G-14: trains have run; the revenue figure now exists, so the
     // Dividends phase has something to decide about.
     or_phase::advance(deps.storage, game_id, protocol_id, OperatingSubPhase::Routes)?;
@@ -1315,6 +1423,23 @@ pub fn execute_run_manual_route(
         .add_attribute("game_id", game_id.to_string())
         .add_attribute("protocol_id", protocol_id.to_string())
         .add_attribute("hex_path", hex_path.join("->"))
+        // Step 4.5 Batch 3, item 1: the same run, but naming each STOP
+        // rather than each hex -- `G19#0->F20->G19#1` for a route that
+        // serves both of New York's stations. `hex_path` above is kept
+        // unchanged so nothing reading it has to change; this is the
+        // attribute that can actually describe a two-station route.
+        .add_attribute(
+            "route_stops",
+            hex_path
+                .iter()
+                .zip(node_path.iter())
+                .map(|(label, node)| match node {
+                    Some(city) => format!("{label}#{city}"),
+                    None => label.clone(),
+                })
+                .collect::<Vec<String>>()
+                .join("->"),
+        )
         .add_attribute("revenue_amount", revenue_amount)
         .add_attribute("payout_strategy", payout_strategy_label);
 

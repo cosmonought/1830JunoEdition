@@ -87,8 +87,22 @@ export interface TileCatalogEntry {
    *  `tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles`
    *  asserts for all 46 entries.
    *
-   *  POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES (#1, #2, #55, #56, #69),
-   *  deliberately and by scope decision. Those are the tiles where the flat
+   *  STALE SCOPE NOTE, CORRECTED. The paragraph below says this is
+   *  "POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES". That was true when it
+   *  was written and is no longer: the mirror now carries `paths` for ALL
+   *  46 entries. Counted rather than assumed -- the harness for the strict
+   *  path-preservation pass walks the catalog and reports 46/46.
+   *
+   *  A CITY HUB APPEARS AS THE FULL PAIRWISE EXPANSION of its live edges:
+   *  #14 (edges 0/1/3/4) lists all six pairs, #63 (all six edges) all
+   *  fifteen. That is what lets a consumer ask "does edge 0 still reach
+   *  edge 3" without having to reason about the city sitting between them,
+   *  and it is why strict upgrade path-preservation can be a plain set
+   *  comparison. The original scope reasoning is kept verbatim below for
+   *  the record.
+   *
+   *  ORIGINALLY POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES (#1, #2, #55,
+   *  #56, #69), deliberately and by scope decision. Those are the tiles where the flat
    *  `connections` mask is genuinely lossy: four live edges paired into two
    *  independent two-edge routes, one per town, and the mask cannot say
    *  which edge pairs with which. Every other tile is either unambiguous

@@ -96,6 +96,24 @@ export interface TrainTradePanelProps {
   onAccept: (offerId: number) => void;
   onReject: (offerId: number) => void;
   onRescind: (offerId: number) => void;
+  /* ================================================================
+   *  DESIGN NOTE 6: THE COMPOSE FORM MOVED, THE LEDGER STAYED
+   * ================================================================
+   *
+   * `TrainPurchasePanel` now owns composing an offer -- see its design note
+   * #2 for why a clickable roster of real train badges replaced this file's
+   * three dropdowns. What it does NOT own is the OFFER LEDGER below: the
+   * blocked-turn banner, the pending rows, and the three-audience Accept /
+   * Reject / Rescind split that design note #1 exists for.
+   *
+   * Two panels rendering two compose forms for one action would be the
+   * classic duplicate-control bug, so this is switched off at the call site
+   * rather than deleted. Kept switchable rather than removed because the
+   * form is the only surface that works against a chain predating
+   * `owned_trains` -- the badge roster has nothing to render there (see
+   * `TradeCompany.owned_train_models`), and a build pointed at such a
+   * contract can turn this back on in one prop. */
+  composeEnabled?: boolean;
 }
 
 /** Every train model, in roster order. Mirrors `hardware::TRAIN_CATALOG`. */
@@ -125,6 +143,7 @@ export function TrainTradePanel({
   onAccept,
   onReject,
   onRescind,
+  composeEnabled = true,
 }: TrainTradePanelProps) {
   const [sellerId, setSellerId] = useState<number | null>(null);
   const [model, setModel] = useState<string>(TRAIN_MODELS[0]);
@@ -194,7 +213,7 @@ export function TrainTradePanel({
     <div style={styles.root}>
       <div style={styles.headerRow}>
         <span style={styles.headerTitle}>Train Trading</span>
-        {!iAmActivePresident && (
+        {composeEnabled && !iAmActivePresident && (
           <span style={styles.headerHint}>
             Only the operating corporation&apos;s President may make an offer.
           </span>
@@ -224,7 +243,9 @@ export function TrainTradePanel({
         </div>
       )}
 
-      {/* ---- Compose an offer. ---- */}
+      {/* ---- Compose an offer. Design note #6: off by default at the call
+              site, because `TrainPurchasePanel` owns this now. ---- */}
+      {composeEnabled && (
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Buy a train from another corporation</span>
 
@@ -313,6 +334,7 @@ export function TrainTradePanel({
           advance the game phase and triggers no rusting.
         </span>
       </div>
+      )}
 
       {/* ---- Every pending offer. Design note #1. ---- */}
       <div style={styles.section}>

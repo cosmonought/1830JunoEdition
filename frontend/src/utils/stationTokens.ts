@@ -1,0 +1,313 @@
+// frontend/src/utils/stationTokens.ts
+//
+// What a station token costs, and where one may go.
+//
+// ===================================================================
+//  DESIGN NOTE 0: THE PRICE ESCALATES; IT WAS A CONSTANT
+// ===================================================================
+//
+// Every station placement charged `SANDBOX_NOMINAL_TOKEN_COST` -- a flat $40
+// reached for as a stand-in when nothing else about tokens was wired, and
+// never revisited. 1830's schedule is not flat, and the shape of it is the
+// whole decision a president makes about tokens:
+//
+//   THE HOME TOKEN IS FREE. It is granted automatically when the corporation
+//   floats, so it is not bought at all. $0.
+//   THE SECOND COSTS $40.
+//   EVERY ONE AFTER THAT COSTS $100.
+//
+// So a corporation's third token is two and a half times its second, and the
+// UI was quoting $40 for it. That is not a rounding error in a readout -- it
+// is the difference between a placement a treasury can afford and one it
+// cannot, presented as though the choice were cheap.
+//
+// `RulesReference.tsx` already carried the correct schedule in prose ("The
+// next one placed costs $40 from the company treasury, and every one after
+// that costs $100"), which is worth noting: the rules screen and the action
+// button disagreed, and the rules screen was right.
+//
+// ===================================================================
+//  DESIGN NOTE 1: THE ALLOWANCE IS PER CORPORATION, NOT A CONSTANT
+// ===================================================================
+//
+// `PublicCompanyState.station_token_limit` is the authority and this file
+// reads it rather than restating 1830's table. For reference, that table is
+// PRR/NYC/CPR 4, B&O/C&O/ERIE 3, NNH/B&M 2 -- home token included -- which
+// is why "how many can I still buy" is `limit - 1` slots deep and not a
+// fixed three everywhere.
+//
+// ===================================================================
+//  DESIGN NOTE 2: WHAT THIS ENFORCES, AND WHAT STAYS THE CONTRACT'S
+// ===================================================================
+//
+// `hexmap::execute_place_station_token` is the authority on placement and
+// rejects anything illegal that reaches it. What this adds is the same three
+// refusals BEFORE a transaction is signed, with a sentence saying which one
+// bit -- because a click that silently does nothing, or costs a signature to
+// learn "no", is the failure this file exists to prevent:
+//
+//   a) CONNECTIVITY. The city must be one the corporation's own track
+//      already reaches. Shares `reachableNetwork` with the tile-lay veil, so
+//      the two cannot disagree about where a network ends.
+//   b) A FREE SLOT. Every city has a fixed number of token circles; when
+//      they are full the city is closed to new tokens (and blocks other
+//      companies' trains from running THROUGH it).
+//   c) RESERVATIONS. A corporation's home city holds a slot for it from the
+//      start of the game. Until that company floats and places its home
+//      token, nobody else may take the reservation.
+//
+// It does NOT model the one-token-per-turn rule, the treasury check, or
+// whether it is this corporation's turn -- those are elsewhere in the UI or
+// on chain, and duplicating them here would be a second opinion.
+
+import { archetypeForHex } from "../components/hexGeometry";
+import { STATION_HOME_HEXES } from "../components/hexContractTypes";
+import type { MapGridResponse } from "../components/hexContractTypes";
+import { tileCitySlotCounts } from "../components/TileGraphics";
+import { hexKey, reachableNetwork } from "./trackReach";
+
+/** The home token, granted at float rather than bought. */
+export const STATION_TOKEN_HOME_COST = 0;
+/** The second token a corporation places. */
+export const STATION_TOKEN_SECOND_COST = 40;
+/** The third and every one after it. */
+export const STATION_TOKEN_LATER_COST = 100;
+
+/** What the token at `placedIndex` costs -- design note #0. `placedIndex` is
+ *  0-based, so `0` is the home token. */
+export function stationTokenPrice(placedIndex: number): number {
+  if (placedIndex <= 0) return STATION_TOKEN_HOME_COST;
+  if (placedIndex === 1) return STATION_TOKEN_SECOND_COST;
+  return STATION_TOKEN_LATER_COST;
+}
+
+/** One circle in the token row. */
+export interface StationTokenSlot {
+  /** 0-based position in the corporation's allowance. */
+  index: number;
+  cost: number;
+  /** Already on the board -- rendered greyed. */
+  placed: boolean;
+  /** Index 0, the free token granted at float. */
+  isHome: boolean;
+  /** The next one that would be bought, for the button's price and for
+   *  highlighting which circle the player is about to spend. */
+  isNext: boolean;
+}
+
+export interface StationTokenCompanyLike {
+  station_token_hexes: ReadonlyArray<readonly [number, number]>;
+  station_token_limit: number;
+}
+
+/** The corporation's whole allowance, one entry per token -- design note #1.
+ *
+ *  ALL of them, placed and unplaced, because the row is a picture of the
+ *  corporation's capacity rather than a to-do list: seeing that two of four
+ *  are spent is the point, and a row that dropped the spent ones would shrink
+ *  as the game went on and say nothing about what had been used. */
+export function stationTokenSlots(
+  company: StationTokenCompanyLike | null | undefined,
+): StationTokenSlot[] {
+  if (!company) return [];
+  const placedCount = company.station_token_hexes.length;
+  // A chain reporting more tokens than the limit is a contract bug; showing
+  // a row shorter than the tokens on the board would report it as a UI one.
+  const total = Math.max(company.station_token_limit, placedCount);
+  return Array.from({ length: total }, (_, index) => ({
+    index,
+    cost: stationTokenPrice(index),
+    placed: index < placedCount,
+    isHome: index === 0,
+    isNext: index === placedCount,
+  }));
+}
+
+/** What the NEXT placement costs this corporation, or `null` when every
+ *  token is already on the board. */
+export function nextStationTokenCost(
+  company: StationTokenCompanyLike | null | undefined,
+): number | null {
+  if (!company) return null;
+  const placedCount = company.station_token_hexes.length;
+  if (placedCount >= company.station_token_limit) return null;
+  return stationTokenPrice(placedCount);
+}
+
+/* ------------------------------------------------------------------ */
+/* Placement legality -- design note #2                                */
+/* ------------------------------------------------------------------ */
+
+/** How many token circles this hex has in total, across all its cities.
+ *
+ *  A laid tile knows its own slot counts (`tileCitySlotCounts`, mirrored
+ *  from `hexmap::tile_city_slot_counts`). A preprinted hex has one circle
+ *  per printed city -- one for an ordinary city, two for an "OO" pair or
+ *  New York. A hex with no city has none, which is what makes the "no city
+ *  here" refusal fall out of the same lookup. */
+export function stationSlotCount(mapGrid: MapGridResponse, q: number, r: number): number {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) {
+    const counts = tileCitySlotCounts(laid.tile_id);
+    if (counts.length > 0) return counts.reduce((sum, n) => sum + n, 0);
+  }
+  const archetype = archetypeForHex(mapGrid, q, r);
+  if (archetype === "SingleCity") return 1;
+  if (archetype === "DoubleCity") return 2;
+  return 0;
+}
+
+export interface StationPlacementCompany {
+  company_id: number;
+  is_floated: boolean;
+  station_token_hexes: ReadonlyArray<readonly [number, number]>;
+  station_token_limit: number;
+}
+
+export interface StationPlacementInput {
+  mapGrid: MapGridResponse;
+  q: number;
+  r: number;
+  /** The corporation trying to place. */
+  company: StationPlacementCompany;
+  /** Every corporation, for slot occupancy and reservations. */
+  allCompanies: readonly StationPlacementCompany[];
+}
+
+export interface StationPlacementResult {
+  allowed: boolean;
+  /** Player-facing, written to explain rather than merely refuse. `null`
+   *  when allowed. */
+  reason: string | null;
+}
+
+const ALLOWED: StationPlacementResult = { allowed: true, reason: null };
+
+export function evaluateStationPlacement(
+  input: StationPlacementInput,
+): StationPlacementResult {
+  const { mapGrid, q, r, company, allCompanies } = input;
+  const here = (hexes: ReadonlyArray<readonly [number, number]>) =>
+    hexes.some(([hq, hr]) => hq === q && hr === r);
+
+  // ---- The corporation's own allowance. ----
+  if (company.station_token_hexes.length >= company.station_token_limit) {
+    return {
+      allowed: false,
+      reason: `Every one of this corporation's ${company.station_token_limit} station tokens is already on the board.`,
+    };
+  }
+
+  // ---- Is there a city here at all? ----
+  const slots = stationSlotCount(mapGrid, q, r);
+  if (slots === 0) {
+    return {
+      allowed: false,
+      reason: "There is no city here. Pick a city hex, or lay a city tile there first.",
+    };
+  }
+
+  // ---- One token per corporation per city. ----
+  if (here(company.station_token_hexes)) {
+    return {
+      allowed: false,
+      reason: "This corporation already has a station token in this city.",
+    };
+  }
+
+  // ---- Slot occupancy. ----
+  //
+  // A city closed by other companies' tokens is the single most consequential
+  // board state in 1830 -- it blocks their trains from running THROUGH -- so
+  // the refusal names it rather than saying "illegal".
+  const occupied = allCompanies.filter((entry) => here(entry.station_token_hexes)).length;
+  if (occupied >= slots) {
+    return {
+      allowed: false,
+      reason:
+        slots === 1
+          ? "This city's only station slot is taken."
+          : `All ${slots} of this city's station slots are taken.`,
+    };
+  }
+
+  /* ---- Reservations. ----
+   *
+   * Every corporation's home city holds a slot for it from the start of the
+   * game, whether or not it has floated. `STATION_HOME_HEXES` is that table.
+   *
+   * THE RESERVATION IS RELEASED BY USE, not by floating: a company that has
+   * floated AND placed its home token is occupying the slot rather than
+   * reserving it, and its token is already counted above. So the test is
+   * "does this hex reserve a slot for somebody who has not taken it yet",
+   * and each such reservation consumes one of the remaining slots.
+   *
+   * That distinction matters on the shared OO hexes: ERIE's home is a
+   * two-city hex, so before ERIE floats another corporation may still take
+   * the OTHER circle -- reserving both would over-block it. */
+  const unclaimedReservations = STATION_HOME_HEXES.filter((home) => {
+    if (home.q !== q || home.r !== r) return false;
+    if (home.companyId === company.company_id) return false;
+    const owner = allCompanies.find((entry) => entry.company_id === home.companyId);
+    // No record of the company at all: treat the reservation as standing.
+    if (!owner) return true;
+    return !here(owner.station_token_hexes);
+  }).length;
+
+  if (occupied + unclaimedReservations >= slots) {
+    const reserver = STATION_HOME_HEXES.find(
+      (home) => home.q === q && home.r === r && home.companyId !== company.company_id,
+    );
+    return {
+      allowed: false,
+      reason: `This city's remaining slot is reserved as a home station${
+        reserver ? ` for company #${reserver.companyId}` : ""
+      } and cannot be taken.`,
+    };
+  }
+
+  /* ---- Connectivity. ----
+   *
+   * Last, deliberately. The three refusals above are properties of the CITY
+   * and are true for everybody; this one is about the acting corporation, and
+   * a player who has been told "that city is full" does not also need to be
+   * told their track does not reach it.
+   *
+   * A corporation with no token yet has no network to measure, and its first
+   * placement is its home city -- which the contract grants at float rather
+   * than asking for. Rather than guess, that case is allowed through and left
+   * to the chain. */
+  if (company.station_token_hexes.length > 0) {
+    const network = reachableNetwork(mapGrid, company.station_token_hexes);
+    if (!network.has(hexKey(q, r))) {
+      return {
+        allowed: false,
+        reason:
+          "This corporation's track does not reach this city. Station tokens may only be placed on the network it already runs.",
+      };
+    }
+  }
+
+  return ALLOWED;
+}
+
+/** Every hex this corporation may place a token on right now, keyed by
+ *  `hexKey` -- the board-highlight set for the Tokens sub-phase, and the
+ *  same shape the tile-lay veil consumes. */
+export function placeableStationHexes(input: {
+  mapGrid: MapGridResponse;
+  company: StationPlacementCompany | null | undefined;
+  allCompanies: readonly StationPlacementCompany[];
+  /** Every hex on the board, as `(q, r)` pairs. */
+  boardHexes: ReadonlyArray<readonly [number, number]>;
+}): Set<string> {
+  const { mapGrid, company, allCompanies, boardHexes } = input;
+  const out = new Set<string>();
+  if (!company) return out;
+  for (const [q, r] of boardHexes) {
+    if (evaluateStationPlacement({ mapGrid, q, r, company, allCompanies }).allowed) {
+      out.add(hexKey(q, r));
+    }
+  }
+  return out;
+}

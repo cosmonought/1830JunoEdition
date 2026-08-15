@@ -78,6 +78,25 @@ pub struct GameSession {
     pub game_id: u64,
     pub creator: Addr,
     pub total_juno_pool: Uint128,  // Real JUNO deposited by players
+    /// **Step 4.5 Batch 3, item 4: this table's stake.** The exact GROSS
+    /// real-JUNO amount the creator deposited at `CreateGameRoom`, which
+    /// every later joiner must match to the last `ujuno` (the Uniform Ante
+    /// Rule). Written once and never mutated.
+    ///
+    /// Validated at creation to be at least `escrow::MINIMUM_ANTE`, so this
+    /// field is also the room's proof that its floor was cleared -- and,
+    /// because joiners must match it exactly, one check at creation covers
+    /// the whole table.
+    ///
+    /// Previously this figure had no home: `execute_join_game_room` re-read
+    /// the creator's own `PLAYER_JUNO_ANTE` row on every join, which yields
+    /// the same number but makes the room's stake an incidental property of
+    /// one player's ledger entry rather than of the room. `#[serde(default)]`
+    /// so rooms created before this field existed still deserialize; they
+    /// read as zero, and the join path falls back to the old lookup for
+    /// exactly that case.
+    #[serde(default)]
+    pub room_ante: Uint128,
     pub virtual_bank_vgp: Uint128, // In-game play money (Starts at 12,000)
     /// The room's *immutable* genesis bank value -- exactly what
     /// `virtual_bank_vgp` was set to at `CreateGameRoom` time, never
@@ -114,6 +133,37 @@ pub struct GameSession {
     /// currently a static `0` for every room, present as the storage slot
     /// the eventual round-boundary feature will read and write.
     pub priority_deal_index: u32,
+    /// **Step 4.5 Batch 4: who took the last committing action this Stock
+    /// Round.** Index into `player_addresses`, or `None` if nobody has bought
+    /// or sold since the round began.
+    ///
+    /// This exists for exactly one purpose: the 1830 Priority Deal rule says
+    /// the deal passes to the player seated immediately to the LEFT of
+    /// whoever acted last in the Stock Round. That is not derivable when the
+    /// round ends -- by then every player has passed, `active_player_index`
+    /// has wrapped an unknown number of times, and `consecutive_passes` says
+    /// how many passes happened but not who broke the previous streak. So the
+    /// answer is recorded at the moment it is known, by
+    /// `trading::execute_buy_stock` and `trading::execute_sell_stock`, and
+    /// consumed once by `trading::conclude_stock_round`.
+    ///
+    /// **Passing deliberately does NOT update this.** A pass is the absence
+    /// of an action; if it counted, the rule would degenerate into "the deal
+    /// passes to the left of whoever passed last", which is every round the
+    /// same seat regardless of what anyone did.
+    ///
+    /// Reset to `None` by `conclude_stock_round` so the next round starts
+    /// clean -- a round in which nobody acts at all must not silently reuse
+    /// the previous round's last actor.
+    ///
+    /// `u32` rather than the `usize` the request named, matching
+    /// `active_player_index`/`priority_deal_index` above; every seat index in
+    /// this contract is a `u32` and a lone `usize` would need narrowing at
+    /// each comparison. `#[serde(default)]` so rooms created before this
+    /// field existed still deserialize -- they read as `None`, which is
+    /// exactly right for "we have no record of a last actor".
+    #[serde(default)]
+    pub last_active_player_index: Option<u32>,
     /// How many `ExecuteMsg::PassTurn` calls have landed *in a row*, with
     /// no intervening turn-gated trade (`BuyStock`/`SellStock`/
     /// `BidOnPrivate`) resetting the streak. `gamelog::execute_pass_turn`
@@ -186,9 +236,9 @@ pub struct GameSession {
     /// Timeout Safety Valve's clock: once
     /// `env.block.time.seconds() > last_action_timestamp + 172800` (48
     /// hours with no qualifying action), any player may call
-    /// `ExecuteMsg::ClaimTimeoutRefund` to close the room and refund every
+    /// `ExecuteMsg::AnnulGame` to close the room and refund every
     /// player's original real-JUNO ante from `PLAYER_JUNO_ANTE` -- see
-    /// `contract::execute_claim_timeout_refund`. Deliberately NOT refreshed
+    /// `escrow::execute_annul_game`. Deliberately NOT refreshed
     /// by every mutating message (e.g. `BidOnPrivate`,
     /// `ExecuteOperatingRound`, `BeginOperatingRound`,
     /// `EmergencyBuyHardware`, `UndoLastAction`) -- only the six handlers
@@ -407,6 +457,49 @@ pub enum ZoneType {
     BrownZone,
 }
 
+impl ZoneType {
+    /// **Step 4.5 Batch 1, item 2 (Yellow Zone invariant).** True when a
+    /// certificate of a corporation sitting on this cell does NOT count
+    /// toward its holder's Global Certificate Limit (the hand limit --
+    /// `trading::CERTIFICATE_LIMIT_BY_PLAYER_COUNT`). Granted by all three
+    /// colour bands, per this enum's own nested-band doc comment above:
+    /// Yellow is where the exemption starts, and Orange/Brown are strictly
+    /// past that line.
+    ///
+    /// This is the single predicate `trading::check_cert_limit` uses BOTH
+    /// to decide whether the incoming purchase itself counts AND to filter
+    /// the holder's already-owned certificates out of the running total --
+    /// see `count_player_certificates_with_exemptions`. Before Batch 1 the
+    /// exemption only ever skipped the check for the incoming certificate,
+    /// which under-counted nothing but over-counted every previously-bought
+    /// zone-exempt certificate the player was still holding.
+    pub fn waives_certificate_limit(&self) -> bool {
+        matches!(
+            self,
+            ZoneType::YellowZone | ZoneType::OrangeZone | ZoneType::BrownZone
+        )
+    }
+
+    /// **Step 4.5 Batch 1, item 2 (Orange Zone invariant).** True when a
+    /// single player may hold more than the standard
+    /// `trading::CERTIFICATE_LIMIT_PERCENTAGE` (60%) of a corporation
+    /// sitting on this cell -- up to and including 100%. Granted by Orange
+    /// and Brown only: Yellow waives the *hand* limit above but NOT this,
+    /// narrower, per-corporation ownership cap.
+    pub fn waives_ownership_cap(&self) -> bool {
+        matches!(self, ZoneType::OrangeZone | ZoneType::BrownZone)
+    }
+
+    /// **Step 4.5 Batch 1, item 1/2 (Brown Zone invariant).** True when a
+    /// player may buy more than one certificate of a corporation sitting on
+    /// this cell in a single action. Brown only -- and, per
+    /// `trading::execute_buy_stock`, only from the open-market Bank pool;
+    /// the IPO never permits a multi-buy regardless of zone.
+    pub fn permits_multiple_buy(&self) -> bool {
+        matches!(self, ZoneType::BrownZone)
+    }
+}
+
 /// Tracks where a single game's single protocol's price marker currently
 /// sits on the shared `MARKET_GRID` board template. Deliberately does not
 /// duplicate `game_id` as a field (matching this project's convention for
@@ -503,6 +596,39 @@ pub const PROTOCOL_PAR_VALUE: Map<(u64, u32), Uint128> = Map::new("protocol_par_
 /// dividends. Provisioned by `JoinGameRoom` (see `contract::STARTING_CAPITAL_POOL`)
 /// and treated as zero if somehow read before that.
 pub const PLAYER_CASH_VGP: Map<(u64, Addr), Uint128> = Map::new("player_cash_vgp");
+
+/// **Step 4.5 Batch 1, item 3: the Stock Round Buyback Lockout.**
+///
+/// (game_id, player) -> the `protocol_id`s that player has sold at least one
+/// certificate of during the CURRENT Stock Round. The classic 1830 rule this
+/// encodes: *a player may not buy back into a corporation they have already
+/// sold in the same Stock Round.* Without it, a player could sell 30% to
+/// crater a rival's price, then immediately re-buy the same stock cheaper in
+/// the same round -- a pure-profit wash trade the physical game forbids.
+///
+/// Stored as a `Vec<u32>` rather than a `HashSet<String>` deliberately:
+/// - **`Vec`, not `HashSet`** -- `HashSet`'s JSON serialization has no
+///   guaranteed element order, which is a determinism hazard in a CosmWasm
+///   contract (two validators could serialize the same logical set into two
+///   different byte strings and disagree on the state root). Every writer
+///   below keeps this `Vec` sorted and deduplicated, giving set semantics
+///   with a canonical byte encoding. Lists are at most
+///   `public_company::CORE_PUBLIC_COMPANIES.len()` (8) long, so a linear
+///   scan is cheaper than any hashing would be anyway.
+/// - **`u32` protocol id, not a `String` ticker** -- every other share
+///   registry in this contract (`PLAYER_SHARES`, `IPO_POOL_SHARES`,
+///   `PROTOCOL_PRESIDENT`, ...) is keyed by `protocol_id`; storing tickers
+///   here would introduce a second, drift-prone identity for a corporation.
+///   `TradingError::StockBuybackLockout` resolves the human-readable ticker
+///   from `PUBLIC_COMPANIES` only at error-formatting time.
+///
+/// Cleared for every player on the Stock-Round-to-Operating-Round boundary --
+/// both by `trading::conclude_stock_round` (the all-players-passed path, item
+/// 4) and defensively by `operations::execute_begin_operating_round`, so the
+/// lockout can never leak across a round boundary. Also cleared wholesale at
+/// `gamelog::reapply_game_log`'s genesis reset and rebuilt by replaying the
+/// log's `SellStock` entries, exactly like every other replayable registry.
+pub const PLAYER_SR_SALES: Map<(u64, Addr), Vec<u32>> = Map::new("player_sr_sales");
 
 /// (game_id, player) -> the exact real-JUNO amount that specific player
 /// deposited into the room's `total_juno_pool`, recorded once at the
@@ -644,6 +770,31 @@ pub struct PublicCompany {
     pub treasury: Uint128,
     pub is_floated: bool,
     pub total_shares_issued: u8,
+    /// **Step 4.5 Batch 2, item 4.** The total revenue this corporation's
+    /// trains earned the LAST time it ran routes -- written by
+    /// `operations::execute_run_manual_route` on every run, whether that
+    /// revenue was paid out to shareholders or withheld into the treasury,
+    /// and whether it was non-zero or zero. Surfaced through
+    /// `msg::PublicCompanyState::last_route_revenue` so the Operating Round
+    /// table can show each corporation's most recent earnings without the
+    /// client having to scrape and replay transaction attributes.
+    ///
+    /// **Deliberately `Uint128`, not `u32`.** The request specified `u32`,
+    /// but every other monetary quantity in this contract -- `treasury`,
+    /// `PLAYER_CASH_VGP`, `virtual_bank_vgp`, and the `revenue_amount` this
+    /// field is assigned FROM -- is `Uint128`, per the project's
+    /// fixed-point/no-floats rule. A `u32` here would need a lossy,
+    /// panic-prone narrowing conversion at the one place it is written, and
+    /// would silently truncate a late-game route above ~4.29 billion base
+    /// units. Matching the surrounding type removes the conversion entirely.
+    ///
+    /// **`#[serde(default)]` is required, not stylistic.** Every
+    /// `PublicCompany` already written to `PUBLIC_COMPANIES` predates this
+    /// field; without the attribute those records stop deserializing the
+    /// moment the contract is upgraded, bricking every game in flight.
+    /// Defaults to zero, which reads correctly as "has not run routes yet".
+    #[serde(default)]
+    pub last_route_revenue: Uint128,
 }
 
 /// (game_id, company_id) -> PublicCompany. Seeded unfloated by
@@ -1011,6 +1162,16 @@ pub enum ActionRecord {
         protocol_id: u32,
         source: SharePurchaseSource,
         par_value: Option<Uint128>,
+        /// **Step 4.5 Batch 1, item 1.** How many certificates the original
+        /// call bought in one atomic action -- `None`/`Some(1)` for an
+        /// ordinary purchase, `Some(n > 1)` only for a Brown-Zone Bank
+        /// multi-buy. `#[serde(default)]` so an `ActionRecord` written
+        /// before Batch 1 still deserializes: it reads as `None`, which
+        /// `trading::execute_buy_stock` resolves to exactly the single
+        /// certificate that log entry originally bought, so historical logs
+        /// replay to the identical state they always did.
+        #[serde(default)]
+        quantity: Option<u32>,
     },
     SellStock {
         player: Addr,
@@ -1158,6 +1319,57 @@ pub fn count_player_certificates(
     percent_per_share: u8,
     president_share_percentage: u8,
 ) -> StdResult<u32> {
+    count_player_certificates_with_exemptions(
+        storage,
+        game_id,
+        player,
+        private_ids,
+        public_company_ids,
+        percent_per_share,
+        president_share_percentage,
+        &[],
+    )
+}
+
+/// **Step 4.5 Batch 1, item 2.** `count_player_certificates` with the Yellow/
+/// Orange/Brown zone exemption actually applied to the RUNNING TOTAL, not
+/// merely to the certificate being bought.
+///
+/// `exempt_company_ids` is the subset of `public_company_ids` whose market
+/// marker currently sits on a cell whose `ZoneType::waives_certificate_limit`
+/// is true. Every certificate of such a company is skipped entirely: per the
+/// real 1830 rule, those cards do not count toward the holder's hand limit
+/// *while the marker sits in that band*, whether they were bought a moment
+/// ago or ten rounds ago.
+///
+/// This is deliberately a live, position-derived exemption rather than a
+/// sticky flag stamped at purchase time. A company whose price later climbs
+/// back out of the Yellow band has its certificates start counting again,
+/// which is exactly how the physical board behaves -- the colour band is
+/// printed on the CHART, not on the certificate. A consequence worth stating
+/// plainly: a player can be legally over the hand limit without having done
+/// anything wrong, simply because a company they hold moved up out of an
+/// exempt band. `trading::check_cert_limit` only ever blocks *new*
+/// purchases; it never retroactively invalidates a holding, and there is no
+/// forced-sale path in this contract.
+///
+/// Private companies are never zone-exempt -- a private has no market
+/// position at all -- so they are always counted in full.
+///
+/// `count_player_certificates` is the `exempt_company_ids: &[]` special case,
+/// kept as its own name because `auction::execute_bid_on_private` genuinely
+/// wants the unconditional count (see `trading.rs` module doc comment #12).
+#[allow(clippy::too_many_arguments)]
+pub fn count_player_certificates_with_exemptions(
+    storage: &dyn Storage,
+    game_id: u64,
+    player: &Addr,
+    private_ids: &[u32],
+    public_company_ids: &[u32],
+    percent_per_share: u8,
+    president_share_percentage: u8,
+    exempt_company_ids: &[u32],
+) -> StdResult<u32> {
     let mut count: u32 = 0;
 
     for &private_id in private_ids {
@@ -1170,6 +1382,12 @@ pub fn count_player_certificates(
 
     if percent_per_share > 0 {
         for &company_id in public_company_ids {
+            // Zone exemption (item 2): this company's certificates don't
+            // count toward the hand limit at all right now.
+            if exempt_company_ids.contains(&company_id) {
+                continue;
+            }
+
             let held_pct = PLAYER_SHARES
                 .may_load(storage, (game_id, company_id, player.clone()))?
                 .unwrap_or(0);

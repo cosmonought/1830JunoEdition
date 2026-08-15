@@ -108,6 +108,16 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   "RejectTrainOffer",
   "RescindTrainOffer",
   "LayTile",
+  // Station Tokens. Present in the contract's `ExecuteMsg` since the Station
+  // Token feature landed, but never mirrored here -- so this frontend could
+  // not place a token on chain OR in the sandbox, on any code path. Pure
+  // VGP/gameplay state like every other entry.
+  "PlaceStationToken",
+  // Step 4.5 Batch 3, item 1: the President submits an explicit route
+  // instead of leaning on the automatic tracer. Pure VGP/gameplay state --
+  // it moves no real JUNO -- so it belongs on the session key like every
+  // other entry here.
+  "RunManualRoute",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
   "PassTurn",
@@ -129,6 +139,36 @@ export interface PublicCompanyPayoutChoiceDto {
   company_id: number;
   payout: boolean;
 }
+
+/** One stop on a manually-declared route -- the exact mirror of `msg.rs`'s
+ *  `RouteWaypoint` (Step 4.5 Batch 3, item 1).
+ *
+ *  **The unit of a route is a STATION, not a hex.** That distinction became
+ *  load-bearing when the contract's pathfinder moved its own path history to
+ *  `(hex, city_node)` keys, so a route can legally serve BOTH stations of a
+ *  two-city hex -- New York's brown tile (#62) and every OO tile carry two
+ *  independent cities on physically separate track. The old payload was
+ *  `hex_path: string[]`, which could not say which of the two a stop meant,
+ *  so the contract had to refuse any repeated hex label outright rather than
+ *  guess and risk paying for a stop the train never reached.
+ *
+ *  `city_node` is OPTIONAL and omitting it is the normal case: it means "this
+ *  hex has one stop, or none" -- a town, plain connector track, or a
+ *  single-city tile, which is almost the whole board. Only name a city when
+ *  the hex genuinely has more than one.
+ *
+ *  Indexed exactly like the contract's own city registries: `0` is the first
+ *  city on the tile, `1` the second. Naming a city the hex does not have is
+ *  rejected on-chain with `NoSuchCityOnHex` rather than silently coerced. */
+export interface RouteWaypointDto {
+  hex: string;
+  city_node?: number;
+}
+
+/** Distribute Yield vs Slash/Retain Yield -- mirrors `msg.rs`'s
+ *  `PayoutStrategy`, whose unit variants serialize as their bare PascalCase
+ *  names under serde's default externally-tagged representation. */
+export type PayoutStrategyDto = "DeclareDividends" | "Withhold";
 
 /** Exact-cased TypeScript mirror of `msg.rs`'s `ExecuteMsg`, restricted to
  *  the session-key-eligible (non-JUNO-moving) variants in
@@ -212,6 +252,34 @@ export type GameplayExecuteMsg =
         r: number;
         tile_id: number;
         orientation: number;
+      };
+    }
+  // Step 4.5 Batch 3, item 1: Manual Route Validation. `path` replaced the
+  // deprecated `hex_path: string[]` -- see `RouteWaypointDto` for why a bare
+  // label was not enough. Only `protocol_id`'s registered President may send
+  // this, and it requires `BeginOperatingRound` to have populated the
+  // Operating Round Corporation Turn Queue first.
+  | {
+      RunManualRoute: {
+        game_id: number;
+        protocol_id: number;
+        path: RouteWaypointDto[];
+        payout_strategy: PayoutStrategyDto;
+      };
+    }
+  // Station Tokens. `city_index` is OPTIONAL and additive: a hex carrying two
+  // separate cities (New York #54/#62, the OO tiles) needs it to be
+  // answerable at all, while on a single-city hex the only valid value is
+  // `0`. Omitting the key entirely makes the contract resolve the
+  // lowest-indexed city with a free slot -- always a legal placement rather
+  // than a rejection.
+  | {
+      PlaceStationToken: {
+        game_id: number;
+        protocol_id: number;
+        q: number;
+        r: number;
+        city_index?: number;
       };
     }
   | { BuyHardwareFromPool: { game_id: number; protocol_id: number } }

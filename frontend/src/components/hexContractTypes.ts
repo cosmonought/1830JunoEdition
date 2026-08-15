@@ -195,6 +195,95 @@ export const STATION_TICKER_COLORS: Readonly<Record<number, string>> = {
 };
 export const STATION_FALLBACK_TICKER_COLOR = "#5a6270";
 
+/* ==================================================================
+ *  DESIGN NOTE 234: A NEAR-WHITE RING AROUND WHITE LETTERING
+ * ==================================================================
+ *
+ * REPORTED BUG: PRR and CPR tokens are very hard to read.
+ *
+ * A placed token is a small disc of the corporation's brand colour with its
+ * acronym on top, and it was ringed in `#f4ecd8` -- the board's cream -- at
+ * `max(2, size * 0.05)`. Two things go wrong at once, and they compound:
+ *
+ *   THE RING DOES NOT SEPARATE. A token sits inside a WHITE city circle, so
+ *   a cream ring is near-white on near-white. The one job of an outline is
+ *   to say where the token ends, and it could not.
+ *
+ *   THE RING CROWDS THE GLYPHS. The disc is small (`radius = size * 0.22`)
+ *   and a size-scaled stroke centred on that radius eats inward. On the
+ *   dark-filled corporations -- PRR's red, CPR's purple -- the acronym is
+ *   WHITE, so the lettering ran into a near-white band with only a sliver of
+ *   fill between them. Three-letter tickers on the smallest discs in the
+ *   game, with the contrast removed exactly where it was needed.
+ *
+ * Charcoal fixes both without touching the brand palette: it separates
+ * hard from the white circle beneath, and it cannot be confused with white
+ * lettering because it is the opposite end of the scale. It is applied to
+ * every floated token rather than only the white-lettered ones -- the
+ * light-filled corporations (C&O's orange, with black text) had the same
+ * separation problem against the white circle, and one ring colour is one
+ * fewer thing to keep in step with `bestContrastTextColor`.
+ *
+ * The UNFLOATED reservation marker keeps its brand-coloured ring: that ring
+ * is an affordance rather than an outline -- design note #48's "which colour
+ * it'll turn once floated" -- and at 45% alpha it is not competing with
+ * anything.
+ *
+ * B&M IS A DELIBERATE EDGE CASE, recorded because it looks like an oversight
+ * and is not. Its brand colour is `#34495e`, a dark slate barely a shade off
+ * this charcoal, so its ring effectively merges into its own fill and the
+ * token reads as one solid dark disc with white lettering. That is the
+ * SECOND outcome this fix was allowed to reach -- "remove the border
+ * entirely so the corporate background colour fills the whole token" -- and
+ * it is reached without a special case, because the property that actually
+ * matters survives either way: the ring's job is to separate the token from
+ * the WHITE CITY CIRCLE underneath it, and charcoal-on-white does that at
+ * roughly 10:1 whether or not it also happens to contrast with the fill
+ * inside it.
+ *
+ * Tinting B&M's ring lighter to make it visible would put a pale band back
+ * around white lettering -- the exact bug being fixed -- so the merge is the
+ * better of the two outcomes rather than a compromise.
+ */
+export const STATION_TOKEN_RING = "#334155";
+
+/* ==================================================================
+ *  DESIGN NOTE 253: A BRAND COLOUR THAT CAN ACT AS LIGHT
+ * ==================================================================
+ *
+ * The board veil, the legal-placement glow and the manual route line are all
+ * drawn in the acting corporation's colour, so one hue says whose turn it is
+ * everywhere at once. Two of those three are LIGHT effects over a darkened
+ * board, and light needs luminance: B&M's `#34495e` slate and PRR's deep red
+ * are perfectly good fills and make almost no glow at all against a veiled
+ * map.
+ *
+ * So a colour used as light is measured first, and a too-dark one is
+ * BRIGHTENED toward white rather than replaced by it. Replacing would throw
+ * the identity away exactly when the board is trying to communicate it;
+ * lifting keeps the hue recognisably PRR-red or B&M-navy while giving it
+ * enough luminance to read as emitted light.
+ *
+ * The threshold is relative luminance, the same quantity
+ * `bestContrastTextColor` uses, so this file has one idea of "dark".
+ */
+export function glowColorFor(color: string, minimumLuminance = 0.32): string {
+  const parse = (index: number) => parseInt(color.slice(index, index + 2), 16) / 255;
+  const channels = [1, 3, 5].map(parse);
+  if (channels.some((value) => Number.isNaN(value))) return "#FFFFFF";
+  const linear = channels.map((c) =>
+    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+  );
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  if (luminance >= minimumLuminance) return color;
+
+  // Mix toward white by however much is missing. A colour at half the
+  // threshold lifts halfway; one at nearly the threshold barely moves.
+  const mix = Math.min(0.75, 1 - luminance / minimumLuminance);
+  const lifted = channels.map((c) => Math.round((c + (1 - c) * mix) * 255));
+  return `#${lifted.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 export function stationTickerColor(companyId: number): string {
   return STATION_TICKER_COLORS[companyId] ?? STATION_FALLBACK_TICKER_COLOR;
 }
@@ -299,10 +388,40 @@ export interface LegalTilePlacementsResponse {
  *    "offboard"        a red off-board revenue terminal
  *    "gray-immutable"  a preprinted gray hex -- permanently fixed
  *    "max-tier"        the tile there is already the top colour tier
+ *
+ * `"out-of-reach"` is GONE -- design note #257. It was the one reason that
+ * depended on whose turn it was rather than on the board, and it existed to
+ * explain a refusal the Lay Track veil now makes visually. A click on a
+ * dimmed hex is ignored outright, so there is no status left to carry.
  */
 export type HexClickRejection = "not-a-hex" | "offboard" | "gray-immutable" | "max-tier";
 
 export type HexClickQueryState =
+  /** Design note #172: the click landed on NO HEX AT ALL -- open water, the
+   *  margin beyond the board, or one of the real gaps inside its non-convex
+   *  outline (row A has no A13/A15).
+   *
+   *  Distinct from `"blocked"`, which means "a real hex, but you may not lay
+   *  here". This one carries no rejection reason and no message, because
+   *  there is nothing to explain: the player clicked nothing.
+   *
+   *  It exists so an ALREADY-OPEN in-situ UI can close. Returning silently
+   *  -- the previous behaviour -- left a radial menu anchored to an earlier
+   *  hex sitting there while the player clicked empty sea to dismiss it. */
+  | {
+      status: "not-a-hex";
+      q: number;
+      r: number;
+      hexLabel: string;
+      clientX: number;
+      clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
+    }
   /** Design note #141: the hex failed one of the four static board gates
    *  (`evaluateHexForTileLaying`), so `GetLegalTilePlacements` was never
    *  called and no picker may open.
@@ -325,6 +444,12 @@ export type HexClickQueryState =
       hexLabel: string;
       clientX: number;
       clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
       reason: HexClickRejection;
       /** `null` for a click on empty space beyond the board, which is not
        *  worth telling anyone about -- see `evaluateHexForTileLaying`. */
@@ -337,6 +462,12 @@ export type HexClickQueryState =
       hexLabel: string;
       clientX: number;
       clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
     }
   | {
       status: "success";
@@ -345,6 +476,12 @@ export type HexClickQueryState =
       hexLabel: string;
       clientX: number;
       clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
       response: LegalTilePlacementsResponse;
     }
   | {
@@ -354,6 +491,12 @@ export type HexClickQueryState =
       hexLabel: string;
       clientX: number;
       clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
       message: string;
     }
   /** Design note #120: no chain client is wired up, so
@@ -376,5 +519,11 @@ export type HexClickQueryState =
       hexLabel: string;
       clientX: number;
       clientY: number;
+      /** Design note #171: the hex's centre in canvas-CSS pixels, through
+       *  the live pan/zoom transform. In-situ UI anchors to this; the
+       *  `clientX`/`clientY` above remain the raw cursor, which is still
+       *  the right anchor for a cursor-following tooltip. */
+      centroidX: number;
+      centroidY: number;
       placements: LegalTilePlacement[];
     };

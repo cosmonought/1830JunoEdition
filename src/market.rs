@@ -78,8 +78,8 @@ use cosmwasm_std::{StdResult, Storage, Uint128};
 use thiserror::Error;
 
 use crate::state::{
-    MarketCell, ProtocolMarketState, ZoneType, MARKET_ARRIVAL_SEQUENCE, MARKET_GRID,
-    PROTOCOL_MARKET,
+    MarketCell, ProtocolMarketState, ZoneType, BANK_POOL_SHARES, IPO_POOL_SHARES,
+    MARKET_ARRIVAL_SEQUENCE, MARKET_GRID, PROTOCOL_MARKET, PUBLIC_COMPANIES,
 };
 
 /// Grid boundaries for the price chart, matching the real 1830 board's
@@ -183,6 +183,153 @@ pub enum MarketMovement {
     Left,
 }
 
+/// **Step 4.5 Batch 1, item 5: Cliffs and Ledges deflection geometry.**
+///
+/// The exact result of one `apply_market_movement_detailed` call, so callers
+/// (and the test suite) can distinguish the three genuinely different things
+/// that can happen at a chart boundary, which the plain `MarketCell` return
+/// of `apply_market_movement` collapses into one:
+///
+/// - **A clean move.** `applied == Some(requested)`, `deflected == false`.
+/// - **A deflection** (a Cliff). The requested direction was blocked, so the
+///   marker travelled the 1830-mandated substitute direction instead:
+///   `applied == Some(other)`, `deflected == true`.
+/// - **No movement at all** (a Ledge or the Ceiling, or a Cliff whose own
+///   deflection target is off the printed chart too). `applied == None`, and
+///   `cell` is the cell the marker was already standing on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarketMoveOutcome {
+    /// The cell the marker is standing on once this movement resolves --
+    /// unchanged from where it started if nothing moved.
+    pub cell: MarketCell,
+    /// Where the marker stood before this movement was attempted.
+    pub from_x: u32,
+    pub from_y: u32,
+    /// The movement the caller asked for.
+    pub requested: MarketMovement,
+    /// The movement actually travelled, or `None` if the marker held station.
+    pub applied: Option<MarketMovement>,
+    /// True only when a Cliff redirected the marker: `applied` is `Some` and
+    /// differs from `requested`.
+    pub deflected: bool,
+}
+
+impl MarketMoveOutcome {
+    /// True when the marker actually changed cells.
+    pub fn moved(&self) -> bool {
+        self.applied.is_some()
+    }
+}
+
+/// One step in `movement`'s direction from `(x, y)`, or `None` if that step
+/// would leave the bounding rectangle entirely. Pure coordinate arithmetic:
+/// says nothing about whether the resulting cell is actually *printed* on the
+/// ragged chart -- that is `MARKET_GRID`'s business, checked separately by
+/// `resolve_movement` below.
+fn step_coordinates(x: u32, y: u32, movement: MarketMovement) -> Option<(u32, u32)> {
+    match movement {
+        // Top Ceiling: nothing above the chart's highest row.
+        MarketMovement::Up => {
+            if y < MARKET_MAX_Y {
+                Some((x, y + 1))
+            } else {
+                None
+            }
+        }
+        // Bottom Ledge: nothing below the chart's lowest row.
+        MarketMovement::Down => {
+            if y > MARKET_MIN_Y {
+                Some((x, y - 1))
+            } else {
+                None
+            }
+        }
+        MarketMovement::Right => {
+            if x < MARKET_MAX_X {
+                Some((x + 1, y))
+            } else {
+                None
+            }
+        }
+        MarketMovement::Left => {
+            if x > MARKET_MIN_X {
+                Some((x - 1, y))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// **The Cliffs and Ledges rule table (item 5), in one place.** Given a
+/// movement that could not be travelled -- because it would leave the
+/// bounding rectangle, or because the cell it points at is one of the real
+/// chart's blank (unprinted) coordinates -- returns the substitute direction
+/// 1830 says the marker travels instead, or `None` if the marker simply holds
+/// station.
+///
+/// - **Right Cliff -> Up.** A Distribute Yield that would push the marker off
+///   the right-hand end of its row instead lifts it one row. This is the real
+///   chart's only way to climb past a short row into the wider rows above it,
+///   and without it a company parked on a row's last cell could never reach
+///   $350 at all.
+/// - **Left Cliff -> Down.** A Slash/Retain Yield that would push the marker
+///   off the left-hand end of its row instead drops it one row. The real
+///   chart's rows get *shorter* toward the bottom and their blanks are all at
+///   the low-`x` end (see `REAL_MARKET_ROWS`), so this is the staircase a
+///   repeatedly-withholding company walks down.
+/// - **Bottom Ledge -> clamp.** A downward movement from the chart's bottom
+///   row does NOT deflect anywhere; it is simply refused. There is no cell
+///   below $10 and a marker can never fall off the board -- the physical
+///   board's bottom edge is a ledge, not a cliff.
+/// - **Top Ceiling -> clamp.** Symmetrically, an upward movement from the top
+///   row is refused. The chart's single highest cell is $350
+///   (`GAME_END_PRICE_TRIGGER`), and nothing goes above it.
+///
+/// Deflection is deliberately NOT recursive: if the substitute direction is
+/// itself blocked, the marker holds station rather than chaining into a third
+/// direction. Real 1830 never chains deflections, and a recursive rule on a
+/// ragged chart could walk a marker an unbounded distance from one dividend.
+fn deflection_for(movement: MarketMovement) -> Option<MarketMovement> {
+    match movement {
+        MarketMovement::Right => Some(MarketMovement::Up),
+        MarketMovement::Left => Some(MarketMovement::Down),
+        MarketMovement::Up | MarketMovement::Down => None,
+    }
+}
+
+/// Resolves where a marker at `(x, y)` ends up when asked to travel
+/// `movement`, applying `deflection_for`'s Cliff/Ledge table. Returns the
+/// destination plus the direction actually travelled (`None` = held station).
+/// Read-only -- every write happens in `apply_market_movement_detailed`.
+fn resolve_movement(
+    storage: &dyn Storage,
+    x: u32,
+    y: u32,
+    movement: MarketMovement,
+) -> StdResult<((u32, u32), Option<MarketMovement>)> {
+    // A candidate is travelable only if it is inside the bounding rectangle
+    // AND actually printed on the ragged chart.
+    let travelable = |candidate: Option<(u32, u32)>| -> StdResult<Option<(u32, u32)>> {
+        match candidate {
+            Some((cx, cy)) => Ok(MARKET_GRID.may_load(storage, (cx, cy))?.map(|_| (cx, cy))),
+            None => Ok(None),
+        }
+    };
+
+    if let Some(destination) = travelable(step_coordinates(x, y, movement))? {
+        return Ok((destination, Some(movement)));
+    }
+
+    if let Some(deflected) = deflection_for(movement) {
+        if let Some(destination) = travelable(step_coordinates(x, y, deflected))? {
+            return Ok((destination, Some(deflected)));
+        }
+    }
+
+    Ok(((x, y), None))
+}
+
 /// Hands out the next `MARKET_ARRIVAL_SEQUENCE` value for `game_id`,
 /// treating an unseeded counter as `0` (so the first-ever stamp in a room is
 /// `1`), and persists the incremented counter. Called every time a
@@ -201,22 +348,35 @@ fn next_arrival_sequence(storage: &mut dyn Storage, game_id: u64) -> StdResult<u
 }
 
 /// Applies a single grid movement to `game_id`'s `protocol_id` price
-/// marker, clamping at the grid boundaries on every call regardless of the
-/// marker's current position, then persists the new position and returns
-/// the `MarketCell` it landed on.
+/// marker, honoring the real board's Cliff/Ledge boundary geometry, then
+/// persists the new position and returns the `MarketCell` it landed on.
 ///
-/// The real 1830 chart is ragged (see this module's doc comment): a
-/// candidate cell inside the bounding rectangle can still be genuinely
-/// blank (unseeded). Per the physical board's own behavior -- a marker can
-/// never leave the printed chart -- a move whose candidate cell isn't
-/// seeded simply doesn't happen; the marker saturates in place exactly
-/// like hitting the rectangle's own `MARKET_MIN_*`/`MARKET_MAX_*` edge
-/// already did, rather than erroring. `MarketError::MarketCellNotFound` is
-/// therefore no longer reachable from an ordinary movement at all (every
-/// candidate is either a real seeded cell or gets clamped back to the
-/// marker's own current -- already-valid -- position); it remains for
-/// `current_cell`'s own doc comment case (a position recorded against a
-/// cell that was somehow never seeded in the first place).
+/// **Step 4.5 Batch 1, item 5 changed this function's boundary behavior.**
+/// It previously treated all four edges identically: any blocked movement
+/// (off the bounding rectangle, or onto one of the ragged chart's blank
+/// cells) simply saturated in place. That is right for two of the four
+/// directions and wrong for the other two. Real 1830 deflects a blocked
+/// horizontal movement into a vertical one:
+///
+/// - **Right Cliff:** a Distribute Yield blocked on the right moves the
+///   marker UP one row instead of standing still.
+/// - **Left Cliff:** a Slash/Retain Yield blocked on the left moves the
+///   marker DOWN one row instead of standing still.
+/// - **Bottom Ledge / Top Ceiling:** blocked vertical movements still clamp,
+///   with no deflection -- a marker can neither fall off the bottom of the
+///   chart nor climb above $350.
+///
+/// The consequence of the old behavior was not cosmetic: a company parked on
+/// the last printed cell of a short row could pay dividends forever and its
+/// price would never move, so it could never climb into the wider rows above
+/// and could never reach the $350 `GAME_END_PRICE_TRIGGER` at all.
+///
+/// See `deflection_for` for the rule table and `resolve_movement` for the
+/// resolution order. `MarketError::MarketCellNotFound` remains unreachable
+/// from an ordinary movement (every resolved destination is either a real
+/// seeded cell or the marker's own already-valid current position); it
+/// remains for `current_cell`'s own doc comment case (a position recorded
+/// against a cell that was somehow never seeded in the first place).
 ///
 /// Errors (rather than panics) only if this game's protocol has no
 /// recorded market position at all.
@@ -226,6 +386,33 @@ pub fn apply_market_movement(
     protocol_id: u32,
     movement: MarketMovement,
 ) -> Result<MarketCell, MarketError> {
+    apply_market_movement_detailed(storage, game_id, protocol_id, movement)
+        .map(|outcome| outcome.cell)
+}
+
+/// `apply_market_movement`, but reporting the full `MarketMoveOutcome` --
+/// which direction was actually travelled, and whether a Cliff deflected it.
+/// This is the real implementation; `apply_market_movement` is the thin
+/// "I only care where it landed" wrapper over it, which is what every
+/// pre-existing call site in `trading.rs`/`operations.rs` wants.
+///
+/// **Step 4.5 Batch 1, item 5.** Movement resolution is entirely delegated to
+/// `resolve_movement`/`deflection_for` -- see that pair for the Right Cliff,
+/// Left Cliff, Bottom Ledge and Top Ceiling rules and why deflection never
+/// chains. This function's own job is only the storage side: read the
+/// marker, ask where it goes, write it back.
+///
+/// `arrival_sequence` is re-stamped on EVERY call, including a call that
+/// resolves to no movement at all. That is intentional and pre-dates this
+/// change: the counter answers "which marker was touched most recently" for
+/// `operations::calculate_operating_order`'s tie-break, and a company that
+/// paid a dividend into a Ledge has still acted this round.
+pub fn apply_market_movement_detailed(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    protocol_id: u32,
+    movement: MarketMovement,
+) -> Result<MarketMoveOutcome, MarketError> {
     let mut position: ProtocolMarketState = PROTOCOL_MARKET
         .may_load(storage, (game_id, protocol_id))?
         .ok_or(MarketError::ProtocolNotFound {
@@ -233,32 +420,10 @@ pub fn apply_market_movement(
             protocol_id,
         })?;
 
-    let (candidate_x, candidate_y) = match movement {
-        MarketMovement::Up => (
-            position.current_x,
-            position.current_y.saturating_add(1).min(MARKET_MAX_Y),
-        ),
-        MarketMovement::Down => (
-            position.current_x,
-            position.current_y.saturating_sub(1).max(MARKET_MIN_Y),
-        ),
-        MarketMovement::Right => (
-            position.current_x.saturating_add(1).min(MARKET_MAX_X),
-            position.current_y,
-        ),
-        MarketMovement::Left => (
-            position.current_x.saturating_sub(1).max(MARKET_MIN_X),
-            position.current_y,
-        ),
-    };
+    let from_x = position.current_x;
+    let from_y = position.current_y;
 
-    // Ragged-shape saturation: if the rectangle-clamped candidate lands on
-    // one of the chart's genuinely blank cells, stay put instead of
-    // erroring -- see this function's doc comment above.
-    let (new_x, new_y) = match MARKET_GRID.may_load(storage, (candidate_x, candidate_y))? {
-        Some(_) => (candidate_x, candidate_y),
-        None => (position.current_x, position.current_y),
-    };
+    let ((new_x, new_y), applied) = resolve_movement(storage, from_x, from_y, movement)?;
 
     let cell = MARKET_GRID
         .may_load(storage, (new_x, new_y))?
@@ -269,7 +434,14 @@ pub fn apply_market_movement(
     position.arrival_sequence = next_arrival_sequence(storage, game_id)?;
     PROTOCOL_MARKET.save(storage, (game_id, protocol_id), &position)?;
 
-    Ok(cell)
+    Ok(MarketMoveOutcome {
+        cell,
+        from_x,
+        from_y,
+        requested: movement,
+        applied,
+        deflected: matches!(applied, Some(actual) if actual != movement),
+    })
 }
 
 /// Sold-out round bonus: moves `game_id`'s protocol price marker up one
@@ -407,6 +579,87 @@ pub fn initialize_game_market(
         ensure_protocol_position(storage, game_id, company_id, default_x, default_y)?;
     }
     Ok(())
+}
+
+/// **Step 4.5 Batch 1, item 4: the 100%-Sold-Out End-of-Stock-Round rise.**
+///
+/// Walks every `company_id` in `company_ids` and, for each one that is both
+/// FLOATED and 100% in player hands -- `IPO_POOL_SHARES == 0` AND
+/// `BANK_POOL_SHARES == 0` -- advances its price marker one cell UP.
+/// Returns `(company_id, landed_cell)` for each company that was evaluated
+/// as sold out, in `company_ids` order, so the caller can attribute the
+/// movement and check the landed price against `price_triggers_game_end`.
+///
+/// **Called exactly once per Stock Round**, from
+/// `trading::conclude_stock_round`, at the moment every player has passed
+/// consecutively. That single call site is what makes this an end-of-round
+/// bonus rather than a per-purchase one, and is why this function must never
+/// be invoked speculatively: two calls in one round would double-raise every
+/// sold-out company.
+///
+/// **Coordinate convention.** The request this implements is phrased as
+/// "move the token up 1 vertical cell (`y - 1`)", which is the convention of
+/// a chart indexed from its top row downward. This module has always used the
+/// opposite convention -- `y = MARKET_MAX_Y` is the TOP row and price
+/// generally increases with `y` (see this module's own doc comment and
+/// `REAL_MARKET_ROWS`, which maps the verbatim source's row 0 to
+/// `MARKET_MAX_Y`). "Up one cell" is therefore `y + 1` here. Both describe
+/// the identical physical movement; this function goes through `move_up` so
+/// there is exactly one definition of which way is up.
+///
+/// **Interaction with the pre-existing per-purchase sold-out bonus.**
+/// `trading::execute_buy_stock` already bumps a company the instant a
+/// purchase empties both of its pools. That is a different trigger with a
+/// different timing, and both exist in the real game; a corporation that goes
+/// 100% sold out mid-round and stays that way to the end of the round is
+/// legitimately raised twice, once by each rule.
+///
+/// **Why `is_floated` is required.** An unfloated corporation has never sold
+/// a share, so its `IPO_POOL_SHARES` is untouched -- and an unwritten entry
+/// defaults to `full_pool_percentage` (100), not 0, which is exactly why the
+/// caller must pass that constant in rather than letting an absent entry read
+/// as zero. The `is_floated` gate is the belt to that braces: a corporation
+/// nobody has ever bought into can never be "sold out".
+///
+/// `full_pool_percentage` is threaded in as a parameter (matching
+/// `state::count_player_certificates`'s convention) rather than imported from
+/// `trading.rs`, so this module stays below `trading` in the dependency
+/// order instead of reaching back up into it.
+pub fn apply_sold_out_price_rises(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    company_ids: &[u32],
+    full_pool_percentage: u8,
+) -> Result<Vec<(u32, MarketCell)>, MarketError> {
+    let mut risen = Vec::new();
+
+    for &company_id in company_ids {
+        // Never floated (or not a company in this room at all): it has no
+        // shares in player hands to be sold out of.
+        let is_floated = PUBLIC_COMPANIES
+            .may_load(storage, (game_id, company_id))?
+            .map(|company| company.is_floated)
+            .unwrap_or(false);
+        if !is_floated {
+            continue;
+        }
+
+        let ipo_pct = IPO_POOL_SHARES
+            .may_load(storage, (game_id, company_id))?
+            .unwrap_or(full_pool_percentage);
+        let bank_pct = BANK_POOL_SHARES
+            .may_load(storage, (game_id, company_id))?
+            .unwrap_or(0);
+
+        if ipo_pct != 0 || bank_pct != 0 {
+            continue;
+        }
+
+        let cell = move_up(storage, game_id, company_id)?;
+        risen.push((company_id, cell));
+    }
+
+    Ok(risen)
 }
 
 /// One real 1830 price cell's data, as printed on the physical board:

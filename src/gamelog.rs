@@ -283,6 +283,32 @@ pub fn execute_pass_turn(
     // the six state-advancing actions that resets the room's 48-hour
     // inactivity clock.
     session.last_action_timestamp = env.block.time.seconds();
+
+    // ---- Step 4.5 Batch 1, item 4: the Stock Round's natural end.
+    //
+    // The classic 18xx termination rule -- the round ends the moment every
+    // player has passed in a row -- has been tracked in `consecutive_passes`
+    // since this contract was written but never ACTED on; `state.rs`'s own
+    // doc comment for that field described it as "the storage slot a future
+    // Stock-Round-ends feature would read". This is that feature.
+    //
+    // `conclude_stock_round` applies the 100%-sold-out price rise to every
+    // fully-held floated corporation and clears the Buyback Lockout, then
+    // resets `consecutive_passes` to `0`. That reset is what makes this fire
+    // exactly once per round: a further pass starts a fresh streak from one
+    // rather than immediately re-satisfying the condition.
+    //
+    // The round-type guard matters. `consecutive_passes` is also incremented
+    // by passes taken outside a Stock Round, and a sold-out price rise must
+    // not fire in the middle of an Operating Round.
+    let stock_round_concluded =
+        session.current_round_type == RoundType::StockRound && session.consecutive_passes >= player_count;
+    let sold_out_risers = if stock_round_concluded {
+        trading::conclude_stock_round(deps.storage, game_id, &mut session)?
+    } else {
+        Vec::new()
+    };
+
     SESSIONS.save(deps.storage, game_id, &session)?;
 
     record_action(
@@ -295,7 +321,7 @@ pub fn execute_pass_turn(
 
     let new_active_player = &session.player_addresses[session.active_player_index as usize];
 
-    Ok(Response::new()
+    let mut response = Response::new()
         .add_attribute("action", "pass_turn")
         .add_attribute("game_id", game_id.to_string())
         .add_attribute("passed_player", info.sender)
@@ -304,7 +330,29 @@ pub fn execute_pass_turn(
             session.active_player_index.to_string(),
         )
         .add_attribute("new_active_player", new_active_player.as_str())
-        .add_attribute("consecutive_passes", session.consecutive_passes.to_string()))
+        .add_attribute("consecutive_passes", session.consecutive_passes.to_string());
+
+    if stock_round_concluded {
+        response = response
+            .add_attribute("stock_round_concluded", "true")
+            .add_attribute("sold_out_risers", sold_out_risers.len().to_string())
+            // Step 4.5 Batch 4: the Priority Deal has just moved to the seat
+            // left of whoever acted last -- reported so a client can update
+            // its `#1` marker from this response instead of re-querying.
+            .add_attribute(
+                "priority_deal_index",
+                session.priority_deal_index.to_string(),
+            );
+        for (company_id, cell) in &sold_out_risers {
+            response = response
+                .add_attribute("sold_out_protocol_id", company_id.to_string())
+                .add_attribute("sold_out_new_price", cell.price)
+                .add_attribute("sold_out_new_x", cell.x.to_string())
+                .add_attribute("sold_out_new_y", cell.y.to_string());
+        }
+    }
+
+    Ok(response)
 }
 
 /// Pops the most recent entry off `game_id`'s `GAME_LOG` and recomputes the
@@ -424,6 +472,12 @@ pub fn reapply_game_log(
         session.priority_deal_index = 0;
     }
     session.consecutive_passes = 0;
+    // Step 4.5 Batch 4: the Stock Round's last-actor record is replayable
+    // state, exactly like `consecutive_passes` above -- it is written by the
+    // same `BuyStock`/`SellStock` entries the log replays below, so it resets
+    // to genesis here and rebuilds itself. Leaving a stale value would let an
+    // undone purchase still decide who gets the next Priority Deal.
+    session.last_active_player_index = None;
     // Tech Era Color-Locking (`hexmap.rs`'s module doc comment #8):
     // recomputed identically to live play as `ActionRecord::BuyHardwareFromPool`
     // entries replay below, via the same first-3-train/first-5-train
@@ -509,6 +563,14 @@ pub fn reapply_game_log(
         }
     }
 
+    // Step 4.5 Batch 1, item 3: the Stock Round Buyback Lockout is
+    // replayable state, so it resets to genesis (nobody has sold anything)
+    // here and is rebuilt by the `SellStock` entries replayed below --
+    // exactly like `PLAYER_SHARES` and the two pools just above. Without
+    // this reset an undone sale would leave its lockout behind, barring a
+    // player from a corporation they no longer have any record of selling.
+    trading::clear_stock_round_sales(deps.storage, game_id, &session.player_addresses);
+
     for &company_id in &core_public_company_ids {
         IPO_POOL_SHARES.remove(deps.storage, (game_id, company_id));
         BANK_POOL_SHARES.remove(deps.storage, (game_id, company_id));
@@ -585,6 +647,7 @@ pub fn reapply_game_log(
                 protocol_id,
                 source,
                 par_value,
+                quantity,
             } => {
                 trading::execute_buy_stock(
                     deps.branch(),
@@ -594,6 +657,7 @@ pub fn reapply_game_log(
                     protocol_id,
                     source,
                     par_value,
+                    quantity,
                 )?;
             }
             ActionRecord::SellStock {
@@ -768,6 +832,21 @@ pub fn reapply_game_log(
                 // (see the comment above), so it must duplicate this too to
                 // stay behaviorally consistent with live play.
                 session.last_action_timestamp = env.block.time.seconds();
+
+                // Step 4.5 Batch 1, item 4: and it must duplicate the
+                // end-of-Stock-Round conclusion for the same reason. A log
+                // whose replay skipped this would silently lose every
+                // sold-out price rise the live game had already applied, so
+                // an `UndoLastAction` of some LATER action would quietly
+                // roll back price movements that had nothing to do with it.
+                // Same guard and same single-fire property as the live path.
+                if player_count > 0
+                    && session.current_round_type == RoundType::StockRound
+                    && session.consecutive_passes >= player_count
+                {
+                    trading::conclude_stock_round(deps.storage, game_id, &mut session)?;
+                }
+
                 SESSIONS.save(deps.storage, game_id, &session)?;
             }
         }

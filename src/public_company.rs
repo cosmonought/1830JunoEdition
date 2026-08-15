@@ -56,6 +56,8 @@ pub fn spawn_core_public_companies(storage: &mut dyn Storage, game_id: u64) -> S
             treasury: Uint128::zero(),
             is_floated: false,
             total_shares_issued: 0,
+            // Step 4.5 Batch 2, item 4: no routes run yet.
+            last_route_revenue: Uint128::zero(),
         };
         PUBLIC_COMPANIES.save(storage, (game_id, company_id), &company)?;
     }

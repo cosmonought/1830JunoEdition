@@ -9,6 +9,47 @@ pub struct InstantiateMsg {
     pub subsidy_fee_percentage: u64, // e.g., 50 for 0.5%
 }
 
+/// **Step 4.5 Batch 3, item 1.** One stop on a manually-declared route.
+///
+/// The unit of a route is a STATION, not a hex. That distinction became
+/// load-bearing in Batch 2, when the pathfinding engine moved its own path
+/// history to `(hex, city_node)` keys so a route could legally serve both
+/// stations of a two-city hex (#62 brown New York, the OO tiles). The manual
+/// route message was still a `Vec<String>` of hex labels and therefore could
+/// not describe those routes at all -- it had to reject a repeated label,
+/// because guessing which station was meant would pay out revenue for a stop
+/// the train never reached.
+///
+/// A stringly-typed encoding (`"H12:1"`) was considered and rejected: it
+/// pushes parsing and its failure modes into the contract, gives the
+/// frontend no type to program against, and makes an invalid route
+/// indistinguishable from a typo until runtime.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct RouteWaypoint {
+    /// The real board hex label (e.g. `"G19"`), resolved to axial `(q, r)`
+    /// via `hexmap::axial_for_label`.
+    pub hex: String,
+    /// Which city on that hex this stop is, indexed exactly like
+    /// `hexmap::city_slot_counts_at` and `hexmap::tile_segment_cities`
+    /// (`Some(0)` is the first city, `Some(1)` the second).
+    ///
+    /// `None` means "this hex has one stop, or none" -- a town, plain
+    /// connector track, or a single-city tile where naming the city adds
+    /// nothing. It is the correct and expected value for the overwhelming
+    /// majority of the board, so an ordinary route stays as easy to write as
+    /// it was before this field existed.
+    ///
+    /// Supplying `Some(n)` for a hex whose tile has no `n`th city is a hard
+    /// error (`OperationsError::NoSuchCityOnHex`) rather than a silent
+    /// fallback: a client that is confused about the board should be told,
+    /// not quietly paid.
+    ///
+    /// `usize` to match the requested schema and the natural index type of
+    /// the slot-count slices it indexes into; it is narrowed once, checked,
+    /// to the `u8` the on-chain city registries use.
+    pub city_node: Option<usize>,
+}
+
 /// Where a `BuyStock` purchase draws its certificate from -- determines
 /// which price it's bought at. See `ExecuteMsg::BuyStock`'s doc comment.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
@@ -73,11 +114,66 @@ pub enum ExecuteMsg {
     /// purchase advances the turn pointer to the next player and resets
     /// `consecutive_passes` to `0` -- see `trading::ensure_active_player`/
     /// `trading::advance_turn` and `gamelog.rs`'s module doc comment #4.
+    ///
+    /// **Step 4.5 Batch 1, item 6 -- the President's Certificate invariant.**
+    /// The very first purchase of a corporation that has no President and no
+    /// shares in any player's hands is NOT an ordinary 10% certificate: it is
+    /// the 20% President's Certificate, and it costs exactly `2 * par_value`.
+    /// The engine resolves this automatically -- there is no message field to
+    /// request it and no way to decline it, exactly as in the physical game,
+    /// where you cannot open a corporation by buying a single share. An
+    /// ordinary 10% share simply cannot be bought out of a corporation's IPO
+    /// (nor out of the Bank pool) until that opening purchase has happened;
+    /// attempting it is rejected with
+    /// `TradingError::PresidentsCertificateRequired`.
+    ///
+    /// **Step 4.5 Batch 1, item 3 -- the Stock Round Buyback Lockout.** A
+    /// purchase of a corporation this player has already SOLD during the
+    /// current Stock Round is rejected with
+    /// `TradingError::StockBuybackLockout`. The lockout clears at the
+    /// Stock-Round-to-Operating-Round boundary. See `state::PLAYER_SR_SALES`.
+    ///
+    /// **Step 4.5 Batch 1, item 1 -- `quantity` and the Brown Zone.**
+    /// How many certificates to buy in one atomic action. `None` means 1, and
+    /// every value is validated before any state is written, so a rejected
+    /// multi-buy debits nothing and transfers nothing.
+    ///
+    /// A `quantity` above 1 is legal ONLY when both of the following hold,
+    /// and is otherwise rejected with `TradingError::MultiBuyNotPermitted`:
+    /// 1. the corporation's price marker currently sits on a
+    ///    `ZoneType::BrownZone` cell, and
+    /// 2. `source` is `SharePurchaseSource::Bank` -- the IPO never permits a
+    ///    multi-buy, at any price, in any zone.
+    ///
+    /// A legal multi-buy settles atomically: the buyer is debited
+    /// `quantity * current_price` in one subtraction, receives
+    /// `quantity * 10%` in one write, and the Bank pool is decremented by
+    /// that same percentage in one write -- there is no intermediate state in
+    /// which some of the certificates have transferred and others have not,
+    /// and the price does not drift between certificates within the action.
+    ///
+    /// `quantity` may not be `0`, and may not exceed
+    /// `trading::MAX_MULTI_BUY_QUANTITY` (10 certificates = a whole
+    /// corporation); either is rejected with
+    /// `TradingError::InvalidBuyQuantity`.
     BuyStock {
         game_id: u64,
         protocol_id: u32,
         source: SharePurchaseSource,
         par_value: Option<Uint128>,
+        /// `#[serde(default)]` deliberately: this field is ADDITIVE, and
+        /// every message already in flight omits it entirely. The frontend
+        /// (out of scope for this batch -- see `App.tsx`'s own note that
+        /// "`ExecuteMsg::BuyStock` has no quantity parameter, so 'buy 3' is
+        /// three sequential `BuyStock` messages") currently sends
+        /// `{game_id, protocol_id, source, par_value}` and nothing else.
+        /// Without this attribute that JSON would stop deserializing the
+        /// moment this contract was upgraded, breaking every existing client
+        /// for a field they have no reason to know about. Omitted reads as
+        /// `None`, which resolves to `DEFAULT_BUY_QUANTITY` (1) -- byte-for-
+        /// byte the pre-Batch-1 behavior.
+        #[serde(default)]
+        quantity: Option<u32>,
     },
     /// Sells `percentage` of `protocol_id` (any multiple of 10%, per
     /// rules.md's SR transaction rule) back onto the open market. Each
@@ -228,10 +324,15 @@ pub enum ExecuteMsg {
         /// with the rest of this enum rather than introduced as a one-off
         /// `u64` for this single variant.
         protocol_id: u32,
-        /// Real board hex labels (e.g. `"G19"`), resolved to axial `(q, r)`
-        /// coordinates via `hexmap::axial_for_label`. Order matters -- each
-        /// consecutive pair must be direct, track-connected neighbors.
-        hex_path: Vec<String>,
+        /// **Step 4.5 Batch 3, item 1: the strongly-typed route.**
+        ///
+        /// Was `hex_path: Vec<String>`. A bare label cannot say WHICH
+        /// station on a two-city hex a stop refers to, which left this
+        /// message unable to express a route the (city-granular) automatic
+        /// tracer finds perfectly well -- so the validator had to refuse any
+        /// repeated hex outright rather than guess. `RouteWaypoint` carries
+        /// the city node explicitly, and the ambiguity is gone.
+        path: Vec<RouteWaypoint>,
         /// Distribute Yield (`PayoutStrategy::DeclareDividends`) or
         /// Slash/Retain Yield (`PayoutStrategy::Withhold`) for this route's
         /// declared revenue -- see `PayoutStrategy`'s own doc comment. This
@@ -376,23 +477,37 @@ pub enum ExecuteMsg {
     /// deliberately scoped subset that excludes anything moving real JUNO
     /// and a couple of complex batch/bankruptcy paths.
     UndoLastAction { game_id: u64 },
-    /// Inactivity Timeout Safety Valve: closes out game room `game_id` and
-    /// refunds every registered player's real-JUNO ante -- exactly what
-    /// they personally deposited, tracked in `state::PLAYER_JUNO_ANTE`, not
-    /// a proportional or recomputed split (contrast `EndGameAndDistribute`,
-    /// which redeems the pool against final VGP net worth) -- if and only
-    /// if more than 48 hours (172,800 seconds) have elapsed since
-    /// `GameSession::last_action_timestamp`, the timestamp of the room's
-    /// most recent qualifying state-advancing action (`BuyStock`,
-    /// `SellStock`, `PassTurn`, `LayTile`, `DeclareDividends`, or
-    /// `BuyHardwareFromPool` -- see that field's doc comment in `state.rs`).
-    /// Any player currently registered in `game_id` may call this -- it's a
-    /// safety valve for an abandoned room, not a privileged action, so it
-    /// isn't restricted to the room's creator the way `EndGameAndDistribute`
-    /// is. Sets `GameSession::is_active` to `false` on success, matching
-    /// every other room-closing action. See
-    /// `contract::execute_claim_timeout_refund`.
-    ClaimTimeoutRefund { game_id: u64 },
+    /// **Step 4.5 Batch 3, items 2 and 3: annul an unfinished game.**
+    ///
+    /// Tears room `game_id` down WITHOUT scoring it and refunds every
+    /// registered player their own real-JUNO ante (`state::PLAYER_JUNO_ANTE`,
+    /// net of the developer subsidy already forwarded at deposit time). The
+    /// proportional payout math is bypassed entirely.
+    ///
+    /// **This is not `EndGameAndDistribute`, and the difference is the
+    /// point.** That message is for a game that REACHED A RESULT: the pool
+    /// is divided by final VGP net worth, and a player can walk away with
+    /// more or less than they anted. `AnnulGame` is for a game that produced
+    /// NO result -- abandoned, stuck, or called off. Nobody won, so nothing
+    /// is scored and everyone gets their money back. Running the
+    /// proportional split on a half-finished position would hand a real
+    /// prize to whoever happened to be ahead when the room stalled, which is
+    /// a rage-quit exploit rather than a payout.
+    ///
+    /// **Who may call it:**
+    /// - the room's creator, at any time; or
+    /// - ANY registered player, once 48 hours (`INACTIVITY_TIMEOUT_SECONDS`)
+    ///   have elapsed since `GameSession::last_action_timestamp` -- the
+    ///   permissionless escape hatch that stops an absent creator from
+    ///   locking everyone else's JUNO in the contract forever.
+    ///
+    /// Sets `GameSession::is_active` to `false` on success, matching every
+    /// other room-closing action.
+    ///
+    /// **Replaces `ClaimTimeoutRefund`,** which was this same refund without
+    /// the creator path. Two names for one abort vector meant two places for
+    /// the refund rules to drift apart; see `escrow.rs`'s module doc comment.
+    AnnulGame { game_id: u64 },
     /// Pre-Game Waterfall Auction: buys whichever private company is
     /// currently the cheapest still-unowned one, at its exact face value,
     /// right now. Only legal while `GameSession::waterfall_auction_active`
@@ -591,6 +706,21 @@ pub struct PublicCompanyState {
     pub is_floated: bool,
     pub treasury: Uint128,
     pub total_shares_issued: u8,
+    /// **Step 4.5 Batch 2, item 4.** The total revenue this corporation's
+    /// trains earned on its most recent route run -- see
+    /// `state::PublicCompany::last_route_revenue` for the write path and for
+    /// why it is `Uint128` rather than the requested `u32`. Zero for a
+    /// corporation that has never run routes, and reset to zero by a run
+    /// that found no legal route, so this is always "what it earned LAST
+    /// time", never a stale high-water mark.
+    ///
+    /// This is the field the Operating Round table's final column reads.
+    /// It rides on `PublicCompanyState`, which `GetGameState` already returns
+    /// one of per corporation -- this contract has no separate `GameLedger`
+    /// or `Corporation` query to add it to, and inventing two more endpoints
+    /// that re-serve a subset of an existing one would give the frontend
+    /// three places to disagree about the same number.
+    pub last_route_revenue: Uint128,
     /// `None` until this company's very first-ever IPO purchase chooses a
     /// par value (or, for B&O, always `Some` from the moment its private
     /// company is won).

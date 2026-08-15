@@ -45,8 +45,9 @@
 
 import {
   COLOR_TIER_STROKE,
+  DEFAULT_TRACK_INK,
+  TILE_TRACK_INK,
   LANDMARK_HEXES,
-  LANDMARK_TRACKS,
   STATIC_BOARD_HEXES,
   YELLOW_OO_HEXES,
   type OffboardRevenueTiers,
@@ -64,12 +65,10 @@ import {
   edgeAngleRad,
   hexBlockedSlots,
   hexSlotDirection,
-  liveEdges,
   marginLabelFontSize,
   marginLabelReserve,
   pointOnCircle,
   resolveSlotOverride,
-  rotateConnections,
   slotsBlockedByEdges,
   terrainBaseValue,
   twoNodePositions,
@@ -83,13 +82,29 @@ import {
   type TileColorTier,
 } from "./hexTileCatalog";
 import {
+  STATION_TOKEN_RING,
   bestContrastTextColor,
   type MapGridResponse,
   type MapTileEntry,
 } from "./hexContractTypes";
+// `TILE_CATALOG_BY_ID` was imported for design note #216's deleted fallback,
+// which re-derived a tile's connecting segment from `TileCatalogEntry.paths`.
+// The glow reads authored artwork now and never consults the catalog.
 import {
+  NEW_YORK_PRINTED_ARTWORK,
   PILL_SLOT_SPACING,
+  SLOT_RING_RATIO,
   TILE_GRAPHICS_CATALOG,
+  printedMarkersFor,
+  artworkPathsForEdge,
+  artworkPathsForTraversal,
+  newYorkPrintedPaths,
+  printedArtwork,
+  printedArtworkPaths,
+  printedPathsForEdge,
+  printedTerminalRailAtEdge,
+  printedPathsForTraversal,
+  terminalRailAtEdge,
   tileArtworkPaths,
   tileCityAnchors,
   tileMarkerPoints,
@@ -112,6 +127,23 @@ export interface RouteOverlay {
 }
 
 export const EMPTY_ROUTE_OVERLAYS: readonly RouteOverlay[] = [];
+
+/* `TrackTraceStyle` and `applyTrace` are DELETED -- design note #226.
+ *
+ * Design note #195 introduced them so the route glow could re-run each track
+ * renderer stroke-only, in blue, and so guarantee the highlight used the
+ * exact same Bezier geometry as the rails. That guarantee still holds and is
+ * now structural rather than mechanical: the glow strokes the very same
+ * `Path2D` objects out of `TILE_GRAPHICS_CATALOG` and
+ * `PRINTED_GRAPHICS_CATALOG` that the renderers stroke, so there is nothing
+ * left to keep in step.
+ *
+ * What the trace mode could not express is WHICH rail. It re-ran a whole
+ * hex, so it lit every path on it -- and since both endpoints of every route
+ * went through it, that was most routes. Replacing it with a per-path
+ * lookup is what fixes New York lighting both of its disconnected spurs.
+ */
+
 
 
 /* ------------------------------------------------------------------ */
@@ -523,73 +555,22 @@ export function pathsAreDisjoint(paths: ReadonlyArray<readonly [number, number]>
   return paths.length > 0;
 }
 
-/** Draws a tile's revenue-centre markers -- station circle, town dit(s),
- *  or a neutral junction dot -- on top of whatever track was already
- *  stroked. Extracted from `drawTrackPath` by design note #122 so the
- *  new disjoint-path branch and the original fan branch share one
- *  implementation instead of growing a second copy that could drift.
+/* `drawTileMarkers` is DELETED -- design note #209.
  *
- *  Keyed purely on TERRAIN, never on edge count -- see the notes inside.
- *  `DoubleTown` is handled by `DOUBLE_TOWN_ROUTES` before this is ever
- *  reached, so its branch here is a fallback for a double-town tile with
- *  no explicit artwork entry. */
-export function drawTileMarkers(
-  ctx: CanvasRenderingContext2D,
-  center: { x: number; y: number },
-  size: number,
-  entry: TileCatalogEntry,
-  edges: readonly number[],
-): void {
-  //
-  // Design note #118: this block used to live INSIDE the 3+-edge branch (for
-  // the station circle) and to be gated on `edges.length === 2` (for the
-  // dits), which quietly assumed the old invented catalog's geometry. The
-  // real 1830 tray catalog breaks both assumptions in ways that matter:
-  //
-  //   - #57, the Yellow `MajorCityHub` that EVERY plain-city hex on the
-  //     board starts from, has exactly TWO live edges (0/3, a straight) --
-  //     so under the old placement it drew no station circle at all, the
-  //     single most visible tile in the game rendering as bare track.
-  //   - #1/#2/#55/#56/#69, the Yellow `DoubleTown`s, have FOUR live edges
-  //     each -- so under the old `=== 2` gate they drew no dits, and picked
-  //     up the neutral junction dot instead, reading as plain track.
-  //
-  // Hoisting the whole thing out and keying it purely on TERRAIN (never on
-  // edge count) fixes both and is inherently robust to any future catalog
-  // whose geometry differs again.
-  if (entry.terrain === "MajorCityHub" || entry.terrain === "BostonHub") {
-    // design note #49: Boston/Baltimore's own "B"-labeled single-city hub
-    // (`BostonHub`) gets the same single-station treatment as an ordinary
-    // MajorCityHub -- the "B" label is a legality restriction, not a
-    // different artwork shape.
-    drawStationCircle(ctx, center, size);
-  } else if (entry.terrain === "SmallTown") {
-    // A solid DARK circle (design note #3b / item 8's "Distinct Dark Small
-    // Towns"), deliberately not the small white circle this file used
-    // previously, so a town/dit reads as visually distinct from a buildable
-    // city station hub at a glance.
-    drawDitMarker(ctx, center, size);
-  } else if (entry.terrain === "DoubleTown") {
-    // Standardized onto the SAME `twoNodePositions` diagonal coordinates as
-    // G19/OO/every unlaid double-town-designated hex (design notes #57/#58).
-    // Index 0/1 map directly onto the two `drawDitMarker` calls below, first
-    // slot then second slot, with no re-sorting.
-    const [node0, node1] = twoNodePositions(center, size);
-    drawDitMarker(ctx, node0, size * 0.85); // index 0: top-right
-    drawDitMarker(ctx, node1, size * 0.85); // index 1: bottom-left
-  }
-  // FIX (design note #128): a branch used to sit here giving any non-city
-  // tile with 3+ live edges a small dark dot at hex centre. That dot is why
-  // Green and Brown PLAIN track showed phantom towns -- at 0.18 radius in
-  // `#555555` it reads as a dit, and the multi-edge plains and junctions
-  // (#16, #39-#47, #70) all qualified. A junction is a track crossing, not a
-  // revenue centre; real cardboard prints nothing there.
-  //
-  // Every marker this function draws is now gated on TERRAIN alone -- never
-  // on edge count, never on path shape. Only `SmallTown`/`DoubleTown`
-  // produce dits, only `MajorCityHub`/`BostonHub` a station circle, and
-  // anything else draws no centre marker at all.
-}
+ * It placed a tile's station circle or town dit by TERRAIN TYPE alone:
+ * `MajorCityHub` got a circle at the hex centre, `DoubleTown` two dits on a
+ * fixed diagonal, and so on. That is the marker half of the same guess the
+ * track half was making -- terrain says what KIND of revenue centre a tile
+ * carries and cannot say WHERE the cardboard prints it, which is why a
+ * two-city tile ended up with a station in the empty half of the hex (the
+ * failure this file's own design note #133 records).
+ *
+ * Every marker now comes from `TileArtwork.markers`, authored beside the
+ * track it sits on, and `drawHardcodedTileArtwork` draws it. With
+ * `drawTrackPath`'s procedural branches gone this function had no callers
+ * left, and an exported procedural marker placer sitting next to an artwork
+ * catalog is an invitation to reintroduce exactly the drift the catalog
+ * exists to prevent. */
 
 /* Design note #126 deleted `drawRevenueBadge` from here -- the bespoke
    white disc the picker drew for itself. It clashed with the board's own
@@ -633,6 +614,10 @@ export function drawHardcodedTileArtwork(
   size: number,
   tileId: number,
   orientation: number,
+  /** Design note #153: the tile tier's track ink. Defaults to the historic
+   *  near-black, so any caller that does not know the tier renders exactly
+   *  as before rather than being forced to guess one. */
+  ink: string = DEFAULT_TRACK_INK,
 ): boolean {
   const paths = tileArtworkPaths(tileId);
   const art = TILE_GRAPHICS_CATALOG[tileId];
@@ -644,7 +629,7 @@ export function drawHardcodedTileArtwork(
   ctx.translate(center.x, center.y);
   ctx.rotate((-60 * rot * Math.PI) / 180);
   ctx.scale(size, size);
-  ctx.strokeStyle = "#2b2b2b";
+  ctx.strokeStyle = ink;
   // The catalog is authored in unit-hex space, so the transform scales the
   // pen too -- divide back out to land on the SAME on-screen stroke width
   // (`max(3, size * 0.12)`) every other track in this file uses.
@@ -714,250 +699,47 @@ export function drawTrackPath(
   // cannot reach them even by accident. The overlays pass still runs --
   // that is the revenue badge and the "B"/"NY"/"OO" restriction label,
   // neither of which is track art.
-  if (drawHardcodedTileArtwork(ctx, center, size, entry.tileId, orientation)) {
+  // Design note #153: the tier decides the ink. `entry.color` is already in
+  // hand here, which is why this is the layer that resolves it -- the
+  // artwork renderer below takes a colour rather than looking one up, so it
+  // stays a pure drawing primitive.
+  const trackInk = TILE_TRACK_INK[entry.color] ?? DEFAULT_TRACK_INK;
+
+  if (drawHardcodedTileArtwork(ctx, center, size, entry.tileId, orientation, trackInk)) {
     drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
     return;
   }
 
-  const actualMask = rotateConnections(entry.connections, orientation);
-  const edges = liveEdges(actualMask);
-
-  const apothem = size * (Math.sqrt(3) / 2);
-  const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
-
-  ctx.strokeStyle = "#2b2b2b";
-  ctx.lineWidth = Math.max(3, size * 0.12);
-  ctx.lineCap = "round";
-
-  // Design note #119: the DoubleTown discrete-path branch, checked before
-  // everything else because it is the narrowest and most specific case.
-  //
-  // SCOPE, deliberately: this branch is gated on `terrain === "DoubleTown"`
-  // AND on discrete paths actually being available, so it can only ever
-  // capture #1/#2/#55/#56/#69. Every other tile -- including the multi-edge
-  // city and plain tiles, whose Rust catalog rows DO carry path lists --
-  // falls through to exactly the branches it used before, unchanged. That
-  // is a scope decision, not an oversight: the existing branches already
-  // render those correctly, and routing them through here too would restyle
-  // most of the board for no correctness gain.
-  //
-  // Why these five needed it: each has FOUR live edges paired into TWO
-  // independent two-edge routes, one per town, and `connections` is a flat
-  // union that cannot say which edge pairs with which. Proof that the mask
-  // alone is insufficient rather than merely inconvenient -- #1 and #55
-  // share the identical mask `0b01_1011` but pair as {0,4}+{1,3} versus
-  // {0,3}+{1,4}; #2 and #56 share `0b00_1111` but pair as {0,3}+{1,2}
-  // versus {0,2}+{1,3}. No function of the mask can tell those apart. The
-  // old fan-to-centre rendering drew all four of them as the same four-way
-  // junction with two dits floated at fixed offsets, which is wrong track
-  // topology and wrong dit placement on every one of the five.
-  // SUPERSEDED APPROACH (design note #121): a first pass drew these from
-  // the catalog's path data through a generalized offset -- each route bent
-  // through its own node so the two dits could not collide. That was wrong
-  // on the tiles it mattered most for. #55 is two straights crossing in an
-  // X, and bending both arms through offset nodes visibly bowed them into
-  // something that is not the tile; #56's two gentle curves came out warped
-  // enough to be hard to read. The lesson is that "make the markers fit" is
-  // not a good enough reason to move the TRACK. There are exactly five of
-  // these tiles in all of 1830, so they are now drawn from an explicit
-  // per-tile table (`DOUBLE_TOWN_ROUTES`) instead of derived, and the dits
-  // move around the geometry rather than the geometry moving around them.
-  const doubleTownRoutes =
-    entry.terrain === "DoubleTown" ? DOUBLE_TOWN_ROUTES[entry.tileId] : undefined;
-  if (doubleTownRoutes) {
-    const rot = ((orientation % 6) + 6) % 6;
-    // Every route drawn before any dit, so a crossing arm (#55's X crosses
-    // at centre by definition) can never be stroked over a town marker.
-    const ditPoints = doubleTownRoutes.map((route) => {
-      const edgeA = (route.edges[0] + rot) % 6;
-      const edgeB = (route.edges[1] + rot) % 6;
-      const along = drawDoubleTownRoute(ctx, center, size, apothem, edgeA, edgeB);
-      // Design note #123: each town sits at its own explicit `ditAt`, out
-      // along its arm and clear of the crossing -- never at `t = 0.5`,
-      // which is precisely where the other track passes.
-      return along(route.ditAt);
-    });
-    for (const point of ditPoints) {
-      drawDitMarker(ctx, point, size * 0.85);
-    }
-    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
-    return;
-  }
-
-  // Design note #122: every OTHER tile whose catalog paths are disjoint --
-  // #16/#18/#19/#20's crossing green plains, and the single-track tiles
-  // (#3/#4/#7/#8/#9/#57/#58) -- is now drawn from those declared paths too,
-  // with the same canonical straight/gentle/sharp primitives the
-  // double-towns use. This is the "art, not math" rule applied to the whole
-  // catalog: track shape comes from sourced path data, never from a guess
-  // about what a flat bitmask might have meant. Junction and city tiles
-  // deliberately do NOT come through here -- see `pathsAreDisjoint`.
-  // REGRESSION FIX (design note #130): the `!entry.cityGroups` guard is
-  // load-bearing and its absence was the reported "city markers completely
-  // missing" bug, introduced by design note #122's own ordering.
-  //
-  // Every two-city tile has DISJOINT paths by definition -- that is what
-  // makes it two cities rather than one hub. #54/#62 are `[[0,1],[2,3]]`,
-  // #59 two spurs, #64-#68 two pairs. So this branch, sitting above the
-  // `cityGroups` branch, swallowed all eight of them: it drew their track
-  // correctly and then handed off to `drawTileMarkers`, which keys on
-  // terrain and has no case for `NewYorkHub`/`DoubleCityHub` -- because
-  // those were always meant to have drawn their own pair of station circles
-  // in the `cityGroups` branch that now never ran. Result: correct track,
-  // no cities at all.
-  //
-  // Guarding here rather than reordering the branches keeps the diff honest
-  // about which one is the special case: `cityGroups` tiles have bespoke
-  // two-node artwork and must claim themselves first; this branch is the
-  // general disjoint-path renderer for everything else.
-  if (!entry.cityGroups && entry.paths && pathsAreDisjoint(entry.paths)) {
-    const rot = ((orientation % 6) + 6) % 6;
-    for (const [baseA, baseB] of entry.paths) {
-      drawDoubleTownRoute(ctx, center, size, apothem, (baseA + rot) % 6, (baseB + rot) % 6);
-    }
-    drawTileMarkers(ctx, center, size, entry, edges);
-    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
-    return;
-  }
-
-  // Design note #118: `cityGroups` is checked FIRST now, ahead of the
-  // 2-live-edge shortcut below. Previously the shortcut won, which was
-  // harmless while the only two-city tiles in the catalog had 4+ live edges
-  // -- but the real 1830 tray catalog includes #59 ("OO" Green), whose two
-  // cities are a pair of DISCONNECTED one-edge stubs on edges 0 and 2.
-  // That's exactly 2 live edges, so the old ordering would have drawn it as
-  // a single continuous curve joining the two edges through one shared
-  // centre node: visually a through-route, and factually the opposite of
-  // what the tile is (`hexmap::terrain_base_value` prices `DoubleCityHub` at
-  // $40 -- one station per visit -- precisely BECAUSE those two stations
-  // don't connect intra-hex).
-  if (entry.cityGroups) {
-    // Design note #52: a genuine two-city tile (New York, every OO
-    // variant) -- draw each city's own paired-edge curve into ITS OWN
-    // station point, NOT one shared fan-to-center hub. The old code below
-    // (still used for single-city tiles) fanned every live edge into
-    // `center`, which was fine for a `MajorCityHub`/`BostonHub` tile (a
-    // single real city) but wrong for these: the real tile has two
-    // physically independent city nodes, and treating all of a NY/OO
-    // tile's edges as radiating from ONE point drew phantom track past
-    // wherever the OTHER city's own edges actually terminate, and is what
-    // let a corrected (sparse) bitmask still look like a 6-spoke wildcard
-    // fanning from hex center. `twoCityStationPoints` gives the exact same
-    // two points the station-circle block below draws its circles at, so
-    // track and circles can't drift apart.
-    //
-    // BUG FIX (design note #118): `cityGroups` is expressed in BASE
-    // (pre-rotation) edge numbers, exactly like `entry.connections`, but
-    // `edges` above is the POST-rotation live set. The old code intersected
-    // the two directly, so at any `orientation !== 0` the intersection came
-    // back empty or partial and a rotated NY/OO tile silently drew little or
-    // none of its own track. `rotateConnections` shifts base edge `e` to
-    // `(e + orientation) % 6` (bit `e` left-shifted by `orientation`), so
-    // the same transform is applied here before intersecting.
-    const rot = ((orientation % 6) + 6) % 6;
-    const stationPoints = twoCityStationPoints(entry.terrain, center, size);
-    entry.cityGroups.forEach((groupEdges, cityIndex) => {
-      const liveGroupEdges = groupEdges
-        .map((edge) => (edge + rot) % 6)
-        .filter((edge) => edges.includes(edge))
-        .sort((a, b) => a - b);
-      if (liveGroupEdges.length === 0) return;
-      const stationPoint = stationPoints[cityIndex] ?? center;
-      if (liveGroupEdges.length === 1) {
-        const point = edgePoint(liveGroupEdges[0]);
-        bezierTrackSegment(ctx, point, stationPoint, size, edgeInwardNormal(liveGroupEdges[0]), null);
-      } else if (liveGroupEdges.length === 2) {
-        const [a, b] = liveGroupEdges;
-        const start = edgePoint(a);
-        const end = edgePoint(b);
-        const isOpposite = Math.abs(b - a) === 3;
-        if (isOpposite) {
-          ctx.beginPath();
-          ctx.moveTo(start.x, start.y);
-          ctx.lineTo(end.x, end.y);
-          ctx.stroke();
-        } else {
-          bezierTrackSegment(ctx, start, stationPoint, size, edgeInwardNormal(a), null);
-          bezierTrackSegment(ctx, stationPoint, end, size, null, edgeInwardNormal(b));
-        }
-      } else {
-        for (const edge of liveGroupEdges) {
-          const point = edgePoint(edge);
-          bezierTrackSegment(ctx, point, stationPoint, size, edgeInwardNormal(edge), null);
-        }
-      }
-    });
-
-    // Both two-node terrains draw the identical pair of station circles --
-    // see `twoCityStationPoints`/design note #56 for why `NewYorkHub` was
-    // merged onto `DoubleCityHub`'s geometry rather than keeping its own.
-    drawStationCircle(ctx, stationPoints[0], size * 0.85);
-    drawStationCircle(ctx, stationPoints[1], size * 0.85);
-    // Design note #124: two-node hubs return through the shared tail below,
-    // so their badge is drawn there like every other tile's.
-  } else if (edges.length === 2) {
-    const [a, b] = edges;
-    const start = edgePoint(a);
-    const end = edgePoint(b);
-    // `liveEdges` returns edges in ascending order (a < b), so a true
-    // opposite pair -- 0&3, 1&4, 2&5 -- is exactly the b - a === 3 case;
-    // no modular-distance math is needed given that ordering.
-    const isOpposite = b - a === 3;
-
-    // BUG FIX (Revenue Center Connectivity pass -- see `drawPrintedTrack`'s
-    // identical fix for the full derivation of why `arcTo` never actually
-    // touches `center`). Design note #118 update: the real tray catalog makes
-    // this branch far busier than the old one did -- it now carries every
-    // single-town tile (#3/#4/#58), every plain curve and straight
-    // (#7/#8/#9), AND #57, the yellow city tile that starts every plain-city
-    // hex on the board -- so the hardening below is load-bearing now rather
-    // than merely proactive.
-    if (isOpposite) {
-      // A true through-route: edges directly across the tile from each
-      // other -- a straight track, per this feature's explicit request
-      // to use `ctx.lineTo` for this case.
-      ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-    } else {
-      // Rail Map Overhaul (design note #42): two cubic-Bezier halves via
-      // `bezierTrackSegment`, each perpendicular-entering its own edge
-      // (`edgeInwardNormal(a)`/`edgeInwardNormal(b)`) and easing through the
-      // shared station node at `center` -- replaces the previous
-      // `quadraticCurveTo`-based `curveHalf` closure.
-      bezierTrackSegment(ctx, start, center, size, edgeInwardNormal(a), null);
-      bezierTrackSegment(ctx, center, end, size, null, edgeInwardNormal(b));
-    }
-  } else if (edges.length > 0) {
-    // Three or more live edges, single city (a `MajorCityHub`/`BostonHub`
-    // tile) or an ordinary multi-spur junction: the bitmask alone doesn't
-    // say which pairs route together (see design note #3), so draw a spoke
-    // from each live edge into a shared center "station" node instead.
-    // Rail Map Overhaul (design note #42): each spoke is now a
-    // perpendicular-entering Bezier curve (`bezierTrackSegment`), matching
-    // `drawPrintedTrack`'s own already-curved 3+-edge treatment, instead of
-    // the previous straight `lineTo` spoke.
-    //
-    // Design note #118: this is also the deliberate GENERIC-ARTWORK fallback
-    // for the real tray catalog's multi-edge DOUBLE-TOWN tiles (#1, #2,
-    // #55, #56, #69 -- four live edges each, two towns each). Real 1830
-    // pairs those four edges into two specific two-edge town routes, but
-    // `hexmap::TILE_CATALOG` only publishes the flat union bitmask, and this
-    // file's standing discipline (design note #3) is to render what the data
-    // actually says rather than invent a pairing it doesn't. So each edge
-    // fans to centre and the two dit markers are drawn at the canonical
-    // two-node positions below: correct terrain, correct live edges, correct
-    // stop count, approximate intra-tile routing. Upgrade path if the
-    // backend ever publishes per-node edge groups: give those five entries
-    // `cityGroups` and they move to the first branch with no other change.
-    for (const edge of edges) {
-      const point = edgePoint(edge);
-      bezierTrackSegment(ctx, point, center, size, edgeInwardNormal(edge), null);
-    }
-  }
-
-  drawTileMarkers(ctx, center, size, entry, edges);
+  /* ==================================================================
+   *  DESIGN NOTE 209: THERE IS NO PROCEDURAL BRANCH ANY MORE
+   * ==================================================================
+   *
+   * Everything that used to stand here -- the `DoubleTown` route table, the
+   * disjoint-paths renderer, the `cityGroups` two-station branch, the
+   * two-live-edge shortcut and the fan-to-centre spoke fallback -- has been
+   * deleted rather than left behind an unreachable guard.
+   *
+   * WHY DELETED AND NOT KEPT AS A FALLBACK. Every one of those branches read
+   * the flat `connections` BITMASK, which records which edges are live and
+   * cannot record which pairs route together. That is not a limitation of
+   * the code, it is a limitation of the data, and it is why #28 (edges
+   * 0/4/5) and #29 (edges 0/1/2) both came out as the same three-armed Y of
+   * straight radial spokes: from a bitmask alone there is nothing else they
+   * could have come out as. A fallback that is guaranteed to be wrong
+   * whenever it runs is not a safety net; it is a silent renderer of
+   * plausible-looking fiction, and leaving it in place means the next tile
+   * added without artwork looks fine and is not.
+   *
+   * `TILE_GRAPHICS_CATALOG` now covers all 46 entries of `TILE_CATALOG`
+   * (design note #208 there), so the artwork branch above is the only path a
+   * real tile takes. An id with no artwork gets the explicit placeholder
+   * below -- a dashed outline and the tile number, which is legible as "this
+   * build does not know this tile" and cannot be mistaken for track.
+   *
+   * WHAT STILL RUNS. `drawTileOverlays` -- the revenue badge and the
+   * "B"/"NY"/"OO" restriction label -- because neither is track art, and the
+   * artwork branch already calls it on its own way out. */
+  drawUnknownTilePlaceholder(ctx, center, size, entry.tileId);
   drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
 }
 
@@ -993,47 +775,435 @@ export function drawTrackPath(
  *
  *  Restores every context field it touches, so the passes after it are
  *  unaffected. */
+/* `HexRailSpec` and `traceHexRails` are DELETED -- design note #226.
+ *
+ * They existed to re-run a hex's own renderer stroke-only, so the glow could
+ * highlight every rail on a hex it could not resolve a single segment for.
+ * With endpoints resolved by `artworkPathsForEdge` there is no such hex left,
+ * and the mechanism's only remaining effect would be to light track the train
+ * never ran on -- which is the bug it is being removed for. The `trace`
+ * parameter it threaded through the four track renderers went with it.
+ */
+
+/* ==================================================================
+ *  DESIGN NOTE 267: THE ROUTE STOPS AT THE CITY WALL
+ * ==================================================================
+ *
+ * REPORTED: the route marker "sloppily runs over the top of station
+ * tokens". It did, and the reason is structural rather than a stray few
+ * pixels: the route is stroked along the tile's AUTHORED RAIL, and an
+ * authored rail runs straight through the middle of the city it serves.
+ * The station circle is painted on top of that rail by a later pass. So a
+ * route through a city was, by construction, a coloured line drawn across
+ * whatever tokens were sitting in it.
+ *
+ * The fix is a hole rather than a shortened line. Trimming the path would
+ * mean re-deriving where each authored curve enters and leaves each marker
+ * -- per tile, per rotation, per slot count -- which is the class of
+ * arithmetic design note #216 deleted for being wrong more often than the
+ * artwork it replaced. Instead the marker's own outline becomes a clip
+ * exclusion, and the stroke simply does not land inside it.
+ *
+ * That gives the asked-for behaviour for free and exactly: the line stops
+ * at the border radius of the city marker and RESTARTS where the rail
+ * leaves it, because it is one unbroken stroke with a bite taken out.
+ * Curves, pills, rotations and multi-city tiles all fall out of the same
+ * rule with no per-case geometry.
+ *
+ * THE SHAPES MIRROR THE MARKER PASS EXACTLY, and must: the radii here are
+ * read from the same `0.22`/`PILL_SLOT_SPACING` constants
+ * `drawStationCircle` and `drawStationPill` draw with, plus half the ring
+ * stroke, so the hole is the marker's OUTER edge rather than a guess near
+ * it. A drift between the two shows up as a sliver of route colour around
+ * a token, which is the bug this fixes in miniature.
+ *
+ * TOWNS ARE NOT MASKED. A dit is a small filled dot the route legitimately
+ * runs through -- it holds no token, so there is nothing to cover, and
+ * punching a hole for it would break the line for no reason.
+ */
+interface CityMask {
+  cx: number;
+  cy: number;
+  radius: number;
+  /** Centre-to-centre distance between the capsule's two end circles. `0`
+   *  for a 1-slot city, which is then just a circle. */
+  span: number;
+  angleRad: number;
+}
+
+/** The token-bearing markers on one hex, as board-pixel capsule outlines. */
+function cityMasksForHex(
+  laid: { tile_id: number; orientation: number } | undefined,
+  printedLabel: string | undefined,
+  center: { x: number; y: number },
+  size: number,
+): CityMask[] {
+  const masks: CityMask[] = [];
+
+  /** `drawStationCircle`/`drawStationPill`'s outer edge: the marker radius
+   *  plus half the ring stroke that straddles it. */
+  const outerRadius = (markerSize: number) =>
+    markerSize * 0.22 + Math.max(2, markerSize * 0.06) / 2;
+
+  if (laid) {
+    const art = TILE_GRAPHICS_CATALOG[laid.tile_id];
+    if (art) {
+      const rot = ((laid.orientation % 6) + 6) % 6;
+      // Same shrink `drawHardcodedTileArtwork` applies to a two-node tile.
+      const markerSize = art.markers.length > 1 ? size * 0.85 : size;
+      const radius = outerRadius(markerSize);
+      const points = tileMarkerPoints(laid.tile_id, laid.orientation, center, size);
+      art.markers.forEach((marker, index) => {
+        const point = points[index];
+        if (!point || marker.kind !== "city") return;
+        const slots = marker.slots ?? 1;
+        masks.push({
+          cx: point.x,
+          cy: point.y,
+          radius,
+          span: PILL_SLOT_SPACING * (markerSize * 0.22) * (slots - 1),
+          // The tile's rotation folds into the axis here, exactly as the
+          // marker pass folds it in -- see `drawStationPill`'s `angleDeg`.
+          angleRad: (((marker.angle ?? 0) - 60 * rot) * Math.PI) / 180,
+        });
+      });
+    }
+  }
+
+  if (printedLabel !== undefined) {
+    // Design note #229: `printedMarkersFor` so New York's PAIR is covered
+    // rather than only the hexes whose marker happens to be singular.
+    for (const marker of printedMarkersFor(printedLabel)) {
+      if (marker.kind !== "city") continue;
+      masks.push({
+        cx: center.x + size * marker.at.x,
+        cy: center.y + size * marker.at.y,
+        radius: outerRadius(size),
+        // Every preprinted city on this board is 1-slot; a pill would need
+        // the marker pass to draw one too, and it does not.
+        span: 0,
+        angleRad: 0,
+      });
+    }
+  }
+
+  return masks;
+}
+
+/** Clips `ctx` to everything EXCEPT the given markers. Caller saves and
+ *  restores. */
+function clipOutsideCityMasks(ctx: CanvasRenderingContext2D, masks: readonly CityMask[]): void {
+  if (masks.length === 0) return;
+  ctx.beginPath();
+  /* The universe, then the holes. With `"evenodd"` a point inside one of
+     the marker outlines has crossing number 2 and falls outside the clip;
+     everywhere else has 1 and survives. The rect is deliberately absurd
+     rather than measured -- it only has to contain the board, and the
+     canvas has already clipped to itself. */
+  ctx.rect(-1e6, -1e6, 2e6, 2e6);
+  for (const mask of masks) {
+    if (mask.span === 0) {
+      ctx.moveTo(mask.cx + mask.radius, mask.cy);
+      ctx.arc(mask.cx, mask.cy, mask.radius, 0, Math.PI * 2);
+      continue;
+    }
+    /* A capsule, built the same way `drawStationPill` builds its outline:
+       two half-circles joined by the implicit `lineTo` between them. Rotated
+       by hand rather than with a transform, because a transform here would
+       also move the `rect` above and the other masks with it. */
+    const half = mask.span / 2;
+    const cos = Math.cos(mask.angleRad);
+    const sin = Math.sin(mask.angleRad);
+    const end = (offset: number) => ({
+      x: mask.cx + offset * cos,
+      y: mask.cy + offset * sin,
+    });
+    const left = end(-half);
+    const right = end(half);
+    ctx.moveTo(left.x + mask.radius * Math.cos(mask.angleRad + Math.PI / 2),
+               left.y + mask.radius * Math.sin(mask.angleRad + Math.PI / 2));
+    ctx.arc(left.x, left.y, mask.radius, mask.angleRad + Math.PI / 2, mask.angleRad + Math.PI * 1.5);
+    ctx.arc(right.x, right.y, mask.radius, mask.angleRad + Math.PI * 1.5, mask.angleRad + Math.PI / 2);
+    ctx.closePath();
+  }
+  ctx.clip("evenodd");
+}
+
 export function drawRouteOverlays(
   ctx: CanvasRenderingContext2D,
   size: number,
   overlays: readonly RouteOverlay[],
+  /** Design note #155: the laid tiles, so the ribbon can follow each hex's
+   *  REAL authored rails instead of a generic curve through its middle.
+   *  Optional -- omitted, every hex falls back to the generic curve, which
+   *  is exactly the previous behaviour. */
+  tilesAt?: (q: number, r: number) => { tile_id: number; orientation: number } | undefined,
+  /** Design note #215: the preprinted hex label at `(q, r)`, so the glow can
+   *  pick the ONE printed rail a train runs along instead of lighting up
+   *  every rail on the hex. `undefined` for a hex with no printed track. */
+  printedLabelAt?: (q: number, r: number) => string | undefined,
 ): void {
   if (overlays.length === 0) return;
 
-  const apothem = size * (Math.sqrt(3) / 2);
+  /* `apothem` is GONE with design note #216's fallbacks. It existed only to
+     place edge midpoints for the two re-derived curves, and nothing in this
+     function computes a coordinate any more -- every stroke is an authored
+     `Path2D` under a translate/rotate/scale. */
 
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.lineWidth = Math.max(6, size * 0.3);
-  ctx.globalAlpha = 0.55;
+  /* ==================================================================
+   *  DESIGN NOTE 255: A THIN SOLID LINE ON THE RAIL
+   * ==================================================================
+   *
+   * This has now been three things, and the third is the one that was asked
+   * for. Worth recording the whole arc, because each step was a reaction to
+   * the previous one overshooting:
+   *
+   *   1. AN OPAQUE BAR at `size * 0.17` -- wider than the `0.12` rail, so it
+   *      replaced the track artwork rather than marking it.
+   *   2. A TRANSLUCENT HALO (design note #245) -- two wide low-alpha passes
+   *      with a heavy shadow. It stopped covering the rail and started
+   *      muddying it: translucent colour over hand-authored artwork tints
+   *      everything it crosses without ever reading as a definite line.
+   *   3. THIS. A solid line, THINNER than the rail, drawn on top of it.
+   *
+   * The third works because of the width relationship rather than in spite
+   * of it. At 55% of the rail's width the track's own dark ink remains
+   * visible on both sides of the route line, so the artwork still reads as
+   * track while the line reads as a route drawn along it -- the way a
+   * highlighted route looks on a physical board, a coloured thread laid in
+   * the groove rather than a wash over the tile.
+   *
+   * THE COLOUR IS THE CORPORATION'S, supplied per overlay -- see design note
+   * #254 in `App.tsx`.
+   *
+   * ==================================================================
+   *  DESIGN NOTE 268: A THIRD OF THE RAIL, WITH A REAL GLOW
+   * ==================================================================
+   *
+   * Two revisions to the above, both reported, and the second reverses a
+   * decision this note argued for -- so it is worth being straight about
+   * why rather than quietly editing the history.
+   *
+   * WIDTH: 55% -> exactly one THIRD of the rail. 55% left the rail's ink
+   * showing as two thin slivers, which is enough to prove the track is
+   * still there and not enough to read as track. At a third the route
+   * unambiguously sits IN the groove rather than filling it.
+   *
+   * THE SHADOW COMES BACK. Design note #255 removed it, and the reasoning
+   * was sound for the line it was describing: a soft edge on a wide bar
+   * costs definition, and the bar was the problem. It does not follow for a
+   * line a third the width of the rail. A hairline of flat colour on a dark
+   * board is hard to pick out at low zoom and reads as an artefact rather
+   * than as a deliberate mark -- the glow is what makes a thin line
+   * legible, not what blurs a thick one.
+   *
+   * So the stroke is TWO PASSES over the same authored path:
+   *
+   *   1. GLOW  -- the same path, same width, with `shadowBlur`. Canvas
+   *      blooms a shadow symmetrically around what it draws, so a thin
+   *      stroke with a wide blur is a halo with nothing solid in it.
+   *   2. CORE  -- the same path again, shadow off, fully opaque. This is
+   *      the crisp line; it lands exactly on top of the halo's centre.
+   *
+   * Two passes rather than one shadowed stroke because a single pass gives
+   * a line whose own edges are soft. Drawing the core again over the glow
+   * keeps design note #255's crispness AND adds the halo around it, which
+   * is the combination asked for.
+   *
+   * The blur scales with `size` so the halo is the same relative weight at
+   * every zoom, rather than a fixed pixel bloom that swamps the board when
+   * zoomed out and vanishes when zoomed in.
+   */
+  const railWidth = Math.max(3, size * 0.12);
+  /* Exactly a third. No `Math.max` floor: `railWidth` is itself floored at
+     3, so this cannot go below 1px, and a floor here would silently break
+     the stated ratio at small zooms -- which is the number that was asked
+     for. */
+  const routeWidth = railWidth / 3;
+  const glowBlur = Math.max(4, size * 0.18);
 
   for (const overlay of overlays) {
     if (overlay.hexes.length < 2) continue;
     ctx.strokeStyle = overlay.color;
 
-    for (let index = 0; index < overlay.hexes.length - 1; index += 1) {
+    // Walk HEXES, not pairs. The old loop drew each hop as two half-curves
+    // (centre -> crossing, crossing -> next centre), which meant one hex's
+    // two halves were produced by two different iterations and neither knew
+    // the other's edge. Tracing a real rail needs BOTH of a hex's edges at
+    // once -- that is what identifies which authored path the train is on --
+    // so the iteration is now per hex, with the entry and exit edges in hand
+    // together.
+    for (let index = 0; index < overlay.hexes.length; index += 1) {
       const [q, r] = overlay.hexes[index];
-      const [nextQ, nextR] = overlay.hexes[index + 1];
-
-      // Which edge of the current hex faces the next one. `undefined` means
-      // they are not neighbours -- see the doc comment on why that is skipped
-      // rather than bridged.
-      const exitEdge = HEX_NEIGHBOR_OFFSETS.findIndex(
-        ([dq, dr]) => q + dq === nextQ && r + dr === nextR,
-      );
-      if (exitEdge < 0) continue;
-
       const center = axialToPixel(q, r, size);
-      const nextCenter = axialToPixel(nextQ, nextR, size);
-      const crossing = pointOnCircle(center, apothem, edgeAngleRad(exitEdge));
-      const arrivalEdge = (exitEdge + 3) % 6;
 
-      // Same two-half construction, same normals, as a real track spline --
-      // so the ribbon lies along the rails through curves instead of cutting
-      // across them.
-      bezierTrackSegment(ctx, center, crossing, size, null, edgeInwardNormal(exitEdge));
-      bezierTrackSegment(ctx, crossing, nextCenter, size, null, edgeInwardNormal(arrivalEdge));
+      const edgeToward = (target: [number, number] | undefined): number | null => {
+        if (!target) return null;
+        const found = HEX_NEIGHBOR_OFFSETS.findIndex(
+          ([dq, dr]) => q + dq === target[0] && r + dr === target[1],
+        );
+        return found < 0 ? null : found;
+      };
+
+      const entryEdge = edgeToward(overlay.hexes[index - 1]);
+      const exitEdge = edgeToward(overlay.hexes[index + 1]);
+      // Not adjacent to either neighbour: nothing honest to draw. Skipped
+      // rather than bridged with a straight line across the board, which is
+      // the long-standing behaviour this preserves.
+      if (entryEdge === null && exitEdge === null) continue;
+
+      /* ================================================================
+       *  DESIGN NOTE 216: THE GLOW IS `Path2D`, ALL THE WAY DOWN
+       * ================================================================
+       *
+       * Two procedural fallbacks used to sit below this branch and both are
+       * now deleted. They are worth naming, because the second was the
+       * reported "straight lines to the hex centre" outright:
+       *
+       *   FALLBACK A re-derived a tile's connecting segment with
+       *   `drawDoubleTownRoute` whenever the artwork lookup missed. It
+       *   missed constantly, because the catalog covered 22 of 46 tiles.
+       *   It now covers all 46, so a laid tile's rail is ALWAYS an authored
+       *   `Path2D` and there is nothing left to re-derive.
+       *
+       *   FALLBACK B drew two `bezierTrackSegment` half-curves, edge to
+       *   centre and centre to edge. That construction is a straight line by
+       *   arithmetic, not by accident: the first control point goes out
+       *   along the edge's inward normal, which points exactly at the
+       *   centre, and the second goes back along the chord -- both collinear
+       *   with the straight edge-to-centre segment, so the cubic degenerates.
+       *   A two-hex route was two of those meeting at a shared edge: one
+       *   straight bar spanning two hex centres, which is precisely the
+       *   symptom. Deleting it is the fix; there is no "and also make it
+       *   curve" version of that code, because the shape it wanted never
+       *   existed as a curve.
+       *
+       * WHAT REMAINS IS ONE RULE, applied four ways: stroke the authored
+       * `Path2D` the train actually ran along, and nothing else.
+       *
+       * DESIGN NOTE 226 removed the last exception. A third branch used to
+       * re-run the whole hex's renderer, lighting every rail on it. That was
+       * reached by both ENDPOINTS of every route -- they have one edge each,
+       * so there was no traversal to resolve -- which made it the common
+       * case rather than a fallback, and it produced the reported bug
+       * directly: New York prints TWO physically disconnected spurs, so a
+       * train stopping at one lit both and the map claimed a run to a city
+       * the corporation never reached. Every crossing tile (#20, #55, #68)
+       * had the same problem in miniature.
+       *
+       * An endpoint is not ambiguous, though. The train came in along the
+       * rail that TOUCHES the edge it entered by, so that rail is the answer
+       * -- `artworkPathsForEdge` (design note #225) returns it.
+       *
+       *   1. LAID TILE, both edges     -> the traversed rail(s).
+       *   2. PREPRINTED HEX, both edges -> the same, printed catalog.
+       *   3. LAID TILE, one edge        -> the rail meeting that edge.
+       *   4. PREPRINTED HEX, one edge   -> the same, printed catalog.
+       *
+       * NOTHING MATCHES, NOTHING IS DRAWN. A hex whose track does not
+       * connect the edges the player chained through has no rail to
+       * highlight, and inventing one is the class of claim this whole family
+       * of notes exists to remove. The gap in the ribbon is the honest
+       * rendering of a route that does not join up. */
+
+      const laid = tilesAt?.(q, r);
+      const printedLabel = printedLabelAt?.(q, r);
+
+      /** Strokes authored paths under the transform their renderer uses --
+       *  glow then core, design note #268. `rot` is 0 for preprinted
+       *  artwork, which has one fixed facing. */
+      const strokePaths = (paths: readonly Path2D[], rot: number) => {
+        ctx.save();
+        // Design note #267: the city markers on THIS hex become holes, so
+        // neither the glow nor the core lands on a station token. Set
+        // before the transform below, because the masks are already in
+        // board pixels.
+        clipOutsideCityMasks(ctx, cityMasksForHex(laid, printedLabel, center, size));
+        ctx.translate(center.x, center.y);
+        if (rot !== 0) ctx.rotate((-60 * rot * Math.PI) / 180);
+        ctx.scale(size, size);
+        // The catalog is authored in unit-hex space, so the transform scales
+        // the pen too -- divide back out to land on the same on-screen width
+        // at every zoom.
+        ctx.lineWidth = routeWidth / size;
+
+        // Design note #268, pass 1: the halo. `shadowBlur` is in board
+        // pixels and is NOT affected by the transform's scale, so it is set
+        // raw rather than divided back out like the pen width.
+        ctx.shadowBlur = glowBlur;
+        ctx.shadowColor = overlay.color;
+        for (const path of paths) ctx.stroke(path);
+
+        // Pass 2: the crisp core, on top of its own halo.
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
+        for (const path of paths) ctx.stroke(path);
+        ctx.restore();
+      };
+      const strokeAuthored = (paths: readonly Path2D[], indices: number[], rot: number) =>
+        strokePaths(
+          indices.map((index) => paths[index]),
+          rot,
+        );
+
+      const terminalEdge = entryEdge ?? exitEdge;
+      const isEndpoint = entryEdge === null || exitEdge === null;
+
+      // ---- 1 & 3: a laid tile. ----
+      if (laid) {
+        const rot = ((laid.orientation % 6) + 6) % 6;
+
+        /* Design note #244: an ENDPOINT stops at the station.
+           A through-tile's rail passes its revenue centre and carries on out
+           the far edge; a train that terminates here does not. The terminal
+           rail is the same authored curve, cut at the marker. */
+        if (isEndpoint && terminalEdge !== null) {
+          const rail = terminalRailAtEdge(laid.tile_id, laid.orientation, terminalEdge);
+          if (rail) {
+            strokePaths([rail], rot);
+            continue;
+          }
+        }
+
+        // A through hex: one path for a through tile, TWO for a hub (entry
+        // spoke + exit spoke, tracing edge -> city -> edge). See
+        // `artworkPathsForTraversal`.
+        const indices =
+          entryEdge !== null && exitEdge !== null
+            ? artworkPathsForTraversal(laid.tile_id, laid.orientation, entryEdge, exitEdge)
+            : artworkPathsForEdge(laid.tile_id, laid.orientation, terminalEdge!);
+        const paths = indices.length > 0 ? tileArtworkPaths(laid.tile_id) : undefined;
+        if (paths && indices.every((index) => paths[index])) {
+          strokeAuthored(paths, indices, rot);
+          continue;
+        }
+      }
+
+      // ---- 2 & 4: a preprinted hex -- design notes #215 and #225. ----
+      if (printedLabel !== undefined) {
+        // Design note #244: same cut for a preprinted city, whose station
+        // sits on its curve's apex rather than at a rail's end.
+        if (isEndpoint && terminalEdge !== null) {
+          const rail = printedTerminalRailAtEdge(printedLabel, terminalEdge);
+          if (rail) {
+            strokePaths([rail], 0);
+            continue;
+          }
+        }
+
+        const indices =
+          entryEdge !== null && exitEdge !== null
+            ? printedPathsForTraversal(printedLabel, entryEdge, exitEdge)
+            : printedPathsForEdge(printedLabel, terminalEdge!);
+        const paths = indices.length > 0 ? printedArtworkPaths(printedLabel) : undefined;
+        if (paths && indices.every((index) => paths[index])) {
+          strokeAuthored(paths, indices, 0);
+          continue;
+        }
+      }
     }
   }
 
@@ -1175,7 +1345,10 @@ export function drawStationPill(
   for (let slot = 0; slot < slots; slot += 1) {
     const offset = -span / 2 + spacing * slot;
     ctx.beginPath();
-    ctx.arc(offset, 0, radius * 0.86, 0, Math.PI * 2);
+    // Design note #151: `SLOT_RING_RATIO`, not a literal. The token that
+    // docks here reads the same constant (`tileCityTokenRadius`), so the
+    // ring and its occupant are the same circle by construction.
+    ctx.arc(offset, 0, radius * SLOT_RING_RATIO, 0, Math.PI * 2);
     ctx.stroke();
   }
 
@@ -1917,105 +2090,53 @@ export function drawRestrictionBadgeAt(
   drawLabelWithBackground(ctx, text, badgeCenter, { background: false });
 }
 
-/** Draws a landmark's authentic, fixed starting track (see `LANDMARK_TRACKS`
- *  and design note #6b) -- NOT derived from any connection bitmask, since a
- *  landmark's pre-printed track is not a laid tile. Each segment is drawn
- *  independently: a 2-edge segment is a through-route with one shared
- *  station at hex center (mirroring `drawTrackPath`'s opposite/curve split
- *  above); a 1-edge segment (New York's two disconnected stubs) draws a
- *  short stub from the edge partway toward center, with its own station
- *  positioned there so New York's two stations don't overlap each other. */
+/** Draws a landmark's authentic, fixed starting track -- design note #211.
+ *
+ *  Boston and Baltimore are ordinary single-station preprinted hexes and go
+ *  through `drawPrintedTrack` above on their own labels. NEW YORK is the one
+ *  exception in the whole board: it prints TWO physically independent
+ *  stations on one hex, which `PrintedArtwork.marker` (singular) cannot
+ *  express, so it has its own catalog entry and its own two-marker branch
+ *  here.
+ *
+ *  The two stub endpoints are the artwork's, not `twoNodePositions`'. That
+ *  shared NE/SW diagonal was a fixed guess about where two stations sit
+ *  regardless of which edges the track actually runs from -- the same thing
+ *  design note #133 corrected for laid tiles -- and New York's stubs come
+ *  off edges 1 and 4, so the authored endpoints and the diagonal happen to
+ *  agree in direction while disagreeing in distance. Reading the artwork
+ *  means the station is on its own rail by construction rather than by
+ *  coincidence. */
 export function drawLandmarkTrack(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
-  segments: ReadonlyArray<{ edges: readonly number[] }>,
-): void {
-  const apothem = size * (Math.sqrt(3) / 2);
-  const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
+  /** The landmark's hex label. */
+  label: string,
+): boolean {
+  // Boston (E23) and Baltimore (I15) are in the ordinary printed catalog.
+  if (label !== "G19") return drawPrintedTrack(ctx, center, size, label);
 
-  segments.forEach((segment, segmentIndex) => {
-    // BUG FIX ("G19 Thin Track" -- reported: New York's track renders much
-    // thinner than every other hex's track). Root cause: `drawStationCircle`
-    // (called at the end of each segment's branch below, once per station)
-    // sets `ctx.lineWidth = Math.max(2, size * 0.06)` for its own circle
-    // outline and never restores it afterward. New York is the only
-    // landmark with TWO segments in this loop (its "one hex, two
-    // disconnected stations" design, see `LANDMARK_TRACKS`'s doc comment)
-    // -- Boston/Baltimore each have exactly one, so their single track
-    // stroke always happens before their one `drawStationCircle` call ever
-    // runs and is never affected. New York's SECOND segment, though, draws
-    // its own track stroke AFTER the first segment's `drawStationCircle`
-    // call already shrank `ctx.lineWidth` down to the thin circle-outline
-    // value -- with nothing in between to set it back, that second stub
-    // rendered at barely half this function's intended track width. Setting
-    // the track's stroke style fresh at the TOP of every loop iteration
-    // (rather than once before the loop) guarantees each segment's own
-    // stroke always uses the correct track width, regardless of what a
-    // prior segment's station circle left behind.
-    ctx.strokeStyle = "#2b2b2b";
-    ctx.lineWidth = Math.max(3, size * 0.12);
-    ctx.lineCap = "round";
+  const paths = newYorkPrintedPaths();
 
-    if (segment.edges.length === 2) {
-      const [a, b] = segment.edges;
-      const start = edgePoint(a);
-      const end = edgePoint(b);
-      const isOpposite = Math.abs(b - a) === 3;
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.scale(size, size);
+  ctx.strokeStyle = DEFAULT_TRACK_INK;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(3, size * 0.12) / size;
+  for (const path of paths) ctx.stroke(path);
+  ctx.restore();
 
-      // BUG FIX (Revenue Center Connectivity pass -- see `drawPrintedTrack`'s
-      // identical fix for the full derivation): `arcTo` cuts the corner at
-      // `center` by construction and never actually touches it. Boston/
-      // Baltimore's real edge pairs happen to be 120 degrees apart, where
-      // the old `curveRadius = size * 0.6` leaves only a `~0.09 * size` gap
-      // -- small enough to usually hide under `drawStationCircle`'s `0.22 *
-      // size` radius -- but that's a coincidence of these two hexes' exact
-      // edges, not a guarantee, and it's the same fragile pattern that
-      // visibly broke for the gray hexes' more common 60-degree pairs.
-      // Replaced with the same two-`quadraticCurveTo`-halves technique,
-      // each with a guaranteed-exact endpoint at `center.x, center.y`.
-      if (isOpposite) {
-        ctx.beginPath();
-        ctx.moveTo(start.x, start.y);
-        ctx.lineTo(end.x, end.y);
-        ctx.stroke();
-      } else {
-        // Rail Map Overhaul (design note #42): two perpendicular-entering
-        // cubic-Bezier halves via `bezierTrackSegment`, replacing the
-        // previous `quadraticCurveTo`-based `curveHalf` closure -- same
-        // "guaranteed-exact endpoint at center" property this BUG FIX
-        // originally required, now via a Bezier curve instead of a
-        // quadratic one.
-        bezierTrackSegment(ctx, start, center, size, edgeInwardNormal(a), null);
-        bezierTrackSegment(ctx, center, end, size, null, edgeInwardNormal(b));
-      }
-
-      drawStationCircle(ctx, center, size);
-    } else if (segment.edges.length === 1) {
-      const edgeEnd = edgePoint(segment.edges[0]);
-      // A dead-end stub, curving in from the printed edge to the SAME
-      // canonical diagonal node `stationMarkerPoint` anchors its token
-      // marker to (design note #56: segment index 0 = Node Index 0 =
-      // Top-Right/NE via `center + doubleNodeOffset`; segment index 1 =
-      // Node Index 1 = Bottom-Left/SW via `center - doubleNodeOffset`) --
-      // NOT the old independently-computed "50% of the way from this
-      // segment's own edge toward center" approximation, which could land
-      // at a different pixel than `stationMarkerPoint`'s point and let the
-      // real printed track visually detach from its own token marker.
-      // `LANDMARK_TRACKS["New York"]`'s segment order already encodes this
-      // (segment 0 = edge 1/NE, segment 1 = edge 4/SW), so this stays a
-      // purely structural, non-hardcoded mapping -- `segmentIndex` indexes
-      // directly into `twoNodePositions`' own 2-tuple (design note #58), no
-      // re-derived arithmetic. Rail Map Overhaul (design note #42): a
-      // perpendicular-entering Bezier curve (`bezierTrackSegment`) instead
-      // of a straight `lineTo` stub.
-      const stubStation = twoNodePositions(center, size)[segmentIndex];
-
-      bezierTrackSegment(ctx, edgeEnd, stubStation, size, edgeInwardNormal(segment.edges[0]), null);
-
-      drawStationCircle(ctx, stubStation, size);
-    }
-  });
+  for (const marker of NEW_YORK_PRINTED_ARTWORK.markers) {
+    drawStationCircle(
+      ctx,
+      { x: center.x + size * marker.at.x, y: center.y + size * marker.at.y },
+      size * 0.85,
+    );
+  }
+  return true;
 }
 
 /** Draws an off-board hex's pre-printed track stubs -- see `OFFBOARD_TRACKS`
@@ -2050,168 +2171,72 @@ export function drawOffboardTrack(
   }
 }
 
-/** Draws a pre-printed gray hex's fixed track + station/dit/none marker --
- *  see `GRAY_HEXES` and design note #12. Generalizes `drawLandmarkTrack`'s
- *  1-edge (dead-end stub) and 2-edge (through-route) cases to also handle
- *  3+ edges (a curved multi-spur junction, matching `drawTrackPath`'s
- *  multi-spur handling), since two real gray hexes (Rochester, Altoona)
- *  have three real live edges converging on one city.
+/* ==================================================================
+ *  DESIGN NOTE 211: PREPRINTED TRACK IS DRAWN, NOT DERIVED
+ * ==================================================================
  *
- *  Item 6 (Authentic Preprinted Gray Track Curves): every segment here
- *  now curves cleanly INTO the station/dit marker rather than stopping
- *  short of it or meeting it via a straight spoke -- a 1-edge dead-end
- *  stub now runs the full distance to hex center (where its own marker
- *  sits, matching the 2-edge/3+-edge cases below, instead of the previous
- *  pass's shortened halfway stub with the marker floating off-center), and
- *  a 3+-edge junction now draws each spoke as a gentle `quadraticCurveTo`
- *  bend into center instead of a straight radial line, so the track reads
- *  as authentic curved 1830 tile artwork "snapping into" the station hole
- *  rather than a generic straight-line stub. The 2-edge case already had
- *  real curve/straight-through logic (unchanged here) -- see the
- *  `isOpposite` branch below, identical to `drawTrackPath`'s own.
+ * This function used to take an EDGE SET and build a shape from it: one
+ * `lineTo` for an opposite pair, two `bezierTrackSegment` halves meeting at
+ * the hex centre for anything else, N radial spokes for three or more. Every
+ * one of those is the algorithmic construction the tile half of this
+ * renderer has already retired (design note #209), and on preprinted hexes
+ * it was worse than on tiles, because the half-curve degenerates:
+ * `bezierTrackSegment(edgeMidpoint -> centre, inwardNormal, null)` puts both
+ * control points on the straight line between its endpoints, so the "curve"
+ * is a straight radial. Cleveland's 60-degree pair therefore drew as a hard
+ * V through the middle of the hex.
  *
- *  Item (Precise Geometric Track Calibration pass): `bypass`, when set on a
- *  true opposite-edge pair (the only shape the real source's bypass paths
- *  ever take -- see `GrayHexTrack.bypass`'s doc comment), draws a SECOND
- *  curve between the same two edges via `quadraticCurveTo`, bowed well off
- *  the straight chord so it visibly clears the station circle instead of
- *  passing through it -- Altoona's real "some trains skip this stop" fork,
- *  reinstated after being simplified away in an earlier pass. */
+ * It now renders `PRINTED_GRAPHICS_CATALOG[label]` -- literal `d` strings in
+ * the same unit-hex space, the same three canonical primitives, the marker
+ * on the curve's own apex. A gray hex connecting edges 0 and 2 and a laid
+ * #8 connecting edges 0 and 2 are now the same drawn shape, which they
+ * always should have been and never were.
+ *
+ * THE BYPASS IS ARTWORK NOW TOO. Altoona's "some trains skip this stop"
+ * fork was a run of control-point arithmetic here, bowed off the chord by a
+ * tuned `size * 0.8`. It is one more path string in the catalog entry.
+ *
+ * A label with no catalog entry draws nothing and returns `false`, so the
+ * caller can fall back to the explicit placeholder rather than this
+ * inventing a shape for a hex the artwork does not know.
+ */
 export function drawPrintedTrack(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
-  edges: readonly number[],
-  marker: "city" | "town" | "none",
-  bypass?: boolean,
-): void {
-  const apothem = size * (Math.sqrt(3) / 2);
-  const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
-  const sorted = [...edges].sort((a, b) => a - b);
+  /** The hex label -- `GRAY_HEXES`/`LANDMARK_TRACKS`' own key, and the key
+   *  `PRINTED_GRAPHICS_CATALOG` is authored against. */
+  label: string,
+): boolean {
+  const art = printedArtwork(label);
+  const paths = printedArtworkPaths(label);
+  if (!art || !paths) return false;
 
-  ctx.strokeStyle = "#2b2b2b";
-  ctx.lineWidth = Math.max(3, size * 0.12);
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.scale(size, size);
+  ctx.strokeStyle = DEFAULT_TRACK_INK;
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  // The catalog is authored in unit-hex space, so the transform scales the
+  // pen too -- divide back out to land on the SAME on-screen stroke width
+  // every other track in this file uses. Identical to
+  // `drawHardcodedTileArtwork`'s own handling, for the same reason.
+  ctx.lineWidth = Math.max(3, size * 0.12) / size;
+  for (const path of paths) ctx.stroke(path);
+  ctx.restore();
 
-  // Every case's marker now sits at true hex center -- item 6's "snap
-  // perfectly into the center holes" ask -- since no gray hex has more
-  // than one single-edge dead-end stub of its own (unlike New York's two
-  // independent landmark stations, which still need `drawLandmarkTrack`'s
-  // own off-center offset to avoid overlapping each other).
-  const markerPoint = center;
-
-  if (sorted.length === 1) {
-    // A gentle curve rather than a dead-straight radial line, so even a
-    // single stub reads as authentic curved track, not a generic
-    // ruler-straight stub. Rail Map Overhaul (design note #42):
-    // perpendicular-entering cubic Bezier (`bezierTrackSegment`) instead of
-    // the previous `quadraticCurveTo`.
-    const edgeEnd = edgePoint(sorted[0]);
-    bezierTrackSegment(ctx, edgeEnd, center, size, edgeInwardNormal(sorted[0]), null);
-  } else if (sorted.length === 2) {
-    const [a, b] = sorted;
-    const start = edgePoint(a);
-    const end = edgePoint(b);
-    const isOpposite = b - a === 3;
-
-    // BUG FIX (this pass, "Revenue Center Connectivity" -- reported: gray
-    // preprinted hexes with a city/town marker and a NON-opposite 2-edge
-    // pair render with the track visibly missing the marker at center).
-    // Root cause: `arcTo(center, end, radius)` is a rounded-CORNER
-    // primitive -- by construction it is tangent to, but never actually
-    // touches, its own corner point for any `radius > 0`. The previous
-    // `curveRadius = size * 0.6` made this far worse than a small visual
-    // offset: the tangent length from the corner along each ray is `t =
-    // radius / tan(angle / 2)`, and for this file's common 60-degree
-    // adjacent-edge pairs (e.g. Cleveland/Montreal/Lansing/Atlantic City/
-    // Fall River's edge pairs are all 60 degrees apart), `t ≈ 1.04 * size`
-    // -- LONGER than the `apothem ≈ 0.866 * size` edge-to-center segment
-    // itself, so the requested tangent point doesn't even exist within the
-    // hex; the resulting arc genuinely does not approach center at all.
-    // Even the one 120-degree case in this file (Kingston, C15) only
-    // brings the curve to within `~0.09 * size` of center -- inside a
-    // "town" dit's radius but not a "city" station's, and not a reliable
-    // margin either way. Fixed the same way item 6 already fixed this
-    // function's 1-edge and 3+-edge cases: two independent
-    // `quadraticCurveTo` bends, edge-to-center and center-to-edge, each
-    // with an explicit, guaranteed-exact endpoint at `center.x, center.y`
-    // -- so the track always visibly connects to the marker drawn there,
-    // while still reading as curved (not a sharp straight "V") through the
-    // shared vertex. `isOpposite` keeps its own true straight-line case
-    // unchanged (a real opposite pair is already exactly collinear through
-    // center, so it never had this bug).
-    if (isOpposite) {
-      ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-    } else {
-      // Rail Map Overhaul (design note #42): two perpendicular-entering
-      // cubic-Bezier halves via `bezierTrackSegment`, replacing the
-      // previous `quadraticCurveTo`-based `curveHalf` closure -- same
-      // "guaranteed-exact endpoint at center" property this BUG FIX
-      // originally required.
-      bezierTrackSegment(ctx, start, center, size, edgeInwardNormal(a), null);
-      bezierTrackSegment(ctx, center, end, size, null, edgeInwardNormal(b));
-    }
-
-    // Bypass fork: a second, independent curve between the SAME two edges
-    // that loops well clear of the station circle at center (radius
-    // `size * 0.22`, per `drawStationCircle`) rather than passing through
-    // it -- only meaningful for a true opposite pair, since a non-opposite
-    // pair's main route already curves away from center on its own. The
-    // control point offset (`size * 0.8`, perpendicular to the start->end
-    // chord) puts the curve's own peak deviation from that chord at roughly
-    // half that -- `size * 0.4` -- comfortably outside the station circle
-    // plus its stroke width, while staying inside the hex's own apothem
-    // (`size * 0.866`) so the fork never bleeds into a neighboring hex.
-    if (bypass && isOpposite) {
-      // Rail Map Overhaul (design note #42): converted to `ctx.bezierCurveTo`
-      // via the standard quadratic-to-cubic control-point elevation (`cp1 =
-      // start + 2/3*(q - start)`, `cp2 = end + 2/3*(q - end)`) -- this
-      // produces the EXACT SAME curve the single quadratic control point `q`
-      // did, so the fork's already-verified "clears the station circle,
-      // stays inside the hex" geometry is unchanged; only the drawing API
-      // is. Left as its own dedicated wide loop (not `bezierTrackSegment`'s
-      // perpendicular-normal profile) since this fork's whole purpose is to
-      // swing FAR off the direct chord to avoid the station circle, not to
-      // read as a perpendicular edge crossing.
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const bend = size * 0.8;
-      const midX = (start.x + end.x) / 2;
-      const midY = (start.y + end.y) / 2;
-      const qx = midX + (-dy / len) * bend;
-      const qy = midY + (dx / len) * bend;
-      const cp1x = start.x + (2 / 3) * (qx - start.x);
-      const cp1y = start.y + (2 / 3) * (qy - start.y);
-      const cp2x = end.x + (2 / 3) * (qx - end.x);
-      const cp2y = end.y + (2 / 3) * (qy - end.y);
-      ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, end.x, end.y);
-      ctx.stroke();
-    }
-  } else if (sorted.length >= 3) {
-    // Item 6: each spoke bends gently into center (all bowed the same
-    // rotational direction, so they read as one coherent curved junction)
-    // instead of straight radial lines converging on the station. Rail Map
-    // Overhaul (design note #42): perpendicular-entering cubic Bezier
-    // (`bezierTrackSegment`) instead of the previous `quadraticCurveTo`.
-    for (const edge of sorted) {
-      const point = edgePoint(edge);
-      bezierTrackSegment(ctx, point, center, size, edgeInwardNormal(edge), null);
-    }
-  }
-
-  if (marker === "city") {
-    drawStationCircle(ctx, markerPoint, size);
-  } else if (marker === "town") {
+  if (art.marker) {
+    const point = {
+      x: center.x + size * art.marker.at.x,
+      y: center.y + size * art.marker.at.y,
+    };
+    if (art.marker.kind === "city") drawStationCircle(ctx, point, size);
     // Item 8 ("Distinct Dark Small Towns"): dark dit marker, not a white
     // circle -- see `drawDitMarker`'s own doc comment.
-    drawDitMarker(ctx, markerPoint, size);
+    else drawDitMarker(ctx, point, size);
   }
+  return true;
 }
 
 /** Draws a pre-printed yellow "OO" double-city hex's two independent
@@ -2314,16 +2339,58 @@ export function stationMarkerPoint(
     // (design note #58) instead of hand-deriving the offset here.
     return twoNodePositions(center, size)[1];
   }
+
+  /* ==================================================================
+   *  DESIGN NOTE 221: THE PREPRINTED STATION MOVED; THE TOKEN DID NOT
+   * ==================================================================
+   *
+   * REPORTED BUG: station tokens and reservation markers have "drifted" off
+   * the station nodes.
+   *
+   * This is a regression from design note #210/#211, and the drift is exact
+   * rather than approximate. Preprinted hexes used to draw their city circle
+   * at the hex CENTRE unconditionally, because `drawPrintedTrack` built its
+   * track as two half-segments meeting there. Now that they render from
+   * authored artwork, each city sits where the cardboard prints it -- on its
+   * own curve's apex. Cleveland's circle is half a hex radius south of
+   * centre, Montreal's likewise, Boston's is east of it, Baltimore's
+   * south-east, Kingston's town north-west.
+   *
+   * The ARTWORK moved and this function did not, so it went on returning
+   * `center` and every token landed on empty tile fill beside its own
+   * circle. The same `return center` also fed the muted reservation markers
+   * for unfloated companies, which is why both drifted together.
+   *
+   * The fix is the same one design note #133 applied to laid tiles: read the
+   * position off the artwork instead of restating a guess about it. A hex
+   * with authored printed artwork now reports ITS marker's point, so the
+   * token sits in the circle by construction rather than by two independent
+   * computations happening to agree.
+   *
+   * NEW YORK is separate because it prints TWO stations, which
+   * `PrintedArtwork.marker` (singular) cannot express -- it keeps its own
+   * catalog entry, and Node Index 0 is its canonical Top-Right/NE station,
+   * the same convention every other two-station archetype uses (design note
+   * #56).
+   */
   const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
-  const landmarkSegments = landmark ? LANDMARK_TRACKS[landmark.name] : undefined;
-  if (landmarkSegments && landmarkSegments.length >= 2) {
-    // Structural "two real disconnected stub stations" signature (today,
-    // only New York) -- Node Index 0 is always the canonical Top-Right/NE
-    // node, matching `drawLandmarkTrack`'s own segment-index-0 anchor below
-    // exactly (design note #56), both now reading from the same
-    // `twoNodePositions` tuple (design note #58).
-    return twoNodePositions(center, size)[0];
+  const label = hex?.label ?? landmark?.label;
+
+  if (label === "G19") {
+    const first = NEW_YORK_PRINTED_ARTWORK.markers[0];
+    return { x: center.x + size * first.at.x, y: center.y + size * first.at.y };
   }
+
+  if (label !== undefined) {
+    const printed = printedArtwork(label);
+    if (printed?.marker) {
+      return {
+        x: center.x + size * printed.marker.at.x,
+        y: center.y + size * printed.marker.at.y,
+      };
+    }
+  }
+
   return center;
 }
 
@@ -2353,8 +2420,18 @@ export function drawStationTokenMarker(
   ticker: string,
   color: string,
   muted: boolean,
+  /** Design note #151: the DOCKING radius, when this token is being placed
+   *  into a specific slot of a laid tile's city pill
+   *  (`tileCityTokenRadius`). Omit for the preprinted/fallback path, which
+   *  keeps the legacy `size * 0.22` that design note #36 matched to the
+   *  large white city circles.
+   *
+   *  Optional rather than required so every existing call site is
+   *  unchanged, and so a caller with no artwork to measure cannot be forced
+   *  to invent a figure. */
+  radiusOverride?: number,
 ): void {
-  const radius = size * 0.22;
+  const radius = radiusOverride ?? size * 0.22;
 
   // Design note #116: reserved/unfloated badges REVERSED from #46/#48's
   // solid-opaque-navy-plus-full-brand-ring treatment (which read as
@@ -2386,14 +2463,16 @@ export function drawStationTokenMarker(
   ctx.fillStyle = badgeFill;
   ctx.fill();
 
-  // Solid Corporate Brand Color Borders (design note #48, tone updated by
-  // #116 above): the ring is still the corporation's own brand `color`, at
-  // the same fixed, un-scaled `1.75px` (within the original 1.5px-2px
-  // request) reserved/unfloated badges have used since #48 -- deliberately
-  // NOT `size`-scaled like most of this file's other stroke widths, so it
-  // reads as a thin, consistent ring at every zoom level. Floated badges'
-  // own outline (`#f4ecd8`, solid, size-scaled) is unchanged.
-  ctx.strokeStyle = muted ? color : "#f4ecd8";
+  // UNFLOATED (design note #48, tone updated by #116 above): the ring is the
+  // corporation's own brand `color`, at a fixed, un-scaled `1.75px` --
+  // deliberately NOT `size`-scaled like most of this file's other stroke
+  // widths, so it reads as a thin, consistent ring at every zoom level.
+  //
+  // FLOATED: charcoal, not the board's cream. Design note #234 in
+  // `hexContractTypes.ts` has the full reasoning -- a near-white ring around
+  // a small disc, inside a white city circle, with white lettering on it,
+  // removed the contrast in the one place it was needed.
+  ctx.strokeStyle = muted ? color : STATION_TOKEN_RING;
   ctx.lineWidth = muted ? 1.75 : Math.max(2, size * 0.05);
   ctx.stroke();
 

@@ -1,5 +1,6 @@
 pub mod auction;
 pub mod contract;
+pub mod escrow;
 pub mod gamelog;
 pub mod hardware;
 pub mod hexmap;

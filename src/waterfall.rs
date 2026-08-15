@@ -22,12 +22,13 @@
 //!      highest bid on it plus `auction::MIN_BID_INCREMENT` ($5)
 //!      otherwise. A player may hold at most one standing bid per private
 //!      at a time (raising it again requires the mini-auction path, #3).
-//!    - `execute_waterfall_pass`: only legal if at least one private
-//!      anywhere currently has an active bid (`any_private_has_bid`) --
-//!      otherwise every player is forced to commit to one of the two
-//!      actions above, guaranteeing the auction always makes forward
-//!      progress from a cold start. See #4 for what a full round of these
-//!      does.
+//!    - `execute_waterfall_pass`: ALWAYS legal on your turn (Step 4.5
+//!      Batch 4). It used to require that some private anywhere already
+//!      carried a bid, which made the opening position of the game a forced
+//!      move -- you could buy or bid, but not decline. Real 1830 lets a
+//!      table pass from a cold start, and #4 is what makes that terminate
+//!      rather than loop: the price walks down until somebody wants the
+//!      company, or until it is free and forced on them.
 //!    Every one of these three, when it doesn't trigger a phase-ending
 //!    `conclude_waterfall`, advances `active_player_index` to the next
 //!    seated player (`advance_waterfall_turn`) exactly once, regardless of
@@ -65,29 +66,37 @@
 //!    above their own prior bid) or pass (`execute_waterfall_mini_auction_pass`,
 //!    fully refunded and dropped from `bidders`). The mini-auction resolves
 //!    the instant `bidders.len()` reaches `1`.
-//! 4. **Early termination via a full round of passes.** `GameSession::
-//!    consecutive_waterfall_passes` counts consecutive `WaterfallPass`
-//!    calls (reset to `0` by either committing action); the moment it
-//!    reaches `player_addresses.len()`, `execute_waterfall_pass` itself
-//!    calls `conclude_waterfall` immediately, per the exact stopping rule
-//!    requested: "continue cascading... until all private companies are
-//!    owned OR an entire round of passes occurs on the lowest available
-//!    company." Since `WaterfallPass` is illegal whenever zero bids exist
-//!    anywhere, this can only actually happen once at least one bid has
-//!    been placed somewhere -- meaning it's possible (if unlikely) for this
-//!    to fire before ANY private has ever been bought or won outright, if
-//!    every earlier action was a `WaterfallBidHigher` rather than a
-//!    `WaterfallBuyLowest`. `GameSession::last_private_winner` stays `None`
-//!    in that specific case; `conclude_waterfall` handles it explicitly (see
-//!    #5) rather than treating it as an error, since nothing in the
-//!    requested rules forbids an all-bidding, no-buying opening. Because
-//!    Pass only requires *some* private anywhere to have a bid (not
-//!    necessarily the current lowest), this termination can also fire while
-//!    a non-lowest private still has one or more active, never-cascaded-to
-//!    bids on it -- `execute_waterfall_pass` calls
-//!    `refund_all_standing_bids` immediately before `conclude_waterfall` in
-//!    this branch specifically to return every such bidder's escrowed cash
-//!    rather than letting it vanish permanently unowned.
+//! 4. **A full round of passes runs the WATERFALL -- it does not end the
+//!    auction (Step 4.5 Batch 4).** `GameSession::consecutive_waterfall_passes`
+//!    counts consecutive `WaterfallPass` calls (reset to `0` by either
+//!    committing action). The moment it reaches `player_addresses.len()`,
+//!    `execute_waterfall_pass` performs the canonical 1830 sequence: the
+//!    cheapest unowned private's face value drops by
+//!    `WATERFALL_PASS_PRICE_DROP` ($5, floored at $0), every ALREADY-OWNED
+//!    private immediately pays its printed revenue to its owner, and -- if
+//!    that price has reached $0 -- the company is forced free on whoever's
+//!    turn it now is. Then the pass streak resets and play continues.
+//!
+//!    This REPLACED a much blunter rule: reaching a full round of passes
+//!    used to refund every standing bid and conclude the phase outright. That
+//!    terminated the auction in exactly the situation where the real game is
+//!    only getting started, and it meant a table that collectively did not
+//!    want the cheapest private simply skipped the rest of the auction rather
+//!    than discovering a price at which somebody did.
+//!
+//!    **The phase still always terminates**, and now for a better reason:
+//!    the price is monotonically non-increasing, $0 is reachable in a finite
+//!    number of rounds, and a $0 company is forced on a player rather than
+//!    offered. `conclude_waterfall` is now reached in exactly one way -- every
+//!    private owned -- whether that happened through buying, bidding, or a
+//!    forced free assignment. `refund_all_standing_bids` still runs
+//!    immediately before it, since a private that was never cascaded to can
+//!    still hold escrowed bids at that moment.
+//!
+//!    `GameSession::last_private_winner` can no longer be `None` at
+//!    conclusion in practice (something must have been acquired for every
+//!    private to be owned), but `conclude_waterfall` still handles that case
+//!    explicitly -- see #5.
 //! 5. **Priority Deal assignment.** `conclude_waterfall` assigns Stock Round
 //!    1's Priority Deal (`GameSession::priority_deal_index`, and --
 //!    extending that assignment to its natural practical meaning --
@@ -118,10 +127,21 @@ use cosmwasm_std::{Addr, Attribute, DepsMut, Env, MessageInfo, Order, Response, 
 use thiserror::Error;
 
 use crate::auction::{self, AuctionError};
+use crate::operations;
 use crate::state::{
     GameSession, PrivateCompany, RoundType, WaterfallMiniAuction, PLAYER_CASH_VGP,
     PRIVATE_BIDS, PRIVATE_COMPANIES, SESSIONS, WATERFALL_MINI_AUCTION,
 };
+
+/// **Step 4.5 Batch 4.** How much the cheapest unowned private company's face
+/// value falls each time every player passes consecutively -- the canonical
+/// 1830 figure.
+///
+/// This is what guarantees the auction terminates: the price is monotonically
+/// non-increasing and the floor is reachable in a finite number of rounds, at
+/// which point `execute_waterfall_pass` forces the company on someone. Without
+/// it, a table where nobody wants Schuylkill Valley could pass forever.
+pub const WATERFALL_PASS_PRICE_DROP: Uint128 = Uint128::new(5);
 
 #[derive(Error, Debug)]
 pub enum WaterfallError {
@@ -284,23 +304,12 @@ fn collect_bids(
         .map_err(WaterfallError::from)
 }
 
-/// Whether ANY of the six core privates currently has at least one standing
-/// bid -- `execute_waterfall_pass`'s legality gate. Short-circuits on the
-/// first private found with a bid.
-fn any_private_has_bid(storage: &dyn Storage, game_id: u64) -> StdResult<bool> {
-    for (private_id, ..) in auction::CORE_PRIVATE_COMPANIES.iter().copied() {
-        let has_any = PRIVATE_BIDS
-            .prefix((game_id, private_id))
-            .range(storage, None, None, Order::Ascending)
-            .next()
-            .transpose()?
-            .is_some();
-        if has_any {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
+// REMOVED (Step 4.5 Batch 4): `any_private_has_bid`, which existed solely to
+// gate `execute_waterfall_pass` on "some private somewhere already has a bid".
+// Cold-start passing is now legal, so the gate is gone and nothing else ever
+// asked the question. Deleted rather than left behind `#[allow(dead_code)]`:
+// a helper kept alive only by an allow attribute is one someone eventually
+// wires back up without reading why it was retired.
 
 /// Refunds and clears every still-standing `PRIVATE_BIDS` entry across all
 /// six core privates -- used only by `execute_waterfall_pass`'s early
@@ -337,6 +346,43 @@ fn refund_all_standing_bids(
                 amount.to_string(),
             ));
         }
+    }
+    Ok(())
+}
+
+/// **Step 4.5 Batch 4.** Refunds and clears every standing bid on ONE
+/// private, optionally sparing `except` (the winner, whose escrow is being
+/// consumed rather than returned).
+///
+/// The all-pass waterfall can hand a private to a player who never bid on it
+/// -- see `execute_waterfall_pass`'s $0 force-assignment -- and any OTHER
+/// player's escrow sitting on that private would then be stranded: the
+/// company is owned, so no cascade will ever reach it again, and
+/// `refund_all_standing_bids` only runs when the auction CONCLUDES. Without
+/// this the cash would be permanently gone from a live game.
+fn refund_bids_on_private(
+    storage: &mut dyn Storage,
+    game_id: u64,
+    private_id: u32,
+    except: Option<&Addr>,
+    attrs: &mut Vec<Attribute>,
+) -> Result<(), WaterfallError> {
+    for (bidder, amount) in collect_bids(storage, game_id, private_id)? {
+        if Some(&bidder) == except {
+            continue;
+        }
+        let balance = PLAYER_CASH_VGP
+            .may_load(storage, (game_id, bidder.clone()))?
+            .unwrap_or_default();
+        let refunded = balance
+            .checked_add(amount)
+            .map_err(|_| WaterfallError::Overflow {})?;
+        PLAYER_CASH_VGP.save(storage, (game_id, bidder.clone()), &refunded)?;
+        PRIVATE_BIDS.remove(storage, (game_id, private_id, bidder.clone()));
+        attrs.push(Attribute::new(
+            format!("waterfall_refunded_{private_id}_{bidder}"),
+            amount.to_string(),
+        ));
     }
     Ok(())
 }
@@ -705,11 +751,47 @@ pub fn execute_waterfall_bid_higher(
         .add_attribute("bid_amount", bid_amount))
 }
 
-/// Passes on the current Waterfall Auction turn -- legal only while at
-/// least one private anywhere has an active bid (module doc comment #1). A
-/// full round of these in a row (`consecutive_waterfall_passes` reaching
-/// `player_addresses.len()`) ends the whole auction early -- module doc
-/// comment #4.
+/// **Step 4.5 Batch 4: the canonical 1830 all-pass waterfall.**
+///
+/// Passes on the current Waterfall Auction turn. Two rules changed here, and
+/// the second is the substantive one.
+///
+/// **Cold-start passing.** This used to be rejected unless SOME private
+/// anywhere already carried a bid (`PassNotAllowed`). That made the opening
+/// position of the game a forced move: the first player could buy the
+/// cheapest private or bid on a dearer one, but could not decline. Real 1830
+/// lets everyone pass from a standing start -- that is precisely how the
+/// price gets walked down to something worth having -- so the gate is gone.
+/// The now-unreachable-from-here `PassNotAllowed` variant is retained on the
+/// error enum rather than deleted, so any client matching on it still
+/// compiles.
+///
+/// **A full round of passes no longer ends the auction.** It used to:
+/// `consecutive_waterfall_passes` reaching the player count refunded every
+/// bid and concluded. That is not the 1830 rule, and it made the phase
+/// terminate in the one situation where the real game is only just getting
+/// interesting. What happens instead, in this exact order:
+///
+/// 1. **The cheapest unowned private drops $5**, floored at $0. Only the
+///    lowest one moves, which is what keeps `lowest_unowned_private_id`'s
+///    ascending-order scan valid -- the cheapest getting cheaper cannot
+///    reorder the list.
+/// 2. **Every already-owned private immediately pays its printed revenue to
+///    its owner**, from the bank. This is the counterweight that stops
+///    passing from being free: waiting makes the next company cheaper for
+///    you, but it pays income to everyone who already committed. Delegated
+///    to `operations::pay_private_company_revenues` rather than reimplemented
+///    -- same payout, different trigger.
+/// 3. **At $0 the company is forced on whoever's turn it now is**, free, and
+///    the turn advances past them. Nobody can hold out forever; the auction
+///    always terminates.
+/// 4. **The pass streak resets and the auction continues** -- unless every
+///    private is now owned, in which case it concludes normally.
+///
+/// The turn advances BEFORE the $0 check, so "the player whose turn it
+/// currently is" means the player who now faces the reduced price -- the one
+/// who opened the round of passes and has come back around to it -- not the
+/// player who happened to pass last.
 pub fn execute_waterfall_pass(
     deps: DepsMut,
     _env: Env,
@@ -736,9 +818,8 @@ pub fn execute_waterfall_pass(
     }
     ensure_active_player(&session, game_id, &info.sender)?;
 
-    if !any_private_has_bid(deps.storage, game_id)? {
-        return Err(WaterfallError::PassNotAllowed { game_id });
-    }
+    // Step 4.5 Batch 4: cold-start passing. The `any_private_has_bid` gate
+    // that stood here is gone -- see this function's doc comment.
 
     session.consecutive_waterfall_passes = session
         .consecutive_waterfall_passes
@@ -752,15 +833,99 @@ pub fn execute_waterfall_pass(
         Attribute::new("player", info.sender.as_str()),
     ];
 
-    if player_count > 0 && session.consecutive_waterfall_passes >= player_count {
-        // Refund/clear every still-standing bid BEFORE concluding -- see
-        // `refund_all_standing_bids`'s own doc comment for why this specific
-        // termination path (and only this one) needs it.
-        refund_all_standing_bids(deps.storage, game_id, &mut attrs)?;
-        conclude_waterfall(&mut session, &mut attrs);
-    } else {
+    // Not a full round yet: an ordinary pass, turn moves on.
+    if player_count == 0 || session.consecutive_waterfall_passes < player_count {
         advance_waterfall_turn(&mut session);
+        SESSIONS.save(deps.storage, game_id, &session)?;
+        return Ok(Response::new().add_attributes(attrs));
     }
+
+    // ---- A full consecutive round of passes: run the waterfall. ----
+    attrs.push(Attribute::new("waterfall_all_pass_round", "true"));
+
+    // The turn moves on first, so the player who now faces the reduced price
+    // is the one who opened this round of passes -- see the doc comment.
+    advance_waterfall_turn(&mut session);
+
+    match lowest_unowned_private_id(deps.storage, game_id)? {
+        None => {
+            // Nothing left to discount: every private is owned, so the
+            // auction is simply over. Refund anything still escrowed before
+            // concluding -- see `refund_all_standing_bids`.
+            refund_all_standing_bids(deps.storage, game_id, &mut attrs)?;
+            conclude_waterfall(&mut session, &mut attrs);
+        }
+        Some(private_id) => {
+            // ---- 1. Drop the cheapest unowned private by $5, floored at $0.
+            let mut private: PrivateCompany =
+                PRIVATE_COMPANIES.load(deps.storage, (game_id, private_id))?;
+            // `Uint128` is unsigned: `checked_sub` ERRORS below zero rather
+            // than wrapping, so the floor is expressed as a saturating
+            // comparison rather than a subtraction that must not underflow.
+            let reduced = if private.cost <= WATERFALL_PASS_PRICE_DROP {
+                Uint128::zero()
+            } else {
+                private.cost - WATERFALL_PASS_PRICE_DROP
+            };
+            private.cost = reduced;
+            PRIVATE_COMPANIES.save(deps.storage, (game_id, private_id), &private)?;
+
+            attrs.push(Attribute::new(
+                "waterfall_price_drop_private_id",
+                private_id.to_string(),
+            ));
+            attrs.push(Attribute::new(
+                "waterfall_price_drop_new_cost",
+                reduced.to_string(),
+            ));
+
+            // ---- 2. Every owned private pays its printed revenue.
+            let revenue_attrs = operations::pay_private_company_revenues(deps.storage, game_id)
+                .map_err(|e| WaterfallError::Std(StdError::generic_err(e.to_string())))?;
+            attrs.extend(revenue_attrs);
+
+            // ---- 3. At $0 it is forced, free, on whoever's turn it now is.
+            if reduced.is_zero() {
+                let taker = session
+                    .player_addresses
+                    .get(session.active_player_index as usize)
+                    .cloned()
+                    .ok_or(WaterfallError::GameNotFound { game_id })?;
+
+                // Any OTHER player's escrow on this private has to come back:
+                // once it is owned, no cascade will ever reach it again.
+                refund_bids_on_private(
+                    deps.storage,
+                    game_id,
+                    private_id,
+                    Some(&taker),
+                    &mut attrs,
+                )?;
+
+                resolve_private_win(
+                    deps.storage,
+                    game_id,
+                    &mut session,
+                    private_id,
+                    taker,
+                    Uint128::zero(),
+                    &mut attrs,
+                )?;
+                attrs.push(Attribute::new("waterfall_forced_free_assignment", "true"));
+
+                advance_waterfall_turn(&mut session);
+            }
+
+            // ---- 4. Resume the auction -- or conclude, if that free
+            // assignment was the last unowned private.
+            session.consecutive_waterfall_passes = 0;
+            if lowest_unowned_private_id(deps.storage, game_id)?.is_none() {
+                refund_all_standing_bids(deps.storage, game_id, &mut attrs)?;
+                conclude_waterfall(&mut session, &mut attrs);
+            }
+        }
+    }
+
     SESSIONS.save(deps.storage, game_id, &session)?;
 
     Ok(Response::new().add_attributes(attrs))

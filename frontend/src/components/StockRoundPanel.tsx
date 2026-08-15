@@ -329,7 +329,11 @@ function CorporationRoster({
                   </div>
                   <div style={styles.rosterOpsCell}>
                     <span style={styles.rosterOpsLabel}>Last payout</span>
-                    <LastRoutePayout surface="light" compact />
+                    <LastRoutePayout
+                      surface="light"
+                      compact
+                      revenue={company.last_route_revenue}
+                    />
                   </div>
                 </div>
 
@@ -780,7 +784,13 @@ function CompanyActions({
                 }
                 onClick={() => setSource(option)}
               >
-                {option === "Ipo" ? "From IPO" : "From Bank Pool"}
+                {/* Just the source name. "From IPO" / "From Bank Pool"
+                    spent its first word on a preposition that the row's own
+                    context already supplies -- these two sit side by side
+                    under a Buy control, so what else would "IPO" mean? The
+                    shorter labels also stop "From Bank Pool" wrapping in the
+                    narrow card column. */}
+                {option === "Ipo" ? "IPO" : "Bank Pool"}
               </button>
             );
           })}

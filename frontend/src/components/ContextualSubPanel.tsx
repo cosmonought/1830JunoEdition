@@ -57,8 +57,35 @@ import { derivePhase, rustOutlook } from "../utils/gamePhase";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
-import { certificateBreakdown, formatCertificateCount } from "../utils/gameState";
+import {
+  certificateBreakdown,
+  formatCertificateCount,
+  PRIORITY_DEAL_TOOLTIP,
+} from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
+import { sandboxPlayerLabel } from "../utils/sandboxState";
+import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
+
+/* ===================================================================
+ *  DESIGN NOTE 170: SHOW THE PERSON, NOT THE HASH
+ * ===================================================================
+ *
+ * The President column rendered `truncate(company.president)` -- a raw
+ * bech32 address clipped to something like `juno1san...0000`. In the
+ * sandbox every seat's address is `juno1sandbox<name>000...`, so all four
+ * players truncated to a near-identical string of zeroes and the column
+ * became four rows of visually indistinguishable noise. A player could not
+ * tell which corporation was theirs from the one panel whose job is to say
+ * so.
+ *
+ * `sandboxPlayerLabel` already maps a sandbox address to "Alice"/"Bob"/etc
+ * and returns `null` for anything it does not recognise -- which is exactly
+ * the right shape here: a live room's real wallet falls through to the
+ * existing truncation unchanged, so this improves the sandbox without
+ * inventing a name for a stranger. */
+function playerLabel(address: string): string {
+  return sandboxPlayerLabel(address) ?? truncate(address);
+}
 
 export interface ContextualSubPanelProps {
   gameState: GameStateResponse | null;
@@ -189,6 +216,11 @@ function StockRoundPlayerIndex({
           )}
           {gameState.player_addresses.map((player, index) => {
             const isActive = index === gameState.active_player_index;
+            // The Priority Deal is a DIFFERENT pointer from the turn pointer,
+            // and the two only coincide at the very start of a Stock Round.
+            // `active_player_index` says who acts now; `priority_deal_index`
+            // says who will act first NEXT round.
+            const hasPriorityDeal = index === gameState.priority_deal_index;
             const cashEntry = gameState.player_cash.find((entry) => entry.player === player);
             const certs = certificateBreakdown(
               player,
@@ -200,6 +232,11 @@ function StockRoundPlayerIndex({
               <tr key={player} style={isActive ? styles.trActive : undefined}>
                 <td style={styles.td}>
                   {truncate(player)}
+                  {hasPriorityDeal && (
+                    <span style={styles.priorityDealMark} title={PRIORITY_DEAL_TOOLTIP}>
+                      #1
+                    </span>
+                  )}
                   {isActive && <span style={styles.activeBadge}>ACTIVE</span>}
                 </td>
                 {/* In-game cash is dollars, like every other figure in the
@@ -387,7 +424,7 @@ function OperatingRoundCorporationPanel({
                   {company.president ? (
                     <span style={styles.presidentCell}>
                       <span aria-hidden="true">&#128081;</span>
-                      <span>{truncate(company.president)}</span>
+                      <span>{playerLabel(company.president)}</span>
                     </span>
                   ) : (
                     <span style={styles.emptyCell}>--</span>
@@ -419,7 +456,7 @@ function OperatingRoundCorporationPanel({
 
                 {/* ---- Last route payout -- design note #10 ---- */}
                 <td style={styles.tdNumB}>
-                  <LastRoutePayout surface="dark" />
+                  <LastRoutePayout surface="dark" revenue={company.last_route_revenue} />
                 </td>
 
                 {/* ---- Trains, as chips ---- */}
@@ -654,6 +691,23 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a90a0",
     whiteSpace: "nowrap",
   },
+  /** The inline Priority Deal marker -- bare text, no container. Sits in the
+   *  same cell as the boxed ACTIVE badge, and that adjacency is exactly why
+   *  it must NOT be boxed: two pills side by side read as a pair of equal
+   *  states, when one is "acting now" and the other is "acts first next
+   *  round". Different weight, different shape, different meaning.
+   *
+   *  Kept byte-identical to `FinancialLedger`'s own `priorityDealMark` so
+   *  the same indicator looks the same in both places. */
+  priorityDealMark: {
+    marginLeft: "6px",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontWeight: 700,
+    fontSize: FONT_SIZE.small,
+    letterSpacing: "-0.025em",
+    color: "#38bdf8",
+    cursor: "help",
+  },
   activeBadge: {
     marginLeft: "10px",
     fontSize: FONT_SIZE.small,
@@ -663,6 +717,32 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px",
     backgroundColor: "#1f7a3f",
     color: "#eafff0",
+  },
+  // This key was REFERENCED at the UNFLOATED call site above but never
+  // defined, so `styles.unfloatedBadge` evaluated to `undefined` and the
+  // badge rendered as unstyled body text -- indistinguishable from the
+  // corporation's name sitting next to it.
+  //
+  // Nothing caught it because `styles` is typed `Record<string,
+  // React.CSSProperties>`, an index signature that accepts any key and so
+  // cannot tell a real style from a typo. `FinancialLedger.tsx` has the
+  // same shape and the same exposure.
+  //
+  // Colours come from `palette.ts` rather than being restated here, which
+  // is the point of that module: the Ledger's copy of this badge and this
+  // one physically cannot drift apart again.
+  unfloatedBadge: {
+    marginLeft: "10px",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 500,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    letterSpacing: "0.4px",
+    padding: "2px 8px",
+    borderRadius: "4px",
+    backgroundColor: CHIP_INERT_BG,
+    border: `1px solid ${CHIP_INERT_BORDER}`,
+    color: CHIP_INERT_INK,
+    whiteSpace: "nowrap",
   },
   footnote: {
     fontSize: FONT_SIZE.body,

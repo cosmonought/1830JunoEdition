@@ -93,10 +93,26 @@
 //!
 //!    A route runs THROUGH the home station, not merely out of it: both ends
 //!    of one segment on the home tile can be arms of the same route (see
-//!    `best_route_for_train`). A hex is still visited at most once per route
-//!    -- real 1830 permits re-entering a hex on genuinely separate track,
-//!    and this engine does not, a pre-existing simplification G-9 did not
-//!    change. It can only under-report revenue.
+//!    `best_route_for_train`).
+//!
+//!    **Step 4.5 Batch 2, item 1 changed what "already visited" means.** The
+//!    search state is now `(hex, city_node)`, not `hex`. G-9 left a
+//!    simplification in place here -- "a hex is visited at most once per
+//!    route... real 1830 permits re-entering a hex on genuinely separate
+//!    track, and this engine does not" -- and on a two-city tile that
+//!    simplification was not merely conservative, it silently deleted the
+//!    better half of New York's revenue. A route may now serve both stations
+//!    of a two-city hex; it still may not serve the same station twice, and
+//!    it still cannot cross between the two inside the hex, because the only
+//!    move this search makes is a step to a NEIGHBOUR over track it has not
+//!    already claimed. See `PartialRoute::visited_nodes` and
+//!    `HexInfo::arrival_city_node` for the full argument, including the three
+//!    cases where the node collapses back to the hex.
+//!
+//!    A hex with no city (plain track, a town) is still crossed at most once
+//!    per route. That remains an under-report and is deliberately left
+//!    alone: it has nothing to do with station granularity and widening it
+//!    would only enlarge the search space.
 //! 6. **Multi-train assignment is greedy, not globally optimal.** Trains run
 //!    biggest-first, each taking the best route still available to it given
 //!    what earlier trains already claimed. A jointly-optimal assignment is
@@ -294,7 +310,16 @@ pub struct TrainRoute {
     /// included (they simply contribute `$0`). Discovery order, not strict
     /// travel order: a route that runs THROUGH the home station lists home,
     /// then one arm, then the other, rather than one geographic end to the
-    /// other. No two entries repeat.
+    /// other.
+    ///
+    /// **Step 4.5 Batch 2, item 1: entries MAY now repeat.** A route that
+    /// serves both stations of a two-city hex (#62 brown New York, the OO
+    /// tiles) lists that hex twice, once per station reached. It is
+    /// `PartialRoute::visited_nodes` -- keyed on `(hex, city_node)` -- that
+    /// guarantees no STOP is served twice; the hex list is a travel record,
+    /// not the uniqueness constraint. `segments` below remains strictly
+    /// duplicate-free, and that is the invariant a caller should audit
+    /// against.
     pub hexes: Vec<(i32, i32)>,
     /// Every track segment the route consumes, as
     /// `(q, r, (low_edge, high_edge))` with the edge pair in canonical
@@ -606,8 +631,16 @@ pub(crate) fn city_passability_at(
 /// `opponent_station_hexes`, whose contract with its callers is "hexes no
 /// route may touch at all". The DFS never uses it -- it knows exactly which
 /// segment it is traversing, so it asks about that segment's own city.
+///
+/// **Step 4.5 Batch 2, item 1.** Now `pub(crate)` so
+/// `test_city_granular_pathfinding_rejects_ghost_routing` can assert the
+/// CONTRAST directly: on a tile whose city 0 is fully blockaded and whose
+/// city 1 is open, this hex-level roll-up answers `Open` -- which is exactly
+/// the ghost route -- while `HexInfo::transit_passability` answers
+/// `StopOnly` for city 0's own track. Having both functions callable side by
+/// side is what makes that test evidence rather than assertion.
 #[allow(dead_code)]
-fn hex_passability(per_city: &[Passability]) -> Passability {
+pub(crate) fn hex_passability(per_city: &[Passability]) -> Passability {
     if per_city.is_empty() || per_city.iter().any(|p| *p == Passability::Open) {
         Passability::Open
     } else {
@@ -690,6 +723,60 @@ impl HexInfo {
                 }
             }
         }
+    }
+
+    /// **Step 4.5 Batch 2, item 1: which NODE a route occupies on this hex.**
+    ///
+    /// A hex is not a node. Tile #62 (brown New York) and every OO tile
+    /// (#59, #64-#68) carry TWO independent city nodes on one hex, sitting on
+    /// physically separate, non-intersecting track. The route history keys on
+    /// what this returns, so that a route may legitimately visit both of a
+    /// two-city hex's stations -- by leaving and re-entering on that hex's
+    /// other track -- while still never visiting the same station twice.
+    ///
+    /// `entry_segment_indices` are the segments on this hex that carry the
+    /// edge the route is arriving on. `None` is the SINGLE-NODE answer: treat
+    /// the whole hex as one indivisible stop, which is the pre-Batch-2
+    /// behavior. It is returned in exactly three cases, and all three are
+    /// deliberately conservative:
+    ///
+    /// - **The hex has no cities at all** (plain track, a town, a bare
+    ///   connector). There is nothing to subdivide. Note this means a route
+    ///   still crosses a plain hex at most once even where real 1830 would
+    ///   allow two passes on separate track -- an under-report this pass does
+    ///   NOT change, because widening it has nothing to do with ghost routing
+    ///   and would enlarge the search space for no rules benefit.
+    /// - **The correspondence is not knowable** -- `segment_cities` says
+    ///   `None` for a segment on a hex that does have cities, today only a
+    ///   synthesized overlay standing in for preprinted artwork.
+    /// - **The arriving edge is claimed by two DIFFERENT cities.** No real
+    ///   1830 tile does this, so it means the catalog and the slot table
+    ///   disagree; collapsing to one node refuses a visit that might have
+    ///   been legal rather than permitting one that is not.
+    ///
+    /// The asymmetry is the whole point: guessing `None` can only ever cost a
+    /// route revenue it was owed, while guessing a specific node wrongly
+    /// would hand a train a second visit to a station it already used -- the
+    /// exact double-count this granularity exists to prevent.
+    pub(crate) fn arrival_city_node(&self, entry_segment_indices: &[usize]) -> Option<u8> {
+        if self.city_passability.is_empty() {
+            return None;
+        }
+
+        let mut resolved: Option<u8> = None;
+        for &segment_index in entry_segment_indices {
+            match self.segment_cities.get(segment_index).copied().flatten() {
+                // Unknown correspondence -- collapse the hex to one node.
+                None => return None,
+                Some(city_index) => match resolved {
+                    None => resolved = Some(city_index),
+                    Some(previous) if previous == city_index => {}
+                    // Two cities claim the same arriving edge.
+                    Some(_) => return None,
+                },
+            }
+        }
+        resolved
     }
 }
 
@@ -787,14 +874,41 @@ impl<'a> BoardView<'a> {
     }
 }
 
+/// One node a route has already occupied: `(q, r, city_node)`.
+///
+/// **Step 4.5 Batch 2, item 1.** This replaced a bare `(q, r)` hex key. See
+/// `HexInfo::arrival_city_node` for how the third component is resolved and
+/// why `None` collapses a hex back to a single node.
+type RouteNode = (i32, i32, Option<u8>);
+
 /// A route under construction during the depth-first search.
 #[derive(Clone)]
 struct PartialRoute {
+    /// Every hex the route runs across, in discovery order. **May now repeat**
+    /// -- a route that visits both cities of a two-city hex lists that hex
+    /// twice, once per station. `visited_nodes`, not this list, is what
+    /// enforces "never the same stop twice".
     hexes: Vec<(i32, i32)>,
     /// Every ledger key this route consumes -- both real through segments
     /// and the half-edge crossing markers described on `hop_claims`.
     claims: Vec<(i32, i32, (u8, u8))>,
-    visited_hexes: HashSet<(i32, i32)>,
+    /// **Step 4.5 Batch 2, item 1: the city-granular path history.**
+    ///
+    /// Was `visited_hexes: HashSet<(i32, i32)>`. Keying on the hex alone
+    /// conflated two genuinely different rules -- "a train may not stop at
+    /// the same city twice" (real) and "a train may not enter the same hex
+    /// twice" (not a rule) -- and on a multi-city tile it enforced the wrong
+    /// one, silently refusing the legal route that serves both of New York's
+    /// stations.
+    ///
+    /// Note what does NOT change: a train still cannot jump between the two
+    /// stations INSIDE the hex. `expand` only ever moves along
+    /// `HEX_NEIGHBOR_OFFSETS` into a neighbouring hex, so reaching the second
+    /// station requires physically leaving and coming back on that station's
+    /// own track, and `claims` independently forbids reusing any track or
+    /// crossing already consumed. Ghost routing is impossible by
+    /// construction, not by this set.
+    visited_nodes: HashSet<RouteNode>,
     revenue_centres: u32,
     value: Uint128,
 }
@@ -876,14 +990,6 @@ fn best_route_for_train(
         return Ok(None);
     };
 
-    let start = PartialRoute {
-        hexes: vec![home],
-        claims: Vec::new(),
-        visited_hexes: HashSet::from([home]),
-        revenue_centres: u32::from(home_info.is_revenue_centre),
-        value: home_info.value,
-    };
-
     let mut best: Option<PartialRoute> = None;
     let mut budget = MAX_SEARCH_STATES;
 
@@ -911,6 +1017,21 @@ fn best_route_for_train(
         if a == b {
             continue;
         }
+
+        // Step 4.5 Batch 2, item 1: the route starts AT a specific station,
+        // not merely "on the home hex". On a two-city home (ERIE's E11 is an
+        // OO hex) leaving by this segment means starting from THIS segment's
+        // city -- so the start state is built per segment rather than once,
+        // and the other city remains unvisited and reachable later in the
+        // same route.
+        let home_node = (home.0, home.1, home_info.arrival_city_node(&[segment_index]));
+        let start = PartialRoute {
+            hexes: vec![home],
+            claims: Vec::new(),
+            visited_nodes: HashSet::from([home_node]),
+            revenue_centres: u32::from(home_info.is_revenue_centre),
+            value: home_info.value,
+        };
         // Audit G-13: the home hex needs the same per-city transit test as
         // every other hex, and it is NOT covered by "you always hold a token
         // at home". A company's home token sits in ONE city; a home hex with
@@ -1040,29 +1161,8 @@ fn expand(
 
     let (dq, dr) = HEX_NEIGHBOR_OFFSETS[exit_edge as usize];
     let next = (from.0 + dq, from.1 + dr);
-    // MULTI-CITY HEX REVENUE (audit, this pass -- CONFIRMED CORRECT, no
-    // patch needed). This one line is what enforces 1830's "a train may
-    // include a given hex at most once" rule, and it is why a tile carrying
-    // TWO separate city nodes -- #62, the brown New York upgrade, whose four
-    // token slots are two 2-slot cities -- can never have its revenue
-    // double-counted.
-    //
-    // The reason it holds is that `visited_hexes` is keyed on `(q, r)`
-    // ALONE, not on a city or node id. The engine's whole revenue model is
-    // hex-level (module doc comment #2): `HexInfo.value` is one figure per
-    // HEX, resolved once from the laid tile's terrain via
-    // `hexmap::tile_base_value`, and `extend_route` adds that figure exactly
-    // once, at the moment a hex is first entered. There is no per-city
-    // accumulator that a second node on the same hex could increment. So
-    // even though #62's two cities are genuinely separate destinations on
-    // the physical board, this graph cannot represent them as two visits,
-    // and `NewYorkHub`'s flat per-station value is added a single time.
-    //
-    // `terrain_base_value` prices `NewYorkHub` at $40 for exactly this
-    // reason -- see its own comment: the two stations are disconnected
-    // intra-tile, so a single continuous transit reaches one of them, and
-    // the tile is priced per-station rather than as the sum of both.
-    if route.visited_hexes.contains(&next) || route.hexes.len() >= MAX_ROUTE_HEXES {
+
+    if route.hexes.len() >= MAX_ROUTE_HEXES {
         return Ok(None);
     }
 
@@ -1097,6 +1197,53 @@ fn expand(
         return Ok(None);
     }
 
+    // ==== Step 4.5 Batch 2, item 1: CITY-GRANULAR PATH HISTORY. ====
+    //
+    // This check used to read `route.visited_hexes.contains(&next)` and sat
+    // ABOVE the claims test, before the tile had even been loaded. It cannot
+    // sit there any more, and the relocation IS the change: WHICH node this
+    // hop lands on is a property of the track the route arrives on, so the
+    // tile's segments must be resolved before the question can be asked. The
+    // move is behaviour-neutral in itself -- both orderings reject by
+    // returning `Ok(None)`, and neither writes anything.
+    //
+    // What it fixes: on a tile carrying two independent city nodes -- #62,
+    // the brown New York upgrade, and every OO tile -- the hex key refused
+    // the second station outright, so a route that legally served both
+    // scored only one of them. `terrain_base_value` prices `NewYorkHub` and
+    // `DoubleCityHub` PER STATION ($40 each, see their own comments) exactly
+    // because the old engine could reach only one per pass; with the node key
+    // the per-station price is now applied per station actually reached,
+    // which is what those figures always meant.
+    //
+    // What it does NOT loosen, and this is the part worth being explicit
+    // about, because a node key is strictly more permissive than a hex key:
+    //
+    // - **No intra-hex jump.** Reaching the second station is not a move
+    //   inside the hex. `expand` only ever steps to a NEIGHBOUR via
+    //   `HEX_NEIGHBOR_OFFSETS`, so the route must physically leave and come
+    //   back along the other station's own track.
+    // - **No reused rail.** That return trip must clear the `claims` test
+    //   above on all three of its keys, including both halves of the
+    //   crossing -- so it cannot re-enter over track it already ran.
+    // - **No double-counted station.** Two segments of the SAME city resolve
+    //   to the same node and collide here, so a multi-spoke city hub
+    //   (#14/#15/#53/#61/#63, one city, many segments) still admits exactly
+    //   one visit, exactly as before.
+    // - **No guessing.** Where the segment-to-city correspondence is
+    //   uncertain, `arrival_city_node` collapses the hex to a single node and
+    //   the old behavior applies unchanged.
+    let entry_segment_indices: Vec<usize> =
+        entry_segments.iter().map(|(index, _)| *index).collect();
+    let next_node: RouteNode = (
+        next.0,
+        next.1,
+        next_info.arrival_city_node(&entry_segment_indices),
+    );
+    if route.visited_nodes.contains(&next_node) {
+        return Ok(None);
+    }
+
     let next_is_centre = next_info.is_revenue_centre;
     if next_is_centre && route.revenue_centres >= max_revenue_centres {
         // The train is out of stops. It cannot enter another revenue centre,
@@ -1114,7 +1261,7 @@ fn expand(
             extended.claims.push(*key);
         }
     }
-    extended.visited_hexes.insert(next);
+    extended.visited_nodes.insert(next_node);
     if next_is_centre {
         extended.revenue_centres += 1;
         extended.value = extended

@@ -939,6 +939,116 @@ export function marketCellForPrice(price: number): { x: number; y: number } | nu
  *  -- a second copy of "which prices are Brown" would drift the moment
  *  either was edited, and the failure mode is a player being told a rule
  *  that the board contradicts. */
+/* ===================================================================
+ *  DESIGN NOTE 187: PROJECTING THE DIVIDEND MOVE
+ * ===================================================================
+ *
+ * The Dividends step asks a player to choose between paying out and
+ * withholding, and in 1830 that choice MOVES THE TOKEN -- right along the
+ * row if the corporation pays, left if it withholds. The panel offered the
+ * two buttons and said nothing about the consequence, which is most of what
+ * the decision actually turns on.
+ *
+ * `PRICE_GRID` is the real chart, so the destination is a lookup rather
+ * than an estimate: find the cell at the current price, step one column,
+ * and read the price there.
+ *
+ * SCOPE, stated because the omission is deliberate. This models the two
+ * ORDINARY moves. It does NOT model the chart's edges and special cases --
+ * the ledges, the right cliff, or the end-of-Stock-Round sold-out rise --
+ * which `market.rs` implements properly and which depend on state this
+ * function is not given. Where the step would leave the chart the
+ * projection reports the price as unchanged, which is what a clamp does
+ * and is never a worse answer than inventing a cell. The contract remains
+ * the authority on where the token actually lands.
+ */
+export interface MarketProjection {
+  /** Where the token ends up, or the current price when the move is
+   *  blocked by the edge of the chart. */
+  price: number;
+  /** `true` when the token actually moves -- lets a caller distinguish
+   *  "rises to $90" from "already at the ceiling". */
+  moves: boolean;
+}
+
+export function projectDividendMove(
+  currentPrice: number | null | undefined,
+  choice: "pay" | "withhold",
+): MarketProjection | null {
+  if (currentPrice == null || !Number.isFinite(currentPrice)) return null;
+  const cell = PRICE_GRID.find((candidate) => candidate.price === currentPrice);
+  if (!cell) return null;
+  const targetX = cell.x + (choice === "pay" ? 1 : -1);
+  const next = PRICE_GRID.find(
+    (candidate) => candidate.y === cell.y && candidate.x === targetX,
+  );
+  return next ? { price: next.price, moves: true } : { price: currentPrice, moves: false };
+}
+
+/**
+ * Where the token lands when a player SELLS shares -- one row DOWN per
+ * 10% block sold.
+ *
+ * The vertical counterpart to `projectDividendMove`, and it exists for the
+ * same reason: selling moves the marker in 1830, and a sandbox that moved
+ * cash and shares while leaving the chart frozen was showing a stock market
+ * that no action could ever affect.
+ *
+ * `blocks` is how many 10% certificates went to the pool, because the drop
+ * is per block rather than per transaction -- selling 30% in one message is
+ * three rows, not one.
+ *
+ * TAKES A CELL, NOT A PRICE, and returns one. This chart repeats prices
+ * across rows, so "the cell at $76" is ambiguous and walking down from the
+ * wrong one lands somewhere the marker never stood. The caller tracks the
+ * cell for exactly this reason -- see `SandboxMarketMark`.
+ *
+ * "Down" is `y - 1`, not `y + 1`: this chart's y axis is inverted relative
+ * to the screen (see the walk below).
+ *
+ * SAME SCOPE CAVEAT as `projectDividendMove`, and it matters more here: the
+ * real chart has ledges that catch a falling token and a bottom row it
+ * cannot fall out of. This walks down cell by cell and stops when there is
+ * no cell below, which reproduces the FLOOR correctly and the ledges not at
+ * all. `market.rs` remains the authority; this is here so the sandbox's
+ * marker moves in the right direction by the right number of steps.
+ */
+/** The chart cell at `(x, y)`, or `undefined` off the edge. */
+function cellAt(x: number, y: number): PriceCell | undefined {
+  return PRICE_GRID.find((candidate) => candidate.x === x && candidate.y === y);
+}
+
+export function projectShareSaleMove(
+  from: { x: number; y: number },
+  blocks: number,
+): { price: number; x: number; y: number } | null {
+  const start = cellAt(from.x, from.y);
+  if (!start) return null;
+
+  /* Walks with plain indices rather than a `find` closure per step: a
+     callback that captures the loop's own cursor is the `no-loop-func`
+     hazard, and the cell below is a coordinate lookup rather than a search
+     that needs one.
+
+     DOWN IS `y - 1`. The chart's y axis runs the opposite way to the
+     screen's: `REAL_MARKET_ROWS` puts the top row (the $350 ceiling) at
+     `y: 10` and the bottom at `y: 0`, and the renderer inverts it with
+     `gridRow: 11 - cell.y`. Written as `y + 1` this walked UP the chart, so
+     a sale RAISED the price -- and silently did nothing for any token
+     already on the top row, which is where the fixture's PRR sits. Caught
+     by the harness, which asserted the token moves and found it did not. */
+  let { x, y } = start;
+  let price = start.price;
+  for (let step = 0; step < Math.max(0, Math.floor(blocks)); step += 1) {
+    const below = cellAt(x, y - 1);
+    if (!below) break;
+    x = below.x;
+    y = below.y;
+    price = below.price;
+  }
+  return { price, x, y };
+}
+
 export function marketZoneForPrice(price: number | null | undefined): ZoneType | null {
   if (price == null || !Number.isFinite(price)) return null;
   return PRICE_GRID.find((candidate) => candidate.price === price)?.zoneType ?? null;
@@ -1043,6 +1153,54 @@ const ZONE_LEGEND_LABELS: Readonly<Record<Exclude<ZoneType, "Normal">, string>> 
   Orange: "Orange Zone",
   Brown: "Brown Zone",
 };
+
+/* ===================================================================
+ *  DESIGN NOTE 196: THE ZONES ARE A VOCABULARY, NOT THIS CHART'S DECOR
+ * ===================================================================
+ *
+ * The dividend panel has to render a price in its zone's colour and explain
+ * the rule that colour stands for. Both facts already exist here --
+ * `ZONE_GRADIENTS` paints the cells, `ZONE_LEGEND_LABELS` names them and
+ * `ZONE_DESCRIPTIONS` states their rules -- and `marketZoneForPrice` is
+ * already exported precisely because the zones are RULES rather than
+ * decoration.
+ *
+ * What was NOT exportable was the colour, because the chart needs a
+ * multi-stop CSS gradient for a cell and text needs one flat, legible ink.
+ * Reaching for `ZONE_GRADIENTS` off-chart would produce a `background`
+ * string assigned to a `color` property: silently ignored, and the text
+ * would render in the default grey with nobody able to see why.
+ *
+ * So this is the flat text counterpart, hand-paired with each gradient and
+ * lifted for contrast against a dark panel -- the same relationship
+ * `ZONE_PRICE_TEXT_COLOR` has to the tinted cells, one step further along.
+ * A second table of "which prices are Brown" is what this avoids; the
+ * PRICES still come from `marketZoneForPrice` and this only says what a zone
+ * looks like when it is a word rather than a cell.
+ */
+export const ZONE_TEXT_COLORS: Readonly<Record<Exclude<ZoneType, "Normal">, string>> = {
+  Yellow: "#e3c951",
+  Orange: "#e39a51",
+  Brown: "#c08a5e",
+};
+
+/** "Yellow Zone -- Certificates here do not count toward the certificate
+ *  limit." One string, so a tooltip cannot show the label without the rule
+ *  or the rule without the label. */
+export function marketZoneTooltip(zone: ZoneType | null): string | null {
+  if (zone === null || zone === "Normal") return null;
+  return `${ZONE_LEGEND_LABELS[zone]} -- ${ZONE_DESCRIPTIONS[zone]}`;
+}
+
+/** The flat text ink for a zone, or `null` for a price that is either off
+ *  the chart or in an ordinary cell. Returning `null` rather than a default
+ *  grey is deliberate: the caller then applies NO colour at all, so a
+ *  Normal-zone price keeps whatever the surrounding panel gives it instead
+ *  of being re-tinted to something that looks like a fourth zone. */
+export function marketZoneTextColor(zone: ZoneType | null): string | null {
+  if (zone === null || zone === "Normal") return null;
+  return ZONE_TEXT_COLORS[zone];
+}
 
 /* ------------------------------------------------------------------ */
 /* Ticker color palette -- see design note #6                         */

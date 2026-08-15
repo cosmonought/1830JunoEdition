@@ -49,6 +49,12 @@
 import React from "react";
 
 import {
+  ALERT_CRITICAL_BG,
+  ALERT_CRITICAL_BORDER,
+  ALERT_CRITICAL_INK,
+  ALERT_WARN_BG,
+  ALERT_WARN_BORDER,
+  ALERT_WARN_INK,
   CARD_DIVIDER,
   CARD_INK,
   CARD_INK_FAINT,
@@ -56,6 +62,7 @@ import {
 } from "../styles/palette";
 import { FONT_SIZE } from "../styles/typography";
 import {
+  phaseAlertLevel,
   trainTier,
   type GamePhase,
   type TierRustOutlook,
@@ -78,8 +85,12 @@ export interface TrainBadgeCommonProps {
 
 export interface TrainChipsProps extends TrainBadgeCommonProps {
   /** `undefined`/`null` means UNKNOWN -- a contract predating the field --
-   *  and renders "?", never "none". See `PublicCompanyState.owned_trains`. */
-  trains?: string[] | null;
+   *  and renders "?", never "none". See `PublicCompanyState.owned_trains`.
+   *
+   *  `readonly` because this component only reads it, and requiring a
+   *  mutable array forced callers holding a frozen roster to copy or cast --
+   *  a widening of the type, not a loosening of it. */
+  trains?: readonly string[] | null;
   phase: GamePhase | null;
   /** Per-tier rust countdown (`rustOutlook`). Optional: without it a chip
    *  outside the currently-threatened tier still gets a tooltip naming what
@@ -185,10 +196,16 @@ export function TrainChips({ trains, phase, surface, compact, outlook }: TrainCh
   if (trains.length === 0) return placeholderChip("none");
 
   const doomed = phase?.rustingTier ?? null;
-  const remaining = phase?.depotRemaining ?? null;
-  // Escalates with the DEPOT, not the tier -- untinted until one train is
-  // left, so the warning is not shouting from the moment the phase begins.
-  const severity = remaining === 0 ? "doomed" : remaining === 1 ? "atRisk" : null;
+  // Design note #7 (`gamePhase.ts`): severity comes from the SHARED
+  // countdown, not from a second reading of `depotRemaining`. Same two
+  // thresholds as before -- one purchase out is `doomed`, two is `atRisk`
+  // -- but the action bar now reads the identical helper, so the chip and
+  // the badge cannot escalate at different moments.
+  //
+  // Still untinted until the countdown reaches two, so the warning is not
+  // shouting from the instant a phase begins.
+  const alert = phaseAlertLevel(phase);
+  const severity = alert === "critical" ? "doomed" : alert === "warn" ? "atRisk" : null;
 
   return (
     <span style={styles.chipRow}>
@@ -269,14 +286,19 @@ export function CapacityPill({ trains, phase, surface, compact }: CapacityPillPr
 /* ------------------------------------------------------------------ */
 
 export interface LastRoutePayoutProps extends TrainBadgeCommonProps {
-  /** The corporation's most recent route revenue.
+  /** The corporation's most recent route revenue --
+   *  `PublicCompanyState.last_route_revenue`.
    *
-   *  ALWAYS `undefined` TODAY, and that is not an oversight. The contract
-   *  computes this during an Operating Round (`pathfinding::
-   *  trace_best_route`) but no query returns it and there is no field to
-   *  reconstruct it from -- unlike market price (a separate query) or the
-   *  depot count (derivable arithmetic). The prop exists so the one place
-   *  that renders it is already correct when a query does land. */
+   *  THIS IS NOW LIVE. The comment that stood here said it was "ALWAYS
+   *  `undefined` TODAY... no query returns it and there is no field to
+   *  reconstruct it from", and that was true when written. The contract
+   *  since gained `last_route_revenue`, written on every route run and
+   *  returned by `GetGameState`, so callers pass the real figure.
+   *
+   *  `undefined` still has a distinct meaning and is still rendered
+   *  differently: it is what a contract predating the field returns, i.e.
+   *  "this build cannot tell you". A real `"0"` means the corporation ran
+   *  and earned nothing, which is a fact rather than an absence. */
   revenue?: string | number | null;
 }
 
@@ -291,7 +313,9 @@ export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutPr
       style={{ ...styles.payout, fontSize: size, ...(known ? ink.value : ink.empty) }}
       // Plain language: the dash means "not reported", and a player is not
       // the audience for which query is missing.
-      title={known ? undefined : "Route revenue is not available in this build."}
+      title={
+        known ? undefined : "This build's contract does not report route revenue."
+      }
     >
       {known ? `$${value}` : "--"}
     </span>
@@ -304,15 +328,21 @@ export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutPr
 
 const darkInk = {
   chip: { borderColor: "#3a4150", backgroundColor: "#232936", color: "#e2e6ee" },
+  // Design note #7 (`gamePhase.ts`): these are the SAME two constants the
+  // action bar's phase-shift badge uses, so the chip and the badge escalate
+  // together by construction. Amber became orange here specifically because
+  // amber is already spent twice over -- on "look here" and on the Yellow
+  // ERA -- which made an amber rust warning during the Yellow phase
+  // near-invisible against the phase badge sitting beside it.
   atRisk: {
-    borderColor: "#f59e0b",
-    backgroundColor: "rgba(245, 158, 11, 0.18)",
-    color: "#fcd34d",
+    borderColor: ALERT_WARN_BORDER,
+    backgroundColor: ALERT_WARN_BG,
+    color: ALERT_WARN_INK,
   },
   doomed: {
-    borderColor: "#f43f5e",
-    backgroundColor: "rgba(244, 63, 94, 0.18)",
-    color: "#fda4af",
+    borderColor: ALERT_CRITICAL_BORDER,
+    backgroundColor: ALERT_CRITICAL_BG,
+    color: ALERT_CRITICAL_INK,
   },
   atCapacity: {
     borderColor: "#a855f7",

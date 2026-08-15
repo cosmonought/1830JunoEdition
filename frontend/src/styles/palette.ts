@@ -119,6 +119,69 @@ export const CARD_INK_FAINT = "#6b6350";
 /** Rule between regions inside a card. */
 export const CARD_DIVIDER = "#d5cfbc";
 
+/* ------------------------------------------------------------------ */
+/* Status chips on dark chrome                                         */
+/* ------------------------------------------------------------------ */
+//
+// ===================================================================
+//  WHY "UNFLOATED" IS SLATE AND NOT AMBER
+// ===================================================================
+//
+// The Game Ledger renders two amber pills within a few hundred pixels of
+// each other: the corporation roster's UNFLOATED badge (`#3a2f14` on
+// `#6a5a24`) and the Bank Depot's CURRENT badge (`rgba(201,169,76,0.18)` on
+// `#c9a94c`). Two golds that close together do not read as two states --
+// they read as one style applied inconsistently, and the eye tries to
+// relate them. They are not related at all: one marks a corporation that
+// has not floated, the other marks which train tier the phase is on.
+//
+// Amber in this app means "look here" (`CARD_BORDER_ACTIVE`,
+// `CARD_HIGHLIGHT_BG`, the depot's CURRENT). UNFLOATED is the opposite
+// claim -- a corporation with nothing to act on, which is precisely the
+// case `CARD_SURFACE_MUTED` exists for on the light side. Slate says
+// "inert" without spending the attention colour, which frees amber to mean
+// one thing again.
+//
+// THE SHAPE DIFFERS TOO, and deliberately. The chip is squared (4px) and
+// monospaced where every neighbouring badge is a 999px pill in the body
+// face. Colour alone would still leave two same-shaped tags side by side,
+// and a distinction that survives being desaturated is a stronger one --
+// it also keeps working for a red-green colourblind viewer, who cannot use
+// the amber/slate difference at all.
+
+/** UNFLOATED and other genuinely-inert status chips on dark chrome.
+ *  Slate-800 at 80%, matching the muted register of `CARD_SURFACE_MUTED`
+ *  on the paper side. */
+export const CHIP_INERT_BG = "rgba(30, 41, 59, 0.8)";
+export const CHIP_INERT_BORDER = "#334155";
+export const CHIP_INERT_INK = "#94a3b8";
+
+/* ------------------------------------------------------------------ */
+/* Escalation: the two-step countdown to a phase shift                 */
+/* ------------------------------------------------------------------ */
+//
+// `gamePhase.ts` design note #5 establishes that the phase shift and the
+// rust are THE SAME PURCHASE, counted by one number
+// (`purchasesUntilPhaseChange` === `purchasesUntilRust`). These colours are
+// the presentation half of that: two purchases out is orange, one purchase
+// out is crimson. Because both readouts read the same countdown AND the
+// same two constants, they cannot drift into disagreeing about urgency any
+// more than they can disagree about the count.
+//
+// Orange rather than yellow for the two-away step, specifically because
+// yellow/amber is already spent on "look here" and on the Yellow ERA --
+// a yellow rust warning during the Yellow era would be invisible.
+
+/** Two purchases from the phase shift: act soon. */
+export const ALERT_WARN_INK = "#fb923c";
+export const ALERT_WARN_BG = "rgba(249, 115, 22, 0.1)";
+export const ALERT_WARN_BORDER = "rgba(249, 115, 22, 0.3)";
+
+/** One purchase from the phase shift: the next depot buy does it. */
+export const ALERT_CRITICAL_INK = "#fb7185";
+export const ALERT_CRITICAL_BG = "rgba(244, 63, 94, 0.2)";
+export const ALERT_CRITICAL_BORDER = "rgba(244, 63, 94, 0.5)";
+
 /** Positive figures on paper (revenue, gains). */
 export const CARD_INK_POSITIVE = "#1d6b3f";
 /** The president/owner highlight -- dark on gold, never gold on dark. */

@@ -1528,6 +1528,35 @@ export function singleNodeNameplateAnchor(
  *  string when the hex isn't part of the real 93-hex board at all. Used by
  *  the click interceptor (design note #7) to label its popup/loading states
  *  without a round-trip query just to learn a hex's name. */
+/* ==================================================================
+ *  DESIGN NOTE 242: THE DISPLAY NAME IS NOT THE HEX'S IDENTITY
+ * ==================================================================
+ *
+ * `describeHex` below returns a HUMAN STRING -- "New York (G19)", "Altoona
+ * (H12)" -- and it is the right thing for a tooltip, a log line or a
+ * feedback message. It is emphatically not an identifier, and treating it as
+ * one is a bug that hides well: the string contains the real label, so it
+ * looks correct in every message it appears in while failing every lookup
+ * and every wire payload it is passed to.
+ *
+ * That is exactly what happened to the manual route builder. It stored
+ * `describeHex`'s output as its waypoint label, so `sandboxRouteBreakdown`
+ * looked up "New York (G19)" in a table keyed on "G19", missed on every
+ * stop, and priced the whole route at $0 -- while the auto-tracer, which
+ * builds labels from `STATIC_BOARD_HEXES`, priced identical routes
+ * correctly. The same string went into `RunManualRoute`'s `path[].hex`, so
+ * the payload would have been rejected on chain for naming a hex that does
+ * not exist.
+ *
+ * So the two are now separate functions with names that say which is which.
+ * Anything that INDEXES, COMPARES or TRAVELS uses this one.
+ */
+export function boardHexLabel(q: number, r: number): string | null {
+  const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (landmark) return landmark.label;
+  return STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r)?.label ?? null;
+}
+
 export function describeHex(q: number, r: number): string {
   const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
   if (landmark) return `${landmark.name} (${landmark.label})`;

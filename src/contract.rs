@@ -20,8 +20,11 @@
 //!    `JoinGameRoom` alike, at the identical rate and rounding, via the
 //!    shared `subsidy_cut` helper (Audit G-11; entry deposits used to flow
 //!    in untaxed). Only the net reaches the lobby pool that gets redeemed
-//!    proportionally at game end, and `ClaimTimeoutRefund` correspondingly
-//!    refunds each player NET of their own cut -- see design note #13.
+//!    proportionally at game end, and `AnnulGame` correspondingly refunds
+//!    each player NET of their own cut -- see design note #13. Since Step
+//!    4.5 Batch 3 the deposit-splitting itself lives in `escrow.rs`
+//!    (`split_deposit`/`subsidy_cut`); this module only decides WHEN a
+//!    deposit is taken, never how it divides.
 //!    **Uniform Ante Rule:** every joining
 //!    player must attach exactly the same amount the room's creator
 //!    deposited at creation -- not merely a nonzero amount, and no longer
@@ -97,11 +100,14 @@
 //!     `StdResult<Binary>` rather than `Result<Response, ContractError>`,
 //!     matching the standard CosmWasm convention that queries can't emit
 //!     events, messages, or state writes -- only data.
-//! 13. `ClaimTimeoutRefund` (Inactivity Timeout Safety Valve) is callable by
-//!     any currently registered player, not just the room's creator --
-//!     unlike `EndGameAndDistribute`, it's a safety valve for a room no one
-//!     is actively running anymore, not a privileged organizer action. It
-//!     refunds each player their own original real-JUNO ante
+//! 13. `AnnulGame` (Step 4.5 Batch 3, items 2/3 -- replaces the narrower
+//!     `ClaimTimeoutRefund`) is the abort vector, and is callable by the
+//!     room's creator at ANY time or by any currently registered player once
+//!     48 hours have elapsed. Unlike `EndGameAndDistribute` it scores
+//!     nothing: an abandoned or called-off game produced no result, so the
+//!     proportional split is bypassed entirely and each player simply gets
+//!     their money back. It refunds each player their own original
+//!     real-JUNO ante
 //!     (`state::PLAYER_JUNO_ANTE`, populated at `CreateGameRoom`/
 //!     `JoinGameRoom` deposit time) NET of the developer subsidy that was
 //!     taken from it -- never a proportional split of the pool. The net is
@@ -115,9 +121,13 @@
 //!     real JUNO via `BankMsg` and so is deliberately not recorded to
 //!     `GAME_LOG` (`gamelog.rs`'s module doc comment #2).
 
+// `BankMsg`/`Coin` are deliberately absent: after the Step 4.5 Batch 3
+// escrow extraction, this module no longer constructs a single token
+// transfer itself. Every `BankMsg` in the contract is now built inside
+// `escrow.rs`, which is the point of the split.
 use cosmwasm_std::{
-    to_json_binary, Addr, BankMsg, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, Uint128,
+    to_json_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    Uint128,
 };
 use thiserror::Error;
 
@@ -125,6 +135,7 @@ use thiserror::Error;
 use cosmwasm_std::entry_point;
 
 use crate::auction::{self, AuctionError};
+use crate::escrow;
 use crate::gamelog::{self, GameLogError};
 use crate::hardware::{self, HardwareError};
 use crate::hexmap::{self, HexMapError};
@@ -141,17 +152,24 @@ use crate::state::{
 use crate::trading::{self, TradingError};
 use crate::waterfall::{self, WaterfallError};
 
-/// Native denom used for all real-money (lobby pool) operations on Juno.
-pub const NATIVE_DENOM: &str = "ujuno";
+// ===================================================================
+// Step 4.5 Batch 3: real-JUNO handling now lives in `escrow.rs`.
+//
+// These four constants are RE-EXPORTED rather than moved-and-forgotten so
+// that `contract::NATIVE_DENOM` and friends keep resolving for every
+// existing caller -- the test suite, and the frontend's generated schema,
+// both name them through this module. `escrow.rs` is their definition site;
+// this is an alias, and there is only ever one value.
+// ===================================================================
+pub use crate::escrow::{
+    BPS_DENOMINATOR, INACTIVITY_TIMEOUT_SECONDS, MINIMUM_ANTE, NATIVE_DENOM,
+};
 
-/// Basis-point denominator: `subsidy_fee_percentage / BPS_DENOMINATOR` is the
-/// fraction of each creation deposit routed to the developer treasury.
-pub const BPS_DENOMINATOR: u128 = 10_000;
-
-/// Inactivity Timeout Safety Valve threshold, in seconds (48 hours). See
-/// `state.rs`'s `GameSession::last_action_timestamp` doc comment and
-/// `execute_claim_timeout_refund`.
-pub const INACTIVITY_TIMEOUT_SECONDS: u64 = 172_800;
+// Same reasoning: `trading.rs`, `operations.rs` and `hardware.rs` all reach
+// the $350 Game-End Trigger through `crate::contract::finalize_and_distribute_payouts`.
+// Re-exporting keeps those four call sites working unchanged while the
+// definition sits with the rest of the payout machinery.
+pub(crate) use crate::escrow::finalize_and_distribute_payouts;
 
 /// Total starting VGP capital pool, split evenly across a room's declared
 /// `GameSession::max_players` (the classic 1830 endowment: $1200 for 2
@@ -227,6 +245,18 @@ pub enum ContractError {
     #[error("Deposit amount must be greater than zero")]
     ZeroDeposit {},
 
+    /// **Step 4.5 Batch 3, item 4: the Ante Floor.** The deposit opening a
+    /// room was below `escrow::MINIMUM_ANTE`. Deliberately DISTINCT from
+    /// `InvalidAnteAmount` just below, which is the Uniform Ante Rule's
+    /// exact-match check on a JOINER. The two fail for genuinely different
+    /// reasons -- "you did not stake enough to open a table anyone could
+    /// finish" versus "you did not match this table's stake" -- and a client
+    /// needs to tell them apart to say anything useful to the player.
+    #[error(
+        "A deposit of at least {minimum} ujuno is required to open a game room; {got} ujuno was attached"
+    )]
+    InsufficientAnte { minimum: Uint128, got: Uint128 },
+
     #[error(
         "Game room {game_id} requires an ante of exactly {expected} ujuno to join, matching the room creator's own deposit; {got} ujuno was attached instead"
     )]
@@ -240,7 +270,7 @@ pub enum ContractError {
     NotAPlayer { game_id: u64, player: String },
 
     #[error(
-        "Game room {game_id} has had a qualifying action within the last {timeout_seconds} seconds; ClaimTimeoutRefund is not yet available"
+        "Game room {game_id} has had a qualifying action within the last {timeout_seconds} seconds; only the room creator may annul it before that window elapses"
     )]
     TimeoutNotYetElapsed { game_id: u64, timeout_seconds: u64 },
 
@@ -297,7 +327,7 @@ pub fn execute(
         } => execute_create_game_room(deps, env, info, virtual_bank_start, max_players),
         ExecuteMsg::JoinGameRoom { game_id } => execute_join_game_room(deps, env, info, game_id),
         ExecuteMsg::EndGameAndDistribute { game_id } => {
-            execute_end_game_and_distribute(deps, env, info, game_id)
+            escrow::execute_end_game_and_distribute(deps, env, info, game_id)
         }
         // The six arms below are the Event-Sourced Ledger's "loggable" set
         // (see `gamelog.rs` module doc comment #1): each dispatches to its
@@ -314,6 +344,7 @@ pub fn execute(
             protocol_id,
             source,
             par_value,
+            quantity,
         } => {
             let response = trading::execute_buy_stock(
                 deps.branch(),
@@ -323,6 +354,7 @@ pub fn execute(
                 protocol_id,
                 source,
                 par_value,
+                quantity,
             )?;
             gamelog::record_action(
                 deps.storage,
@@ -332,6 +364,12 @@ pub fn execute(
                     protocol_id,
                     source,
                     par_value,
+                    // Step 4.5 Batch 1, item 1: the quantity is recorded
+                    // verbatim so `reapply_game_log` re-buys the same block
+                    // in one action rather than replaying it as N separate
+                    // single purchases -- which would matter, since a
+                    // multi-buy's certificates all settle at one price.
+                    quantity,
                 },
             )?;
             Ok(response)
@@ -461,7 +499,7 @@ pub fn execute(
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id,
-            hex_path,
+            path,
             payout_strategy,
         } => operations::execute_run_manual_route(
             deps,
@@ -469,7 +507,7 @@ pub fn execute(
             info,
             game_id,
             protocol_id,
-            hex_path,
+            path,
             payout_strategy,
         )
         .map_err(Into::into),
@@ -675,12 +713,17 @@ pub fn execute(
         ExecuteMsg::UndoLastAction { game_id } => {
             gamelog::execute_undo_last_action(deps, env, info, game_id).map_err(Into::into)
         }
-        // Not recorded to `GAME_LOG` -- like `CreateGameRoom`/`JoinGameRoom`/
-        // `EndGameAndDistribute`, this moves real JUNO via `BankMsg`, which
-        // the Event-Sourced Ledger deliberately excludes (see `gamelog.rs`'s
-        // module doc comment #2).
-        ExecuteMsg::ClaimTimeoutRefund { game_id } => {
-            execute_claim_timeout_refund(deps, env, info, game_id)
+        // Step 4.5 Batch 3, items 2/3. Not recorded to `GAME_LOG` -- like
+        // `CreateGameRoom`/`JoinGameRoom`/`EndGameAndDistribute`, this moves
+        // real JUNO via `BankMsg`, which the Event-Sourced Ledger
+        // deliberately excludes (see `gamelog.rs`'s module doc comment #2).
+        //
+        // This arm replaced `ClaimTimeoutRefund`, which was a narrower
+        // version of the same thing (timeout only, no creator path). One
+        // abort vector, so the refund rules cannot drift between two
+        // handlers -- see `escrow.rs`'s module doc comment.
+        ExecuteMsg::AnnulGame { game_id } => {
+            escrow::execute_annul_game(deps, env, info, game_id)
         }
         // Pre-Game Waterfall Auction actions -- none of these five are
         // recorded to `GAME_LOG`/given an `ActionRecord` variant, for the
@@ -784,19 +827,25 @@ fn execute_create_game_room(
 
     let config = CONFIG.load(deps.storage)?;
 
-    // Exactly one non-zero coin of the native denom is required to fund the
-    // lobby pool at creation time.
-    let deposit_amount = require_native_deposit(&info)?;
+    // Exactly one non-zero coin of the native denom, split into the
+    // developer subsidy and the net that reaches the pool -- one shared
+    // intake path with room ENTRY below, so a deposit can never be valued
+    // one way here and another there (Audit G-11, now `escrow::split_deposit`).
+    let deposit = escrow::split_deposit(&info, config.subsidy_fee_percentage)?;
+    let deposit_amount = deposit.gross;
+    let subsidy_amount = deposit.subsidy;
+    let net_pool_amount = deposit.net_pool;
 
-    // subsidy = deposit * subsidy_fee_percentage / BPS_DENOMINATOR, using
-    // only checked, deterministic Uint128 math (no floats). Shared with
-    // room ENTRY and the inactivity refund since Audit G-11 -- see
-    // `subsidy_cut`.
-    let subsidy_amount = subsidy_cut(deposit_amount, config.subsidy_fee_percentage)?;
-
-    let net_pool_amount = deposit_amount
-        .checked_sub(subsidy_amount)
-        .map_err(|_| ContractError::Overflow {})?;
+    // Step 4.5 Batch 3, item 4: the Ante Floor. Checked on the GROSS
+    // deposit, before the subsidy is taken -- the floor is about what a
+    // player must actually stake to open a table, not what survives the fee.
+    //
+    // Checked HERE and nowhere else, because this deposit becomes the room's
+    // `room_ante` and every joiner is then held to it exactly; clearing the
+    // floor once at creation transitively guarantees it for the whole table.
+    // See `escrow::MINIMUM_ANTE` for why the real, gas-aware figure is the
+    // frontend's job and this is only a safety net.
+    escrow::require_minimum_ante(deposit_amount)?;
 
     let game_id = NEXT_GAME_ID.load(deps.storage)?;
     let next_game_id = game_id.checked_add(1).ok_or(ContractError::Overflow {})?;
@@ -805,6 +854,10 @@ fn execute_create_game_room(
         game_id,
         creator: info.sender.clone(),
         total_juno_pool: net_pool_amount,
+        // Step 4.5 Batch 3, item 4: the GROSS deposit, not the net. The
+        // Uniform Ante Rule compares what a player actually sends, not what
+        // survives the subsidy -- see `execute_join_game_room`.
+        room_ante: deposit_amount,
         virtual_bank_vgp: virtual_bank_start,
         // Immutable genesis baseline `reapply_game_log` resets
         // `virtual_bank_vgp` back to on every `UndoLastAction` replay --
@@ -819,6 +872,8 @@ fn execute_create_game_room(
         // enforcement currently reaches.
         active_player_index: 0,
         priority_deal_index: 0,
+        // Step 4.5 Batch 4: no Stock Round has begun, so nobody has acted.
+        last_active_player_index: None,
         consecutive_passes: 0,
         // Tech Era Color-Locking (see `hexmap.rs`'s module doc comment
         // #8): every room starts with only Yellow tiles unlocked.
@@ -869,7 +924,7 @@ fn execute_create_game_room(
 
     // Inactivity Timeout Safety Valve refund ledger (see
     // `state::PLAYER_JUNO_ANTE`'s doc comment): records exactly what the
-    // creator personally deposited, so `execute_claim_timeout_refund` can
+    // creator personally deposited, so `escrow::execute_annul_game` can
     // send it back to them specifically if the room is ever abandoned.
     PLAYER_JUNO_ANTE.save(
         deps.storage,
@@ -915,14 +970,10 @@ fn execute_create_game_room(
         .add_attribute("starting_cash_vgp", starting_cash);
 
     // Route the subsidy cut to the developer treasury for gas-fee grants.
-    if !subsidy_amount.is_zero() {
-        response = response.add_message(BankMsg::Send {
-            to_address: config.developer_treasury.to_string(),
-            amount: vec![Coin {
-                denom: NATIVE_DENOM.to_string(),
-                amount: subsidy_amount,
-            }],
-        });
+    // Built by `escrow::subsidy_transfer`, which returns `None` for a
+    // zero cut -- a chain rejects a `BankMsg::Send` carrying no coins.
+    if let Some(transfer) = escrow::subsidy_transfer(&config.developer_treasury, subsidy_amount) {
+        response = response.add_message(transfer);
     }
 
     Ok(response)
@@ -989,8 +1040,27 @@ fn execute_join_game_room(
     // check deliberately runs BEFORE the subsidy is taken (G-11 below), so
     // "every player antes the same amount" keeps meaning what a player
     // actually sends, not what survives the fee.
-    let required_ante = PLAYER_JUNO_ANTE.load(deps.storage, (game_id, session.creator.clone()))?;
-    let joined_amount = require_native_deposit(&info)?;
+    //
+    // Step 4.5 Batch 3, item 4: the figure compared against is now
+    // `GameSession::room_ante` -- written once, at room creation, from the
+    // creator's own deposit. It used to be re-read out of the creator's
+    // `PLAYER_JUNO_ANTE` entry on every join, which produced the same number
+    // but made the room's stake an incidental consequence of one player's
+    // ledger row rather than a property of the room. `room_ante` says what it
+    // is. (The old lookup is kept as a fallback for rooms created before this
+    // field existed, where `#[serde(default)]` reads it as zero.)
+    let required_ante = if session.room_ante.is_zero() {
+        PLAYER_JUNO_ANTE.load(deps.storage, (game_id, session.creator.clone()))?
+    } else {
+        session.room_ante
+    };
+
+    // Audit G-11: the developer gas subsidy applies to room ENTRY, not just
+    // room creation -- same `escrow::split_deposit` intake, so a joiner and
+    // the creator who sent the same gross amount are taxed identically.
+    let config = CONFIG.load(deps.storage)?;
+    let deposit = escrow::split_deposit(&info, config.subsidy_fee_percentage)?;
+    let joined_amount = deposit.gross;
     if joined_amount != required_ante {
         return Err(ContractError::InvalidAnteAmount {
             game_id,
@@ -998,17 +1068,8 @@ fn execute_join_game_room(
             got: joined_amount,
         });
     }
-
-    // Audit G-11: the developer gas subsidy now applies to room ENTRY, not
-    // just room creation. Identical formula and identical rounding to
-    // `execute_create_game_room`'s own cut -- `subsidy_fee_percentage /
-    // BPS_DENOMINATOR`, floor-divided -- so a joiner and the creator who
-    // sent the same gross amount are taxed exactly the same.
-    let config = CONFIG.load(deps.storage)?;
-    let subsidy_amount = subsidy_cut(joined_amount, config.subsidy_fee_percentage)?;
-    let net_pool_amount = joined_amount
-        .checked_sub(subsidy_amount)
-        .map_err(|_| ContractError::Overflow {})?;
+    let subsidy_amount = deposit.subsidy;
+    let net_pool_amount = deposit.net_pool;
 
     session.total_juno_pool = session
         .total_juno_pool
@@ -1040,18 +1101,12 @@ fn execute_join_game_room(
         .add_attribute("total_juno_pool", session.total_juno_pool)
         .add_attribute("starting_cash_vgp", starting_cash);
 
-    // Route this joiner's subsidy cut to the developer treasury, exactly as
-    // room creation already does. State is fully written above before any
-    // message is dispatched, per `juno_developer_spec.md`'s reentrancy
-    // guidance.
-    if !subsidy_amount.is_zero() {
-        response = response.add_message(BankMsg::Send {
-            to_address: config.developer_treasury.to_string(),
-            amount: vec![Coin {
-                denom: NATIVE_DENOM.to_string(),
-                amount: subsidy_amount,
-            }],
-        });
+    // Route this joiner's subsidy cut to the developer treasury, through the
+    // exact same `escrow::subsidy_transfer` room creation uses. State is
+    // fully written above before any message is dispatched, per
+    // `juno_developer_spec.md`'s reentrancy guidance.
+    if let Some(transfer) = escrow::subsidy_transfer(&config.developer_treasury, subsidy_amount) {
+        response = response.add_message(transfer);
     }
 
     Ok(response)
@@ -1218,321 +1273,12 @@ pub(crate) fn appraise_player_net_worth(
     Ok(appraise_player_net_worth_breakdown(deps, game_id, player_addr)?.net_worth)
 }
 
-/// Closes out an active game room and redeems the real-JUNO lobby pool
-/// proportionally against each player's final VGP net worth -- computed
-/// entirely on-chain by `appraise_player_net_worth`, never accepted as
-/// caller input. See this module's doc comment (design note #5) for why:
-/// an earlier version of this handler took a `final_player_points` list
-/// directly from the caller, which meant a buggy or malicious client's
-/// numbers -- not this contract's own ledger -- decided how the real JUNO
-/// pool split.
-///
-/// This is a thin authorization wrapper around the shared
-/// `finalize_and_distribute_payouts` core: load the room, confirm it's
-/// still active, confirm the caller is the room's creator, then hand off.
-/// See that function's own doc comment for why the shared core lives here
-/// and returns a plain `StdResult` rather than `ContractError`.
-fn execute_end_game_and_distribute(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    game_id: u64,
-) -> Result<Response, ContractError> {
-    let session = SESSIONS
-        .may_load(deps.storage, game_id)?
-        .ok_or(ContractError::GameNotFound { game_id })?;
-
-    if !session.is_active {
-        return Err(ContractError::GameNotActive { game_id });
-    }
-
-    // Only the room creator (the lobby's Validator/organizer) may finalize
-    // and trigger payout via this message -- contrast the automatic $350
-    // Game-End Trigger (`finalize_and_distribute_payouts`'s other caller),
-    // which is a rules-mandated event with no single authorizing player.
-    if info.sender != session.creator {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    Ok(finalize_and_distribute_payouts(deps, game_id, session)?)
-}
-
-/// Shared close-out core for both the room-creator-invoked
-/// `EndGameAndDistribute` message (`execute_end_game_and_distribute` above)
-/// and the automatic $350 Game-End Trigger (`market::GAME_END_PRICE_TRIGGER`,
-/// checked in `trading::execute_buy_stock`/`execute_declare_dividends` and
-/// `operations::execute_operating_round` immediately after any ascending
-/// market movement -- see `market.rs`'s module doc comment for the full
-/// design/sourcing note on why $350 is this project's own explicit house
-/// rule). Sums every registered player's final VGP net worth fresh from
-/// this room's own on-chain ledger (`appraise_player_net_worth`), splits
-/// the real-JUNO lobby pool proportionally, marks the room inactive, and
-/// returns the payout `Response` for the caller to use directly or fold
-/// into a larger one.
-///
-/// Takes an already-loaded `session` by value and performs NO
-/// authorization check itself -- both callers already did their own
-/// (the creator-only check above, or the automatic trigger's "this is a
-/// rules-mandated event, not a player-invoked action" reasoning) before
-/// reaching here.
-///
-/// Returns a plain `StdResult<Response>` rather than `ContractError`
-/// specifically so `trading::TradingError`/`operations::OperationsError`
-/// callers -- which have no `From<ContractError>` conversion, matching
-/// this crate's error-enum convention of only ever depending "downward"
-/// from `contract.rs` into the feature modules, never the reverse -- can
-/// propagate it via their own existing `Std(#[from] StdError)` variant
-/// with a plain `.map_err(...)?` rather than a new cross-module `From` impl.
-pub(crate) fn finalize_and_distribute_payouts(
-    deps: DepsMut,
-    game_id: u64,
-    mut session: GameSession,
-) -> StdResult<Response> {
-    // Every registered player's final VGP net worth, computed fresh from
-    // this room's own ledger -- see `appraise_player_net_worth`. Takes
-    // `deps.as_ref()` because the appraiser is read-only and shared with
-    // the `Deps`-only query layer (`query::query_player_net_worth`); the
-    // immutable borrow ends with each call, leaving `deps.storage` free
-    // for the mutable `SESSIONS.save` further down.
-    let mut player_points: Vec<(Addr, Uint128)> =
-        Vec::with_capacity(session.player_addresses.len());
-    let mut total_vgp = Uint128::zero();
-    for player in session.player_addresses.iter() {
-        let net_worth = appraise_player_net_worth(deps.as_ref(), game_id, player)
-            .map_err(|e| StdError::generic_err(e.to_string()))?;
-        total_vgp = total_vgp
-            .checked_add(net_worth)
-            .map_err(|_| StdError::generic_err("overflow summing player net worth"))?;
-        player_points.push((player.clone(), net_worth));
-    }
-
-    if total_vgp.is_zero() {
-        return Err(StdError::generic_err(
-            "total VGP points across all players is zero; cannot compute a proportional payout",
-        ));
-    }
-
-    let pool = session.total_juno_pool;
-    let mut messages = Vec::with_capacity(player_points.len());
-    let mut distributed = Uint128::zero();
-
-    for (addr, points) in player_points.iter() {
-        // payout = pool * player_points / total_vgp -- each player's
-        // proportional percentage of total wealth applied to the real
-        // JUNO pool, using checked fixed-point Uint128 math throughout.
-        let payout = pool
-            .checked_mul(*points)
-            .map_err(|_| StdError::generic_err("overflow computing payout"))?
-            .checked_div(total_vgp)
-            .map_err(|_| StdError::generic_err("overflow computing payout"))?;
-
-        distributed = distributed
-            .checked_add(payout)
-            .map_err(|_| StdError::generic_err("overflow computing payout"))?;
-
-        if !payout.is_zero() {
-            messages.push(BankMsg::Send {
-                to_address: addr.to_string(),
-                amount: vec![Coin {
-                    denom: NATIVE_DENOM.to_string(),
-                    amount: payout,
-                }],
-            });
-        }
-    }
-
-    // Integer division can leave a small remainder undistributed; sweep it
-    // to the developer treasury so it never sits stranded in contract state.
-    let dust = pool
-        .checked_sub(distributed)
-        .map_err(|_| StdError::generic_err("overflow computing dust"))?;
-    if !dust.is_zero() {
-        let config = CONFIG.load(deps.storage)?;
-        messages.push(BankMsg::Send {
-            to_address: config.developer_treasury.to_string(),
-            amount: vec![Coin {
-                denom: NATIVE_DENOM.to_string(),
-                amount: dust,
-            }],
-        });
-    }
-
-    // State is finalized before any BankMsg is dispatched, consistent with
-    // the reentrancy guidance in juno_developer_spec.md. This is also
-    // exactly what "halt all further player turns" means in practice: every
-    // gameplay handler in this crate checks `session.is_active` first thing
-    // (see `trading.rs`/`operations.rs`/this module), so flipping it here
-    // rejects every subsequent action regardless of whatever the turn
-    // pointer nominally says.
-    session.is_active = false;
-    session.total_juno_pool = Uint128::zero();
-    SESSIONS.save(deps.storage, game_id, &session)?;
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .add_attribute("action", "end_game_and_distribute")
-        .add_attribute("game_id", game_id.to_string())
-        .add_attribute("total_juno_pool_distributed", distributed)
-        .add_attribute("dust_swept_to_treasury", dust))
-}
-
-/// Inactivity Timeout Safety Valve: closes an abandoned game room and
-/// refunds every registered player their own real-JUNO ante NET of the
-/// developer subsidy that was taken from it -- i.e. exactly the amount
-/// their deposit actually contributed to `total_juno_pool` -- rather than a
-/// proportional split, unlike `execute_end_game_and_distribute`.
-///
-/// **Solvency (Audit G-11).** `PLAYER_JUNO_ANTE` records each player's
-/// GROSS deposit, but the subsidy cut is forwarded to the developer
-/// treasury the moment it is taken, so only the net ever reaches the pool.
-/// Refunding the gross therefore tried to pay out more than the room
-/// holds. That shortfall already existed for the room creator (whose
-/// deposit has always been taxed) and taxing joiners too would have
-/// multiplied it by the player count. Each refund is now
-/// `ante - subsidy_cut(ante)`, so the refunds sum to exactly
-/// `total_juno_pool` and the room can never overdraw the contract's
-/// balance. Requires
-/// `env.block.time.seconds() > session.last_action_timestamp +
-/// INACTIVITY_TIMEOUT_SECONDS` (48 hours since the room's last qualifying
-/// state-advancing action -- see `state.rs`'s `GameSession::last_action_timestamp`
-/// doc comment for exactly which actions refresh it). Callable by any
-/// currently registered player, not just the room's creator, since this is
-/// a safety valve for a room nobody is actively running anymore, not a
-/// privileged administrative action.
-fn execute_claim_timeout_refund(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    game_id: u64,
-) -> Result<Response, ContractError> {
-    let mut session = SESSIONS
-        .may_load(deps.storage, game_id)?
-        .ok_or(ContractError::GameNotFound { game_id })?;
-
-    if !session.is_active {
-        return Err(ContractError::GameNotActive { game_id });
-    }
-
-    if !session.player_addresses.contains(&info.sender) {
-        return Err(ContractError::NotAPlayer {
-            game_id,
-            player: info.sender.to_string(),
-        });
-    }
-
-    let timeout_at = session
-        .last_action_timestamp
-        .checked_add(INACTIVITY_TIMEOUT_SECONDS)
-        .ok_or(ContractError::Overflow {})?;
-    if env.block.time.seconds() <= timeout_at {
-        return Err(ContractError::TimeoutNotYetElapsed {
-            game_id,
-            timeout_seconds: INACTIVITY_TIMEOUT_SECONDS,
-        });
-    }
-
-    // State is finalized before any BankMsg is dispatched, consistent with
-    // the reentrancy guidance in juno_developer_spec.md (same pattern as
-    // `execute_end_game_and_distribute`).
-    session.is_active = false;
-    session.total_juno_pool = Uint128::zero();
-    SESSIONS.save(deps.storage, game_id, &session)?;
-
-    // Refund each player exactly their own original ante -- never a
-    // recomputed or proportional split -- read straight from
-    // `PLAYER_JUNO_ANTE`, defaulting to zero for a (registered but never
-    // funded) player who joined without attaching any coin.
-    let config = CONFIG.load(deps.storage)?;
-    let mut messages = Vec::with_capacity(session.player_addresses.len());
-    let mut total_refunded = Uint128::zero();
-    let mut total_subsidy_withheld = Uint128::zero();
-    for player in session.player_addresses.iter() {
-        let ante = PLAYER_JUNO_ANTE
-            .may_load(deps.storage, (game_id, player.clone()))?
-            .unwrap_or_default();
-        if ante.is_zero() {
-            continue;
-        }
-
-        // Audit G-11: refund the NET contribution, not the gross ante --
-        // the subsidy cut left the contract for the developer treasury at
-        // deposit time and was never part of this room's pool. Recomputed
-        // from the same immutable `subsidy_fee_percentage` that took it;
-        // see `subsidy_cut`'s own doc comment for why that is safe.
-        let withheld = subsidy_cut(ante, config.subsidy_fee_percentage)?;
-        let refund = ante
-            .checked_sub(withheld)
-            .map_err(|_| ContractError::Overflow {})?;
-        total_subsidy_withheld = total_subsidy_withheld
-            .checked_add(withheld)
-            .map_err(|_| ContractError::Overflow {})?;
-        if refund.is_zero() {
-            continue;
-        }
-
-        total_refunded = total_refunded
-            .checked_add(refund)
-            .map_err(|_| ContractError::Overflow {})?;
-        messages.push(BankMsg::Send {
-            to_address: player.to_string(),
-            amount: vec![Coin {
-                denom: NATIVE_DENOM.to_string(),
-                amount: refund,
-            }],
-        });
-    }
-
-    Ok(Response::new()
-        .add_messages(messages)
-        .add_attribute("action", "claim_timeout_refund")
-        .add_attribute("game_id", game_id.to_string())
-        .add_attribute("claimed_by", info.sender)
-        .add_attribute("total_refunded", total_refunded)
-        .add_attribute("total_subsidy_withheld", total_subsidy_withheld))
-}
-
-/// Requires `info.funds` to contain exactly one non-zero coin of
-/// `NATIVE_DENOM`, returning its amount. Used for room-creation deposits,
-/// which must always be funded.
-/// The developer gas-subsidy cut taken from a real-JUNO deposit:
-/// `deposit * subsidy_fee_percentage / BPS_DENOMINATOR`, floor-divided,
-/// using only checked deterministic `Uint128` math (no floats).
-///
-/// Extracted (Audit G-11) so room creation, room entry, and the inactivity
-/// refund all compute the identical figure from the identical formula --
-/// previously creation had this inline and nothing else could reuse it.
-///
-/// `GameConfig::subsidy_fee_percentage` is written once, at `instantiate`,
-/// and never updated anywhere in this contract, so re-deriving a past
-/// deposit's cut at refund time always reproduces the exact value that was
-/// taken at deposit time. If a config-update handler is ever added, this
-/// assumption breaks and the refund path below must store the net figure
-/// instead of recomputing it.
-fn subsidy_cut(
-    deposit: Uint128,
-    subsidy_fee_percentage: u64,
-) -> Result<Uint128, ContractError> {
-    deposit
-        .checked_mul(Uint128::from(subsidy_fee_percentage))
-        .map_err(|_| ContractError::Overflow {})?
-        .checked_div(Uint128::from(BPS_DENOMINATOR as u64))
-        .map_err(|_| ContractError::Overflow {})
-}
-
-fn require_native_deposit(info: &MessageInfo) -> Result<Uint128, ContractError> {
-    if info.funds.len() != 1 {
-        return Err(ContractError::InvalidDeposit {
-            expected_denom: NATIVE_DENOM.to_string(),
-        });
-    }
-    let coin = &info.funds[0];
-    if coin.denom != NATIVE_DENOM {
-        return Err(ContractError::InvalidDeposit {
-            expected_denom: NATIVE_DENOM.to_string(),
-        });
-    }
-    if coin.amount.is_zero() {
-        return Err(ContractError::ZeroDeposit {});
-    }
-    Ok(coin.amount)
-}
+// ===================================================================
+// MOVED to `escrow.rs` (Step 4.5 Batch 3): `execute_end_game_and_distribute`,
+// `finalize_and_distribute_payouts`, `execute_claim_timeout_refund` (now
+// `execute_annul_game`), `subsidy_cut` and `require_native_deposit`.
+//
+// Everything that moves real JUNO now lives in one module. See `escrow.rs`'s
+// own doc comment for the boundary rule and for why annulment is a
+// separate machine from payout.
+// ===================================================================

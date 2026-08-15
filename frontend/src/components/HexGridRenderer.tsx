@@ -23,7 +23,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import {
+  tileCitySlotCounts,
   tileCitySlotPoints,
+  tileCityTokenRadius,
 } from "./TileGraphics";
 // Monolith split, Phase 1. Imported under their own names because this file's
 // own code refers to them unqualified throughout; the matching
@@ -50,6 +52,9 @@ import {
   GULF_HIDDEN_EDGE,
   HEX_START_VALUE_OVERRIDE,
   IMPASSABLE_BORDER_EDGES,
+  LAY_TRACK_DIM_ALPHA,
+  LAY_TRACK_DIM_INK,
+  LAY_TRACK_HIGHLIGHT_INK,
   LANDMARK_HEXES,
   LANDMARK_TRACKS,
   NAMED_HEX_LABELS,
@@ -78,6 +83,7 @@ import {
 import {
   archetypeForHex,
   axialToPixel,
+  boardHexLabel,
   claimHexSlotPreferring,
   deadEdgesAt,
   describeHex,
@@ -253,13 +259,114 @@ export interface HexGridRendererProps {
    *  building a manual route had no visual confirmation of the path they were
    *  assembling. */
   routeOverlays?: readonly RouteOverlay[];
+  /* ==================================================================
+   *  DESIGN NOTE 223: THE WILD BLUE YONDER
+   * ==================================================================
+   *
+   * REPORTED BUG: "players can currently click anywhere to lay track."
+   *
+   * They could. The click path's only board-level gate is
+   * `evaluateHexForTileLaying`, which answers a STATIC question -- is this a
+   * real hex, and is it the kind of hex a tile may ever go on -- and knows
+   * nothing about the corporation doing the laying. So every buildable hex
+   * on the board opened the picker, including ones on the far side of the
+   * map from any track the company owns.
+   *
+   * When this set is supplied the board renders 18xx.games-style: hexes the
+   * acting corporation's network reaches keep their normal brightness and
+   * take a highlight ring, everything else is veiled, and a click outside
+   * the set is reported as `"blocked"` with a reason rather than opening a
+   * picker the contract would refuse.
+   *
+   * KEYED `"q,r"`, matching `utils/trackReach.ts`'s `hexKey`. A `Set` rather
+   * than an array because the draw loop tests every hex on the board on
+   * every frame, and a linear scan per hex is quadratic on a 100-hex map.
+   *
+   * OMITTED means NO DIMMING AND NO GATE -- the previous behaviour exactly.
+   * That is what every phase other than Lay Track passes, and what Lay Track
+   * itself passes when the corporation's reach cannot be determined (see
+   * `LayableHexResult.unconstrained`): a board dimmed on a guess would take
+   * the map away from the player over missing data. */
+  /* ==================================================================
+   *  DESIGN NOTE 241: THREE TIERS, NOT TWO
+   * ==================================================================
+   *
+   * This was a single `ReadonlySet` of legal hexes: anything in it kept its
+   * brightness, everything else was veiled. Two reports came out of that
+   * shape and both are about the same missing tier.
+   *
+   *   THE NETWORK VANISHED. A player choosing where to extend is reasoning
+   *   about the route the extension joins -- and that route was in the dark,
+   *   because it is not itself a legal target. `visible` is the fix: the
+   *   corporation's own track stays lit alongside the placements.
+   *
+   *   THE HIGHLIGHT WAS A BORDER. A crisp green ring reads as a hard UI
+   *   chrome element stamped over the cardboard. `highlighted` still marks
+   *   the legal set, but it is drawn as a soft bloom (see the draw pass) so
+   *   it reads as the board glowing rather than as a box drawn on it.
+   *
+   * `highlighted` MUST BE A SUBSET OF `visible` -- a hex that is legal but
+   * dimmed would be the worst of both. The caller unions them rather than
+   * this asserting it, since the caller is the one with both sets in hand.
+   */
+  /* ==================================================================
+   *  DESIGN NOTE 269: ONE THING ON A HEX AT A TIME
+   * ==================================================================
+   *
+   * REPORTED: clicking a hex during Lay Track opens the tile selector AND
+   * leaves the hover tooltip sitting on top of it.
+   *
+   * Both are anchored to the same hex, so they do not merely overlap by
+   * accident -- they are drawn at the same point by design, one over the
+   * other. The tooltip is also the less useful of the two by a distance:
+   * it names a hex the player has just deliberately clicked, and the
+   * selector directly above it already says which hex it is for.
+   *
+   * The tooltip is HOVER state, and the picker is a MODAL surface, so the
+   * renderer cannot work this out for itself: the ring is mounted by
+   * `App.tsx`, outside this component. Hence a prop rather than internal
+   * logic -- the owner of the modal is the only one who knows it is open.
+   *
+   * `handlePointerMove` refuses to set the tooltip while this is on, and an
+   * effect clears any tooltip already showing when it goes on. Both are
+   * needed: the first stops it reappearing on the next mouse move, the
+   * second removes the one that was on screen at the moment of the click. */
+  suppressHoverTooltip?: boolean;
+  layFocus?: {
+    /** Not dimmed: the corporation's network plus its legal targets. */
+    visible: ReadonlySet<string>;
+    /** Softly glowed, and the only hexes the picker will open on. */
+    highlighted: ReadonlySet<string>;
+    /** Design note #252: the glow's colour -- the acting corporation's, so
+     *  the board, the toolbar and the route line agree about whose turn it
+     *  is. Omitted falls back to the neutral highlight ink. */
+    glowColor?: string;
+  };
+  /** Design note #159: the pointer's meaning right now.
+   *
+   *  `"token"` puts the canvas in station-token targeting mode: a crosshair
+   *  cursor, so the board visibly stops being a place you click to lay
+   *  track and becomes a place you click to drop a token. A mode with no
+   *  cursor change is a mode players forget they are in, and then every
+   *  subsequent click does something they did not intend. */
+  cursorMode?: "default" | "token";
   /** Fired synchronously on every genuine hex click, before the
    *  `GetLegalTilePlacements` query (if enabled) resolves -- lets the host
    *  app position a popup immediately instead of waiting on the network. */
   onHexClick?: (info: {
+    /** Design note #171: the hex's centre in canvas-CSS pixels, already
+     *  through the live pan/zoom transform. Anchor in-situ UI to THIS, not
+     *  to the cursor. */
+    centroidX: number;
+    centroidY: number;
     q: number;
     r: number;
+    /** The HUMAN name -- "New York (G19)". For messages, never for lookups
+     *  or wire payloads; see `boardHexLabel`'s design note #242. */
     hexLabel: string;
+    /** The hex's canonical board label -- "G19". `null` for a coordinate
+     *  that is not a real board hex. THIS is the identifier. */
+    boardLabel: string | null;
     clientX: number;
     clientY: number;
   }) => void;
@@ -488,6 +595,9 @@ export function HexGridRenderer({
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
   routeOverlays = EMPTY_ROUTE_OVERLAYS,
+  cursorMode = "default",
+  suppressHoverTooltip = false,
+  layFocus,
 }: HexGridRendererProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -844,6 +954,19 @@ export function HexGridRenderer({
     // a DoubleCity hex used to make.
     for (const hex of STATIC_BOARD_HEXES) {
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
+      // Design note #150: A LAID TILE COVERS THE PREPRINT.
+      //
+      // On the physical board a tile is a piece of cardboard placed ON TOP
+      // of the printed hex; the mountain artwork underneath is not visible
+      // through it. This renderer drew both, so a tiled mountain showed the
+      // tile's track AND the mountain icon it was supposedly covering.
+      //
+      // The `isComplexHex` test below already skipped most tiled hexes as a
+      // side effect (a laid tile has live edges), but only incidentally --
+      // it is asking "is this hex visually busy", not "is it covered". The
+      // explicit check states the actual rule, and covers the case the
+      // incidental one missed.
+      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isComplexHex =
@@ -888,15 +1011,25 @@ export function HexGridRenderer({
     // pass already paints the correct fill); only the dashed white outline
     // -- which still usefully flags "this hex is a landmark station",
     // unrelated to fill color uniformity -- remains here.
-    for (const landmark of LANDMARK_HEXES) {
-      const center = axialToPixel(landmark.q, landmark.r, hexSize);
-      drawHexPath(ctx, center, hexSize);
-      ctx.setLineDash([6, 4]);
-      ctx.strokeStyle = "#ffffff88";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
+    /* REMOVED (design note #160): the dashed white perimeter this loop drew
+       around Boston, Baltimore and New York.
+
+       It was the last survivor of a treatment whose other half -- the
+       per-landmark translucent fill -- the comment above records being
+       deleted for making these three hexes look unlike every other
+       preprinted yellow hex. The outline had exactly the same effect for
+       exactly the same reason: G19/E23/I15 are ordinary preprinted yellow
+       hexes that happen to carry a letter code, and ringing them in dashes
+       drew a distinction the board itself does not make.
+
+       Dashes also already MEAN something else in this renderer -- both other
+       users are "provisional": the ghost tile preview and
+       `drawUnknownTilePlaceholder`. A permanent feature drawn in the
+       provisional idiom reads as unfinished.
+
+       Nothing is lost. The "B"/"NY" corner restriction badges still mark
+       these hexes, say WHICH code each carries rather than merely that one
+       exists, and persist across every tier (design note #49). */
 
     // ---- Every laid tile: fill, outline, and its decoded track path.
     // Landmark hexes (New York/Boston/Baltimore) skip the generic
@@ -1003,7 +1136,9 @@ export function HexGridRenderer({
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
-        drawLandmarkTrack(ctx, center, hexSize, LANDMARK_TRACKS[landmark.name] ?? []);
+        // Design note #211: keyed on the hex LABEL, which is what the
+        // printed artwork catalog is authored against.
+        drawLandmarkTrack(ctx, center, hexSize, landmark.label);
       });
     }
 
@@ -1031,15 +1166,27 @@ export function HexGridRenderer({
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
-        drawPrintedTrack(ctx, center, hexSize, grayTrack.edges, grayTrack.marker, grayTrack.bypass);
+        drawPrintedTrack(ctx, center, hexSize, hex.label);
       });
     }
 
-    // ---- Pre-printed yellow "OO" double-city hexes, always drawn (see
-    // design note #12) -- two independent station circles, no connecting
-    // track (the real board prints none there either).
+    // ---- Pre-printed yellow "OO" double-city hexes (see design note #12)
+    // -- two independent station circles, no connecting track (the real
+    // board prints none there either).
     for (const hex of STATIC_BOARD_HEXES) {
       if (!YELLOW_OO_HEXES.has(hex.label)) continue;
+      // Design note #150. "Always drawn" (#12) was written when nothing
+      // could be laid on these four hexes. Now that green #59 and the five
+      // brown OO tiles can be, "always" produced the worst ghost on the
+      // board: #59 draws its OWN two stations, so an upgraded Philadelphia
+      // & Trenton rendered FOUR station circles -- two of them belonging to
+      // a preprint the tile was sitting on top of.
+      //
+      // NOT to be confused with the "OO" corner RESTRICTION badge further
+      // down, which design note #49 deliberately keeps visible across every
+      // tier. That badge says what MAY be laid here; these circles claim
+      // what IS here, and only the second claim goes stale.
+      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
       // markers -- previously only track/text calls were wrapped.
@@ -1058,6 +1205,10 @@ export function HexGridRenderer({
     // reserved for a Town/Double-Town tile rather than ordinary track.
     for (const hex of STATIC_BOARD_HEXES) {
       if (!hex.townDesignation) continue;
+      // Design note #150: a laid tile carries its own town/city artwork, so
+      // the "reserved for a Town tile" marker has done its job and is now
+      // describing a hex that is no longer blank.
+      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station/
       // dit markers -- previously only track/text calls were wrapped.
@@ -1092,6 +1243,12 @@ export function HexGridRenderer({
     // centered circle, no offset pair needed.
     for (const hex of STATIC_BOARD_HEXES) {
       if (!hex.cityDesignation) continue;
+      // Design note #150: same as the Town pass above. A laid `MajorCityHub`
+      // tile draws its own station circle in the same place, so without this
+      // the two stack -- producing a subtly heavier, off-centre circle
+      // rather than an obviously doubled one, which is worse: it reads as a
+      // rendering imprecision rather than as a bug.
+      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
       // markers -- previously only track/text calls were wrapped.
@@ -1108,18 +1265,64 @@ export function HexGridRenderer({
     // tokens, city circles and every badge, so the overlay can never bury the
     // markers a player needs in order to read the board. A route is an
     // annotation over the map, not a replacement for it.
-    drawRouteOverlays(ctx, hexSize, routeOverlays);
+    // Design note #155: hand the overlay the laid tiles so it can trace each
+    // hex's real authored rail. A plain lookup closure rather than the whole
+    // grid -- the primitive has no business knowing what a `MapGridResponse`
+    // is, and this keeps it a pure drawing function.
+    // Design note #195: the SECOND lookup is the one that fixes preprinted
+    // track. `tilesAt` above can only ever answer for a hex carrying a laid
+    // `MapTileEntry`; every gray hex, all three landmarks and every off-board
+    // terminal have real rails and no tile record, so the overlay had nothing
+    // to follow and fell back to a straight edge-to-centre spoke. This hands
+    // the glow the same four sources the four track passes above draw from,
+    // in the same precedence order they run in.
+    drawRouteOverlays(
+      ctx,
+      hexSize,
+      routeOverlays,
+      (q, r) => mapGrid.tiles.find((tile) => tile.q === q && tile.r === r),
+      // Design note #226: the whole-hex `railsAt` lookup is gone. Endpoints
+      // resolve to a single authored rail now, so there is no branch left
+      // that needs to know how a hex was drawn -- only which path to stroke.
+      // Design note #215: the printed label, so a route crossing a gray hex
+      // or a landmark highlights the ONE rail it runs along rather than
+      // every rail on the hex. Only hexes with authored printed artwork
+      // qualify -- an off-board terminal has stubs rather than a traversable
+      // path, and falls through to the whole-hex trace above.
+      (q, r) => {
+        const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+        if (boardHex && GRAY_HEXES[boardHex.label]) return boardHex.label;
+        const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+        return landmark?.label;
+      },
+    );
 
-    // ---- Station Token markers (design note #36, extended by #44) --
-    // layered on TOP of every white/gray/OO station circle drawn above. Two
-    // passes: (1) a MUTED preprinted marker at each of the 8
-    // `STATION_HOME_HEXES` whose matching company hasn't floated yet (or is
-    // missing from
-    // `publicCompanies` entirely -- e.g. before the host app's first
-    // `GetGameState` query resolves), and (2) a REAL, ticker-colored marker
-    // at every `station_token_hexes` entry of every company that HAS
-    // floated -- which, since the home token is always index 0 there,
-    // covers the home marker and any additional paid tokens together.
+    /* ==================================================================
+     *  DESIGN NOTE 222: TOKENS ARE DRAWN LAST, NOT MERELY LATE
+     * ==================================================================
+     *
+     * REPORTED BUG: badges render on top of and obscure tracks and cities.
+     *
+     * This pass used to run HERE, immediately after the city-circle passes,
+     * on the reasoning recorded in its own comment: "layered on TOP of every
+     * white/gray/OO station circle drawn above." True of the circles, and
+     * false of everything that came after -- the value badges, the "B"/"NY"/
+     * "OO" restriction badges and every nameplate pass all draw further down
+     * this function, so all of them landed on top of the tokens.
+     *
+     * A badge covering a token is worse than a badge covering track: a token
+     * is the one marker that says WHOSE network this is, and a route's
+     * legality turns on it. The value badge sitting over it is information
+     * the player can get from the tooltip; the token is not.
+     *
+     * The pass is now a closure invoked after every badge and label pass, so
+     * the marker z-order ends: track -> route glow -> city circles ->
+     * badges/labels -> STATION TOKENS -> live tile preview. Deferred rather
+     * than physically relocated because it reads `claimedHexSlots` and the
+     * company map built alongside the passes above; moving the code would
+     * have meant moving those too, and the ordering is the whole change.
+     */
+    const drawStationTokenPass = () =>
     {
       const companiesById = new Map<number, StationTokenCompany>();
       for (const company of publicCompanies) {
@@ -1203,7 +1406,12 @@ export function HexGridRenderer({
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
         for (const [q, r] of company.station_token_hexes) {
-          const city = tokenCityIndex(company, q, r) ?? 0;
+          // Design note #251: the bucket key must match the index the draw
+          // pass below resolves, or a company would be counted into one
+          // city's occupants and drawn from another's slot list.
+          const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+          const cities = laid ? tileCitySlotCounts(laid.tile_id).length : 0;
+          const city = tokenCityIndex(company, q, r) ?? (cities === 1 ? 0 : 0);
           const key = `${q},${r},${city}`;
           const bucket = occupantsByCity.get(key);
           if (bucket) bucket.push(company);
@@ -1225,15 +1433,51 @@ export function HexGridRenderer({
           const tokenCenter = axialToPixel(q, r, hexSize);
 
           let point: { x: number; y: number } | undefined;
-          if (laidTile && chainCity !== undefined) {
+          // Design note #151: the docking RADIUS, resolved from the same
+          // artwork the slot position comes from. Left `undefined` on the
+          // fallback path below, where there is no pill to dock into and
+          // the legacy `size * 0.22` is the correct answer.
+          let dockRadius: number | undefined;
+
+          /* ==================================================================
+           *  DESIGN NOTE 251: A PILL HAS SLOTS; DOCK INTO ONE
+           * ==================================================================
+           *
+           * REPORTED BUG: a token placed on a double-station "pill" city
+           * snaps to the exact centre of the pill instead of into one of its
+           * circular slots.
+           *
+           * The slot machinery below has always been right. What gated it was
+           * `chainCity !== undefined` -- `tokenCityIndex` returns `undefined`
+           * whenever the chain omits `station_tokens`, which the sandbox does
+           * and any contract predating Audit G-12 does. So every token on
+           * every laid tile fell through to `stationMarkerPoint`, which
+           * answers per HEX and therefore returns the pill's centre anchor.
+           * Two companies sharing a 2-slot city stacked on the same point.
+           *
+           * The original caution behind that gate is real and is preserved:
+           * on a genuinely TWO-CITY tile (#54/#62's New York, the OO tiles) a
+           * guess about WHICH city would draw a token in the wrong station,
+           * which is worse than drawing it centrally. But that risk does not
+           * exist on a one-city tile -- #14, #15, #63 and every pill in the
+           * game have exactly one city, so its index is 0 and there is
+           * nothing to guess.
+           *
+           * So the inference is made only where it is not a guess: one city
+           * means city 0, more than one means fall back exactly as before.
+           */
+          const cityCount = laidTile ? tileCitySlotCounts(laidTile.tile_id).length : 0;
+          const resolvedCity = chainCity ?? (cityCount === 1 ? 0 : undefined);
+
+          if (laidTile && resolvedCity !== undefined) {
             const slotPoints = tileCitySlotPoints(
               laidTile.tile_id,
-              chainCity,
+              resolvedCity,
               laidTile.orientation,
               tokenCenter,
               hexSize,
             );
-            const bucket = occupantsByCity.get(`${q},${r},${chainCity}`) ?? [];
+            const bucket = occupantsByCity.get(`${q},${r},${resolvedCity}`) ?? [];
             const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
             // A bucket longer than the city has slots means the chain and
             // this mirror disagree about capacity (see
@@ -1241,6 +1485,11 @@ export function HexGridRenderer({
             // slot keeps the token visible and stacked rather than
             // vanishing, which is the more debuggable failure.
             point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+            // Only when a real slot point was found. If `slotPoints` came
+            // back empty the token falls through to the per-hex anchor
+            // below, and a docking radius there would shrink a token that
+            // is not docked in anything.
+            if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize);
           }
 
           // Fallback: a pre-G-12 chain, an unknown tile, or an untiled
@@ -1248,11 +1497,19 @@ export function HexGridRenderer({
           // to be had, so the legacy per-hex anchor is the honest one.
           const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile);
           withHexClip(ctx, tokenCenter, hexSize, () => {
-            drawStationTokenMarker(ctx, resolved, hexSize, company.ticker, stationTickerColor(company.company_id), false);
+            drawStationTokenMarker(
+              ctx,
+              resolved,
+              hexSize,
+              company.ticker,
+              stationTickerColor(company.company_id),
+              false,
+              dockRadius,
+            );
           });
         }
       }
-    }
+    };
 
     // ---- Landmark labels, always on top. Font size responsively shrinks
     // (see design note #3b / `fitFontSize`) so the name never overflows
@@ -1638,6 +1895,25 @@ export function HexGridRenderer({
     // "revenue." Tight 2px padding/radius unchanged.
     for (const hex of STATIC_BOARD_HEXES) {
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
+      // Design note #150, and this one is a CORRECTNESS fix rather than a
+      // cosmetic one.
+      //
+      // `hexmap.rs`'s `execute_lay_tile` charges terrain from the hex, once:
+      //
+      //     let effective_terrain_cost =
+      //         if is_upgrade { Uint128::zero() } else { terrain_build_fee(q, r) };
+      //
+      // with the stated rule "a hex's printed terrain fee is paid exactly
+      // once, when that hex is first built on -- every later colour upgrade
+      // of the same hex is free". So once this hex carries a tile, the $80
+      // or $120 on the badge is not what the next lay costs. It is what the
+      // LAST one cost, rendered as though it were a live price.
+      //
+      // Design note #136 established that this label and the contract's fee
+      // must be the same lookup. Keeping the badge after the first lay broke
+      // that guarantee in the one direction #136 could not see: the lookup
+      // was right, the precondition was not.
+      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       // Design note #136 (F-2): the printed figure comes from the
       // coordinate-keyed mirror of `hexmap::terrain_build_fee`, so the label
@@ -1992,15 +2268,120 @@ export function HexGridRenderer({
       drawImpassableBorderEdge(ctx, center, hexSize, border.edge);
     }
 
-    // ---- Live preview "ghost" tile (design note #7 / item 3), drawn last
-    // so it's always visible on top of everything else, but at reduced
-    // opacity with a dashed outline so it clearly reads as a not-yet-
-    // confirmed preview rather than a real, committed tile.
+
+    // Design note #222: tokens go on last, above every badge and nameplate.
+    drawStationTokenPass();
+
+    /* ---- Design note #223: the Lay Track veil. ----
+       Drawn after EVERY other board pass, tokens included, so the dimming
+       is uniform -- a hex that is out of reach should read as out of reach
+       whatever happens to be printed on it. The live preview below is the
+       one thing layered on top, because it is the tile the player is
+       actively judging and must stay at full contrast. */
+    if (layFocus) {
+      for (const hex of STATIC_BOARD_HEXES) {
+        const key = `${hex.q},${hex.r}`;
+        const center = axialToPixel(hex.q, hex.r, hexSize);
+
+        if (!layFocus.visible.has(key)) {
+          ctx.save();
+          ctx.globalAlpha = LAY_TRACK_DIM_ALPHA;
+          ctx.fillStyle = LAY_TRACK_DIM_INK;
+          drawHexPath(ctx, center, hexSize);
+          ctx.fill();
+          ctx.restore();
+          continue;
+        }
+
+        /* ==================================================================
+         *  DESIGN NOTE 252: AN OUTER GLOW, NOT A RING WITH A SHADOW
+         * ==================================================================
+         *
+         * REPORTED BUG: the legal-placement highlight is a thick solid green
+         * border with no actual glow.
+         *
+         * Two things made it read that way, and the second is the one that
+         * mattered.
+         *
+         *   THE LINE WAS TOO HEAVY. `hexSize * 0.13` is wider than the track
+         *   artwork itself (`0.12`), so whatever the alpha, the eye read it
+         *   as a drawn border. It is now `hexSize * 0.02` -- a reduction of
+         *   roughly 85%, floored at one pixel so it never vanishes at small
+         *   zoom.
+         *
+         *   THE SHADOW BLOOMED BOTH WAYS. `ctx.shadowBlur` spreads a halo
+         *   symmetrically, so half of every "glow" was painted INSIDE the
+         *   hex, over the cardboard. Inward bloom on a hex-sized ring fills
+         *   the hex -- which is exactly what turns a glow into a solid tint,
+         *   and then reads as a border with a muddy interior rather than as
+         *   light coming off an edge.
+         *
+         * A true outer glow needs the inside masked. The clip below is a
+         * generous rect MINUS this hex, built as one path and clipped
+         * `evenodd`; stroking the hex through it discards everything on the
+         * inward side and leaves only the halo escaping outward. That is
+         * what a glow is -- light spilling out of a shape, not a ring drawn
+         * around it.
+         *
+         * THE COLOUR IS THE CORPORATION'S, matching the action toolbar and
+         * the route line so "PRR is acting" is one colour across the screen
+         * -- with a fallback for a brand colour too dark to register as
+         * light against the veiled board, since a glow that cannot be seen
+         * is not a glow. */
+        if (layFocus.highlighted.has(key)) {
+          const glow = layFocus.glowColor ?? LAY_TRACK_HIGHLIGHT_INK;
+          ctx.save();
+
+          ctx.beginPath();
+          ctx.rect(center.x - hexSize * 4, center.y - hexSize * 4, hexSize * 8, hexSize * 8);
+          drawHexPath(ctx, center, hexSize);
+          ctx.clip("evenodd");
+
+          ctx.strokeStyle = glow;
+          ctx.shadowColor = glow;
+          ctx.lineWidth = Math.max(1, hexSize * 0.02);
+          // Three passes rather than one wide blur: each adds a further
+          // falloff step, so the halo fades gradually instead of ending at
+          // the visible edge a single shadow leaves.
+          for (const blur of [hexSize * 0.5, hexSize * 0.28, hexSize * 0.12]) {
+            ctx.shadowBlur = Math.max(4, blur);
+            drawHexPath(ctx, center, hexSize);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+    }
+
+    // ---- Live preview tile, drawn last so it sits on top of everything.
+    //
+    // DESIGN NOTE 167: FULLY OPAQUE, and the ghost styling is gone.
+    //
+    // It used to render at `globalAlpha = 0.65` so it would "clearly read as
+    // a not-yet-confirmed preview". That reasoning came from a flow where
+    // the preview was the ONLY signal that something was pending -- there
+    // was no explicit confirm, so the tile itself had to look tentative.
+    //
+    // The radial selector changed that: a green check and a red X float
+    // directly above the hex whenever a preview is live, and nothing is
+    // committed until the check is pressed. The pending state is stated by
+    // a control, not implied by transparency -- and transparency was
+    // costing the one thing the preview exists for. At 0.65 the board
+    // colours underneath bled through the tile, which on the new saturated
+    // palette turned a yellow tile over a green hex into a muddy third
+    // colour and made the track hard to trace against its neighbours. The
+    // whole point of an in-situ preview is judging whether the tile FITS,
+    // and it was being judged through a veil.
+    //
+    // The DASHED outline stays. It is the cheap half of the old signal --
+    // it costs no legibility, keeps working for anyone who cannot see the
+    // buttons (they sit above the hex, which may be off-screen on a panned
+    // board), and matches this renderer's existing idiom for provisional
+    // artwork.
     if (previewTile) {
       const previewCatalogEntry = TILE_CATALOG_BY_ID.get(previewTile.tileId);
       const previewCenter = axialToPixel(previewTile.q, previewTile.r, hexSize);
       ctx.save();
-      ctx.globalAlpha = 0.65;
       drawHexPath(ctx, previewCenter, hexSize);
       ctx.fillStyle = previewCatalogEntry ? ERA_TILE_FILL[previewCatalogEntry.color] : "#dddddd";
       ctx.fill();
@@ -2068,6 +2449,10 @@ export function HexGridRenderer({
 
     ctx.restore();
   }, [
+    // Design note #223: the veil is part of the picture, so a change to the
+    // reachable set has to repaint. Omitted, the board would keep the
+    // dimming from whichever corporation was acting when it was last drawn.
+    layFocus,
     // `mapGrid`, not `mapGrid.tiles` (react-hooks/exhaustive-deps).
     //
     // The body reads the WHOLE object, not just the array: `hexHasLaidTile`,
@@ -2235,7 +2620,10 @@ export function HexGridRenderer({
       // `STATIC_BOARD_HEXES` entry); the plain charcoal workspace outside
       // the board (design note #18) shows no tooltip at all.
       const hoveredLandmark = LANDMARK_HEXES.find((l) => l.q === hoverQ && l.r === hoverR);
-      if (hoveredLandmark || hoveredBoardHex) {
+      // Design note #269: a picker is open on a hex -- it owns the anchor.
+      if (suppressHoverTooltip) {
+        setHoveredCoordLabel((prev) => (prev === null ? prev : null));
+      } else if (hoveredLandmark || hoveredBoardHex) {
         // Design note #75: flip toward whichever side of the PANEL (this
         // canvas's own `rect`, already computed above for the hex-hit-test)
         // still has room, mirroring `drawOffboardTooltip`'s own adaptive
@@ -2321,6 +2709,11 @@ export function HexGridRenderer({
       // nothing here writes state that could feed back into these deps.
       mapGrid,
       currentEra,
+      // Design note #269: same class of staleness as the three above, and
+      // the one that would bite hardest -- frozen at `false`, the tooltip
+      // would keep reappearing under an open picker on every mouse move,
+      // which is the reported bug with an extra step.
+      suppressHoverTooltip,
     ],
   );
 
@@ -2388,12 +2781,64 @@ export function HexGridRenderer({
        * picker, and not route-point selection either, which would otherwise
        * happily append a route point in the middle of the Atlantic.
        */
+      // Design note #171: computed once, here, so every report below --
+      // `onHexClick` and all six `onHexClickQuery` statuses -- carries the
+      // same centre. Above the gate, because `"not-a-hex"` reports it too.
+      const centre = axialToPixel(q, r, hexSize);
+      const centroidX = centre.x * view.zoom + view.panX;
+      const centroidY = centre.y * view.zoom + view.panY;
+
       const eligibility = evaluateHexForTileLaying(q, r, mapGrid);
       if (eligibility.reason === "not-a-hex") {
+        // Design note #172: SAY SO, rather than returning silently.
+        //
+        // This returned with no signal at all, which was right when the only
+        // consumer was the tile picker -- there is nothing to open over open
+        // water. It stopped being right once something could already be
+        // OPEN: a radial menu anchored to a previous hex stayed up while the
+        // player clicked around the ocean trying to dismiss it, because the
+        // one gesture that obviously means "never mind" produced no event.
+        //
+        // `"not-a-hex"` is now a real reported status. It carries no
+        // placements and opens nothing; its entire job is to let a listener
+        // close what it opened.
+        onHexClickQuery?.({
+          status: "not-a-hex",
+          q,
+          r,
+          hexLabel,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          centroidX,
+          centroidY,
+        });
         return;
       }
 
-      onHexClick?.({ q, r, hexLabel, clientX: event.clientX, clientY: event.clientY });
+      // Design note #171: the hex's own CENTRE, in canvas-CSS pixels.
+      //
+      // Callers were anchoring UI to `clientX`/`clientY` -- the cursor. A
+      // radial menu built on that opens wherever the pointer happened to
+      // land, so clicking a hex near its rim produced a ring visibly off
+      // its own hex, and two clicks on the same hex produced two different
+      // rings. Anchoring wants the HEX, and the hex's centre is a property
+      // of the grid, not of the click.
+      //
+      // Projected through the SAME transform `draw()` applies
+      // (`translate(pan)` then `scale(zoom)`), which is the inverse of the
+      // `contentX`/`contentY` computation above -- so it tracks pan and
+      // zoom for free rather than needing its own correction.
+      onHexClick?.({
+        q,
+        r,
+        hexLabel,
+        // Design note #242: the identifier, alongside the display name.
+        boardLabel: boardHexLabel(q, r),
+        clientX: event.clientX,
+        clientY: event.clientY,
+        centroidX,
+        centroidY,
+      });
 
       // Design note #120: this guard used to be a single condition covering
       // all four interceptor props, and it is now split in two, because the
@@ -2429,6 +2874,41 @@ export function HexGridRenderer({
       // both in normal mode and omits both in route-select mode, and neither
       // has anything to do with whether a chain is reachable.
       if (gameId === undefined || protocolId === undefined) {
+        return;
+      }
+
+      /* ==================================================================
+       *  DESIGN NOTE 257: A DIMMED HEX SAYS IT ALREADY
+       * ==================================================================
+       *
+       * REPORTED: clicking a dimmed hex during Lay Track pops up an
+       * unnecessary explainer.
+       *
+       * This used to report a `"blocked"` status carrying a sentence about
+       * the corporation's reach, which `App` rendered as a floating amber
+       * cue near the cursor. That was the right call when the board gave no
+       * other signal -- design note #141's own reasoning, that this codebase
+       * had twice shipped a hex click that logged and then silently did
+       * nothing.
+       *
+       * The veil changed the premise. When `layFocus` is active the hex the
+       * player just clicked is VISIBLY dimmed and the legal ones are
+       * VISIBLY glowing, so the explainer restates in words what the board
+       * has already said in light -- and it does so as a popup that follows
+       * the cursor, which is a lot of ceremony for "not there". Worse, it
+       * fires on every stray click during the one step where a player is
+       * most likely to be clicking around the map deciding.
+       *
+       * So under the veil the click is simply ignored. The status is still
+       * SUPERSEDED (`clickQuerySeqRef`) so a late response for a previous
+       * hex cannot open a picker over the one just refused -- silence must
+       * not mean "and also let the last thing through".
+       *
+       * WITHOUT A VEIL NOTHING CHANGES. Gates 2 and 3 below still report
+       * their reasons, because with no dimming those hexes look identical to
+       * legal ones and the cue is the only feedback there is. */
+      if (layFocus && !layFocus.highlighted.has(`${q},${r}`)) {
+        clickQuerySeqRef.current += 1;
         return;
       }
 
@@ -2471,6 +2951,8 @@ export function HexGridRenderer({
           hexLabel: eligibility.hexLabel,
           clientX: event.clientX,
           clientY: event.clientY,
+          centroidX,
+          centroidY,
           // Non-null: `"not-a-hex"` already returned above, and it is the
           // only reason with no message.
           reason: eligibility.reason!,
@@ -2522,6 +3004,8 @@ export function HexGridRenderer({
           hexLabel,
           clientX: event.clientX,
           clientY: event.clientY,
+          centroidX,
+          centroidY,
           placements,
         });
         return;
@@ -2535,6 +3019,8 @@ export function HexGridRenderer({
         hexLabel,
         clientX: event.clientX,
         clientY: event.clientY,
+          centroidX,
+          centroidY,
       });
 
       queryClient
@@ -2565,6 +3051,8 @@ export function HexGridRenderer({
             hexLabel,
             clientX: event.clientX,
             clientY: event.clientY,
+          centroidX,
+          centroidY,
             response: response as LegalTilePlacementsResponse,
           });
         })
@@ -2578,11 +3066,17 @@ export function HexGridRenderer({
             hexLabel,
             clientX: event.clientX,
             clientY: event.clientY,
+          centroidX,
+          centroidY,
             message,
           });
         });
     },
     [
+      // Design note #223: a stale set here would gate clicks against the
+      // PREVIOUS corporation's reach -- refusing hexes the current one may
+      // build on, and accepting ones it may not.
+      layFocus,
       view.panX,
       view.panY,
       view.zoom,
@@ -2682,6 +3176,17 @@ export function HexGridRenderer({
     scheduleDraw();
   }, [fitView, scheduleDraw]);
 
+  /* Design note #269, the other half: the tooltip on screen AT THE MOMENT
+     the picker opens. The guard in `handlePointerMove` only stops the next
+     one from being set, and a click does not move the pointer -- so without
+     this the stale tooltip would sit under the ring until the player
+     happened to move the mouse. */
+  useEffect(() => {
+    if (!suppressHoverTooltip) return;
+    setHoveredCoordLabel((prev) => (prev === null ? prev : null));
+    setHoveredOffboardHex((prev) => (prev === null ? prev : null));
+  }, [suppressHoverTooltip]);
+
   /** The pointer has left the canvas entirely -- clears the off-board hover
    *  tooltip (design note #15/item 4) in addition to `handlePointerUp`'s own
    *  drag-release handling, since `handlePointerMove` (the only other place
@@ -2742,7 +3247,37 @@ export function HexGridRenderer({
           all. */}
       <canvas
         ref={canvasRef}
-        style={{ width, height, touchAction: "none", cursor: detailedView ? "grab" : "default" }}
+        style={{
+          width,
+          height,
+          touchAction: "none",
+          // Design note #159: targeting beats panning. While a token is
+          // being placed the crosshair is the more important signal -- the
+          // player can still pan, they just need to know what a click does.
+          // Design note #183: a STATION TOKEN, not a bare crosshair.
+          //
+          // `crosshair` says "you are about to click precisely somewhere",
+          // which is true of route-point selection and tile laying too --
+          // it marked that a mode was active without saying WHICH. An
+          // inline SVG cursor showing the token itself names the mode at
+          // the pointer, where the player is actually looking.
+          //
+          // Data-URI rather than a file: it is nine elements, it must not
+          // race a network fetch (a cursor that arrives late is a cursor
+          // that flickers), and the hotspot has to be declared in the same
+          // breath as the art. `16 16` centres it, because a token is
+          // placed AT a point rather than pointed at from a corner.
+          //
+          // `, crosshair` is the fallback, not decoration: a browser that
+          // rejects the URI keeps the old behaviour instead of silently
+          // reverting to an arrow that says nothing.
+          cursor:
+            cursorMode === "token"
+              ? `url("${STATION_TOKEN_CURSOR}") 16 16, crosshair`
+              : detailedView
+                ? "grab"
+                : "default",
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -2845,6 +3380,23 @@ export interface TilePreviewThumbnailProps {
  *  Built for `TileSelectionPopup.tsx`'s carousel thumbnails and its larger
  *  rotation preview; has no wallet/session/query dependency of its own,
  *  matching this file's presentational-only design. */
+/** Design note #183: the station-token placement cursor.
+ *
+ *  A white disc with a dark rim and a centre dot -- the same vocabulary
+ *  `drawStationTokenMarker` uses on the board, so the pointer looks like
+ *  the thing it is about to place. The outer dark ring keeps it visible on
+ *  the light tile colours (`#FDE900` especially) as well as on the dark
+ *  board chrome, which a plain white disc would not manage. */
+const STATION_TOKEN_CURSOR =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' +
+      '<circle cx="16" cy="16" r="10" fill="#ffffff" stroke="#1a1a1a" stroke-width="3"/>' +
+      '<circle cx="16" cy="16" r="3.5" fill="#1a1a1a"/>' +
+      '<path d="M16 1 v5 M16 26 v5 M1 16 h5 M26 16 h5" stroke="#1a1a1a" stroke-width="2.5" stroke-linecap="round"/>' +
+      "</svg>",
+  );
+
 export function TilePreviewThumbnail({
   tileId,
   orientation = 0,

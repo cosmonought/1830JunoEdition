@@ -102,7 +102,12 @@
 import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
+import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
+// Design note #170 (ContextualSubPanel): a name beats a truncated hash, and
+// this returns `null` for a real wallet so live rooms are unchanged.
+import { sandboxPlayerLabel } from "../utils/sandboxState";
+import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
@@ -218,7 +223,7 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
           </thead>
           <tbody>
             <tr>
-              <td style={styles.tdB}>Starting Bank Cash (1830 baseline: $12,000)</td>
+              <td style={styles.tdB}>Starting Bank Cash</td>
               <td style={styles.tdNum}>${gameState.virtual_bank_start}</td>
             </tr>
             <tr>
@@ -492,9 +497,18 @@ function PlayerAssetsSection({
                 for (const holding of playerCompanyHoldings(player, gameState)) {
                   heldPercent.set(holding.company.company_id, holding.percentage);
                 }
+                const hasPriorityDeal =
+                  gameState.player_addresses[gameState.priority_deal_index] === player;
                 return (
                   <tr key={player}>
-                    <td style={styles.tdB}>{truncate(player)}</td>
+                    <td style={styles.tdB}>
+                      {truncate(player)}
+                      {hasPriorityDeal && (
+                        <span style={styles.priorityDealMark} title={PRIORITY_DEAL_TOOLTIP}>
+                          #1
+                        </span>
+                      )}
+                    </td>
                     <td
                       style={styles.tdNumB}
                       title={
@@ -681,7 +695,7 @@ function CorporationAssetsSection({
                       {company.president ? (
                         <span style={styles.presidentCell}>
                           <span aria-hidden="true">&#128081;</span>
-                          <span>{truncate(company.president, 8, 5)}</span>
+                          <span>{sandboxPlayerLabel(company.president) ?? truncate(company.president, 8, 5)}</span>
                         </span>
                       ) : (
                         <span style={styles.holdingsEmpty}>--</span>
@@ -713,7 +727,11 @@ function CorporationAssetsSection({
                       />
                     </td>
                     <td style={styles.tdNumB}>
-                      <LastRoutePayout surface="dark" compact />
+                      <LastRoutePayout
+                        surface="dark"
+                        compact
+                        revenue={company.last_route_revenue}
+                      />
                     </td>
                     <td style={styles.tdNumB}>{company.ipo_pool_percentage}%</td>
                     <td style={styles.tdNumB}>{company.bank_pool_percentage}%</td>
@@ -870,15 +888,44 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9aa0ac",
     margin: 0,
   },
+  /** The inline Priority Deal marker. Bare text on purpose -- no pill, no
+   *  border, no background. This sits immediately beside a player's name in
+   *  a dense table that already carries a crown glyph and an ACTIVE badge
+   *  elsewhere; a third boxed element would turn the name column into a row
+   *  of competing containers. Colour and the monospace `#1` do the whole job.
+   *
+   *  `cursor: help` is what signals the `title` tooltip is there at all --
+   *  without it the mark looks like decoration rather than something to
+   *  hover. */
+  priorityDealMark: {
+    marginLeft: "6px",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontWeight: 700,
+    // `text-sm` in the requested Tailwind spec means "one step below body".
+    // This app's scale is uniformly upsized (see `styles/typography.ts`), so
+    // the honest translation is `small`, not a literal 14px -- a hardcoded
+    // 14px would be the one element in the table ignoring the scale.
+    fontSize: FONT_SIZE.small,
+    // Tailwind `tracking-tight`.
+    letterSpacing: "-0.025em",
+    // Tailwind `text-sky-400`.
+    color: "#38bdf8",
+    cursor: "help",
+  },
   presidentTag: {
     // Design note #15: margin follows the glyph to the left side.
     marginRight: "5px",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    padding: "1px 5px",
-    borderRadius: "999px",
-    backgroundColor: "#8a6d1f",
-    color: "#fff8e0",
+    // The pill is GONE. The crown emoji already carries its own colour and
+    // silhouette, so wrapping it in a gold pill was two badges stacked --
+    // the container read as the indicator and the glyph inside it as
+    // decoration, which is backwards. Bare, it reads as one mark.
+    //
+    // `padding`/`borderRadius`/`backgroundColor`/`color` were removed rather
+    // than zeroed: an emoji renders in its own colour font regardless, so a
+    // `color` here only ever affected the fallback glyph, and leaving dead
+    // declarations behind invites someone to "restore" the box later.
   },
   /* ---- Holdings chips. Only the PRIVATE companies still use a chip: the
      public holdings became real columns in design note #8, and the fourteen
@@ -1000,15 +1047,25 @@ const styles: Record<string, React.CSSProperties> = {
   corpFullName: { fontSize: FONT_SIZE.micro, color: "#8a90a0", whiteSpace: "nowrap" },
   presidentCell: { display: "inline-flex", alignItems: "center", gap: "6px" },
   // Same "badge only on the exception" rule the Operating Round tray uses.
+  //
+  // Slate, not amber -- see `palette.ts`'s CHIP_INERT_* note. This badge sat
+  // a few hundred pixels from the Bank Depot's amber CURRENT pill and the
+  // two read as one inconsistent style rather than two unrelated states.
+  //
+  // `FONT_SIZE.micro` rather than a literal 12px: `typography.ts` scaled the
+  // whole app's ramp up on purpose (micro is 15px, "originally 10-11px"), so
+  // a hardcoded size here would render this one chip visibly smaller than
+  // every badge beside it and silently opt out of that decision.
   unfloatedBadge: {
     fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
+    fontWeight: 500,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     letterSpacing: "0.4px",
-    padding: "1px 7px",
-    borderRadius: "999px",
-    backgroundColor: "#3a2f14",
-    border: "1px solid #6a5a24",
-    color: "#e0c07a",
+    padding: "2px 8px",
+    borderRadius: "4px",
+    backgroundColor: CHIP_INERT_BG,
+    border: `1px solid ${CHIP_INERT_BORDER}`,
+    color: CHIP_INERT_INK,
     whiteSpace: "nowrap",
   },
   // Design note #13: the token dot, matching the map and the OR tray.

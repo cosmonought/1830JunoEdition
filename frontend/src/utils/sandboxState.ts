@@ -602,6 +602,7 @@ function buildPrivateCompanies(phase: RoundType): PrivateCompanyState[] {
  * declaration, rather than letting a caller set one and forget the other.
  */
 export type SandboxScenarioId =
+  | "start"
   | "auction"
   | "stock"
   | "or-yellow"
@@ -619,9 +620,44 @@ export interface SandboxScenario {
   /** The highest train tier in play. Drives `derivePhase`, and is kept in
    *  step with `era` by construction -- see design note #176. */
   trainTier: string;
+  /** Design note #9: strip the fixture back to turn 1 -- nothing sold,
+   *  nothing floated, no trains, empty treasuries. */
+  zeroState?: boolean;
 }
 
 export const SANDBOX_SCENARIOS: readonly SandboxScenario[] = [
+  /* ==================================================================
+   *  DESIGN NOTE 9: A FIXTURE THAT SHOWS EVERY BRANCH CANNOT SHOW TURN 1
+   * ==================================================================
+   *
+   * REPORTED: the sandbox opens mid-game -- Bob already owns a private,
+   * corporations are floated, trains are owned -- so the rules that only
+   * apply at the START of a game cannot be tested at all.
+   *
+   * That is a fair description of a deliberate choice, and the choice was
+   * right for what it was for. Design note #5 says so in as many words:
+   * the holdings were "chosen to put every rendering branch on screen at
+   * once rather than to depict a plausible mid-game position". A fixture
+   * built to make every UI state visible is necessarily a fixture in which
+   * nothing is still at zero.
+   *
+   * The two purposes are genuinely incompatible, so this is a SEPARATE
+   * scenario rather than a rewrite of the others: `start` is the empty
+   * board a tester needs for float rules, auction opening bids and first
+   * tile lays, and the mid-game fixtures stay exactly as they are for
+   * everything they were built to exercise.
+   *
+   * IT IS THE DEFAULT, because opening on turn 1 is what a player expects
+   * from "sandbox" and the mid-game boards are the special case. */
+  {
+    id: "start",
+    label: "Game Start (zero state)",
+    blurb: "Turn 1 - nothing sold, nothing floated, empty treasuries",
+    phase: "WaterfallAuction",
+    era: "Yellow",
+    trainTier: "2",
+    zeroState: true,
+  },
   {
     id: "auction",
     label: "Private Auction",
@@ -677,7 +713,7 @@ const DEPOT_TOTAL_FOR_TIER: Readonly<Record<string, number>> = {
   "6": 2,
 };
 
-export const DEFAULT_SANDBOX_SCENARIO: SandboxScenarioId = "or-green";
+export const DEFAULT_SANDBOX_SCENARIO: SandboxScenarioId = "start";
 
 export function sandboxScenario(id: SandboxScenarioId): SandboxScenario {
   return SANDBOX_SCENARIOS.find((s) => s.id === id) ?? SANDBOX_SCENARIOS[3];
@@ -720,6 +756,9 @@ export type SandboxTrainFixture = "default" | "spread";
 const SPREAD_FIXTURE_FLEET: readonly string[] = ["2", "3"];
 const SPREAD_FIXTURE_COMPANIES = 2;
 
+/** 1830's starting capital for a four-seat table. */
+const ZERO_STATE_PLAYER_CASH = 400;
+
 export function sandboxScenarioState(
   id: SandboxScenarioId,
   gameId: number,
@@ -729,6 +768,68 @@ export function sandboxScenarioState(
 ): GameStateResponse {
   const scenario = sandboxScenario(id);
   const base = sandboxGameState(scenario.phase, gameId);
+
+  /* ==================================================================
+   *  DESIGN NOTE 9: THE ZERO STATE
+   * ==================================================================
+   *
+   * Applied by stripping the rich fixture rather than by authoring a
+   * second one. Two reasons, and the second is the one that matters:
+   *
+   *   The IDENTITIES stay right -- tickers, home hexes, par ladder, the
+   *   private list, the seating order. Those are 1830 facts, not fixture
+   *   choices, and a hand-written second copy would be a second place for
+   *   them to drift from the contract.
+   *
+   *   What is stripped is exactly what a GAME produces: ownership, float,
+   *   cash, trains, tokens. Turn 1 is defined by the absence of those, so
+   *   removing them IS the zero state rather than an approximation of it.
+   *
+   * PLAYER CASH IS THE ONE THING SET RATHER THAN CLEARED. 1830 deals each
+   * player a starting bank by headcount, and $0 would not be turn 1 -- it
+   * would be a table that cannot bid. Four seats is $400 each. */
+  if (scenario.zeroState) {
+    return {
+      ...base,
+      active_player_index: 0,
+      consecutive_passes: 0,
+      private_companies: base.private_companies.map((entry) => ({
+        ...entry,
+        owner: null,
+        owner_protocol_id: null,
+        closed: false,
+      })),
+      public_companies: base.public_companies.map((company) => ({
+        ...company,
+        is_floated: false,
+        president: null,
+        par_value: null,
+        treasury: "0",
+        total_shares_issued: 0,
+        // Every certificate starts in the IPO. Nothing has been bought, so
+        // nothing is in a player's hands and nothing has been sold into the
+        // bank pool -- design note #5's warning about a formula inventing a
+        // 10% pool applies here too, so both are stated rather than derived.
+        ipo_pool_percentage: 100,
+        bank_pool_percentage: 0,
+        player_holdings: [],
+        owned_trains: [],
+        // No corporation has floated, so none has been granted its home
+        // token. `station_token_limit` is a printed property of the company
+        // and stays.
+        station_token_hexes: [],
+        station_tokens: [],
+        last_route_revenue: "0",
+      })),
+      player_cash: base.player_cash.map((entry) => ({
+        ...entry,
+        cash_vgp: String(ZERO_STATE_PLAYER_CASH),
+      })),
+      // Nothing has floated, so there is no operating queue yet.
+      active_operating_order: [],
+      active_corporation_index: 0,
+    };
+  }
 
   /* THE FLEET IS CAPPED, and the reason is a bug this fixture had.
    *
@@ -873,8 +974,30 @@ export function sandboxGameState(phase: RoundType, gameId: number): GameStateRes
 export function sandboxWaterfallState(
   phase: RoundType,
   gameId: number,
+  /** Design note #9: the turn-1 auction -- every private still on offer,
+   *  no standing bids, no mini-auction in progress. */
+  zeroState = false,
 ): WaterfallStateResponse | null {
   if (phase !== "WaterfallAuction") return null;
+
+  if (zeroState) {
+    return {
+      game_id: gameId,
+      waterfall_auction_active: true,
+      // All six, cheapest first, and the cheapest is the only one buyable
+      // outright -- which is exactly what the rules say on turn 1.
+      privates: SANDBOX_PRIVATES.map((priv, index) => ({
+        private_id: priv.id,
+        name: priv.name,
+        face_value: String(priv.cost),
+        is_lowest_offered: index === 0,
+        bids: [],
+      })),
+      current_turn: SANDBOX_PLAYERS[0],
+      mini_auction: null,
+      consecutive_waterfall_passes: 0,
+    };
+  }
 
   return {
     game_id: gameId,

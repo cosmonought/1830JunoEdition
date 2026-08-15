@@ -545,6 +545,8 @@ import {
   stationTickerColor,
 } from "./components/hexContractTypes";
 import { TrainChips } from "./components/TrainBadges";
+import PrivatePowerPanel, { type PrivateAbility } from "./components/PrivatePowerPanel";
+import type { PrivateCompanyState } from "./utils/gameState";
 import { RoutePlannerPanel, RouteModeToggle } from "./components/RoutePlannerPanel";
 import type { RouteBuildMode, TrainRouteDraft } from "./components/RoutePlannerPanel";
 import StationTokenRow from "./components/StationTokenRow";
@@ -1267,6 +1269,51 @@ function MarketMoveLine({
   );
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 298: WHAT A PINNED BAR IS ALLOWED TO KEEP
+ * ==================================================================
+ *
+ * A sticky bar costs the map its height for the whole scroll, so the
+ * pinned form has to earn every row it occupies. The rule applied is: keep
+ * what a player needs WHILE LOOKING AT THE BOARD, drop what they only need
+ * when deciding what to do next.
+ *
+ *   KEPT   the phase badge, the acting corporation, its treasury and train
+ *          limit, and every action button. These are the inputs to "can I
+ *          click that hex", which is the question being asked while the map
+ *          is on screen.
+ *   DROPPED the station-token row, the president's name, the train chips
+ *          and the sub-phase stepper. All are orientation -- they answer
+ *          "where am I in the turn", which the player has already answered
+ *          by the time they are scrolling the map.
+ *
+ * The stepper is the one worth defending: it is a progress indicator, and a
+ * progress indicator that is always visible stops being read. It comes back
+ * the moment the bar unsticks.
+ */
+function useCondensedOnScroll(threshold = 24): boolean {
+  const [condensed, setCondensed] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    /* Read on a rAF rather than on every scroll event: this flips one
+       boolean, and re-rendering the action bar on every pixel of a wheel
+       gesture is the classic scroll-listener jank. */
+    let queued = false;
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(() => {
+        queued = false;
+        setCondensed(window.scrollY > threshold);
+      });
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [threshold]);
+  return condensed;
+}
+
 function ContextualActionBar({
   roundType,
   orSubPhase,
@@ -1282,6 +1329,11 @@ function ContextualActionBar({
   onOpenPrivateTrade,
   ownsAnyTrain,
   mustBuyTrain,
+  privateCompanies,
+  privatePowerViewer,
+  sandboxMode,
+  usedPrivateAbilities,
+  onUsePrivateAbility,
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
@@ -1358,6 +1410,12 @@ function ContextualActionBar({
    *  1830's mandatory purchase applies. Distinct from `!ownsAnyTrain`,
    *  which is also true when the chain simply did not say. */
   mustBuyTrain: boolean;
+  /** Design note #0 in `PrivatePowerPanel.tsx`. */
+  privateCompanies: readonly PrivateCompanyState[];
+  privatePowerViewer: string | null;
+  sandboxMode: boolean;
+  usedPrivateAbilities: ReadonlySet<number>;
+  onUsePrivateAbility: (ability: PrivateAbility) => void;
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
@@ -1419,6 +1477,9 @@ function ContextualActionBar({
   // the train chips. Computed here rather than inline in the JSX because
   // both the badge's style and its wording branch on it.
   const phaseAlert = phaseAlertLevel(phase ?? null);
+  /** Design note #297/#298: pinned to the top, so the bar sheds its
+   *  orientation rows and keeps only what is needed while reading the map. */
+  const condensed = useCondensedOnScroll();
 
   /* Design note #236: the acting corporation's own colours, resolved once.
    *
@@ -1664,7 +1725,13 @@ function ContextualActionBar({
    * so the bar stays one row tall while the trays keep working. */
   return (
     <>
-    <div style={{ ...styles.actionBar, ...(isMyTurn ? styles.actionBarTurnPulse : {}) }}>
+    <div
+      style={{
+        ...styles.actionBar,
+        ...(isMyTurn ? styles.actionBarTurnPulse : {}),
+        ...(condensed ? styles.actionBarCondensed : {}),
+      }}
+    >
       {/* The "Phase N of 6: Track" suffix is GONE, and its removal is the
           point rather than a simplification.
 
@@ -1814,7 +1881,14 @@ function ContextualActionBar({
                 </span>
               )}
               {activeCorporation?.presidentLabel && (
-                <span style={{ ...styles.orContextPresident, color: corporationBarInk.inkMuted }}>
+                <span
+                  style={{
+                    ...styles.orContextPresident,
+                    color: corporationBarInk.inkMuted,
+                    // Design note #298: identity detail, dropped when pinned.
+                    ...(condensed ? { display: "none" } : {}),
+                  }}
+                >
                   {"\u{1F451} "}
                   {activeCorporation.presidentLabel}
                 </span>
@@ -1847,7 +1921,7 @@ function ContextualActionBar({
                     cost, spent ones greyed in place. See
                     `StationTokenRow.tsx` for why it needs its own inset
                     surface on a brand-coloured bar. */}
-                <span style={styles.orContextFact}>
+                <span style={{ ...styles.orContextFact, ...(condensed ? { display: "none" } : {}) }}>
                   <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                     Stations
                   </span>
@@ -1867,7 +1941,7 @@ function ContextualActionBar({
                   {/* The same chips the Round Detail table draws, so a train
                       reads identically wherever it appears -- including the
                       amber tint on a tier that is about to rust. */}
-                  {activeCorporation.trains.length === 0 ? (
+                  {condensed ? null : activeCorporation.trains.length === 0 ? (
                     <span style={{ ...styles.orContextFactNone, color: corporationBarInk.inkMuted }}>
                       none
                     </span>
@@ -1919,6 +1993,7 @@ function ContextualActionBar({
             )}
           </div>
 
+          {!condensed && (
           <div style={styles.orPanelStepperRow}>
             {/* Design note #235: UNDO lives on the sub-phase line now. It is
                 the only control that moves the turn cursor BACKWARDS, so it
@@ -1940,6 +2015,7 @@ function ContextualActionBar({
               }
             />
           </div>
+          )}
 
           <div style={styles.orPanelActionRow}>
             {/* LEFT RAIL -- docked status. Fixed home, so the phase badge and
@@ -2343,6 +2419,18 @@ function ContextualActionBar({
           `routeSelectMode`, which made the toggle that turns route mode on
           live somewhere else by necessity -- a control cannot switch on the
           panel it is inside. Rendering on the sub-phase breaks that loop. */}
+      {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
+          ownership and on the round they may be used in. Renders nothing
+          outside sandbox, and nothing when the viewer owns none. */}
+      <PrivatePowerPanel
+        privateCompanies={privateCompanies}
+        viewerAddress={privatePowerViewer}
+        roundType={roundType}
+        sandbox={sandboxMode}
+        usedAbilities={usedPrivateAbilities}
+        onUseAbility={onUsePrivateAbility}
+        controlsEnabled={sessionReady}
+      />
       {showRouteToggle && (
         <RoutePlannerPanel
           drafts={trainDrafts}
@@ -2788,6 +2876,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const [sandboxScenarioId, setSandboxScenarioId] =
     useState<SandboxScenarioId>(DEFAULT_SANDBOX_SCENARIO);
   const sandboxPhase = sandboxScenario(sandboxScenarioId).phase;
+  /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
+  const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
+
+  /* Design note #1 in `PrivatePowerPanel.tsx`: which abilities have fired.
+     Local, because there is no contract message to read it back from --
+     the panel exists so the surface and its two gates are testable, and
+     this is the smallest state that makes "Used" mean something. */
+  const [usedPrivateAbilities, setUsedPrivateAbilities] = useState<ReadonlySet<number>>(
+    () => new Set<number>(),
+  );
 
   /* Design note #246: which train distribution the fixture uses. A SECOND
      axis alongside the scenario, not a sixth scenario -- which era you are
@@ -3395,11 +3493,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * auction into it".
    */
   const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(
-    () => (sandbox ? sandboxWaterfallState(sandboxPhase, gameId) : null),
+    () => (sandbox ? sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState) : null),
   );
   useEffect(() => {
-    setSandboxWaterfall(sandbox ? sandboxWaterfallState(sandboxPhase, gameId) : null);
-  }, [sandbox, sandboxPhase, gameId]);
+    setSandboxWaterfall(sandbox ? sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState) : null);
+  }, [sandbox, sandboxPhase, gameId, sandboxIsZeroState]);
   useEffect(() => {
     sandboxWaterfallRef.current = sandboxWaterfall;
   }, [sandboxWaterfall]);
@@ -4709,12 +4807,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [sandbox, gameId, sandboxMarket],
   );
 
+  const handleUsePrivateAbility = useCallback(
+    (ability: PrivateAbility) => {
+      setUsedPrivateAbilities((prev) => {
+        const next = new Set(prev);
+        next.add(ability.privateId);
+        return next;
+      });
+      logInfoRef.current?.(
+        "Private Power",
+        `${ability.action} -- ${ability.description}`,
+      );
+    },
+    [],
+  );
+
   const logInfo = useCallback((label: string, detail: string) => {
     const id = nextLogEntryId++;
     const timestamp = new Date().toLocaleTimeString();
     const timestampMs = Date.now();
     setActionLog((log) => [{ id, label, status: "info", detail, timestamp, timestampMs }, ...log]);
   }, []);
+
+  /* `logInfo` is defined below the handler that uses it, so the handler
+     reads it through a ref rather than forcing a reorder of a 6000-line
+     file for one call. */
+  const logInfoRef = useRef<((label: string, detail: string) => void) | null>(null);
+  useEffect(() => {
+    logInfoRef.current = logInfo;
+  }, [logInfo]);
 
   const runGameplayAction = useCallback(
     async (fallbackLabel: string, msg: GameplayExecuteMsg) => {
@@ -6532,6 +6653,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
                   ownsAnyTrain={ownsAnyTrain}
                   mustBuyTrain={mustBuyTrain}
+                  privateCompanies={gameState?.private_companies ?? []}
+                  privatePowerViewer={viewerAddress}
+                  sandboxMode={sandbox}
+                  usedPrivateAbilities={usedPrivateAbilities}
+                  onUsePrivateAbility={handleUsePrivateAbility}
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
@@ -7723,10 +7849,28 @@ const styles: Record<string, React.CSSProperties> = {
   // below now shares `TopTicker.tsx`'s exact header color (`#1E293B`) --
   // together these let the active tab flow directly into the ticker
   // docked beneath it with no color seam or border line.
+  /* ==================================================================
+   *  DESIGN NOTE 299: THE TABS WERE A HEADING WEARING A BUTTON'S BORDER
+   * ==================================================================
+   *
+   * REPORTED: the main tabs are quite tall and push the chat and activity
+   * rows down.
+   *
+   * They were 14px of padding above and below a `heading`-sized label --
+   * the same type step a panel TITLE uses -- which is roughly a 47px
+   * control for a one-word destination. The tab bar added another 14px of
+   * its own above that, so the row cost about 60px before anything in it
+   * had been read.
+   *
+   * A tab is a navigation control, not a section heading. It takes the
+   * `control` step like every other clickable thing in the app, and the
+   * padding comes down to a standard compact button. The label is
+   * unchanged and still reads at a glance -- what shrank is the empty
+   * space around it. */
   mainTabBar: {
     display: "flex",
     gap: "6px",
-    padding: "14px 28px 0",
+    padding: "6px 16px 0",
     backgroundColor: "#0F172A",
   },
   /* ---- Design note #46: every tab is visibly a control. ----
@@ -7736,9 +7880,10 @@ const styles: Record<string, React.CSSProperties> = {
      inset fill, which is what makes the row legible as a set of buttons
      before anyone hovers anything. */
   mainTabButton: {
-    fontSize: FONT_SIZE.heading,
+    // Design note #299: `control`, not `heading` -- a tab is a button.
+    fontSize: FONT_SIZE.control,
     fontWeight: 600,
-    padding: "14px 28px",
+    padding: "7px 18px",
     borderRadius: "10px 10px 0 0",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -7812,7 +7957,27 @@ const styles: Record<string, React.CSSProperties> = {
    * trays lived inside it; those are separate blocks below it now, so this
    * is a single row of controls and is styled as page chrome rather than as
    * a card. ---- */
+  /* ==================================================================
+   *  DESIGN NOTE 297: THE CONTROLS FOLLOW THE PLAYER DOWN THE PAGE
+   * ==================================================================
+   *
+   * The board is taller than the viewport by design (`HexGridRenderer`
+   * design note #30 -- the page scrolls rather than the map), which means
+   * scrolling to see the southern hexes takes the action panel off the top
+   * of the screen. The two controls a player needs while looking at the
+   * map -- Place Token, Skip -- are the two that leave first.
+   *
+   * Sticky rather than fixed: fixed would take the bar out of flow and
+   * leave a gap where it was, and it only needs to stop at the top of the
+   * scroll container it already lives in.
+   *
+   * IT CONDENSES WHEN IT STICKS, because a pinned bar is a permanent
+   * subtraction from the map. Design note #298 covers what is dropped and
+   * why the choice is not arbitrary. */
   actionBar: {
+    position: "sticky",
+    top: 0,
+    zIndex: 50,
     display: "flex",
     // Row, not column: the round label sits inline with the controls now
     // that nothing else shares the container.
@@ -7836,6 +8001,16 @@ const styles: Record<string, React.CSSProperties> = {
   // `actionBar` alongside its base style, not replacing it, so the bar's
   // own layout/padding/background are unaffected -- only the border color
   // and the shared pulsing-glow animation are added.
+  /* Design note #298: the pinned form. Vertical padding halves and the
+     bar loses its rounding against the top edge -- it is now a chrome
+     element rather than a card, and a floating rounded card that never
+     moves reads as a stuck modal. */
+  actionBarCondensed: {
+    padding: "3px 12px",
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    boxShadow: "0 2px 10px rgba(0, 0, 0, 0.45)",
+  },
   actionBarTurnPulse: {
     // Design note #35: crisp silver rather than the old `#c0392b`. Bright
     // enough to read as lit against `actionBar`'s dark fill, and it no
@@ -7932,10 +8107,15 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "8px 14px",
-    // Design note #295: the corporation status strip, same band.
-    padding: "5px 10px",
-    minHeight: "44px",
+    gap: "6px 14px",
+    /* Design note #299: the strip's height is set by the station-token row
+       and the train chips inside it, which are already compact -- so the
+       44px floor was adding empty space to a row that had none to give.
+       Dropped rather than lowered: a minimum height on a card whose
+       contents already exceed it does nothing except on the one screen
+       where the card is nearly empty, and there the extra height is not
+       worth the pixels everywhere else. */
+    padding: "3px 10px",
     borderRadius: "8px",
     backgroundColor: "#171c28",
     border: "1px solid #2b3242",
@@ -8011,13 +8191,19 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   /* Design note #164: the two-row Operating Round panel. */
-  orPanel: { display: "flex", flexDirection: "column", gap: "6px", width: "100%" },
+  /* Design note #299: the gap between the corporation strip, the sub-phase
+     stepper and the action row. Three stacked rows at 6px each is 18px of
+     pure separation in a panel whose own rows are ~30px -- halved, which
+     still reads as three distinct bands. */
+  orPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
   orPanelStepperRow: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     borderBottom: "1px solid #2b3242",
-    paddingBottom: "4px",
+    // Design note #299: the rule below the strip is the separator; 4px of
+    // padding on top of the stepper's own is a second one made of air.
+    paddingBottom: "1px",
   },
   orPanelActionRow: {
     display: "grid",

@@ -252,7 +252,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     alignItems: "center",
     gap: "10px",
-    padding: "8px 0",
+    /* Design note #299 (`App.tsx`): 8px above and below the step strip, on
+       top of the panel's own row gap, made this the tallest thing in the
+       action panel that contains no control. It is a progress indicator --
+       it needs to be readable, not spacious. */
+    padding: "3px 0",
   },
   strip: {
     display: "flex",

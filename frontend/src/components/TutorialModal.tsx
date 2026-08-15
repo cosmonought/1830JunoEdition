@@ -79,6 +79,38 @@ export function resetTutorials(topicKeys: readonly string[]): void {
   for (const key of topicKeys) writeFlag(SEEN_PREFIX + key, false);
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 159: FORGETTING IS NOT THE SAME AS BEING TOLD TO STOP
+ * ==================================================================
+ *
+ * REPORTED: the tutorials do not appear on the zero-state sandbox, which
+ * is precisely where they should, because that scenario exists to be
+ * experienced the way a new player would.
+ *
+ * The trigger was never broken -- `isWaterfallPhase` is true there and the
+ * modal opens on it. What stops it is the SEEN flag, which persists in
+ * `localStorage` across sessions by design, and which anyone who has run
+ * this sandbox once has already set. The zero state resets the game and
+ * had no way to reset the teaching.
+ *
+ * THIS DELIBERATELY DOES NOT CLEAR THE GLOBAL OFF SWITCH, which is the
+ * whole reason it exists beside `resetTutorials` rather than reusing it.
+ * The two flags record different things:
+ *
+ *   the SEEN flag   -- "I have read this one." A fact about progress
+ *                      through a game, and starting a new game invalidates
+ *                      it exactly as it invalidates the board.
+ *   the OFF switch  -- "Stop showing me these." A standing preference
+ *                      about the APPLICATION, which no in-game action
+ *                      should quietly overturn.
+ *
+ * Clearing both would mean a player who ticked "turn tutorials off" gets
+ * them back every time they open a fresh sandbox, which is the behaviour
+ * that checkbox exists to prevent. */
+export function replayTutorials(topicKeys: readonly string[]): void {
+  for (const key of topicKeys) writeFlag(SEEN_PREFIX + key, false);
+}
+
 export interface TutorialPage {
   title: string;
   body: string;

@@ -464,10 +464,35 @@ export function WaterfallAuctionDashboard({
                 {gameState.player_addresses.map((player, index) => {
                   const isTurnHolder =
                     player === (miniAuction ? miniAuction.current_turn : waterfallState.current_turn);
+                  /* ==================================================
+                       DESIGN NOTE 33: AN AUCTION IS ABOUT WHO CAN PAY
+                      ==================================================
+
+                      The seating list showed the order and the names and
+                      not the one number that decides every bid in the
+                      round. A player judging whether to raise needs to
+                      know what the others can still afford -- that is not
+                      incidental context, it is the whole strategic content
+                      of a private auction.
+
+                      It was available all along: `player_cash` is on the
+                      game state this component already receives. Nothing
+                      had to be plumbed, only rendered. */
+                  const cash = gameState.player_cash.find(
+                    (entry) => entry.player === player,
+                  )?.cash_vgp;
                   return (
                     <div key={player} style={isTurnHolder ? styles.seatingRowActive : styles.seatingRow}>
                       <span style={styles.seatingIndex}>{index + 1}.</span>
                       <span style={styles.seatingAddress}>{nameFor(player, playerLabel)}</span>
+                      {cash !== undefined && (
+                        <span
+                          style={styles.seatingCash}
+                          title={`${nameFor(player, playerLabel)} holds $${cash}.`}
+                        >
+                          ${cash}
+                        </span>
+                      )}
                       {/* ==================================================
                            DESIGN NOTE 32: IN HOTSEAT THERE IS NO "YOU"
                           ==================================================
@@ -1656,6 +1681,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #32: the seat that must act now. Reads as a state rather
      than an identity, which is what distinguishes it from `youBadge`. */
+  /* Design note #33: the figure every bid is measured against. Tabular
+     numerals so a column of them is comparable at a glance, which is the
+     only reason to show four of them at once. */
+  seatingCash: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#7ee0a1",
+    fontVariantNumeric: "tabular-nums",
+    marginLeft: "auto",
+  },
   turnBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,

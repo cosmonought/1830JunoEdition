@@ -756,8 +756,39 @@ export type SandboxTrainFixture = "default" | "spread";
 const SPREAD_FIXTURE_FLEET: readonly string[] = ["2", "3"];
 const SPREAD_FIXTURE_COMPANIES = 2;
 
-/** 1830's starting capital for a four-seat table. */
-const ZERO_STATE_PLAYER_CASH = 400;
+/* ==================================================================
+ *  DESIGN NOTE 10: THE BANK IS WHAT IT STARTED WITH, MINUS WHAT IT DEALT
+ * ==================================================================
+ *
+ * REPORTED: the zero state opens with the bank holding $8,460 when it
+ * should hold $9,600.
+ *
+ * `sandboxGameState` sets `virtual_bank_vgp: "8420"` -- a MID-GAME figure,
+ * hand-authored to balance against the rich fixture's player cash and
+ * corporate treasuries. Design note #9's zero state reset the players and
+ * the treasuries and left the bank alone, so the one number that is a
+ * FUNCTION of the other two kept its old value. The result was a table
+ * where the money did not add up: $12,000 of bank start against $8,420 +
+ * $1,600 + $0 = $10,020 on the board.
+ *
+ * So the two figures are derived from one total here rather than typed
+ * separately. Cash dealt is `TOTAL_DISTRIBUTED` split evenly across the
+ * seats; the bank keeps the rest. Change the seat count and both move
+ * together, and the sum stays $12,000 by construction rather than by
+ * somebody re-checking the arithmetic.
+ *
+ * NOTE ON THE FIGURE: $2,400 split four ways is $600 each. Canonical 1830
+ * deals by headcount -- $400 each at four players, for $1,600 total -- so
+ * this is the Juno Edition's own flat distribution rather than the printed
+ * rule. Recorded because the previous pass used the canonical $400 and a
+ * future reader comparing against a rulebook will otherwise think this is
+ * a bug. */
+const ZERO_STATE_TOTAL_DISTRIBUTED = 2400;
+const ZERO_STATE_BANK_START = 12000;
+const ZERO_STATE_PLAYER_CASH = Math.floor(
+  ZERO_STATE_TOTAL_DISTRIBUTED / SANDBOX_PLAYERS.length,
+);
+const ZERO_STATE_BANK_CASH = ZERO_STATE_BANK_START - ZERO_STATE_TOTAL_DISTRIBUTED;
 
 export function sandboxScenarioState(
   id: SandboxScenarioId,
@@ -825,6 +856,9 @@ export function sandboxScenarioState(
         ...entry,
         cash_vgp: String(ZERO_STATE_PLAYER_CASH),
       })),
+      // Design note #10: the bank holds what it has not dealt out.
+      virtual_bank_vgp: String(ZERO_STATE_BANK_CASH),
+      virtual_bank_start: String(ZERO_STATE_BANK_START),
       // Nothing has floated, so there is no operating queue yet.
       active_operating_order: [],
       active_corporation_index: 0,

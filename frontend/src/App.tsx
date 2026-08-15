@@ -674,6 +674,8 @@ import TutorialModal, {
   STOCK_MARKET_TUTORIAL,
   STOCK_ROUND_TUTORIAL,
   WATERFALL_AUCTION_TUTORIAL,
+  TUTORIAL_LIBRARY,
+  replayTutorials,
 } from "./components/TutorialModal";
 import { ConnectWalletButton } from "./components/ConnectWalletButton";
 import { useFirestoreChat } from "./components/ChatBox";
@@ -1329,6 +1331,8 @@ function ContextualActionBar({
   onOpenPrivateTrade,
   ownsAnyTrain,
   mustBuyTrain,
+  activePlayerName,
+  activePlayerCash,
   privateCompanies,
   privatePowerViewer,
   sandboxMode,
@@ -1410,6 +1414,26 @@ function ContextualActionBar({
    *  1830's mandatory purchase applies. Distinct from `!ownsAnyTrain`,
    *  which is also true when the chain simply did not say. */
   mustBuyTrain: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 300: THE PLAYER'S OWN MONEY WAS NOWHERE ON THIS PANEL
+   * ==================================================================
+   *
+   * The bar reports the CORPORATION's treasury, which is what pays for
+   * track, tokens and trains -- and says nothing about the player's own
+   * cash, which is what pays for shares, private companies, and the
+   * president's emergency train purchase this app now enforces (design
+   * note #293).
+   *
+   * Those are different pockets and both are spent from this screen. A
+   * president told "you must buy a train" with no way to see whether they
+   * can personally cover it is being asked a question the UI is refusing
+   * to answer.
+   *
+   * It stays in the CONDENSED form too. Design note #298's rule is "keep
+   * what a player needs while looking at the board" -- and whether they can
+   * afford the thing they are about to click is exactly that. */
+  activePlayerName: string | null;
+  activePlayerCash: number | null;
   /** Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
@@ -2024,6 +2048,18 @@ function ContextualActionBar({
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
+                </span>
+              )}
+              {/* Design note #300: the acting PLAYER's cash, which is a
+                  different pocket from the corporation's treasury shown in
+                  the strip above. */}
+              {activePlayerCash !== null && (
+                <span
+                  style={styles.playerCashBadge}
+                  title={`${activePlayerName ?? "The acting player"} holds $${activePlayerCash} personally. Separate from the corporation's treasury -- this is what buys shares, privates, and a president's emergency train.`}
+                >
+                  <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
+                  <span style={styles.playerCashValue}>${activePlayerCash}</span>
                 </span>
               )}
               {phaseAlert && (
@@ -2879,6 +2915,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
   const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
 
+  /* ==================================================================
+   *  DESIGN NOTE 301: A NEW GAME FORGETS THAT YOU HAVE PLAYED BEFORE
+   * ==================================================================
+   *
+   * The zero-state scenario exists to be met the way a new player meets
+   * the game, and the tutorials are part of that -- but their "seen" flags
+   * live in `localStorage` and outlive every reset the scenario performs.
+   * Anyone who has opened this sandbox once has dismissed the auction
+   * explainer, so the one board built to show a first game was the one
+   * board that never taught it.
+   *
+   * Cleared on ENTERING the zero state, which includes a page load that
+   * starts there. That is deliberate rather than incidental: a new game is
+   * exactly when a first-game explainer should be offered again, and the
+   * mid-game fixtures leave the flags alone, so a tester hopping between
+   * `or-green` and `stock` is not interrupted.
+   *
+   * `replayTutorials` rather than `resetTutorials` -- see design note #159
+   * in `TutorialModal.tsx` for why the global off switch is left standing.
+   * A player who has said "stop showing me these" has said it about the
+   * app, not about this game. */
+  useEffect(() => {
+    if (!sandbox || !sandboxIsZeroState) return;
+    replayTutorials(TUTORIAL_LIBRARY.map((topic) => topic.topicKey));
+  }, [sandbox, sandboxIsZeroState, sandboxScenarioId]);
+
   /* Design note #1 in `PrivatePowerPanel.tsx`: which abilities have fired.
      Local, because there is no contract message to read it back from --
      the panel exists so the surface and its two gates are testable, and
@@ -3679,6 +3741,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   }, [viewerAddress, gameState]);
 
   useDocumentTitleFlash(isMyTurn);
+
+  /** Design note #300: the acting seat's personal cash. `null` when there
+   *  is no seat on turn or the chain does not report it -- a missing wallet
+   *  must not render as $0, which is a real and very different state. */
+  const activeSeatCash = useMemo(() => {
+    if (!gameState) return null;
+    const seat = actingSeatIndex(gameState);
+    if (seat === null) return null;
+    const address = gameState.player_addresses[seat];
+    const entry = gameState.player_cash.find((row) => row.player === address);
+    if (!entry) return null;
+    const value = Number(entry.cash_vgp);
+    return Number.isFinite(value) ? value : null;
+  }, [gameState]);
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
@@ -6653,6 +6729,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
                   ownsAnyTrain={ownsAnyTrain}
                   mustBuyTrain={mustBuyTrain}
+                  activePlayerName={activeSeatLabel}
+                  activePlayerCash={activeSeatCash}
                   privateCompanies={gameState?.private_companies ?? []}
                   privatePowerViewer={viewerAddress}
                   sandboxMode={sandbox}
@@ -8218,6 +8296,27 @@ const styles: Record<string, React.CSSProperties> = {
     // floor was already 44px and nothing stopped the row exceeding it.
     minHeight: "44px",
     maxHeight: "52px",
+  },
+  /* Design note #300: the player's own wallet. Deliberately styled unlike
+     the corporation strip's treasury -- they are different money, and two
+     figures that look alike on one bar will be read as one. */
+  playerCashBadge: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "5px",
+    padding: "2px 7px",
+    borderRadius: "999px",
+    border: "1px solid #2f6f55",
+    backgroundColor: "#16241d",
+    cursor: "help",
+    whiteSpace: "nowrap",
+  },
+  playerCashName: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#8fb6a1" },
+  playerCashValue: {
+    fontSize: FONT_SIZE.body,
+    fontWeight: 800,
+    color: "#7ee0a1",
+    fontVariantNumeric: "tabular-nums",
   },
   orPanelRailLeft: {
     display: "flex",

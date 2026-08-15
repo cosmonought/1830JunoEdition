@@ -406,13 +406,6 @@ const DEFAULT_HEX_SIZE = 42;
 const DEFAULT_WIDTH = 900;
 const DEFAULT_HEIGHT = 640;
 
-/** Design note #30: the share of the window height the board may occupy.
- *
- *  The remainder is not slack -- it is the Operating Round action bar above
- *  and the round-detail panels below, both of which are where the turn is
- *  actually taken. A board that consumed the whole viewport would be a map
- *  with no game around it. */
-const MAX_VIEWPORT_FRACTION = 0.72;
 /** Design note #36/item 1: was a flat `MAX_ZOOM = 3` ABSOLUTE cap, applied
  *  not just to the interactive zoom-in handlers below but to `minZoom`
  *  itself (the baseline board-fit zoom) -- on a wide-enough viewport,
@@ -741,63 +734,39 @@ export function HexGridRenderer({
    *  to match (`App.tsx` design note #13), letting the BROWSER's own page
    *  scrollbar carry the rest. */
   /* ==================================================================
-   *  DESIGN NOTE 30: THE BOARD MAY NOT PUSH THE GAME OFF SCREEN
+   *  DESIGN NOTE 30: REVERTED -- THE BOARD IS NOT A SCROLL WINDOW
    * ==================================================================
    *
-   * REPORTED: the layout needs 50% browser zoom to look proportionate, and
-   * the action headers and bottom status panels get pushed off-screen.
+   * This briefly capped the height at 72% of the viewport, on the
+   * reasoning that a board taller than the window pushes the action bar
+   * and the status panels off screen.
    *
-   * Design note #27 above made the height DERIVED from the board's true
-   * aspect ratio at whatever width is available, deliberately letting
-   * ancestors grow and "the BROWSER's own page scrollbar carry the rest".
-   * That is right about proportion and wrong about the consequence: the
-   * board is wide, so at a 1080p pane width the derived height is taller
-   * than the viewport, the page grows to fit it, and the action bar above
-   * and the status panels below are pushed out of view. The player's only
-   * lever is the zoom control -- which is exactly the report.
+   * It was wrong, and the way it was wrong is worth keeping. The
+   * assumption was that a canvas shorter than the board's aspect ratio
+   * would LETTERBOX -- that `fitView` would refit the map into whatever
+   * box it was given and leave margin at the sides. It does not: the
+   * camera holds a locked baseline pose (design note #8), so a shorter
+   * canvas simply shows less of the board. The map was cropped top and
+   * bottom, and the only way to see the missing rows was to pan inside the
+   * canvas -- a scroll window nested inside a scrolling page, which is
+   * worse than the problem it replaced.
    *
-   * A CAP CLOSES IT WITHOUT UNDOING #27. The aspect ratio still decides
-   * the height whenever it fits; when it does not, the height stops at
-   * what the viewport can show. The canvas then renders WIDER than the
-   * board needs, and `fitView` already handles that -- it fits the board to
-   * the canvas and centres it, so the result is margin at the sides rather
-   * than a squashed map.
+   * Design note #27 had already settled this, and design note #13 in
+   * `App.tsx` dropped `overflow: auto` from the board's ancestors on
+   * purpose so the PAGE scrollbar carries the map. The height is derived
+   * from the board's own aspect ratio at the available width, the wrapper
+   * grows to match, and the whole board is reachable by scrolling the page
+   * exactly like any other tall content.
    *
-   * `MAX_VIEWPORT_FRACTION` is the share of the window the board may take.
-   * Deliberately well under 1: the chrome above and below it is not
-   * decoration, it is where the turn is actually played, and a board that
-   * fills the viewport exactly would still leave nothing for it.
-   *
-   * `heightProp` STILL WINS OUTRIGHT. A caller passing an explicit height
-   * is stating a layout it has already solved -- the tile-tray thumbnail,
-   * a test harness -- and second-guessing it with a viewport rule would
-   * break the one case that is definitely not a full-page board. */
-  /* Design note #30: the live window height, so the cap re-resolves when
-     the window is resized or a devtools pane opens. Read through state
-     rather than `window.innerHeight` inside the memo -- a memo cannot
-     observe a global, so it would cap against whatever the height happened
-     to be on first render and never move again.
-
-     `0` on the server-rendered/test path, where there is no viewport to cap
-     against and the board's natural height is the right answer. */
-  const [windowHeight, setWindowHeight] = useState<number>(() =>
-    typeof window === "undefined" ? 0 : window.innerHeight,
-  );
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const onResize = () => setWindowHeight(window.innerHeight);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
+   * If the chrome being pushed down is worth solving later, the fix is a
+   * smaller board -- fewer pixels per hex -- not a smaller window onto the
+   * same board. */
   const height = useMemo(() => {
     if (heightProp !== undefined) return heightProp;
     const boundsWidth = Math.max(boardContentBounds.maxX - boardContentBounds.minX, 1);
     const boundsHeight = Math.max(boardContentBounds.maxY - boardContentBounds.minY, 1);
-    const natural = Math.round(width * (boundsHeight / boundsWidth));
-    if (windowHeight <= 0) return natural;
-    return Math.min(natural, Math.round(windowHeight * MAX_VIEWPORT_FRACTION));
-  }, [heightProp, boardContentBounds, width, windowHeight]);
+    return Math.round(width * (boundsHeight / boundsWidth));
+  }, [heightProp, boardContentBounds, width]);
   /** Monotonic counter guarding against a stale `GetLegalTilePlacements`
    *  response (from an earlier click) resolving after a newer click's
    *  request has already superseded it -- only the most recent request's

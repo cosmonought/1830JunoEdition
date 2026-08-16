@@ -154,67 +154,92 @@ interface PrivateCatalogEntry {
  *  `MOCK_TRAIN_CATALOG`): if the backend gains or changes an ability, this
  *  table has to be updated by hand. See `PrivateCatalogEntry.ability` for
  *  the two powers this text currently describes ahead of the contract. */
+/* ==================================================================
+ *  DESIGN NOTE 360: THE RULEBOOK'S OWN WORDS
+ * ==================================================================
+ *
+ * These five strings are the 1830 rulebook's canonical text for the
+ * privates' special powers, supplied verbatim. They replace paraphrases
+ * that were shorter and, in three places, wrong in ways that mattered:
+ *
+ *   D&H  said the tile lay was free. It is not -- the mountain costs the
+ *        usual $120 and only the TOKEN is free, which is most of the cost.
+ *        It also omitted that the tile DOES consume the corporation's
+ *        normal placement, the opposite of the C&SL's grant of a second.
+ *   M&H  omitted both conditions on the exchange (the 60% cap, and NYC
+ *        shares actually being available) and the fact that it can be done
+ *        between other players' turns.
+ *   C&A  was described as an ability the owner triggers. It is not: the
+ *        share arrives on PURCHASE and the private stays open.
+ *
+ * VERBATIM, INCLUDING THE TYPOGRAPHY. The curly apostrophes and the em dash
+ * are the source text's; normalising them to ASCII would be an edit, and
+ * once one edit is allowed the text stops being quotable.
+ *
+ * ONE CORRECTION, MADE ON REQUEST. The supplied D&H copy read "it need not
+ * be connect to any track"; it now reads "connected". The first pass
+ * reproduced that typo deliberately and flagged it rather than fixing it
+ * quietly -- correcting a quotation without saying so is how a quotation
+ * stops matching its source. Raised, confirmed, changed. It is the only
+ * departure from the text as given, which is why it is written down here
+ * rather than left for a future reader to notice as a discrepancy.
+ *
+ * SCHUYLKILL VALLEY has no entry in the supplied set because it has no
+ * power. Its line stays as the codebase's own, which says so outright
+ * rather than leaving a blank that reads as missing data.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 312 (preserved): TWO PRIVATES CANNOT RESERVE ONE HEX
+ * ==================================================================
+ *
+ * The paraphrases this replaces once had D&H naming B20 -- C&SL's hex --
+ * and M&H claiming F16, which is D&H's. The canonical text above settles it
+ * by construction: C&SL is B-20, D&H is F-16, and M&H reserves nothing at
+ * all because its power is the NYC exchange.
+ *
+ * KEPT AS A NOTE because two other files cite #312 by number
+ * (`utils/privateReservations.ts` and `utils/sandboxState.ts`), and because
+ * the DIVERGENCE it recorded is still live and still belongs on the
+ * contract audit list:
+ *
+ *   ⚠ `auction.rs` gives Mohawk & Hudson a reserved hex of F16. On this
+ *     board F16 is Scranton and Scranton is the D&H's. Nothing in the
+ *     frontend reads the reserved hex to make a decision, so the divergence
+ *     is cosmetic until the contract starts enforcing it -- and fixing it
+ *     properly means changing `auction.rs`, not editing this text back.
+ */
 const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
   1: {
     revenue: 5,
     // Canonically correct: Schuylkill Valley is the one 1830 private with
     // NO special ability. Said outright rather than left blank, because a
     // blank slot reads as missing data.
-    ability: "No special power — bought for its revenue and as cheap entry into the auction.",
+    ability: "No special power \u2014 bought for its revenue and as cheap entry into the auction.",
   },
   2: {
     revenue: 10,
     ability:
-      "Its owning corporation may lay a free track tile on B20 (Burlington), in addition to its normal tile lay for the turn.",
+      "A railroad owning the CL may lay a tile on the CL\u2019s hex (B-20). This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. This tile placement may be performed in addition to the railroad\u2019s normal tile placement\u2014on that turn only it may play two tiles.",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 312: TWO PRIVATES CANNOT RESERVE THE SAME HEX
-   * ==================================================================
-   *
-   * REPORTED: Champlain & St. Lawrence and Delaware & Hudson both claim to
-   * reserve B20.
-   *
-   * They did, and only one of them was right. C&SL's hex IS B20 -- this
-   * board labels it Burlington (`hexBoardData.ts`), and `PrivatePowerPanel`
-   * has always pointed C&SL's free tile lay there. D&H's hex is F16, which
-   * this board labels Scranton, and `PrivatePowerPanel` has always pointed
-   * D&H's free tile-and-station there too. So the two panels that drive the
-   * actual ability buttons were correct all along; this catalog -- which is
-   * display text only -- had D&H's entry naming C&SL's hex.
-   *
-   * MOHAWK & HUDSON WAS THE SECOND HALF OF THE SAME SLIP. Entry 4 claimed
-   * M&H blocks F16, which is D&H's hex, so correcting D&H alone would have
-   * moved the collision rather than removed it. M&H's power in 1830 is not
-   * a hex reservation at all -- it is the exchange for a 10% NYC share,
-   * which is what `PrivatePowerPanel` already offers as its button. The
-   * blocking line was describing an ability M&H does not have, on a hex
-   * belonging to a different company.
-   *
-   * ⚠ THIS NOW DIVERGES FROM THE CONTRACT. `sandboxState.ts` design note #1
-   * records that `auction.rs` gives M&H a reserved hex of F16. That is a
-   * backend fact and this pass does not touch the backend, so the divergence
-   * is deliberate and belongs on the contract audit list: on this board F16
-   * is Scranton and Scranton is D&H's. Fixing it properly means changing
-   * `auction.rs`, not editing this text back. */
   3: {
     revenue: 15,
     ability:
-      "Reserves F16 (Scranton): its owning corporation may lay a tile AND place a station there at no cost, and no other corporation may lay track on it until this private closes.",
+      "A railroad owning the DH may lay a track tile and a station token on the DH\u2019s hex (F-16). The mountain costs $120 as usual, but laying the token is free. This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. The tile laid does count as the owning railroad\u2019s one tile placement for his turn. If the DH does not lay a station token on the turn it lays the tile on its starting hex, it must follow the normal rules when placing a station (i.e., it must have a legal train route to the hex). Other railroads may lay a tile on the DH starting hex subject to the ordinary rules, after which the DH special effects are no longer available",
   },
   4: {
     revenue: 20,
     ability:
-      "May be exchanged for a 10% share of the NYC, if the NYC has floated. The exchange closes this private permanently.",
+      "A player owning the MH may exchange it for a 10% share of NYC, provided he does not already hold 60% of the NYC shares and there is NYC shares available in the bank or the pool. The exchange may be made during the player\u2019s turn of a stock round or between the turns of other players or railroads in either stock or operating rounds. This action closes the MH.",
   },
   5: {
     revenue: 25,
     ability:
-      "May be exchanged for a 10% share of the PRR. The exchange closes this private permanently.",
+      "The initial purchaser of the CA immediately receives a 10% share of PRR shares without further payment. This action does not close the CA. The PRR railroad will not be running at this point, but the shares may be retained or sold subject to the ordinary rules of the game.",
   },
   6: {
     revenue: 30,
     ability:
-      "Auto-floats the public B&O: the winner receives its 20% President's Certificate free, immediately sets B&O's par value, and the remaining 80% opens in the IPO pool.",
+      "The owner of the BO private company immediately receives the president\u2019s certificate of the B&O railroad without further payment and immediately sets a par share value. The BO private company may not be sold to any corporation, and does not change hands if the owning player loses the presidency of the B&O. When the B&O railroad purchases its first train this private company is closed down.",
   },
 };
 
@@ -326,14 +351,18 @@ export interface WaterfallAuctionDashboardProps {
  * the auction and nothing is wrong at all. A player who has learned that
  * red means trouble reads the liveliest card on the board as an alert.
  *
- * HOW IT IS BUILT, and why not simply `border-image`. A gradient cannot be
- * animated by rotating a `border-image` -- browsers do not interpolate it.
- * The reliable technique is a `::before` layer holding a `conic-gradient`
- * inset behind the card, with the card's own background masking the middle,
- * so what shows through is a ring of gradient; animating the gradient's
- * angle spins it. `@property` would let the angle interpolate natively, but
- * it is not universal, so the frames rotate the LAYER instead, which every
- * engine that ships `conic-gradient` also ships.
+ * HOW IT IS BUILT. Two background layers on one element: an opaque fill
+ * clipped to the PADDING box, and the gradient clipped to the BORDER box.
+ * The fill covers the middle, so the only gradient left visible is the
+ * 3px ring -- a real animated border with no pseudo-element and no
+ * stacking-context tricks.
+ *
+ * WHY NOT A ROTATING `conic-gradient` ON A `::before`, which is the usual
+ * recipe: a rotating rectangle does not cover its own bounding box at the
+ * corners, so the ring tears diagonally four times per turn unless the
+ * layer is oversized into a square and re-centred. `background-position` on
+ * a repeating linear gradient has no such geometry, animates a property
+ * every engine interpolates, and needs no `@property` registration.
  *
  * THE PALETTE deliberately runs the full hue circle rather than a two- or
  * three-stop blend: the point is that it is unmistakably not any of the
@@ -345,9 +374,43 @@ export interface WaterfallAuctionDashboardProps {
  * that DISAPPEARS when motion is reduced is an information problem, and
  * turning the animation off must not cost the player the answer to "which
  * card is live". */
+/* ==================================================================
+ *  DESIGN NOTE 344: THE CHASER HAD A DARK GAP EVERY CYCLE
+ * ==================================================================
+ *
+ * REPORTED: the chaser pulses briefly, goes dark and restarts instead of
+ * flowing continuously.
+ *
+ * The animation was right; the TILING was not. The gradient layer carried
+ * `background-repeat: no-repeat`, so as the keyframes translated it the
+ * single painted tile slid off the border and left bare transparent border
+ * behind it. The ring lit up, drained to dark as the tile departed, then
+ * snapped back when the iteration restarted -- exactly "pulses, goes dark,
+ * restarts", and it was one word away from correct the whole time.
+ *
+ * TWO CONDITIONS MAKE IT SEAMLESS, and both have to hold:
+ *
+ *   1. THE TILE REPEATS. `background-repeat: no-repeat, repeat` -- the
+ *      opaque fill must NOT repeat (it is sized to the box), the gradient
+ *      must, so there is always another copy arriving behind the one
+ *      leaving.
+ *
+ *   2. ONE CYCLE MOVES EXACTLY ONE TILE. A percentage in
+ *      `background-position` is a fraction of (positioning area - image
+ *      width), NOT of the area -- so with `background-size: 200%` the
+ *      image is 2W wide, the base is (W - 2W) = -W, and `200%` resolves to
+ *      -2W. The tile is 2W. One tile exactly, and the W cancels, so it
+ *      holds at every card width. Change the 200% in `background-size`
+ *      without changing the 200% in the keyframe and the loop visibly
+ *      stutters once per cycle.
+ *
+ * The palette's first and last stops are the SAME colour for the same
+ * reason: the tile has to butt against its own copy without a seam.
+ */
 const MINI_AUCTION_GLOW_KEYFRAMES = `
 @keyframes waterfall-miniauction-chase {
-  to { background-position: 0 0, 300% 0; }
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 0 0, 200% 0; }
 }
 /* The whole border, and the card's fill, live HERE rather than in the
    inline style object -- inline styles beat a stylesheet, so a
@@ -365,9 +428,11 @@ const MINI_AUCTION_GLOW_KEYFRAMES = `
       #ff4d4d, #ff9f1c, #ffd400, #4ade80, #22d3ee,
       #4f7cff, #a855f7, #ff4dc4, #ff4d4d
     ) border-box;
-  background-size: auto, 300% 100%;
+  /* Design note #344: the 200% here and the 200% in the keyframe are ONE
+     number -- one cycle must translate exactly one tile. */
+  background-size: 100% 100%, 200% 100%;
   background-position: 0 0, 0 0;
-  background-repeat: no-repeat;
+  background-repeat: no-repeat, repeat;
   animation: waterfall-miniauction-chase 3.2s linear infinite;
   box-shadow: 0 0 18px rgba(120, 160, 255, 0.22), 0 3px 16px rgba(0, 0, 0, 0.45);
 }
@@ -401,6 +466,20 @@ export function WaterfallAuctionDashboard({
      that is whoever is on turn (there is no wallet to compare against);
      online it is the connected player, whose funds stay on screen even
      while somebody else acts. */
+  /* Design note #341: who owns which privates, for the seating table's new
+     column. Reads `gameState.private_companies` -- the same list the sold
+     cards come from (design note #303 writes the owner there), so the two
+     surfaces cannot disagree about who won what.
+
+     CLOSED PRIVATES ARE EXCLUDED. A closed company is off the board and
+     pays nothing; listing it would show a player holding an asset they no
+     longer have. Irrelevant during the auction, where nothing has closed
+     yet, and correct later if this table is ever reused. */
+  const ownedPrivatesFor = (player: string) =>
+    (gameState?.private_companies ?? []).filter(
+      (priv) => !priv.closed && priv.owner === player,
+    );
+
   const fundsSeat =
     (miniAuctionSeat(waterfallState, hotseat) ?? connectedWalletAddress) ?? null;
   const viewerFunds = fundsSeat ? auctionFunds(gameState, waterfallState, fundsSeat) : null;
@@ -601,27 +680,36 @@ export function WaterfallAuctionDashboard({
             the table stays. What does NOT go is the hint line -- it says
             where the controls are, which nothing else on this screen
             does, and it was merely housed in the same panel. */}
-        <div style={styles.actionRail}>
-          <div style={styles.actionRailMain}>
-            {!miniAuction && (
-              <span style={styles.hintText}>
-                {isMyMainTurn
-                  ? "Buy or bid directly on a company card above. Pass and Undo are in the action bar at the top of the screen."
-                  : "Waiting for the current player."}
-              </span>
-            )}
-            {miniAuction && (
-              <span style={styles.hintText}>
-                A mini-auction is running — its Raise and Pass controls are inside the
-                highlighted company card above.
-              </span>
-            )}
-          </div>
+        {/* ==================================================================
+             DESIGN NOTE 341: THE TABLE IS THE PANEL
+            ==================================================================
 
+            REPORTED: remove the large text-explanation panel at the bottom
+            of the Auction tab; expand the Seating Order to the full width
+            and add a column for the privates each player owns.
+
+            The hint block was the last survivor of the old footer (design
+            note #322 removed the Turn banner beside it), and it had the
+            same weakness: it was prose about where the controls are, on a
+            screen where the controls are on the cards a few inches above
+            and labelled. It cost half the footer's width to say something
+            a player learns once.
+
+            What replaces it is not empty space. The seating table takes the
+            whole width and spends it on the column the auction was missing:
+            WHO OWNS WHAT. Cash says what a player can still bid; the
+            privates say what they have already committed to and what income
+            they are drawing -- and until now the only way to see another
+            player's holdings was to read the sold cards and remember four
+            names. */}
+        <div style={styles.actionRail}>
           {gameState && gameState.player_addresses.length > 0 && (
-            <div style={styles.actionRailSide}>
+            <div style={styles.actionRailFull}>
               <div style={styles.seatingCard}>
-                <span style={styles.actionCardTitle}>Seating Order</span>
+                <div style={styles.seatingHeaderRow}>
+                  <span style={styles.actionCardTitle}>Seating Order</span>
+                  <span style={styles.seatingColumnHint}>Available / held &middot; Privates owned</span>
+                </div>
                 {gameState.player_addresses.map((player, index) => {
                   const isTurnHolder =
                     player === (miniAuction ? miniAuction.current_turn : waterfallState.current_turn);
@@ -674,6 +762,27 @@ export function WaterfallAuctionDashboard({
                           )}
                         </span>
                       )}
+                      {/* Design note #341: what this player already holds.
+                          Numbers rather than names -- the cards above are
+                          numbered 1-6 (design note #304) and players refer
+                          to these companies by that order ("the 3"), so
+                          six chips fit where six names never would. The
+                          full name and revenue are one hover away. */}
+                      <span style={styles.seatingPrivates}>
+                        {ownedPrivatesFor(player).length === 0 ? (
+                          <span style={styles.seatingPrivatesEmpty}>none</span>
+                        ) : (
+                          ownedPrivatesFor(player).map((priv) => (
+                            <span
+                              key={priv.private_id}
+                              style={styles.seatingPrivateChip}
+                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round.`}
+                            >
+                              {priv.private_id}
+                            </span>
+                          ))
+                        )}
+                      </span>
                       {/* ==================================================
                            DESIGN NOTE 32: IN HOTSEAT THERE IS NO "YOU"
                           ==================================================
@@ -1193,6 +1302,30 @@ function SoldPrivateCard({
 }) {
   const ownerLabel = nameFor(sold.owner ?? "", playerLabel, 6, 4);
   const paid = settledPrice ?? Number(sold.cost);
+  /* ==================================================================
+   *  DESIGN NOTE 340: WINNING A COMPANY SHOULD NOT ERASE IT
+   * ==================================================================
+   *
+   * REPORTED: sold private companies lose all their information -- powers,
+   * text -- keeping only the name and face value.
+   *
+   * They did. This card rendered a header, one figure and the sold badge,
+   * while the live card beside it rendered the same header, TWO figures
+   * (face value and revenue per OR) and the special-power block. So the
+   * moment a player won a company, the description of what they had just
+   * bought disappeared.
+   *
+   * That is exactly backwards. Before the sale the ability text is
+   * shopping information; after it, it is the owner's REFERENCE -- the
+   * thing they consult when deciding whether they can lay a free tile this
+   * turn, or what their income is. The auction grid stays on screen for the
+   * whole auction and the sold cards hold their slots (design note #30), so
+   * this was six cards progressively turning into blanks.
+   *
+   * The catalog lookup is by `private_id`, the same key the live card uses,
+   * so there is one source for the text and no chance of the two cards
+   * describing the same company differently. */
+  const catalogEntry = PRIVATE_COMPANY_CATALOG[sold.private_id];
   return (
     <div style={styles.privateCardSold}>
       <div style={styles.privateCardHeader}>
@@ -1205,7 +1338,19 @@ function SoldPrivateCard({
           <span style={styles.privateCardFigureValue}>${sold.cost}</span>
           <span style={styles.privateCardFigureLabel}>face value</span>
         </div>
+        {catalogEntry && (
+          <div style={styles.privateCardFigure}>
+            <span style={styles.privateCardFigureValueRevenue}>+{catalogEntry.revenue}</span>
+            <span style={styles.privateCardFigureLabel}>revenue / OR</span>
+          </div>
+        )}
       </div>
+      {catalogEntry && (
+        <div style={styles.privateCardAbilityBlock}>
+          <span style={styles.privateCardAbilityLabel}>Special power</span>
+          <span style={styles.privateCardAbility}>{catalogEntry.ability}</span>
+        </div>
+      )}
       <div style={styles.soldBadgeWrap}>
         {/* Design note #30: the badge WRAPS. It was a single nowrap line, so
             a long name plus a price overflowed the card and sat on the page
@@ -1814,21 +1959,18 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "10px",
   },
   /** Section caption for the interaction band. */
-  /** The mini-auction / turn-actions column inside the band. */
-  actionRailMain: {
+  /* Design note #341: the seating table is the whole footer now, so it
+     takes the whole width. The two styles it replaces -- a 280px side
+     column and a 420px main column -- were both sized to share the band
+     with the hint block, and are deleted rather than left unused: a style
+     nothing renders is an invitation to put something back beside the
+     table and undo the widening. */
+  actionRailFull: {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
-    flex: "1 1 420px",
+    flex: "1 1 100%",
     minWidth: 0,
-  },
-  /** The seating column inside the band. */
-  actionRailSide: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-    flex: "0 1 280px",
-    minWidth: "240px",
   },
   actionCard: {
     display: "flex",
@@ -1957,6 +2099,42 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #33: the figure every bid is measured against. Tabular
      numerals so a column of them is comparable at a glance, which is the
      only reason to show four of them at once. */
+  seatingHeaderRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "10px",
+    marginBottom: "2px",
+  },
+  seatingColumnHint: {
+    marginLeft: "auto",
+    fontSize: FONT_SIZE.micro,
+    color: "#6f7480",
+  },
+  /* Design note #341: fixed basis for the same reason the turn slot has one
+     (design note #323) -- a player winning their first private must not
+     shove every other column sideways. */
+  seatingPrivates: {
+    flex: "0 0 128px",
+    display: "flex",
+    flexDirection: "row",
+    gap: "3px",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  seatingPrivatesEmpty: { fontSize: FONT_SIZE.micro, color: "#5c626e" },
+  seatingPrivateChip: {
+    minWidth: "16px",
+    padding: "0 4px",
+    borderRadius: "4px",
+    backgroundColor: "#2a3142",
+    border: "1px solid #3a4055",
+    color: "#c8cbd6",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    textAlign: "center",
+    cursor: "help",
+  },
   seatingCash: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,

@@ -289,6 +289,30 @@ export function describeGameplayAction(
   if ("RejectTrainOffer" in msg) return `${actingPlayer(context)} rejected a train offer.`;
   if ("RescindTrainOffer" in msg) return `${actingPlayer(context)} withdrew a train offer.`;
 
+  /* ==================================================================
+   *  DESIGN NOTE 361: PRIVATES ARE KNOWN BY NUMBER AS WELL AS NAME
+   * ==================================================================
+   *
+   * REPORTED: the log prints "Schuylkill Valley" where it should print
+   * "1. Schuylkill Valley".
+   *
+   * The auction cards have been numbered 1-6 since design note #304, on the
+   * reasoning that 1830 players refer to these companies by waterfall order
+   * as much as by name -- "the 3" is how a table talks about the Delaware &
+   * Hudson. The log was the one surface still using bare names, so a player
+   * reading back what happened had to translate between two vocabularies.
+   *
+   * ONE HELPER, used by every arm that names a private, so the log cannot
+   * develop two formats. Falls back to the bare id when the room does not
+   * report the company -- "private #3" is still better than "undefined",
+   * and it is the same fallback design note #307 established. */
+  const namePrivate = (privateId: number): string => {
+    const entry = context.gameState?.private_companies.find(
+      (row) => row.private_id === privateId,
+    );
+    return entry ? `${entry.private_id}. ${entry.name}` : `private #${privateId}`;
+  };
+
   if ("BuyPrivateCompany" in msg) {
     const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
     const target = gameState?.private_companies.find(
@@ -296,7 +320,7 @@ export function describeGameplayAction(
     );
     const seller = target?.owner ? context.labelForAddress(target.owner) : "its owner";
     return (
-      `${corp(gameState, protocol_id)} bought ${target?.name ?? `private #${private_id}`} ` +
+      `${corp(gameState, protocol_id)} bought ${namePrivate(private_id)} ` +
       `from ${seller} for $${price}.`
     );
   }
@@ -327,14 +351,11 @@ export function describeGameplayAction(
   if ("WaterfallBidHigher" in msg) {
     const { private_id, bid_amount } = msg.WaterfallBidHigher;
     /* Design note #307: NAME IT. "private #3" is the contract's identifier
-       and means nothing at the table -- players know these companies by
-       name, and the state already carries it. Falls back to the number only
-       when the room does not report the private at all, which is a
-       different and much rarer failure. */
-    const target = context.gameState?.private_companies.find(
-      (entry) => entry.private_id === private_id,
-    );
-    return `${actingPlayer(context)} bid $${bid_amount} on ${target?.name ?? `private #${private_id}`}.`;
+       and means nothing at the table. Design note #361 added the number
+       back in front of the name, which is how players actually refer to
+       these companies -- the lookup that used to sit here is now inside
+       `namePrivate`, so both arms format identically. */
+    return `${actingPlayer(context)} bid $${bid_amount} on ${namePrivate(private_id)}.`;
   }
 
   if ("WaterfallMiniAuctionRaise" in msg) {

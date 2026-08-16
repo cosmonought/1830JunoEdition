@@ -128,6 +128,8 @@ import {
   drawRestrictionBadge,
   drawReservationBadge,
   drawRouteOverlays,
+  hitTestRoutes,
+  type RouteHitPaths,
   drawSingleNodeNameplate,
   drawStackedNameLabel,
   drawStationCircle,
@@ -263,6 +265,31 @@ export interface HexGridRendererProps {
    *  assembling. */
   routeOverlays?: readonly RouteOverlay[];
   /* ==================================================================
+   *  DESIGN NOTE 374: THE MAP DRIVES THE CURSOR TOO
+   * ==================================================================
+   *
+   * `hexCanvasPrimitives.ts` design note #373 explains the shared cursor.
+   * This is the map's end of it, and it is the only one of the three
+   * surfaces that has to WORK for the connection: on a canvas there are no
+   * elements to hover, so a route path cannot raise an event by itself.
+   *
+   * THE HIT TEST IS HEX-GRAINED, deliberately. `handlePointerMove` already
+   * resolves the pointer to an axial `(q, r)` for the tooltip and the hover
+   * highlight; asking which overlays contain that hex is a lookup against
+   * data already in hand. Pixel-perfect proximity to the drawn spline would
+   * mean re-deriving every authored `Path2D` under its transform and
+   * running `isPointInStroke` per frame, for a gain the player cannot see:
+   * routes run along rails, and a rail occupies its hex.
+   *
+   * A HEX ON TWO ROUTES HIGHLIGHTS NEITHER. Overlapping routes are the
+   * common case in 1830 -- that is why they have separate colours at all --
+   * and picking one arbitrarily would be worse than picking none: the
+   * player would hover a shared segment, see a highlight, and conclude the
+   * wrong train ran it. Ambiguity resolves to no answer.
+   */
+  highlightedTrainIndex?: number | null;
+  onHighlightRoute?: (trainIndex: number | null) => void;
+  /* ==================================================================
    *  DESIGN NOTE 223: THE WILD BLUE YONDER
    * ==================================================================
    *
@@ -344,6 +371,35 @@ export interface HexGridRendererProps {
      *  the board, the toolbar and the route line agree about whose turn it
      *  is. Omitted falls back to the neutral highlight ink. */
     glowColor?: string;
+    /* ==================================================================
+     *  DESIGN NOTE 377: THE VEIL IS BACK, FOR ONE PLAYER
+     * ==================================================================
+     *
+     * Design note #367 removed the Lay Track veil outright on two
+     * objections. Only one of them survives, and it needed a condition
+     * rather than a deletion:
+     *
+     *   RIGHT: "it dimmed the board for EVERYONE." `layFocus` describes ONE
+     *   corporation's reach and every player sees the same canvas, so three
+     *   of four watched the map grey out for a restriction that was not
+     *   theirs. That is what this flag fixes -- the veil now belongs to the
+     *   player whose turn it is.
+     *
+     *   OVERSTATED: "it suppressed the board to emphasise a subset." True
+     *   at `0.55`, where more than half the light went. The active player
+     *   genuinely does want contrast against their own legal set, and the
+     *   answer is a lighter overlay (`LAY_TRACK_DIM_ALPHA`, now `0.22`),
+     *   not none. Deleting it removed the contrast along with the problem.
+     *
+     * SET BY THE SHELL, from `isMyTurn`, because only the shell knows who
+     * is watching -- the renderer has a board and no identity. In hotseat
+     * it is true by construction (whoever is at the keyboard holds the
+     * turn) and correctly goes false when a tester pins the view to another
+     * seat, which is how the passive-player case is reachable in sandbox.
+     *
+     * DEFAULT `false`: a caller that has not thought about whose turn it is
+     * gets the undimmed board, which is the safe half of the asymmetry. */
+    dim?: boolean;
   };
   /** Design note #159: the pointer's meaning right now.
    *
@@ -612,6 +668,36 @@ const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
  *  the memo that derives the reservations. */
 const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
 
+/** Design note #365: how long a pointer must rest on a hex before its
+ *  tooltip appears. */
+export const HEX_TOOLTIP_DELAY_MS = 2000;
+
+/* ==================================================================
+ *  DESIGN NOTE 366: THE RESERVATION, IN THE TOOLTIP
+ * ==================================================================
+ *
+ * The badge (design note #364) says a hex is spoken for; it does not have
+ * room to say by whom in words, and two or three letters on a corner are
+ * only legible to somebody who already knows the abbreviation.
+ *
+ * The tooltip is where that gets spelled out, and it is now worth reading:
+ * design note #365 made it something a player deliberately waits for rather
+ * than something that flashes past, so a line appended here is a line
+ * somebody asked for.
+ *
+ * ONE SHORT CLAUSE, appended rather than substituted. The hex's own
+ * description -- its name, its terrain, its value -- is why the player
+ * hovered; the reservation is a qualifier on it. "Reserved by CSL" is four
+ * words and matches the badge exactly, so the mark on the board and the
+ * text under the cursor teach each other.
+ */
+export function withReservationNote(
+  description: string,
+  reservation: { initials: string } | null,
+): string {
+  return reservation ? `${description} — Reserved by ${reservation.initials}` : description;
+}
+
 export function HexGridRenderer({
   mapGrid,
   hexSize = DEFAULT_HEX_SIZE,
@@ -628,6 +714,8 @@ export function HexGridRenderer({
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
   routeOverlays = EMPTY_ROUTE_OVERLAYS,
+  highlightedTrainIndex = null,
+  onHighlightRoute,
   cursorMode = "default",
   suppressHoverTooltip = false,
   layFocus,
@@ -889,6 +977,49 @@ export function HexGridRenderer({
    *  that specific hex's label should render in its bright, bold, 100%-
    *  opaque hover style instead of its default muted/translucent one. */
   const [hoveredHexCoord, setHoveredHexCoord] = useState<{ q: number; r: number } | null>(null);
+
+  /* ==================================================================
+   *  DESIGN NOTE 365: THE TOOLTIP WAITS
+   * ==================================================================
+   *
+   * REPORTED: map tooltips appear instantly, causing visual fatigue while
+   * scanning the board.
+   *
+   * They did, and the cost compounds with the board's density: dragging the
+   * pointer across the map fired a tooltip on every hex it crossed, so
+   * moving from one side to the other flashed a dozen panels the player had
+   * not asked for. An instant tooltip is right for a control whose meaning
+   * is unclear; it is wrong for a hundred adjacent things you are looking
+   * PAST on your way somewhere.
+   *
+   * TWO SECONDS, which is long by tooltip conventions and correct here: the
+   * point is that a hex you are merely crossing never shows one, and the
+   * pointer crosses a hex in a fraction of a second. The delay only expires
+   * when a player has genuinely stopped on something.
+   *
+   * WHAT IS NOT DELAYED: `hoveredHexCoord`, the highlight the board draws
+   * under the cursor. That is FEEDBACK -- it tells the player what they are
+   * pointing at -- and delaying it would make the map feel unresponsive.
+   * Only the text panel waits.
+   *
+   * THE TIMER IS RESTARTED, not merely started, on every move onto a new
+   * hex, which is what makes the delay per-hex rather than per-entry: a
+   * slow sweep across five hexes shows nothing until the pointer settles.
+   */
+  /* Design note #380: the last repaint's route stroke geometry, in board
+     pixels. `null` until the first draw, which is the state the pointer
+     handler treats as "no pixel answer available". */
+  const routeHitRef = useRef<RouteHitPaths | null>(null);
+
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelTooltipTimer = useCallback(() => {
+    if (tooltipTimerRef.current !== null) {
+      clearTimeout(tooltipTimerRef.current);
+      tooltipTimerRef.current = null;
+    }
+  }, []);
+  // Cleared on unmount, so a pending tooltip cannot fire into a dead tree.
+  useEffect(() => cancelTooltipTimer, [cancelTooltipTimer]);
 
   /** The active-coordinate hover tooltip's live state -- see design note
    *  #21. `label` is the same board-label string `describeHex` would
@@ -1347,10 +1478,28 @@ export function HexGridRenderer({
     // to follow and fell back to a straight edge-to-centre spoke. This hands
     // the glow the same four sources the four track passes above draw from,
     // in the same precedence order they run in.
-    drawRouteOverlays(
+    /* Design note #373: emphasis is computed HERE, where the cursor is
+       known, and handed down as data. `drawRouteOverlays` stays a pure
+       renderer of what it is given. */
+    const emphasised = routeOverlays.map((overlay) => ({
+      ...overlay,
+      emphasis:
+        highlightedTrainIndex === null || overlay.trainIndex === undefined
+          ? ("normal" as const)
+          : overlay.trainIndex === highlightedTrainIndex
+            ? ("primary" as const)
+            : ("muted" as const),
+    }));
+
+    /* Design note #380: the draw hands back the flattened stroke geometry
+       it just painted, one path per train, for the pointer to test against.
+       Stashed in a ref rather than state -- it changes on every repaint,
+       and re-rendering React because the hit geometry moved would repaint
+       the canvas, which would rebuild the geometry. */
+    routeHitRef.current = drawRouteOverlays(
       ctx,
       hexSize,
-      routeOverlays,
+      emphasised,
       (q, r) => mapGrid.tiles.find((tile) => tile.q === q && tile.r === r),
       // Design note #226: the whole-hex `railsAt` lookup is gone. Endpoints
       // resolve to a single authored rail now, so there is no branch left
@@ -2368,16 +2517,7 @@ export function HexGridRenderer({
     // not compile. Same workaround the Set spreads in this file use.
     reservations.forEach((reservation) => {
       const center = axialToPixel(reservation.q, reservation.r, hexSize);
-      drawReservationBadge(
-        ctx,
-        center,
-        hexSize,
-        reservation.initials,
-        mapGrid,
-        reservation.q,
-        reservation.r,
-        claimedHexSlots,
-      );
+      drawReservationBadge(ctx, center, hexSize, reservation.initials, reservation.slot);
     });
 
     // ---- Impassable border edges (design note #38): a fixed set of four
@@ -2396,25 +2536,61 @@ export function HexGridRenderer({
     // Design note #222: tokens go on last, above every badge and nameplate.
     drawStationTokenPass();
 
-    /* ---- Design note #223: the Lay Track veil. ----
-       Drawn after EVERY other board pass, tokens included, so the dimming
-       is uniform -- a hex that is out of reach should read as out of reach
-       whatever happens to be printed on it. The live preview below is the
-       one thing layered on top, because it is the tile the player is
-       actively judging and must stay at full contrast. */
+    /* ==================================================================
+     *  DESIGN NOTE 367: THE VEIL IS GONE
+     * ==================================================================
+     *
+     * REPORTED: during Lay Track the entire map dims, for all players. It
+     * is visually confusing and unnecessary.
+     *
+     * Design note #223 introduced it to answer a real bug -- "players can
+     * click anywhere to lay track" -- by making unreachable hexes read as
+     * unreachable. It over-answered. Two things were wrong with it:
+     *
+     *   IT DIMMED THE BOARD FOR EVERYONE. The veil is drawn from
+     *   `layFocus`, which describes ONE corporation's reach, and every
+     *   player at the table sees the same canvas. So three of four players
+     *   watched the map grey out for a restriction that was not theirs and
+     *   could not act on it either way.
+     *
+     *   IT SUPPRESSED THE BOARD TO EMPHASISE A SUBSET. An 1830 player
+     *   reading the map during a tile lay is looking at the whole network
+     *   -- where rivals are, where the route wants to go next -- and the
+     *   veil took that away at the moment it was most wanted, to mark
+     *   something the glow already marks.
+     *
+     * WHAT REMAINS is design note #252's outer glow on the legal hexes, in
+     * the acting corporation's own colour. That is ADDITIVE: it draws the
+     * eye to the legal set without taking the rest of the board away, and
+     * it is the half of the pair that was doing the work.
+     *
+     * THE CLICK GATE IS UNAFFECTED. `layFocus.highlighted` still decides
+     * which hexes open the picker (see `handlePointerUp`), so the original
+     * "click anywhere" bug stays fixed -- it was always enforced by the
+     * set, never by the dimming. */
     if (layFocus) {
       for (const hex of STATIC_BOARD_HEXES) {
         const key = `${hex.q},${hex.r}`;
         const center = axialToPixel(hex.q, hex.r, hexSize);
 
-        if (!layFocus.visible.has(key)) {
+        /* Design note #377: dimmed only for the player on turn, and only
+           the hexes outside their reach. `visible` carries the network as
+           well as the legal targets (design note #241), so the route an
+           extension joins stays lit alongside the placements. */
+        if (layFocus.dim && !layFocus.visible.has(key)) {
           ctx.save();
           ctx.globalAlpha = LAY_TRACK_DIM_ALPHA;
           ctx.fillStyle = LAY_TRACK_DIM_INK;
           drawHexPath(ctx, center, hexSize);
           ctx.fill();
           ctx.restore();
-          continue;
+          /* NOT `continue`. Design note #367 deleted the veil and with it
+             the early-exit that used to sit here, and the exit was a second
+             bug in its own right: a hex could be dimmed OR glowed, never
+             both. A legal target is always inside `visible`, so the two
+             never actually collided -- but the structure said they might,
+             and falling through means the glow below is reached on every
+             hex regardless of what this branch did. */
         }
 
         /* ==================================================================
@@ -2450,8 +2626,12 @@ export function HexGridRenderer({
          * THE COLOUR IS THE CORPORATION'S, matching the action toolbar and
          * the route line so "PRR is acting" is one colour across the screen
          * -- with a fallback for a brand colour too dark to register as
-         * light against the veiled board, since a glow that cannot be seen
-         * is not a glow. */
+         * light, since a glow that cannot be seen is not a glow.
+         *
+         * Design note #367 removed the veil this used to be seen against,
+         * which makes the glow the ONLY guide to the legal set. The three
+         * falloff passes below matter more for that reason, not less: it
+         * now has to carry the signal alone. */
         if (layFocus.highlighted.has(key)) {
           const glow = layFocus.glowColor ?? LAY_TRACK_HIGHLIGHT_INK;
           ctx.save();
@@ -2622,6 +2802,9 @@ export function HexGridRenderer({
     // React re-renders, and the memoised draw callback never re-runs, so the
     // overlay silently never appears.
     routeOverlays,
+    // Design note #373: a change of cursor repaints, or the emphasis would
+    // only appear on the next unrelated redraw.
+    highlightedTrainIndex,
     showCityNames,
   ]);
 
@@ -2730,6 +2913,51 @@ export function HexGridRenderer({
         return { q: hoverQ, r: hoverR };
       });
 
+      /* ==============================================================
+       *  DESIGN NOTE 380 (pointer half): THE LINE, NOT THE HEX
+       * ==============================================================
+       *
+       * `drawRouteOverlays` returns the exact stroke geometry it painted,
+       * so "is the pointer on this route" is a question about the curve
+       * rather than about the hex containing it. Two trains sharing a hex
+       * now resolve to whichever line is actually under the cursor, which
+       * is the case design note #374 had to give up on.
+       *
+       * THE TRANSFORM, THE PEN AND THE POINT SPACE all have to match the
+       * draw, and the argument for each is long enough that it lives with
+       * the draw rather than here -- see `hitTestRoutes` and design note
+       * #381 in `hexCanvasPrimitives.ts`. This handler's job is to supply
+       * the pointer, the view and the device ratio.
+       *
+       * NO HEX FALLBACK when the paths exist. Hovering inside a hex but
+       * not on any line now highlights nothing, and that is correct: the
+       * whole point is that the hex is no longer the unit. The fallback
+       * survives only for the case where the mechanism itself is missing
+       * (`DOMMatrix`, checked at draw time), where hex-grained hover is
+       * better than none. */
+      if (onHighlightRoute) {
+        const hit = routeHitRef.current;
+        const ctx2d = event.currentTarget.getContext("2d");
+
+        if (hit && hit.paths.size > 0 && ctx2d) {
+          onHighlightRoute(
+            hitTestRoutes(ctx2d, hit, cssX, cssY, view, window.devicePixelRatio || 1),
+          );
+        } else {
+          /* Design note #374's test, kept for the no-`DOMMatrix` case only.
+             A hex on two routes still resolves to nothing there, because
+             without the geometry there is nothing better to say. */
+          const carrying = routeOverlays.filter(
+            (overlay) =>
+              overlay.trainIndex !== undefined &&
+              overlay.hexes.some(([q, r]) => q === hoverQ && r === hoverR),
+          );
+          onHighlightRoute(
+            carrying.length === 1 ? (carrying[0].trainIndex as number) : null,
+          );
+        }
+      }
+
       setHoveredOffboardHex((prev) => {
         if (isOffboardHover) {
           if (prev && prev.q === hoverQ && prev.r === hoverR) return prev;
@@ -2749,6 +2977,7 @@ export function HexGridRenderer({
       const hoveredLandmark = LANDMARK_HEXES.find((l) => l.q === hoverQ && l.r === hoverR);
       // Design note #269: a picker is open on a hex -- it owns the anchor.
       if (suppressHoverTooltip) {
+        cancelTooltipTimer();
         setHoveredCoordLabel((prev) => (prev === null ? prev : null));
       } else if (hoveredLandmark || hoveredBoardHex) {
         // Design note #75: flip toward whichever side of the PANEL (this
@@ -2759,14 +2988,29 @@ export function HexGridRenderer({
         // half the canvas's own width/height (not `window.innerWidth`/
         // `innerHeight`) keeps this correct even when the canvas doesn't
         // fill the whole browser viewport.
-        setHoveredCoordLabel({
-          label: describeHexWithValue(hoverQ, hoverR, mapGrid, currentEra, publicCompanies),
+        /* Design note #365: everything the panel needs is captured NOW and
+           shown later. Reading `event` inside the timeout would be a use
+           after React has pooled it, and re-deriving the hex would risk
+           describing whatever is under the pointer two seconds later
+           rather than the hex the player actually stopped on. */
+        const pending = {
+          // Design note #366: the reservation note, appended while it stands.
+          label: withReservationNote(
+            describeHexWithValue(hoverQ, hoverR, mapGrid, currentEra, publicCompanies),
+            reservations.get(`${hoverQ},${hoverR}`) ?? null,
+          ),
           clientX: event.clientX,
           clientY: event.clientY,
           preferLeft: cssX > rect.width / 2,
           preferAbove: cssY > rect.height / 2,
-        });
+        };
+        cancelTooltipTimer();
+        tooltipTimerRef.current = setTimeout(() => {
+          tooltipTimerRef.current = null;
+          setHoveredCoordLabel(pending);
+        }, HEX_TOOLTIP_DELAY_MS);
       } else {
+        cancelTooltipTimer();
         setHoveredCoordLabel((prev) => (prev === null ? prev : null));
       }
 
@@ -2804,15 +3048,28 @@ export function HexGridRenderer({
       boardContentBounds,
       width,
       height,
-      view.panX,
-      view.panY,
-      view.zoom,
+      /* The WHOLE view, not its three fields. `hitTestRoutes` takes the
+         object, so the three narrower entries no longer cover every read
+         and the lint rule is right to say so (design note #381). */
+      view,
       hexSize,
       // Design note #118: added so the tooltip's new real-ticker station
       // list doesn't close over a stale `publicCompanies` array from this
       // callback's first render -- station tokens are placed live during
       // play.
       publicCompanies,
+      /* Design note #366: the tooltip appends the reservation note, so a
+         stale map here would keep saying "Reserved by DH" after the D&H
+         closed -- the same class of staleness the two entries below record,
+         on a line that is a rule rather than a number. */
+      reservations,
+      // Design note #374: the hit test reads both.
+      routeOverlays,
+      onHighlightRoute,
+      /* Design note #365: stable (a `useCallback` with no deps), listed
+         because the delay timer is cleared through it and an omitted
+         stable dep is still a dep. */
+      cancelTooltipTimer,
       // Design note #138: `mapGrid` and `currentEra` added. The comment that
       // stood here previously acknowledged both were missing and deferred
       // them as "out of scope"; they are in scope now, and both were real
@@ -3323,10 +3580,13 @@ export function HexGridRenderer({
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       setHoveredOffboardHex(null);
       setHoveredCoordLabel(null);
+      cancelTooltipTimer();
+      onHighlightRoute?.(null);
       setHoveredHexCoord(null);
       handlePointerUp(event);
     },
-    [handlePointerUp],
+    // Design note #374: the leave handler clears the cursor too.
+    [handlePointerUp, cancelTooltipTimer, onHighlightRoute],
   );
 
   /* Design note #44: the control cluster moved OUT of the canvas.
@@ -3494,7 +3754,33 @@ export interface TilePreviewThumbnailProps {
   orientation?: number;
   /** Overall canvas size in CSS pixels (square). Default 96. */
   size?: number;
-  /** Hex radius used to render the tile within the canvas. Default 40. */
+  /* ==================================================================
+   *  DESIGN NOTE 368: THE HEX HAS TO FIT ITS OWN CANVAS
+   * ==================================================================
+   *
+   * REPORTED: the radial tile selector shows its previews as rectangles
+   * instead of hexagons, so the artwork looks clipped.
+   *
+   * It was clipped, and by exactly one number. This defaulted to a FIXED
+   * radius of 40 while `size` defaulted to 96, and the two were only
+   * compatible by luck: `drawHexPath` draws a POINTY-TOP hex, whose height
+   * is 2R and whose width is √3·R, so a radius of 40 needs an 80px canvas.
+   *
+   * `RadialTileSelector` passes `size={38}` and left `hexSize` alone. A
+   * 40-radius hex is 80px tall inside a 38px canvas, so five sixths of it
+   * -- every vertex, top and bottom -- fell outside the bitmap and what
+   * survived was the middle band: a rectangle. Not a styling problem at
+   * all, and not visible from the CSS, which is why it reads as one.
+   *
+   * DERIVED, so the two can never disagree again. `(size - 2) / 2` is the
+   * largest radius whose 2px tier stroke still lands inside the canvas;
+   * height is the binding dimension for a pointy-top hex, and the √3/2
+   * width then fits with room to spare. `TileSelectionPopup` passes both
+   * explicitly (150/64, which fits) and is unaffected.
+   *
+   * A DEFAULT RATHER THAN A COMPUTATION AT THE CALL SITE, because the
+   * relationship is a property of the drawing, not of any one caller --
+   * and the bug was a caller being asked to know it. */
   hexSize?: number;
   className?: string;
 }
@@ -3528,7 +3814,8 @@ export function TilePreviewThumbnail({
   tileId,
   orientation = 0,
   size = 96,
-  hexSize = 40,
+  // Design note #368: derived from `size`, never a bare constant.
+  hexSize = (size - 2) / 2,
   className,
 }: TilePreviewThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -3584,7 +3871,29 @@ export function TilePreviewThumbnail({
     ctx.restore();
   }, [tileId, orientation, size, hexSize]);
 
-  return <canvas ref={canvasRef} style={{ width: size, height: size }} className={className} />;
+  /* Design note #368: the element's own bounds are the hexagon too, not
+     just the artwork inside it. The canvas is transparent outside the hex
+     either way, but a square element means any chrome BEHIND it -- the
+     radial ring's button background, a hover fill -- shows through the
+     corners and frames the tile as a card. Clipping the element makes the
+     preview read as a game piece.
+
+     The polygon is a pointy-top hex inscribed in the square, height-bound:
+     ±(√3/2)/2 = ±43.3% horizontally, the full height vertically. Same
+     proportions as `drawHexPath`, so the clip lands exactly on the stroke
+     rather than shaving it. */
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: size, height: size, clipPath: HEX_CLIP_PATH }}
+      className={className}
+    />
+  );
 }
+
+/** Design note #368: a pointy-top hexagon, in percentages so it scales with
+ *  whatever box it is applied to. */
+export const HEX_CLIP_PATH =
+  "polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%)";
 
 export default HexGridRenderer;

@@ -96,6 +96,24 @@ export type ActionLogStatus = "pending" | "success" | "error" | "info";
 
 export interface ActionLogEntry {
   id: number;
+  /* ==================================================================
+   *  DESIGN NOTE 343: THE ROUND IS STAMPED, NOT DERIVED
+   * ==================================================================
+   *
+   * The round context an entry happened in -- "Auction", "SR1", "OR 1.1".
+   *
+   * STORED ON THE ENTRY rather than computed when the log is rendered, and
+   * the difference is the whole point. A derived prefix reads the CURRENT
+   * round, so the moment the auction ended every historic line would
+   * relabel itself "SR1" and the log would claim the privates were
+   * auctioned during the Stock Round. A log that rewrites its own history
+   * is worse than one with no prefixes at all.
+   *
+   * Optional so entries written before this field existed -- and any future
+   * caller that has no round to report -- render without a prefix rather
+   * than with an empty bracket.
+   */
+  round?: string;
   label: string;
   status: ActionLogStatus;
   detail: string;
@@ -117,6 +135,8 @@ export interface FeedItem {
   chatAuthor?: string;
   chatText?: string;
   logLabel?: string;
+  /** Design note #343: the round the entry was stamped with. */
+  logRound?: string;
   logStatus?: ActionLogStatus;
   logDetail?: string;
 }
@@ -144,6 +164,7 @@ export function mergeFeedItems(
     timestampMs: entry.timestampMs,
     timestampLabel: entry.timestamp,
     logLabel: entry.label,
+    logRound: entry.round,
     logStatus: entry.status,
     logDetail: entry.detail,
   }));

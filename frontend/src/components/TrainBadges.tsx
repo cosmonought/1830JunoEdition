@@ -97,6 +97,29 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    *  will destroy it, just without the "(N purchases away)" figure -- a
    *  number we cannot stand behind is worse than no number. */
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
+  /* ==================================================================
+   *  DESIGN NOTE 375: A CHIP IS A TRAIN, AND A TRAIN RUNS A ROUTE
+   * ==================================================================
+   *
+   * `hexCanvasPrimitives.ts` design note #373 explains the shared cursor.
+   * This is the chip's end of it.
+   *
+   * THE INDEX IS THE POSITION IN `trains`, which is the same key the Route
+   * Planner's rows and the map overlays use -- design note #5 in
+   * `RoutePlannerPanel` established that two 3-trains are two different
+   * trains and get two rows, and this is the other half of that: two
+   * 3-trains are two different chips and highlight independently.
+   *
+   * ALL THREE PROPS OPTIONAL, because this component renders in four
+   * places and only one of them -- the Operating Round corporation strip
+   * during Run Routes -- has a cursor to share. The Round Detail table and
+   * the depot want a chip that does nothing on hover, and forcing them to
+   * pass nulls would be plumbing a feature they do not have. */
+  highlightedTrainIndex?: number | null;
+  onHighlightTrain?: (trainIndex: number | null) => void;
+  /** Design note #375: only the surface that shares a cursor makes its
+   *  chips interactive. Elsewhere they stay inert badges. */
+  interactive?: boolean;
 }
 
 /* ==================================================================
@@ -158,7 +181,16 @@ const STATIC_RUST_TRIGGER: Readonly<Partial<Record<TrainTier, TrainTier>>> = {
   "4": "D",
 };
 
-export function TrainChips({ trains, phase, surface, compact, outlook }: TrainChipsProps) {
+export function TrainChips({
+  trains,
+  phase,
+  surface,
+  compact,
+  outlook,
+  highlightedTrainIndex = null,
+  onHighlightTrain,
+  interactive = false,
+}: TrainChipsProps) {
   const ink = surface === "light" ? lightInk : darkInk;
   const size = compact ? FONT_SIZE.small : FONT_SIZE.strong;
 
@@ -217,6 +249,12 @@ export function TrainChips({ trains, phase, surface, compact, outlook }: TrainCh
         const inDangerWindow =
           doomed !== null && tier === doomed && severity !== null ? severity : null;
         const warning = rustTooltip(tier, phase, outlook, inDangerWindow);
+        /* Design note #375: highlighted, faded, or neither. The muted state
+           matters as much as the primary one -- with three chips in a row,
+           "this one" is only legible if the others step back. */
+        const isPrimary = interactive && highlightedTrainIndex === index;
+        const isMuted =
+          interactive && highlightedTrainIndex !== null && highlightedTrainIndex !== index;
         return (
           <span
             key={`${model}-${index}`}
@@ -227,12 +265,16 @@ export function TrainChips({ trains, phase, surface, compact, outlook }: TrainCh
               padding: compact ? "1px 6px" : "2px 9px",
               minWidth: compact ? "22px" : "28px",
               ...(inDangerWindow ? ink[inDangerWindow] : {}),
+              ...(isPrimary ? styles.chipHighlighted : {}),
+              ...(isMuted ? styles.chipMuted : {}),
               // Every chip carries a tooltip now (design note #4), so every
               // chip gets the help cursor -- and never the text I-beam,
               // which is wrong on a badge regardless.
-              cursor: warning ? "help" : "default",
+              cursor: interactive ? "pointer" : warning ? "help" : "default",
             }}
             title={warning}
+            onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}
+            onMouseLeave={interactive ? () => onHighlightTrain?.(null) : undefined}
           >
             {model}
           </span>
@@ -366,7 +408,47 @@ const lightInk = {
 } as const;
 
 const styles: Record<string, React.CSSProperties> = {
-  chipRow: { display: "inline-flex", gap: "4px", flexWrap: "wrap", alignItems: "center" },
+  /* ==================================================================
+   *  DESIGN NOTE 370: A CHIP'S HEIGHT WAS FONT METRICS, NOT A NUMBER
+   * ==================================================================
+   *
+   * REPORTED: the train chips in the Corporation card are clipped at the
+   * bottom.
+   *
+   * The chip had no height of its own. Its box came out of `lineHeight:
+   * 1.25` on the inherited font -- 15px * 1.25 = 18.75px -- plus 2px of
+   * padding and a 1px border each side, so 24.75px. Three things then
+   * conspire:
+   *
+   *   IT IS FRACTIONAL. A 24.75px box on a display that snaps to device
+   *   pixels rounds, and which way it rounds depends on the zoom and the
+   *   element's subpixel offset. Round down and the 1px bottom border --
+   *   the curved part of a 5px radius -- is the row that goes.
+   *
+   *   `inline-flex` SITS ON A BASELINE. The chip row is an inline-level box
+   *   inside a text flow, aligned by the baseline of its first item, so its
+   *   descent has to fit under the baseline in whatever line box the parent
+   *   built from the SAME font metrics. A chip taller than its own line
+   *   box overhangs.
+   *
+   *   THE CARD HAD 3px TO GIVE. Design note #299 cut `orContextCard`'s
+   *   vertical padding to 3px and removed its 44px floor -- correct for the
+   *   space it reclaimed, and it left nothing absorbing the overhang.
+   *
+   * `minHeight` states the box in whole pixels instead of deriving it from
+   * a font, and `alignSelf: flex-start` stops the baseline alignment
+   * stretching it. `App.tsx` design note #371 gives the card back the two
+   * pixels the row needs. Both halves: an unclipped chip in a card too
+   * short for it is still clipped. */
+  chipRow: {
+    display: "inline-flex",
+    gap: "4px",
+    flexWrap: "wrap",
+    alignItems: "center",
+    // Design note #370: the row is a block in its own right, so its height
+    // is its content's rather than a line box's.
+    verticalAlign: "middle",
+  },
   chip: {
     display: "inline-flex",
     alignItems: "center",
@@ -377,7 +459,22 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     lineHeight: 1.25,
+    /* Design note #370: a whole-pixel floor. 24px clears the tallest chip
+       this renders (15px text at 1.25 plus 2px padding and 1px borders =
+       24.75px of content, which `box-sizing: border-box` fits) without the
+       fractional rounding that was shaving the bottom border. */
+    minHeight: "24px",
+    boxSizing: "border-box",
+    alignSelf: "center",
   },
+  /* Design note #375: the highlight is a RING and a lift, not a colour
+     change -- a chip's colour already carries the rust warning, and
+     overwriting it to signal a hover would trade one meaning for another. */
+  chipHighlighted: {
+    boxShadow: "0 0 0 2px rgba(160, 200, 255, 0.85), 0 0 10px rgba(120, 170, 255, 0.5)",
+    transform: "translateY(-1px)",
+  },
+  chipMuted: { opacity: 0.35 },
   pill: {
     display: "inline-flex",
     alignItems: "center",

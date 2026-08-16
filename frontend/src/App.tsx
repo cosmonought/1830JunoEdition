@@ -547,6 +547,7 @@ import {
 import { TrainChips } from "./components/TrainBadges";
 import PrivatePowerPanel, { type PrivateAbility } from "./components/PrivatePowerPanel";
 import type { PrivateCompanyState } from "./utils/gameState";
+import { corporationPrivateCompanies } from "./utils/gameState";
 import { RoutePlannerPanel, RouteModeToggle } from "./components/RoutePlannerPanel";
 import type { RouteBuildMode, TrainRouteDraft } from "./components/RoutePlannerPanel";
 import StationTokenRow from "./components/StationTokenRow";
@@ -655,6 +656,9 @@ import {
   sandboxWaterfallState,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
+import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
+import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
+
 import {
   EmergencyTrainPurchaseModal,
   buildEmergencyPurchasePlan,
@@ -668,6 +672,7 @@ import {
   describePrivatePayout,
   applySandboxLayTile,
   isRouteTerminusHex,
+  grantBOPresidency,
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
@@ -691,6 +696,14 @@ import { useFirestoreChat } from "./components/ChatBox";
 // importing the second would be a name collision. Two truncators is one too
 // many, but unifying them is a separate tidy-up, not this pass's business.
 import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
+
+/* Design note #354: the two identifiers that tie the B&O private to the
+   B&O corporation. Named constants rather than inline literals because
+   they are a CROSS-TABLE join -- private #6 in `auction.rs`'s roster is the
+   same company as ticker "B&O" in `public_company.rs`'s -- and a bare `6`
+   at the join site reads as an arbitrary index. */
+const BO_PRIVATE_ID = 6;
+const BO_TICKER = "B&O";
 
 /* ------------------------------------------------------------------ */
 /* Placeholder room state -- see design note #1                       */
@@ -1341,6 +1354,7 @@ function ContextualActionBar({
   activePlayerName,
   activePlayerCash,
   activePlayerEscrow,
+  playerRoster,
   privateCompanies,
   privatePowerViewer,
   sandboxMode,
@@ -1363,6 +1377,8 @@ function ContextualActionBar({
   routeBuildMode,
   onSelectRouteBuildMode,
   onSelectRouteTrain,
+  highlightedRouteIndex,
+  onHighlightRoute,
   trainDrafts,
   activeTrainIndex,
   routeFeedback,
@@ -1394,6 +1410,8 @@ function ContextualActionBar({
     companyId: number;
     ticker: string;
     fullName: string | null;
+    homeHexLabel: string | null;
+    privates: readonly PrivateCompanyState[];
     presidentLabel: string | null;
     /** Design note #326: the president's personal cash, for the tooltip. */
     presidentCash: number | null;
@@ -1447,6 +1465,15 @@ function ContextualActionBar({
   activePlayerCash: number | null;
   /** How much of their money is standing on bids. `0` outside the auction. */
   activePlayerEscrow: number;
+  /** Design note #342: every seat, in order, with its spendable cash.
+   *  Empty falls back to the single acting-player badge. */
+  playerRoster: ReadonlyArray<{
+    address: string;
+    label: string;
+    available: number;
+    escrowed: number;
+    isActive: boolean;
+  }>;
   /** Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
@@ -1487,6 +1514,9 @@ function ContextualActionBar({
   routeBuildMode: RouteBuildMode;
   onSelectRouteBuildMode: (mode: RouteBuildMode) => void;
   onSelectRouteTrain: (trainIndex: number) => void;
+  /** Design note #373: the shared route cursor, owned by the shell. */
+  highlightedRouteIndex: number | null;
+  onHighlightRoute: (trainIndex: number | null) => void;
   /** Design note #275: one priced draft per owned train, INCLUDING
    *  duplicate models -- three 3-trains are three entries. */
   trainDrafts: readonly TrainRouteDraft[];
@@ -1783,12 +1813,23 @@ function ContextualActionBar({
           The strip already shows the position, the progress AND the
           sequence, so the text is redundant as well as contradictory; the
           honest fix is for one of them to stop making the claim. */}
+      {/* Design note #339: the auction is a ROUND, and the bar said it was
+          not. `roundType` has four values and this branch covered two, so
+          the Waterfall Auction -- the phase every game opens in -- fell
+          through to "No live round" while the auction dashboard was on
+          screen beneath it. A player's first impression of the app was a
+          header denying that anything was happening.
+
+          `null` keeps the honest wording: before the first `GetGameState`
+          resolves there genuinely is no round yet. */}
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
           ? "Operating Round"
           : roundType === "StockRound"
             ? "Stock Round"
-            : "No live round"}
+            : roundType === "WaterfallAuction"
+              ? "Auction Round"
+              : "No live round"}
       </span>
       {/* Operating Round turn stepper. Renders directly under the round
           label it elaborates: the label says WHICH step, the strip says
@@ -1984,7 +2025,28 @@ function ContextualActionBar({
                     cost, spent ones greyed in place. See
                     `StationTokenRow.tsx` for why it needs its own inset
                     surface on a brand-coloured bar. */}
-                <span style={{ ...styles.orContextFact, ...(condensed ? { display: "none" } : {}) }}>
+                {/* ==================================================
+                     DESIGN NOTE 372: THE PINNED CARD SHOWS THE PIECES
+                    ==================================================
+
+                    REPORTED: scrolled down, the sticky card shows the name,
+                    the treasury and the TRAIN LIMIT. During operations the
+                    actual trains and stations matter far more than the cap.
+
+                    Design note #298 chose what to drop when the bar pins,
+                    and it dropped the two rows that were expensive in
+                    height -- the station circles and the train chips --
+                    keeping the cheap single figures. That optimised for
+                    pixels rather than for the decision: a president mid-turn
+                    is asking "what do I own and where can I put a token",
+                    and the answer was scrolled off the top of the page while
+                    a number they cannot act on stayed pinned.
+
+                    So the condensed card keeps the PIECES and drops the
+                    LIMIT. It costs a few pixels back, which is the right
+                    trade for the one row that is on screen the whole time
+                    the map is being used. */}
+                <span style={styles.orContextFact}>
                   <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                     Stations
                   </span>
@@ -1994,6 +2056,8 @@ function ContextualActionBar({
                     ink={corporationBarInk.ink}
                     inkMuted={corporationBarInk.inkMuted}
                     emptyLabel="no allowance reported"
+                    // Design note #362: the home slot shows its hex.
+                    homeHexLabel={activeCorporation.homeHexLabel}
                   />
                 </span>
 
@@ -2004,7 +2068,8 @@ function ContextualActionBar({
                   {/* The same chips the Round Detail table draws, so a train
                       reads identically wherever it appears -- including the
                       amber tint on a tier that is about to rust. */}
-                  {condensed ? null : activeCorporation.trains.length === 0 ? (
+                  {/* Design note #372: chips survive the pin. */}
+                  {activeCorporation.trains.length === 0 ? (
                     <span style={{ ...styles.orContextFactNone, color: corporationBarInk.inkMuted }}>
                       none
                     </span>
@@ -2022,14 +2087,27 @@ function ContextualActionBar({
                       // already computed for the table; this bar simply
                       // was not being handed it.
                       outlook={rustOutlookForBar}
+                      /* Design note #375: interactive only during Run
+                         Routes, where a chip and a route line are two views
+                         of one thing. Outside it the chips are badges. */
+                      interactive={orSubPhase === "Routes"}
+                      highlightedTrainIndex={highlightedRouteIndex}
+                      onHighlightTrain={onHighlightRoute}
                     />
                   )}
                   {/* Design note #248: the limit, beside the fleet it caps.
                       The chips say WHICH trains; this says how much room is
                       left, which is the figure that decides whether the Buy
                       Trains step has anything in it. Amber at the ceiling,
-                      because that is the state that ends the step. */}
-                  {phase?.trainLimit !== undefined && (
+                      because that is the state that ends the step.
+
+                      Design note #372: DROPPED WHEN PINNED. It is the one
+                      figure here a president cannot act on -- the Buy Trains
+                      step enforces it on its own -- so it is what gives way
+                      to keep the chips and the tokens on a bar that has to
+                      stay short. Still present in the full card, where there
+                      is room for both. */}
+                  {!condensed && phase?.trainLimit !== undefined && (
                     <span
                       style={{
                         ...styles.orContextFactValue,
@@ -2052,6 +2130,55 @@ function ContextualActionBar({
                     </span>
                   )}
                 </span>
+
+                {/* ==================================================
+                     DESIGN NOTE 379 (strip half): PRIVATES THE COMPANY OWNS
+                    ==================================================
+
+                    A corporation that bought a private from a player owns a
+                    real asset -- it pays that company's revenue into this
+                    treasury every Operating Round (design note #329) -- and
+                    no surface said so. `utils/gameState.ts` design note #379
+                    has the full account.
+
+                    ABSENT, NOT EMPTY, when there are none. Most
+                    corporations never buy a private, so a permanent
+                    "Privates: none" on the one bar that is on screen all
+                    turn would be a row of nothing for seven companies out
+                    of eight. The Game Ledger's table shows a dash instead,
+                    which is right for a table -- a column has to keep its
+                    cell -- and wrong for a strip.
+
+                    DROPPED WHEN PINNED, like the president line: design
+                    note #372 keeps the pieces a president acts on, and a
+                    private is a standing asset rather than a move. */}
+                {activeCorporation.privates.length > 0 && (
+                  <span
+                    style={{
+                      ...styles.orContextFact,
+                      ...(condensed ? { display: "none" } : {}),
+                    }}
+                  >
+                    <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
+                      Privates
+                    </span>
+                    <span style={styles.orContextPrivates}>
+                      {activeCorporation.privates.map((priv) => (
+                        <span
+                          key={priv.private_id}
+                          style={{
+                            ...styles.orContextPrivateChip,
+                            color: corporationBarInk.ink,
+                            borderColor: corporationBarInk.border,
+                          }}
+                          title={`${priv.name} — $${priv.revenue_per_or} per Operating Round into ${activeCorporation.ticker}'s treasury.`}
+                        >
+                          {priv.private_id}. {priv.name}
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                )}
               </span>
             )}
           </div>
@@ -2337,25 +2464,77 @@ function ContextualActionBar({
             balances the trailing one that already pins the phase badge,
             which centres the group between them without either rail having
             to know what the other holds. */}
-        {activePlayerCash !== null && (
-          <span
-            style={styles.playerCashBadge}
-            /* Design note #317: when money is escrowed the badge says so,
-               because the figure beside the name has stopped being the
-               player's balance and become their SPENDING POWER -- two
-               different numbers that only coincide when nothing is bid. */
-            title={
-              activePlayerEscrow > 0
-                ? `${activePlayerName ?? "The acting player"} has $${activePlayerCash} available to bid. $${activePlayerEscrow} more is escrowed in standing bids and comes back if those bids lose.`
-                : `${activePlayerName ?? "The acting player"} holds $${activePlayerCash}. In the auction this is the only money in play \u2014 privates are bought from a player's own cash, not a corporation's treasury.`
-            }
-          >
-            <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
-            <span style={styles.playerCashValue}>${activePlayerCash}</span>
-            {activePlayerEscrow > 0 && (
-              <span style={styles.playerCashEscrow}>${activePlayerEscrow} held</span>
-            )}
+        {/* ==================================================================
+             DESIGN NOTE 342: THE WHOLE TABLE, NOT JUST WHOEVER IS UP
+            ==================================================================
+
+            REPORTED: display every player's name and treasury persistently
+            in the Action Bar, with the active player highlighted green and
+            the rest slate.
+
+            Design note #308 put the ACTING seat's name and cash here, which
+            answered "what can I spend" and nothing else. In an auction the
+            question that decides a bid is "what can THEY spend" -- whether
+            the player who keeps raising is about to run out, and whether
+            the $220 B&O is reachable by anyone but you. That was on the
+            seating table at the bottom of the auction tab and nowhere else,
+            so judging a raise meant scrolling away from the raise button.
+
+            A ROW OF PILLS, one per seat, in seating order. The active seat
+            is green and the rest are slate, which makes the turn readable
+            at a glance without a separate badge -- and because every seat
+            is always present, the row does not reflow when the turn moves
+            (the same fixed-layout reasoning as design note #323).
+
+            AVAILABLE cash, not total, for design note #317's reason: during
+            the auction the total is the one figure that cannot be spent.
+            Falls back to the single acting-player badge whenever the roster
+            is not available, which is every non-sandbox room until the
+            first `GetGameState` resolves. */}
+        {playerRoster.length > 0 ? (
+          <span style={styles.actionBarRoster}>
+            {playerRoster.map((seat) => (
+              <span
+                key={seat.address}
+                style={{
+                  ...styles.rosterPill,
+                  ...(seat.isActive ? styles.rosterPillActive : styles.rosterPillIdle),
+                }}
+                title={
+                  seat.escrowed > 0
+                    ? `${seat.label} has $${seat.available} available to bid. $${seat.escrowed} more is escrowed in standing bids and comes back if those bids lose.`
+                    : `${seat.label} holds $${seat.available}.${seat.isActive ? " On turn." : ""}`
+                }
+              >
+                <span style={styles.rosterPillName}>{seat.label}</span>
+                <span style={styles.rosterPillValue}>${seat.available}</span>
+                {seat.escrowed > 0 && (
+                  <span style={styles.rosterPillEscrow}>+${seat.escrowed}</span>
+                )}
+              </span>
+            ))}
           </span>
+        ) : (
+          activePlayerCash !== null && (
+            <span
+              style={styles.playerCashBadge}
+              /* Design note #317: when money is escrowed the badge says so,
+                 because the figure beside the name has stopped being the
+                 player's balance and become their SPENDING POWER -- two
+                 different numbers that only coincide when nothing is bid. */
+              title={
+                activePlayerEscrow > 0
+                  ? `${activePlayerName ?? "The acting player"} has $${activePlayerCash} available to bid. $${activePlayerEscrow} more is escrowed in standing bids and comes back if those bids lose.`
+                  : `${activePlayerName ?? "The acting player"} holds $${activePlayerCash}. In the auction this is the only money in play \u2014 privates are bought from a player's own cash, not a corporation's treasury.`
+              }
+            >
+              <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
+              <span style={styles.playerCashValue}>${activePlayerCash}</span>
+              {activePlayerEscrow > 0 && (
+                <span style={styles.playerCashEscrow}>${activePlayerEscrow} held</span>
+              )}
+            </span>
+          )
         )}
         <span style={styles.actionBarSpacer} />
         {/* Design note #31: Pass leads -- it is the action available in
@@ -2565,6 +2744,7 @@ function ContextualActionBar({
         privateCompanies={privateCompanies}
         viewerAddress={privatePowerViewer}
         roundType={roundType}
+        orSubPhase={roundType === "OperatingRound" ? orSubPhase : null}
         sandbox={sandboxMode}
         usedAbilities={usedPrivateAbilities}
         onUseAbility={onUsePrivateAbility}
@@ -2574,6 +2754,9 @@ function ContextualActionBar({
         <RoutePlannerPanel
           drafts={trainDrafts}
           activeTrainIndex={trainDrafts.length === 0 ? null : activeTrainIndex}
+          // Design note #9 there: transient, and NOT the active train.
+          highlightedTrainIndex={highlightedRouteIndex}
+          onHighlightTrain={onHighlightRoute}
           onSelectTrain={onSelectRouteTrain}
           onClearRoute={onClearRoute}
           onRunRoute={onRunTrains}
@@ -3296,6 +3479,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // alongside eight per-card actions would be a second, contradictory
   // answer to "which company?" waiting to be read by mistake.
   const [srParValue, setSrParValue] = useState<string>(MOCK_BUY_STOCK_PAR_VALUE);
+  /** Design note #351: mirrored so the dispatch path can read the ladder's
+   *  current selection synchronously, the same reason `sandboxStateRef`
+   *  exists. Numeric, because the reducer prices with it. */
+  const srParValueRef = useRef<number | null>(Number(MOCK_BUY_STOCK_PAR_VALUE) || null);
+  useEffect(() => {
+    const parsed = Number(srParValue);
+    srParValueRef.current = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [srParValue]);
 
   // Automatic Phase-Based Tab Navigation (design note below near its own
   // `useEffect`): holds the last-seen `current_round_type` so the
@@ -3626,6 +3817,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       companyId: company.company_id,
       ticker: company.ticker,
       fullName: corporationFullName(company.ticker) ?? null,
+      /** Design note #362: the printed home hex, for the token row. */
+      homeHexLabel: company.home_hex_label ?? null,
+      /** Design note #379: privates this corporation's TREASURY owns --
+       *  bought from a player under the phase-gated corporate purchase, and
+       *  until now visible on no surface at all. */
+      privates: gameState
+        ? corporationPrivateCompanies(company.company_id, gameState)
+        : [],
       presidentLabel: company.president
         ? (sandboxPlayerLabel(company.president) ?? truncateAddress(company.president))
         : null,
@@ -3815,7 +4014,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * no emergency, so the modal's own mount condition is one identity check
    * and cannot disagree with this derivation about whether one exists. */
   const emergencyPurchasePlan = useMemo(() => {
+    /* ==============================================================
+     *  DESIGN NOTE 358: THREE CONDITIONS, NOT ONE
+     * ==============================================================
+     *
+     * REPORTED: the modal appears immediately in the Zero State sandbox.
+     *
+     * It did, and the reason is that `mustBuyTrain` alone is a much weaker
+     * claim than it reads as. It answers "does this corporation own zero
+     * trains", which in a zero state is true of ALL EIGHT of them before
+     * anybody has done anything -- so the first thing a new player saw was
+     * a blocking emergency for a company that had not taken a turn.
+     *
+     * The obligation only exists at the moment it is due. All three:
+     *
+     *   THE ROUND    an Operating Round. Nothing buys trains in a Stock
+     *                Round or the auction.
+     *   THE STEP     `Hardware`, the Buy Trains sub-phase. A corporation
+     *                mid-track-lay is not yet obliged to do anything about
+     *                its empty roster.
+     *   THE MONEY    treasury below the cheapest depot train, which is the
+     *                condition that makes it an EMERGENCY rather than an
+     *                ordinary purchase.
+     *
+     * The zero state fails the first two, which is why the report describes
+     * it appearing "immediately". */
     if (!mustBuyTrain || !gameState) return null;
+    if (gameState.current_round_type !== "OperatingRound") return null;
+    if (orSubPhase !== "Hardware") return null;
     const corporation = gameState.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
@@ -3838,17 +4064,59 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       priceForCompany: (companyId) => (sandbox ? (sandboxMarketPrices[companyId] ?? null) : null),
       labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
     });
-  }, [mustBuyTrain, gameState, actingProtocolId, sandbox, sandboxMarketPrices]);
+  }, [mustBuyTrain, gameState, orSubPhase, actingProtocolId, sandbox, sandboxMarketPrices]);
 
-  /* Dismissed by the player -- design note #3 in the modal. Keyed on the
-     corporation so dismissing PRR's emergency does not also hide ERIE's
-     when the turn moves on; a single boolean would suppress every
-     subsequent emergency for the rest of the session. */
-  const [dismissedEmergencyFor, setDismissedEmergencyFor] = useState<number | null>(null);
-  const emergencyModalPlan =
-    emergencyPurchasePlan && dismissedEmergencyFor !== emergencyPurchasePlan.corporationId
-      ? emergencyPurchasePlan
-      : null;
+  /* Design note #3 in the modal: there is no dismissal any more. The plan
+     IS the mount condition -- `null` when there is no emergency, and
+     present for exactly as long as one is unresolved. The
+     `dismissedEmergencyFor` state that stood here let a player close the
+     modal and carry on, which is the bug requirement 1 reports. */
+  const emergencyModalPlan = emergencyPurchasePlan;
+
+  /* ===================================================================
+   *  DESIGN NOTE 359: THE TWO ENDINGS
+   * ===================================================================
+   *
+   * 1830 stops when the bank breaks or when a president cannot fund a
+   * mandatory train. Both are derived rather than stored, and neither is a
+   * message the contract sends -- `GetGameState` reports `is_active`, but
+   * the sandbox has no path that flips it, and on a live chain the poll
+   * would deliver the ending anyway.
+   *
+   * BANKRUPTCY IS READ OFF THE EMERGENCY PLAN, not computed a second time.
+   * `endgame.ts` already decides it, the modal already renders it, and a
+   * parallel derivation here could disagree with the modal about whether
+   * the game had ended -- which would show a Game Over behind a still-live
+   * emergency, or the reverse.
+   *
+   * ORDER MATTERS: bankruptcy wins. If a president is bankrupt AND the bank
+   * has emptied in the same tick, the bankruptcy is the more specific
+   * story and the one with a named player in it. */
+  const gameEndReason = useMemo<GameEndReason | null>(() => {
+    if (emergencyPurchasePlan?.bankrupt) return "bankruptcy";
+    if (sandbox && bankIsBroken(gameState)) return "bank-broken";
+    return null;
+  }, [emergencyPurchasePlan, sandbox, gameState]);
+
+  const bankruptLabel = emergencyPurchasePlan?.bankrupt
+    ? emergencyPurchasePlan.presidentLabel
+    : null;
+
+  /** Design note #3 in `endgame.ts`: cash, shares at market, privates at
+   *  face. Computed only once the game has actually ended -- ranking four
+   *  players on every render of a live game is work nobody is looking at. */
+  const finalStandings = useMemo(() => {
+    if (!gameEndReason || !gameState) return [];
+    return rankPlayers({
+      state: gameState,
+      priceForCompany: (companyId) => (sandbox ? (sandboxMarketPrices[companyId] ?? null) : null),
+      labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+      bankruptAddress: emergencyPurchasePlan?.bankrupt
+        ? emergencyPurchasePlan.presidentAddress
+        : null,
+      totalAnte: PLACEHOLDER_TOTAL_ANTE,
+    });
+  }, [gameEndReason, gameState, sandbox, sandboxMarketPrices, emergencyPurchasePlan]);
 
   const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
@@ -4044,6 +4312,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return availableCash(gameState, waterfallState, address);
   }, [gameState, waterfallState]);
 
+  /* Design note #342: every seat's spendable cash, in seating order.
+     Only during the AUCTION -- a Stock Round bar showing four balances
+     would be four numbers none of which gates the acting player's buy, and
+     an Operating Round spends a treasury rather than a wallet. The empty
+     array is what makes the bar fall back to the single acting badge. */
+  const playerRoster = useMemo(() => {
+    if (!gameState || gameState.current_round_type !== "WaterfallAuction") return [];
+    const seat = actingSeatIndex(gameState);
+    const active = seat === null ? null : gameState.player_addresses[seat];
+    return gameState.player_addresses.map((address) => ({
+      address,
+      label: sandboxPlayerLabel(address) ?? truncateAddress(address),
+      available: availableCash(gameState, waterfallState, address) ?? 0,
+      escrowed: escrowedBids(waterfallState, address),
+      isActive: address === active,
+    }));
+  }, [gameState, waterfallState]);
+
   /** What the acting seat has locked in standing bids, for the badge's
    *  tooltip. Zero outside the auction. */
   const activeSeatEscrow = useMemo(() => {
@@ -4157,17 +4443,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      trade it was named after. */
 
 
+  /* ==================================================================
+   *  DESIGN NOTE 343 (source): THE ROUND, AS A SHORT TAG
+   * ==================================================================
+   *
+   * This memo has existed, correct and completely unused, since it was
+   * written -- it is the `roundLabel is assigned a value but never used`
+   * warning that has been standing in this file's lint output. It computes
+   * exactly the round context the Activity Log now stamps on every entry,
+   * so it is wired rather than deleted.
+   *
+   * Formats follow the brief: `Auction`, `SR1`, `OR 1.1`. The auction case
+   * shortened from "Waterfall Auction" because this is a prefix in a
+   * gutter, not a heading -- "[Waterfall Auction]" is wider than most of
+   * the lines it would sit beside.
+   */
   const roundLabel = useMemo(() => {
     if (!gameState) return null;
     // Pre-Game Waterfall Auction (`waterfall.rs`): every room now
     // genesis-starts here, before `macro_round_number`'s "SR1"/"OR1.1"
-    // numbering is meaningful at all -- see `WaterfallAuctionDashboard.tsx`,
-    // which is what actually renders during this phase.
-    if (gameState.current_round_type === "WaterfallAuction") return "Waterfall Auction";
-    const prefix = gameState.current_round_type === "StockRound" ? "SR" : "OR";
+    // numbering is meaningful at all.
+    if (gameState.current_round_type === "WaterfallAuction") return "Auction";
+    if (gameState.current_round_type === "StockRound") {
+      return `SR${gameState.macro_round_number}`;
+    }
     const suffix = gameState.sub_round_index > 0 ? `.${gameState.sub_round_index}` : "";
-    return `${prefix}${gameState.macro_round_number}${suffix}`;
+    return `OR ${gameState.macro_round_number}${suffix}`;
   }, [gameState]);
+
+  /* Read through a ref by the log writers, which are declared above this
+     memo -- the same ordering workaround `logInfoRef` uses. A ref also
+     means the stamp is taken at WRITE time rather than closed over at
+     callback-construction time, which is what design note #343 requires:
+     an entry written during the auction must keep `[Auction]` even though
+     the callback that wrote it was built rounds earlier. */
+  const roundLabelRef = useRef<string | null>(null);
+  useEffect(() => {
+    roundLabelRef.current = roundLabel;
+  }, [roundLabel]);
 
   // Interactive Floating Tile-Selection Popup Overlay state (see
   // HexGridRenderer.tsx design note #7). `hexClickQuery` mirrors whatever
@@ -5132,6 +5445,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      hue would invent a second meaning for a channel that already answers
      "whose turn is this". The ACTIVE train's route is the one the player is
      editing, and that is what the panel's row highlight says. */
+  /* ===================================================================
+   *  DESIGN NOTE 373 (owner): ONE NUMBER, THREE SURFACES
+   * ===================================================================
+   *
+   * The shared cursor lives here because all three consumers are children
+   * of this shell and none of them is the parent of the others -- the map
+   * is in one pane, the corporation strip in the action bar, the Route
+   * Planner in a third. Lifting it is the only place they meet.
+   *
+   * DELIBERATELY NOT PERSISTED and deliberately not in the undo snapshot
+   * (design note #310's rule is about state the DISPATCH path writes). A
+   * hover cursor describes where the pointer is, which is not part of the
+   * game and should not survive a reload or an undo.
+   *
+   * `null` is the resting state and every surface clears to it on leave,
+   * so a highlight cannot outlive the pointer that caused it. */
+  const [highlightedTrainIndex, setHighlightedTrainIndex] = useState<number | null>(null);
+
+  /* Cleared when the sub-phase moves off Run Routes: the cursor describes a
+     relationship between three surfaces that only two of them show outside
+     that step, and a stale highlight on a chip whose panel has gone would
+     be a mark nothing explains. */
+  useEffect(() => {
+    if (orSubPhase !== "Routes") setHighlightedTrainIndex(null);
+  }, [orSubPhase]);
+
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
     const color = glowColorFor(stationTickerColor(actingProtocolId));
     const overlays: RouteOverlay[] = [];
@@ -5144,6 +5483,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         trainLabel: `${train.model}-Train`,
         color,
         hexes: points.map((point) => [point.q, point.r] as [number, number]),
+        // Design note #373: the join key the three surfaces share.
+        trainIndex: train.trainIndex,
       });
     }
     return overlays;
@@ -5219,7 +5560,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     const id = nextLogEntryId++;
     const timestamp = new Date().toLocaleTimeString();
     const timestampMs = Date.now();
-    setActionLog((log) => [{ id, label, status: "info", detail, timestamp, timestampMs }, ...log]);
+    setActionLog((log) => [
+      { id, label, status: "info", detail, timestamp, timestampMs, round: roundLabelRef.current ?? undefined },
+      ...log,
+    ]);
   }, []);
 
   /* `logInfo` is defined below the handler that uses it, so the handler
@@ -5424,8 +5768,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           sandboxWaterfallRef.current = result.waterfall;
           setSandboxWaterfall(result.waterfall);
 
-          if (result.charge && after) {
-            const { player, amount } = result.charge;
+          /* Design note #334a: a LIST of charges, and not all of them the
+             actor's -- an auto-awarded private is charged to its lone
+             bidder, who may not be the player who just moved. */
+          for (const { player, amount } of result.charges) {
+            if (!after) break;
             after = {
               ...after,
               player_cash: after.player_cash.map((entry: { player: string; cash_vgp: string }) =>
@@ -5438,25 +5785,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               ),
             };
           }
-          if (result.won) {
-            const { privateId, name, player, price } = result.won;
-            /* ==============================================================
-             *  DESIGN NOTE 303: A WON PRIVATE HAS TO BECOME AN OWNED ONE
-             * ==============================================================
-             *
-             * REPORTED: sold private companies disappear from the screen.
-             *
-             * The dashboard already renders a dimmed "Sold to X for $Y"
-             * card, and it lists them from `gameState.private_companies`
-             * filtered on `owner !== null`. Nothing ever set that owner.
-             * `applySandboxWaterfallAction` REPORTS the win -- it returns
-             * `won` so the caller can log it -- and the waterfall's own
-             * `removePrivate` drops the company off the live list. So the
-             * card left the auction grid and never arrived in the sold one.
-             *
-             * The reducer reporting rather than writing is the right split
-             * (it owns the auction atom, not the game state), so the write
-             * belongs here, where both are in hand. */
+
+          /* ==============================================================
+           *  DESIGN NOTE 303: A WON PRIVATE HAS TO BECOME AN OWNED ONE
+           * ==============================================================
+           *
+           * REPORTED: sold private companies disappear from the screen.
+           *
+           * The dashboard already renders a dimmed "Sold to X for $Y"
+           * card, and it lists them from `gameState.private_companies`
+           * filtered on `owner !== null`. Nothing ever set that owner.
+           * `applySandboxWaterfallAction` REPORTS the win -- it returns
+           * `won` so the caller can log it -- and the waterfall's own
+           * `removePrivate` drops the company off the live list. So the
+           * card left the auction grid and never arrived in the sold one.
+           *
+           * The reducer reporting rather than writing is the right split
+           * (it owns the auction atom, not the game state), so the write
+           * belongs here, where both are in hand.
+           *
+           * Design note #334: a LIST now. One purchase can cascade through
+           * several lone-bid privates, and looping is what stops the
+           * second and third from going missing the way the first once
+           * did. */
+          for (const { privateId, name, player, price } of result.won) {
             if (after) {
               after = {
                 ...after,
@@ -5476,6 +5828,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               "Private Won",
               `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
             );
+
+            /* Design note #354: the B&O private hands its winner the
+               corporation's presidency, free. The rule lives in
+               `sandboxSession.ts` as a named function -- see its note for
+               what moves, what does not, and why it is not inline here. */
+            if (privateId === BO_PRIVATE_ID && after) {
+              const granted = grantBOPresidency(after, player, BO_TICKER);
+              if (granted !== after) {
+                after = granted;
+                logInfo(
+                  "B&O Presidency",
+                  `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives the 20% B&O President's Certificate free and sets its par value. B&O floats at 60% sold.`,
+                );
+              }
+            }
+          }
+
+          /* ==============================================================
+           *  DESIGN NOTE 337 (caller half): THE ALL-PASS PAYOUT
+           * ==============================================================
+           *
+           * The reducer reports that the table passed all the way round and
+           * what the markdown cost; the money moves here, because the
+           * privates' owners and revenues live on the GAME state and the
+           * waterfall reducer holds only the auction document.
+           *
+           * `applyPrivateRevenue` is the Operating Round's own payout
+           * function (design note #327), reused rather than reimplemented --
+           * so "who owns it", "is it closed", "does a corporate owner get
+           * it" and "who funds it" have exactly one answer in this app. */
+          if (result.markdown) {
+            logInfo(
+              "Waterfall",
+              `Everyone passed \u2014 ${result.markdown.name} drops from $${result.markdown.from} to $${result.markdown.to}.`,
+            );
+          }
+          if (result.allPassed && after) {
+            const revenue = applyPrivateRevenue(after);
+            if (revenue && revenue.state !== after) {
+              after = revenue.state;
+              const labelFor = (address: string) =>
+                sandboxPlayerLabel(address) ?? truncateAddress(address);
+              const tickerFor = (companyId: number) =>
+                after?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+                `company #${companyId}`;
+              for (const payout of revenue.payouts) {
+                logInfo("Private Revenue", describePrivatePayout(payout, labelFor, tickerFor));
+              }
+            }
           }
         }
 
@@ -5510,9 +5911,59 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             // Design note #273: what the chart says this share is worth, so
             // the wallet and the market agree about one trade.
             sharePrice: marketResult.tradePrice ?? undefined,
+            /* Design note #351: the par ladder's selection, for the
+               founding purchase that sets it. Read from the ref rather
+               than the state variable for design note #265's reason --
+               within one dispatch the state may still be a render behind,
+               and a par set from a stale selection would be the wrong
+               price forever. */
+            parValue: srParValueRef.current ?? undefined,
+            /* Design note #363: the board's own label -> (q, r) table, so a
+               corporation that floats gets its home token on the hex the
+               map actually draws rather than on a coordinate this reducer
+               guessed. */
+            homeHexToAxial: (label) => {
+              const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
+              return hex ? ([hex.q, hex.r] as const) : null;
+            },
           });
           sandboxStateRef.current = after;
           setSandboxState(after);
+
+          /* ==============================================================
+           *  DESIGN NOTE 353 (caller half): THE ROUND CHANGES HANDS
+           * ==============================================================
+           *
+           * `recordPass` sets a one-shot flag when a full round of passes
+           * closed the Stock Round. The shell consumes it here: it owns the
+           * log, and it owns the round transition -- the reducer holds only
+           * the game document and has no business deciding which tab the
+           * player is looking at.
+           *
+           * The flag is CLEARED as it is read, so a later re-render cannot
+           * fire the transition twice. */
+          if (after.stock_round_just_ended) {
+            const holder = after.player_addresses[after.priority_deal_index];
+            const holderLabel = holder
+              ? (sandboxPlayerLabel(holder) ?? truncateAddress(holder))
+              : "the next player";
+            logInfo(
+              "Round",
+              `Stock Round ends. Priority Deal shifts to ${holderLabel}.`,
+            );
+            after = {
+              ...after,
+              stock_round_just_ended: false,
+              current_round_type: "OperatingRound" as const,
+              consecutive_passes: 0,
+            };
+            sandboxStateRef.current = after;
+            setSandboxState(after);
+            /* The tab follows the round. `surfaceTabFor` is the same lookup
+               the round-transition effect uses, so the two cannot disagree
+               about where an Operating Round is played. */
+            setActiveMainTab(surfaceTabFor("OperatingRound"));
+          }
         }
 
         // Design note #265: described against the RESOLVED state.
@@ -5527,6 +5978,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
             timestamp,
             timestampMs,
+            // Design note #343: stamped at write time.
+            round: roundLabelRef.current ?? undefined,
           },
           ...log,
         ]);
@@ -5542,6 +5995,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             detail: "Spectator mode — watching only. Join from the lobby to play.",
             timestamp,
             timestampMs,
+            // Design note #343: stamped at write time.
+            round: roundLabelRef.current ?? undefined,
           },
           ...log,
         ]);
@@ -5549,7 +6004,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       }
 
       setActionLog((log) => [
-        { id, label, status: "pending", detail: "Broadcasting via session key...", timestamp, timestampMs },
+        {
+          id,
+          label,
+          status: "pending",
+          detail: "Broadcasting via session key...",
+          timestamp,
+          timestampMs,
+          // Design note #343: stamped at write time. The `log.map` updaters
+          // below only change `status`/`detail`, so the stamp survives the
+          // pending -> success transition.
+          round: roundLabelRef.current ?? undefined,
+        },
         ...log,
       ]);
 
@@ -7016,13 +7482,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       <EmergencyTrainPurchaseModal
         plan={emergencyModalPlan}
         sandbox={sandbox}
-        onClose={() =>
-          setDismissedEmergencyFor(emergencyModalPlan?.corporationId ?? null)
-        }
+        /* Design note #1 in the modal: the forced sale. Dispatches the
+           ordinary `SellStock` with the block the modal has already
+           validated against both restrictions -- the legality lives in
+           `endgame.ts`, so what reaches the reducer is a sale that was
+           legal at the moment the button was drawn. */
+        onSellShares={(companyId, percentage) => {
+          void runGameplayAction("SellStock: emergency funding", {
+            SellStock: { game_id: gameId, protocol_id: companyId, percentage },
+          });
+        }}
         onConfirm={() => {
           const plan = emergencyModalPlan;
           if (!plan) return;
-          setDismissedEmergencyFor(plan.corporationId);
           /* Design note #333: `EmergencyBuyHardware`, NOT the ordinary
              `BuyHardwareFromPool`. They are different contract messages and
              the difference is the whole feature -- the ordinary one charges
@@ -7036,9 +7508,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           );
           logInfo(
             "Emergency Purchase",
-            `${plan.presidentLabel} covered $${plan.shortfall} of ${plan.corporationTicker}'s $${plan.trainCost} ${plan.trainModel}-train from personal cash.`,
+            `${plan.presidentLabel} covered $${plan.shortfall} of ${plan.corporationTicker}'s $${plan.trainCost} ${plan.trainModel}-train — $${plan.treasuryContribution} treasury, $${plan.fromPlayerCash} personal cash.`,
           );
         }}
+      />
+
+      {/* Design note #0 in `GameOverModal.tsx`: both endings, one surface.
+          Mounted above the emergency modal in z-order because bankruptcy is
+          declared FROM that modal -- the game ending has to be able to
+          cover the screen the president was looking at when it happened. */}
+      <GameOverModal
+        reason={gameEndReason}
+        standings={finalStandings}
+        viewerAddress={viewerAddress}
+        totalAnte={PLACEHOLDER_TOTAL_ANTE}
+        bankruptLabel={bankruptLabel}
       />
 
       {/* Design note #34: one bar. The room context below used to be a
@@ -7215,6 +7699,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   activePlayerName={activeSeatLabel}
                   activePlayerCash={activeSeatCash}
                   activePlayerEscrow={activeSeatEscrow}
+                  playerRoster={playerRoster}
                   privateCompanies={gameState?.private_companies ?? []}
                   privatePowerViewer={viewerAddress}
                   sandboxMode={sandbox}
@@ -7238,6 +7723,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   routeBuildMode={routeBuildMode}
                   onSelectRouteBuildMode={handleSelectRouteBuildMode}
                   onSelectRouteTrain={handleSelectRouteTrain}
+                  highlightedRouteIndex={highlightedTrainIndex}
+                  onHighlightRoute={setHighlightedTrainIndex}
                   trainDrafts={trainDrafts}
                   activeTrainIndex={activeTrainIndex}
                   routeFeedback={routeFeedback}
@@ -7435,6 +7922,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   <StockRoundPanel
                     publicCompanies={gameState?.public_companies ?? []}
                     parValue={srParValue}
+                    // Design note #356/#357: the round number bans SR1
+                    // sales; the acting seat's cash gates every buy.
+                    macroRoundNumber={gameState?.macro_round_number}
+                    playerCash={activeSeatCash}
                     onSelectParValue={setSrParValue}
                     onBuyShare={handleBuyShare}
                     onSellShares={handleSellShares}
@@ -7606,6 +8097,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // roster and clear themselves when a private closes.
                       privateCompanies={gameState?.private_companies}
                       routeOverlays={manualRouteOverlay}
+                      // Design note #374: the map both reads and drives the
+                      // shared cursor.
+                      highlightedTrainIndex={highlightedTrainIndex}
+                      onHighlightRoute={setHighlightedTrainIndex}
                       // Design note #224: the Lay Track veil.
                       // Design note #240: one veil, two steps. Track lay
                       // lights what the network can build on; token
@@ -7619,7 +8114,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       suppressHoverTooltip={
                         (tileSelectorArmed && radialSelector !== null) || pendingToken !== null
                       }
-                      layFocus={layTrackFocus ?? tokenTargetFocus}
+                      /* ==================================================
+                           DESIGN NOTE 377 (shell half): WHOSE VEIL IS IT
+                          ==================================================
+
+                          The renderer has a board and no identity, so the
+                          question "is the person looking at this the one
+                          taking the turn" can only be answered here.
+
+                          `isMyTurn` is exactly that question and already
+                          existed for the tab-title flash -- it compares
+                          `viewerAddress` against `actingSeatIndex`, which
+                          in an Operating Round resolves to the PRESIDENT of
+                          the acting corporation rather than to a seat
+                          pointer. That is the right identity: the veil
+                          marks one corporation's reach, and the player who
+                          can act on it is its president.
+
+                          Spread onto whichever focus is live so the token
+                          targeting step inherits the same asymmetry without
+                          a second flag saying the same thing. */
+                      layFocus={
+                        layTrackFocus
+                          ? { ...layTrackFocus, dim: isMyTurn }
+                          : tokenTargetFocus
+                            ? { ...tokenTargetFocus, dim: isMyTurn }
+                            : undefined
+                      }
                     />
                   ) : (
                     <StockMarketRenderer
@@ -8716,8 +9237,31 @@ const styles: Record<string, React.CSSProperties> = {
        Dropped rather than lowered: a minimum height on a card whose
        contents already exceed it does nothing except on the one screen
        where the card is nearly empty, and there the extra height is not
-       worth the pixels everywhere else. */
-    padding: "3px 10px",
+       worth the pixels everywhere else.
+
+       ==================================================================
+        DESIGN NOTE 371: 3px WAS ONE PIXEL TOO FEW
+       ==================================================================
+
+       REPORTED: the train chips inside this card are clipped at the
+       bottom.
+
+       #299 was right that the 44px floor was dead space and wrong by a
+       hair about the padding. The chips are the tallest thing in this row
+       at 24px (`TrainBadges` design note #370), and at 3px top and bottom
+       the card is 30px -- which fits, until the row WRAPS. A wrapping flex
+       container distributes its lines by `align-content`, whose initial
+       value is `stretch`; with the card's height driven by content that is
+       usually harmless, but any ancestor rounding or a partially-filled
+       last line pushes the final row against the padding edge, and the
+       thing that goes is the 1px bottom border of a 5px-radius chip.
+
+       6px, and `alignContent: center` so a wrapped set of lines is
+       centred in the box rather than stretched against its edges. Two
+       pixels each way is not the space #299 reclaimed -- that was the
+       40px difference between a 44px floor and a 30px row. */
+    padding: "6px 10px",
+    alignContent: "center",
     borderRadius: "8px",
     backgroundColor: "#171c28",
     border: "1px solid #2b3242",
@@ -8758,6 +9302,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontVariantNumeric: "tabular-nums",
+  },
+  /* Design note #379: chips, matching the Game Ledger's own list so a
+     private reads the same wherever it appears. The border takes the
+     corporation's own ink so the chip sits on a brand-coloured bar without
+     a hardcoded colour that would be invisible on half the palette. */
+  orContextPrivates: { display: "inline-flex", flexWrap: "wrap", gap: "4px" },
+  orContextPrivateChip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    padding: "1px 6px",
+    borderRadius: "4px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    whiteSpace: "nowrap",
+    cursor: "help",
   },
   orContextFactAside: { fontSize: FONT_SIZE.micro, fontWeight: 400 },
   orContextFactNone: { fontSize: FONT_SIZE.small, fontStyle: "italic" },
@@ -8844,6 +9403,43 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #317: escrow qualifies the figure beside it rather than
      competing with it -- muted, and absent entirely when nothing is bid. */
+  /* Design note #342: the roster row. `flexWrap` because four pills plus
+     the buttons genuinely overflow a narrow window, and wrapping is a
+     better failure than clipping a player's balance. */
+  actionBarRoster: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "6px",
+    flexWrap: "wrap",
+  },
+  rosterPill: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "6px",
+    padding: "3px 9px",
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+  },
+  /* Green for the seat on turn -- the same `#7ee0a1` family the seating
+     table's ON TURN badge uses, so the two surfaces mark the turn in one
+     colour rather than each picking their own. */
+  rosterPillActive: {
+    borderColor: "#3f7a55",
+    backgroundColor: "#17301f",
+    color: "#9fe9bb",
+  },
+  rosterPillIdle: {
+    borderColor: "#2f3543",
+    backgroundColor: "#1b1f29",
+    color: "#8a919e",
+  },
+  rosterPillName: { fontSize: FONT_SIZE.micro, fontWeight: 700 },
+  rosterPillValue: { fontSize: FONT_SIZE.small, fontWeight: 800 },
+  rosterPillEscrow: { fontSize: FONT_SIZE.micro, opacity: 0.75 },
   playerCashEscrow: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,

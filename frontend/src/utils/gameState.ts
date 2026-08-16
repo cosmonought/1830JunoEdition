@@ -207,9 +207,32 @@ export interface GameStateResponse {
    *  by `ExecuteMsg::PassTurn`. */
   active_player_index: number;
   /** Real field, but per `src/state.rs`'s own doc comment currently static
-   *  `0` for every room -- nothing yet reassigns it during play. Displayed
-   *  where relevant, but should read as inert rather than a live pointer. */
+   *  `0` for every room -- nothing yet reassigns it during play on chain.
+   *  The SANDBOX reassigns it at the end of a Stock Round (design note #353
+   *  in `sandboxSession.ts`), which is the rule the contract will apply
+   *  when it implements `conclude_stock_round`'s own half. */
   priority_deal_index: number;
+  /* ==================================================================
+   *  SANDBOX-ONLY FIELDS
+   * ==================================================================
+   *
+   * Neither of these comes off the wire. `GetGameState` does not report
+   * them and a live room leaves them `undefined`, which every reader below
+   * treats as "not applicable" rather than as a value -- see design note
+   * #352 for why they live on the state object at all rather than in module
+   * scope (the undo snapshot copies the state; it cannot copy a closure).
+   *
+   * Marked optional rather than added to the mirror of the contract's
+   * response shape, so nothing here can be mistaken for a field the chain
+   * will one day send.
+   */
+  /** Design note #352: the seat that last bought or sold this Stock Round,
+   *  for the Priority Deal handover. `null` when nobody has traded. */
+  last_trader_index?: number | null;
+  /** Design note #353: set for one dispatch when a full round of passes
+   *  closed the Stock Round, so the shell can log the handover and move to
+   *  the Operating Round. Consumed and cleared by the caller. */
+  stock_round_just_ended?: boolean;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */
@@ -441,6 +464,40 @@ export function playerCompanyHoldings(
     }
   }
   return holdings;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 379: A PRIVATE CAN BELONG TO A COMPANY, NOT A PLAYER
+ * ==================================================================
+ *
+ * REPORTED: when a corporation buys a private company from a player, there
+ * is nowhere in the UI to see that the corporation now owns it.
+ *
+ * `PrivateCompanyState` has carried BOTH owners since the schema was
+ * written -- `owner` for a player and `owner_protocol_id` for a
+ * corporation, "mutually exclusive" per its own doc comment -- and the
+ * phase-gated corporate purchase that sets the second one has been
+ * implemented since `PrivateTradePanel`. Every reader in the app looked
+ * only at `owner`. So the moment a private crossed from a player to a
+ * company it left the seller's ledger row and arrived nowhere: it paid
+ * revenue to a treasury (design note #329) that no surface attributed to
+ * it.
+ *
+ * ONE HELPER, so the ledger column and the Operating Round strip cannot
+ * disagree about what a corporation owns -- the same reason
+ * `playerPrivateCompanies` exists for the other half of the pair.
+ *
+ * CLOSED PRIVATES ARE EXCLUDED, matching `playerSellablePrivateCompanies`
+ * and the reservation badges: a closed company is off the board, pays
+ * nothing, and listing it would show an asset the corporation no longer
+ * has. */
+export function corporationPrivateCompanies(
+  companyId: number,
+  state: GameStateResponse,
+): PrivateCompanyState[] {
+  return state.private_companies.filter(
+    (priv) => !priv.closed && priv.owner_protocol_id === companyId,
+  );
 }
 
 /** Every private company `playerAddress` currently owns -- the other half

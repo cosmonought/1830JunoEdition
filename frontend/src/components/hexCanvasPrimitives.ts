@@ -124,7 +124,40 @@ export interface RouteOverlay {
    *  adjacent; a non-adjacent pair is skipped rather than drawn as a straight
    *  line across the board (see `drawRouteOverlays`). */
   hexes: Array<[number, number]>;
+  /* ==================================================================
+   *  DESIGN NOTE 373: ONE ROUTE IS THE ONE BEING LOOKED AT
+   * ==================================================================
+   *
+   * REPORTED: there is no visual connection between a route path on the
+   * map, its train chip on the corporation card, and its row in the Route
+   * Planner.
+   *
+   * Three surfaces describing one thing, and nothing tying them together --
+   * so with three trains drafted, working out which coloured line belongs
+   * to which row meant matching colours by eye across two panels. The
+   * colours were always per-train (design note #254), which is what makes
+   * the connection RECOVERABLE; it was never made.
+   *
+   * `trainIndex` is the join key. It is the same index the Route Planner
+   * rows and the train chips are keyed on, so a single number held in
+   * `App.tsx` is enough for all three to agree -- no id scheme, no
+   * registry, and nothing that can drift because there is only one value.
+   *
+   * `emphasis` is what this overlay should do about it:
+   *
+   *   "normal"    nothing is highlighted; draw as always.
+   *   "primary"   this is the one. Heavier and brighter.
+   *   "muted"     something else is. Fade back so the primary reads.
+   *
+   * Computed by the CALLER rather than derived here from a highlighted
+   * index, because `drawRouteOverlays` is also used by callers that have no
+   * concept of a cursor, and a second optional parameter to every one of
+   * them would be plumbing for a state they do not have. */
+  trainIndex?: number;
+  emphasis?: RouteEmphasis;
 }
+
+export type RouteEmphasis = "normal" | "primary" | "muted";
 
 export const EMPTY_ROUTE_OVERLAYS: readonly RouteOverlay[] = [];
 
@@ -929,6 +962,69 @@ function clipOutsideCityMasks(ctx: CanvasRenderingContext2D, masks: readonly Cit
   ctx.clip("evenodd");
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 380: THE HIT TEST IS THE GEOMETRY, NOT THE HEX
+ * ==================================================================
+ *
+ * REPORTED: route hover relies on hex overlap, so two trains sharing a hex
+ * abort the highlight rather than resolving it.
+ *
+ * `HexGridRenderer` design note #374 chose that shape and defended it:
+ * "pixel-perfect proximity would mean re-deriving every authored `Path2D`
+ * under its transform and running `isPointInStroke` per frame, for a gain
+ * the player cannot see: routes run along rails, and a rail occupies its
+ * hex." The premise was right and the conclusion was wrong. The gain is
+ * exactly the case that note ALSO had to special-case -- a shared hex --
+ * and it is not rare, it is the position that makes route colours worth
+ * having at all.
+ *
+ * THE COST WAS OVERSTATED TOO. Nothing needs re-deriving per frame. Every
+ * route stroke already passes through ONE function (`strokePaths` below)
+ * which knows both the authored path and the exact transform it is drawn
+ * under, so the flattened geometry is a by-product of the draw that already
+ * happened. It is built once per repaint, not once per pointer move.
+ *
+ * WHAT IS RETURNED is one `Path2D` per train, in BOARD pixels -- the space
+ * after the per-hex translate/rotate/scale and before the view's pan/zoom.
+ * That is the space `size` is measured in, so the caller strokes it at
+ * `routeHitWidth` and applies only the view transform. Flattening at draw
+ * time rather than storing (path, matrix) pairs means the hit test is one
+ * `isPointInStroke` per train rather than one per hex per train.
+ *
+ * `DOMMatrix` IS REQUIRED and is checked for. `Path2D.addPath` takes a
+ * matrix and there is no way to compose a transform into a path without
+ * one; where it is missing (an old engine, a test environment) the map
+ * comes back empty and the caller keeps its hex-grained behaviour rather
+ * than losing hover entirely.
+ */
+/* ==================================================================
+ *  DESIGN NOTE 380: HOW WIDE A ROUTE IS TO A POINTER
+ * ==================================================================
+ *
+ * The drawn route is exactly a third of the rail (design note #268), which
+ * at ordinary zoom is two or three pixels -- a target no hand can hit and
+ * no trackpad can hold. This multiplies the pen for the HIT TEST only; the
+ * painted line is untouched.
+ *
+ * A WIDER PEN, not a search radius. Stroke width grows perpendicular to
+ * the curve wherever it goes, so a tolerance expressed this way follows
+ * the bend; a radius around the pointer would also catch a route running
+ * parallel a few pixels away, which is exactly the discrimination this
+ * whole change exists to gain.
+ *
+ * 4x lands the target near 10px at the default hex size, which is the
+ * usual floor for a pointer affordance, and stays proportional at every
+ * zoom because the underlying width already is. */
+export const ROUTE_HIT_TOLERANCE = 4;
+
+export interface RouteHitPaths {
+  /** Flattened board-space stroke geometry, by `trainIndex`. */
+  paths: Map<number, Path2D>;
+  /** The width those paths were drawn at, in board pixels. The caller must
+   *  stroke-test at this or wider -- a hairline is unhittable. */
+  routeWidth: number;
+}
+
 export function drawRouteOverlays(
   ctx: CanvasRenderingContext2D,
   size: number,
@@ -942,8 +1038,14 @@ export function drawRouteOverlays(
    *  pick the ONE printed rail a train runs along instead of lighting up
    *  every rail on the hex. `undefined` for a hex with no printed track. */
   printedLabelAt?: (q: number, r: number) => string | undefined,
-): void {
-  if (overlays.length === 0) return;
+): RouteHitPaths {
+  /* Design note #380: accumulated as the routes are drawn. Declared before
+     the early return so the shape of the result never depends on whether
+     there was anything to draw. */
+  const hitPaths = new Map<number, Path2D>();
+  const canFlatten = typeof DOMMatrix !== "undefined";
+
+  if (overlays.length === 0) return { paths: hitPaths, routeWidth: Math.max(3, size * 0.12) / 3 };
 
   /* `apothem` is GONE with design note #216's fallbacks. It existed only to
      place edge midpoints for the two re-derived curves, and nothing in this
@@ -1022,12 +1124,36 @@ export function drawRouteOverlays(
      3, so this cannot go below 1px, and a floor here would silently break
      the stated ratio at small zooms -- which is the number that was asked
      for. */
-  const routeWidth = railWidth / 3;
+  const baseRouteWidth = railWidth / 3;
   const glowBlur = Math.max(4, size * 0.18);
 
   for (const overlay of overlays) {
     if (overlay.hexes.length < 2) continue;
     ctx.strokeStyle = overlay.color;
+
+    /* Design note #373: the emphasis, applied as WIDTH and ALPHA rather
+       than as a different colour. The colour is the route's identity --
+       changing it to signal a hover would break the very correspondence
+       this feature exists to make visible. Width and opacity say "this
+       one" without saying "a different one".
+
+       The muted pass stays fully drawn rather than being skipped: a route
+       that vanishes while you hover its neighbour is worse than one that
+       recedes, because the player loses the comparison they were making. */
+    const emphasis: RouteEmphasis = overlay.emphasis ?? "normal";
+    const widthScale = emphasis === "primary" ? 2.2 : 1;
+    const alpha = emphasis === "muted" ? 0.32 : 1;
+
+    /* Design note #380: this train's flattened geometry, filled in by
+       `strokePaths` as each hex is drawn. Keyed on `trainIndex` because
+       that is the join the whole cross-highlight runs on (design note
+       #373); an overlay without one cannot be hovered to any purpose and
+       is not collected. */
+    const hitPath =
+      canFlatten && overlay.trainIndex !== undefined ? new Path2D() : null;
+    if (hitPath && overlay.trainIndex !== undefined) {
+      hitPaths.set(overlay.trainIndex, hitPath);
+    }
 
     // Walk HEXES, not pairs. The old loop drew each hop as two half-curves
     // (centre -> crossing, crossing -> next centre), which meant one hex's
@@ -1116,6 +1242,26 @@ export function drawRouteOverlays(
        *  glow then core, design note #268. `rot` is 0 for preprinted
        *  artwork, which has one fixed facing. */
       const strokePaths = (paths: readonly Path2D[], rot: number) => {
+        /* Design note #380: the hit geometry is composed from the SAME
+           three transforms the stroke below applies, in the same order --
+           translate to the hex centre, rotate the tile's facing, scale out
+           of unit-hex space. Built here rather than recomputed later so
+           the two can never describe different curves; if the draw moves,
+           this moves with it because it reads the same `center`, `rot` and
+           `size`.
+
+           The city-mask clip is NOT applied. It punches holes where station
+           tokens sit so the ribbon does not paint over them -- a painting
+           concern. A route still RUNS through the city it stops at, and a
+           player hovering the middle of a station means that route. */
+        if (hitPath) {
+          const matrix = new DOMMatrix()
+            .translate(center.x, center.y)
+            .rotate(rot === 0 ? 0 : (-60 * rot))
+            .scale(size);
+          for (const path of paths) hitPath.addPath(path, matrix);
+        }
+
         ctx.save();
         // Design note #267: the city markers on THIS hex become holes, so
         // neither the glow nor the core lands on a station token. Set
@@ -1128,12 +1274,16 @@ export function drawRouteOverlays(
         // The catalog is authored in unit-hex space, so the transform scales
         // the pen too -- divide back out to land on the same on-screen width
         // at every zoom.
-        ctx.lineWidth = routeWidth / size;
+        // Design note #373: the emphasis scales the pen, not the colour.
+        ctx.lineWidth = (baseRouteWidth * widthScale) / size;
+        ctx.globalAlpha = alpha;
 
         // Design note #268, pass 1: the halo. `shadowBlur` is in board
         // pixels and is NOT affected by the transform's scale, so it is set
         // raw rather than divided back out like the pen width.
-        ctx.shadowBlur = glowBlur;
+        // Design note #373: a primary route's halo grows with it, which is
+        // what makes it read as lit rather than merely thicker.
+        ctx.shadowBlur = emphasis === "primary" ? glowBlur * 1.6 : glowBlur;
         ctx.shadowColor = overlay.color;
         for (const path of paths) ctx.stroke(path);
 
@@ -1208,6 +1358,97 @@ export function drawRouteOverlays(
   }
 
   ctx.restore();
+  // Design note #380: the width the caller must stroke-test at, in the same
+  // board pixels the paths are expressed in.
+  return { paths: hitPaths, routeWidth: baseRouteWidth };
+}
+
+/** The pan/zoom the board was drawn under. Structural, so the hit test can
+ *  be called with a plain object rather than the renderer's view state. */
+export interface RouteHitView {
+  panX: number;
+  panY: number;
+  zoom: number;
+}
+
+/**
+ * Which route's LINE is under `(cssX, cssY)`, or `null` for none.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 381: THE HIT TEST LIVES WITH THE DRAW
+ * ==================================================================
+ *
+ * This began inside `HexGridRenderer`'s pointer handler, which is where a
+ * pointer handler's logic belongs -- until you try to test it, and find
+ * that reaching it means mounting a React component around a real canvas
+ * to synthesise a `PointerEvent`. Nothing here needs any of that: it needs
+ * a context, some paths, a point and a view.
+ *
+ * MORE IMPORTANTLY, THE CORRECTNESS ARGUMENT IS ABOUT THE DRAW. Every line
+ * below exists to mirror something `drawRouteOverlays` did -- its
+ * transform, its pen width, its caps and joins. Two functions in one file
+ * that must agree can be read together; the same pair 1,600 lines apart in
+ * different modules drift, and the drift is invisible because a hit test
+ * that is subtly wrong still returns plausible answers.
+ *
+ * `isPointInStroke` IS ASYMMETRIC, and this is the whole difficulty. The
+ * PATH is transformed by the current matrix; the POINT is read in the
+ * canvas's own bitmap space, explicitly unaffected by that matrix. Since
+ * the renderer sizes its backing store at `width * dpr`, that bitmap space
+ * is device pixels, so:
+ *
+ *   - the matrix is rebuilt as `dpr` then pan then zoom, exactly the order
+ *     the draw applies them, and
+ *   - the CSS-pixel point is multiplied INTO device pixels.
+ *
+ * Doing one without the other is worse than doing neither. With neither,
+ * both spaces are CSS pixels and the test is merely un-scaled -- correct at
+ * 1x. With one, they disagree by exactly `dpr` on every HiDPI screen.
+ *
+ * THE PEN IS WIDENED, NOT THE SEARCH. `isPointInStroke` measures against
+ * `lineWidth`/`lineCap`/`lineJoin`, so a test at the default 1px would miss
+ * a line drawn at 4. The route is deliberately a third of the rail (design
+ * note #268), which is a target no hand can hit, so it is tested at
+ * `ROUTE_HIT_TOLERANCE` times its drawn width. Widening the pen keeps the
+ * tolerance perpendicular to the curve, which is what a player means by
+ * "near the line"; a radius search around the point would also catch
+ * anything running alongside it.
+ *
+ * FIRST HIT WINS. Two routes are indistinguishable here only if they run
+ * the SAME rail, where there is no answer to prefer -- unlike design note
+ * #374's hex test, which gave up whenever two routes merely shared a tile.
+ * That case is now answered, and it is the one this exists for.
+ */
+export function hitTestRoutes(
+  ctx: CanvasRenderingContext2D,
+  hit: RouteHitPaths,
+  cssX: number,
+  cssY: number,
+  view: RouteHitView,
+  dpr: number,
+): number | null {
+  if (hit.paths.size === 0) return null;
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.translate(view.panX, view.panY);
+  ctx.scale(view.zoom, view.zoom);
+  ctx.lineWidth = hit.routeWidth * ROUTE_HIT_TOLERANCE;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // Into the bitmap space the point is read in -- see above.
+  const deviceX = cssX * dpr;
+  const deviceY = cssY * dpr;
+
+  let found: number | null = null;
+  hit.paths.forEach((path: Path2D, trainIndex: number) => {
+    if (found === null && ctx.isPointInStroke(path, deviceX, deviceY)) {
+      found = trainIndex;
+    }
+  });
+  ctx.restore();
+  return found;
 }
 
 /** GENERIC PLACEHOLDER ARTWORK for a `tile_id` that isn't in this file's
@@ -2118,126 +2359,121 @@ export function drawRestrictionBadgeAt(
  * clears.
  *
  * IT IS DELIBERATELY NOT A `drawRestrictionBadge`. The "B"/"NY"/"OO" badges
- * are PRINTED ON THE CARDBOARD -- permanent properties of the hex, black
- * text on no background, part of the board's own artwork. A reservation is
- * a temporary game-state fact that comes and goes with a company. Drawing
- * it in the same visual language would be claiming a hex is printed with
- * something it is not, and would leave a player unable to tell which marks
- * survive to the endgame.
- *
- * So it reads as a PIECE SITTING ON the board: a raised dark pill with its
- * own shadow, an amber rule, and a drawn padlock. Amber rather than red,
- * because the hex is spoken for rather than dangerous -- the same
- * distinction requirement 3 of this pass draws between an active event and
- * a warning.
+ * are PRINTED ON THE CARDBOARD -- permanent properties of the hex, part of
+ * the board's own artwork. A reservation is a temporary game-state fact
+ * that comes and goes with a company, so it is drawn in its own key: a gold
+ * padlock rather than the board's black serif letters.
  *
  * THE LOCK IS DRAWN, NOT TYPED. `🔒` renders as a colour emoji on some
  * platforms, a hollow glyph on others and a tofu box where the font is
- * missing, and this file's whole doctrine is authored artwork over
- * whatever the font stack happens to supply (see the header's "Art, not
- * Math" note). Two paths -- a shackle arc and a body -- are three lines of
- * code and identical everywhere.
+ * missing, and this file's whole doctrine is authored artwork over whatever
+ * the font stack happens to supply. Two paths -- a shackle arc and a body
+ * -- are three lines of code and identical everywhere.
+ *
+ * ===================================================================
+ *  DESIGN NOTE 364: THE FIRST VERSION LOOKED LIKE A BUTTON
+ * ===================================================================
+ *
+ * REPORTED: the badges are too large, overflow into neighbouring hexes,
+ * and read as clickable because of the pill background.
+ *
+ * All three came from one decision. The first cut drew a filled, stroked,
+ * drop-shadowed pill so the badge would read as a PIECE SITTING ON the
+ * board rather than as printed artwork -- and a filled rounded rectangle
+ * with a border and a shadow is exactly the visual vocabulary of a button.
+ * The pill also set the size: it had to be wide enough for "C&SL" plus a
+ * lock plus padding, which on a 42px hex is most of the hex's width, and
+ * at the smaller zooms it ran into the neighbours.
+ *
+ * The plate is gone entirely. What remains is a lock and two or three
+ * letters, drawn with a dark halo so they stay legible over any tile
+ * colour without needing a background to sit on -- the same technique the
+ * board's own nameplates use. Roughly 40% of the former footprint.
+ *
+ * THE AMPERSAND GOES TOO. "CSL" and "DH" are the same identifiers minus a
+ * character that costs width and adds nothing at this size: nobody reads
+ * a two-letter mark on a hex corner as a company name they need punctuated.
+ *
+ * THE POSITIONS ARE PINNED, not claimed. Every other badge in this file
+ * negotiates for a slot through `claimHexSlotPreferring`, which is right
+ * when several passes compete for one hex. There are exactly two of these,
+ * on two known hexes, and both were given a specific home: B20's at the
+ * BOTTOM VERTEX (slot 10), F16's on the BOTTOM-LEFT EDGE (slot 4). A
+ * negotiated slot could have put either back over a neighbour, which is
+ * the bug. The caller supplies the slot.
  */
 export function drawReservationBadgeAt(
   ctx: CanvasRenderingContext2D,
   badgeCenter: { x: number; y: number },
   size: number,
-  /** The private's initials, e.g. `"C&SL"`. */
+  /** The private's initials, e.g. `"CSL"`. No ampersand -- design note #364. */
   initials: string,
 ): void {
-  const scale = Math.max(0.55, Math.min(1, size / 42));
-  const fontPx = Math.max(7, Math.round(9 * scale));
+  // Design note #364: markedly smaller than the pill version, and it shrinks
+  // with the hex rather than holding a minimum a plate would have needed.
+  const scale = Math.max(0.5, Math.min(1, size / 42));
+  const fontPx = Math.max(6, Math.round(7.5 * scale));
   ctx.save();
   ctx.font = `bold ${fontPx}px ${FONT_FAMILY_STACK}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
 
-  const lockW = fontPx * 0.72;
-  const gap = fontPx * 0.34;
-  const padX = fontPx * 0.5;
+  const lockW = fontPx * 0.62;
+  const gap = fontPx * 0.28;
   const textW = ctx.measureText(initials).width;
-  const pillW = padX * 2 + lockW + gap + textW;
-  const pillH = fontPx * 1.65;
-  const x = badgeCenter.x - pillW / 2;
-  const y = badgeCenter.y - pillH / 2;
-  const radius = pillH / 2;
+  // Centred on the point the caller gave us, so a slot direction puts the
+  // whole mark where it was aimed rather than its left edge.
+  const startX = badgeCenter.x - (lockW + gap + textW) / 2;
 
-  // The raised pill. A shadow is what makes it read as ON the board rather
-  // than printed into it.
-  ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
-  ctx.shadowBlur = 4 * scale;
-  ctx.shadowOffsetY = 1 * scale;
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + pillW - radius, y);
-  ctx.arc(x + pillW - radius, y + radius, radius, -Math.PI / 2, Math.PI / 2);
-  ctx.lineTo(x + radius, y + pillH);
-  ctx.arc(x + radius, y + radius, radius, Math.PI / 2, -Math.PI / 2);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(26, 29, 38, 0.94)";
-  ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-  ctx.strokeStyle = "#c9a227";
-  ctx.lineWidth = Math.max(1, 1.2 * scale);
-  ctx.stroke();
+  /* No plate. A dark halo under both the glyph and the text is what keeps
+     them readable over yellow track, green cardboard or a red off-board --
+     the same trick the nameplate pass uses, and it costs no footprint. */
+  ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+  ctx.shadowBlur = Math.max(2, 3 * scale);
 
   // The padlock: shackle arc above a body rectangle.
-  const lockX = x + padX;
-  const bodyH = pillH * 0.4;
-  const bodyY = badgeCenter.y - bodyH * 0.15;
-  const shackleR = lockW * 0.32;
-  ctx.strokeStyle = "#e6c65a";
-  ctx.lineWidth = Math.max(1, 1.1 * scale);
+  const bodyH = fontPx * 0.55;
+  const bodyY = badgeCenter.y - bodyH * 0.1;
+  const shackleR = lockW * 0.3;
+  ctx.strokeStyle = "#f0d074";
+  ctx.lineWidth = Math.max(0.9, 1 * scale);
   ctx.beginPath();
-  ctx.arc(lockX + lockW / 2, bodyY, shackleR, Math.PI, 0);
+  ctx.arc(startX + lockW / 2, bodyY, shackleR, Math.PI, 0);
   ctx.stroke();
-  ctx.fillStyle = "#e6c65a";
+  ctx.fillStyle = "#f0d074";
   ctx.beginPath();
-  ctx.rect(lockX + lockW * 0.12, bodyY, lockW * 0.76, bodyH);
+  ctx.rect(startX + lockW * 0.12, bodyY, lockW * 0.76, bodyH);
   ctx.fill();
 
-  ctx.fillStyle = "#f2e6c0";
-  ctx.fillText(initials, lockX + lockW + gap, badgeCenter.y + fontPx * 0.05);
+  ctx.fillStyle = "#f7ead0";
+  ctx.fillText(initials, startX + lockW + gap, badgeCenter.y + fontPx * 0.05);
   ctx.restore();
 }
 
 /**
  * Places and draws a reservation badge on `(q, r)`.
  *
- * Goes through the same 12-slot claiming ledger every other badge pass uses
- * (design note #72), so a reserved hex that also carries a revenue badge and
- * a nameplate does not stack all three on one corner. The preference leads
- * with the LOWER slots: the two reserved hexes both carry nameplates, which
- * `NAMEPLATE_SLOT_PREFERENCE` puts at the top, and a badge that has to be
- * legible at a glance should not be the one fighting for that space.
+ * Design note #364: `slot` is REQUIRED and comes from the caller. These two
+ * badges have fixed homes chosen so neither can reach a neighbouring hex,
+ * and a negotiated slot is what let the first version wander.
  */
-export const RESERVATION_SLOT_PREFERENCE: readonly number[] = [3, 4, 5, 2, 6, 9, 11, 12];
-
 export function drawReservationBadge(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
   initials: string,
-  mapGrid: MapGridResponse,
-  q: number,
-  r: number,
-  claimedHexSlots: Map<string, Set<number>>,
+  slot: number,
 ): void {
-  const override = resolveSlotOverride(q, r, "restriction");
-  const preference = withSlotReserve(q, r, "restriction", RESERVATION_SLOT_PREFERENCE);
-  const blocked = hexBlockedSlots(mapGrid, q, r);
-  const dead = slotsBlockedByEdges(deadEdgesAt(q, r), false);
-  const slot = claimHexSlotPreferring(claimedHexSlots, q, r, override, preference, blocked, dead);
-  // Same 0.65 magnitude every other badge in this file uses, so a
-  // reservation badge sits at the radius its neighbours would have.
+  /* 0.62 rather than the 0.65 every other badge uses: a vertex slot already
+     sits at the full corner radius, and the mark is centred on the point
+     rather than starting there, so a hair further in keeps its outer end
+     inside the hex boundary. */
   const direction = hexSlotDirection(slot);
   drawReservationBadgeAt(
     ctx,
     {
-      x: center.x + direction.x * size * 0.65,
-      y: center.y + direction.y * size * 0.65,
+      x: center.x + direction.x * size * 0.62,
+      y: center.y + direction.y * size * 0.62,
     },
     size,
     initials,

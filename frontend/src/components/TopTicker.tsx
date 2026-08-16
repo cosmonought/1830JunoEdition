@@ -83,7 +83,8 @@ function previewText(item: FeedItem): string {
   }
   const icon = iconForLogStatus(item.logStatus ?? "info");
   const detail = item.logDetail && item.logDetail.length <= 40 ? ` — ${item.logDetail}` : "";
-  return `${icon} ${item.logLabel}${detail}`;
+  const round = item.logRound ? `[${item.logRound}] ` : "";
+  return `${icon} ${round}${item.logLabel}${detail}`;
 }
 
 export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggleExpand }: TopTickerProps) {
@@ -163,6 +164,10 @@ function LogEntry({ item }: { item: FeedItem }) {
         {icon} {category}
       </span>
       <span style={styles.logStatusIcon}>{statusIcon}</span>
+      {/* Design note #343: the round this happened in, ahead of the label.
+          Muted and monospaced so a column of them lines up and reads as a
+          gutter rather than as part of each sentence. */}
+      {item.logRound && <span style={styles.logRound}>[{item.logRound}]</span>}
       <span style={styles.logLabel}>{item.logLabel}</span>
       <span style={styles.timestamp}>{item.timestampLabel}</span>
     </div>
@@ -298,6 +303,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   logStatusIcon: {
     fontSize: FONT_SIZE.small,
+  },
+  logRound: {
+    fontSize: FONT_SIZE.micro,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    color: "#6f7480",
+    flexShrink: 0,
   },
   logLabel: {
     flex: 1,

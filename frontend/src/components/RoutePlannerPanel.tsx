@@ -158,6 +158,23 @@ export interface RoutePlannerPanelProps {
    *  `null` when the corporation owns nothing to draft for. */
   activeTrainIndex: number | null;
   onSelectTrain: (trainIndex: number) => void;
+  /* ==================================================================
+   *  DESIGN NOTE 9: THE ROW'S END OF THE SHARED CURSOR
+   * ==================================================================
+   *
+   * `hexCanvasPrimitives.ts` design note #373 explains the cursor itself.
+   *
+   * DISTINCT FROM `activeTrainIndex`, and the two are easy to conflate.
+   * Active means "map clicks are drafting for this train" -- a MODE, chosen
+   * by clicking the chip, persisting until changed. Highlighted means "this
+   * is the one being looked at right now" -- transient, driven by hover,
+   * and it can point at a train that is not the active one, which is
+   * exactly what makes it useful for comparing two drafted routes.
+   *
+   * Merging them would mean hovering a row silently redirected the map's
+   * clicks, which is the kind of mode change nobody expects from a hover. */
+  highlightedTrainIndex?: number | null;
+  onHighlightTrain?: (trainIndex: number | null) => void;
   /** Clears one train's route, or every train's when given `null`. */
   onClearRoute: (trainIndex: number | null) => void;
   onRunRoute: () => void;
@@ -282,6 +299,8 @@ export function RouteModeToggle({
 export function RoutePlannerPanel({
   drafts,
   activeTrainIndex,
+  highlightedTrainIndex = null,
+  onHighlightTrain,
   onSelectTrain,
   onClearRoute,
   onRunRoute,
@@ -366,13 +385,21 @@ export function RoutePlannerPanel({
 
           {drafts.map((draft) => {
             const isActive = draft.trainIndex === activeTrainIndex;
+            // Design note #9: transient, and independent of `isActive`.
+            const isHighlighted = draft.trainIndex === highlightedTrainIndex;
             const isOpen = expanded.has(draft.trainIndex);
             const reach = draft.maxDistance;
             return (
               <React.Fragment key={draft.trainIndex}>
                 <div
-                  style={{ ...styles.tableRow, ...(isActive ? styles.tableRowActive : {}) }}
+                  style={{
+                    ...styles.tableRow,
+                    ...(isActive ? styles.tableRowActive : {}),
+                    ...(isHighlighted ? styles.tableRowHighlighted : {}),
+                  }}
                   role="row"
+                  onMouseEnter={() => onHighlightTrain?.(draft.trainIndex)}
+                  onMouseLeave={() => onHighlightTrain?.(null)}
                 >
                   {/* Design note #5: the chip is a train, not a model. Two
                       3-trains get two chips, and clicking one says "the map
@@ -608,6 +635,15 @@ const styles: Record<string, React.CSSProperties> = {
   tableRowActive: {
     backgroundColor: "#1a2130",
     boxShadow: "inset 2px 0 0 #38bdf8",
+  },
+  /* Design note #9: distinct from active, and it has to LOOK distinct --
+     the active row already owns a left rule and a fill, so the highlight
+     takes the one channel left, an outline. Spread after `tableRowActive`
+     so a row that is both keeps its rule and gains the ring. */
+  tableRowHighlighted: {
+    outline: "1px solid rgba(160, 200, 255, 0.75)",
+    outlineOffset: "-1px",
+    backgroundColor: "#1b2434",
   },
   headerRow: {
     display: "grid",

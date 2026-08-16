@@ -118,6 +118,7 @@ import {
   certificateBreakdown,
   formatCertificateCount,
   playerCompanyHoldings,
+  corporationPrivateCompanies,
   playerPrivateCompanies,
   usePlayerNetWorths,
 } from "../utils/gameState";
@@ -657,6 +658,9 @@ function CorporationAssetsSection({
                 <th style={styles.thCenterB}>Trains</th>
                 <th style={styles.thCenterB}>Train Limit</th>
                 <th style={styles.thNumB}>Last Route Payout</th>
+                {/* Design note #379: what the TREASURY owns, beside what it
+                    holds in cash and rolling stock. */}
+                <th style={styles.thB}>Privates</th>
                 <th style={styles.thNumB}>IPO</th>
                 <th style={styles.thNumB}>Bank Pool</th>
                 <th style={styles.thNum}>Player Hands</th>
@@ -669,6 +673,11 @@ function CorporationAssetsSection({
                   0,
                 );
                 const price = priceByCompany.get(company.company_id);
+                // Design note #379: what this corporation's treasury owns.
+                const corporatePrivates = corporationPrivateCompanies(
+                  company.company_id,
+                  gameState,
+                );
                 return (
                   <tr key={company.company_id}>
                     <td style={styles.tdB}>
@@ -732,6 +741,24 @@ function CorporationAssetsSection({
                         compact
                         revenue={company.last_route_revenue}
                       />
+                    </td>
+                    {/* Design note #379: privates the treasury bought. */}
+                    <td style={styles.tdB}>
+                      {corporatePrivates.length === 0 ? (
+                        <span style={styles.holdingsEmpty}>--</span>
+                      ) : (
+                        <span style={styles.corpPrivateList}>
+                          {corporatePrivates.map((priv) => (
+                            <span
+                              key={priv.private_id}
+                              style={styles.corpPrivateChip}
+                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round, paid to ${company.ticker}'s treasury.`}
+                            >
+                              {priv.private_id}. {priv.name}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </td>
                     <td style={styles.tdNumB}>{company.ipo_pool_percentage}%</td>
                     <td style={styles.tdNumB}>{company.bank_pool_percentage}%</td>
@@ -932,6 +959,21 @@ const styles: Record<string, React.CSSProperties> = {
      `tree*`/`netWorth*` styles the removed certificate-tree cards used were
      deleted with them rather than left to rot. ---- */
   holdingsCell: { display: "flex", flexWrap: "wrap", gap: "4px", maxWidth: "340px" },
+  /* Design note #379: chips rather than a comma list -- a corporation holds
+     at most a couple of privates, and each is a discrete asset with its own
+     revenue, so they read as objects rather than as prose. */
+  corpPrivateList: { display: "inline-flex", flexWrap: "wrap", gap: "4px" },
+  corpPrivateChip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    padding: "1px 6px",
+    borderRadius: "4px",
+    backgroundColor: "#2a3142",
+    border: "1px solid #3a4055",
+    color: "#c8cbd6",
+    whiteSpace: "nowrap",
+    cursor: "help",
+  },
   holdingsEmpty: { color: "#6f7480", fontStyle: "italic" },
   holdingChipPrivate: {
     display: "inline-flex",

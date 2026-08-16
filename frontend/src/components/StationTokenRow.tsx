@@ -61,6 +61,29 @@ export interface StationTokenRowProps {
   inkMuted: string;
   /** Shown when the corporation has no allowance to draw. */
   emptyLabel?: string;
+  /* ==================================================================
+   *  DESIGN NOTE 362: THE HOME TOKEN'S CAPTION IS ITS HEX, NOT ITS PRICE
+   * ==================================================================
+   *
+   * REPORTED: the first station marker slot displays "$0", which is
+   * unhelpful.
+   *
+   * It was accurate and useless in the same breath. Every other slot's
+   * caption is a DECISION -- $40, then $100, the money the next placement
+   * will cost -- and the home token has no decision attached: it is granted
+   * free at float and goes on a hex printed on the board. So the one slot
+   * that could not be priced was captioned with a price, and "$0" beside a
+   * circle reads as "worth nothing" rather than "already yours".
+   *
+   * The hex label is the fact a player actually wants there. It answers
+   * where the corporation starts, which is the question the home token
+   * exists to represent, and on the Operating Round strip it is the only
+   * place that answer appears at all.
+   *
+   * `null` falls back to the price. One core company (NNH) has no home hex
+   * assigned on this board (`gameState.ts` on `home_hex_label`), and
+   * inventing a label for it would be worse than the "$0" this replaces. */
+  homeHexLabel?: string | null;
 }
 
 /** Neutral grey for a token already on the board -- design note #1. */
@@ -72,6 +95,7 @@ export function StationTokenRow({
   ink,
   inkMuted,
   emptyLabel = "none",
+  homeHexLabel = null,
 }: StationTokenRowProps) {
   if (slots.length === 0) {
     return <span style={{ ...styles.empty, color: inkMuted }}>{emptyLabel}</span>;
@@ -84,10 +108,17 @@ export function StationTokenRow({
       aria-label={`Station tokens: ${slots.filter((s) => s.placed).length} of ${slots.length} placed`}
     >
       {slots.map((slot) => {
+        // Design note #362: the home slot is captioned by WHERE, the rest
+        // by HOW MUCH.
+        const showsHex = slot.isHome && homeHexLabel !== null;
         const title = slot.isHome
-          ? slot.placed
-            ? "Home station — granted free when the corporation floated."
-            : "Home station — placed free when the corporation floats."
+          ? homeHexLabel !== null
+            ? slot.placed
+              ? `Home station on ${homeHexLabel} — granted free when the corporation floated.`
+              : `Home station on ${homeHexLabel} — placed free when the corporation floats.`
+            : slot.placed
+              ? "Home station — granted free when the corporation floated."
+              : "Home station — placed free when the corporation floats."
           : slot.placed
             ? `Placed. Cost $${slot.cost}.`
             : `Costs $${slot.cost} from the treasury.`;
@@ -114,7 +145,7 @@ export function StationTokenRow({
                 ...(slot.placed ? styles.pricePlaced : {}),
               }}
             >
-              ${slot.cost}
+              {showsHex ? homeHexLabel : `$${slot.cost}`}
             </span>
           </span>
         );

@@ -61,6 +61,7 @@
 
 import type {
   GameStateResponse,
+  PublicCompanyState,
   RoundType,
   WaterfallMiniAuctionStatus,
   WaterfallPrivateStatus,
@@ -106,6 +107,12 @@ export const SANDBOX_NOMINAL_TOKEN_COST = 40;
  *  share is 10%; the President's 20% double certificate is a rule this
  *  reducer does not model and the contract does. */
 export const SANDBOX_SHARE_PERCENTAGE = 10;
+
+/** Design note #351: the President's Certificate is a DOUBLE share -- 20%
+ *  of the company, for twice par. Named rather than written as `10 * 2` so
+ *  the two places that need it (the equity moved, and the certificate count
+ *  the ledger derives) cannot drift apart. */
+export const SANDBOX_PRESIDENT_PERCENTAGE = 20;
 
 /** What a full round of passes knocks off the cheapest private -- design
  *  note #271. `auction::MIN_BID_INCREMENT`'s own $5 step, reused because the
@@ -202,14 +209,57 @@ function advanceCorporation(state: GameStateResponse): GameStateResponse {
   };
 }
 
-/** Records a pass and, if that completes a full round of them, ends the
- *  Stock Round the way the contract does.
+/* ==================================================================
+ *  DESIGN NOTE 352: WHO TRADED LAST, AND WHY IT IS TRACKED HERE
+ * ==================================================================
  *
- *  The only rule-shaped thing in this file, and it is here because it is not
- *  really a rule -- it is a counter reaching the player count. What it does
- *  NOT do is the part that IS a rule: no sold-out price rise, no Priority
- *  Deal reassignment, no lockout clearing. Those live in
- *  `trading::conclude_stock_round`. */
+ * The Priority Deal after a Stock Round goes to the player SITTING TO THE
+ * LEFT of whoever last bought or sold. That is a fact about the round's
+ * history, and nothing in `GameStateResponse` records it -- the contract
+ * derives it inside `conclude_stock_round` and reports only the result.
+ *
+ * So the sandbox has to remember it. Kept on the state object rather than
+ * in a module-level variable for the reason design note #310 records the
+ * hard way: anything the dispatch path writes has to be in the undo
+ * snapshot, and the snapshot copies the state. A module variable would
+ * survive an undo and hand the deal to somebody who no longer traded.
+ *
+ * `null` when nobody has traded all round -- an entire Stock Round of
+ * passes, which is legal and which 1830 answers by leaving the Priority
+ * Deal where it already was.
+ */
+function markTrader(state: GameStateResponse, actor: string | null): GameStateResponse {
+  if (!actor) return state;
+  const index = state.player_addresses.indexOf(actor);
+  return index === -1 ? state : { ...state, last_trader_index: index };
+}
+
+/** Records a pass and, if that completes a full round of them, ends the
+ *  Stock Round.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 353: THE ROUND NOW ACTUALLY ENDS
+ *  ==================================================================
+ *
+ *  REPORTED: the Stock Round never ends, and the Priority Deal starts on
+ *  the wrong player.
+ *
+ *  The note that stood here was candid about the first half -- "the sandbox
+ *  marks the boundary by resetting the streak so the loop keeps moving, and
+ *  leaves the consequences to the contract" -- which was the right call
+ *  when the sandbox had no round transitions at all. It has them now
+ *  (`handleProceedToStockRound` opens SR1), and a round that can be entered
+ *  but never left is a dead end of exactly the kind design note #271 fixed
+ *  for the auction.
+ *
+ *  WHAT THIS DOES: ends the round, moves the Priority Deal to the seat left
+ *  of the last trader, and seats that player to act first in the Operating
+ *  Round that follows.
+ *
+ *  WHAT IT STILL DOES NOT: the sold-out price rise and the lockout
+ *  clearing, which are `market.rs`'s and `trading.rs`'s. Those are rules
+ *  about VALUE; this is pacing about WHOSE TURN, and the distinction is the
+ *  same one this file has drawn since design note #0. */
 function recordPass(state: GameStateResponse): GameStateResponse {
   const count = state.player_addresses.length;
   if (count === 0) return state;
@@ -223,11 +273,33 @@ function recordPass(state: GameStateResponse): GameStateResponse {
 
   if (streak < count) return advanced;
 
-  // A full round of passes. In the auction this runs the waterfall; in a
-  // Stock Round it ends the round. The sandbox marks the boundary by
-  // resetting the streak so the loop keeps moving, and leaves the
-  // consequences to the contract.
-  return { ...advanced, consecutive_passes: 0 };
+  // A full round of passes. In the auction this runs the waterfall (the
+  // `WaterfallPass` arm handles it before reaching here); in a Stock Round
+  // it ends the round.
+  if (state.current_round_type !== "StockRound") {
+    return { ...advanced, consecutive_passes: 0 };
+  }
+
+  /* LEFT OF THE LAST TRADER. "Left" is the next seat in turn order, which
+     is the same direction `advanceSeat` moves -- so the deal lands on
+     whoever would have acted after the last person to trade. With nobody
+     having traded, the deal stays where it is: a round in which nothing
+     happened has nothing to reorder. */
+  const priority =
+    state.last_trader_index === null || state.last_trader_index === undefined
+      ? state.priority_deal_index
+      : (state.last_trader_index + 1) % count;
+
+  return {
+    ...advanced,
+    consecutive_passes: 0,
+    priority_deal_index: priority,
+    // The Priority Deal holder opens the next round, which is what makes it
+    // worth holding.
+    active_player_index: priority,
+    last_trader_index: null,
+    stock_round_just_ended: true,
+  };
 }
 
 /** Applies one dispatched gameplay message to the local sandbox state.
@@ -529,6 +601,14 @@ export interface SandboxActionContext {
    *  Omitted falls back to `SANDBOX_NOMINAL_SHARE_PRICE`, which is what
    *  every trade cost before the chart could move. */
   sharePrice?: number;
+  /** Design note #351: the par ladder's current selection, for the founding
+   *  purchase that sets it. Ignored on every other buy -- once
+   *  `par_value` is set the company has a price and the ladder is locked. */
+  parValue?: number;
+  /** Design note #363: resolves a home hex label to `(q, r)`. Injected --
+   *  the board table lives in `components/`, which `utils/` must not
+   *  import. Omitted, corporations still float without their token. */
+  homeHexToAxial?: (label: string) => readonly [number, number] | null;
 }
 
 /** Moves `percentage` out of one of a corporation's pools and into
@@ -857,10 +937,65 @@ export function settleTrainSale(
  */
 export interface SandboxWaterfallResult {
   waterfall: WaterfallStateResponse;
-  /** What the acting player owes, if this action bought something. */
-  charge: { player: string; amount: number } | null;
-  /** A private that just changed hands, for the caller's log line. */
-  won: { privateId: number; name: string; player: string; price: number } | null;
+  /* ==================================================================
+   *  DESIGN NOTE 334a: CHARGES ARE A LIST, AND NOT ALWAYS THE ACTOR'S
+   * ==================================================================
+   *
+   * This was one optional `{ player, amount }` -- "what the acting player
+   * owes". Design note #336's cascade breaks both halves of that: one
+   * purchase can settle several privates, and the auto-awarded ones are
+   * charged to the LONE BIDDER, who is not the player who acted.
+   *
+   * A list of `(player, amount)` says both without overloading either. The
+   * first attempt at this reused the payout array with a negative amount
+   * and a sentinel id, which typechecked and would have been read as
+   * revenue by the first caller that summed it.
+   */
+  charges: Array<{ player: string; amount: number }>;
+  /* ==================================================================
+   *  DESIGN NOTE 334: ONE ACTION CAN SELL SEVERAL PRIVATES
+   * ==================================================================
+   *
+   * This was a single `won` object, which was true while the only way to
+   * win a private was to buy it or to outlast a contest. Design note #336's
+   * auto-resolve cascade breaks that assumption: buying the cheapest
+   * private can promote one that already has a lone bid, which resolves
+   * instantly, which promotes the next -- and a table that has been bidding
+   * for a while can settle three companies off one purchase.
+   *
+   * A LIST, in resolution order. The alternative was to report only the
+   * first and let the others move silently, which is the shape that
+   * produced design note #303's vanishing cards: the state changed and the
+   * caller was never told, so its own bookkeeping drifted from the
+   * reducer's.
+   */
+  won: Array<{ privateId: number; name: string; player: string; price: number }>;
+  /* ==================================================================
+   *  DESIGN NOTE 337: THE ALL-PASS PAYOUT, REPORTED NOT PERFORMED
+   * ==================================================================
+   *
+   * 1830: when every player passes in succession, the cheapest private is
+   * marked down $5 AND every private already owned pays its revenue to its
+   * owner. The markdown was implemented (design note #271); the payout half
+   * was not, so a table that stalled got cheaper privates and no income --
+   * which removes the main reason a player is ever willing to sit and pass.
+   *
+   * THIS FILE DOES NOT PAY IT, and that is the same boundary every other
+   * arm here respects: `charges` is likewise "what the actor owes" for the
+   * caller to apply, because the waterfall atom is a separate document from
+   * `GameStateResponse` and does not carry `private_companies` at all. The
+   * owner roster, the revenue figures and the bank all live on the game
+   * state, so the reducer that owns THAT is the one that can pay.
+   *
+   * Reporting the flag rather than the payouts also means the credit runs
+   * through `applyPrivateRevenue` -- the same function the Operating Round
+   * uses (design note #327) -- so the two paths cannot drift on who counts
+   * as an owner or on who funds it. A second payout implementation here
+   * would be a second set of answers to those questions.
+   */
+  allPassed: boolean;
+  /** The markdown that came with it, for the caller's log line. */
+  markdown: { privateId: number; name: string; from: number; to: number } | null;
 }
 
 /** The next seat in turn order, wrapping. */
@@ -875,7 +1010,13 @@ export function applySandboxWaterfallAction(
   msg: GameplayExecuteMsg,
   players: readonly string[],
 ): SandboxWaterfallResult {
-  const unchanged: SandboxWaterfallResult = { waterfall, charge: null, won: null };
+  const unchanged: SandboxWaterfallResult = {
+    waterfall,
+    charges: [],
+    won: [],
+    allPassed: false,
+    markdown: null,
+  };
   const actor = waterfall.mini_auction?.current_turn ?? waterfall.current_turn;
 
   /** Drops a private from the offer list and re-marks the new cheapest. The
@@ -940,6 +1081,78 @@ export function applySandboxWaterfallAction(
    *  `current_turn` is the first of them who is not leading. Returns `null`
    *  when the private is not contested, which the caller reads as "nothing
    *  to open". */
+  /* ==================================================================
+   *  DESIGN NOTE 336: THE CASCADE, WHICH WAS DOCUMENTED BUT NEVER RUN
+   * ==================================================================
+   *
+   * REPORTED: a player holds the only bid on the B&O at $225. Another
+   * player buys the private directly below it. The waterfall then offers
+   * the B&O to the NEXT player at its $220 face value instead of resolving
+   * it to the lone bidder.
+   *
+   * Which is worse than a missing feature -- it offers the company to
+   * somebody else for $5 LESS than the standing bid, so the bidder is
+   * punished for having bid. Anyone who noticed would simply stop bidding.
+   *
+   * THE RULE WAS ALREADY WRITTEN DOWN, in `WaterfallAuctionDashboard.tsx`'s
+   * own status-badge comment: "0 bids leaves a private simply open, exactly
+   * 1 bid is what the next cascade run auto-resolves to that sole bidder
+   * ('auto-award'), 2+ bids is what starts a mini-auction." The UI has been
+   * rendering an `isAutoAwardPending` badge for that state since design
+   * note #14. Nothing ever performed the resolution the badge promised.
+   *
+   * IT CASCADES, hence the name and hence the loop. Awarding the lone-bid
+   * private promotes the next one, which may itself carry a single bid,
+   * which resolves in turn -- a table that has been bidding for several
+   * rounds can settle three companies off one purchase. A single `if` would
+   * have fixed the reported case and left the two-deep case wrong, which is
+   * the harder bug to find because it needs a longer game to reach.
+   *
+   * TERMINATION: every iteration removes exactly one private from a finite
+   * list, and the loop stops on 0 bids (buyable) or 2+ (contested). The
+   * `privates.length` bound is belt-and-braces against a malformed fixture
+   * whose `is_lowest_offered` never advances.
+   */
+  const cascade = (
+    startingPrivates: WaterfallPrivateStatus[],
+  ): {
+    privates: WaterfallPrivateStatus[];
+    mini: WaterfallMiniAuctionStatus | null;
+    won: SandboxWaterfallResult["won"];
+    charges: Array<{ player: string; amount: number }>;
+  } => {
+    let privates = startingPrivates;
+    const won: SandboxWaterfallResult["won"] = [];
+    const charges: Array<{ player: string; amount: number }> = [];
+
+    for (let guard = 0; guard <= startingPrivates.length; guard += 1) {
+      const lowest = privates.find((entry) => entry.is_lowest_offered);
+      if (!lowest) return { privates, mini: null, won, charges };
+
+      if (lowest.bids.length >= 2) {
+        // Contested: a mini-auction decides it, and the cascade stops here.
+        return { privates, mini: openMiniAuction(lowest), won, charges };
+      }
+      if (lowest.bids.length === 0) {
+        // Open at face value. Nothing to resolve; the next player chooses.
+        return { privates, mini: null, won, charges };
+      }
+
+      // Exactly one bid: it is theirs, at the price they bid -- NOT at face
+      // value. The bid is the higher of the two by construction (a bid must
+      // exceed face value by the increment), and charging face value would
+      // hand them a discount for having been the only one interested.
+      const [bid] = lowest.bids;
+      const price = Number(bid.bid_amount) || 0;
+      won.push({ privateId: lowest.private_id, name: lowest.name, player: bid.bidder, price });
+      charges.push({ player: bid.bidder, amount: price });
+      privates = privates
+        .filter((entry) => entry.private_id !== lowest.private_id)
+        .map((entry, index) => ({ ...entry, is_lowest_offered: index === 0 }));
+    }
+    return { privates, mini: null, won, charges };
+  };
+
   const openMiniAuction = (
     target: WaterfallPrivateStatus,
   ): WaterfallMiniAuctionStatus | null => {
@@ -975,22 +1188,28 @@ export function applySandboxWaterfallAction(
        is the ordinary way a mini-auction starts in a real game -- bids
        accumulate on a private while it is too expensive to be the lowest
        offer, and land the moment it becomes one. */
-    const remaining = removePrivate(target.private_id);
-    const promoted = remaining.find((entry) => entry.is_lowest_offered);
-    const mini = promoted ? openMiniAuction(promoted) : null;
+    // Design note #336: the promoted private may be settled already.
+    const resolved = cascade(removePrivate(target.private_id));
 
     return {
       waterfall: settle({
         ...waterfall,
-        privates: remaining,
-        mini_auction: mini,
+        privates: resolved.privates,
+        mini_auction: resolved.mini,
         current_turn: nextSeat(players, waterfall.current_turn),
         // Buying is not passing, so the streak that would end the auction
         // resets -- a counter, not a rule about what the streak means.
         consecutive_waterfall_passes: 0,
       }),
-      charge: { player: actor, amount: price },
-      won: { privateId: target.private_id, name: target.name, player: actor, price },
+      // The buyer's own price, then whatever the cascade auto-awarded --
+      // each to whoever actually owes it (design note #334a).
+      charges: [{ player: actor, amount: price }, ...resolved.charges],
+      won: [
+        { privateId: target.private_id, name: target.name, player: actor, price },
+        ...resolved.won,
+      ],
+      allPassed: false,
+      markdown: null,
     };
   }
 
@@ -1034,8 +1253,10 @@ export function applySandboxWaterfallAction(
       // the dashboard already renders reads the bid list -- so no cash moves
       // here. Charging on the bid and refunding on a loss would be this file
       // modelling a rule it has no business owning.
-      charge: null,
-      won: null,
+      charges: [],
+      won: [],
+      allPassed: false,
+      markdown: null,
     };
   }
 
@@ -1059,18 +1280,31 @@ export function applySandboxWaterfallAction(
           // Free, so it goes. The next seat takes it at no cost, which is
           // how the real auction stops a worthless private from blocking
           // every remaining turn.
-          const remaining = removePrivate(target.private_id);
-          const promoted = remaining.find((entry) => entry.is_lowest_offered);
+          const freed = cascade(removePrivate(target.private_id));
           return {
             waterfall: settle({
               ...waterfall,
-              privates: remaining,
-              mini_auction: promoted ? openMiniAuction(promoted) : null,
+              privates: freed.privates,
+              mini_auction: freed.mini,
               current_turn: nextSeat(players, taker),
               consecutive_waterfall_passes: 0,
             }),
-            charge: null,
-            won: { privateId: target.private_id, name: target.name, player: taker, price: 0 },
+            charges: freed.charges,
+            won: [
+              { privateId: target.private_id, name: target.name, player: taker, price: 0 },
+              ...freed.won,
+            ],
+            // Design note #337: this branch IS an all-pass -- the round of
+            // passes that marked the price to zero. The privates pay here
+            // too, and forgetting that would make the payout depend on
+            // whether the markdown happened to land on a round number.
+            allPassed: true,
+            markdown: {
+              privateId: target.private_id,
+              name: target.name,
+              from: Number(target.face_value) || 0,
+              to: 0,
+            },
           };
         }
 
@@ -1087,8 +1321,16 @@ export function applySandboxWaterfallAction(
             // declined this offer, it has never been made one.
             consecutive_waterfall_passes: 0,
           },
-          charge: null,
-          won: null,
+          charges: [],
+          won: [],
+          // Design note #337: the two halves of the all-pass rule, together.
+          allPassed: true,
+          markdown: {
+            privateId: target.private_id,
+            name: target.name,
+            from: Number(target.face_value) || 0,
+            to: marked,
+          },
         };
       }
     }
@@ -1099,8 +1341,10 @@ export function applySandboxWaterfallAction(
         current_turn: nextSeat(players, waterfall.current_turn),
         consecutive_waterfall_passes: passes,
       },
-      charge: null,
-      won: null,
+      charges: [],
+      won: [],
+      allPassed: false,
+      markdown: null,
     };
   }
 
@@ -1155,8 +1399,10 @@ export function applySandboxWaterfallAction(
           current_turn: nextSeat(mini.bidders, actor),
         },
       },
-      charge: null,
-      won: null,
+      charges: [],
+      won: [],
+      allPassed: false,
+      markdown: null,
     };
   }
 
@@ -1173,22 +1419,61 @@ export function applySandboxWaterfallAction(
       const winner = remaining[0] ?? mini.high_bidder;
       const target = waterfall.privates.find((entry) => entry.private_id === mini.private_id);
       const price = Number(mini.high_bid) || 0;
-      const stillOffered = removePrivate(mini.private_id);
-      const promoted = stillOffered.find((entry) => entry.is_lowest_offered);
+      // Design note #271: resolving one contest can immediately expose
+      // another. Design note #336: or settle it outright, if the promoted
+      // private carries exactly one bid.
+      const resolved = cascade(removePrivate(mini.private_id));
       return {
         waterfall: settle({
           ...waterfall,
-          privates: stillOffered,
-          // Design note #271: resolving one contest can immediately expose
-          // another -- the promoted private may already carry bids.
-          mini_auction: promoted ? openMiniAuction(promoted) : null,
-          current_turn: nextSeat(players, waterfall.current_turn),
+          privates: resolved.privates,
+          mini_auction: resolved.mini,
+          /* ==============================================================
+           *  DESIGN NOTE 338: A MINI-AUCTION DOES NOT CONSUME A MAIN TURN
+           * ==============================================================
+           *
+           * REPORTED: mini-auctions break the Seating Order turn cursor --
+           * after one ends, the action bar and the seating list highlight
+           * the wrong player.
+           *
+           * This line was `current_turn: nextSeat(players,
+           * waterfall.current_turn)`, and it advanced the MAIN rotation a
+           * second time.
+           *
+           * The main cursor has already moved by the time a contest opens:
+           * whichever action exposed it -- `WaterfallBidHigher` or
+           * `WaterfallBuyLowest` -- advanced the seat as part of its own
+           * arm, because that player used their turn. Everything inside the
+           * contest then moves `mini_auction.current_turn` and only that,
+           * which is correct: a raise is not a waterfall turn, it is a move
+           * in a side auction among the bidders.
+           *
+           * So advancing again on resolution skipped exactly one seat, every
+           * time. Four players, A on turn:
+           *
+           *   A bids on the cheapest      -> cursor B
+           *   B bids on it, contest opens -> cursor C
+           *   A drops out, B wins         -> cursor D   (C never acted)
+           *
+           * The seating rail and the hotseat gate both read this field, so
+           * they agreed with each other and both pointed at the wrong seat
+           * -- which is why the report describes it as a display bug.
+           *
+           * PRESERVED, not recomputed. `waterfall.current_turn` is already
+           * the seat that was next when the contest began; the contest did
+           * not touch it, so resuming is simply leaving it alone. */
+          current_turn: waterfall.current_turn,
           consecutive_waterfall_passes: 0,
         }),
-        charge: { player: winner, amount: price },
-        won: target
-          ? { privateId: target.private_id, name: target.name, player: winner, price }
-          : null,
+        charges: [{ player: winner, amount: price }, ...resolved.charges],
+        won: [
+          ...(target
+            ? [{ privateId: target.private_id, name: target.name, player: winner, price }]
+            : []),
+          ...resolved.won,
+        ],
+        allPassed: false,
+      markdown: null,
       };
     }
 
@@ -1227,8 +1512,10 @@ export function applySandboxWaterfallAction(
           current_turn: nextSeat(remaining, actor),
         },
       },
-      charge: null,
-      won: null,
+      charges: [],
+      won: [],
+      allPassed: false,
+      markdown: null,
     };
   }
 
@@ -1401,18 +1688,94 @@ export function applySandboxAction(
     // messages instead (its own design note #33). Reading a field the UI
     // does not send would model a purchase shape that cannot occur here.
     const { protocol_id, source } = msg.BuyStock;
-    const percentage = SANDBOX_SHARE_PERCENTAGE;
     /* Design note #273: the CHART's price, not a flat $67 for everything.
        `ctx.sharePrice` is the same figure `applySandboxMarketAction`
        reports, handed in rather than recomputed so the money that leaves
        the wallet and the money the log quotes are one number. */
     const price = ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE;
 
-    const spent = actor ? adjustCash(state, actor, -price) : state;
-    const banked = adjustBank(spent, price);
-    return advanceSeat(
-      moveShares(banked, protocol_id, actor, source === "Bank" ? "Bank" : "Ipo", percentage),
+    /* ==================================================================
+     *  DESIGN NOTE 351: THE FIRST IPO SHARE IS TWO SHARES
+     * ==================================================================
+     *
+     * REPORTED: when floating an IPO the first purchaser picks a par value,
+     * but the UI records a 10% share, does not mark them President, and
+     * leaves the par selector open for the next player.
+     *
+     * All three are one omission. In 1830 the first certificate out of an
+     * IPO is the PRESIDENT'S CERTIFICATE: 20% of the company for twice the
+     * par price, and with it the presidency and the par price itself, set
+     * once and never again. This arm moved a flat `SANDBOX_SHARE_PERCENTAGE`
+     * and charged a flat `price` for every purchase, so the founding buy was
+     * indistinguishable from the fifth one.
+     *
+     * The consequences compounded rather than staying cosmetic: with
+     * `president` never set, the card kept offering the par ladder (it
+     * gates on `par_value === null`), the ledger's certificate count was
+     * wrong by one, and `soldToPlayersPercent` under-reported by 10% so the
+     * 60% float threshold arrived a purchase late.
+     *
+     * `StockRoundPanel` has PRICED this correctly all along -- its design
+     * note #35 quotes "@ $134" for a $67 par -- so the panel was already
+     * telling the player something the reducer then did not do. That gap is
+     * what makes it worth writing down: a UI quoting a transaction the
+     * state does not perform is the shape this codebase keeps removing.
+     *
+     * BOTH CONDITIONS, per `StockRoundPanel`'s own design note #36: no
+     * president AND nobody holding anything. A malformed fixture with
+     * holders but no president degrades to an ordinary 10% share rather
+     * than handing out a second President's Certificate.
+     */
+    const target = state.public_companies.find((c) => c.company_id === protocol_id);
+    const anyHeld = (target?.player_holdings ?? []).some((h) => h.percentage > 0);
+    const isPresidentBuy =
+      source !== "Bank" && !!target && target.president === null && !anyHeld && !!actor;
+
+    const percentage = isPresidentBuy
+      ? SANDBOX_PRESIDENT_PERCENTAGE
+      : SANDBOX_SHARE_PERCENTAGE;
+    const charged = isPresidentBuy ? price * 2 : price;
+
+    const spent = actor ? adjustCash(state, actor, -charged) : state;
+    const banked = adjustBank(spent, charged);
+    const moved = moveShares(
+      banked,
+      protocol_id,
+      actor,
+      source === "Bank" ? "Bank" : "Ipo",
+      percentage,
     );
+
+    /* The presidency and the par price, together -- they are set by the
+       same act and the panel locks its ladder on `par_value !== null`, so
+       writing one without the other would leave the selector open on a
+       company that already has a president. `ctx.parValue` is the ladder
+       selection the panel had when it dispatched. */
+    const crowned = isPresidentBuy
+      ? {
+          ...moved,
+          public_companies: moved.public_companies.map((company) =>
+            company.company_id === protocol_id
+              ? {
+                  ...company,
+                  president: actor,
+                  par_value: company.par_value ?? String(ctx?.parValue ?? price),
+                }
+              : company,
+          ),
+        }
+      : moved;
+
+    /* Design note #363: buying is the only action that can cross the float
+       threshold, so the check rides on it rather than running on every
+       dispatch. `ctx.homeHexToAxial` is injected by the caller; without it
+       the company still floats, it just gets no token -- which is better
+       than not floating at all. */
+    const floated = ctx?.homeHexToAxial
+      ? applyFloatThreshold(crowned, ctx.homeHexToAxial)
+      : crowned;
+
+    return advanceSeat(markTrader(floated, actor));
   }
 
   if ("SellStock" in msg) {
@@ -1442,7 +1805,8 @@ export function applySandboxAction(
       "Bank",
       -sold,
     );
-    return { ...returned, consecutive_passes: 0 };
+    // Design note #352: selling counts as trading for the Priority Deal.
+    return markTrader({ ...returned, consecutive_passes: 0 }, actor);
   }
 
   if (
@@ -1806,6 +2170,137 @@ export function isSeatDrivenRound(phase: RoundType): boolean {
 }
 
 /* ==================================================================
+ *  DESIGN NOTE 363: FLOATING PUTS A TOKEN ON THE BOARD
+ * ==================================================================
+ *
+ * REPORTED: when ERIE (or another corporation) floats, the UI neither
+ * places nor prompts for its home station marker.
+ *
+ * It did not, because nothing in the sandbox ever floated anything.
+ * `is_floated` was seeded by the fixtures and never written again -- so a
+ * corporation could cross 60% sold and stay unfloated forever, with an
+ * empty `station_token_hexes` and a treasury that never received its
+ * capitalisation. The Stock Round could distribute every certificate in a
+ * company and nothing on the board would change.
+ *
+ * FLOATING IS A THRESHOLD, WHICH IS WHY IT BELONGS HERE. This file's
+ * design note #0 draws the line at rules the contract owns, and the float
+ * check is on the same side as the phase change (design note #284b) and the
+ * all-pass markdown: a counter reaching a number, with a consequence that
+ * is bookkeeping. WHAT floats a company (60% sold to players) is the
+ * contract's rule and is read from `FLOAT_THRESHOLD_PERCENT`; what happens
+ * when it does -- the flag flips, the home token goes down -- is moving
+ * pieces.
+ *
+ * THE TOKEN IS PLACED, NOT PROMPTED. 1830 grants the home station free and
+ * puts it on a hex printed on the board; there is no decision for a player
+ * to make, so a prompt would be asking a question with one answer. The
+ * report says "place or prompt"; place is the correct half.
+ *
+ * ===================================================================
+ *  DESIGN NOTE 376: THE TREASURY, NOW THAT THE MODE IS SETTLED
+ * ===================================================================
+ *
+ * REPORTED: a corporation that floats keeps a $0 treasury.
+ *
+ * It did, and this note previously said so and declined to fix it: "full
+ * capitalisation pays the company 10x its par price, and `par_value` is set
+ * but the CAPITALISATION MODE is `market.rs`'s -- 1830 has full,
+ * incremental and part variants and this build has not established which
+ * the contract implements."
+ *
+ * The mode is now established as FULL: exactly ten times par, credited the
+ * moment the company floats. That was the open question, so the reason for
+ * holding back is gone and the credit lands here with the flag and the
+ * token, in the one place that knows a corporation just floated.
+ *
+ * THE BANK PAYS IT. Capitalisation is the corporation selling its shares to
+ * the players, and the money the players spent has already gone to the bank
+ * (`BuyStock` banks every purchase) -- so this is that money coming back
+ * out, not new money appearing. Skipping the debit would inflate the game's
+ * total supply and push back the bank-break ending, which is a real 1830
+ * end condition (`endgame.ts`'s `bankIsBroken`).
+ *
+ * NO PAR, NO CREDIT. `par_value` is null for a company that somehow floated
+ * without one -- which the B&O private can produce, since it grants the
+ * presidency and leaves par for the winner to set (design note #354). Ten
+ * times nothing is nothing, and inventing a default here would put a figure
+ * in a treasury that every later comparison trusts.
+ */
+export const FLOAT_THRESHOLD_PERCENT = 60;
+
+/** Design note #376: full capitalisation pays ten times par. */
+export const FULL_CAPITALISATION_MULTIPLE = 10;
+
+/** How much of `company` sits in players' hands. */
+function soldToPlayersPercent(company: PublicCompanyState): number {
+  return company.player_holdings.reduce((sum, entry) => sum + entry.percentage, 0);
+}
+
+/**
+ * Floats every corporation that has crossed the threshold and drops its
+ * home token.
+ *
+ * Returns the SAME state when nothing changed, so callers can skip a
+ * re-render and a log write on identity.
+ *
+ * `homeHexToAxial` is injected because the label -> `(q, r)` table lives in
+ * `components/hexBoardData.ts` and this module resolves board geometry
+ * through its caller rather than importing a renderer's data -- the same
+ * one-way rule `routeAutoTrace`'s injected helpers follow.
+ */
+export function applyFloatThreshold(
+  state: GameStateResponse,
+  homeHexToAxial: (label: string) => readonly [number, number] | null,
+): GameStateResponse {
+  let changed = false;
+  // Design note #376: what the bank pays out this pass, in one debit.
+  let capitalised = 0;
+
+  const companies = state.public_companies.map((company) => {
+    if (company.is_floated) return company;
+    if (soldToPlayersPercent(company) < FLOAT_THRESHOLD_PERCENT) return company;
+
+    changed = true;
+
+    /* Design note #376: ten times par, into a treasury that was empty. Added
+       to whatever is there rather than assigned, so a company that somehow
+       already holds money is not silently reset by floating. */
+    const par = Number(company.par_value);
+    const capital =
+      Number.isFinite(par) && par > 0 ? par * FULL_CAPITALISATION_MULTIPLE : 0;
+    capitalised += capital;
+    const treasury = String((Number(company.treasury) || 0) + capital);
+
+    const axial = company.home_hex_label ? homeHexToAxial(company.home_hex_label) : null;
+
+    /* A company with no home hex still FLOATS -- one core company (NNH) has
+       none assigned on this board, and refusing to float it because it
+       cannot be given a token would be enforcing a restriction that does
+       not exist. It simply floats without one. */
+    if (!axial) return { ...company, is_floated: true, treasury };
+
+    const [q, r] = axial;
+    const already = company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
+    return {
+      ...company,
+      is_floated: true,
+      treasury,
+      station_token_hexes: already
+        ? company.station_token_hexes
+        : [[q, r] as [number, number], ...company.station_token_hexes],
+    };
+  });
+
+  if (!changed) return state;
+  // Design note #376: one debit for the whole pass, for the same reason
+  // design note #329's payout banks once -- `adjustBank` floors at zero and
+  // several separate calls against a nearly-empty bank would floor
+  // differently from one call for the sum.
+  return adjustBank({ ...state, public_companies: companies }, -capitalised);
+}
+
+/* ==================================================================
  *  DESIGN NOTE 327: THE PRIVATES NEVER PAID
  * ==================================================================
  *
@@ -1927,6 +2422,79 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
   next = adjustBank(next, -total);
 
   return { state: next, payouts, total };
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 354: THE B&O PRIVATE CARRIES A PRESIDENCY
+ * ==================================================================
+ *
+ * REPORTED: the player who wins the B&O private in the auction should
+ * immediately be credited the 20% B&O President's Certificate and prompted
+ * to set its par value -- without paying for the certificate -- and the B&O
+ * should still not float until 60% is sold.
+ *
+ * Every surface has DESCRIBED this since the catalog was written ("the
+ * winner receives the 20% B&O President's Certificate free, immediately
+ * sets B&O's par value...") and nothing performed it. So the auction's most
+ * expensive private, the one a player pays $220 for precisely because it
+ * comes with a company, delivered a revenue stream and nothing else.
+ *
+ * WHAT MOVES AND WHAT DOES NOT, and the split is the whole rule:
+ *
+ *   MOVES        20% out of the B&O's IPO into the winner's holding, and
+ *                `president` to the winner.
+ *   DOES NOT     any cash. The certificate is GRANTED, not bought --
+ *                charging par here would bill the player twice for one
+ *                private.
+ *   STAYS PUT    `is_floated`. 1830 floats on 60% SOLD, and 20% is not 60%.
+ *                `StockRoundPanel` design note #24 already renders exactly
+ *                this state ("Auto-floated by the B&O private") for a
+ *                company parred but not yet floated, so the panel was ready
+ *                for a position the reducer never produced.
+ *   STAYS UNSET  `par_value`. The panel's ladder shows while par is null,
+ *                which IS the prompt; choosing a default here would answer
+ *                a question that belongs to the winner.
+ *
+ * A NAMED FUNCTION rather than sixty lines inline in the dispatch closure,
+ * and that was not the first shape: the inline version passed a whole suite
+ * of assertions that only ever read the source text, and survived being
+ * switched off entirely. Anything worth this much comment is worth being
+ * callable on its own.
+ *
+ * Returns the SAME state when there is nothing to do -- no B&O, or one that
+ * already has a president -- so the caller can skip its log on identity.
+ */
+export function grantBOPresidency(
+  state: GameStateResponse,
+  winner: string,
+  boTicker = "B&O",
+): GameStateResponse {
+  const bo = state.public_companies.find((entry) => entry.ticker === boTicker);
+  if (!bo || bo.president !== null) return state;
+
+  return {
+    ...state,
+    public_companies: state.public_companies.map((entry) => {
+      if (entry.company_id !== bo.company_id) return entry;
+      const held =
+        entry.player_holdings.find((h) => h.player === winner)?.percentage ?? 0;
+      return {
+        ...entry,
+        president: winner,
+        ipo_pool_percentage: Math.max(
+          0,
+          entry.ipo_pool_percentage - SANDBOX_PRESIDENT_PERCENTAGE,
+        ),
+        player_holdings: [
+          ...entry.player_holdings.filter((h) => h.player !== winner),
+          { player: winner, percentage: held + SANDBOX_PRESIDENT_PERCENTAGE },
+        ],
+        total_shares_issued:
+          entry.total_shares_issued +
+          SANDBOX_PRESIDENT_PERCENTAGE / SANDBOX_SHARE_PERCENTAGE,
+      };
+    }),
+  };
 }
 
 /** "Schuylkill Valley pays $5 to Alice." One line per payout, because the

@@ -60,9 +60,39 @@
 import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+import type { OperatingSubPhase } from "./OperatingSubPhaseStepper";
 import type { PrivateCompanyState, RoundType } from "../utils/gameState";
 
-/** When an ability may be used. */
+/* ==================================================================
+ *  DESIGN NOTE 349: A ROUND IS NOT PRECISE ENOUGH
+ * ==================================================================
+ *
+ * REPORTED: the Champlain & St. Lawrence track-lay power shows up during
+ * the Stock Round; it should appear only in the Operating Round's Lay
+ * Track subphase.
+ *
+ * Two different things were wrong and the first hid the second.
+ *
+ * IT WAS NOT ACTUALLY SHOWING IN A STOCK ROUND -- `inPhase` compares
+ * `roundType === ability.phase` and C&SL is tagged `OperatingRound`, so in
+ * a Stock Round it rendered DISABLED with "Only usable during an Operating
+ * Round". Disabled, but present: a row with the company's name and a
+ * greyed button, in a panel titled Private Powers, on a screen where the
+ * power cannot be used at all. Design note #2 argued for showing an
+ * out-of-phase ability rather than hiding it, and that reasoning holds for
+ * a power the player will use LATER THIS ROUND -- it does not hold across
+ * a round boundary, where the answer is simply "not now, and not for a
+ * while".
+ *
+ * AND THE GATE WAS TOO COARSE. Even inside an Operating Round, a free tile
+ * lay is only legal during Lay Track: offering it during Run Routes is
+ * offering an action the contract refuses. `AbilityPhase` had no way to
+ * say so, so the panel could not have been right even in principle.
+ *
+ * The type now carries an optional SUBPHASE. Absent means "any subphase of
+ * that round", which is the honest default for the powers that genuinely
+ * are round-wide (the share exchanges).
+ */
 export type AbilityPhase = "OperatingRound" | "StockRound";
 
 export interface PrivateAbility {
@@ -72,12 +102,33 @@ export interface PrivateAbility {
   /** One line: what it does, in 1830 terms. */
   description: string;
   phase: AbilityPhase;
+  /** Design note #349: narrows to one Operating Round step. Omitted means
+   *  the whole round. */
+  subPhase?: OperatingSubPhase;
+  /** Design note #349: hidden entirely outside its round rather than shown
+   *  disabled. Set for powers whose round is far away when it is not the
+   *  current one; left off where the wait is short enough that a disabled
+   *  row is useful context rather than noise. */
+  hideOutOfRound?: boolean;
 }
 
-/* 1830's four abilities that a player ACTIVATES. Schuylkill Valley has no
-   ability, and Camden & Amboy's PRR share is granted on purchase rather
-   than triggered -- neither gets a button, because a control for a thing
-   that happens by itself is a control that does nothing. */
+/* ==================================================================
+ *  DESIGN NOTE 350: CAMDEN & AMBOY WAS MISSING, NOT ABSENT BY DESIGN
+ * ==================================================================
+ *
+ * REPORTED: the private that exchanges for a PRR certificate (Camden &
+ * Amboy) should be visible and actionable during the Stock Round.
+ *
+ * The comment that stood here said C&A "is granted on purchase rather than
+ * triggered", so it deserved no button. That is not this ruleset: the
+ * auction dashboard's own catalog has described C&A as "May be exchanged
+ * for a 10% share of the PRR. The exchange closes this private
+ * permanently." since it was written, and an EXCHANGE is a decision the
+ * owner makes on their turn -- exactly the shape of the Mohawk & Hudson's
+ * NYC exchange sitting directly above it, which did get a button.
+ *
+ * So five of the six privates now have controls, and the one that does not
+ * is Schuylkill Valley, which genuinely has no ability at all. */
 export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
   {
     privateId: 2,
@@ -85,6 +136,11 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     description:
       "Champlain & St. Lawrence — the owning corporation may lay a tile on B20 (Burlington) at no cost, without using its normal tile lay.",
     phase: "OperatingRound",
+    /* Design note #349: a tile lay is legal in ONE step of the round, and
+       the panel is hidden outside the round entirely -- a Stock Round has
+       no track step to be waiting for. */
+    subPhase: "Track",
+    hideOutOfRound: true,
   },
   {
     privateId: 3,
@@ -92,12 +148,21 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     description:
       "Delaware & Hudson — the owning corporation may lay a tile AND place a station on F16 (Scranton) at no cost.",
     phase: "OperatingRound",
+    subPhase: "Track",
+    hideOutOfRound: true,
   },
   {
     privateId: 4,
     action: "Exchange for NYC share",
     description:
       "Mohawk & Hudson — the owner may exchange this private for a 10% share of the New York Central.",
+    phase: "StockRound",
+  },
+  {
+    privateId: 5,
+    action: "Exchange for PRR share",
+    description:
+      "Camden & Amboy — the owner may exchange this private for a 10% share of the Pennsylvania. The exchange closes this private permanently.",
     phase: "StockRound",
   },
   {
@@ -116,6 +181,9 @@ export interface PrivatePowerPanelProps {
    *  corporation operating. */
   viewerAddress: string | null;
   roundType: RoundType | null;
+  /** Design note #349: the Operating Round step, for the abilities that are
+   *  legal in only one of them. `null` outside an Operating Round. */
+  orSubPhase: OperatingSubPhase | null;
   /** Design note #1: rendered only in sandbox, because only sandbox has
    *  anywhere for the action to go. */
   sandbox: boolean;
@@ -129,6 +197,7 @@ export function PrivatePowerPanel({
   privateCompanies,
   viewerAddress,
   roundType,
+  orSubPhase,
   sandbox,
   usedAbilities,
   onUseAbility,
@@ -140,11 +209,14 @@ export function PrivatePowerPanel({
     const priv = privateCompanies.find((entry) => entry.private_id === ability.privateId);
     return { ability, priv };
   }).filter(
-    ({ priv }) =>
+    ({ ability, priv }) =>
       priv !== undefined &&
       !priv.closed &&
       viewerAddress !== null &&
-      priv.owner === viewerAddress,
+      priv.owner === viewerAddress &&
+      // Design note #349: an ability whose round is somewhere else entirely
+      // is not context, it is clutter. Only the ones that opt in.
+      !(ability.hideOutOfRound && roundType !== ability.phase),
   );
 
   // Design note #2: nothing owned means nothing to say. A permanent empty
@@ -163,11 +235,18 @@ export function PrivatePowerPanel({
       {owned.map(({ ability, priv }) => {
         const used = usedAbilities.has(ability.privateId);
         const inPhase = roundType === ability.phase;
+        /* Design note #349: the subphase gate, which only applies inside
+           the right round. `undefined` means the whole round, so an
+           ability without one is in-step by definition. */
+        const inSubPhase =
+          ability.subPhase === undefined || orSubPhase === ability.subPhase;
         const reason = used
           ? "Already used this game."
           : !inPhase
             ? `Only usable during ${ability.phase === "OperatingRound" ? "an Operating Round" : "a Stock Round"}.`
-            : null;
+            : !inSubPhase
+              ? `Only usable during the ${ability.subPhase} step of an Operating Round.`
+              : null;
         return (
           <div key={ability.privateId} style={styles.row}>
             <div style={styles.rowText}>

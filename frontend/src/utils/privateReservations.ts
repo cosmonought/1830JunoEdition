@@ -61,9 +61,22 @@ interface ReservationRule {
   privateId: number;
   /** Board label, resolved against `STATIC_BOARD_HEXES` -- design note #2. */
   hexLabel: string;
-  /** What the badge prints. Short enough to sit on a hex corner at the
-   *  smallest zoom the board renders at. */
+  /** What the badge prints. Design note #364 in `hexCanvasPrimitives.ts`:
+   *  NO AMPERSAND -- "CSL", not "C&SL". The character costs width on a hex
+   *  corner and adds nothing at seven pixels. */
   initials: string;
+  /* ==================================================================
+   *  DESIGN NOTE 3: EACH BADGE HAS A FIXED HOME
+   * ==================================================================
+   *
+   * The 13-slot numbering from `hexGeometry.ts`: 1-6 are edge midpoints,
+   * 7-12 are corner vertices. These two are PINNED rather than negotiated
+   * through the shared claiming ledger, because there are exactly two of
+   * them on two known hexes and both had to be placed where they cannot
+   * reach a neighbour -- which is the overflow bug design note #364
+   * records. A claimed slot is the right answer when passes compete; a
+   * chosen one is the right answer when the position itself is the fix. */
+  slot: number;
   /** One line for the tooltip, in the player's terms rather than the
    *  contract's. */
   power: string;
@@ -77,13 +90,17 @@ const RESERVATION_RULES: readonly ReservationRule[] = [
   {
     privateId: 2,
     hexLabel: "B20",
-    initials: "C&SL",
+    initials: "CSL",
+    // Slot 10 = the Bottom Point vertex.
+    slot: 10,
     power: "its owner may lay a tile here free, in addition to the corporation's normal lay",
   },
   {
     privateId: 3,
     hexLabel: "F16",
-    initials: "D&H",
+    initials: "DH",
+    // Slot 4 = the Bottom-Left edge midpoint.
+    slot: 4,
     power: "its owner may lay a tile AND place a station here at no cost",
   },
 ];
@@ -99,6 +116,8 @@ export interface HexReservation {
   privateId: number;
   privateName: string;
   initials: string;
+  /** Design note #3: the fixed slot this hex's badge draws on. */
+  slot: number;
   /** `null` while the private is still in the auction. */
   ownerAddress: string | null;
   power: string;
@@ -139,6 +158,7 @@ export function activeReservations(
       privateId: rule.privateId,
       privateName: priv.name,
       initials: rule.initials,
+      slot: rule.slot,
       ownerAddress: priv.owner ?? null,
       power: rule.power,
     });

@@ -572,8 +572,29 @@ export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorT
  *
  * The ink is the board's own deep navy rather than neutral black, so the
  * veil reads as the map receding rather than as a grey sheet over it.
- */
-export const LAY_TRACK_DIM_ALPHA = 0.55;
+
+/* ==================================================================
+ *  THE LAY TRACK VEIL: DELETED, THEN RESTORED ASYMMETRICALLY
+ * ==================================================================
+ *
+ * These were deleted by `HexGridRenderer.tsx` design note #367 and brought
+ * back by #377. That note carries the reasoning; the short version is that
+ * #367 was right about one of its two objections and the remedy for it was
+ * a CONDITION, not a deletion -- the veil now applies to the player whose
+ * turn it is and to nobody else.
+ *
+ * THE ALPHA IS THE OTHER HALF OF THE FIX. It was 0.55: more than half the
+ * board's light gone, which is what turned a legitimate emphasis into the
+ * map being taken away. At 0.22 a veiled hex still reads as cardboard --
+ * its colour, its track and its tokens all survive -- and the glow on the
+ * legal set has something to be brighter THAN.
+ *
+ * The deletion note warned that "a dimming constant sitting in the board
+ * palette is a standing invitation to reintroduce a global overlay". That
+ * risk is real and is answered where it can be: the renderer cannot dim
+ * without `layFocus.dim`, which only the shell sets, and only from
+ * `isMyTurn`. */
+export const LAY_TRACK_DIM_ALPHA = 0.22;
 export const LAY_TRACK_DIM_INK = "#070b14";
 /** The ring on a buildable hex. Green, matching the tile picker's own
  *  confirm affordance (`fabConfirm`), so "you may act here" is one colour

@@ -101,6 +101,11 @@ export interface StockRoundPanelProps {
    *  cover. `null` when disconnected, which zeroes every option -- correct,
    *  since a disconnected viewer holds nothing to sell. */
   connectedAddress: string | null;
+  /** Design note #356: the Stock Round's number. `1` bans selling. */
+  macroRoundNumber?: number;
+  /** Design note #357: what this player can actually spend. `null` when the
+   *  room does not report it, which leaves the gate off. */
+  playerCash?: number | null;
   /** Design note #8: live stock-market price per `company_id`.
    *
    *  A SEPARATE prop rather than a field on `PublicCompanyState`, because on
@@ -180,6 +185,8 @@ function CorporationRoster({
   outlook,
   marketPrices,
   connectedAddress,
+  macroRoundNumber,
+  playerCash,
   playerLabel,
   expandedCompanyId,
   onToggleCompany,
@@ -194,6 +201,10 @@ function CorporationRoster({
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
   marketPrices?: Readonly<Record<number, number | null>>;
   connectedAddress: string | null;
+  /** Design note #356: the Stock Round's number; `1` bans selling. */
+  macroRoundNumber?: number;
+  /** Design note #357: the acting player's spendable cash, for the buy gate. */
+  playerCash?: number | null;
   playerLabel?: (address: string) => string | null;
   expandedCompanyId: number | null;
   onToggleCompany: (companyId: number) => void;
@@ -356,20 +367,82 @@ function CorporationRoster({
                   </div>
                 </div>
 
-                {/* Holdings table. */}
-                <div style={styles.rosterHoldings}>
+                {/* ==================================================
+                     DESIGN NOTE 378: ONE OWNERSHIP TABLE, IN 18xx ORDER
+                    ==================================================
+
+                    REPORTED: the ownership list is unstructured and should
+                    match standard 18xx tabular layouts.
+
+                    It was two separate readouts describing one thing. A
+                    list of players sat here with their percentages, and the
+                    IPO and Bank Pool counts sat in their own row underneath
+                    (design note #355), in a different format, with no
+                    columns shared between them. So the question every 18xx
+                    player asks of a corporation -- "where are the ten
+                    certificates" -- had its answer split across two shapes
+                    that did not line up, and the two halves could not be
+                    read as a total.
+
+                    ONE TABLE, in the order the physical game keeps its
+                    certificates: the two BANKS first (unsold in the IPO,
+                    returned to the Pool), a rule, then the PLAYERS who hold
+                    the rest. The rule is not decoration -- it is the line
+                    between shares nobody owns and shares somebody does,
+                    which is the distinction the whole layout exists to
+                    make.
+
+                    THREE COLUMNS. Shareholder, then certificates, then
+                    percentage. Certificates before percentage because a
+                    certificate is the physical unit a player moves, and
+                    because the president's 20% being ONE certificate is
+                    exactly the fact a bare percentage hides.
+
+                    SORTED DESCENDING, and the president is NOT hoisted --
+                    that was already true of the old list and the reasoning
+                    holds: seeing them sitting second on an equal stake is
+                    precisely what a player needs to notice. */}
+                <div style={styles.ownershipTable} role="table" aria-label={`${company.ticker} ownership`}>
+                  <div style={styles.ownershipHeadRow} role="row">
+                    <span style={styles.ownershipName} role="columnheader">Shareholder</span>
+                    <span style={styles.ownershipNum} role="columnheader">Shares</span>
+                    <span style={styles.ownershipNum} role="columnheader">%</span>
+                  </div>
+
+                  {/* The two banks, always shown -- an IPO at 0% means the
+                      company is fully distributed, which is worth as much
+                      as any other figure here. */}
+                  <div style={styles.ownershipRow} role="row">
+                    <span style={styles.ownershipName} role="cell">IPO</span>
+                    <span style={styles.ownershipNum} role="cell">
+                      {company.ipo_pool_percentage / 10}
+                    </span>
+                    <span style={styles.ownershipNum} role="cell">{company.ipo_pool_percentage}%</span>
+                  </div>
+                  <div style={styles.ownershipRow} role="row">
+                    <span style={styles.ownershipName} role="cell">Bank Pool</span>
+                    <span style={styles.ownershipNum} role="cell">
+                      {company.bank_pool_percentage / 10}
+                    </span>
+                    <span style={styles.ownershipNum} role="cell">{company.bank_pool_percentage}%</span>
+                  </div>
+
+                  {/* Design note #378: the line between unowned and owned. */}
+                  <hr style={styles.ownershipRule} />
+
                   {holdings.length === 0 ? (
                     <span style={styles.rosterNoHoldings}>No shares held by players</span>
                   ) : (
                     holdings.map((holding) => (
                       <div
                         key={holding.address}
+                        role="row"
                         style={{
-                          ...styles.rosterHoldingRow,
+                          ...styles.ownershipRow,
                           ...(holding.isPresident ? styles.rosterHoldingRowPresident : {}),
                         }}
                       >
-                        <span style={styles.rosterHoldingName}>
+                        <span style={styles.ownershipName} role="cell">
                           {holding.isPresident && (
                             <span title="President — controls this corporation" aria-label="President">
                               👑
@@ -378,50 +451,36 @@ function CorporationRoster({
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                           {holding.isSelf && <span style={styles.rosterYouTag}>you</span>}
                         </span>
-                        <span style={styles.rosterHoldingPercent}>
-                          {holding.percentage}%
-                          <span style={styles.rosterCertCount}>
-                            {" "}
-                            ({certificateCount(holding.percentage, holding.isPresident)} cert
-                            {certificateCount(holding.percentage, holding.isPresident) === 1 ? "" : "s"})
-                          </span>
+                        <span style={styles.ownershipNum} role="cell">
+                          {certificateCount(holding.percentage, holding.isPresident)}
                         </span>
+                        <span style={styles.ownershipNum} role="cell">{holding.percentage}%</span>
                       </div>
                     ))
                   )}
                 </div>
 
-                <div style={styles.rosterPoolRow}>
-                  <span>IPO {company.ipo_pool_percentage}%</span>
-                  <span>Bank Pool {company.bank_pool_percentage}%</span>
-                </div>
+                {/* ==================================================
+                     DESIGN NOTE 345: ONE FLOAT READOUT, NOT TWO
+                    ==================================================
 
-                {/* Float bar, in the COLLAPSED body and only while unfloated
-                    -- design note #17. It answers "is this close to
-                    floating?", which is a question you ask while scanning
-                    cards, so burying it behind an expand was wrong. And once
-                    a company HAS floated the bar is a permanent 100% that
-                    says nothing the FLOATED badge above has not already said,
-                    so it is removed entirely rather than pinned full. */}
-                {!company.is_floated && (
-                  <div style={styles.floatBlock}>
-                    <div style={styles.floatBarTrack}>
-                      <div
-                        style={{
-                          ...styles.floatBarFill,
-                          width: `${Math.min(100, soldToPlayersPercent(company))}%`,
-                        }}
-                      />
-                      <div
-                        style={{ ...styles.floatBarThreshold, left: `${FLOAT_THRESHOLD_PERCENT}%` }}
-                        title="60% float threshold"
-                      />
-                    </div>
-                    <span style={styles.floatBarCaption}>
-                      {soldToPlayersPercent(company)}% sold &middot; {FLOAT_THRESHOLD_PERCENT}% to float
-                    </span>
-                  </div>
-                )}
+                    REPORTED: remove the full-row 0/60% progress bar to save
+                    space; keep the small 0/60% pill at the top right.
+
+                    Design note #17 put the bar in the collapsed body for a
+                    good reason -- "is this close to floating?" is a
+                    question you ask while scanning -- and then the pill
+                    badge arrived above it answering the same question in
+                    one line. Eight cards were each spending a track, a
+                    fill, a threshold tick and a caption on a figure printed
+                    six pixels higher.
+
+                    The pill wins because it is already IN the header row a
+                    player reads first, and because the bar's one advantage
+                    -- showing distance to the threshold graphically -- is
+                    worth less than the vertical space it costs across eight
+                    cards on a screen that also has to hold the market
+                    chart. */}
 
                 {/* Design note #24: floated WITHOUT reaching the threshold.
                     Says which rule did it, so the badge never looks like it
@@ -441,6 +500,8 @@ function CorporationRoster({
               company={company}
               marketPrice={market}
               connectedAddress={connectedAddress}
+              macroRoundNumber={macroRoundNumber}
+              playerCash={playerCash}
               parValue={parValue}
               onSelectParValue={onSelectParValue}
               onBuyShare={onBuyShare}
@@ -542,9 +603,13 @@ function CorporationRoster({
                           </div>
                         ))
                       )}
+                      {/* Design note #355: same suppression on the card
+                          back, so the two faces agree. */}
                       <div style={styles.rosterPoolRow}>
                         <span>IPO {company.ipo_pool_percentage}%</span>
-                        <span>Bank Pool {company.bank_pool_percentage}%</span>
+                        {company.bank_pool_percentage > 0 && (
+                          <span>Bank Pool {company.bank_pool_percentage}%</span>
+                        )}
                       </div>
                     </div>
 
@@ -600,6 +665,8 @@ function CompanyActions({
   company,
   marketPrice,
   connectedAddress,
+  macroRoundNumber,
+  playerCash,
   parValue,
   onSelectParValue,
   onBuyShare,
@@ -612,6 +679,8 @@ function CompanyActions({
    *  appears at all. */
   marketPrice: number | null;
   connectedAddress: string | null;
+  macroRoundNumber?: number;
+  playerCash?: number | null;
   parValue: string;
   onSelectParValue: (value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
@@ -747,6 +816,42 @@ function CompanyActions({
   // so an absent entry means zero, not missing data.
   const playerHoldingPercent =
     company.player_holdings.find((holding) => holding.player === connectedAddress)?.percentage ?? 0;
+  /* Design note #356: `macroRoundNumber` is 1 for the first Stock Round.
+     `undefined` -- a room that does not report it -- permits the sale
+     rather than blocking it: the contract refuses an illegal one, and a
+     UI that hid Sell on missing data would hide it for the whole game. */
+  const sellingForbidden = macroRoundNumber === 1;
+
+  /* ==================================================================
+   *  DESIGN NOTE 357: A PLAYER CANNOT SPEND WHAT THEY DO NOT HAVE
+   * ==================================================================
+   *
+   * REPORTED: players can spend into negative cash -- $74 buying an $82
+   * share.
+   *
+   * The button gated on turn and session readiness and never on price. The
+   * sandbox reducer's `adjustCash` floors at zero rather than refusing, so
+   * the purchase completed, the share arrived, and the buyer's balance read
+   * $0 instead of -$8. Quiet, and the kind of wrong that only shows up when
+   * somebody reconciles the bank.
+   *
+   * THE TOTAL COST, not the unit price -- the two differ in both directions
+   * that matter here. A President's Certificate is DOUBLE par (design note
+   * #35 already prices it that way on the label), and a Brown-zone multibuy
+   * is `n` times the price. Gating on the unit would let a player buy a
+   * $134 presidency with $70.
+   *
+   * `null` cash leaves the gate OFF. A room that does not report a balance
+   * is not a room where the player is broke, and blocking every purchase on
+   * missing data would be worse than the bug. */
+  const totalCost = (() => {
+    if (!priceKnown) return null;
+    const price = unitPrice as number;
+    if (isPresidentPurchase) return price * 2;
+    return price * (multiBuyMax > 1 ? effectiveQuantity : 1);
+  })();
+  const cannotAfford =
+    playerCash != null && totalCost != null && totalCost > playerCash;
   const bankPoolPercent = company.bank_pool_percentage;
   const selectedSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
 
@@ -776,43 +881,115 @@ function CompanyActions({
             `disabled` also keeps the two buttons in the same place from
             first render to last, so the Buy button underneath never
             moves. */}
-        <div style={styles.sourceToggleRow}>
-          {(["Ipo", "Bank"] as const).map((option) => {
-            const available = option === "Ipo"
-              ? company.ipo_pool_percentage > 0
-              : company.bank_pool_percentage > 0;
-            return (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={source === option}
-                style={{
-                  ...styles.sourceToggle,
-                  ...(source === option && available ? styles.sourceToggleActive : {}),
-                  // Inline styles cannot express `:disabled` (Lobby.tsx
-                  // design note #3), so the disabled look is computed.
-                  ...(available ? {} : styles.sourceToggleEmpty),
-                }}
-                disabled={controlsDisabled || !available}
-                title={
-                  available
-                    ? undefined
-                    : option === "Ipo"
-                      ? "The IPO Warehouse is empty."
-                      : "The Bank Pool is empty."
-                }
-                onClick={() => setSource(option)}
-              >
-                {/* Just the source name. "From IPO" / "From Bank Pool"
-                    spent its first word on a preposition that the row's own
-                    context already supplies -- these two sit side by side
-                    under a Buy control, so what else would "IPO" mean? The
-                    shorter labels also stop "From Bank Pool" wrapping in the
-                    narrow card column. */}
-                {option === "Ipo" ? "IPO" : "Bank Pool"}
-              </button>
-            );
-          })}
+        {/* ==================================================================
+             DESIGN NOTE 346: THE SOURCE IS A SWITCH, NOT TWO BUTTONS
+            ==================================================================
+
+            REPORTED: the front of the stock cards is too cluttered; replace
+            the large Bank/IPO buttons with a compact toggle beside Buy, and
+            default to the only available option when one pool is empty.
+
+            Design note #36 argued for keeping both sources visible and
+            DISABLED rather than hiding an empty one, and that argument
+            still holds -- "the Bank Pool is empty" is a fact a buyer wants.
+            What it got wrong was the WEIGHT: two full-width padded buttons
+            stacked above the Buy button, so choosing a source looked like
+            three primary actions rather than one action with a setting.
+
+            A segmented switch says the same thing in one row: the two
+            options are visibly alternatives rather than separate commands,
+            the empty one is struck through and unclickable with its reason
+            on hover, and the whole control is a third of the height. It
+            sits ON the Buy row, so "buy one share, from here" reads as a
+            single sentence.
+
+            THE DEFAULT is handled by the effect below, which already
+            re-points `source` at the first stocked pool whenever the
+            current one drains. That covers the "one is empty" case at
+            first render as well, because it runs on mount. */}
+        <div style={styles.buyRow}>
+          <div style={styles.sourceSwitch} role="group" aria-label="Share source">
+            {(["Ipo", "Bank"] as const).map((option) => {
+              const available = option === "Ipo"
+                ? company.ipo_pool_percentage > 0
+                : company.bank_pool_percentage > 0;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={source === option}
+                  style={{
+                    ...styles.sourceSwitchOption,
+                    ...(source === option && available ? styles.sourceSwitchOptionActive : {}),
+                    // Inline styles cannot express `:disabled` (Lobby.tsx
+                    // design note #3), so the disabled look is computed.
+                    ...(available ? {} : styles.sourceSwitchOptionEmpty),
+                  }}
+                  disabled={controlsDisabled || !available}
+                  title={
+                    available
+                      ? option === "Ipo"
+                        ? `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
+                        : `Buy from the Bank Pool at market price. ${company.bank_pool_percentage}% left.`
+                      : option === "Ipo"
+                        ? "The IPO Warehouse is empty."
+                        : "The Bank Pool is empty."
+                  }
+                  onClick={() => setSource(option)}
+                >
+                  {option === "Ipo" ? "IPO" : "Pool"}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ==================================================================
+               DESIGN NOTE 347: SOLD OUT IS A STATE, NOT A DISABLED BUY
+              ==================================================================
+
+              REPORTED: when a corporation is fully sold out, disable the buy
+              inputs and show a grey "Sold Out" button.
+
+              The button was already disabled in this state -- `disabled={...
+              || availableSources.length === 0}` -- but it still READ "Buy 1
+              share @ $67", which is the failure mode this codebase keeps
+              removing: a control describing an action that cannot happen.
+              A player seeing a price and a greyed button assumes they
+              cannot afford it, or that it is not their turn.
+
+              Both pools empty means every certificate is in players' hands.
+              That is a permanent fact about the company for the rest of the
+              round, not a temporary block, so it gets its own label and its
+              own neutral grey rather than the primary button's colour
+              drained. */}
+          {availableSources.length === 0 ? (
+            <button
+              type="button"
+              style={{ ...styles.actionButton, ...styles.soldOutButton }}
+              disabled
+              title={`Every ${company.ticker} certificate is held by players — the IPO and the Bank Pool are both empty.`}
+            >
+              Sold Out
+            </button>
+          ) : (
+            <button
+              type="button"
+              style={styles.actionButton}
+              onClick={() =>
+                onBuyShare(company.company_id, source, multiBuyMax > 1 ? effectiveQuantity : 1)
+              }
+              disabled={controlsDisabled || cannotAfford}
+              title={
+                cannotAfford
+                  ? `Costs $${totalCost} — you hold $${playerCash}.`
+                  : undefined
+              }
+            >
+              {/* Design note #35: one computed label, so the price cannot
+                  disappear depending on which branch built the string. */}
+              {buyLabel}
+            </button>
+          )}
         </div>
 
         {/* ---- Design note #33: the Brown zone's multi-buy ---------------
@@ -854,19 +1031,16 @@ function CompanyActions({
           </div>
         )}
 
-        <button
-          type="button"
-          style={styles.actionButton}
-          onClick={() =>
-            onBuyShare(company.company_id, source, multiBuyMax > 1 ? effectiveQuantity : 1)
-          }
-          disabled={controlsDisabled || availableSources.length === 0}
-        >
-          {/* Design note #35: one computed label, so the price cannot
-              disappear depending on which branch built the string. */}
-          {buyLabel}
-        </button>
       </div>
+
+      {/* Design note #357: the reason, where the player is looking. A
+          disabled button with only a tooltip is a button that looks broken
+          to anyone who does not hover it. */}
+      {cannotAfford && (
+        <span style={styles.cannotAffordNote}>
+          ${totalCost} needed &middot; you hold ${playerCash}
+        </span>
+      )}
 
       {/* ---- Par + Sell, one line where the card is wide enough ----------
           Design note #22. Both are the same KIND of control -- a row of
@@ -918,8 +1092,26 @@ function CompanyActions({
             cannot succeed -- every size disabled, a line-through on all
             five, and a button that never enables. On eight cards where a
             player typically holds three, that is five cards of dead
-            controls. Hidden outright instead. */}
-        {playerHoldingPercent > 0 && (
+            controls. Hidden outright instead.
+
+            ==================================================
+             DESIGN NOTE 356: NOBODY SELLS IN STOCK ROUND 1
+            ==================================================
+
+            1830 forbids any sale during the first Stock Round -- there is
+            nothing to sell that was not bought minutes ago, and allowing it
+            would let a player park cash in a company and withdraw it before
+            anyone could react.
+
+            HIDDEN, not disabled, and this is the opposite call from design
+            note #36's source buttons a few lines up. That distinction is
+            deliberate: an empty Bank Pool is a fact about the BOARD that a
+            buyer wants ("it exists and is empty"), whereas the SR1 sell ban
+            is a fact about the RULES that will never change while this
+            round lasts. A permanently disabled control teaches the player
+            to ignore that region of the card, and by SR2 -- when Sell
+            becomes real -- they have stopped looking. */}
+        {playerHoldingPercent > 0 && !sellingForbidden && (
         <div style={styles.numericRowBlock}>
           <span style={styles.cardActionsLabel}>Sell</span>
         {/* Design note #19: ONE control block, not five buttons.
@@ -1178,6 +1370,8 @@ export function StockRoundPanel({
   hotseat = false,
   activePlayerLabel = null,
   connectedAddress,
+  macroRoundNumber,
+  playerCash,
   marketPrices,
   playerLabel,
   phase,
@@ -1189,6 +1383,34 @@ export function StockRoundPanel({
   // wired to one condition and miss the other.
   const controlsDisabled = !sessionReady || actionsLockedReason != null;
   const [expandedCompanyId, setExpandedCompanyId] = useState<number | null>(null);
+
+  /* ==================================================================
+   *  DESIGN NOTE 348: A FLIPPED CARD BELONGS TO WHOEVER FLIPPED IT
+   * ==================================================================
+   *
+   * REPORTED: after a player buys a share and the turn passes, the previous
+   * player's flipped stock tile is still flipped over for the next player.
+   *
+   * `expandedCompanyId` is session state -- it survives every re-render,
+   * including the one where the turn moves -- and nothing ever cleared it.
+   * In hotseat that is the whole bug: Bob picks up the mouse and finds
+   * Alice's PRR card open on its back, showing HER holdings and HER
+   * controls, so his first click is on a card he did not choose to look at.
+   *
+   * WHY A TURN CHANGE AND NOT A PURCHASE. The tempting hook is
+   * `onBuyShare`, but a player can flip a card, read it, and pass without
+   * buying anything -- and the card would still be open for the next
+   * player. The turn moving is the actual boundary: it is the moment the
+   * surface stops belonging to one person and starts belonging to another,
+   * whatever they did or did not do with it.
+   *
+   * KEYED ON THE LABEL rather than on an address because that is what this
+   * component is given, and it is already resolved per seat. Passing to a
+   * seat with the same name would not re-fire -- which cannot happen, since
+   * the label is derived from the seat and the seats are distinct. */
+  useEffect(() => {
+    setExpandedCompanyId(null);
+  }, [activePlayerLabel]);
 
   /* ---- Design note #10: ACTIONS LIVE IN THE CARD ---------------------
    *
@@ -1243,6 +1465,8 @@ export function StockRoundPanel({
         outlook={outlook}
         marketPrices={marketPrices}
         connectedAddress={connectedAddress}
+        macroRoundNumber={macroRoundNumber}
+        playerCash={playerCash}
         playerLabel={playerLabel}
         expandedCompanyId={expandedCompanyId}
         onToggleCompany={(id) =>
@@ -1411,7 +1635,6 @@ const styles: Record<string, React.CSSProperties> = {
   // Design note #32: says WHY the controls are dead. A grid of greyed-out
   // buttons with no explanation reads as a broken panel.
   // Design note #36: an empty pool's button stays put and stops responding.
-  sourceToggleEmpty: { opacity: 0.4, cursor: "not-allowed" },
   multiBuyRow: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
   multiBuySelect: {
     fontSize: FONT_SIZE.small,
@@ -1476,17 +1699,62 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro, color: CARD_INK_FAINT,
     textTransform: "uppercase", letterSpacing: "0.4px",
   },
-  rosterHoldings: {
-    display: "flex", flexDirection: "column", gap: "2px",
+  /* ==================================================================
+   *  DESIGN NOTE 378: THE OWNERSHIP TABLE
+   * ==================================================================
+   *
+   * A GRID, not a flex row per line. The old list used
+   * `justify-content: space-between`, which pins the name left and the
+   * figure right and lets the gap between them vary with the name's
+   * length -- so a column of percentages did not line up, which is the one
+   * thing a table of numbers exists to do. Fixed tracks put every figure
+   * on the same axis whatever the shareholder is called.
+   *
+   * `rosterHoldings` is GONE with the list it styled. The card back keeps
+   * its own condensed layout (design note #27) and its own styles. */
+  ownershipTable: {
+    display: "flex", flexDirection: "column", gap: "1px",
     borderTopWidth: "1px", borderTopStyle: "solid", borderTopColor: CARD_DIVIDER,
     paddingTop: "7px",
   },
-  rosterNoHoldings: { fontSize: FONT_SIZE.small, color: CARD_INK_FAINT, fontStyle: "italic" },
-  rosterHoldingRow: {
-    display: "flex", alignItems: "baseline", justifyContent: "space-between",
-    gap: "8px", fontSize: FONT_SIZE.small, color: CARD_INK,
-    padding: "2px 4px", borderRadius: "4px",
+  ownershipRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 46px 46px",
+    alignItems: "baseline",
+    gap: "6px",
+    fontSize: FONT_SIZE.small,
+    color: CARD_INK,
+    padding: "2px 4px",
+    borderRadius: "4px",
   },
+  ownershipHeadRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 46px 46px",
+    alignItems: "baseline",
+    gap: "6px",
+    padding: "0 4px 2px",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    color: CARD_INK_FAINT,
+  },
+  ownershipName: {
+    display: "inline-flex", alignItems: "center", gap: "5px",
+    minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+  },
+  ownershipNum: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
+  /* Design note #378: the line between shares nobody owns and shares
+     somebody does. Reset from the browser default, which is an inset 3D
+     bevel that reads as a separator between SECTIONS rather than as a rule
+     inside a table. */
+  ownershipRule: {
+    height: 0,
+    margin: "3px 0",
+    border: "none",
+    borderTop: `1px solid ${CARD_DIVIDER}`,
+  },
+  rosterNoHoldings: { fontSize: FONT_SIZE.small, color: CARD_INK_FAINT, fontStyle: "italic" },
   // Design note #8: gold + bold, the second of the president's three
   // independent markers.
   rosterHoldingRowPresident: {
@@ -1506,8 +1774,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px", backgroundColor: "#dcecf5", color: "#1c4a63",
   },
   rosterHoldingPercent: { flexShrink: 0, fontVariantNumeric: "tabular-nums" },
-  rosterCertCount: { color: CARD_INK_FAINT, fontWeight: 400 },
-  rosterPresidentLine: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#7a5c08" },
   /* ---- Option C: 3D flip (design note #26) ----
    * `perspective` lives on the VIEWPORT, not the rotating element: a
    * transformed element cannot supply its own perspective, and without one
@@ -1702,31 +1968,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#6fdc9b",
   },
   /** Wrapper for the collapsed-body float bar -- design note #17. */
-  floatBlock: { display: "flex", flexDirection: "column", gap: "3px", marginTop: "2px" },
-  floatBarTrack: {
-    position: "relative",
-    width: "100%",
-    height: "10px",
-    borderRadius: "999px",
-    backgroundColor: "#0a0e17",
-    border: "1px solid #2a2e3a",
-    overflow: "hidden",
-  },
-  floatBarFill: {
-    height: "100%",
-    backgroundColor: "#3a7bd5",
-  },
-  floatBarThreshold: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    width: "2px",
-    backgroundColor: "#e0c341",
-  },
-  floatBarCaption: {
-    fontSize: FONT_SIZE.small,
-    color: "#9aa0ac",
-  },
   controlsRow: {
     display: "flex",
     gap: "18px",
@@ -1752,24 +1993,54 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "#4a6a92",
     color: "#e6e8ef",
   },
-  sourceToggleRow: {
+  /* Design note #346: Buy and its source on one row. The switch does not
+     grow; the Buy button takes the rest, so the price stays readable at
+     every card width. */
+  buyRow: { display: "flex", alignItems: "stretch", gap: "8px" },
+  sourceSwitch: {
     display: "flex",
-    gap: "6px",
+    flexShrink: 0,
+    borderRadius: "7px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a3f4b",
+    overflow: "hidden",
   },
-  sourceToggle: {
-    fontSize: FONT_SIZE.small,
-    fontWeight: 600,
-    padding: "6px 10px",
-    borderRadius: "6px",
-    border: "1px solid #3a3f4b",
+  sourceSwitchOption: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    padding: "0 9px",
+    border: "none",
     backgroundColor: "#1e2129",
-    color: "#c7cbd4",
+    color: "#8a919e",
+    fontFamily: "inherit",
     cursor: "pointer",
   },
-  sourceToggleActive: {
+  sourceSwitchOptionActive: {
     backgroundColor: "#2a3a52",
-    borderColor: "#4a6a92",
     color: "#e6e8ef",
+  },
+  /* Struck through rather than merely faded: an empty pool is not "not
+     chosen", it is "nothing here to buy", and the two look identical at
+     40% opacity. */
+  sourceSwitchOptionEmpty: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+    textDecoration: "line-through",
+  },
+  /* Design note #347: neutral grey, deliberately NOT the primary button's
+     colour desaturated -- this is a state of the company, not a control
+     waiting to become available. */
+  cannotAffordNote: {
+    fontSize: FONT_SIZE.micro,
+    color: "#e8a0a0",
+    fontVariantNumeric: "tabular-nums",
+  },
+  soldOutButton: {
+    backgroundColor: "#20242e",
+    borderColor: "#343b48",
+    color: "#7f8798",
+    cursor: "not-allowed",
   },
   /* ---- Slashed sell row (design note #19). Supersedes the five-chip
    * stepper, which had its own bug worth recording: as a non-wrapping flex

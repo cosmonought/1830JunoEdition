@@ -70,7 +70,6 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { TilePreviewThumbnail } from "./HexGridRenderer";
 import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
-import { COLOR_TIER_STROKE } from "./hexBoardData";
 import type { LegalTilePlacement } from "./hexContractTypes";
 import { FONT_SIZE } from "../styles/typography";
 
@@ -520,9 +519,6 @@ export function RadialTileSelector({
                 style={{
                   ...styles.candidate,
                   transform: `translate(-50%, -50%) translate(${position.x}px, ${position.y}px)`,
-                  // The tier's own rim, so the ring is sorted by era at a
-                  // glance without needing a label on every thumbnail.
-                  borderColor: tier ? COLOR_TIER_STROKE[tier] : "#4a5163",
                 }}
               >
                 <TilePreviewThumbnail
@@ -691,19 +687,39 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.35,
     maxWidth: "260px",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 369: THE CHROME WAS THE OTHER HALF OF THE RECTANGLE
+   * ==================================================================
+   *
+   * `HexGridRenderer` design note #368 fixed the artwork -- the hex was
+   * being drawn larger than its own canvas and cropped to its middle band.
+   * This is the half that was visible even once it was not: a 10px rounded
+   * rectangle with a 2px border and an opaque fill, wrapped around a
+   * hexagonal tile. Six vertices of dark background showed at the corners
+   * and the eye read the CARD, not the tile.
+   *
+   * The border is also redundant. `TilePreviewThumbnail` already strokes
+   * the tile in `COLOR_TIER_STROKE[tier]` -- the same colour this border
+   * was set to -- so the ring carried two rims of one colour around two
+   * different shapes.
+   *
+   * What remains is a transparent hit target. The tile is its own chrome:
+   * it has a fill, a tier-coloured edge and a drop shadow of its own, which
+   * is what a piece looks like. */
   candidate: {
     pointerEvents: "auto",
     position: "absolute",
     left: 0,
     top: 0,
-    padding: "3px",
-    borderRadius: "10px",
-    borderWidth: "2px",
-    borderStyle: "solid",
-    backgroundColor: "rgba(15, 20, 32, 0.94)",
+    padding: 0,
+    border: "none",
+    background: "transparent",
     cursor: "pointer",
     lineHeight: 0,
-    boxShadow: "0 3px 12px rgba(0,0,0,0.5)",
+    /* The shadow moves off the box and onto the SHAPE. `box-shadow` on a
+       clipped element is clipped with it; `filter: drop-shadow` follows the
+       alpha, so the hex casts a hex-shaped shadow. */
+    filter: "drop-shadow(0 3px 8px rgba(0,0,0,0.55))",
   },
   candidateNumber: {
     display: "block",

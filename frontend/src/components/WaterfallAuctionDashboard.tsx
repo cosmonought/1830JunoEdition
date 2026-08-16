@@ -973,7 +973,41 @@ function PrivateCard({
         .filter((bid) => bid.bidder === fundsSeat)
         .reduce((sum, bid) => sum + (Number(bid.bid_amount) || 0), 0)
     : 0;
-  const bidReason = bidRejectionReason(funds, bidAmount, minimumBid);
+  /* ==================================================================
+   *  DESIGN NOTE 384: ONE BID PER PRIVATE, IN THE WATERFALL PROPER
+   * ==================================================================
+   *
+   * REPORTED: players can spam bids on the same private before a
+   * mini-auction.
+   *
+   * They could, and each one escrowed more of their cash against the same
+   * certificate. `ownRaiseEscrow` just above is the evidence: it sums a
+   * seat's bids on one private, and it only needs to SUM because a seat
+   * could have several. A second bid on a private you are already the
+   * standing bidder on is a player bidding against themselves; a second bid
+   * behind someone else's is the move that should be a raise, and raising
+   * is what the mini-auction exists for.
+   *
+   * SO THE GATE IS "HAVE I BID HERE", not "am I winning here". Both cases
+   * are the same mistake and both are refused with the same sentence.
+   *
+   * THE MINI-AUCTION LIFTS IT, which is the whole point of the exception.
+   * Once a contest is triggered on this private the control below is no
+   * longer Place Bid but Raise, and raising repeatedly is how the contest
+   * is fought -- `ownRaiseEscrow` then does its real job of charging only
+   * the increment. Gating that would make a triggered auction unwinnable by
+   * anyone who opened it.
+   *
+   * `ownRaiseEscrow > 0` is the test rather than a separate scan of
+   * `priv.bids`, because it is already exactly "this seat's money standing
+   * on this private" -- deriving the same fact twice is how the two answers
+   * start to disagree. */
+  const alreadyBidHere = !isCompetingInMiniAuction && ownRaiseEscrow > 0;
+  const repeatBidReason = alreadyBidHere
+    ? `You already have a $${ownRaiseEscrow} bid on ${priv.name}. One bid per private company — if someone outbids you, a mini-auction opens and you can raise there.`
+    : null;
+
+  const bidReason = repeatBidReason ?? bidRejectionReason(funds, bidAmount, minimumBid);
   const raiseReason = bidRejectionReason(funds, raiseAmount, minimumRaise, ownRaiseEscrow);
   const buyPrice = Number(priv.face_value) || 0;
   const buyReason =
@@ -1235,7 +1269,9 @@ function PrivateCard({
           ) : (
             /* Every other still-unowned private takes bids. */
             <>
-              <span style={styles.cardActionsTitle}>Place a bid</span>
+              <span style={styles.cardActionsTitle}>
+                {alreadyBidHere ? "Your bid stands" : "Place a bid"}
+              </span>
               <div style={styles.bidRow}>
                 <input
                   type="number"
@@ -1244,7 +1280,12 @@ function PrivateCard({
                   step={MIN_BID_INCREMENT}
                   value={bidAmount}
                   onChange={(e) => setBidAmount(Number(e.target.value))}
-                  disabled={!sessionReady || !isMyMainTurn}
+                  // Design note #384: the FIELD goes too, not just the
+                  // button. A live input above a dead button invites the
+                  // player to type a figure and then discover it cannot be
+                  // sent, which is a worse refusal than one that never
+                  // took the keystrokes.
+                  disabled={!sessionReady || !isMyMainTurn || alreadyBidHere}
                   aria-label={`Bid amount for ${priv.name}`}
                 />
                 <button
@@ -1267,9 +1308,18 @@ function PrivateCard({
                   space six cards needed. The number a player actually needs
                   stays visible; the reasoning is one hover away. */}
               <span style={styles.cardActionsHint}>
-                Min ${minimumBid}
-                {funds && ` \u00b7 $${funds.available} available`}
-                {!isMyMainTurn && " \u00b7 not your turn"}
+                {/* Design note #384: when the bid is refused for being a
+                    repeat, the hint says so instead of reciting a minimum
+                    the player is not allowed to meet. */}
+                {alreadyBidHere ? (
+                  `Bid $${ownRaiseEscrow}, escrowed until this private is sold or auctioned`
+                ) : (
+                  <>
+                    Min ${minimumBid}
+                    {funds && ` \u00b7 $${funds.available} available`}
+                    {!isMyMainTurn && " \u00b7 not your turn"}
+                  </>
+                )}
               </span>
             </>
           )}

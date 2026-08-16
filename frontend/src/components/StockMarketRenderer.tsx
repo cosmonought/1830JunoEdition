@@ -1537,6 +1537,49 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
   const parFrameBorderPx = deriveParFrameBorderPx(cellSize);
   const parFrameGlowPx = deriveParFrameGlowPx(cellSize);
 
+  /* ==================================================================
+   *  DESIGN NOTE 387: NO PAR, NO TOKEN. ENFORCED HERE.
+   * ==================================================================
+   *
+   * REPORTED: in the Zero State sandbox, unparred corporations are showing
+   * market values and rendering tokens on the matrix.
+   *
+   * A stock market position is a claim that a corporation has a price, and
+   * a corporation acquires a price by being PARRED -- the president's
+   * purchase sets `par_value` and places the token on that column. So a
+   * token for a company with no par is not a stale figure, it is a
+   * corporation that has not entered the market at all being drawn as
+   * though it had.
+   *
+   * THE FILTER IS HERE, AT THE RENDERER, rather than only in the sandbox
+   * fixture that produced the bad data. The fixture is fixed too (see
+   * `sandboxInitialMarketPrices`), but fixing only the fixture would leave
+   * the invariant undefended for live chain data, and the invariant is not
+   * a sandbox property -- it is what a market position MEANS. A renderer
+   * that draws whatever it is handed will draw this bug again the next time
+   * any producer gets it wrong.
+   *
+   * `parredCompanies` is the authority because it comes straight from
+   * `PublicCompanyState.par_value` (design note #24), which is the same
+   * field the par-track markers below already trust. One source, so the
+   * token and the gold par marker can never disagree about whether a
+   * company has entered the market.
+   *
+   * UNKNOWN ROSTER PASSES EVERYTHING THROUGH. `parredCompanies` is optional
+   * -- the placeholder path renders a chart with no game state at all -- and
+   * treating "no roster supplied" as "nothing is parred" would blank the
+   * demo grid. Absent evidence is not evidence of absence, the same rule
+   * design note #385 applies to the private roster. */
+  const tradingPositions = useMemo(() => {
+    if (parredCompanies === undefined) return marketGrid.positions;
+    const parred = new Set(
+      parredCompanies
+        .filter((company) => company.par_value !== null)
+        .map((company) => company.company_id),
+    );
+    return marketGrid.positions.filter((position) => parred.has(position.company_id));
+  }, [marketGrid.positions, parredCompanies]);
+
   // Groups live company positions by cell so multi-occupant cells can be
   // staggered -- see design note #5. Built as a plain typed array (not
   // `Array.from(map.entries())`) so the token-wrapper render below doesn't
@@ -1544,7 +1587,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
   // this environment's bare `tsc` run happens to see.
   const cellOccupantGroups = useMemo<CellOccupantGroup[]>(() => {
     const groupsByKey = new Map<string, CellOccupantGroup>();
-    for (const position of marketGrid.positions) {
+    for (const position of tradingPositions) {
       const x = clamp(position.x, MARKET_MIN_X, MARKET_MAX_X);
       const y = clamp(position.y, MARKET_MIN_Y, MARKET_MAX_Y);
       const key = cellKey(x, y);
@@ -1558,7 +1601,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
     const groups: CellOccupantGroup[] = [];
     groupsByKey.forEach((group) => groups.push(group));
     return groups;
-  }, [marketGrid.positions]);
+  }, [tradingPositions]);
 
   /* Design note #24: derived, not observed. The old version of this block
    * watched `marketGrid.positions` for tokens landing on par cells and
@@ -1574,9 +1617,12 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
     <div style={styles.root} className={className}>
       <div style={styles.header}>
         <span style={styles.headerTitle}>Stock Market</span>
+        {/* Design note #387: counts the tokens actually drawn. Reading
+            `marketGrid.positions` here would announce "4 companies trading"
+            over an empty chart the moment any of them is unparred. */}
         <span style={styles.headerHint}>
-          Game #{marketGrid.game_id} -- {marketGrid.positions.length}{" "}
-          compan{marketGrid.positions.length === 1 ? "y" : "ies"} trading
+          Game #{marketGrid.game_id} -- {tradingPositions.length}{" "}
+          compan{tradingPositions.length === 1 ? "y" : "ies"} trading
         </span>
       </div>
 

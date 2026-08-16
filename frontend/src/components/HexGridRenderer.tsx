@@ -669,8 +669,16 @@ const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
 const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
 
 /** Design note #365: how long a pointer must rest on a hex before its
- *  tooltip appears. */
-export const HEX_TOOLTIP_DELAY_MS = 2000;
+ *  tooltip appears.
+ *
+ *  Design note #383: 2000ms -> 1200ms, reported as slightly too long. The
+ *  delay exists so that sweeping the pointer across the board does not trail
+ *  a queue of tooltips behind it, and 1200ms still clears that bar -- a
+ *  deliberate pause reads as roughly a second, while a sweep crosses a hex
+ *  in a fraction of one. What 2000ms additionally cost was the case the
+ *  delay is FOR: a player who stops on a hex intending to read it waited
+ *  long enough to wonder whether anything was coming. */
+export const HEX_TOOLTIP_DELAY_MS = 1200;
 
 /* ==================================================================
  *  DESIGN NOTE 366: THE RESERVATION, IN THE TOOLTIP

@@ -50,6 +50,10 @@ import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { allowsMultipleBankPoolBuys, marketZoneForPrice } from "./StockMarketRenderer";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 import { FONT_SIZE } from "../styles/typography";
+// Design note #389: the same ink-on-fill helper the map's station
+// tokens use, so a corporate colour is legible on the card for the
+// same reason it is legible on the board.
+import { bestContrastTextColor } from "./hexContractTypes";
 import {
   CARD_BORDER,
   CARD_BORDER_ACTIVE,
@@ -231,6 +235,9 @@ function CorporationRoster({
       <div style={styles.rosterGrid}>
         {publicCompanies.map((company) => {
           const color = tickerColor(company.company_id);
+          // Design note #389: derived from the fill, so every corporation's
+          // stripe is legible without a per-company decision.
+          const liveryInk = bestContrastTextColor(color);
           const isExpanded = company.company_id === expandedCompanyId;
           const market = marketPrices?.[company.company_id] ?? null;
 
@@ -254,38 +261,69 @@ function CorporationRoster({
                     ticker, prices, holdings, pools, all of it. A caret is a
                     ~20px target on a ~300px card that is itself the thing
                     being chosen; making the card the target removes the
-                    question of where to click. Shared by both paradigms:
-                    in A it expands, in C it flips. */}
+                    question of where to click. Design note #388: it
+                    expands -- there is no longer a second paradigm for it
+                    to mean something else in. */}
                 <button
                   type="button"
                   onClick={() => onToggleCompany(company.company_id)}
                   aria-expanded={isExpanded}
                   style={styles.rosterCardToggle}
                 >
-                <div style={styles.rosterCardHeader}>
-                  {/* Ticker stays the headline -- it is what the market
-                      grid, the ledger and the map token all key off. The
-                      canonical name sits underneath at micro size so the
-                      card teaches it without competing with it. Stacked in
-                      a column because `rosterCardHeader` is a
-                      space-between row: adding the name as a sibling would
-                      have pushed the float badge off the right edge. */}
+                {/* ==================================================
+                     DESIGN NOTE 389: THE HEADER IS THE LIVERY
+                    ==================================================
+
+                    REPORTED: replace the top text area -- abbreviation,
+                    full name and float progress -- with a solid stripe
+                    whose background is exactly the corporation's theme
+                    colour, with the text legible inside it.
+
+                    The three facts were already here; what they lacked was
+                    IDENTITY. A corporation's colour was a 16px tint on the
+                    ticker glyphs alone, which is the least of it: the same
+                    colour is the map token, the route ribbon and the market
+                    chart token, and on all three it is a FIELD of colour.
+                    Eight cards distinguished only by four coloured letters
+                    made the player read to identify a card they could have
+                    recognised.
+
+                    `tickerColor` is the same lookup those surfaces use, so
+                    the stripe cannot drift from the token. The requirement
+                    says "exactly match", and this is the mechanism for
+                    that: one table, not a second palette that looks close.
+
+                    THE INK IS COMPUTED, NOT CHOSEN. `bestContrastTextColor`
+                    is the same helper the map's station tokens use to put
+                    an acronym on an arbitrary corporate fill. Hard-coding
+                    white would fail on C&O's amber (#d68910); hard-coding
+                    black would fail on CPR's purple. Deriving it per colour
+                    means a corporation added later is legible by
+                    construction rather than by someone remembering to
+                    check. */}
+                <div style={{ ...styles.rosterLivery, backgroundColor: color, color: liveryInk }}>
                   <span style={styles.rosterNameStack}>
                     <span
-                      style={{ ...styles.rosterTicker, color }}
+                      style={styles.rosterLiveryTicker}
                       title={corporationTitle(company.ticker)}
                     >
                       {company.ticker}
                     </span>
                     {corporationFullName(company.ticker) && (
-                      <span style={styles.rosterFullName}>
+                      <span style={styles.rosterLiveryName}>
                         {corporationFullName(company.ticker)}
                       </span>
                     )}
                   </span>
+                  {/* Float status rides in the stripe too -- it was the
+                      third thing in the text area being replaced. Both
+                      badges take their ink from the stripe rather than
+                      carrying their own, so neither can become unreadable
+                      on a corporation whose colour they were not designed
+                      against. */}
                   {company.is_floated ? (
                     <span
-                      style={styles.rosterFloatedBadge}
+                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
                       title={
                         metFloatThreshold(company)
                           ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
@@ -295,7 +333,10 @@ function CorporationRoster({
                       FLOATED
                     </span>
                   ) : (
-                    <span style={styles.rosterUnfloatedBadge}>
+                    <span
+                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
+                      title={`${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
+                    >
                       {soldToPlayersPercent(company)}% / {FLOAT_THRESHOLD_PERCENT}%
                     </span>
                   )}
@@ -305,8 +346,26 @@ function CorporationRoster({
                     live figure and gets the emphasis; par is what it floated
                     at and is the reference point for judging it. */}
                 <div style={styles.rosterPriceRow}>
+                  {/* ==================================================
+                       DESIGN NOTE 387: NO PAR, NO MARKET FIGURE
+                      ==================================================
+
+                      REPORTED: unparred corporations display market values.
+
+                      `market` comes from the price table, which had been
+                      seeded from a mid-game fixture regardless of scenario
+                      -- so a Zero State corporation with `par_value: null`
+                      showed a price for a share nobody can own at a
+                      valuation nothing set. The seed is fixed, and so is
+                      the chart's token filter, but the card asserts it too:
+                      the market price is DEFINED as where the token stands,
+                      and a company with no par has no token. Reading
+                      `market` without checking par would let any future
+                      producer put the figure back. */}
                   <div style={styles.rosterPrice}>
-                    <span style={styles.rosterPriceValue}>{market === null ? "--" : market}</span>
+                    <span style={styles.rosterPriceValue}>
+                      {company.par_value === null || market === null ? "--" : market}
+                    </span>
                     <span style={styles.rosterPriceLabel}>market</span>
                   </div>
                   <div style={styles.rosterPrice}>
@@ -322,9 +381,9 @@ function CorporationRoster({
                     Trains, capacity and last payout, on the FRONT face.
                     A Stock Round decision is a bet on how a corporation
                     will operate, and none of that was visible without
-                    flipping the card -- which is exactly the moment a
+                    expanding the card -- which is exactly the moment a
                     player is choosing between eight of them and least
-                    wants to flip each one. Whether a company is one
+                    wants to open each one. Whether a company is one
                     purchase from losing its trains, or already at its
                     limit and unable to buy, changes what a share is worth
                     before you look at the price.
@@ -498,7 +557,10 @@ function CorporationRoster({
           const cardActions = (
             <CompanyActions
               company={company}
-              marketPrice={market}
+              // Design note #387: an unparred company has no market price,
+              // so the controls that branch on one (the Brown-zone
+              // multi-buy) see the same `null` the card displays.
+              marketPrice={company.par_value === null ? null : market}
               connectedAddress={connectedAddress}
               macroRoundNumber={macroRoundNumber}
               playerCash={playerCash}
@@ -510,129 +572,42 @@ function CorporationRoster({
             />
           );
 
-          /* ---- Option C: 3D flip -- design note #26 -------------------
-             The outer element owns `perspective` (a child cannot give
-             itself one) and a FIXED height, because both faces are
-             absolutely positioned and so contribute nothing to layout.
-             `backfaceVisibility: hidden` on each face is what stops the
-             mirrored reverse showing through mid-rotation. */
-          if (USE_FLIP_UI) {
-            return (
-              <div key={company.company_id} style={styles.flipViewport}>
-                <div
-                  style={{
-                    ...styles.flipInner,
-                    transform: isExpanded ? "rotateY(180deg)" : "rotateY(0deg)",
-                  }}
-                >
-                  <div
-                    style={{
-                      ...styles.flipFace,
-                      ...styles.rosterCard,
-                      ...(company.is_floated ? {} : styles.rosterCardUnfloated),
-                      borderColor: CARD_BORDER,
-                    }}
-                  >
-                    {cardFace}
-                  </div>
-                  {/* Design note #27: the WHOLE back flips too, and there is
-                      no "back to data" arrow. The card is the control; a
-                      dedicated return button is a second, smaller target for
-                      something the entire surface already does.
+          /* ==================================================
+               DESIGN NOTE 388: THE FLIP IS GONE
+              ==================================================
 
-                      The catch this creates, and how it is handled: a click
-                      anywhere would also flip while the player is operating
-                      the buy/sell controls INSIDE the back. So the actions
-                      are wrapped in a `stopPropagation` guard -- clicks on
-                      real controls act and stay put; clicks on the back's
-                      dead space flip home. Without that guard, picking a
-                      sell size would spin the card away mid-decision. */}
-                  <div
-                    onClick={(event) => {
-                      // Design note #27: a click that landed on an actual
-                      // control is that control's; anything else flips.
-                      if ((event.target as HTMLElement).closest("button, input, select, label")) {
-                        return;
-                      }
-                      onToggleCompany(company.company_id);
-                    }}
-                    role="button"
-                    tabIndex={-1}
-                    style={{
-                      ...styles.flipFace,
-                      ...styles.flipFaceBack,
-                      ...styles.rosterCard,
-                      borderColor: CARD_BORDER_ACTIVE,
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={styles.flipBackHeader}>
-                      <span
-                        style={{ ...styles.rosterTicker, color }}
-                        title={corporationTitle(company.ticker)}
-                      >
-                        {company.ticker}
-                      </span>
-                      <span style={styles.flipBackPrices}>
-                        ${market === null ? "--" : market} mkt &middot; ${company.par_value ?? "--"} par
-                      </span>
-                    </div>
+             REPORTED: remove the 3D card flip entirely and render every
+             action on the front of the card.
 
-                    {/* Design note #27: INFORMATION CONTINUITY. A condensed
-                        holdings list and the pool counts, so the numbers a
-                        buy/sell decision depends on are still on screen
-                        while the decision is being made. */}
-                    <div style={styles.flipBackHoldings}>
-                      {holdings.length === 0 ? (
-                        <span style={styles.rosterNoHoldings}>No shares held by players</span>
-                      ) : (
-                        holdings.map((holding) => (
-                          <div
-                            key={holding.address}
-                            style={{
-                              ...styles.flipBackHoldingRow,
-                              ...(holding.isPresident ? styles.rosterHoldingRowPresident : {}),
-                            }}
-                          >
-                            <span style={styles.rosterHoldingName}>
-                              {holding.isPresident && <span aria-label="President">&#128081;</span>}
-                              {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
-                              {holding.isSelf && <span style={styles.rosterYouTag}>you</span>}
-                            </span>
-                            <span style={styles.rosterHoldingPercent}>{holding.percentage}%</span>
-                          </div>
-                        ))
-                      )}
-                      {/* Design note #355: same suppression on the card
-                          back, so the two faces agree. */}
-                      <div style={styles.rosterPoolRow}>
-                        <span>IPO {company.ipo_pool_percentage}%</span>
-                        {company.bank_pool_percentage > 0 && (
-                          <span>Bank Pool {company.bank_pool_percentage}%</span>
-                        )}
-                      </div>
-                    </div>
+             Design note #26 chose the flip to solve a real problem -- the
+             grid reflowed when a card expanded, so choosing between eight
+             corporations meant the other seven jumped around underneath the
+             pointer. The flip fixed that by construction: a rotated card
+             occupies exactly the space it did before.
 
-                    {/* Design note #27 (revised): the guard sits on the
-                        CONTROLS, not on the whole actions container.
-                        Wrapping the container meant its padding, its
-                        section labels and every gap between rows swallowed
-                        the click too -- so in practice only the thin header
-                        strip at the very top of the card flipped it back,
-                        which is the reported bug.
+             It cost more than it saved, and design note #27's history is
+             the evidence. Hiding the numbers behind the decision meant
+             re-deriving a condensed holdings list, a second price readout
+             and a second pool row for the back face -- a whole parallel
+             rendering of the same corporation, which then had to be kept in
+             agreement with the front (see #355's "same suppression on the
+             card back, so the two faces agree"). Then the flip needed a
+             `stopPropagation` guard so operating a control did not spin the
+             card away mid-decision, and that guard needed revising when it
+             turned out to swallow clicks on padding.
 
-                        `closest("button, input, select, label")` lets a
-                        click on a real control act and stay put, while a
-                        click on any dead space -- inside the actions block
-                        or anywhere else on the back -- flips home. */}
-                    <div style={styles.flipBackScroll}>{cardActions}</div>
-                  </div>
-                </div>
-              </div>
-            );
-          }
+             Every one of those is a cost of the numbers being on the other
+             side of a rotation. Putting the actions on the FRONT deletes
+             the parallel render, the guard and the fixed 460px frame that
+             imposed the tallest card's height on all eight -- and the buy
+             and sell controls now sit directly beneath the ownership table
+             they are a decision about, which is where a player looking at
+             both wanted them.
 
-          /* ---- Option A: accordion (default) ---- */
+             The reflow #26 worried about is handled by the card keeping its
+             own height: actions render for the EXPANDED card only, exactly
+             as the accordion always did. */
+
           return (
             <div
               key={company.company_id}
@@ -643,7 +618,13 @@ function CorporationRoster({
               }}
             >
               {cardFace}
-              {isExpanded && cardActions}
+              {/* Design note #388: ON THE FRONT, unconditionally. The
+                  actions were gated on `isExpanded` because the flip and
+                  the accordion both treated them as the hidden half of the
+                  card. There is no hidden half now, and a Par/Buy/Sell
+                  control that requires a click to reveal is a control the
+                  player has to remember is there. */}
+              {cardActions}
             </div>
           );
         })}
@@ -1179,52 +1160,20 @@ function CompanyActions({
   );
 }
 
-/* ==================================================================== */
-/*  DESIGN NOTE 26: OPTION A vs OPTION C -- THE CARD PARADIGM TEST      */
-/* ==================================================================== */
+/* ===================================================================
+/*  DESIGN NOTE 26 (SUPERSEDED BY #388): THE CARD PARADIGM TEST
+/* ===================================================================
 //
-// Two ways of fitting ~20 controls per corporation onto a screen holding
-// eight of them, built side by side so they can be compared on the real
-// thing rather than argued about.
+// This file used to carry a long comparison of two card paradigms --
+// Option A, an accordion that reflows the grid, and Option C, a 3D flip
+// with a fixed 460px frame -- behind a `USE_FLIP_UI` flag, on the
+// reasoning that which one is better is a judgement about how the screen
+// is actually used and should be settled by trying both.
 //
-//   A (false)           ACCORDION. Cards hug their content; the whole
-//                       collapsed surface toggles open. Cheap to scan --
-//                       every card's data is visible at once -- and one
-//                       click to act. Cost: the open card pushes its row
-//                       taller, so the grid reflows as you work.
-//   C (true, DEFAULT)   3D FLIP. Front is data, back is actions, joined by
-//                       a `rotateY` on a shared fixed-size frame. The grid
-//                       NEVER reflows, because a flipped card occupies
-//                       exactly the space it did before. Cost: front and
-//                       back can never be seen together, so you cannot
-//                       check a holding while choosing a sell size -- and
-//                       a fixed frame means the tallest card's height is
-//                       imposed on all eight.
-//
-// UPDATE: C is now the default, and its one real cost -- losing sight of the
-// data while acting -- is addressed rather than accepted: the BACK carries a
-// condensed copy of the holdings and the IPO/Bank counts, so a player
-// choosing a sell size can still see what they hold. That is the whole
-// reason the back is worth building; a flip that hides the numbers you are
-// deciding with is a worse accordion.
-//
-// The honest summary is that A optimises for comparison and C optimises for
-// layout stability, and which matters more is a judgement about how the
-// screen is actually used -- which is why this is a flag rather than a
-// decision made in the abstract.
-//
-// IMPLEMENTATION NOTE: both share ONE `CompanyActions` and one card-face
-// renderer. The flag chooses the WRAPPER only. Building two independent
-// card components would have doubled every future fix and let the two
-// paradigms drift apart, which would make the comparison meaningless.
-
-/** Flip the paradigm. `false` = Option A (accordion), `true` = Option C. */
-const USE_FLIP_UI = true;
-
-/** Option C only: the fixed frame height both faces share. A flip card
- *  cannot size to content -- the two faces are absolutely positioned on top
- *  of each other, so the frame needs a height before either is measured. */
-const FLIP_CARD_HEIGHT_PX = 460;
+// It was settled. Design note #388 records the outcome and the reasons;
+// the flip, the flag and the fixed frame height are all deleted rather
+// than left switchable, because a flag nobody will flip back is just a
+// second code path to keep working. The accordion is the card.
 
 /* ==================================================================== */
 /*  DESIGN NOTE 24: FLOAT IS THE 60% RULE, WITH NO EXCEPTIONS           */
@@ -1604,6 +1553,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "2px",
     borderStyle: "solid",
     borderRadius: "10px",
+    // Design note #389: the livery stripe bleeds to the card's edges, so
+    // the card clips it back inside the corner radius.
+    overflow: "hidden",
     cursor: "pointer",
     textAlign: "left",
     font: "inherit",
@@ -1611,6 +1563,54 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 3px 12px rgba(0,0,0,0.4)",
   },
   rosterCardHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" },
+  /* ---- Design note #389: the corporate livery stripe ----
+     Negative margins pull it out to the card's own edges and back up under
+     the border radius, so it reads as a painted band on the card rather
+     than a coloured box sitting inside one -- the card's `padding: 12px
+     14px` is cancelled exactly. `overflow: hidden` on the card itself is
+     what keeps the square stripe corners inside the 10px radius. */
+  rosterLivery: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    margin: "-12px -14px 0",
+    padding: "9px 14px",
+    minWidth: 0,
+  },
+  rosterLiveryTicker: {
+    fontSize: FONT_SIZE.heading,
+    fontWeight: 800,
+    letterSpacing: "0.5px",
+    // Inherits the computed ink; stated so nothing downstream re-tints it.
+    color: "inherit",
+  },
+  rosterLiveryName: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 600,
+    letterSpacing: "0.01em",
+    color: "inherit",
+    // Design note #22's uniform card width still governs: a long name
+    // ellipsises rather than widening the card.
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    opacity: 0.85,
+  },
+  /** Float status inside the stripe. Outlined in the stripe's own ink
+   *  rather than filled, so it reads as a badge without introducing a
+   *  third colour onto a band that is already carrying two. */
+  rosterLiveryBadge: {
+    flexShrink: 0,
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    padding: "2px 7px",
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    fontVariantNumeric: "tabular-nums",
+  },
   rosterTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800, letterSpacing: "0.5px" },
   rosterNameStack: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
   rosterFullName: {
@@ -1774,78 +1774,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px", backgroundColor: "#dcecf5", color: "#1c4a63",
   },
   rosterHoldingPercent: { flexShrink: 0, fontVariantNumeric: "tabular-nums" },
-  /* ---- Option C: 3D flip (design note #26) ----
-   * `perspective` lives on the VIEWPORT, not the rotating element: a
-   * transformed element cannot supply its own perspective, and without one
-   * `rotateY` degenerates into a flat horizontal squash with no depth.
-   * The fixed height is unavoidable -- both faces are `position: absolute`
-   * and contribute nothing to layout, so the frame has to be told a size. */
-  flipViewport: {
-    perspective: "1400px",
-    height: `${FLIP_CARD_HEIGHT_PX}px`,
-  },
-  flipInner: {
-    position: "relative",
-    width: "100%",
-    height: "100%",
-    transformStyle: "preserve-3d",
-    transition: "transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1)",
-  },
-  flipFace: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    flexDirection: "column",
-    // Without this the mirrored reverse of the other face shows through
-    // during the middle of the rotation.
-    backfaceVisibility: "hidden",
-    WebkitBackfaceVisibility: "hidden",
-    overflow: "hidden",
-    boxSizing: "border-box",
-  },
-  /** Pre-rotated so it faces outward once the frame turns 180deg. */
-  flipFaceBack: { transform: "rotateY(180deg)" },
-  flipBackHeader: {
-    display: "flex",
-    alignItems: "baseline",
-    justifyContent: "space-between",
-    gap: "8px",
-    width: "100%",
-  },
-  flipBackPrices: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    color: CARD_INK_MUTED,
-    fontVariantNumeric: "tabular-nums",
-  },
-  /** Design note #27: condensed holdings on the back. Capped and scrolling
-   *  so a six-holder company cannot push the actions off a fixed frame. */
-  flipBackHoldings: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    maxHeight: "132px",
-    overflowY: "auto",
-    paddingTop: "6px",
-    marginTop: "6px",
-    borderTopWidth: "1px",
-    borderTopStyle: "solid",
-    borderTopColor: CARD_DIVIDER,
-  },
-  flipBackHoldingRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "8px",
-    fontSize: FONT_SIZE.micro,
-    color: CARD_INK,
-    padding: "1px 4px",
-    borderRadius: "4px",
-  },
-  /** The back can overflow its fixed frame on a company with many controls,
-   *  so it scrolls rather than clipping them away. */
-  flipBackScroll: { flex: "1 1 auto", overflowY: "auto", minHeight: 0, marginTop: "8px" },
-
   /** Design note #28: the call to action on an unparred company. */
   setParPrompt: {
     fontSize: FONT_SIZE.micro,

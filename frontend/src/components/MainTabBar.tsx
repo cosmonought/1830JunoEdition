@@ -90,6 +90,58 @@ export function isTabAvailable(tab: MainTab, roundType: RoundType | null): boole
  * (design note #41 -- there is no `"phase"` entry that round to land on);
  * an Operating Round is played on the rail map.
  */
+/**
+ * Is the player looking at the surface this round is played on?
+ *
+ * ==================================================================
+ *  DESIGN NOTE 390: THE TABS THAT ARE NOT A PLACE TO ACT
+ * ==================================================================
+ *
+ * REPORTED: players get confused viewing the map during a Stock Round, or
+ * the stock market during an Operating Round, and should be offered a way
+ * back to where the action is.
+ *
+ * The naive check is `activeTab !== surfaceTabFor(roundType)`, and it is
+ * wrong for three of the six tabs. `ledger` and `rules` are REFERENCE
+ * surfaces -- a player opens the Game Ledger mid-turn precisely to check
+ * something before acting, and `stock` is the market chart, which is read
+ * during every round. Treating those as "the wrong tab" would replace the
+ * action panel with a redirect the moment a player consulted anything,
+ * which is a worse trap than the one being fixed: it makes the reference
+ * material cost you your controls.
+ *
+ * So the redirect fires only when the player is on ANOTHER ROUND'S PLAYING
+ * SURFACE -- the map during a Stock Round, the corporations during an
+ * Operating Round. Those are the two cases in the report, and they are the
+ * ones where a player is plausibly waiting for something to happen on a
+ * screen where nothing will.
+ *
+ * REFERENCE TABS KEEP THE ACTION PANEL as it was. Nothing is taken away
+ * from a player who is deliberately reading.
+ */
+export function isPlayingSurface(tab: MainTab): boolean {
+  return tab === "phase" || tab === "corps" || tab === "map";
+}
+
+/** The tab the player should be on to act, when they are on the wrong
+ *  PLAYING surface -- `null` when they are already in the right place or
+ *  are on a reference tab (design note #390). */
+export function misplacedSurfaceTab(
+  activeTab: MainTab,
+  roundType: RoundType | null,
+): MainTab | null {
+  if (!isPlayingSurface(activeTab)) return null;
+  const correct = surfaceTabFor(roundType);
+  return activeTab === correct ? null : correct;
+}
+
+/** The human label for a tab, for the redirect button's copy. Reads the
+ *  same table the strip renders, so "Return to Rail Map" can never name a
+ *  tab differently from the tab itself. */
+export function labelForTab(tab: MainTab, roundType: RoundType | null): string {
+  return orderedMainTabs(roundType).find((entry) => entry.id === tab)?.label ?? "the board";
+}
+
 export function surfaceTabFor(roundType: RoundType | null): MainTab {
   switch (roundType) {
     case "WaterfallAuction":

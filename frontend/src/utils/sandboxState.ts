@@ -459,11 +459,31 @@ export type SandboxMarketPrices = Readonly<Record<number, SandboxMarketMark | nu
  *  after this the cell travels with the mark. */
 export function sandboxInitialMarketPrices(
   cellForPrice: (price: number) => { x: number; y: number } | null,
+  /* Design note #387: the Zero State has no market at all.
+
+     REPORTED: unparred corporations show market values and render tokens in
+     the Zero State.
+
+     This function seeded from `SANDBOX_CORPORATIONS`, the mid-game fixture,
+     with no idea which scenario was being loaded -- so "Game Start (zero
+     state)" reset the companies (`par_value: null`, unfloated, empty
+     treasuries) and then handed the chart a full set of mid-game prices
+     anyway. The two halves of one scenario disagreed because only one of
+     them was told which scenario it was.
+
+     A corporation has a market price when it has a PAR, because parring is
+     what puts the token on the board. Passing the flag rather than reading
+     a module-level scenario keeps this a pure function of its arguments,
+     which is what the harness needs to test both branches. */
+  zeroState = false,
 ): SandboxMarketPrices {
   const marks: Record<number, SandboxMarketMark | null> = {};
   for (const corp of SANDBOX_CORPORATIONS) {
-    const cell = corp.market === null ? null : cellForPrice(corp.market);
-    marks[corp.id] = corp.market === null || !cell ? null : { price: corp.market, ...cell };
+    const parred = !zeroState && corp.par !== null;
+    const cell = !parred || corp.market === null ? null : cellForPrice(corp.market);
+    marks[corp.id] = !parred || corp.market === null || !cell
+      ? null
+      : { price: corp.market, ...cell };
   }
   return marks;
 }

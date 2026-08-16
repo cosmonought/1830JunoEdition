@@ -99,14 +99,59 @@ export function privatePriceBounds(faceValue: number): { min: number; max: numbe
  *  A private qualifies only if a PLAYER holds it: `trading.rs` reads
  *  `private.owner` and fails with no seller when it is absent, so one
  *  already bought by a corporation (`owner_protocol_id`) or closed is not a
- *  candidate. Filtering here means those never appear rather than appearing
- *  and failing. */
+ *  candidate. */
 export function eligiblePrivatesForPurchase(
   privates: readonly PrivateCompanyState[],
 ): PrivateCompanyState[] {
   return privates.filter(
     (entry) => !entry.closed && entry.owner !== null && entry.owner_protocol_id === null,
   );
+}
+
+/**
+ * Privates the step is ABOUT -- everything still in play.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 386: SHOW THE UNSOLD ONES, DISABLED
+ * ==================================================================
+ *
+ * REPORTED: the sub-phase should display all available private companies --
+ * those not closed and not already owned by another corporation -- clearly
+ * marking which player owns them.
+ *
+ * `eligiblePrivatesForPurchase` above answers a narrower question: which
+ * ones can a corporation propose for RIGHT NOW. It excludes privates still
+ * unsold in the auction, because there is no seller to agree, and that
+ * exclusion is correct for dispatch. It was wrong for DISPLAY, and the
+ * difference is what a player learns from an empty list:
+ *
+ *   FILTERED OUT   "No private company is available" -- which reads as
+ *                  "there are none", when there may be four sitting in the
+ *                  auction that this corporation could buy next round.
+ *   SHOWN, DISABLED "C&SL -- unsold in the auction" -- which is the actual
+ *                  state of the game, and tells the player where the
+ *                  private went and what has to change.
+ *
+ * So this returns the wider set and the picker renders both, with the
+ * un-proposable ones inert and captioned. The two functions stay separate
+ * rather than one function with a flag, because they answer genuinely
+ * different questions and the dispatch path must keep using the strict one
+ * -- a display predicate that quietly became the legality predicate is
+ * exactly how an unsendable proposal reaches the chain.
+ */
+export function purchasablePrivatesInPlay(
+  privates: readonly PrivateCompanyState[],
+): PrivateCompanyState[] {
+  return privates.filter((entry) => !entry.closed && entry.owner_protocol_id === null);
+}
+
+/** Why this private cannot be proposed for, or `null` when it can be.
+ *  One sentence per reason, at the row that carries it. */
+export function privatePurchaseBlockReason(entry: PrivateCompanyState): string | null {
+  if (entry.owner === null) {
+    return "Still unsold in the private auction — no owner to sell it yet.";
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,11 +180,20 @@ export function ProposePrivatePurchase({
   onPropose,
   onClose,
 }: ProposePrivatePurchaseProps) {
-  const eligible = useMemo(() => eligiblePrivatesForPurchase(privates), [privates]);
+  // Design note #386: the wider set for DISPLAY. `selectable` below is still
+  // the strict predicate, and it is what gates the row and the submit.
+  const eligible = useMemo(() => purchasablePrivatesInPlay(privates), [privates]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [priceText, setPriceText] = useState("");
 
-  const selected = eligible.find((entry) => entry.private_id === selectedId) ?? null;
+  /* Design note #386: a row that cannot be proposed for cannot be the
+     selection either. Resolving `selected` against the STRICT list means an
+     unsold private can be shown and read without ever becoming the subject
+     of the price field and the submit button below. */
+  const selected =
+    eligible.find(
+      (entry) => entry.private_id === selectedId && privatePurchaseBlockReason(entry) === null,
+    ) ?? null;
   const faceValue = selected ? Number(selected.cost) : 0;
   const bounds = privatePriceBounds(faceValue);
   const price = Number(priceText);
@@ -195,10 +249,15 @@ export function ProposePrivatePurchase({
             {eligible.map((entry) => {
               const isSelected = entry.private_id === selectedId;
               const entryBounds = privatePriceBounds(Number(entry.cost));
+              // Design note #386: shown either way, inert when it cannot be
+              // bought, and captioned with the reason.
+              const blocked = privatePurchaseBlockReason(entry);
               return (
                 <button
                   key={entry.private_id}
                   type="button"
+                  disabled={blocked !== null}
+                  title={blocked ?? undefined}
                   onClick={() => {
                     setSelectedId(entry.private_id);
                     // Seed at face value: the neutral offer, and the one a
@@ -207,17 +266,28 @@ export function ProposePrivatePurchase({
                     // range.
                     setPriceText(String(entry.cost));
                   }}
-                  style={{ ...styles.row, ...(isSelected ? styles.rowSelected : {}) }}
+                  style={{
+                    ...styles.row,
+                    ...(isSelected && blocked === null ? styles.rowSelected : {}),
+                    ...(blocked !== null ? styles.rowBlocked : {}),
+                  }}
                 >
                   <span style={styles.rowName}>{entry.name}</span>
                   <span style={styles.rowMeta}>
                     face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
                   </span>
+                  {/* Design note #386: WHO HOLDS IT, named. This is the
+                      requirement's "clearly marking which player currently
+                      owns them" -- and for an unsold private it is also the
+                      explanation for why the row is inert, so the two facts
+                      are one line rather than two. */}
                   <span style={styles.rowOwner}>
-                    held by {entry.owner ? labelForAddress(entry.owner) : "nobody"}
+                    {entry.owner
+                      ? `held by ${labelForAddress(entry.owner)}`
+                      : "unsold in the auction"}
                   </span>
                   <span style={styles.rowBand}>
-                    ${entryBounds.min} - ${entryBounds.max}
+                    {blocked === null ? `$${entryBounds.min} - $${entryBounds.max}` : "not for sale"}
                   </span>
                 </button>
               );
@@ -433,6 +503,16 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   rowSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
+  /* Design note #386: present but plainly not actionable. Recedes rather
+     than disappears -- the whole point of showing it is that the player
+     learns the private exists and where it is. `not-allowed` over the
+     usual pointer so the refusal is felt before it is clicked. */
+  rowBlocked: {
+    opacity: 0.55,
+    cursor: "not-allowed",
+    borderStyle: "dashed",
+    backgroundColor: "#171c27",
+  },
   rowName: { fontSize: FONT_SIZE.strong, fontWeight: 700 },
   rowBand: {
     fontSize: FONT_SIZE.micro,

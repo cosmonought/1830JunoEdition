@@ -61,6 +61,11 @@ import {
   type TierRustOutlook,
   type TrainTier,
 } from "../utils/gamePhase";
+import {
+  labelForTab,
+  misplacedSurfaceTab,
+  type MainTab,
+} from "../components/MainTabBar";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
 
@@ -297,6 +302,8 @@ export default function ContextualActionBar({
   routeFeedback,
   onClearRoute,
   currentGlobalEra,
+  activeTab,
+  onSelectTab,
   isMyTurn,
   phase,
 }: {
@@ -444,6 +451,15 @@ export default function ContextualActionBar({
    *  down to what `activePlayerAddress` actually still owns and could sell
    *  (`playerSellablePrivateCompanies`), not the full room-wide list. */
   currentGlobalEra: TileColor | null;
+  /** Design note #390: which top-level tab the player is looking at, so the
+   *  bar can tell when it is being rendered beside the wrong board.
+   *  Optional -- a caller that omits it never redirects, rather than
+   *  redirecting to a guess. */
+  activeTab?: MainTab;
+  /** Navigates to a tab. Required for the redirect to do anything, so the
+   *  check is skipped without it: a redirect button with nothing to
+   *  dispatch is a dead end, not a fix. */
+  onSelectTab?: (tab: MainTab) => void;
   /** Active Player Turn Notifications -- design note #18/item 4. Applies
    *  the shared `app-turn-pulse-glow` keyframe (see `styles.appRoot`'s own
    *  JSX call site for where that `<style>` tag is injected) to this bar's
@@ -508,6 +524,23 @@ export default function ContextualActionBar({
   // Track -> Tokens -> Dividends -> Hardware -- one step at a time, rather
   // than exposing every OR action at once regardless of where the
   // corporation actually is in its turn.
+  /* Design note #390: `null` when the player is where the action is, or is
+     on a reference tab. `onSelectTab` is part of the condition because a
+     redirect button with nothing to dispatch is a dead end, not a fix. */
+  const misplacedTab =
+    activeTab !== undefined && onSelectTab !== undefined
+      ? misplacedSurfaceTab(activeTab, roundType)
+      : null;
+  const misplacedTabLabel = misplacedTab !== null ? labelForTab(misplacedTab, roundType) : "";
+  const roundLabelForTab =
+    roundType === "WaterfallAuction"
+      ? "The private auction"
+      : roundType === "StockRound"
+        ? "The Stock Round"
+        : roundType === "OperatingRound"
+          ? "The Operating Round"
+          : "This round";
+
   let contextualButtons: ActionBarButton[];
   if (roundType === "OperatingRound") {
     switch (orSubPhase) {
@@ -703,6 +736,41 @@ export default function ContextualActionBar({
    * it "chunky" -- they are panels, not buttons, and one of them contains a
    * price slider. They now render UNDER the slim strip as their own blocks,
    * so the bar stays one row tall while the trays keep working. */
+  /* ==================================================================
+   *  DESIGN NOTE 390 (panel half): ONE BUTTON, AND NOTHING ELSE
+   * ==================================================================
+   *
+   * When the player is on another round's playing surface, the entire bar
+   * is replaced by a single control that takes them back. Replaced rather
+   * than prefixed, and that is the requirement's word: a bar that showed
+   * the redirect ALONGSIDE the usual buttons would leave live controls for
+   * a round being played on a screen the player cannot see, which is how
+   * you get an action dispatched against a board you are not looking at.
+   *
+   * The whole panel also stays out of the way of the reference tabs -- see
+   * `misplacedSurfaceTab`, which returns `null` for Ledger, Rules and the
+   * market chart. */
+  if (misplacedTab !== null) {
+    return (
+      <div
+        style={{
+          ...styles.actionBar,
+          ...(condensed ? styles.actionBarCondensed : {}),
+          ...styles.actionBarRedirect,
+        }}
+      >
+        <button
+          type="button"
+          style={{ ...styles.actionBarButton, ...styles.actionBarRedirectButton }}
+          onClick={() => onSelectTab?.(misplacedTab)}
+          title={`${roundLabelForTab} is being played on the ${misplacedTabLabel} tab.`}
+        >
+          Return to {misplacedTabLabel}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <>
     <div
@@ -1105,6 +1173,10 @@ export default function ContextualActionBar({
             <OperatingSubPhaseStepper
               current={orSubPhase}
               era={currentGlobalEra}
+              // Design note #385: the strip drops `Buy Private` once every
+              // private is closed or inside a corporation, so the step is
+              // not there to be skipped.
+              privates={privateCompanies}
               trailing={
                 <button
                   type="button"

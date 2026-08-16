@@ -134,17 +134,79 @@ export function initialOrSubPhase(era: string | null | undefined): OperatingSubP
   return era === "Yellow" || !era ? "Track" : "BuyPrivate";
 }
 
-/** Design note #2: the steps that apply in this era. */
-export function visibleSubPhases(era: string | null | undefined): readonly OperatingSubPhase[] {
-  return initialOrSubPhase(era) === "Track"
-    ? OPERATING_SUB_PHASE_ORDER.filter((phase) => phase !== "BuyPrivate")
-    : OPERATING_SUB_PHASE_ORDER;
+/** The shape `visibleSubPhases` needs off a private company -- structural,
+ *  so callers can pass `PrivateCompanyState` without this module importing
+ *  the whole game-state vocabulary. */
+export interface PrivateAvailability {
+  closed: boolean;
+  /** Set when a CORPORATION holds it; such a private can never be bought
+   *  again (`trading.rs` reads `private.owner` and fails without one). */
+  owner_protocol_id: number | null;
+}
+
+/**
+ * Is there anything left for a corporation to buy?
+ *
+ * ==================================================================
+ *  DESIGN NOTE 385: A STEP WITH NOTHING IN IT IS NOT A STEP
+ * ==================================================================
+ *
+ * REPORTED: Buy Private Companies requires too many manual skips when no
+ * privates are available.
+ *
+ * The step was gated on the ERA alone (design note #2 -- hidden before
+ * Phase 3 because the contract's cursor starts at Track). From Phase 3 it
+ * then appeared on every corporation's turn for the rest of the game, and
+ * by the mid-game it is usually empty: privates get bought into treasuries,
+ * and Phase 5 closes every one that is left. Six corporations each skipping
+ * a dead step every Operating Round is a lot of clicks spent proving a
+ * negative.
+ *
+ * A PRIVATE IS BUYABLE IF a player still holds it -- not closed, and not
+ * already inside a corporation. That is the same predicate
+ * `eligiblePrivatesForPurchase` applies in `PrivateTradePanel.tsx`, and it
+ * is deliberately the same one: the step exists to open that picker, so the
+ * step should be present exactly when the picker would have rows.
+ *
+ * PHASE 5 NEEDS NO SPECIAL CASE. It closes all privates, so every entry has
+ * `closed: true` and this returns false on its own. Testing the phase as
+ * well would be a second rule that has to be kept in agreement with the
+ * first, and the first is the one that is actually true -- what matters is
+ * whether anything is buyable, not why it isn't.
+ *
+ * AN UNKNOWN ROSTER SHOWS THE STEP. `undefined` means the query has not
+ * resolved, and hiding a step because data has not arrived would make the
+ * strip flicker as it loads -- worse, it would hide a legal action from a
+ * player whose privates simply had not loaded yet. Absent evidence is not
+ * evidence of absence.
+ */
+export function hasBuyablePrivate(
+  privates: readonly PrivateAvailability[] | null | undefined,
+): boolean {
+  if (privates === null || privates === undefined) return true;
+  return privates.some((entry) => !entry.closed && entry.owner_protocol_id === null);
+}
+
+/** Design note #2: the steps that apply in this era.
+ *  Design note #385: and in this state of the private roster. */
+export function visibleSubPhases(
+  era: string | null | undefined,
+  privates?: readonly PrivateAvailability[] | null,
+): readonly OperatingSubPhase[] {
+  const showBuyPrivate = initialOrSubPhase(era) !== "Track" && hasBuyablePrivate(privates);
+  return showBuyPrivate
+    ? OPERATING_SUB_PHASE_ORDER
+    : OPERATING_SUB_PHASE_ORDER.filter((phase) => phase !== "BuyPrivate");
 }
 
 export interface OperatingSubPhaseStepperProps {
   current: OperatingSubPhase;
   /** Drives which steps render -- see design note #2. */
   era: string | null | undefined;
+  /** Design note #385: also drives which steps render. `Buy Private` is
+   *  dropped once nothing is left for a corporation to buy. Omitted or
+   *  `undefined` means "not loaded", which shows the step. */
+  privates?: readonly PrivateAvailability[] | null;
   /* ==================================================================
    *  DESIGN NOTE 235: SKIP AND UNDO SWAPPED LINES
    * ==================================================================
@@ -176,9 +238,10 @@ export interface OperatingSubPhaseStepperProps {
 export function OperatingSubPhaseStepper({
   current,
   era,
+  privates,
   trailing,
 }: OperatingSubPhaseStepperProps) {
-  const steps = visibleSubPhases(era);
+  const steps = visibleSubPhases(era, privates);
   const currentIndex = steps.indexOf(current);
 
   return (

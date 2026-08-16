@@ -1649,13 +1649,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      two, for design note #265's reason -- a loop of dispatches must see
      each other's results. */
   const [sandboxMarket, setSandboxMarket] = useState<SandboxMarketPrices>(() =>
-    sandboxInitialMarketPrices(marketCellForPrice),
+    // Design note #387: the Zero State seeds an EMPTY chart. Nothing is
+    // parred at turn one, so nothing has a market position.
+    sandboxInitialMarketPrices(marketCellForPrice, sandboxScenario(sandboxScenarioId).zeroState),
   );
   // Re-seeded on a scenario change for the same reason the other two are:
   // picking a scenario means "show me that screen", not "carry my moved
   // tokens into it".
   useEffect(() => {
-    setSandboxMarket(sandboxInitialMarketPrices(marketCellForPrice));
+    setSandboxMarket(
+      sandboxInitialMarketPrices(marketCellForPrice, sandboxScenario(sandboxScenarioId).zeroState),
+    );
   }, [sandbox, sandboxScenarioId, gameId]);
   const sandboxMarketRef = useRef<SandboxMarketPrices>(sandboxMarket);
   useEffect(() => {
@@ -1835,11 +1839,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * A player can still walk back to `BuyPrivate` on the stepper, so nothing
    * is unreachable -- only the default changed.
    */
+  /* Design note #385: and it never opens on a step that is not there.
+     `initialOrSubPhase` returns `BuyPrivate` from Phase 3 on, but the strip
+     now drops that step once nothing is buyable -- so seeding the cursor
+     there would put the turn on a hidden step, which reads as an empty
+     action panel with no way forward but Skip. `visibleSubPhases` is asked
+     rather than re-deriving the condition, so the cursor and the strip
+     cannot disagree about which steps exist. */
   useEffect(() => {
-    setOrSubPhase(
-      sandbox ? "Track" : initialOrSubPhase(gameState?.current_global_era),
+    const steps = visibleSubPhases(
+      gameState?.current_global_era,
+      gameState?.private_companies,
     );
-  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, sandbox]);
+    const opening = sandbox ? "Track" : initialOrSubPhase(gameState?.current_global_era);
+    setOrSubPhase(steps.includes(opening) ? opening : steps[0]);
+  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, sandbox]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -4418,7 +4432,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     });
     if (!sandbox) return;
     setOrSubPhase((current) => {
-      const steps = visibleSubPhases(gameState?.current_global_era);
+      // Design note #385: the same filtered list the strip renders, so Skip
+      // walks past a hidden `Buy Private` rather than stopping on it.
+      const steps = visibleSubPhases(
+        gameState?.current_global_era,
+        gameState?.private_companies,
+      );
       const at = steps.indexOf(current);
       // Past the last step the turn is over, so hold rather than wrapping
       // back to Track -- wrapping would let a corporation lay a second tile.
@@ -5323,6 +5342,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 ) : (
                 <ContextualActionBar
                   roundType={gameState?.current_round_type ?? null}
+                  // Design note #390: the bar compares these two and
+                  // replaces itself with a Return button when the player is
+                  // on another round's playing surface.
+                  activeTab={activeMainTab}
+                  onSelectTab={setActiveMainTab}
                   orSubPhase={orSubPhase}
                   sessionReady={controlsEnabled}
                   // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`

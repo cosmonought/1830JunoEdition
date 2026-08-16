@@ -529,6 +529,23 @@ export const styles: Record<string, React.CSSProperties> = {
      bar loses its rounding against the top edge -- it is now a chrome
      element rather than a card, and a floating rounded card that never
      moves reads as a stuck modal. */
+  /* ---- Design note #390: the wrong-tab redirect ----
+     The bar becomes one centred control. Padding grows because it is now
+     the only thing in the strip and a lone button pinned left in a
+     full-width bar reads as a leftover rather than as the point. */
+  actionBarRedirect: {
+    justifyContent: "center",
+    padding: "14px 16px",
+  },
+  actionBarRedirectButton: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    padding: "10px 22px",
+    letterSpacing: "0.02em",
+    backgroundColor: "#2f6fb2",
+    borderColor: "#4d8ee0",
+    color: "#f2f7ff",
+  },
   actionBarCondensed: {
     padding: "3px 12px",
     borderTopLeftRadius: 0,

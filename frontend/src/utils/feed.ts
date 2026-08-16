@@ -171,53 +171,29 @@ export function mergeFeedItems(
   return [...chatItems, ...logItems].sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
-/** Emoji + short category label per requested badge type (Tile/Stock/
- *  Train/Dividend/Phase Shift) -- see design note #3 for why this is a
- *  plain label-substring match, not a new structured field. Checked in a
- *  fixed priority order so a label that could plausibly match more than
- *  one category resolves deterministically. */
-export function iconForLogEntry(label: string): { icon: string; category: string } {
-  const lower = label.toLowerCase();
-  if (lower.includes("tile") || lower.includes("station") || lower.includes("track")) {
-    return { icon: "🛤️", category: "Tile" };
-  }
-  if (lower.includes("stock") || lower.includes("private")) {
-    return { icon: "💹", category: "Stock" };
-  }
-  if (lower.includes("hardware") || lower.includes("train")) {
-    return { icon: "🚂", category: "Train" };
-  }
-  if (lower.includes("dividend")) {
-    return { icon: "💰", category: "Dividend" };
-  }
-  if (
-    lower.includes("passturn") ||
-    lower.includes("pass turn") ||
-    lower.includes("skip") ||
-    lower.includes("end turn") ||
-    lower.includes("phase") ||
-    lower.includes("undo")
-  ) {
-    return { icon: "🔄", category: "Phase Shift" };
-  }
-  return { icon: "📜", category: "Log" };
-}
-
-/** Status -> single-glyph indicator, shared by the Top Ticker's live
- *  preview (matching this pass's own requested `🟢 Alice laid Tile #57...`
- *  example format) and the Feed Overlay's log badge strips. */
-export function iconForLogStatus(status: ActionLogStatus): string {
-  switch (status) {
-    case "success":
-      return "🟢";
-    case "error":
-      return "🔴";
-    case "pending":
-      return "🟡";
-    default:
-      return "🔵";
-  }
-}
+/* ==================================================================
+ *  DESIGN NOTE 425: THE EMOJI HELPERS ARE GONE
+ * ==================================================================
+ *
+ * `iconForLogEntry` and `iconForLogStatus` were DELETED, not merely left
+ * uncalled. They produced the category badges (🛤 Tile, 💹 Stock, 🚂 Train
+ * …) and the status circles (🟢🔴🟡🔵) that `TopTicker` used to prefix
+ * every log line with, and the requirement is that the log carry clean text
+ * and nothing else.
+ *
+ * WHY DELETE RATHER THAN STOP CALLING. Two exported functions whose entire
+ * output is emoji, sitting in the module the log renders from, are a
+ * standing invitation to put the badges back -- and the category one
+ * deserved removing on its own merits regardless of this pass. It inferred
+ * a type by substring-matching the label, so it restated a word already
+ * visible in the sentence beside it and mis-tagged any entry that happened
+ * to contain another category's keyword ("Skip Station Token" is a Tile;
+ * "Private Revenue" is Stock).
+ *
+ * `ActionLogStatus` is unaffected and still carried on every entry --
+ * `TopTicker` reads it to mark a failure in words. The status was never the
+ * problem; rendering it as a coloured circle was.
+ */
 
 /** Deterministic per-author "player brand color tag" -- see
  *  FeedOverlay.tsx's own design note for how this is used. A fixed palette

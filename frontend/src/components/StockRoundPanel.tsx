@@ -54,10 +54,16 @@ import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
 import { TrainChips } from "./TrainBadges";
 // Design note #410: the corporate herald, shared with the action panel.
 import { CorporateLogo } from "./CorporateLogo";
-import { allowsMultipleBankPoolBuys, marketZoneForPrice } from "./StockMarketRenderer";
+import {
+  allowsMultipleBankPoolBuys,
+  marketZoneForPrice,
+  PAR_BOX_PRICES,
+} from "./StockMarketRenderer";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
+import { StationTokenRow } from "./StationTokenRow";
+import { stationTokenSlots } from "../utils/stationTokens";
 import { FONT_SIZE } from "../styles/typography";
 // Design note #389: the same ink-on-fill helper the map's station
 // tokens use, so a corporate colour is legible on the card for the
@@ -219,6 +225,7 @@ function CorporationRoster({
   onBuyShare,
   onSellShares,
   controlsDisabled,
+  tradingOpen,
 }: {
   publicCompanies: readonly PublicCompanyState[];
   phase?: GamePhase | null;
@@ -247,6 +254,9 @@ function CorporationRoster({
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
+  /** Design note #417: `false` outside a Stock Round -- each card then
+   *  renders no trading controls at all. */
+  tradingOpen: boolean;
 }) {
   if (publicCompanies.length === 0) {
     return (
@@ -544,14 +554,51 @@ function CorporationRoster({
                     />
                   </span>
                   <span style={styles.assetDivider} aria-hidden="true">|</span>
+                  {/* ==================================================
+                       DESIGN NOTE 424: THE CAPACITY, DRAWN
+                      ==================================================
+
+                      REPORTED: replace the plain "n of 4 stations placed"
+                      text on the stock cards with the visual token row the
+                      Action Panel already uses -- the Home, $40 and $100
+                      circles.
+
+                      `2/4` is a count, and a count is the least of what a
+                      player wants here. The row it replaces is the same
+                      component the Operating Round strip renders
+                      (`StationTokenRow`, design note #362), and it answers
+                      three questions the fraction cannot: which tokens are
+                      spent, where the home one sits, and -- the one that
+                      decides a purchase -- what the NEXT one costs. A
+                      corporation with two placed is looking at $100 for its
+                      third, and `2/4` does not say so.
+
+                      THE SAME COMPONENT, NOT A SECOND ONE THAT LOOKS LIKE
+                      IT. Both surfaces describe one corporation's
+                      allowance, and this file has been bitten before by two
+                      renderers of one fact drifting apart (design note #423,
+                      one screen over). `stationTokenSlots` is the same
+                      derivation the action bar feeds it.
+
+                      THE INKS ARE THE CARD'S, NOT THE BAR'S. `StationTokenRow`
+                      takes its ring and caption colours as props precisely
+                      because it sits on two different surfaces: the action
+                      bar's corporate livery, and this card's light paper.
+                      Passing the card palette's own inks is what keeps the
+                      circles legible here -- the bar's near-white ink would
+                      vanish on `CARD_SURFACE`. */}
                   <span
                     style={styles.assetItem}
                     title={`Station tokens: ${tokensPlaced} of ${company.station_token_limit} placed on the map.`}
                   >
-                    <span aria-hidden="true">&#127914;</span>
-                    <span style={styles.assetValue}>
-                      {tokensPlaced}/{company.station_token_limit}
-                    </span>
+                    <StationTokenRow
+                      slots={stationTokenSlots(company)}
+                      color={tickerColor(company.company_id)}
+                      ink={CARD_INK}
+                      inkMuted={CARD_INK_MUTED}
+                      homeHexLabel={company.home_hex_label}
+                      emptyLabel="No stations"
+                    />
                   </span>
                 </div>
 
@@ -669,13 +716,49 @@ function CorporationRoster({
                   {holdings.length === 0 ? (
                     <span style={styles.rosterNoHoldings}>No shares held by players</span>
                   ) : (
+                    /* ==================================================
+                         DESIGN NOTE 421: THE HIGHLIGHT FOLLOWS THE READER
+                        ==================================================
+
+                        REPORTED: highlight the viewer's own row instead of
+                        the president's. Keep the crown on the president but
+                        drop their highlight, and remove the "you" tag.
+
+                        THE ROW HIGHLIGHT AND THE CROWN WERE SAYING THE SAME
+                        THING TWICE, which is what made the amber wrong
+                        rather than merely misplaced. A crown is already an
+                        unmistakable, permanent mark of the presidency, and
+                        a filled amber row behind it added emphasis to a
+                        fact that needed none. Meanwhile the one row a
+                        reader actually scans for -- their own -- was
+                        marked by a small pale "you" pill at the end of a
+                        name, which is the weakest position in the row and
+                        the last thing the eye reaches.
+
+                        So the two swap weights. The crown carries the
+                        presidency alone, on a plain row; the fill carries
+                        "this one is yours", which is the question a player
+                        asks every time this table is on screen and the
+                        only one whose answer differs per reader.
+
+                        THE TAG IS DELETED, NOT MOVED. With the row itself
+                        highlighted, a pill spelling out the same thing is
+                        the duplication this note just removed from the
+                        president -- reintroduced one column to the left.
+                        `isSelf` survives as the flag that drives the fill.
+
+                        NOTHING IS LOST FOR A HOTSEAT PLAYER. `isSelf`
+                        needs a `connectedAddress`, which a shared keyboard
+                        does not have, so no row highlights there -- the
+                        same behaviour the "you" tag had, since it was
+                        gated on exactly the same value. */
                     holdings.map((holding) => (
                       <div
                         key={holding.address}
                         role="row"
                         style={{
                           ...styles.ownershipRow,
-                          ...(holding.isPresident ? styles.rosterHoldingRowPresident : {}),
+                          ...(holding.isSelf ? styles.rosterHoldingRowSelf : {}),
                         }}
                       >
                         <span style={styles.ownershipName} role="cell">
@@ -685,7 +768,6 @@ function CorporationRoster({
                             </span>
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
-                          {holding.isSelf && <span style={styles.rosterYouTag}>you</span>}
                         </span>
                         <span style={styles.ownershipNum} role="cell">
                           {certificateCount(holding.percentage, holding.isPresident)} ({holding.percentage}%)
@@ -818,6 +900,8 @@ function CorporationRoster({
               onBuyShare={onBuyShare}
               onSellShares={onSellShares}
               controlsDisabled={controlsDisabled}
+              // Design note #417: no Stock Round, no controls at all.
+              tradingOpen={tradingOpen}
             />
           );
 
@@ -927,6 +1011,7 @@ function CompanyActions({
   onBuyShare,
   onSellShares,
   controlsDisabled,
+  tradingOpen,
 }: {
   company: PublicCompanyState;
   /** This company's live market price, or `null` when it has no position.
@@ -942,6 +1027,10 @@ function CompanyActions({
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
+  /** Design note #417: whether shares can be traded AT ALL right now, i.e.
+   *  whether this is a Stock Round. `false` renders no controls -- not
+   *  disabled ones. */
+  tradingOpen: boolean;
 }) {
   /* Design note #18: BUY SOURCE IS LOCAL.
    *
@@ -1110,6 +1199,37 @@ function CompanyActions({
     playerCash != null && totalCost != null && totalCost > playerCash;
   const bankPoolPercent = company.bank_pool_percentage;
   const selectedSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
+
+  /* ==================================================================
+   *  DESIGN NOTE 417: OUTSIDE A STOCK ROUND THERE ARE NO CONTROLS
+   * ==================================================================
+   *
+   * REPORTED: remove the Buy/Sell buttons from the corporation cards when
+   * the game is not in a Stock Round. Do not just warn -- hide them.
+   *
+   * Design note #32 made these controls DISABLED outside a Stock Round and
+   * argued the case: "a rejected transaction is a worse explanation than a
+   * disabled button". True, and it answered the wrong question. The choice
+   * is not between a disabled button and a rejected transaction; it is
+   * between a disabled button and NO BUTTON, and a disabled control claims
+   * something a hidden one does not -- that this is an action available
+   * here, blocked for a reason the player might fix.
+   *
+   * Nothing about an Operating Round is fixable by waiting on this card.
+   * The roster is a REFERENCE surface for most of the game (design note
+   * #41 made it a persistent tab), and a reference surface carrying eight
+   * cards' worth of greyed Buy, Sell, source-switch and par controls is a
+   * screen mostly made of things that do not work.
+   *
+   * The panel still states why, once, at the top -- `actionsLockedReason`
+   * is unchanged and still renders. One sentence for the whole roster
+   * rather than forty dead controls saying it individually.
+   *
+   * GUARDED HERE, NOT AT THE CALL SITE, and the placement is load-bearing:
+   * this component holds `useState`/`useEffect`, so an early return above
+   * them would change the hook order between rounds and crash the card.
+   * Every hook has run by this line; only the render is skipped. */
+  if (!tradingOpen) return null;
 
   return (
     <div style={styles.cardActions}>
@@ -1445,14 +1565,48 @@ function CompanyActions({
         )}
       </div>
 
+      {/* ==================================================================
+           DESIGN NOTE 418: THE SR1 BAN REACHED THE SELECTOR, NOT THE BUTTON
+          ==================================================================
+
+          REPORTED: explicitly disable Sell during the first Stock Round.
+          1830 forbids selling in SR1.
+
+          Design note #356 established `sellingForbidden` and applied it to
+          the SIZE SELECTOR a few lines above -- `playerHoldingPercent > 0 &&
+          !sellingForbidden` -- and stopped there. This button kept only the
+          holdings test, so in SR1 the strip of 10/20/30/40/50 options
+          vanished and a live "Sell 10% Bundle" button remained underneath
+          it, wired straight to `onSellShares`. The ban was visible and not
+          enforced, which is the worst of both: the UI looked like it knew
+          the rule while the click still went through.
+
+          DISABLED, NOT HIDDEN, and deliberately the opposite of design note
+          #417's treatment one screen over. The distinction is whether the
+          player can ever act here. Outside a Stock Round the answer is no
+          and the controls go; in SR1 selling is a real action of this very
+          panel that is barred for one round and legal in every round after,
+          so a disabled button carrying the reason teaches a rule the player
+          will need next round. That is the same argument
+          `SELL_PERCENTAGE_OPTIONS` already makes for rendering illegal bundle
+          sizes greyed with an explanation rather than omitting them.
+
+          THE REASON IS ON THE BUTTON, not only in a tooltip: `title` is the
+          established pattern here for a disabled control, and the label
+          itself changes so the ban is legible without hovering. */}
       {playerHoldingPercent > 0 && (
       <button
         type="button"
         style={styles.actionButton}
         onClick={() => onSellShares(company.company_id, sellPercentage)}
-        disabled={controlsDisabled || !selectedSellState.enabled}
+        disabled={controlsDisabled || sellingForbidden || !selectedSellState.enabled}
+        title={
+          sellingForbidden
+            ? "No selling in the first Stock Round — 1830 opens the market to sales from SR2 onward."
+            : undefined
+        }
       >
-        Sell {sellPercentage}% Bundle
+        {sellingForbidden ? "Selling Opens in SR2" : `Sell ${sellPercentage}% Bundle`}
       </button>
       )}
 
@@ -1550,8 +1704,31 @@ function tickerColor(companyId: number): string {
 
 /** Standard 1830 par ladder, per this pass's own requirement.
  *  Exported since design note #399: the B&O prompt offers the same six
- *  rungs, and two copies of a price ladder is two ladders that can differ. */
-export const PAR_VALUE_LADDER: readonly string[] = ["67", "71", "76", "82", "90", "100"];
+ *  rungs, and two copies of a price ladder is two ladders that can differ.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 415: DERIVED FROM THE BOARD'S OWN PAR BOXES
+ *  ==================================================================
+ *
+ *  This was a hand-written `["67", "71", ...]`. It agreed with the chart,
+ *  and design note #399 had already made the argument for why a second copy
+ *  of a price ladder is a liability -- it just drew the boundary one file
+ *  too early. There were still two ladders: this list of prices a player may
+ *  CHOOSE, and `StockMarketRenderer.PAR_VALUE_LADDER`'s list of prices the
+ *  board has BOXES for.
+ *
+ *  Those must be the same set, and the failure when they are not is now
+ *  silent rather than loud. `placeParMark` resolves a par through
+ *  `parBoxCellFor`, which returns `null` for any price not in the ladder --
+ *  correctly, since a price with no box is not a par. So a seventh rung
+ *  added here and not there would let a player par a corporation at a price
+ *  that puts no token on the chart at all, and the company would read
+ *  "not on the market chart" forever with nothing to explain why.
+ *
+ *  Deriving means the two cannot disagree. `String` because this list feeds
+ *  a radio group whose values are strings, while the coordinates table is
+ *  numeric -- the conversion is the only thing this file adds. */
+export const PAR_VALUE_LADDER: readonly string[] = PAR_BOX_PRICES.map(String);
 
 /** Every sell-bundle size 1830 can express: 10% certificate blocks up to the
  *  50% Bank Pool cap. F-6.
@@ -1741,6 +1918,12 @@ export function StockRoundPanel({
         onBuyShare={onBuyShare}
         onSellShares={onSellShares}
         controlsDisabled={controlsDisabled}
+        /* Design note #417: shares trade in a Stock Round and nowhere else.
+           `actionsLockedReason` already carries that fact -- it is the
+           sentence rendered directly above -- so deriving from it keeps the
+           notice and the controls answering to one condition rather than
+           two that can disagree. */
+        tradingOpen={actionsLockedReason == null}
       />
 
       {/* Design note #13: the Pass button MOVED OUT of this panel to the
@@ -2135,7 +2318,13 @@ const styles: Record<string, React.CSSProperties> = {
   rosterNoHoldings: { fontSize: FONT_SIZE.small, color: CARD_INK_FAINT, fontStyle: "italic" },
   // Design note #8: gold + bold, the second of the president's three
   // independent markers.
-  rosterHoldingRowPresident: {
+  /* Design note #421: the amber row is the VIEWER's, not the president's.
+     Renamed rather than repointed -- `rosterHoldingRowPresident` described
+     the thing it was wrong about, and a later reader handed a style with
+     that name would reasonably put it back on the crown. Same three
+     tokens, so the fill is still the one highlight treatment the card set
+     shares (`palette.ts`). */
+  rosterHoldingRowSelf: {
     backgroundColor: CARD_HIGHLIGHT_BG,
     color: CARD_HIGHLIGHT_INK,
     fontWeight: 800,
@@ -2147,10 +2336,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex", alignItems: "center", gap: "5px",
     minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   },
-  rosterYouTag: {
-    fontSize: FONT_SIZE.micro, fontWeight: 700, padding: "0 6px",
-    borderRadius: "999px", backgroundColor: "#dcecf5", color: "#1c4a63",
-  },
+  /* `rosterYouTag` DELETED by design note #421. The row fill says "yours"
+     now; a pill saying it again beside the name is the duplication that
+     note removed from the president. Deleted rather than left unused --
+     an orphaned style is an invitation to render it again. */
   rosterHoldingPercent: { flexShrink: 0, fontVariantNumeric: "tabular-nums" },
   /** Design note #28: the call to action on an unparred company. */
   setParPrompt: {

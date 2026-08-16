@@ -233,6 +233,11 @@ export interface GameStateResponse {
    *  closed the Stock Round, so the shell can log the handover and move to
    *  the Operating Round. Consumed and cleared by the caller. */
   stock_round_just_ended?: boolean;
+  /** Design note #411: the mirror of `stock_round_just_ended` for the other
+   *  direction -- set for one dispatch when the last corporation in the
+   *  operating queue finished its turn and the macro round closed. Consumed
+   *  and cleared by the caller, which owns the log and the tab. */
+  operating_round_just_ended?: boolean;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */

@@ -83,6 +83,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
+import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
@@ -581,9 +582,36 @@ export function WaterfallAuctionDashboard({
           {gameState && gameState.player_addresses.length > 0 && (
             <div style={styles.actionRailFull}>
               <div style={styles.seatingCard}>
+                {/* ==================================================
+                     DESIGN NOTE 422: THREE COLUMNS, THREE HEADINGS
+                    ==================================================
+
+                    REPORTED: head these columns "Player Information",
+                    "Cash" and "Privates".
+
+                    They had one heading between them -- a right-aligned
+                    hint reading "Available / held · Privates owned", which
+                    described two of the three columns in a single string
+                    parked over neither of them. A reader had to map a
+                    slash-separated phrase onto a flex row by position.
+
+                    The labels now sit ON their columns, using the same
+                    basis values the rows do (`0 0 128px` for privates, the
+                    cash cell's `marginLeft: auto`), so heading and data
+                    line up at every window width rather than approximately.
+
+                    "Available / held" is not lost -- it was the more
+                    precise of the two phrases, and it survives where it
+                    belongs: in each cash cell's own tooltip, which already
+                    spelled out the total, the escrow and the available
+                    figure separately. */}
                 <div style={styles.seatingHeaderRow}>
                   <span style={styles.actionCardTitle}>Seating Order</span>
-                  <span style={styles.seatingColumnHint}>Available / held &middot; Privates owned</span>
+                </div>
+                <div style={styles.seatingColumnHeader} aria-hidden="true">
+                  <span style={styles.seatingColumnHeadPlayer}>Player Information</span>
+                  <span style={styles.seatingColumnHeadCash}>Cash</span>
+                  <span style={styles.seatingColumnHeadPrivates}>Privates</span>
                 </div>
                 {gameState.player_addresses.map((player, index) => {
                   const isTurnHolder =
@@ -622,6 +650,41 @@ export function WaterfallAuctionDashboard({
                     <div key={player} style={isTurnHolder ? styles.seatingRowActive : styles.seatingRow}>
                       <span style={styles.seatingIndex}>{index + 1}.</span>
                       <span style={styles.seatingAddress}>{nameFor(player, playerLabel)}</span>
+                      {/* ==================================================
+                           DESIGN NOTE 422: "YOUR TURN", BESIDE THE NAME
+                          ==================================================
+
+                          REPORTED: replace "on turn" with a prominent
+                          "Your turn" badge next to the active player's
+                          name.
+
+                          `ON TURN` sat in a reserved slot at the far RIGHT
+                          of the row, past the cash and the privates --
+                          design note #323 put it there to stop the badge
+                          shoving the numeric columns around, and that fix
+                          was correct about the jitter and wrong about the
+                          reading order. "Whose turn is it" is a fact about
+                          a PERSON, and it was landing an entire row away
+                          from the person's name.
+
+                          Beside the name it reads as one phrase. The slot
+                          keeps design note #323's whole mechanism -- fixed
+                          basis, rendered on every row, empty when it does
+                          not apply -- so nothing moves as the turn passes;
+                          it is simply a reserved column in a different
+                          place.
+
+                          THE WORDING IS SECOND PERSON AND THAT IS A REAL
+                          CHANGE, not a restyle. `ON TURN` describes a seat
+                          from the outside and is true of somebody on every
+                          row of every render. "Your turn" addresses the
+                          reader, so it is only honest on the row the reader
+                          controls -- which is the fact worth making
+                          prominent, and the one a player scanning four
+                          seats is actually looking for. */}
+                      <span style={styles.seatingTurnSlot}>
+                        {isTurnHolder && <span style={styles.turnBadge}>Your turn</span>}
+                      </span>
                       {funds && (
                         <span
                           style={styles.seatingCash}
@@ -637,26 +700,17 @@ export function WaterfallAuctionDashboard({
                           )}
                         </span>
                       )}
-                      {/* Design note #341: what this player already holds.
-                          Numbers rather than names -- the cards above are
-                          numbered 1-6 (design note #304) and players refer
-                          to these companies by that order ("the 3"), so
-                          six chips fit where six names never would. The
-                          full name and revenue are one hover away. */}
+                      {/* Design note #423: NAMED PILLS. Design note #341 put
+                          numbers here on the grounds that "six chips fit
+                          where six names never would" -- true of names and
+                          false of acronyms, which is what the pills carry.
+                          The full name, the revenue and now the rules text
+                          are a click away rather than hover-only. */}
                       <span style={styles.seatingPrivates}>
-                        {ownedPrivatesFor(player).length === 0 ? (
-                          <span style={styles.seatingPrivatesEmpty}>none</span>
-                        ) : (
-                          ownedPrivatesFor(player).map((priv) => (
-                            <span
-                              key={priv.private_id}
-                              style={styles.seatingPrivateChip}
-                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round.`}
-                            >
-                              {priv.private_id}
-                            </span>
-                          ))
-                        )}
+                        <PrivateCompanyPills
+                          privates={ownedPrivatesFor(player)}
+                          surface="card"
+                        />
                       </span>
                       {/* ==================================================
                            DESIGN NOTE 32: IN HOTSEAT THERE IS NO "YOU"
@@ -695,9 +749,8 @@ export function WaterfallAuctionDashboard({
                           its width empty. Reserving space for a thing that
                           is usually absent looks wasteful in a static
                           mock-up and is the entire fix in a live one. */}
-                      <span style={styles.seatingTurnSlot}>
-                        {isTurnHolder && <span style={styles.turnBadge}>ON TURN</span>}
-                      </span>
+                      {/* Design note #422: the trailing turn slot is gone --
+                          the badge moved up beside the name. */}
                     </div>
                   );
                 })}
@@ -2030,11 +2083,36 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     marginBottom: "2px",
   },
-  seatingColumnHint: {
-    marginLeft: "auto",
+  /* `seatingColumnHint` DELETED by design note #422 -- one right-aligned
+     string describing two columns it sat over neither of. Replaced by the
+     three real headings below, each on its own column. */
+  /* Design note #422: mirrors `seatingRow`'s flex geometry exactly -- same
+     gap, same padding, same basis values -- so a heading sits over its
+     column at every width instead of near it. `alignItems: baseline`
+     rather than `center` because these are words above words. */
+  seatingColumnHeader: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "8px",
+    padding: "0 6px 3px",
     fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
     color: "#6f7480",
+    borderBottom: "1px solid #2a3142",
+    marginBottom: "3px",
   },
+  /* Spans the index, the name and the turn slot -- everything the heading
+     "Player Information" actually covers. */
+  seatingColumnHeadPlayer: { flex: "1 1 auto" },
+  seatingColumnHeadCash: { marginLeft: "auto" },
+  seatingColumnHeadPrivates: { flex: "0 0 128px" },
+  /* `seatingPrivateChip` and `seatingPrivatesEmpty` DELETED by design note
+     #423 -- the numbered chip and its "none" label both moved into
+     `PrivateCompanyPills`, which the Ledger renders too. Deleted rather
+     than left behind: a chip style sitting in the file that used to draw
+     numbered chips is how the numbers come back. */
   /* Design note #341: fixed basis for the same reason the turn slot has one
      (design note #323) -- a player winning their first private must not
      shove every other column sideways. */
@@ -2046,19 +2124,6 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "flex-end",
     alignItems: "center",
     flexWrap: "wrap",
-  },
-  seatingPrivatesEmpty: { fontSize: FONT_SIZE.micro, color: "#5c626e" },
-  seatingPrivateChip: {
-    minWidth: "16px",
-    padding: "0 4px",
-    borderRadius: "4px",
-    backgroundColor: "#2a3142",
-    border: "1px solid #3a4055",
-    color: "#c8cbd6",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    textAlign: "center",
-    cursor: "help",
   },
   seatingCash: {
     fontSize: FONT_SIZE.small,
@@ -2077,23 +2142,31 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: "#8a919e",
   },
-  /* Design note #323: fixed basis, never grows or shrinks, right-aligned so
-     the badge sits flush with the row end whether or not it is there. Wide
-     enough for "ON TURN" at `FONT_SIZE.micro` with its padding. */
+  /* Design note #323, still: fixed basis, never grows or shrinks, rendered
+     on every row so the columns cannot jitter as the turn passes.
+     Design note #422 moved it beside the name and widened it -- "Your turn"
+     is four characters longer than "ON TURN" -- and flipped the alignment
+     to `flex-start`, because it now trails a name rather than closing a
+     row. */
   seatingTurnSlot: {
-    flex: "0 0 62px",
+    flex: "0 0 76px",
     display: "flex",
-    justifyContent: "flex-end",
+    justifyContent: "flex-start",
     alignItems: "center",
   },
+  /* Design note #422: prominent, and no longer shouting. `ON TURN` was
+     tracked-out uppercase because it was a status tag at the end of a row;
+     "Your turn" is a sentence fragment addressed to the reader, so it
+     drops the letter-spacing and keeps the high-contrast green fill that
+     made it findable. */
   turnBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
-    letterSpacing: "0.08em",
     color: "#0d1117",
     backgroundColor: "#7ee0a1",
     borderRadius: "4px",
-    padding: "1px 5px",
+    padding: "2px 7px",
+    whiteSpace: "nowrap",
   },
   youBadge: {
     fontSize: FONT_SIZE.micro,

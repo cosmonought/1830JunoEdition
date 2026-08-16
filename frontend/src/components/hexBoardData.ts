@@ -594,7 +594,37 @@ export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorT
  * risk is real and is answered where it can be: the renderer cannot dim
  * without `layFocus.dim`, which only the shell sets, and only from
  * `isMyTurn`. */
-export const LAY_TRACK_DIM_ALPHA = 0.22;
+/* ==================================================================
+ *  DESIGN NOTE 420: 0.22 WAS A DIMMING NOBODY COULD SEE
+ * ==================================================================
+ *
+ * REPORTED: reintroduce the dimming during Lay Tile, so only the valid
+ * hexes stay lit.
+ *
+ * The mechanism was never missing -- `HexGridRenderer` has painted this
+ * veil over every out-of-reach hex all along. What was missing was the
+ * EFFECT, and the reason is arithmetic rather than logic: `#070b14` is
+ * near-black, this board's unlit surface is already very dark, and 22% of
+ * near-black over near-black is a difference of a few RGB points. The
+ * overlay was drawing, correctly, and was invisible.
+ *
+ * That is how a working feature comes to be reported as absent, and it is
+ * why this constant moved rather than the code around it.
+ *
+ * THE HISTORY MATTERS HERE, because both previous values were reactions to
+ * each other. `0.55` was judged to "suppress the board to emphasise a
+ * subset" and was deleted outright; `0.22` reinstated the veil while
+ * over-correcting past the point of visibility. `0.42` is chosen between
+ * them, and the test it has to pass is the one both endpoints failed: a
+ * veiled hex must still read as CARDBOARD -- its colour, its track and its
+ * tokens all legible -- while being unmistakably behind the lit set at a
+ * glance, without the player hunting for the difference.
+ *
+ * The click gate is unaffected and always was: `layFocus.highlighted`
+ * decides which hexes open the picker, so no value here can make an
+ * illegal hex clickable or a legal one dead. This constant governs
+ * appearance only, which is what makes tuning it safe. */
+export const LAY_TRACK_DIM_ALPHA = 0.42;
 export const LAY_TRACK_DIM_INK = "#070b14";
 /** The ring on a buildable hex. Green, matching the tile picker's own
  *  confirm affordance (`fabConfirm`), so "you may act here" is one colour

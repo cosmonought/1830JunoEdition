@@ -477,6 +477,21 @@ export type SandboxMarketPrices = Readonly<Record<number, SandboxMarketMark | nu
  *  after this the cell travels with the mark. */
 export function sandboxInitialMarketPrices(
   cellForPrice: (price: number) => { x: number; y: number } | null,
+  /* Design note #415: the par-box resolver, for a fixture corporation still
+     standing on its par price.
+
+     CPR is the case that exposed this: `par: 76, market: 76`. Resolving 76
+     through `cellForPrice` put its token at (3, 10) -- the top row -- while
+     the board drew the gold par box for 76 at (6, 7), so the fixture opened
+     with a marker two rows and three columns away from the box it was
+     supposed to be sitting in.
+
+     A corporation that has NOT moved off par belongs in its par box; one
+     that has moved belongs wherever the price took it, and for that the
+     first-match resolver is the only answer available to a fixture that
+     records a price rather than a cell. So both are supplied and the
+     comparison below picks. */
+  parCellFor: (parPrice: number) => { x: number; y: number } | null,
   /* Design note #387: the Zero State has no market at all.
 
      REPORTED: unparred corporations show market values and render tokens in
@@ -498,7 +513,16 @@ export function sandboxInitialMarketPrices(
   const marks: Record<number, SandboxMarketMark | null> = {};
   for (const corp of SANDBOX_CORPORATIONS) {
     const parred = !zeroState && corp.par !== null;
-    const cell = !parred || corp.market === null ? null : cellForPrice(corp.market);
+    /* Design note #415: still at par -> the par box; moved -> the price
+       grid. The par box is tried FIRST and only when the two prices agree,
+       so a corporation that has walked to a price that merely happens to
+       equal some other company's par is not yanked into a box it never
+       stood in. */
+    const cell =
+      !parred || corp.market === null
+        ? null
+        : (corp.market === corp.par ? parCellFor(corp.market) : null) ??
+          cellForPrice(corp.market);
     marks[corp.id] = !parred || corp.market === null || !cell
       ? null
       : { price: corp.market, ...cell };
@@ -519,16 +543,34 @@ export function sandboxInitialMarketPrices(
  * or a company that already has a mark. Already having one matters -- a
  * token that has walked up the chart must not be dragged back to par
  * because something re-read the par value.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 415: THE RESOLVER IS THE PAR BOX, NOT THE PRICE GRID
+ * ==================================================================
+ *
+ * REPORTED: parred corporations land on incorrect market cells.
+ *
+ * This took `marketCellForPrice`, which returns the FIRST cell carrying a
+ * given price. Every par value also appears in the chart's top row, and
+ * that row is searched first -- so parring at $67 put the token at (1, 10)
+ * instead of the par box at (6, 5), and only $100 happened to agree.
+ *
+ * The parameter is now `parCellFor` and the caller injects
+ * `StockMarketRenderer.parBoxCellFor`, which reads the ladder's own
+ * coordinate table. Renamed rather than merely repointed: the old name
+ * described a lookup whose semantics were exactly the bug, and a future
+ * caller handed "a function from price to cell" would reasonably supply
+ * the wrong one again.
  */
 export function placeParMark(
   prices: SandboxMarketPrices,
   companyId: number,
   parPrice: number,
-  cellForPrice: (price: number) => { x: number; y: number } | null,
+  parCellFor: (parPrice: number) => { x: number; y: number } | null,
 ): SandboxMarketPrices {
   if (prices[companyId]) return prices;
   if (!Number.isFinite(parPrice) || parPrice <= 0) return prices;
-  const cell = cellForPrice(parPrice);
+  const cell = parCellFor(parPrice);
   if (!cell) return prices;
   return { ...prices, [companyId]: { price: parPrice, ...cell } };
 }

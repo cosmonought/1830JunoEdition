@@ -46,6 +46,9 @@ import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/
 
 const TUTORIALS_OFF_KEY = "1830juno.tutorials_off.v1";
 const SEEN_PREFIX = "1830juno.tutorial_seen.v1.";
+/** Design note #412: opt-IN, and the polarity is the whole point -- see
+ *  `tutorialMode` below. */
+const TUTORIAL_MODE_KEY = "1830juno.tutorial_mode.v1";
 
 function readFlag(key: string): boolean {
   try {
@@ -69,6 +72,53 @@ function writeFlag(key: string, value: boolean): void {
 /** Whether tutorials are globally suppressed. */
 export function tutorialsDisabled(): boolean {
   return readFlag(TUTORIALS_OFF_KEY);
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 412: TUTORIAL MODE IS OPT-IN, AND NOTHING ELSE IS
+ * ==================================================================
+ *
+ * REPORTED: clicking End Turn in an Operating Round yanks the player to the
+ * Stock Market tab. It should only do that in a tutorial.
+ *
+ * The redirect is design note #44's, and its reasoning is sound for the
+ * player it was written about: a first-time president watches their share
+ * price move left, has no idea why, and reads it as their own mistake. The
+ * lesson is about a number on another screen, so the tutorial navigates
+ * there and opens on top of it.
+ *
+ * What it lacked was a way to say "I am not that player". Its three guards
+ * -- is a president, first Operating Round, tutorial not already seen --
+ * are all about the SITUATION, and every experienced player passes through
+ * that situation exactly once per game while wanting none of it. Hijacking
+ * the tab mid-turn is the most disruptive thing this app does to a player
+ * who did not ask for it, which is why "they can dismiss the modal" is not
+ * an answer: the navigation happens before the modal is on screen, and
+ * dismissing it does not put the board back.
+ *
+ * THE POLARITY IS DELIBERATE. This is a THIRD flag rather than a reuse of
+ * `tutorialsDisabled`, and the difference is the default. The off switch
+ * defaults to false, so `!tutorialsDisabled()` is TRUE for everyone who has
+ * never touched the setting -- which would leave the redirect firing for
+ * exactly the standard play the requirement says to disable it for, while
+ * looking as though it had been gated. Tutorial mode defaults to FALSE and
+ * has to be turned on, so standard play is standard play without anyone
+ * opting out of anything.
+ *
+ * THE MODAL ITSELF IS UNAFFECTED, and that split is the point. The
+ * explainer still arms and still opens under its own existing rules; it is
+ * a panel over the current screen and costs a player who does not want it
+ * one click. Only the NAVIGATION is gated, because only the navigation
+ * moves someone off the board they were looking at. */
+export function tutorialModeEnabled(): boolean {
+  return readFlag(TUTORIAL_MODE_KEY);
+}
+
+/** Turns tutorial mode on or off. Exported for a settings screen, and for
+ *  symmetry with `resetTutorials` -- a flag with no writer is a flag that
+ *  can only ever hold its default. */
+export function setTutorialMode(enabled: boolean): void {
+  writeFlag(TUTORIAL_MODE_KEY, enabled);
 }
 
 /** Clears both the global off switch and every per-topic seen flag, so the

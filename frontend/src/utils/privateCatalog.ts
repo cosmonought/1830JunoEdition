@@ -56,6 +56,46 @@ export interface PrivateCatalogEntry {
    *  it belongs on the contract audit list. Do not "fix" it by editing the
    *  text back into vagueness -- fix it in `auction.rs`. */
   ability: string;
+  /* ==================================================================
+   *  DESIGN NOTE 423: THE ACRONYM IS A NAME, NOT A NUMBER
+   * ==================================================================
+   *
+   * REPORTED: replace the numeric chips for private companies with named
+   * acronym pills.
+   *
+   * The chips rendered `private_id` -- `1` through `6` -- and design note
+   * #341 defended that: "the cards above are numbered 1-6 and players refer
+   * to these companies by that order ('the 3'), so six chips fit where six
+   * names never would."
+   *
+   * The premise is half true and the conclusion does not follow from it.
+   * Players do say "the 3" while the auction cards are on screen and
+   * numbered, because the number is a POSITION in a list they are looking
+   * at. Away from that list -- in the Ledger's Player Assets table, or two
+   * rounds later -- `3` names nothing. It is not the company's identity, it
+   * is its rank in a queue that has since been consumed.
+   *
+   * The acronyms are the identity, they are what the rulebook and every
+   * player use once the auction is over, and they are short enough that the
+   * width argument never applied: `SV` is two characters against `1`'s one.
+   *
+   * WHY THE CATALOG AND NOT THE STATE. `PrivateCompanyState.name` carries
+   * the full name and the contract will never send an abbreviation, so this
+   * is frontend presentation data about a fixed set of six -- the same
+   * reasoning `corporationNames.ts` records for the public companies'
+   * table. Keyed by `private_id` so it cannot drift from `revenue` and
+   * `ability` beside it. */
+  acronym: string;
+}
+
+/** The acronym for a private, or `null` if the id is not one of the six.
+ *
+ *  `null` rather than a fallback to the number: a caller rendering a pill
+ *  for an unrecognised private should decide for itself whether to draw
+ *  nothing or to degrade, and quietly reintroducing the numeric chip this
+ *  replaced is the one answer that should not be automatic. */
+export function privateAcronym(privateId: number): string | null {
+  return PRIVATE_COMPANY_CATALOG[privateId]?.acronym ?? null;
 }
 
 /** Hand-kept mirror of `auction.rs::CORE_PRIVATE_COMPANIES`'s revenue
@@ -123,6 +163,7 @@ export interface PrivateCatalogEntry {
  */
 export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
   1: {
+    acronym: "SV",
     revenue: 5,
     // Canonically correct: Schuylkill Valley is the one 1830 private with
     // NO special ability. Said outright rather than left blank, because a
@@ -130,26 +171,31 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     ability: "No special power \u2014 bought for its revenue and as cheap entry into the auction.",
   },
   2: {
+    acronym: "C&StL",
     revenue: 10,
     ability:
       "A railroad owning the CL may lay a tile on the CL\u2019s hex (B-20). This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. This tile placement may be performed in addition to the railroad\u2019s normal tile placement\u2014on that turn only it may play two tiles.",
   },
   3: {
+    acronym: "D&H",
     revenue: 15,
     ability:
       "A railroad owning the DH may lay a track tile and a station token on the DH\u2019s hex (F-16). The mountain costs $120 as usual, but laying the token is free. This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. The tile laid does count as the owning railroad\u2019s one tile placement for his turn. If the DH does not lay a station token on the turn it lays the tile on its starting hex, it must follow the normal rules when placing a station (i.e., it must have a legal train route to the hex). Other railroads may lay a tile on the DH starting hex subject to the ordinary rules, after which the DH special effects are no longer available",
   },
   4: {
+    acronym: "M&H",
     revenue: 20,
     ability:
       "A player owning the MH may exchange it for a 10% share of NYC, provided he does not already hold 60% of the NYC shares and there is NYC shares available in the bank or the pool. The exchange may be made during the player\u2019s turn of a stock round or between the turns of other players or railroads in either stock or operating rounds. This action closes the MH.",
   },
   5: {
+    acronym: "C&A",
     revenue: 25,
     ability:
       "The initial purchaser of the CA immediately receives a 10% share of PRR shares without further payment. This action does not close the CA. The PRR railroad will not be running at this point, but the shares may be retained or sold subject to the ordinary rules of the game.",
   },
   6: {
+    acronym: "B&O",
     revenue: 30,
     ability:
       "The owner of the BO private company immediately receives the president\u2019s certificate of the B&O railroad without further payment and immediately sets a par share value. The BO private company may not be sold to any corporation, and does not change hands if the owning player loses the presidency of the B&O. When the B&O railroad purchases its first train this private company is closed down.",

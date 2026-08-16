@@ -193,20 +193,173 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
   };
 }
 
-/** Moves the Operating Round corporation cursor on by one.
+/* ==================================================================
+ *  DESIGN NOTE 411: THE OPERATING QUEUE HAS TO BE BUILT BY SOMEBODY
+ * ==================================================================
  *
- *  Wraps back to the start of the queue rather than ending the round: the
- *  real end-of-round bookkeeping (`operations::advance_operating_round_turn`)
- *  decides between another sub-round and closing the macro round using paced
- *  scheduling this file has no business reproducing. Wrapping keeps the
- *  hotseat loop running so every corporation's panel can be reached. */
-function advanceCorporation(state: GameStateResponse): GameStateResponse {
-  const queue = state.active_operating_order.length;
-  if (queue === 0) return state;
-  return {
+ * REPORTED: ending a corporation's turn in an Operating Round advances
+ * nothing -- not the active company, not the active player -- so the round
+ * runs forever.
+ *
+ * ONE ROOT CAUSE, and it is not in the advance at all. Nothing ever filled
+ * `active_operating_order`. Two paths enter an Operating Round and both set
+ * the round type without building the queue:
+ *
+ *   - the Stock Round's own close (`App.tsx`, design note #353's caller
+ *     half), which set `current_round_type` and `consecutive_passes`;
+ *   - the `BeginOperatingRound` arm below, which set the round type and
+ *     reset the cursor to zero.
+ *
+ * The fixtures ship a hand-written queue (`sandboxState.ts`'s
+ * `[1, 8, 2, 3, 6, 7]`), so every scenario that OPENS in an Operating Round
+ * worked and hid this completely. A game PLAYED into one from the zero
+ * state arrives with `[]`, and from there:
+ *
+ *   `advanceCorporation` read `queue === 0` and returned the state
+ *   untouched -- the infinite round.
+ *
+ *   `actingSeatIndex` (`gameState.ts`) read `active_operating_order[0]` as
+ *   `undefined` and returned `null`, meaning "no seat may act". That is
+ *   what locked the president out of Lay Tile while leaving every
+ *   unconditioned button -- Skip among them -- live for everyone. The
+ *   authorisation predicate was not wrong; it was being handed an empty
+ *   queue and correctly concluding that nobody was on turn.
+ *
+ * So the queue is built where the round begins, and the two entry paths now
+ * share one function rather than each doing half the job.
+ *
+ * ORDER IS BY MARKET PRICE, DESCENDING -- 1830's actual rule. The price
+ * lives in the separate market atom (design note #272), which this reducer
+ * must not reach into, so the caller injects a lookup. Without one the par
+ * value stands in: it is the price every corporation starts at, so a queue
+ * built from it is right until the chart first moves and never absurd.
+ *
+ * ONLY FLOATED CORPORATIONS WITH A PRESIDENT. An unfloated company cannot
+ * operate at all, and a floated one with no president on record has nobody
+ * entitled to act for it -- `actingSeatIndex` would return `null` on its
+ * turn and strand the round exactly as an empty queue does. Both are
+ * excluded here rather than skipped later, so the queue cannot contain an
+ * entry that stops it. */
+export function buildOperatingOrder(
+  state: GameStateResponse,
+  priceFor?: (companyId: number) => number | null,
+): number[] {
+  const priced = state.public_companies
+    .filter((company) => company.is_floated && !!company.president)
+    .map((company) => ({
+      companyId: company.company_id,
+      price:
+        priceFor?.(company.company_id) ??
+        (company.par_value === null ? 0 : Number(company.par_value) || 0),
+    }));
+
+  /* Ties broken by `company_id` ascending. The real tie-break is
+     `calculate_operating_order`'s and belongs to the contract; what matters
+     here is that the order is TOTAL and STABLE, because a queue that
+     reshuffles between two dispatches would move the cursor onto a
+     corporation that has already operated. */
+  priced.sort((a, b) => (b.price - a.price) || (a.companyId - b.companyId));
+  return priced.map((entry) => entry.companyId);
+}
+
+/** Points `active_player_index` at whoever presides over the corporation
+ *  currently up.
+ *
+ *  The seat pointer is not meaningful during an Operating Round -- the
+ *  queue names companies -- but it is still the field every seat-driven
+ *  consumer reads, and leaving it parked on whoever last acted in the Stock
+ *  Round is what made "the active player never changes" a second, separate
+ *  symptom of the same bug. Keeping it in step means `actingSeatIndex` and
+ *  the raw pointer agree during an OR instead of disagreeing silently.
+ *
+ *  Left untouched when the presidency cannot be resolved: moving it to zero
+ *  would hand the controls to an arbitrary seat, which is worse than
+ *  leaving them where they were. */
+function syncSeatToActingCorporation(state: GameStateResponse): GameStateResponse {
+  const companyId = state.active_operating_order[state.active_corporation_index];
+  if (companyId === undefined) return state;
+  const president = state.public_companies.find(
+    (company) => company.company_id === companyId,
+  )?.president;
+  if (!president) return state;
+  const seat = state.player_addresses.indexOf(president);
+  if (seat === -1 || seat === state.active_player_index) return state;
+  return { ...state, active_player_index: seat };
+}
+
+/** Opens an Operating Round: builds the queue, parks the cursor on the
+ *  first corporation and seats its president.
+ *
+ *  Exported because two callers need it -- the `BeginOperatingRound` arm
+ *  below and the shell's Stock-Round close -- and a second hand-written
+ *  copy is precisely how the queue came to be built by neither of them. */
+export function beginOperatingRound(
+  state: GameStateResponse,
+  priceFor?: (companyId: number) => number | null,
+): GameStateResponse {
+  const order = buildOperatingOrder(state, priceFor);
+  return syncSeatToActingCorporation({
     ...state,
-    active_corporation_index: (state.active_corporation_index + 1) % queue,
-  };
+    current_round_type: "OperatingRound",
+    active_operating_order: order,
+    active_corporation_index: 0,
+    consecutive_passes: 0,
+    operating_round_just_ended: false,
+  });
+}
+
+/** Moves the Operating Round corporation cursor on by one, and closes the
+ *  round when it runs off the end of the queue.
+ *
+ *  THE WRAP IS NOW AN EVENT, NOT A LOOP. The note that stood here wrapped
+ *  the cursor modulo the queue length and said so deliberately: "the real
+ *  end-of-round bookkeeping decides between another sub-round and closing
+ *  the macro round using paced scheduling this file has no business
+ *  reproducing. Wrapping keeps the hotseat loop running so every
+ *  corporation's panel can be reached."
+ *
+ *  That was a reasonable call when nothing could leave an Operating Round
+ *  either. It is not one now that the Stock Round can be entered and left
+ *  (design note #353), because the two together make the OR the one round
+ *  with no exit -- a corporation queue that cycles forever is the same dead
+ *  end #353 removed, just slower to notice.
+ *
+ *  `sub_round_index` and `operating_round_sequence_length` are both already
+ *  on the state and say exactly how many Operating Rounds this phase runs,
+ *  so the decision needs no scheduling this file would have to invent: run
+ *  the queue again if the sequence has another round in it, otherwise raise
+ *  the one-shot flag and let the shell move to the Stock Round. */
+function advanceCorporation(
+  state: GameStateResponse,
+  priceFor?: (companyId: number) => number | null,
+): GameStateResponse {
+  /* AN EMPTY QUEUE IS RECOVERED, NOT TOLERATED. This returned the state
+     unchanged, which is the infinite round in one line. A round that has
+     somehow started without a queue is better answered by building the one
+     that was missing than by refusing to move -- and if nothing can float,
+     the round is genuinely over and the flag below says so. */
+  if (state.active_operating_order.length === 0) {
+    const rebuilt = beginOperatingRound(state, priceFor);
+    return rebuilt.active_operating_order.length > 0
+      ? rebuilt
+      : { ...state, operating_round_just_ended: true };
+  }
+
+  const next = state.active_corporation_index + 1;
+  if (next < state.active_operating_order.length) {
+    return syncSeatToActingCorporation({ ...state, active_corporation_index: next });
+  }
+
+  // Every corporation has operated. Another round in the sequence, or out.
+  const sequenceLength = Math.max(1, state.operating_round_sequence_length || 1);
+  if (state.sub_round_index < sequenceLength) {
+    return syncSeatToActingCorporation({
+      ...beginOperatingRound(state, priceFor),
+      sub_round_index: state.sub_round_index + 1,
+    });
+  }
+
+  return { ...state, operating_round_just_ended: true };
 }
 
 /* ==================================================================
@@ -592,6 +745,12 @@ export interface SandboxActionContext {
   mapGrid?: MapGridResponse;
   /** Scales red off-board terminals, whose value rises with the era. */
   era?: TileColorTier;
+  /** Design note #411: a corporation's current market price, for building
+   *  the Operating Round queue in descending price order. Injected for the
+   *  same reason `sharePrice` is -- the chart is a separate atom this
+   *  reducer must not reach across into, and the caller is the one place
+   *  that holds both. Omitted falls back to par value. */
+  marketPriceFor?: (companyId: number) => number | null;
   /** Design note #273: what one 10% certificate of the corporation being
    *  traded costs right now, from the live market atom. Handed in rather
    *  than looked up because the market is a SEPARATE mock (design note
@@ -1656,7 +1815,7 @@ export function applySandboxAction(
   // would strand the Operating Round on its first corporation forever.
   if ("PassTurn" in msg) {
     return state.current_round_type === "OperatingRound"
-      ? advanceCorporation(state)
+      ? advanceCorporation(state, ctx?.marketPriceFor)
       : recordPass(state);
   }
 
@@ -2139,11 +2298,11 @@ export function applySandboxAction(
   }
 
   if ("BeginOperatingRound" in msg) {
-    return {
-      ...state,
-      current_round_type: "OperatingRound",
-      active_corporation_index: 0,
-    };
+    /* Design note #411: this set the round type and zeroed the cursor, and
+       left `active_operating_order` at whatever it already held -- which
+       from the zero state is `[]`, the empty queue that made the round
+       unadvanceable. `beginOperatingRound` builds it. */
+    return beginOperatingRound(state, ctx?.marketPriceFor);
   }
 
   if ("UndoLastAction" in msg) {
@@ -2272,24 +2431,40 @@ export function applyFloatThreshold(
     capitalised += capital;
     const treasury = String((Number(company.treasury) || 0) + capital);
 
-    const axial = company.home_hex_label ? homeHexToAxial(company.home_hex_label) : null;
-
-    /* A company with no home hex still FLOATS -- one core company (NNH) has
-       none assigned on this board, and refusing to float it because it
-       cannot be given a token would be enforcing a restriction that does
-       not exist. It simply floats without one. */
-    if (!axial) return { ...company, is_floated: true, treasury };
-
-    const [q, r] = axial;
-    const already = company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
-    return {
-      ...company,
-      is_floated: true,
-      treasury,
-      station_token_hexes: already
-        ? company.station_token_hexes
-        : [[q, r] as [number, number], ...company.station_token_hexes],
-    };
+    /* ================================================================
+     *  DESIGN NOTE 416: THE TOKEN IS PROMPTED, NOT PLACED
+     * ================================================================
+     *
+     * REPORTED: stop auto-placing the home station. When a corporation
+     * floats, halt and make the president place it explicitly, even though
+     * the destination hex is fixed by the rules.
+     *
+     * Design note #363 placed it automatically and argued the case: "1830
+     * grants the home station free and puts it on a hex printed on the
+     * board; there is no decision for a player to make, so a prompt would
+     * be asking a question with one answer."
+     *
+     * That reasoning is about the RULES and the requirement is about the
+     * PLAYER, and on this one they come apart. The float is the most
+     * consequential thing that happens to a corporation -- it gains a
+     * treasury, an operating turn and its first piece on the map -- and
+     * placing the token silently meant the single most visible half of it
+     * happened while the player was looking at a stock card on another tab.
+     * A first token appearing on a board nobody was watching teaches
+     * nothing about where that corporation now operates from.
+     *
+     * The prompt is therefore not asking WHICH hex. It is making the player
+     * witness the placement, and it names the hex while doing so. That is
+     * why it can be a confirmation rather than a map interaction and still
+     * satisfy the requirement.
+     *
+     * WHAT THIS FUNCTION DOES NOW is float and capitalise, and stop. The
+     * token is placed by `placeHomeStationToken` below, dispatched when the
+     * prompt is answered. `homeHexToAxial` is still taken -- unused for
+     * placement, still the thing that decides whether a home hex RESOLVES,
+     * because a company whose label maps to nothing must not raise a prompt
+     * that can never be satisfied. */
+    return { ...company, is_floated: true, treasury };
   });
 
   if (!changed) return state;
@@ -2298,6 +2473,107 @@ export function applyFloatThreshold(
   // several separate calls against a nearly-empty bank would floor
   // differently from one call for the sum.
   return adjustBank({ ...state, public_companies: companies }, -capitalised);
+}
+
+/** A corporation that has floated and still owes its home station token.
+ *  Design note #416: what the prompt is raised from. */
+export interface PendingHomeToken {
+  companyId: number;
+  ticker: string;
+  hexLabel: string;
+  q: number;
+  r: number;
+  president: string | null;
+}
+
+/**
+ * Every floated corporation whose printed home hex has no token on it yet.
+ *
+ * Design note #416: derived from state rather than reported by the reducer,
+ * for the reason design note #363 records about floats generally -- the
+ * condition is a fact about the board that is true until it is answered, so
+ * a poll landing late, twice, or after a reload finds it just the same. A
+ * one-shot flag would lose the prompt on refresh and leave a corporation
+ * permanently owing a token nothing would ask for again.
+ *
+ * ORDERED BY `active_operating_order` WHERE ONE EXISTS, so two corporations
+ * floating on the same dispatch are prompted in operating order rather than
+ * in whatever order `public_companies` happens to hold -- the same order
+ * they will act in, which is the one a player can predict.
+ *
+ * A company with no `home_hex_label`, or one whose label does not resolve,
+ * is ABSENT rather than pending: NNH has no home hex on this board (design
+ * note #363), and raising a prompt whose hex cannot be named would be a
+ * modal with no legal answer.
+ */
+export function pendingHomeTokens(
+  state: GameStateResponse,
+  homeHexToAxial: (label: string) => readonly [number, number] | null,
+): PendingHomeToken[] {
+  const rank = new Map(state.active_operating_order.map((id, index) => [id, index]));
+
+  const pending = state.public_companies.flatMap((company) => {
+    if (!company.is_floated || !company.home_hex_label) return [];
+    const axial = homeHexToAxial(company.home_hex_label);
+    if (!axial) return [];
+    const [q, r] = axial;
+    const already = company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
+    if (already) return [];
+    return [
+      {
+        companyId: company.company_id,
+        ticker: company.ticker,
+        hexLabel: company.home_hex_label,
+        q,
+        r,
+        president: company.president,
+      },
+    ];
+  });
+
+  return pending.sort(
+    (a, b) =>
+      (rank.get(a.companyId) ?? Number.MAX_SAFE_INTEGER) -
+        (rank.get(b.companyId) ?? Number.MAX_SAFE_INTEGER) || a.companyId - b.companyId,
+  );
+}
+
+/**
+ * Puts a corporation's home station token on its printed hex.
+ *
+ * Design note #416: the other half of the prompt. Separate from
+ * `applyFloatThreshold` because they now happen at different moments -- the
+ * float when the 60th percent sells, the token when the president answers
+ * -- and folding the second back into the first is exactly how it became
+ * automatic in the first place.
+ *
+ * IDEMPOTENT. Returns the same object when the token is already down, so a
+ * double-click, a replayed dispatch or a poll arriving between the click
+ * and the state write cannot stack two tokens on one hex.
+ */
+export function placeHomeStationToken(
+  state: GameStateResponse,
+  companyId: number,
+  q: number,
+  r: number,
+): GameStateResponse {
+  const company = state.public_companies.find((entry) => entry.company_id === companyId);
+  if (!company || !company.is_floated) return state;
+  if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
+
+  return {
+    ...state,
+    public_companies: state.public_companies.map((entry) =>
+      entry.company_id === companyId
+        ? {
+            ...entry,
+            // Home token first, matching `grant_home_station_token`'s own
+            // ordering -- several readers take `[0]` as "the home station".
+            station_token_hexes: [[q, r] as [number, number], ...entry.station_token_hexes],
+          }
+        : entry,
+    ),
+  };
 }
 
 /* ==================================================================

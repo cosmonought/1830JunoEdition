@@ -112,6 +112,7 @@ import { corporationFullName, corporationTitle } from "../utils/corporationNames
 import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
+import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
 import {
@@ -560,30 +561,32 @@ export function PlayerAssetsSection({
                     </td>
                     <td style={styles.tdNumB}>{netWorth ? `$${netWorth.net_worth}` : pendingLabel}</td>
                     <td style={hasCompanies ? styles.tdB : styles.td}>
-                      {privates.length === 0 ? (
-                        <span style={styles.holdingsEmpty}>None</span>
-                      ) : (
-                        <div style={styles.holdingsCell}>
-                          {privates.map((priv) => (
-                            <span
-                              key={priv.private_id}
-                              style={styles.holdingChipPrivate}
-                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round.`}
-                            >
-                              {/* Design note #407: the figure certificate-
-                                  exchange timing is judged on, on screen
-                                  rather than one hover away. This column is
-                                  also what the Stock Round footer renders
-                                  (design note #405), which is exactly when
-                                  a player is weighing that trade. */}
-                              {priv.name}
-                              <span style={styles.corpPrivateRevenue}>
-                                +${priv.revenue_per_or}
-                              </span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      {/* ==================================================
+                           DESIGN NOTE 423: THE SAME PILLS THE AUCTION USES
+                          ==================================================
+
+                          This cell and the auction's seating table were two
+                          hand-rolled renderers for one thing, and they had
+                          already drifted into disagreeing about what a
+                          private looks like: the auction showed a bare
+                          numeral, this showed the full name with its
+                          revenue appended. Neither could be clicked.
+
+                          `PrivateCompanyPills` is now both. The full name
+                          and the revenue that design note #407 wanted on
+                          screen are not lost -- they lead the panel the
+                          pill opens, alongside the rules text that was
+                          previously not reachable from this table at all.
+
+                          IT ALSO FIXES THIS COLUMN'S HEIGHT. Full names
+                          wrapped, so a player holding three privates got a
+                          three-line row and the whole table went ragged.
+                          Acronyms on one non-wrapping line do not. */}
+                      <PrivateCompanyPills
+                        privates={privates}
+                        surface="table"
+                        emptyLabel="None"
+                      />
                     </td>
                     {companies.map((company, index) => {
                       const percentage = heldPercent.get(company.company_id) ?? 0;
@@ -1021,11 +1024,13 @@ const styles: Record<string, React.CSSProperties> = {
     // `color` here only ever affected the fallback glyph, and leaving dead
     // declarations behind invites someone to "restore" the box later.
   },
-  /* ---- Holdings chips. Only the PRIVATE companies still use a chip: the
-     public holdings became real columns in design note #8, and the fourteen
-     `tree*`/`netWorth*` styles the removed certificate-tree cards used were
-     deleted with them rather than left to rot. ---- */
-  holdingsCell: { display: "flex", flexWrap: "wrap", gap: "4px", maxWidth: "340px" },
+  /* ---- Holdings chips. Design note #423: `holdingChipPrivate` and
+     `holdingsCell` are GONE too -- the private column renders
+     `PrivateCompanyPills` now, which brings its own layout and its own
+     pill. What remains here is `holdingsEmpty`, still used by the
+     corporation tables below. Same reasoning as the `tree*`/`netWorth*`
+     styles this comment already records: deleted with their markup rather
+     than left to rot. ---- */
   /* Design note #379: chips rather than a comma list -- a corporation holds
      at most a couple of privates, and each is a discrete asset with its own
      revenue, so they read as objects rather than as prose. */
@@ -1051,16 +1056,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "help",
   },
   holdingsEmpty: { color: "#6f7480", fontStyle: "italic" },
-  holdingChipPrivate: {
-    display: "inline-flex",
-    alignItems: "center",
-    fontSize: FONT_SIZE.micro,
-    padding: "2px 7px",
-    borderRadius: "999px",
-    backgroundColor: "#2a2314",
-    color: "#d9c48a",
-    whiteSpace: "nowrap",
-  },
   footnote: {
     fontSize: FONT_SIZE.micro,
     color: "#6f7480",

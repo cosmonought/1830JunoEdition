@@ -498,6 +498,23 @@ export const styles: Record<string, React.CSSProperties> = {
    * IT CONDENSES WHEN IT STICKS, because a pinned bar is a permanent
    * subtraction from the map. Design note #298 covers what is dropped and
    * why the choice is not arbitrary. */
+  /* ==================================================================
+   *  DESIGN NOTE 426: PLAIN `sticky top-0`
+   * ==================================================================
+   *
+   * REPORTED: the bar should use standard `sticky top-0` behaviour, so it
+   * only collapses when it actually reaches the top of the screen.
+   *
+   * `position: sticky; top: 0` was already here and is kept verbatim --
+   * what stopped it behaving that way was `marginBottom`, below. A sticky
+   * element's margin travels with it, so the bar reserved 12px of empty
+   * space beneath itself for the whole scroll, and it detached from the
+   * viewport edge 12px early. The margin moves to the CONTENT that follows,
+   * which is where the gap was actually wanted.
+   *
+   * `zIndex: 50` stays: sticky does not create a stacking context on its
+   * own, and without it the panels scrolling underneath paint over the bar
+   * at exactly the moment it is doing its job. */
   actionBar: {
     position: "sticky",
     top: 0,
@@ -519,7 +536,9 @@ export const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     borderColor: "#2f3646",
     borderRadius: "10px",
-    marginBottom: "12px",
+    /* Design note #426: no `marginBottom`. See above -- a sticky element's
+       own margin scrolls with it and offsets it from `top: 0`. The gap is
+       now the following content's `marginTop`, which stays put. */
   },
   // Active Player Turn Notifications -- design note #18/item 4. Spread onto
   // `actionBar` alongside its base style, not replacing it, so the bar's
@@ -566,26 +585,85 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.04em",
     color: "#9aa0ac",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 426: TRUE-CENTRED, WHICH THE SPACER PAIR WAS NOT
+   * ==================================================================
+   *
+   * REPORTED: true-centre the action buttons (Skip / Undo).
+   *
+   * This row -- Pass Turn, the contextual buttons, Undo -- was a flex line
+   * with a `flex: 1` spacer before the group and another after it, and
+   * design note #309 described that as centring: "a leading spacer balances
+   * the trailing one that already pins the phase badge, which centres the
+   * group between them without either rail having to know what the other
+   * holds."
+   *
+   * Two equal spacers do centre the group BETWEEN THEMSELVES. They do not
+   * centre it on the bar, because the phase badge sits outside the trailing
+   * spacer and the leading spacer has nothing balancing it -- so the whole
+   * group is pushed left by exactly the badge's width, and by more when the
+   * badge escalates to its wider alert wording. The buttons drifted as
+   * phase text changed, which is the tell.
+   *
+   * `1fr auto 1fr` is the same grid `orPanelActionRow` has used all along,
+   * and it is immune to that: the side rails are equal by construction
+   * whatever they contain, so the centre column is centred on the PANEL.
+   * The two bars now centre identically, which also settles design note
+   * #309's actual goal -- muscle memory built in one phase landing in the
+   * next.
+   *
+   * The spacers are gone from the markup with it; `actionBarSpacer` stays
+   * defined for the auction bar's own row, which is a genuine flex line. */
   actionBarButtons: {
+    display: "grid",
+    gridTemplateColumns: "1fr auto 1fr",
+    alignItems: "center",
+    gap: "6px",
+    // Design note #40, still: must GROW so the rails have width to take.
+    // `minWidth: 0` lets it shrink below its content width, so a long row
+    // wraps rather than overflowing the bar.
+    flex: 1,
+    minWidth: 0,
+  },
+  /* Design note #426: the centre cell of the grid above -- the buttons
+     themselves, centred within a column that is already centred. */
+  actionBarButtonsCentre: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    flexWrap: "wrap",
+  },
+  /* Design note #426: the right rail, holding the phase badge. `justifySelf:
+     end` rather than a spacer, so the badge pins right without stealing
+     width from the centred group. */
+  /* Design note #427: the reason the return bar is on screen at all,
+     stated beside the button rather than left to the button's wording. */
+  returnBarNotice: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#9fe5b5",
+    whiteSpace: "nowrap",
+  },
+  actionBarRailRight: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     gap: "6px",
-    flexWrap: "wrap",
-    // Design note #40: must GROW, or the internal spacer has no width to
-    // expand into and the phase badge sits flush against Undo instead of at
-    // the far right. `minWidth: 0` lets it shrink below its content width
-    // too, so a long button row wraps rather than overflowing the bar.
-    flex: 1,
-    minWidth: 0,
+    justifySelf: "end",
   },
+  /* Design note #426: nudged back up. Design note #31 slimmed these to
+     `small`/7px on the reasoning that "in a single chrome strip they only
+     have to be comfortably clickable, not the focal point of the screen" --
+     which took them below comfortable. These are the primary actions of a
+     turn and several are destructive-ish (Skip forgoes a step outright), so
+     they get one step of the type scale back and a little more room around
+     the label. Still not the focal point; just reliably hittable. */
   actionBarButton: {
-    // Design note #31: slimmed from `strong`/12px padding. These were sized
-    // for a standalone panel; in a single chrome strip they only have to be
-    // comfortably clickable, not the focal point of the screen.
-    fontSize: FONT_SIZE.small,
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    padding: "7px 14px",
+    padding: "9px 18px",
     borderRadius: "8px",
     border: "1px solid #3a3f4b",
     backgroundColor: "#242833",
@@ -784,6 +862,11 @@ export const styles: Record<string, React.CSSProperties> = {
     // padding on top of the stepper's own is a second one made of air.
     paddingBottom: "1px",
   },
+  /* Design note #426: this row was ALREADY true-centred -- `1fr auto 1fr`
+     rails plus `justifyContent: center` on `orPanelActions` inside them.
+     It is the model the non-Operating-Round bar (`actionBarButtons`) has
+     now been rebuilt to match; see that style's own note for what it was
+     doing instead and why the spacer pair only looked like centring. */
   orPanelActionRow: {
     display: "grid",
     // THE WHOLE POINT. Equal `1fr` rails mean the centre column is centred
@@ -795,8 +878,12 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     // Design note #295: a fixed band rather than a floor alone -- the
     // floor was already 44px and nothing stopped the row exceeding it.
-    minHeight: "44px",
-    maxHeight: "52px",
+    /* Design note #426: the band grows with the buttons. At 9px padding
+       around a `strong` label the row needs the extra few pixels, and a
+       `maxHeight` that no longer fits its contents is how a bar starts
+       clipping its own controls. */
+    minHeight: "48px",
+    maxHeight: "60px",
   },
   /* Design note #300: the player's own wallet. Deliberately styled unlike
      the corporation strip's treasury -- they are different money, and two

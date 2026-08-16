@@ -534,7 +534,11 @@ import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork } from "./utils/trackReach";
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
 import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
-import { glowColorFor, stationTickerColor } from "./components/hexContractTypes";
+import {
+  bestContrastTextColor,
+  glowColorFor,
+  stationTickerColor,
+} from "./components/hexContractTypes";
 import { type PrivateAbility } from "./components/PrivatePowerPanel";
 import { corporationPrivateCompanies } from "./utils/gameState";
 import type { RouteBuildMode, TrainRouteDraft } from "./components/RoutePlannerPanel";
@@ -547,6 +551,7 @@ import {
 import { corporationFullName } from "./utils/corporationNames";
 import StockMarketRenderer, {
   marketCellForPrice,
+  parBoxCellFor,
   projectDividendCellMove,
   projectShareSaleMove,
   projectDividendMove,
@@ -634,6 +639,9 @@ import {
   applySandboxMarketAction,
   applyPrivateRevenue,
   applySandboxWaterfallAction,
+  beginOperatingRound,
+  pendingHomeTokens,
+  placeHomeStationToken,
   describePrivatePayout,
   applySandboxLayTile,
   describeFloat,
@@ -644,6 +652,8 @@ import {
 } from "./utils/sandboxSession";
 import SandboxToolbar from "./components/SandboxToolbar";
 import BoParPrompt from "./components/BoParPrompt";
+import HomeStationPrompt from "./components/HomeStationPrompt";
+import ReturnToTurnBar from "./panels/ReturnToTurnBar";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -655,6 +665,7 @@ import TutorialModal, {
   WATERFALL_AUCTION_TUTORIAL,
   TUTORIAL_LIBRARY,
   replayTutorials,
+  tutorialModeEnabled,
 } from "./components/TutorialModal";
 import { useFirestoreChat } from "./components/ChatBox";
 // NOT importing `truncateAddress` from `utils/lobby` -- `utils/address.ts`
@@ -1708,14 +1719,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   const [sandboxMarket, setSandboxMarket] = useState<SandboxMarketPrices>(() =>
     // Design note #387: the Zero State seeds an EMPTY chart. Nothing is
     // parred at turn one, so nothing has a market position.
-    sandboxInitialMarketPrices(marketCellForPrice, sandboxScenario(sandboxScenarioId).zeroState),
+    sandboxInitialMarketPrices(
+      marketCellForPrice,
+      parBoxCellFor,
+      sandboxScenario(sandboxScenarioId).zeroState,
+    ),
   );
   // Re-seeded on a scenario change for the same reason the other two are:
   // picking a scenario means "show me that screen", not "carry my moved
   // tokens into it".
   useEffect(() => {
     setSandboxMarket(
-      sandboxInitialMarketPrices(marketCellForPrice, sandboxScenario(sandboxScenarioId).zeroState),
+      sandboxInitialMarketPrices(
+      marketCellForPrice,
+      parBoxCellFor,
+      sandboxScenario(sandboxScenarioId).zeroState,
+    ),
     );
   }, [sandbox, sandboxScenarioId, gameId]);
   const sandboxMarketRef = useRef<SandboxMarketPrices>(sandboxMarket);
@@ -1730,6 +1749,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     () => sandboxMarketPriceTable(sandboxMarket),
     [sandboxMarket],
   );
+
+  /** Design note #411: one corporation's current chart price, for building
+   *  the Operating Round queue.
+   *
+   *  READS THE REF, NOT THE MEMO. `runGameplayAction` refreshes
+   *  `sandboxMarketRef` partway through a dispatch and then advances the
+   *  game state; a lookup closed over `sandboxMarketPrices` would be a
+   *  render behind at exactly that moment and could order the queue on
+   *  prices the same dispatch had already changed. Stable identity, so it
+   *  does not re-arm every consumer on each market tick. */
+  const marketPriceForCompany = useCallback(
+    (companyId: number): number | null => sandboxMarketRef.current[companyId]?.price ?? null,
+    [],
+  );
+
+  /** Design note #363: the board's own label -> `(q, r)` table.
+   *
+   *  HOISTED since design note #416. It was an inline lambda inside the
+   *  reducer's context object, which was fine while the float was the only
+   *  thing that needed it; the home-station prompt needs the SAME mapping to
+   *  decide which corporations owe a token and to name the hex it is bound
+   *  for. Two copies of "where is H12" is two answers waiting to disagree,
+   *  and the disagreement would be a modal pointing at the wrong hex. */
+  const homeHexToAxial = useCallback((label: string): readonly [number, number] | null => {
+    const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
+    return hex ? ([hex.q, hex.r] as const) : null;
+  }, []);
 
   /* DECLARED HERE, not up with `mustBuyTrain`, and the placement is not
      cosmetic: this memo reads `sandboxMarketPrices` to value the
@@ -3702,6 +3748,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             // Design note #273: what the chart says this share is worth, so
             // the wallet and the market agree about one trade.
             sharePrice: marketResult.tradePrice ?? undefined,
+            /* Design note #411: the Operating Round queue is ordered by
+               market price, and the chart is a separate atom the reducer
+               must not reach into. Read from the REF, which the block above
+               has just refreshed, so the order reflects any move this very
+               dispatch caused rather than the previous render's prices. */
+            marketPriceFor: marketPriceForCompany,
             /* Design note #351: the par ladder's selection, for the
                founding purchase that sets it. Read from the ref rather
                than the state variable for design note #265's reason --
@@ -3720,10 +3772,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                corporation that floats gets its home token on the hex the
                map actually draws rather than on a coordinate this reducer
                guessed. */
-            homeHexToAxial: (label) => {
-              const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
-              return hex ? ([hex.q, hex.r] as const) : null;
-            },
+            homeHexToAxial,
           });
           /* ==============================================================
            *  DESIGN NOTE 400: A FLOAT IS AN EVENT, NOT JUST A FLAG
@@ -3767,7 +3816,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   ?.par_value ?? null;
               if (wasUnparred === null && company.par_value !== null) {
                 const par = Number(company.par_value);
-                setSandboxMarket((prices) => placeParMark(prices, company.company_id, par, marketCellForPrice));
+                /* Design note #415: `parBoxCellFor`, not `marketCellForPrice`. The
+                   latter resolves a par to the chart's TOP ROW -- see its own
+                   note -- which is what put five of the six par values on the
+                   wrong cell. */
+                setSandboxMarket((prices) =>
+                  placeParMark(prices, company.company_id, par, parBoxCellFor),
+                );
               }
             }
             for (const company of after.public_companies) {
@@ -3805,18 +3860,64 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               "Round",
               `Stock Round ends. Priority Deal shifts to ${holderLabel}.`,
             );
-            after = {
-              ...after,
-              stock_round_just_ended: false,
-              current_round_type: "OperatingRound" as const,
-              consecutive_passes: 0,
-            };
+            /* ==========================================================
+             *  DESIGN NOTE 411 (caller half): THE QUEUE IS BUILT HERE
+             * ==========================================================
+             *
+             * This set `current_round_type` and `consecutive_passes` and
+             * nothing else, so the Operating Round opened with whatever
+             * `active_operating_order` the state already carried -- `[]`
+             * for any game actually played into an OR rather than seeded
+             * into one by a fixture. An OR with an empty queue cannot
+             * advance and has no acting seat, which is both halves of the
+             * reported infinite-round bug.
+             *
+             * `beginOperatingRound` is the same function the
+             * `BeginOperatingRound` message arm uses, so the two entry
+             * paths cannot build different queues -- or, as here, one of
+             * them build none at all. */
+            after = beginOperatingRound(after, marketPriceForCompany);
+            after = { ...after, stock_round_just_ended: false };
             sandboxStateRef.current = after;
             setSandboxState(after);
             /* The tab follows the round. `surfaceTabFor` is the same lookup
                the round-transition effect uses, so the two cannot disagree
                about where an Operating Round is played. */
             setActiveMainTab(surfaceTabFor("OperatingRound"));
+          }
+
+          /* ==============================================================
+           *  DESIGN NOTE 411 (caller half): AND THE ROUND HANDS BACK
+           * ==============================================================
+           *
+           * The mirror of the block above. `advanceCorporation` raises this
+           * when the last corporation in the queue has operated and the
+           * sequence has no further Operating Round in it; the shell owns
+           * the log and the tab, exactly as it does for the Stock Round's
+           * close, so the reducer reports rather than navigates.
+           *
+           * Cleared as it is read for the same reason: a flag left standing
+           * would re-fire the transition on the next render. */
+          if (after.operating_round_just_ended) {
+            logInfo(
+              "Round",
+              "Operating Round ends — every corporation has operated. Opening the next Stock Round.",
+            );
+            after = {
+              ...after,
+              operating_round_just_ended: false,
+              current_round_type: "StockRound" as const,
+              macro_round_number: after.macro_round_number + 1,
+              sub_round_index: 0,
+              consecutive_passes: 0,
+              last_trader_index: null,
+              // The Priority Deal holder opens the Stock Round -- the whole
+              // point of holding it (design note #353).
+              active_player_index: after.priority_deal_index,
+            };
+            sandboxStateRef.current = after;
+            setSandboxState(after);
+            setActiveMainTab(surfaceTabFor("StockRound"));
           }
         }
 
@@ -3928,6 +4029,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
          stable a silent staleness bug is exactly the kind this file has
          collected notes about. */
       parValueNumberFor,
+      /* Design note #411: the market-price lookup for the Operating Round
+         queue. Stable for the same reason and listed on the same principle
+         as `parValueNumberFor` above -- both are `useCallback`s over a ref,
+         and both would go stale silently if that ever changed. */
+      marketPriceForCompany,
+      // Design note #416: hoisted out of this object literal, so it is a
+      // dependency now rather than a freshly-built closure each call.
+      homeHexToAxial,
     ],
   );
 
@@ -4045,6 +4154,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       );
     },
     [runGameplayAction, gameId, gameState, parValueFor],
+  );
+
+  /* ==================================================================
+   *  DESIGN NOTE 416: WHO STILL OWES A HOME STATION
+   * ==================================================================
+   *
+   * Derived from the board every render rather than raised as a one-shot
+   * flag when the float happens. `pendingHomeTokens` asks "is this floated
+   * corporation's printed home hex empty", which stays true until it is
+   * answered -- so a reload, a late poll, or two corporations floating on
+   * one dispatch all resolve correctly, and a prompt cannot be lost.
+   *
+   * ONLY THE HEAD OF THE QUEUE is prompted. Several can float at once (a
+   * waterfall cascade, or a multi-buy crossing two thresholds); they are
+   * returned in operating order and the next appears as this one is
+   * answered.
+   *
+   * NATURALLY INERT AGAINST A LIVE CHAIN, and worth stating because it
+   * looks like a gap. The contract's `grant_home_station_token` places the
+   * token as part of floating, so on a real game the hex is already
+   * occupied by the time any state reaches this line and the list comes
+   * back empty. This prompt governs the SANDBOX, which is the only place
+   * the frontend owns the placement -- a frontend cannot decline to do
+   * something the chain has already done. */
+  const pendingHomeToken = useMemo(() => {
+    if (!gameState) return null;
+    return pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
+  }, [gameState, homeHexToAxial]);
+
+  /** Design note #416: the prompt's answer. Free -- this deliberately does
+   *  NOT dispatch `PlaceStationToken`, which charges the escalating token
+   *  price (design note #239). A home station costs nothing, and routing it
+   *  through the paid message would bill a corporation for the one token
+   *  1830 gives it. */
+  const handlePlaceHomeStation = useCallback(
+    (companyId: number, q: number, r: number) => {
+      const ticker =
+        gameState?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+        `#${companyId}`;
+      setSandboxState((current) => {
+        if (!current) return current;
+        const placed = placeHomeStationToken(current, companyId, q, r);
+        if (placed === current) return current;
+        sandboxStateRef.current = placed;
+        return placed;
+      });
+      logInfo("Home Station", `${ticker} places its home station token.`);
+    },
+    [gameState, logInfo],
   );
 
   /* Design note #399: the prompt's answer. Grants the certificate AND sets
@@ -4903,12 +5061,97 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return owned >= limit;
   }, [gameState, actingProtocolId, depot]);
 
+  /* ==================================================================
+   *  DESIGN NOTE 414: A TRAIN IS NOT THE SAME THING AS A ROUTE
+   * ==================================================================
+   *
+   * REPORTED: a corporation holding a train but with no legal route -- or
+   * with routes that total $0 -- is still walked through Run Routes and is
+   * still offered "Pay Dividends" on $0 at the step after.
+   *
+   * Design note #292 built the forced-withhold machinery and gated all of
+   * it on `ownsAnyTrain`, which is the CHEAP half of the question. Owning a
+   * train is necessary to run and nowhere near sufficient: a corporation
+   * whose token sits on a city no track reaches, or whose only route runs
+   * between two blank hexes, owns a train and can earn nothing with it. It
+   * therefore passed every guard, arrived at Dividends with a live Pay
+   * button quoting "$0 per share", and could pay a dividend of nothing --
+   * which is not a legal 1830 declaration, and which left the share price
+   * standing still when the rules move it left.
+   *
+   * THE PROBE IS THE DRAFTER, NOT A SECOND OPINION. `assignRouteSet` is the
+   * same search the Auto Route button runs (design note #280), asked for
+   * the same thing and read for its total rather than its paths. Writing a
+   * cheaper "can this corporation reach anything" check would be a second
+   * pathfinder to keep in step with the first, and the failure would be the
+   * worst kind: a step skipped for a corporation that did have a route, or
+   * a $0 dividend offered because the cheap check disagreed with the real
+   * one about a junction.
+   *
+   * SCOPED TO THE TWO STEPS THAT ASK. The search is not free, so it runs
+   * only during an Operating Round on Routes or Dividends, and only for a
+   * corporation that owns a train at all -- `ownsAnyTrain` is still the
+   * first question, it is just no longer the last one. Everywhere else this
+   * is `null`, meaning "not asked", which the readers below distinguish
+   * from a real `0`.
+   *
+   * `null` ALSO MEANS "COULD NOT TELL". A corporation with no tokens on the
+   * board yet returns no assignments, and so would a board that has not
+   * loaded. Both are reported as unknown rather than as zero, because the
+   * consequence of a wrong zero here is an automatic, irreversible withhold
+   * on a corporation that could have paid. */
+  const maxRouteRevenue = useMemo<number | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
+    if (orSubPhase !== "Routes" && orSubPhase !== "Dividends") return null;
+    if (!ownsAnyTrain) return null;
+
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    const startHexes = corporation?.station_token_hexes ?? [];
+    if (startHexes.length === 0) return null;
+
+    const result = assignRouteSet({
+      mapGrid,
+      era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+      startHexes,
+      trains: ownedTrainRoster.map((train) => ({
+        trainIndex: train.trainIndex,
+        maxRevenueCentres: train.maxDistance ?? 4,
+      })),
+    });
+    return result.totalRevenue;
+  }, [
+    gameState,
+    orSubPhase,
+    ownsAnyTrain,
+    actingProtocolId,
+    mapGrid,
+    currentPhase,
+    ownedTrainRoster,
+  ]);
+
+  /** Design note #414: whether this corporation can earn anything at all
+   *  this turn. Owning no train and owning a stranded one are different
+   *  facts with the same consequence, so they are answered together and the
+   *  reason string keeps them distinguishable to the player. */
+  const noEarnableRevenue = useMemo<string | null>(() => {
+    if (!ownsAnyTrain) return "it owns no trains, so there is no route to run";
+    if (maxRouteRevenue === 0) {
+      return "its trains cannot reach a route that earns anything";
+    }
+    return null;
+  }, [ownsAnyTrain, maxRouteRevenue]);
+
   /** Why this step has no decision in it, or `null` when it does. */
   const autoSkipReason = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
     if (orSubPhase === "Routes") {
-      return ownsAnyTrain ? null : "it owns no trains, so there is no route to run";
+      /* Design note #414: was `ownsAnyTrain ? null : ...`. A corporation
+         with a train and no reachable revenue was held on a step whose only
+         control drafts a route that cannot exist. */
+      return noEarnableRevenue;
     }
     /* ==================================================================
      *  DESIGN NOTE 292: A TRAINLESS DIVIDEND IS DECIDED, NOT SKIPPED
@@ -4930,34 +5173,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      *
      * Handled below rather than through `autoSkipReason`, because the two
      * are different actions: one advances a cursor, the other declares. */
-    if (orSubPhase === "Dividends" && !ownsAnyTrain) return null;
+    /* Design note #414: `!ownsAnyTrain` became `noEarnableRevenue` for the
+       same reason it did on Routes above -- a stranded train earns exactly
+       what no train earns, and the step below settles both identically. */
+    if (orSubPhase === "Dividends" && noEarnableRevenue !== null) return null;
     if (orSubPhase === "Hardware" && atTrainLimitNow) {
       return "it is already at its train limit";
     }
     return null;
-  }, [gameState, spectator, orSubPhase, ownsAnyTrain, atTrainLimitNow]);
+  }, [gameState, spectator, orSubPhase, noEarnableRevenue, atTrainLimitNow]);
 
   /* Design note #292: the forced withhold. Same once-per-(corporation,step)
      guard as the auto-skip beside it, and for the same reason -- online the
      cursor is poll-driven, so an unguarded effect would broadcast a
-     declaration on every render until the next poll landed. */
+     declaration on every render until the next poll landed.
+
+     Design note #414: it now fires for a corporation that HAS a train and
+     cannot earn with it, not only for one with no train at all. The
+     declaration is identical either way -- $0, withheld, marker left -- so
+     the two cases share this effect rather than growing a second one that
+     would have to be kept in step with it. */
   const forcedWithholdRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return;
     if (spectator) return;
-    if (orSubPhase !== "Dividends" || ownsAnyTrain) return;
+    if (orSubPhase !== "Dividends" || noEarnableRevenue === null) return;
     const key = `${actingProtocolId}:withhold`;
     if (forcedWithholdRef.current.has(key)) return;
     forcedWithholdRef.current.add(key);
     logInfo(
       "Auto-Withhold",
-      "No trains ran, so there is nothing to pay out — $0 withheld and the share price steps left.",
+      `${ownsAnyTrain ? "No route earned anything" : "No trains ran"}, so there is nothing to pay out — $0 withheld and the share price steps left.`,
     );
     handleWithholdRevenue();
   }, [
     gameState,
     spectator,
     orSubPhase,
+    noEarnableRevenue,
     ownsAnyTrain,
     actingProtocolId,
     handleWithholdRevenue,
@@ -5010,7 +5263,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * twice: only for a president (the lesson is about YOUR corporation),
    * only during the FIRST Operating Round, and `TutorialModal`'s own
    * per-topic seen flag and global off switch both still apply -- this
-   * arms the modal, it does not bypass anyone's preferences. */
+   * arms the modal, it does not bypass anyone's preferences.
+   *
+   * ==================================================================
+   *  DESIGN NOTE 412: AND A FOURTH GUARD, ON THE NAVIGATION ONLY
+   * ==================================================================
+   *
+   * REPORTED: End Turn in an Operating Round forces a redirect to the Stock
+   * Market page. It should do that only in tutorial mode.
+   *
+   * The three guards above are all about the SITUATION and none about the
+   * PLAYER, so every experienced player met this exactly once per game and
+   * had the board pulled out from under them mid-turn. `tutorialMode`
+   * defaults to false -- see `TutorialModal`'s design note #412 for why it
+   * is a new opt-in flag rather than the existing off switch inverted --
+   * so standard play now ends a turn and stays where it was.
+   *
+   * THE TAB SWITCH IS GATED; ARMING THE MODAL IS NOT. The explainer is a
+   * panel over the screen the player chose and costs one click to dismiss;
+   * the navigation is what moves them somewhere they did not ask to go, and
+   * it happens BEFORE the modal renders, so dismissing does not undo it.
+   * Gating both would silently retire a tutorial that still works for the
+   * player it was written for. */
   const handleEndOperatingTurn = useCallback(() => {
     const viewerIsPresident =
       viewerAddress != null &&
@@ -5021,7 +5295,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     setOrSubPhase("Track");
 
     if (viewerIsPresident && isFirstOperatingRound) {
-      setActiveMainTab("stock");
+      if (tutorialModeEnabled()) setActiveMainTab("stock");
       setMarketTutorialArmed(true);
     }
   }, [handlePassTurn, viewerAddress, gameState]);
@@ -5385,6 +5659,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         onConfirm={handleConfirmBoPar}
       />
 
+      {/* Design note #416: blocking, for the same reason the B&O prompt is
+          -- a floated corporation owes its home station and 1830 has no
+          branch where it declines one. Mounted at shell level beside the
+          other two prompts rather than inside the map panel, because it can
+          fire while the player is on any tab. */}
+      <HomeStationPrompt
+        pending={pendingHomeToken}
+        presidentLabel={
+          pendingHomeToken?.president
+            ? sandboxPlayerLabel(pendingHomeToken.president) ??
+              truncateAddress(pendingHomeToken.president)
+            : null
+        }
+        liveryColor={
+          pendingHomeToken ? stationTickerColor(pendingHomeToken.companyId) : "#171c28"
+        }
+        liveryInk={
+          pendingHomeToken
+            ? bestContrastTextColor(stationTickerColor(pendingHomeToken.companyId))
+            : "#eaf2ff"
+        }
+        onPlace={handlePlaceHomeStation}
+      />
+
       <EmergencyTrainPurchaseModal
         plan={emergencyModalPlan}
         sandbox={sandbox}
@@ -5716,7 +6014,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     bank depot and the corporate marketplace, in that order,
                     with the second collapsed. Same `orSubPhase === "Hardware"`
                     gate the offer ledger below uses. */}
-                {gameState?.current_round_type === "OperatingRound" &&
+                {/* ===================================================================
+                     DESIGN NOTE 419: THE TRAIN PANELS BELONG TO ONE TAB
+                    ===================================================================
+
+                     REPORTED: the Buy Trains from Bank panel bleeds into the
+                     Stocks and Stock Market tabs.
+
+                     It did, and the gate below is why it was easy to miss:
+                     `current_round_type === "OperatingRound" && orSubPhase
+                     === "Hardware"` is a precise, correct statement about
+                     WHEN this panel applies, and says nothing about WHERE.
+
+                     This whole branch sits inside `isWorkspaceTab`, which is
+                     true for four tabs -- `phase`, `corps`, `map` and
+                     `stock`. So during an Operating Round's Buy Trains step
+                     the panel rendered on every one of them, including the
+                     two whose entire subject is share trading.
+
+                     THIS IS DESIGN NOTE #27'S BUG AGAIN. That note fixed the
+                     auction dashboard hijacking the Rail Map by adding a tab
+                     test to a condition that had only a phase test, and
+                     wrote down the lesson: a panel inside `isWorkspaceTab`
+                     must say which workspace it is for. The Stock Round panel
+                     beside this one learned it (`activeMainTab === "corps"`).
+                     The train panels did not.
+
+                     `surfaceTabFor("OperatingRound")` rather than a literal
+                     `"map"`, so if the Operating Round's home tab ever moves,
+                     this follows it instead of quietly pointing at the wrong
+                     surface -- the same anti-drift reason the round
+                     transitions already call it rather than naming tabs. */}
+                {activeMainTab === surfaceTabFor("OperatingRound") &&
+                  gameState?.current_round_type === "OperatingRound" &&
                   orSubPhase === "Hardware" && (
                   <TrainPurchasePanel
                     depot={depot}
@@ -5775,7 +6105,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     That is still true and is what the Action Log carries; a
                     dedicated panel on the buy screen is a different claim --
                     that you have something to do here. */}
-                {gameState?.current_round_type === "OperatingRound" &&
+                {/* Design note #419: the offer ledger is the purchase
+                    panel's sibling and leaked identically -- same phase
+                    gate, same missing tab gate, same four tabs. Fixed
+                    together, because a fix that left the ledger bleeding
+                    onto the Stock Market tab would have answered the report
+                    rather than the bug. */}
+                {activeMainTab === surfaceTabFor("OperatingRound") &&
+                  gameState?.current_round_type === "OperatingRound" &&
                   orSubPhase === "Hardware" &&
                   viewerTrainOffers.length > 0 && (
                   <TrainTradePanel
@@ -6093,6 +6430,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             )}
           </main>
         </>
+      )}
+
+      {/* Design note #427: the reference tabs get a way back. Only while
+          the viewer is on turn -- see that file for why a permanent banner
+          would be worse than none. */}
+      {(activeMainTab === "ledger" || activeMainTab === "rules") && (
+        <ReturnToTurnBar
+          isMyTurn={isMyTurn}
+          roundType={gameState?.current_round_type ?? null}
+          onReturn={setActiveMainTab}
+        />
       )}
 
       {activeMainTab === "ledger" && (

@@ -920,6 +920,34 @@ const PRICE_GRID: readonly PriceCell[] = buildPriceGrid();
  *  game gets its real `(x, y)` from the contract, which tracks the actual cell
  *  a marker has walked to rather than re-deriving it from the price.
  *
+ *  ==================================================================
+ *   DESIGN NOTE 415: DO NOT USE THIS TO PLACE A PARRED TOKEN
+ *  ==================================================================
+ *
+ *  "Arbitrary but deterministic" was true and was not harmless, and the
+ *  par ladder is exactly where it stopped being harmless. Every one of the
+ *  six par prices also appears in the TOP ROW of the chart (`y = 10`), and
+ *  `REAL_MARKET_ROWS` lists that row first -- so the first match for a par
+ *  price is always the top-row cell, never the par box:
+ *
+ *      par $67  -> this returns (1, 10);  the par box is (6, 5)
+ *      par $71  -> this returns (2, 10);  the par box is (6, 6)
+ *      par $76  -> this returns (3, 10);  the par box is (6, 7)
+ *      par $82  -> this returns (4, 10);  the par box is (6, 8)
+ *      par $90  -> this returns (5, 10);  the par box is (6, 9)
+ *      par $100 -> this returns (6, 10);  the par box is (6, 10)  <-- only
+ *                                          one that happens to agree
+ *
+ *  Five of the six par values landed in the wrong cell, and the sixth was
+ *  right by coincidence -- which is the worst possible distribution,
+ *  because $100 is the par a developer reaches for when checking whether
+ *  parring works. It does, for that one value.
+ *
+ *  Use `parBoxCellFor` for a par. This stays for the case it is actually
+ *  correct for: resolving a price the marker has WALKED to, where any cell
+ *  carrying that price is as good as any other because the caller has
+ *  already lost the real one.
+ *
  *  Returns `null` for a price with no cell, which callers must treat as
  *  "not on the chart" rather than coercing to the origin -- `(0, 0)` is a
  *  real cell and a marker parked there would be a visible lie. */
@@ -927,6 +955,45 @@ export function marketCellForPrice(price: number): { x: number; y: number } | nu
   const cell = PRICE_GRID.find((candidate) => candidate.price === price);
   return cell ? { x: cell.x, y: cell.y } : null;
 }
+
+/**
+ * The designated PAR BOX for one of the six standard par values.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 415: THE PAR BOX IS A COORDINATE, NOT A PRICE MATCH
+ * ==================================================================
+ *
+ * REPORTED: parred corporations put their token on the wrong market cell,
+ * or do not appear on the matrix at all.
+ *
+ * Parring a corporation does not mean "put the marker on some cell showing
+ * this number". It means "put the marker in the par box for this value" --
+ * a specific, printed, gold-framed cell in the ladder column at `x = 6`.
+ * The distinction is invisible for $100 and wrong for the other five, which
+ * is why the bug reads as intermittent.
+ *
+ * THE TABLE ALREADY EXISTED. `PAR_VALUE_LADDER` has carried the correct
+ * six coordinates all along -- the renderer uses them to draw the gold
+ * frame, so the board has been DISPLAYING the right boxes while the token
+ * placement resolved somewhere else entirely. This function is the missing
+ * reader, not a new source of truth, so the frame and the marker cannot
+ * disagree about where a par box is.
+ *
+ * NULL FOR A NON-PAR PRICE, and deliberately not a fallback to
+ * `marketCellForPrice`. A price that is not on the ladder is not a par, and
+ * quietly resolving it to some other cell is precisely the behaviour this
+ * function exists to end -- the caller should treat it as "this is not a
+ * par value" rather than receive a plausible-looking coordinate.
+ */
+export function parBoxCellFor(parPrice: number): { x: number; y: number } | null {
+  const entry = PAR_VALUE_LADDER.find((candidate) => candidate.price === parPrice);
+  return entry ? { x: entry.x, y: entry.y } : null;
+}
+
+/** The six legal par values, in ladder order. Exported so a caller can
+ *  offer exactly the prices the board has boxes for, rather than keeping a
+ *  second list that can drift from the coordinates above. */
+export const PAR_BOX_PRICES: readonly number[] = PAR_VALUE_LADDER.map((entry) => entry.price);
 
 /** The rule zone a price sits in, or `null` if the price is not on the
  *  board at all.

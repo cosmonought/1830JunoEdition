@@ -594,22 +594,61 @@ export default function ContextualActionBar({
         contextualButtons = [];
         break;
       case "Dividends":
+        /* ==================================================================
+           DESIGN NOTE 414: THERE IS NO SUCH THING AS PAYING $0
+          ==================================================================
+
+           REPORTED: a corporation with no earnable revenue is still offered
+           "Pay Dividends", quoting $0 per share.
+
+           1830 has no such declaration. A corporation that earned nothing
+           withholds -- that is the whole decision, and it is the one that
+           steps the share price left. Offering Pay beside Withhold at $0
+           presents a binary where the rules have a single outcome, and the
+           two buttons do not even differ in effect: paying nothing and
+           withholding nothing move the same zero. The only thing the player
+           could get wrong is the market move, and Pay gets it wrong
+           silently -- the marker stays put, the price never falls, and
+           nothing on screen says a rule was skipped.
+
+           So at zero the choice collapses to the one legal action. `App`'s
+           forced-withhold effect (design note #414 there) will normally have
+           declared it before this renders; this is the same rule expressed
+           on the control, so a player who reaches the step during the poll
+           interval that precedes the auto-declaration cannot click the
+           button that should not exist.
+
+           THE TEST IS THE REVENUE, NOT THE TRAIN. `dividendRevenue` is
+           already what the pay button spends and what its per-share figure
+           divides, so gating on it cannot disagree with the label beside it
+           -- and it covers the stranded-train case, the trainless case and
+           the ran-a-worthless-route case without naming any of them. */
         contextualButtons = [
-          {
-            key: "pay-dividends",
-            // Design note #188: the per-share figure is the number the
-            // decision turns on, and it was the one thing the button did
-            // not say. 1830 splits revenue ten ways -- one share is 10% --
-            // so a $180 route pays $18 a share.
-            label: `Pay Dividends ($${dividendPerShare} per share)`,
-            onClick: onPayDividends,
-            title: `Splits $${dividendRevenue} between every shareholder at $${dividendPerShare} per 10% share.`,
-          },
+          ...(dividendRevenue > 0 && dividendRevenueIsThisTurn
+            ? [
+                {
+                  key: "pay-dividends",
+                  // Design note #188: the per-share figure is the number the
+                  // decision turns on, and it was the one thing the button did
+                  // not say. 1830 splits revenue ten ways -- one share is 10% --
+                  // so a $180 route pays $18 a share.
+                  label: `Pay Dividends ($${dividendPerShare} per share)`,
+                  onClick: onPayDividends,
+                  title: `Splits $${dividendRevenue} between every shareholder at $${dividendPerShare} per 10% share.`,
+                },
+              ]
+            : []),
           {
             key: "withhold-revenue",
-            label: "Withhold to Corporate Treasury",
+            label:
+              dividendRevenue > 0
+                ? "Withhold to Corporate Treasury"
+                : "Withhold $0 — Share Price Steps Left",
             onClick: onWithholdRevenue,
-            title: `Keeps all $${dividendRevenue} in the corporation's treasury. Shareholders receive nothing.`,
+            title:
+              dividendRevenue > 0
+                ? `Keeps all $${dividendRevenue} in the corporation's treasury. Shareholders receive nothing.`
+                : "This corporation earned nothing this turn. 1830 has no $0 dividend — the revenue is withheld and the share price moves one step left.",
           },
         ];
         break;
@@ -669,6 +708,56 @@ export default function ContextualActionBar({
     // implementation to move.
     contextualButtons = [];
   }
+
+  /* ==================================================================
+   *  DESIGN NOTE 413: THE BAR NOW ASKS WHOSE TURN IT IS
+   * ==================================================================
+   *
+   * REPORTED: during an Operating Round the acting corporation's president
+   * is locked out of Lay Tile, while every player who is NOT acting can see
+   * and click Skip.
+   *
+   * Both halves at once, which is what makes it look contradictory and what
+   * gives it away: the authorisation was not merely wrong, it was ABSENT
+   * from one surface and correct-but-starved on the other.
+   *
+   *   THE LOCKOUT was `actingSeatIndex` returning `null` because
+   *   `active_operating_order` was empty -- see `sandboxSession.ts` design
+   *   note #411. "Nobody may act" is the correct reading of an empty queue,
+   *   and `tileLayDisabledReason` correctly refused everyone including the
+   *   president. Fixed at the source; nothing in this file caused it.
+   *
+   *   THE SKIP BUTTON is this file's. Every control below was gated on
+   *   `sessionReady` alone -- "is there a signing session", not "may this
+   *   player act" -- so a bar rendered for a spectator or for the four
+   *   players waiting their turn carried live buttons that dispatched real
+   *   messages. The chain would refuse them, but only after a signature and
+   *   a round trip, and the sandbox has no chain to refuse anything.
+   *
+   * `isMyTurn` was already computed, already correct, and already passed to
+   * this component -- and used for exactly one thing: a decorative pulse on
+   * the wrapper (design note #4's turn alert). The predicate the bar needed
+   * was sitting in its own props being used as a CSS class.
+   *
+   * HIDDEN, NOT DISABLED, and that is a departure from how this file treats
+   * every other unavailable control. A disabled button with a reason is the
+   * right shape when the player COULD act and something specific stops them
+   * -- design note #293's End Turn, which explains the train they must buy.
+   * It is the wrong shape for "this is not your turn", because there is no
+   * action for the player to take, nothing they can change, and eight
+   * greyed buttons on four players' screens is an entire panel of noise
+   * describing somebody else's decision. The acting corporation is already
+   * named across the top of the bar; that is the answer to why the controls
+   * are absent, and it is already on screen.
+   *
+   * SCOPED TO OPERATING ROUNDS, because that is the round whose turn belongs
+   * to a corporation rather than a seat, and the round this bar carries
+   * action buttons in. The Stock Round and the auction put their controls in
+   * their own panels (`contextualButtons` is empty for both), so widening
+   * this would gate a set that is already empty while risking the auction's
+   * own flow. */
+  const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;
+  if (!mayActThisTurn) contextualButtons = [];
 
 
   /* ==================================================================
@@ -1321,7 +1410,12 @@ export default function ContextualActionBar({
                   it is the opposite kind of string: it says where the
                   action IS (on the map), which is a thing the player cannot
                   otherwise know. */}
-              {contextualButtons.length === 0 && orSubPhase === "Track" && (
+              {/* Design note #413: and it is only true for the player who
+                  may actually click that hex. Told to a non-acting player it
+                  is an instruction they cannot follow, on a map that will
+                  refuse them -- which is the same dead click the Skip button
+                  was handing out, dressed as help. */}
+              {mayActThisTurn && contextualButtons.length === 0 && orSubPhase === "Track" && (
                 <span style={styles.orPanelNoActions}>
                   Select a hex on the map to lay or upgrade track. Click the preview to rotate.
                 </span>
@@ -1431,7 +1525,12 @@ export default function ContextualActionBar({
                   also why this tests the REVENUE rather than the sub-phase:
                   the question is whether anything was earned, not which
                   step the cursor is on. */}
-              {orSubPhase !== "Hardware" && !dividendChoiceForced && (
+              {/* Design note #413: `mayActThisTurn` leads, because Skip is
+                  the control the report names. It dispatches
+                  `AdvanceOperatingSubPhase` for the ACTING corporation, so a
+                  non-acting player clicking it was stepping somebody else's
+                  turn forward. */}
+              {mayActThisTurn && orSubPhase !== "Hardware" && !dividendChoiceForced && (
                 <button
                   type="button"
                   style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
@@ -1441,6 +1540,17 @@ export default function ContextualActionBar({
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
+              )}
+              {/* The one line that replaces the whole control set for a
+                  player who is not acting. Without it the centre column is
+                  simply empty, which reads as a panel that failed to load
+                  rather than as somebody else's turn. */}
+              {!mayActThisTurn && (
+                <span style={styles.orPanelNoActions}>
+                  {activeCorporation
+                    ? `${activeCorporation.ticker} is operating — its president has the controls.`
+                    : "Another corporation is operating."}
+                </span>
               )}
             </div>
 
@@ -1556,7 +1666,11 @@ export default function ContextualActionBar({
             </span>
           )
         )}
-        <span style={styles.actionBarSpacer} />
+        {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
+            The leading `actionBarSpacer` that used to sit here is gone --
+            see `appStyles.ts` for why two equal spacers centred the group
+            between themselves but not on the bar. */}
+        <span style={styles.actionBarButtonsCentre}>
         {/* Design note #31: Pass leads -- it is the action available in
             every phase, and the one a player reaches for most. */}
         <button
@@ -1599,12 +1713,17 @@ export default function ContextualActionBar({
             in this NON-Operating-Round branch it was unreachable markup.
             Removed rather than left as a second copy to keep in step with
             the live one in the OR panel above. */}
+        </span>
 
-        {/* Design note #40: the phase badge, pinned right. `marginLeft:
-            auto` on the spacer rather than on the badge itself, because the
-            badge is conditional -- an auto margin on a node that sometimes
-            does not render would silently stop pinning anything. */}
-        <span style={styles.actionBarSpacer} />
+        {/* Design note #40/#426: the phase badge, pinned right. The trailing
+            spacer is gone with the leading one -- the grid's right rail
+            (`justifySelf: end`) pins the badge without taking width from the
+            centred group, which is what the spacer pair could not do. The
+            rail renders unconditionally so the grid always has three
+            columns; design note #40's warning about an auto margin on a
+            conditional node no longer applies, because the margin is now the
+            rail's rather than the badge's. */}
+        <span style={styles.actionBarRailRight}>
         {phase && (
           <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
             {phase.label}
@@ -1646,6 +1765,7 @@ export default function ContextualActionBar({
             )}
           </span>
         )}
+        </span>
       </div>
       )}
     </div>

@@ -82,6 +82,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
@@ -112,136 +113,10 @@ import type {
  *  terminology throughout this file. */
 const MIN_BID_INCREMENT = 5;
 
-/** One private company's display data -- revenue yield and canonical power. */
-interface PrivateCatalogEntry {
-  revenue: number;
-  /** The private's canonical 1830 special power, one line.
-   *
-   *  ENFORCEMENT BADGES REMOVED (design note #13). An earlier pass rendered
-   *  an "⛓ ENFORCED" / "○ NOT IN THIS RULESET" badge beside each of these,
-   *  because `auction.rs` only implements three of the six powers. The
-   *  badges are gone by explicit decision: all six privates are required
-   *  parts of this ruleset, and the card should describe the piece rather
-   *  than annotate the current state of the backend.
-   *
-   *  ⚠ CONSEQUENCE, RECORDED HERE ON PURPOSE. Two of the descriptions below
-   *  now state powers this contract does NOT currently implement:
-   *
-   *    - Champlain & St. Lawrence -- free tile lay on its home hex
-   *    - Camden & Amboy          -- exchange for a 10% PRR share
-   *
-   *  Schuylkill Valley is safe -- canonically it HAS no power, so there is
-   *  nothing to enforce. D&H, M&H and B&O are genuinely enforced
-   *  (`hexmap.rs` doc comment #24, `auction.rs` doc comment #4), though the
-   *  hex-blocking text for D&H/M&H now states the official rule's two
-   *  exceptions -- owning corporation, or closure -- and whether the
-   *  contract honours BOTH of those exceptions is itself an audit
-   *  question.
-   *
-   *  So until those two are implemented, this UI describes an ability a
-   *  player cannot exercise. That is a BACKEND gap, not a display bug, and
-   *  it belongs on the contract audit list. Do not "fix" it by editing the
-   *  text back into vagueness -- fix it in `auction.rs`. */
-  ability: string;
-}
+/* Design note #391: the catalog moved to `utils/privateCatalog.ts` so
+   the stock card can quote the same text. Same table, same values --
+   only its address changed. */
 
-/** Hand-kept mirror of `auction.rs::CORE_PRIVATE_COMPANIES`'s revenue
- *  yields, plus each private's canonical 1830 special power.
- *
- *  DISPLAY SOURCE ONLY -- not derived from any schema, and nothing reads it
- *  to make a decision. Same convention as this codebase's other hand-kept
- *  mirrors (`HexGridRenderer.tsx`'s `TILE_CATALOG`, `App.tsx`'s
- *  `MOCK_TRAIN_CATALOG`): if the backend gains or changes an ability, this
- *  table has to be updated by hand. See `PrivateCatalogEntry.ability` for
- *  the two powers this text currently describes ahead of the contract. */
-/* ==================================================================
- *  DESIGN NOTE 360: THE RULEBOOK'S OWN WORDS
- * ==================================================================
- *
- * These five strings are the 1830 rulebook's canonical text for the
- * privates' special powers, supplied verbatim. They replace paraphrases
- * that were shorter and, in three places, wrong in ways that mattered:
- *
- *   D&H  said the tile lay was free. It is not -- the mountain costs the
- *        usual $120 and only the TOKEN is free, which is most of the cost.
- *        It also omitted that the tile DOES consume the corporation's
- *        normal placement, the opposite of the C&SL's grant of a second.
- *   M&H  omitted both conditions on the exchange (the 60% cap, and NYC
- *        shares actually being available) and the fact that it can be done
- *        between other players' turns.
- *   C&A  was described as an ability the owner triggers. It is not: the
- *        share arrives on PURCHASE and the private stays open.
- *
- * VERBATIM, INCLUDING THE TYPOGRAPHY. The curly apostrophes and the em dash
- * are the source text's; normalising them to ASCII would be an edit, and
- * once one edit is allowed the text stops being quotable.
- *
- * ONE CORRECTION, MADE ON REQUEST. The supplied D&H copy read "it need not
- * be connect to any track"; it now reads "connected". The first pass
- * reproduced that typo deliberately and flagged it rather than fixing it
- * quietly -- correcting a quotation without saying so is how a quotation
- * stops matching its source. Raised, confirmed, changed. It is the only
- * departure from the text as given, which is why it is written down here
- * rather than left for a future reader to notice as a discrepancy.
- *
- * SCHUYLKILL VALLEY has no entry in the supplied set because it has no
- * power. Its line stays as the codebase's own, which says so outright
- * rather than leaving a blank that reads as missing data.
- *
- * ==================================================================
- *  DESIGN NOTE 312 (preserved): TWO PRIVATES CANNOT RESERVE ONE HEX
- * ==================================================================
- *
- * The paraphrases this replaces once had D&H naming B20 -- C&SL's hex --
- * and M&H claiming F16, which is D&H's. The canonical text above settles it
- * by construction: C&SL is B-20, D&H is F-16, and M&H reserves nothing at
- * all because its power is the NYC exchange.
- *
- * KEPT AS A NOTE because two other files cite #312 by number
- * (`utils/privateReservations.ts` and `utils/sandboxState.ts`), and because
- * the DIVERGENCE it recorded is still live and still belongs on the
- * contract audit list:
- *
- *   ⚠ `auction.rs` gives Mohawk & Hudson a reserved hex of F16. On this
- *     board F16 is Scranton and Scranton is the D&H's. Nothing in the
- *     frontend reads the reserved hex to make a decision, so the divergence
- *     is cosmetic until the contract starts enforcing it -- and fixing it
- *     properly means changing `auction.rs`, not editing this text back.
- */
-const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
-  1: {
-    revenue: 5,
-    // Canonically correct: Schuylkill Valley is the one 1830 private with
-    // NO special ability. Said outright rather than left blank, because a
-    // blank slot reads as missing data.
-    ability: "No special power \u2014 bought for its revenue and as cheap entry into the auction.",
-  },
-  2: {
-    revenue: 10,
-    ability:
-      "A railroad owning the CL may lay a tile on the CL\u2019s hex (B-20). This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. This tile placement may be performed in addition to the railroad\u2019s normal tile placement\u2014on that turn only it may play two tiles.",
-  },
-  3: {
-    revenue: 15,
-    ability:
-      "A railroad owning the DH may lay a track tile and a station token on the DH\u2019s hex (F-16). The mountain costs $120 as usual, but laying the token is free. This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. The tile laid does count as the owning railroad\u2019s one tile placement for his turn. If the DH does not lay a station token on the turn it lays the tile on its starting hex, it must follow the normal rules when placing a station (i.e., it must have a legal train route to the hex). Other railroads may lay a tile on the DH starting hex subject to the ordinary rules, after which the DH special effects are no longer available",
-  },
-  4: {
-    revenue: 20,
-    ability:
-      "A player owning the MH may exchange it for a 10% share of NYC, provided he does not already hold 60% of the NYC shares and there is NYC shares available in the bank or the pool. The exchange may be made during the player\u2019s turn of a stock round or between the turns of other players or railroads in either stock or operating rounds. This action closes the MH.",
-  },
-  5: {
-    revenue: 25,
-    ability:
-      "The initial purchaser of the CA immediately receives a 10% share of PRR shares without further payment. This action does not close the CA. The PRR railroad will not be running at this point, but the shares may be retained or sold subject to the ordinary rules of the game.",
-  },
-  6: {
-    revenue: 30,
-    ability:
-      "The owner of the BO private company immediately receives the president\u2019s certificate of the B&O railroad without further payment and immediately sets a par share value. The BO private company may not be sold to any corporation, and does not change hands if the owning player loses the presidency of the B&O. When the B&O railroad purchases its first train this private company is closed down.",
-  },
-};
 
 /* ==================================================================
  *  DESIGN NOTE 314: WHOSE MONEY THE CONTROLS ARE ABOUT TO SPEND

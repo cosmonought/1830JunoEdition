@@ -139,6 +139,9 @@ export interface FinancialLedgerProps {
    *  `GameStateResponse`, so the Corporation Assets table's Market Price
    *  column needs it separately or renders a dash. */
   marketGrid?: MarketGridResponse | null;
+  /** Design note #405: passed through to the Player Assets table so seats
+   *  read as names rather than truncated addresses. */
+  playerLabel?: (address: string) => string | null;
 }
 
 export function FinancialLedger({
@@ -150,6 +153,7 @@ export function FinancialLedger({
   contractAddress,
   gameId,
   marketGrid,
+  playerLabel,
 }: FinancialLedgerProps) {
   // Called unconditionally (React hook rules) even before `gameState`
   // resolves -- `usePlayerNetWorths` itself no-ops cleanly on an empty
@@ -186,6 +190,7 @@ export function FinancialLedger({
             netWorthsEnabled={netWorthsEnabled}
             netWorthsLoading={netWorthsLoading}
             netWorthsError={netWorthsError}
+            playerLabel={playerLabel}
           />
           {/* Design note #14: exactly three tables -- Bank, Players,
               Corporations. */}
@@ -385,15 +390,43 @@ interface PlayerAssetsSectionProps {
    *  no visible reason. */
   netWorthsError: string | null;
   marketGrid?: MarketGridResponse | null;
+  /** Design note #405: resolves a seat to a readable name. Omitted, rows
+   *  fall back to the truncated address, which is the old behaviour. */
+  playerLabel?: (address: string) => string | null;
 }
 
-function PlayerAssetsSection({
+/* ==================================================================
+ *  DESIGN NOTE 405: ONE PLAYER ASSETS TABLE, TWO PLACES
+ * ==================================================================
+ *
+ * REPORTED: the Stock Round footer prints raw `juno1san...` addresses;
+ * replace it with a replication of this table so portfolio and net worth
+ * are trackable during the round.
+ *
+ * "A replication of" is the phrase that decides the implementation.
+ * Building a second table in `ContextualSubPanel.tsx` would replicate the
+ * LOOK and then drift on everything else -- the certificate-limit exemption
+ * (design note #7 in `utils/gameState.ts`) needs live market prices, the
+ * money columns need the net-worth query and its three distinct pending
+ * states, and none of that survives being copied by eye. The footer renders
+ * THIS component instead.
+ *
+ * THE RAW-ADDRESS PROBLEM IS NOT FIXED BY THE MOVE, and an earlier draft of
+ * this note claimed it was. It was wrong: this table calls `truncate(player)`
+ * and prints `juno1san...0000` exactly as the footer did, only shorter. So
+ * the fix is a real one -- an optional `playerLabel`, resolved the way every
+ * other roster in the app resolves a seat, falling back to truncation for an
+ * address with no name. Recorded rather than quietly corrected, because a
+ * note asserting a fix that does not exist is worse than no note.
+ */
+export function PlayerAssetsSection({
   gameState,
   netWorths,
   netWorthsEnabled,
   netWorthsLoading,
   netWorthsError,
   marketGrid,
+  playerLabel,
 }: PlayerAssetsSectionProps) {
   // Design note #7 in `utils/gameState.ts`: Yellow/Orange/Brown holdings
   // are exempt from the certificate limit, which needs live prices.
@@ -503,7 +536,8 @@ function PlayerAssetsSection({
                 return (
                   <tr key={player}>
                     <td style={styles.tdB}>
-                      {truncate(player)}
+                      {/* Design note #405: a name when there is one. */}
+                      {playerLabel?.(player) ?? truncate(player)}
                       {hasPriorityDeal && (
                         <span style={styles.priorityDealMark} title={PRIORITY_DEAL_TOOLTIP}>
                           #1
@@ -531,8 +565,21 @@ function PlayerAssetsSection({
                       ) : (
                         <div style={styles.holdingsCell}>
                           {privates.map((priv) => (
-                            <span key={priv.private_id} style={styles.holdingChipPrivate}>
+                            <span
+                              key={priv.private_id}
+                              style={styles.holdingChipPrivate}
+                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round.`}
+                            >
+                              {/* Design note #407: the figure certificate-
+                                  exchange timing is judged on, on screen
+                                  rather than one hover away. This column is
+                                  also what the Stock Round footer renders
+                                  (design note #405), which is exactly when
+                                  a player is weighing that trade. */}
                               {priv.name}
+                              <span style={styles.corpPrivateRevenue}>
+                                +${priv.revenue_per_or}
+                              </span>
                             </span>
                           ))}
                         </div>
@@ -754,7 +801,27 @@ function CorporationAssetsSection({
                               style={styles.corpPrivateChip}
                               title={`${priv.name} — $${priv.revenue_per_or} per Operating Round, paid to ${company.ticker}'s treasury.`}
                             >
+                              {/* ==================================================
+                                   DESIGN NOTE 407: THE REVENUE IS ON THE CHIP
+                                  ==================================================
+                              
+                                  REPORTED: privates must display their per-OR revenue wherever they are
+                                  listed outside the auction -- it is what certificate-exchange timing is
+                                  judged on.
+                              
+                                  Every one of these lists already KNEW the figure and spent it on a
+                                  `title` attribute. A tooltip is not a display: it needs a pointer, it
+                                  needs a pause, and it shows one private at a time -- so comparing "which
+                                  of these three is worth holding through Phase 5" meant hovering three
+                                  chips in sequence and remembering two numbers.
+                              
+                                  The auction is exempt because there the revenue is already the headline
+                                  of every card. Outside it, the privates are a list of names and the one
+                                  number that makes them different was the one being hidden. */}
                               {priv.private_id}. {priv.name}
+                              <span style={styles.corpPrivateRevenue}>
+                                +${priv.revenue_per_or}
+                              </span>
                             </span>
                           ))}
                         </span>
@@ -963,6 +1030,15 @@ const styles: Record<string, React.CSSProperties> = {
      at most a couple of privates, and each is a discrete asset with its own
      revenue, so they read as objects rather than as prose. */
   corpPrivateList: { display: "inline-flex", flexWrap: "wrap", gap: "4px" },
+  /** Design note #407: the per-OR figure, in the money green the rest of
+   *  the ledger uses for income. Kept as its own span so it stays legible
+   *  when the name beside it is long. */
+  corpPrivateRevenue: {
+    marginLeft: "5px",
+    fontWeight: 800,
+    color: "#1d7a45",
+    fontVariantNumeric: "tabular-nums",
+  },
   corpPrivateChip: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

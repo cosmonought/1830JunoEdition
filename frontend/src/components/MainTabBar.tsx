@@ -130,7 +130,34 @@ export function misplacedSurfaceTab(
   activeTab: MainTab,
   roundType: RoundType | null,
 ): MainTab | null {
-  if (!isPlayingSurface(activeTab)) return null;
+  /* ==================================================================
+   *  DESIGN NOTE 404: REFERENCE TABS GET THE BAR TOO
+   * ==================================================================
+   *
+   * REVERSES design note #390 above, which is left standing rather than
+   * edited away.
+   *
+   * That note excluded Ledger, Rules and the market chart on the reasoning
+   * that they are surfaces a player opens MID-TURN to check something, and
+   * that replacing their action panel with a redirect would make consulting
+   * the rules cost you your controls. The reasoning was sound and the
+   * conclusion was wrong, because it assumed the alternative was leaving the
+   * FULL action bar there -- and the full bar is the actual hazard.
+   *
+   * Playtest reports what that costs: Pass and Undo sit live on a screen the
+   * player is only reading, and a turn gets spent by accident from the Game
+   * Ledger. A misclick on a reference tab should not be able to end a turn.
+   *
+   * So the exclusion goes, and the panel on those tabs carries the Return
+   * button and NOTHING ELSE -- see the panel half in
+   * `ContextualActionBar.tsx`. #390's concern is answered by that
+   * restriction rather than by the exemption: nothing is taken away from a
+   * player who is reading, because the controls they lose are controls they
+   * cannot safely use from there anyway.
+   *
+   * `isPlayingSurface` is kept and still exported -- the distinction it
+   * draws is real and the bar's copy reads differently for the two cases --
+   * but it no longer gates the redirect. */
   const correct = surfaceTabFor(roundType);
   return activeTab === correct ? null : correct;
 }

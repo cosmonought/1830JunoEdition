@@ -855,7 +855,21 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1b1f29",
     color: "#8a919e",
   },
-  rosterPillName: { fontSize: FONT_SIZE.micro, fontWeight: 700 },
+  /* Design note #406: TRUNCATED, because six seats have to fit.
+     `rosterPill` is `nowrap`, so without a ceiling a table of long names
+     pushes the pills off the bar rather than shrinking them -- and six is
+     the maximum 1830 seats, so the crowded case is a supported one rather
+     than an edge. 8em holds roughly twelve characters at this size, which
+     covers every sandbox name outright and clips only genuinely long ones.
+     The full name stays in the pill's `title`. */
+  rosterPillName: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    maxWidth: "8em",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
   rosterPillValue: { fontSize: FONT_SIZE.small, fontWeight: 800 },
   rosterPillEscrow: { fontSize: FONT_SIZE.micro, opacity: 0.75 },
   playerCashEscrow: {

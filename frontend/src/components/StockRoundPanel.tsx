@@ -44,11 +44,18 @@
 //    codebase) so a given company reads as the same color everywhere.
 
 import React, { useEffect, useState } from "react";
-import type { PublicCompanyState } from "../utils/gameState";
+import type { PrivateCompanyState, PublicCompanyState } from "../utils/gameState";
 import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
-import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
+// Design note #409: `TrainChips` is back -- inline in the asset row, not in
+// the stacked cell design note #393 removed. `CapacityPill` and
+// `LastRoutePayout` stay out: the train LIMIT is about the next purchase (an
+// Operating Round question) and the payout now rides in the livery stripe
+// (design note #392).
+import { TrainChips } from "./TrainBadges";
 import { allowsMultipleBankPoolBuys, marketZoneForPrice } from "./StockMarketRenderer";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
+// Design note #391/#395: the canonical rules text a private row expands to.
+import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { FONT_SIZE } from "../styles/typography";
 // Design note #389: the same ink-on-fill helper the map's station
 // tokens use, so a corporate colour is legible on the card for the
@@ -70,8 +77,16 @@ import {
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
-  parValue: string;
-  onSelectParValue: (value: string) => void;
+  /** Design note #395: the room's private companies, so each card can list
+   *  the ones its corporation owns. Optional -- a caller without game state
+   *  simply renders no private rows. */
+  privateCompanies?: readonly PrivateCompanyState[];
+  /** Design note #398: the par selection for ONE corporation. A lookup
+   *  rather than a value -- a single shared string made every card's ladder
+   *  a view of the same selection, so pressing $90 on the PRR moved the
+   *  B&O's ladder with it. */
+  parValueFor: (companyId: number) => string;
+  onSelectParValue: (companyId: number, value: string) => void;
   /** Design note #29 in `App.tsx`: the target company travels with the
    *  click. Every card renders its own Buy/Sell, so there is no shared
    *  selection for these to read -- and `selectedProtocolId` /
@@ -192,9 +207,12 @@ function CorporationRoster({
   macroRoundNumber,
   playerCash,
   playerLabel,
-  expandedCompanyId,
-  onToggleCompany,
-  parValue,
+  privateCompanies,
+  activeCompanyId,
+  onActivateCompany,
+  expandedPrivateId,
+  setExpandedPrivateId,
+  parValueFor,
   onSelectParValue,
   onBuyShare,
   onSellShares,
@@ -210,10 +228,20 @@ function CorporationRoster({
   /** Design note #357: the acting player's spendable cash, for the buy gate. */
   playerCash?: number | null;
   playerLabel?: (address: string) => string | null;
-  expandedCompanyId: number | null;
-  onToggleCompany: (companyId: number) => void;
-  parValue: string;
-  onSelectParValue: (value: string) => void;
+  /** Design note #395: the whole private roster; each card filters out its
+   *  own. Optional so a caller without game state renders no private rows
+   *  rather than needing a stub. */
+  privateCompanies?: readonly PrivateCompanyState[];
+  /** Design note #396: the card whose action bar is rendered. `null` means
+   *  no card is active and no card shows Buy/Sell/Par. */
+  activeCompanyId: number | null;
+  onActivateCompany: (companyId: number | null) => void;
+  /** Design note #395: which private's rules text is open, across all
+   *  cards -- one at a time, like the active card but a separate cursor. */
+  expandedPrivateId: number | null;
+  setExpandedPrivateId: (privateId: number | null) => void;
+  parValueFor: (companyId: number) => string;
+  onSelectParValue: (companyId: number, value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
@@ -238,7 +266,19 @@ function CorporationRoster({
           // Design note #389: derived from the fill, so every corporation's
           // stripe is legible without a per-company decision.
           const liveryInk = bestContrastTextColor(color);
-          const isExpanded = company.company_id === expandedCompanyId;
+          /* Design note #393: `owned_trains` is nullable on the wire and the
+             badges this row replaced absorbed that internally. Normalised
+             once here rather than guarded at each of the three reads. */
+          const trains = company.owned_trains ?? [];
+          const tokensPlaced = company.station_token_hexes?.length ?? 0;
+          /* Design note #395: the same predicate `corporationPrivateCompanies`
+             applies -- open, and held by THIS corporation. Filtered here
+             rather than imported because that helper takes a whole
+             `GameStateResponse` and this panel is given only the roster. */
+          const ownedPrivates = (privateCompanies ?? []).filter(
+            (priv) => !priv.closed && priv.owner_protocol_id === company.company_id,
+          );
+          const isActive = company.company_id === activeCompanyId;
           const market = marketPrices?.[company.company_id] ?? null;
 
           // Sorted by stake, largest first. The president is NOT forced to
@@ -261,13 +301,15 @@ function CorporationRoster({
                     ticker, prices, holdings, pools, all of it. A caret is a
                     ~20px target on a ~300px card that is itself the thing
                     being chosen; making the card the target removes the
-                    question of where to click. Design note #388: it
-                    expands -- there is no longer a second paradigm for it
-                    to mean something else in. */}
+                    question of where to click. Design note #396: what the
+                    click now does is make this card ACTIVE -- clicking the
+                    active card again deactivates it, so there is always a
+                    way back to a board with no controls on it at all. */}
                 <button
                   type="button"
-                  onClick={() => onToggleCompany(company.company_id)}
-                  aria-expanded={isExpanded}
+                  onClick={() => onActivateCompany(isActive ? null : company.company_id)}
+                  aria-expanded={isActive}
+                  aria-label={`${company.ticker} — ${isActive ? "hide" : "show"} share actions`}
                   style={styles.rosterCardToggle}
                 >
                 {/* ==================================================
@@ -321,25 +363,53 @@ function CorporationRoster({
                       carrying their own, so neither can become unreadable
                       on a corporation whose colour they were not designed
                       against. */}
-                  {company.is_floated ? (
+                  {/* ==================================================
+                       DESIGN NOTE 392: THE PAYOUT RIDES IN THE STRIPE
+                      ==================================================
+
+                      REPORTED: move the Last Payout value into the top
+                      coloured header, opposite the abbreviation.
+
+                      It was one of four stacked label/value cells below,
+                      each spending a caption line on a single figure. Last
+                      payout is the one of the four a share buyer weighs
+                      most directly -- it is what the corporation last
+                      handed its shareholders -- and the stripe had unused
+                      width on the right.
+
+                      NOT the same thing as the float badge beside it: the
+                      badge says whether the company is trading at all, the
+                      payout says what it paid when it did. Both are
+                      one-glance facts about whether the share is worth
+                      buying, which is why they share the row a player
+                      reads first. */}
+                  <span style={styles.rosterLiveryRight}>
                     <span
-                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
-                      title={
-                        metFloatThreshold(company)
-                          ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
-                          : `Auto-floated by the B&O private company, not by reaching ${FLOAT_THRESHOLD_PERCENT}% sold.`
-                      }
+                      style={{ ...styles.rosterLiveryPayout, color: liveryInk }}
+                      title={`Last route payout: $${company.last_route_revenue}. What this corporation most recently earned from running trains.`}
                     >
-                      FLOATED
+                      ${company.last_route_revenue}
                     </span>
-                  ) : (
-                    <span
-                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
-                      title={`${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
-                    >
-                      {soldToPlayersPercent(company)}% / {FLOAT_THRESHOLD_PERCENT}%
-                    </span>
-                  )}
+                    {company.is_floated ? (
+                      <span
+                        style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
+                        title={
+                          metFloatThreshold(company)
+                            ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
+                            : `Auto-floated by the B&O private company, not by reaching ${FLOAT_THRESHOLD_PERCENT}% sold.`
+                        }
+                      >
+                        FLOATED
+                      </span>
+                    ) : (
+                      <span
+                        style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
+                        title={`${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
+                      >
+                        {soldToPlayersPercent(company)}% / {FLOAT_THRESHOLD_PERCENT}%
+                      </span>
+                    )}
+                  </span>
                 </div>
 
                 {/* The two prices, side by side and labelled. Market is the
@@ -372,58 +442,107 @@ function CorporationRoster({
                     <span style={styles.rosterPriceValueMuted}>{company.par_value ?? "--"}</span>
                     <span style={styles.rosterPriceLabel}>IPO / par</span>
                   </div>
-                  <span style={styles.rosterChevron} aria-hidden="true">
-                    {isExpanded ? "\u25B2" : "\u25BC"}
-                  </span>
                 </div>
 
-                {/* ---- Design note #31: the operating snapshot ----------
-                    Trains, capacity and last payout, on the FRONT face.
-                    A Stock Round decision is a bet on how a corporation
-                    will operate, and none of that was visible without
-                    expanding the card -- which is exactly the moment a
-                    player is choosing between eight of them and least
-                    wants to open each one. Whether a company is one
-                    purchase from losing its trains, or already at its
-                    limit and unable to buy, changes what a share is worth
-                    before you look at the price.
+                {/* ==================================================
+                     DESIGN NOTE 393: ONE LINE OF ASSETS
+                    ==================================================
 
-                    Rendered with the SAME components the Operating Round
-                    table uses (`TrainBadges.tsx`), on the light surface --
-                    so the rust colouring cannot disagree between the two
-                    screens. */}
-                <div style={styles.rosterOpsRow}>
-                  <div style={styles.rosterOpsCell}>
-                    <span style={styles.rosterOpsLabel}>Treasury</span>
-                    <span style={styles.rosterOpsTreasury}>${company.treasury}</span>
-                  </div>
-                  <div style={styles.rosterOpsCell}>
-                    <span style={styles.rosterOpsLabel}>Trains</span>
+                    REPORTED: condense Treasury, Trains and Station Tokens
+                    into a single tightly packed inline row with minimal
+                    icons, and strip out the bulky badges and stacked
+                    labels.
+
+                    Design note #31 put this data on the front for a reason
+                    that still holds -- whether a corporation is one
+                    purchase from losing its trains changes what a share is
+                    worth before you look at the price. What it got wrong
+                    was the FORMAT: four cells, each with a caption line
+                    above a value, plus `TrainChips` and `CapacityPill`
+                    rendering pill-shaped badges with their own padding and
+                    borders. Four captions and two badge sets, times eight
+                    cards, to say three numbers.
+
+                    THE ICONS ARE THE CAPTIONS. A coin, a locomotive and a
+                    marker are unambiguous in context and cost no line of
+                    their own, so the row is one line instead of five. Each
+                    carries a `title` with the words spelled out, because an
+                    icon that is obvious to a returning player is not
+                    obvious to a new one and a tooltip is free.
+
+                    WHAT WAS LOST, AND WHY IT CAME BACK (design note #409):
+                    this note argued that `TrainChips`' per-train rust
+                    colouring could go, because "on a Stock Round card the
+                    question is what does it own". That was wrong, and the
+                    error is visible in this same note's own second
+                    paragraph, which had already said the opposite: whether
+                    a corporation is one purchase from losing its trains
+                    changes what a share is worth BEFORE you look at the
+                    price. Rust is not an Operating Round detail a share
+                    buyer can look up later -- it is the difference between
+                    a fleet and a pile of scrap, and the Stock Round is
+                    exactly when it is being priced.
+
+                    So the chips are back, INLINE. What #393 was actually
+                    right about was the LAYOUT -- four stacked caption/value
+                    cells -- and none of that returns. `TrainChips` renders
+                    as an inline-flex row of pills (`chipRow`), so it drops
+                    into this line beside the coin and the token count
+                    without adding a row of its own.
+
+                    `CapacityPill` stays gone. The train LIMIT is a rule
+                    about what the corporation may buy NEXT, which is an
+                    Operating Round decision; the rust colouring is about
+                    what it owns NOW, which is the share price. Restoring
+                    the one that was wrongly dropped is not a reason to
+                    restore the other.
+
+                    STATION TOKENS as placed-over-limit, which neither of
+                    the old cells showed at all -- `CapacityPill` was about
+                    TRAINS. A corporation with 2 of 3 tokens down has one
+                    more city it can claim, and that is a real input to a
+                    share decision that the old row simply omitted. */}
+                <div style={styles.assetRow}>
+                  <span
+                    style={styles.assetItem}
+                    title={`Treasury: $${company.treasury} in this corporation's own funds.`}
+                  >
+                    <span aria-hidden="true">&#128176;</span>
+                    <span style={styles.assetValue}>${company.treasury}</span>
+                  </span>
+                  <span style={styles.assetDivider} aria-hidden="true">|</span>
+                  {/* Design note #409: the real chips, with the rust
+                      colouring a share buyer is pricing. `compact` and the
+                      light surface, matching the Operating Round's own
+                      rendering so the two screens cannot disagree about
+                      which tier is about to rust. */}
+                  <span
+                    style={styles.assetItem}
+                    title={
+                      trains.length > 0
+                        ? `Trains owned: ${trains.join(", ")}. Colour marks how close each is to rusting.`
+                        : "This corporation owns no trains."
+                    }
+                  >
+                    <span aria-hidden="true">&#128642;</span>
                     <TrainChips
-                      trains={company.owned_trains}
+                      trains={trains}
                       phase={phase ?? null}
                       surface="light"
                       compact
                       outlook={outlook}
                     />
-                  </div>
-                  <div style={styles.rosterOpsCell}>
-                    <span style={styles.rosterOpsLabel}>Limit</span>
-                    <CapacityPill
-                      trains={company.owned_trains}
-                      phase={phase ?? null}
-                      surface="light"
-                      compact
-                    />
-                  </div>
-                  <div style={styles.rosterOpsCell}>
-                    <span style={styles.rosterOpsLabel}>Last payout</span>
-                    <LastRoutePayout
-                      surface="light"
-                      compact
-                      revenue={company.last_route_revenue}
-                    />
-                  </div>
+                  </span>
+                  <span style={styles.assetDivider} aria-hidden="true">|</span>
+                  <span
+                    style={styles.assetItem}
+                    title={`Station tokens: ${tokensPlaced} of ${company.station_token_limit} placed on the map.`}
+                  >
+                    <span aria-hidden="true">&#127914;</span>
+                    <span style={styles.assetValue}>
+                      {tokensPlaced}/{company.station_token_limit}
+                    </span>
+                  </span>
                 </div>
 
                 {/* ==================================================
@@ -462,10 +581,45 @@ function CorporationRoster({
                     holds: seeing them sitting second on an equal stake is
                     precisely what a player needs to notice. */}
                 <div style={styles.ownershipTable} role="table" aria-label={`${company.ticker} ownership`}>
+                  {/* ==================================================
+                       DESIGN NOTE 394: ENTITY / SHARES / PRICE
+                      ==================================================
+
+                      REPORTED: standardise three columns; give the IPO and
+                      Bank Pool rows both a share count and a percentage
+                      plus their current price, and leave the player rows'
+                      price blank.
+
+                      The old third column was `%`, which meant the header
+                      described the banks and the players identically while
+                      the two rows answered different questions. A player's
+                      percentage is their STAKE; the IPO's percentage is
+                      INVENTORY, and what a buyer wants next to inventory is
+                      what it costs.
+
+                      SO THE PERCENTAGE MOVES IN BESIDE THE COUNT -- `7
+                      (70%)` -- and the freed column carries price. Both
+                      figures survive; they are just no longer pretending to
+                      be the same kind of fact as each other.
+
+                      THE TWO PRICES ARE DIFFERENT, and that is 1830, not a
+                      display choice: an IPO share is bought at the PAR
+                      price the president set, a Bank Pool share at the
+                      CURRENT MARKET price. Printing one price for both
+                      rows would be wrong in the common case where a
+                      corporation has risen or fallen since it floated --
+                      which is most of the game.
+
+                      A PLAYER ROW'S PRICE IS BLANK, deliberately, and not
+                      a dash. There is no price at which a player's shares
+                      are for sale: they are not a pool you can buy from,
+                      and printing the market figure there would read as an
+                      offer. Blank says "this column does not apply to this
+                      row", which is the truth. */}
                   <div style={styles.ownershipHeadRow} role="row">
-                    <span style={styles.ownershipName} role="columnheader">Shareholder</span>
+                    <span style={styles.ownershipName} role="columnheader">Entity</span>
                     <span style={styles.ownershipNum} role="columnheader">Shares</span>
-                    <span style={styles.ownershipNum} role="columnheader">%</span>
+                    <span style={styles.ownershipNum} role="columnheader">Price</span>
                   </div>
 
                   {/* The two banks, always shown -- an IPO at 0% means the
@@ -474,16 +628,29 @@ function CorporationRoster({
                   <div style={styles.ownershipRow} role="row">
                     <span style={styles.ownershipName} role="cell">IPO</span>
                     <span style={styles.ownershipNum} role="cell">
-                      {company.ipo_pool_percentage / 10}
+                      {company.ipo_pool_percentage / 10} ({company.ipo_pool_percentage}%)
                     </span>
-                    <span style={styles.ownershipNum} role="cell">{company.ipo_pool_percentage}%</span>
+                    <span
+                      style={styles.ownershipNum}
+                      role="cell"
+                      title="IPO shares are bought at the par price set when this corporation was floated."
+                    >
+                      {company.par_value === null ? "--" : `$${company.par_value}`}
+                    </span>
                   </div>
                   <div style={styles.ownershipRow} role="row">
                     <span style={styles.ownershipName} role="cell">Bank Pool</span>
                     <span style={styles.ownershipNum} role="cell">
-                      {company.bank_pool_percentage / 10}
+                      {company.bank_pool_percentage / 10} ({company.bank_pool_percentage}%)
                     </span>
-                    <span style={styles.ownershipNum} role="cell">{company.bank_pool_percentage}%</span>
+                    <span
+                      style={styles.ownershipNum}
+                      role="cell"
+                      title="Bank Pool shares are bought at the current market price."
+                    >
+                      {/* Design note #387: no par, no market figure. */}
+                      {company.par_value === null || market === null ? "--" : `$${market}`}
+                    </span>
                   </div>
 
                   {/* Design note #378: the line between unowned and owned. */}
@@ -504,19 +671,91 @@ function CorporationRoster({
                         <span style={styles.ownershipName} role="cell">
                           {holding.isPresident && (
                             <span title="President — controls this corporation" aria-label="President">
-                              👑
+                              &#128081;
                             </span>
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                           {holding.isSelf && <span style={styles.rosterYouTag}>you</span>}
                         </span>
                         <span style={styles.ownershipNum} role="cell">
-                          {certificateCount(holding.percentage, holding.isPresident)}
+                          {certificateCount(holding.percentage, holding.isPresident)} ({holding.percentage}%)
                         </span>
-                        <span style={styles.ownershipNum} role="cell">{holding.percentage}%</span>
+                        {/* Design note #394: blank, not a dash. */}
+                        <span style={styles.ownershipNum} role="cell" />
                       </div>
                     ))
                   )}
+
+                  {/* ==================================================
+                       DESIGN NOTE 395: THE PRIVATES THIS COMPANY OWNS
+                      ==================================================
+
+                      REPORTED: list corporate-owned privates at the bottom
+                      of the table -- name left with an ellipsis, revenue
+                      right -- and make each row expand to its full name and
+                      rules text.
+
+                      They belong in the ownership table rather than beside
+                      it because they ARE holdings: a private inside a
+                      corporation is an asset the shareholders own a piece
+                      of, and it pays into the treasury every Operating
+                      Round. A buyer weighing PRR against B&O wants the
+                      "+$30/OR of privates" in the same block as the share
+                      counts, not in a separate panel.
+
+                      THE ELLIPSIS IS LOAD-BEARING. "Champlain & St.
+                      Lawrence" is 24 characters and the card is fixed-width
+                      by design note #22; without `textOverflow` it wraps
+                      and every card carrying that private grows a line.
+                      Clipping it is only acceptable BECAUSE the row expands
+                      -- the full name is one click away, which is the trade
+                      the requirement asks for.
+
+                      EXPANSION IS PER PRIVATE AND INDEPENDENT of which card
+                      is active. Reading what the D&H does is a reference
+                      lookup, not an action, so it must not compete with the
+                      active-card selection that governs Buy and Sell
+                      (design note #396). A player can read a private on one
+                      card while a different card holds the action bar. */}
+                  {ownedPrivates.length > 0 && (
+                    <>
+                      <hr style={styles.ownershipRule} />
+                      {ownedPrivates.map((priv) => {
+                        const open = expandedPrivateId === priv.private_id;
+                        const entry = PRIVATE_COMPANY_CATALOG[priv.private_id];
+                        return (
+                          <div key={priv.private_id} style={styles.privateRowGroup}>
+                            <button
+                              type="button"
+                              style={styles.privateRow}
+                              aria-expanded={open}
+                              onClick={(event) => {
+                                // The card behind this is itself a click
+                                // target (design note #396); reading a
+                                // private must not also activate the card.
+                                event.stopPropagation();
+                                setExpandedPrivateId(open ? null : priv.private_id);
+                              }}
+                              title={open ? priv.name : `${priv.name} — click for its rules text.`}
+                            >
+                              <span style={open ? styles.privateNameOpen : styles.privateName}>
+                                {priv.name}
+                              </span>
+                              <span style={styles.privateRevenue}>
+                                +${priv.revenue_per_or}
+                              </span>
+                            </button>
+                            {open && (
+                              <p style={styles.privateRules}>
+                                {entry?.ability ?? "No recorded special power."}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+
                 </div>
 
                 {/* ==================================================
@@ -564,7 +803,7 @@ function CorporationRoster({
               connectedAddress={connectedAddress}
               macroRoundNumber={macroRoundNumber}
               playerCash={playerCash}
-              parValue={parValue}
+              parValue={parValueFor(company.company_id)}
               onSelectParValue={onSelectParValue}
               onBuyShare={onBuyShare}
               onSellShares={onSellShares}
@@ -614,17 +853,42 @@ function CorporationRoster({
               style={{
                 ...styles.rosterCard,
                 ...(company.is_floated ? {} : styles.rosterCardUnfloated),
-                borderColor: isExpanded ? CARD_BORDER_ACTIVE : CARD_BORDER,
+                ...(isActive ? styles.rosterCardActive : {}),
+                borderColor: isActive ? CARD_BORDER_ACTIVE : CARD_BORDER,
               }}
             >
               {cardFace}
-              {/* Design note #388: ON THE FRONT, unconditionally. The
-                  actions were gated on `isExpanded` because the flip and
-                  the accordion both treated them as the hidden half of the
-                  card. There is no hidden half now, and a Par/Buy/Sell
-                  control that requires a click to reveal is a control the
-                  player has to remember is there. */}
-              {cardActions}
+              {/* ==================================================
+                   DESIGN NOTE 396: ONE CARD HOLDS THE CONTROLS
+                  ==================================================
+
+                  REPORTED: showing Buy, Sell and Par on all eight cards is
+                  massive clutter; a card must be clicked to become active,
+                  and only the active card renders an action bar.
+
+                  THIS REVERSES DESIGN NOTE #388, which is left standing
+                  above rather than edited away. That note argued a control
+                  requiring a click to reveal is one the player has to
+                  remember is there -- and taken alone the argument is
+                  sound. What it did not weigh is the MULTIPLIER: eight
+                  corporations, each with a source switch, a buy button, a
+                  par ladder and a five-way sell selector, is roughly 160
+                  controls on one screen. At that density the problem is no
+                  longer whether an individual control is discoverable, it
+                  is that none of them are, because the eye has nowhere to
+                  land.
+
+                  The reversal is narrow and #388's real point survives:
+                  the actions still render on the FRONT of the card, in
+                  place, under the numbers they act on. Nothing was moved
+                  to a back face or a modal. The only change is that eight
+                  copies became one.
+
+                  WHY CLICKING AGAIN CLEARS IT: a player who has finished
+                  with a card needs a way back to the dense read-only grid,
+                  and making the same target toggle is one fewer control
+                  than a close button. */}
+              {isActive && cardActions}
             </div>
           );
         })}
@@ -662,8 +926,9 @@ function CompanyActions({
   connectedAddress: string | null;
   macroRoundNumber?: number;
   playerCash?: number | null;
+  /** This company's own par selection -- design note #398. */
   parValue: string;
-  onSelectParValue: (value: string) => void;
+  onSelectParValue: (companyId: number, value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
@@ -838,6 +1103,59 @@ function CompanyActions({
 
   return (
     <div style={styles.cardActions}>
+      {/* ==================================================================
+           DESIGN NOTE 397: PAR COMES BEFORE THE PRESIDENT'S SHARE
+          ==================================================================
+
+          REPORTED: the Par button flow is chronologically backward -- the
+          par selector must render ABOVE "Buy President's Share".
+
+          It sat below, sharing a row with the Sell selector, because both
+          are the same KIND of control -- a strip of numeric options with
+          exactly one chosen -- and design note #22 paired them on that
+          basis. Pairing by control TYPE is what put them out of order.
+
+          The rulebook order is the order the player acts in: you set a par
+          price and THEN buy the president's certificate at it, in one
+          motion. Rendering the price second asked the player to press Buy,
+          notice it used a number chosen somewhere below, and scroll back --
+          the number the button spends is now above the button that spends
+          it.
+
+          THE SELL BLOCK STAYS PUT, and loses nothing by it: par is only
+          offered while `par_value === null`, and a corporation nobody has
+          parred has no shares for anyone to sell. The two controls were
+          never on screen together. */}
+
+        {company.par_value === null && (
+          <div style={styles.numericRowBlock}>
+            <span style={styles.cardActionsLabel}>Par</span>
+            <div style={styles.sellSlashRow} role="group" aria-label="Par value">
+              {PAR_VALUE_LADDER.map((value, index) => (
+                <React.Fragment key={value}>
+                  {index > 0 && (
+                    <span style={styles.sellSlash} aria-hidden="true">
+                      /
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-pressed={parValue === value}
+                    style={{
+                      ...styles.sellSlashOption,
+                      ...(parValue === value ? styles.sellSlashOptionActive : {}),
+                    }}
+                    // Design note #398: says WHICH company's ladder moved.
+                    onClick={() => onSelectParValue(company.company_id, value)}
+                  >
+                    {value}
+                  </button>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        )}
+
       {/* Buy */}
       <div style={styles.cardActionsBlock}>
         <span style={styles.cardActionsLabel}>Buy share</span>
@@ -1040,34 +1358,6 @@ function CompanyActions({
           rejected. `par_value === null` is the real question: has anyone
           set this yet? Floating is a later, separate event. */}
       <div style={styles.numericRowPair}>
-        {company.par_value === null && (
-          <div style={styles.numericRowBlock}>
-            <span style={styles.cardActionsLabel}>Par</span>
-            <div style={styles.sellSlashRow} role="group" aria-label="Par value">
-              {PAR_VALUE_LADDER.map((value, index) => (
-                <React.Fragment key={value}>
-                  {index > 0 && (
-                    <span style={styles.sellSlash} aria-hidden="true">
-                      /
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    aria-pressed={parValue === value}
-                    style={{
-                      ...styles.sellSlashOption,
-                      ...(parValue === value ? styles.sellSlashOptionActive : {}),
-                    }}
-                    onClick={() => onSelectParValue(value)}
-                  >
-                    {value}
-                  </button>
-                </React.Fragment>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Design note #25: no holding, no Sell. Rendering a sell
             control for shares you do not own is offering an action that
             cannot succeed -- every size disabled, a line-through on all
@@ -1234,22 +1524,24 @@ function truncateHolder(address: string): string {
 /** Design note #5: hand-kept duplicate of StockMarketRenderer.tsx's
  *  module-local (unexported) `TICKER_COLORS`. */
 const TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c0392b", // PRR
-  2: "#2980b9", // NYC
-  3: "#8e44ad", // CPR
-  4: "#27ae60", // B&O
-  5: "#d68910", // C&O
-  6: "#16a085", // ERIE
-  7: "#b03a2e", // NNH
-  8: "#34495e", // B&M
+  1: "#c8102e", // PRR  -- red
+  2: "#1a1a1a", // NYC  -- black
+  3: "#7b4a22", // CPR  -- brown
+  4: "#12408f", // B&O  -- dark blue
+  5: "#5bc8e8", // C&O  -- light blue / cyan
+  6: "#f5cd3a", // ERIE -- yellow
+  7: "#ee7c22", // NNH  -- orange
+  8: "#1e7a45", // B&M  -- green
 };
 const FALLBACK_TICKER_COLOR = "#5a6270";
 function tickerColor(companyId: number): string {
   return TICKER_COLORS[companyId] ?? FALLBACK_TICKER_COLOR;
 }
 
-/** Standard 1830 par ladder, per this pass's own requirement. */
-const PAR_VALUE_LADDER: readonly string[] = ["67", "71", "76", "82", "90", "100"];
+/** Standard 1830 par ladder, per this pass's own requirement.
+ *  Exported since design note #399: the B&O prompt offers the same six
+ *  rungs, and two copies of a price ladder is two ladders that can differ. */
+export const PAR_VALUE_LADDER: readonly string[] = ["67", "71", "76", "82", "90", "100"];
 
 /** Every sell-bundle size 1830 can express: 10% certificate blocks up to the
  *  50% Bank Pool cap. F-6.
@@ -1310,7 +1602,8 @@ const FLOAT_THRESHOLD_PERCENT = 60;
 
 export function StockRoundPanel({
   publicCompanies,
-  parValue,
+  privateCompanies,
+  parValueFor,
   onSelectParValue,
   onBuyShare,
   onSellShares,
@@ -1331,7 +1624,14 @@ export function StockRoundPanel({
   // same way an unready session does -- one flag, so no control can be
   // wired to one condition and miss the other.
   const controlsDisabled = !sessionReady || actionsLockedReason != null;
-  const [expandedCompanyId, setExpandedCompanyId] = useState<number | null>(null);
+  /* Design note #396: the ACTIVE card -- the one whose action bar renders.
+     Renamed from `expandedCompanyId`: it no longer expands anything, it
+     decides where the controls live. */
+  const [activeCompanyId, setActiveCompanyId] = useState<number | null>(null);
+  /* Design note #395: a separate cursor for the private rules text, so
+     reading what the D&H does never moves the action bar off the card the
+     player was working on. */
+  const [expandedPrivateId, setExpandedPrivateId] = useState<number | null>(null);
 
   /* ==================================================================
    *  DESIGN NOTE 348: A FLIPPED CARD BELONGS TO WHOEVER FLIPPED IT
@@ -1358,7 +1658,11 @@ export function StockRoundPanel({
    * seat with the same name would not re-fire -- which cannot happen, since
    * the label is derived from the seat and the seats are distinct. */
   useEffect(() => {
-    setExpandedCompanyId(null);
+    setActiveCompanyId(null);
+    // Design note #395: the private text closes with the turn too. It is
+    // reference material for the player who opened it, not a view the next
+    // seat inherits.
+    setExpandedPrivateId(null);
   }, [activePlayerLabel]);
 
   /* ---- Design note #10: ACTIONS LIVE IN THE CARD ---------------------
@@ -1417,11 +1721,12 @@ export function StockRoundPanel({
         macroRoundNumber={macroRoundNumber}
         playerCash={playerCash}
         playerLabel={playerLabel}
-        expandedCompanyId={expandedCompanyId}
-        onToggleCompany={(id) =>
-          setExpandedCompanyId((current) => (current === id ? null : id))
-        }
-        parValue={parValue}
+        privateCompanies={privateCompanies}
+        activeCompanyId={activeCompanyId}
+        onActivateCompany={setActiveCompanyId}
+        expandedPrivateId={expandedPrivateId}
+        setExpandedPrivateId={setExpandedPrivateId}
+        parValueFor={parValueFor}
         onSelectParValue={onSelectParValue}
         onBuyShare={onBuyShare}
         onSellShares={onSellShares}
@@ -1494,12 +1799,6 @@ const styles: Record<string, React.CSSProperties> = {
     // Fills whatever height the card has, so there is never a dead strip
     // below the content inside a collapsed card.
     flex: "1 1 auto",
-  },
-  rosterChevron: {
-    marginLeft: "auto",
-    alignSelf: "center",
-    fontSize: FONT_SIZE.small,
-    color: CARD_INK_FAINT,
   },
   /* ---- Per-company action drawer (design note #10) ---- */
   cardActions: {
@@ -1597,6 +1896,101 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     opacity: 0.85,
   },
+  /** Design note #392: the right-hand cluster in the stripe -- payout then
+   *  float status. Grouped so the pair stays together when a long
+   *  corporate name pushes on them. */
+  rosterLiveryRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: "7px",
+    flexShrink: 0,
+  },
+  rosterLiveryPayout: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    fontVariantNumeric: "tabular-nums",
+    letterSpacing: "0.01em",
+  },
+  /* ---- Design note #393: the one-line asset row ----
+     A single flex line directly under the stripe. `tabular-nums` on the
+     values so the figures line up down a column of eight cards, which is
+     most of what makes a dense grid scannable. */
+  assetRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    flexWrap: "wrap",
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK,
+    lineHeight: 1.35,
+  },
+  assetItem: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "3px",
+    cursor: "help",
+  },
+  assetValue: {
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+  },
+  assetDivider: {
+    color: CARD_DIVIDER,
+    fontWeight: 400,
+  },
+  /* ---- Design note #395: corporate-owned private rows ---- */
+  privateRowGroup: {
+    display: "flex",
+    flexDirection: "column",
+  },
+  privateRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: "8px",
+    width: "100%",
+    padding: "2px 4px",
+    margin: 0,
+    border: "none",
+    borderRadius: "4px",
+    background: "transparent",
+    font: "inherit",
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK,
+    textAlign: "left",
+    cursor: "pointer",
+  },
+  /** Collapsed: one line, clipped. The card is a fixed width (design note
+   *  #22) and "Champlain & St. Lawrence" is longer than it. */
+  privateName: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+  },
+  /** Expanded: the same text, allowed to wrap to its full length. */
+  privateNameOpen: {
+    whiteSpace: "normal",
+    fontWeight: 700,
+    minWidth: 0,
+  },
+  privateRevenue: {
+    flexShrink: 0,
+    fontWeight: 700,
+    color: "#1d7a45",
+    fontVariantNumeric: "tabular-nums",
+  },
+  privateRules: {
+    margin: "1px 4px 5px",
+    fontSize: FONT_SIZE.micro,
+    lineHeight: 1.45,
+    color: CARD_INK_MUTED,
+  },
+  /** Design note #396: the active card carries the controls, so it is
+   *  lifted off the grid rather than merely outlined. */
+  rosterCardActive: {
+    boxShadow: "0 0 0 1px rgba(77,142,224,0.35), 0 6px 18px rgba(0,0,0,0.28)",
+  },
   /** Float status inside the stripe. Outlined in the stripe's own ink
    *  rather than filled, so it reads as a badge without introducing a
    *  third colour onto a band that is already carrying two. */
@@ -1660,32 +2054,6 @@ const styles: Record<string, React.CSSProperties> = {
      below. `flexWrap` because a corporation at its Phase 2 limit can hold
      four chips, which will not sit beside two more cells on a narrow
      card. ---- */
-  rosterOpsRow: {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: "14px",
-    paddingTop: "8px",
-    marginTop: "2px",
-    borderTopWidth: "1px",
-    borderTopStyle: "solid",
-    borderTopColor: CARD_DIVIDER,
-  },
-  rosterOpsCell: { display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 },
-  rosterOpsTreasury: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    fontVariantNumeric: "tabular-nums",
-    color: CARD_INK,
-  },
-  rosterOpsLabel: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-    color: CARD_INK_FAINT,
-  },
   rosterPrice: { display: "flex", flexDirection: "column", gap: "1px" },
   rosterPriceValue: {
     fontSize: FONT_SIZE.heading, fontWeight: 800, color: CARD_INK,

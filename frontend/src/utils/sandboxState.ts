@@ -389,7 +389,25 @@ export function sandboxMarketPositions(marks: SandboxMarketPrices): SandboxMarke
     // Design note #272: the cell comes off the mark. `cellForPrice` used to
     // be taken as a parameter and called here on every render; it is now
     // used once, at seed time, so a walked token stays where it walked.
-    if (!corp.floated || mark === null) continue;
+    /* ==================================================================
+     *  DESIGN NOTE 401: THE MARK IS THE POSITION
+     * ==================================================================
+     *
+     * REPORTED: when a company is parred its token appears only on the
+     * IPO/Par tray, not on the matrix.
+     *
+     * `corp.floated` used to gate this too, and it is read from the STATIC
+     * fixture table -- so a corporation parred during play could never gain
+     * a position no matter what the live state said. The tray reads
+     * `par_value` off the game document and showed the company; the chart
+     * read a constant from a mid-game fixture and did not.
+     *
+     * The mark alone is the right test, because a mark IS a position: it
+     * carries the cell the token stands on. A company with no mark has no
+     * position, which is exactly design note #387's rule, and `placeParMark`
+     * below is what creates one at the moment a par is set. Consulting a
+     * second, older source for the same fact was the bug. */
+    if (mark === null) continue;
     positions.push({
       company_id: corp.id,
       ticker: corp.ticker,
@@ -486,6 +504,33 @@ export function sandboxInitialMarketPrices(
       : { price: corp.market, ...cell };
   }
   return marks;
+}
+
+/**
+ * Puts a newly-parred corporation's token on its par cell.
+ *
+ * Design note #401: parring is what gives a corporation a price, and a
+ * price is a cell. Called when `par_value` goes from null to set -- see the
+ * caller in `App.tsx`, which diffs the state rather than having the reducer
+ * report it, for design note #337's reason.
+ *
+ * RETURNS THE SAME OBJECT when there is nothing to do, so the caller can
+ * skip its state write on identity: an unknown price, an unmappable cell,
+ * or a company that already has a mark. Already having one matters -- a
+ * token that has walked up the chart must not be dragged back to par
+ * because something re-read the par value.
+ */
+export function placeParMark(
+  prices: SandboxMarketPrices,
+  companyId: number,
+  parPrice: number,
+  cellForPrice: (price: number) => { x: number; y: number } | null,
+): SandboxMarketPrices {
+  if (prices[companyId]) return prices;
+  if (!Number.isFinite(parPrice) || parPrice <= 0) return prices;
+  const cell = cellForPrice(parPrice);
+  if (!cell) return prices;
+  return { ...prices, [companyId]: { price: parPrice, ...cell } };
 }
 
 /** Just the prices, for the corporation cards -- design note #2's "one

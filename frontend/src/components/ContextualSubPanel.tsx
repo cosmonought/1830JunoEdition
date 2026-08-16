@@ -51,17 +51,16 @@
 
 import React from "react";
 
-import type { GameStateResponse } from "../utils/gameState";
+import type { GameStateResponse, QueryCapableClient } from "../utils/gameState";
+import { usePlayerNetWorths } from "../utils/gameState";
+// Design note #405: the Game Ledger's own Player Assets table, rendered here
+// rather than replicated -- see the footer half of that note below.
+import { PlayerAssetsSection } from "./FinancialLedger";
 import { corporationFullName } from "../utils/corporationNames";
 import { derivePhase, rustOutlook } from "../utils/gamePhase";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
-import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
-import {
-  certificateBreakdown,
-  formatCertificateCount,
-  PRIORITY_DEAL_TOOLTIP,
-} from "../utils/gameState";
+import type { MarketGridResponse } from "./StockMarketRenderer";
 import { FONT_SIZE } from "../styles/typography";
 import { sandboxPlayerLabel } from "../utils/sandboxState";
 import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
@@ -97,6 +96,17 @@ export interface ContextualSubPanelProps {
    *  to render. Market price is NOT on `GameStateResponse` -- see design
    *  note #10 -- so it has to arrive separately or not at all. */
   marketGrid?: MarketGridResponse | null;
+  /* Design note #405: what the Stock Round footer's Player Assets table
+     needs. The QUERY INPUTS rather than its resolved output, because the
+     net-worth query is a shared hook (`usePlayerNetWorths`) and handing the
+     footer a pre-resolved copy would mean App had to run it too -- a second
+     caller of a query whose one existing caller is the ledger. Optional
+     throughout: omitted, the table renders its own "not connected"
+     placeholders, which is the honest offline state. */
+  queryClient?: QueryCapableClient;
+  contractAddress?: string;
+  gameId?: number;
+  playerLabel?: (address: string) => string | null;
 }
 
 export function ContextualSubPanel({
@@ -105,6 +115,13 @@ export function ContextualSubPanel({
   error,
   className,
   marketGrid,
+  // Design note #405: the footer's Player Assets table needs these to
+  // resolve names and money. All optional -- omitted, the table renders its
+  // own "not connected" placeholders, which is the honest state offline.
+  queryClient,
+  contractAddress,
+  gameId,
+  playerLabel,
 }: ContextualSubPanelProps) {
   if (!gameState) {
     return (
@@ -128,7 +145,14 @@ export function ContextualSubPanel({
       {gameState.current_round_type === "WaterfallAuction" ? (
         <WaterfallAuctionNotice />
       ) : gameState.current_round_type === "StockRound" ? (
-        <StockRoundPlayerIndex gameState={gameState} marketGrid={marketGrid} />
+        <StockRoundPlayerIndex
+          gameState={gameState}
+          marketGrid={marketGrid}
+          queryClient={queryClient}
+          contractAddress={contractAddress}
+          gameId={gameId}
+          playerLabel={playerLabel}
+        />
       ) : (
         <OperatingRoundCorporationPanel gameState={gameState} marketGrid={marketGrid} />
       )}
@@ -172,92 +196,72 @@ function WaterfallAuctionNotice() {
 function StockRoundPlayerIndex({
   gameState,
   marketGrid,
+  queryClient,
+  contractAddress,
+  gameId,
+  playerLabel,
 }: {
   gameState: GameStateResponse;
   marketGrid?: MarketGridResponse | null;
+  queryClient?: QueryCapableClient;
+  contractAddress?: string;
+  gameId?: number;
+  playerLabel?: (address: string) => string | null;
 }) {
-  // Design note #7 in `utils/gameState.ts`: the exemption is a market
-  // POSITION rule, so the count needs prices. Without them everything
-  // counts, which is the correct conservative reading.
-  const marketPrices: Record<number, number | null> = {};
-  for (const entry of marketGrid?.positions ?? []) {
-    const value = Number(entry.price);
-    marketPrices[entry.company_id] = Number.isFinite(value) ? value : null;
-  }
+  // Design note #405: the ledger's own query, not a second implementation.
+  const {
+    netWorths,
+    loading: netWorthsLoading,
+    error: netWorthsError,
+  } = usePlayerNetWorths(
+    queryClient,
+    contractAddress ?? "",
+    gameId ?? 0,
+    gameState.player_addresses ?? [],
+  );
+  // Same derivation the ledger uses -- the hook reports loading and errors
+  // but not whether it was ever asked to run.
+  const netWorthsEnabled = Boolean(
+    queryClient && contractAddress !== undefined && gameId !== undefined,
+  );
+  /* ==================================================================
+   *  DESIGN NOTE 405 (footer half): THE LEDGER'S TABLE, NOT A COPY
+   * ==================================================================
+   *
+   * REPORTED: this footer prints raw `juno1san...` wallet addresses;
+   * replace the whole panel with a replication of the Game Ledger's Player
+   * Assets table so portfolio and net worth can be tracked during the
+   * round.
+   *
+   * The panel this replaces built its own table from `player_addresses`
+   * and printed the address in the first column. Rebuilding that table to
+   * look like the ledger's would have reproduced the look and then drifted
+   * on the substance -- the certificate-limit exemption needs live market
+   * prices, the money columns need the net-worth query and its three
+   * separate pending states, and none of that survives being copied by
+   * eye. So the ledger's own component renders here.
+   *
+   * The header stays: it carries the round number, which the ledger has no
+   * reason to know and the footer is the only place that shows.
+   */
   return (
     <>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Stock Round — Player Index</span>
+        <span style={styles.headerTitle}>Stock Round — Player Assets</span>
         <span style={styles.headerHint}>
           SR{gameState.macro_round_number}
           {gameState.sub_round_index > 0 ? `.${gameState.sub_round_index}` : ""}
         </span>
       </div>
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Player</th>
-            {/* Design note #12: both money and counts are right-aligned, and
-                the CELLS below use the matching variant. The Certificates
-                header was `thNum` while its cells were plain `td`, so the
-                header sat hard right over left-aligned digits -- the column
-                read as two columns that happened to touch. */}
-            <th style={{ ...styles.th, ...styles.thNum }}>Cash</th>
-            <th style={{ ...styles.th, ...styles.thNum }}>Certificates</th>
-          </tr>
-        </thead>
-        <tbody>
-          {gameState.player_addresses.length === 0 && (
-            <tr>
-              <td style={styles.td} colSpan={3}>
-                No registered players yet.
-              </td>
-            </tr>
-          )}
-          {gameState.player_addresses.map((player, index) => {
-            const isActive = index === gameState.active_player_index;
-            // The Priority Deal is a DIFFERENT pointer from the turn pointer,
-            // and the two only coincide at the very start of a Stock Round.
-            // `active_player_index` says who acts now; `priority_deal_index`
-            // says who will act first NEXT round.
-            const hasPriorityDeal = index === gameState.priority_deal_index;
-            const cashEntry = gameState.player_cash.find((entry) => entry.player === player);
-            const certs = certificateBreakdown(
-              player,
-              gameState,
-              marketGrid ? marketPrices : null,
-              marketZoneForPrice,
-            );
-            return (
-              <tr key={player} style={isActive ? styles.trActive : undefined}>
-                <td style={styles.td}>
-                  {truncate(player)}
-                  {hasPriorityDeal && (
-                    <span style={styles.priorityDealMark} title={PRIORITY_DEAL_TOOLTIP}>
-                      #1
-                    </span>
-                  )}
-                  {isActive && <span style={styles.activeBadge}>ACTIVE</span>}
-                </td>
-                {/* In-game cash is dollars, like every other figure in the
-                    app -- the bare number here was the last place it was
-                    not marked as currency. */}
-                <td style={{ ...styles.td, ...styles.tdNum }}>${cashEntry ? cashEntry.cash_vgp : "0"}</td>
-                <td
-                  style={{ ...styles.td, ...styles.tdNum }}
-                  title={
-                    certs.exempt > 0
-                      ? `${certs.exempt} certificate${certs.exempt === 1 ? "" : "s"} sit in a Yellow, Orange or Brown zone corporation and do not count toward the limit.`
-                      : undefined
-                  }
-                >
-                  {formatCertificateCount(certs)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <PlayerAssetsSection
+        gameState={gameState}
+        marketGrid={marketGrid}
+        netWorths={netWorths}
+        netWorthsEnabled={netWorthsEnabled}
+        netWorthsLoading={netWorthsLoading}
+        netWorthsError={netWorthsError}
+        playerLabel={playerLabel}
+      />
     </>
   );
 }

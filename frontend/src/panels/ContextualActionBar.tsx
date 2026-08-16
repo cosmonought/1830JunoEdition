@@ -62,6 +62,7 @@ import {
   type TrainTier,
 } from "../utils/gamePhase";
 import {
+  isPlayingSurface,
   labelForTab,
   misplacedSurfaceTab,
   type MainTab,
@@ -740,16 +741,28 @@ export default function ContextualActionBar({
    *  DESIGN NOTE 390 (panel half): ONE BUTTON, AND NOTHING ELSE
    * ==================================================================
    *
-   * When the player is on another round's playing surface, the entire bar
-   * is replaced by a single control that takes them back. Replaced rather
-   * than prefixed, and that is the requirement's word: a bar that showed
-   * the redirect ALONGSIDE the usual buttons would leave live controls for
-   * a round being played on a screen the player cannot see, which is how
-   * you get an action dispatched against a board you are not looking at.
+   * When the player is on any tab other than the one this round is played
+   * on, the entire bar is replaced by a single control that takes them
+   * back. Replaced rather than prefixed, and that is the requirement's
+   * word: a bar that showed the redirect ALONGSIDE the usual buttons would
+   * leave live controls for a round being played on a screen the player
+   * cannot see, which is how you get an action dispatched against a board
+   * you are not looking at.
    *
-   * The whole panel also stays out of the way of the reference tabs -- see
-   * `misplacedSurfaceTab`, which returns `null` for Ledger, Rules and the
-   * market chart. */
+   * DESIGN NOTE 404: THIS NOW COVERS THE REFERENCE TABS TOO -- Ledger,
+   * Rules and the market chart. `misplacedSurfaceTab` used to exempt them
+   * so that reading did not cost a player their controls; playtest found
+   * the cost of the exemption, which is that Pass and Undo sat live on a
+   * screen nobody was acting from and turns were being spent by accident.
+   *
+   * The replacement is what makes the reversal safe. A reference tab keeps
+   * an action bar -- so the player stays oriented and the layout does not
+   * jump -- and that bar has exactly one control, which cannot end a turn.
+   *
+   * THE COPY DISTINGUISHES THE TWO CASES. Standing on another round's
+   * PLAYING surface is a player who may be waiting for something that will
+   * never happen there; standing on a reference tab is a player who is
+   * deliberately reading. Same button, different sentence. */
   if (misplacedTab !== null) {
     return (
       <div
@@ -763,7 +776,11 @@ export default function ContextualActionBar({
           type="button"
           style={{ ...styles.actionBarButton, ...styles.actionBarRedirectButton }}
           onClick={() => onSelectTab?.(misplacedTab)}
-          title={`${roundLabelForTab} is being played on the ${misplacedTabLabel} tab.`}
+          title={
+            activeTab !== undefined && isPlayingSurface(activeTab)
+              ? `${roundLabelForTab} is being played on the ${misplacedTabLabel} tab, not this one.`
+              : `${roundLabelForTab} is being played on the ${misplacedTabLabel} tab. Turn actions are hidden here so a reference screen cannot spend your turn.`
+          }
         >
           Return to {misplacedTabLabel}
         </button>
@@ -1154,7 +1171,8 @@ export default function ContextualActionBar({
                           }}
                           title={`${priv.name} — $${priv.revenue_per_or} per Operating Round into ${activeCorporation.ticker}'s treasury.`}
                         >
-                          {priv.private_id}. {priv.name}
+                          {/* Design note #407: revenue shown, not hovered. */}
+                          {priv.private_id}. {priv.name} +${priv.revenue_per_or}
                         </span>
                       ))}
                     </span>

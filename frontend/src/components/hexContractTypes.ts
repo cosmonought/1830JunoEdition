@@ -184,14 +184,14 @@ export const STATION_HOME_HEXES: ReadonlyArray<{
  *  `company_id` keys. See design note #36 for why this is copied rather
  *  than imported. */
 export const STATION_TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c0392b", // PRR
-  2: "#2980b9", // NYC
-  3: "#8e44ad", // CPR
-  4: "#27ae60", // B&O
-  5: "#d68910", // C&O
-  6: "#16a085", // ERIE
-  7: "#b03a2e", // NNH
-  8: "#34495e", // B&M
+  1: "#c8102e", // PRR  -- red
+  2: "#1a1a1a", // NYC  -- black
+  3: "#7b4a22", // CPR  -- brown
+  4: "#12408f", // B&O  -- dark blue
+  5: "#5bc8e8", // C&O  -- light blue / cyan
+  6: "#f5cd3a", // ERIE -- yellow
+  7: "#ee7c22", // NNH  -- orange
+  8: "#1e7a45", // B&M  -- green
 };
 export const STATION_FALLBACK_TICKER_COLOR = "#5a6270";
 
@@ -283,6 +283,70 @@ export function glowColorFor(color: string, minimumLuminance = 0.32): string {
   const lifted = channels.map((c) => Math.round((c + (1 - c) * mix) * 255));
   return `#${lifted.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 403 (SUPERSEDED BY #408): NNH IS NO LONGER PRR'S RED
+ * ==================================================================
+ *
+ * REPORTED: adjust PRR or NNH so the two are easily distinguishable.
+ *
+ * They were `#c0392b` and `#b03a2e` -- CIELAB dE 8.4 apart. Below about 15
+ * two colours read as the same colour under normal viewing, so on the map,
+ * the chart and eight stock cards the New Haven and the Pennsylvania were
+ * effectively one livery.
+ *
+ * That measurement stands and the fix was real. The specific colour it
+ * chose -- `#00838f`, dark cyan -- does not survive design note #408, which
+ * replaces the whole palette with the physical game's. The note is kept
+ * because the METHOD is what carried forward: measure the separation, do
+ * not judge it. #408 applies the same measurement to eight colours instead
+ * of two.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 408: THE COLOURS THE BOARD ACTUALLY USES
+ * ==================================================================
+ *
+ * REPORTED: the corporate colours do not match the physical board game,
+ * which is jarring for experienced players.
+ *
+ * This palette was never canonical -- it was eight plausible, well-spaced
+ * hues, and every previous pass tuned it for legibility and separation
+ * without asking what colour the pieces actually are. For a player who
+ * knows 1830, that is worse than an arbitrary palette: the Erie is yellow
+ * on the board and reaching for the yellow token to find it is the B&O
+ * costs more than having no expectation at all.
+ *
+ * So the hues are now the specified ones, and the two properties earlier
+ * passes cared about were re-checked rather than assumed against them:
+ *
+ *   CONTRAST. Every entry clears 4.5:1 against whichever of black or white
+ *   `bestContrastTextColor` returns -- the WCAG threshold for normal text,
+ *   which is the right bar because the stripe's ticker is 16px bold and
+ *   16px bold is NOT "large text" by WCAG (that starts at 18.66px bold).
+ *   The lowest is B&M green at 5.35:1; the shade of each hue was chosen to
+ *   clear the bar rather than the bar being lowered to fit a shade.
+ *
+ *   SEPARATION. Minimum pairwise dE across all 28 combinations is 44.4
+ *   (ERIE yellow against NNH orange), against the 8.4 that started design
+ *   note #403. Canonical and distinguishable turned out not to be in
+ *   tension -- the physical game already had to solve this problem with
+ *   ink on cardboard.
+ *
+ *   THE CONTRAST INK FLIPS WHERE IT SHOULD. C&O's cyan, ERIE's yellow and
+ *   NNH's orange are light enough to take BLACK text; the other five take
+ *   white. That is the helper doing its job on new inputs, and it is
+ *   asserted per colour rather than trusted.
+ *
+ * NYC IS `#1a1a1a`, NOT `#000000`. The requirement allows "a very dark
+ * gray to ensure UI legibility" and this takes it: pure black would be
+ * indistinguishable from the card borders and the chart's own gridlines,
+ * and a corporation whose livery is the same colour as the furniture reads
+ * as a rendering failure rather than as the New York Central.
+ *
+ * ALL THREE MIRRORS ARE UPDATED TOGETHER. This palette is hand-copied into
+ * `hexContractTypes.ts`, `StockMarketRenderer.tsx` and `StockRoundPanel.tsx`
+ * (each says so in its own header), so changing one would give the map and
+ * the cards different opinions about who a corporation is. */
 
 export function stationTickerColor(companyId: number): string {
   return STATION_TICKER_COLORS[companyId] ?? STATION_FALLBACK_TICKER_COLOR;

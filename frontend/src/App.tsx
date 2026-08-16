@@ -606,6 +606,7 @@ import {
 } from "./components/OperatingSubPhaseStepper";
 import { useDocumentTitleFlash } from "./utils/turnAlert";
 import {
+  placeParMark,
   sandboxInitialMarketPrices,
   sandboxMarketPriceTable,
   type SandboxMarketPrices,
@@ -635,12 +636,14 @@ import {
   applySandboxWaterfallAction,
   describePrivatePayout,
   applySandboxLayTile,
+  describeFloat,
   isRouteTerminusHex,
   grantBOPresidency,
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
 import SandboxToolbar from "./components/SandboxToolbar";
+import BoParPrompt from "./components/BoParPrompt";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -674,6 +677,7 @@ import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animat
 import {
   BO_PRIVATE_ID,
   BO_TICKER,
+  buyStockProtocolId,
   ERA_FOR_PHASE_TINT,
   NO_TRAIN_ROUTE_REASON,
   SMALLEST_TRAIN_CAPACITY,
@@ -1159,15 +1163,68 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   // Sell, and passes its own id to the handler. Keeping a shared selection
   // alongside eight per-card actions would be a second, contradictory
   // answer to "which company?" waiting to be read by mistake.
-  const [srParValue, setSrParValue] = useState<string>(MOCK_BUY_STOCK_PAR_VALUE);
-  /** Design note #351: mirrored so the dispatch path can read the ladder's
-   *  current selection synchronously, the same reason `sandboxStateRef`
-   *  exists. Numeric, because the reducer prices with it. */
-  const srParValueRef = useRef<number | null>(Number(MOCK_BUY_STOCK_PAR_VALUE) || null);
+  /* ==================================================================
+   *  DESIGN NOTE 398: ONE PAR SELECTION PER CORPORATION
+   * ==================================================================
+   *
+   * REPORTED: selecting a par value on one corporation's tile updates the
+   * par selector for all corporations, and for all players.
+   *
+   * It did, and the cause is the shape of this state rather than anything
+   * in the cards: `srParValue` was ONE string, threaded into all eight
+   * ladders as `parValue` and back out through one `onSelectParValue`. Every
+   * ladder was therefore a view of the same value, so pressing $90 on the
+   * PRR moved the highlight on the B&O, the C&O and everything else -- and
+   * because the dispatch read that single value, the NEXT president's
+   * purchase carried a price somebody else had chosen for a different
+   * company.
+   *
+   * This is precisely the bug design note #18 in `StockRoundPanel.tsx` fixed
+   * for the buy SOURCE, which was also one value shared across eight cards.
+   * That note's own words: "the toggle a player set on PRR silently governed
+   * the purchase they then made from B&M." Par is the same failure with
+   * worse consequences, because par is not a preference -- it is the price
+   * the certificate is bought at, and it is set once and permanently.
+   *
+   * KEYED BY `company_id`, not by index: the roster's order is the
+   * contract's and a company can be absent from a partial response, so an
+   * index would silently re-point one company's par at another's.
+   *
+   * THE DEFAULT IS NOT STORED. A company with no entry falls back to
+   * `MOCK_BUY_STOCK_PAR_VALUE` at read time, so the map holds only genuine
+   * choices -- which keeps "has this player picked a par for this company"
+   * answerable, and means seeding eight defaults is not a prerequisite for
+   * rendering.
+   *
+   * "AND FOR ALL PLAYERS" is the same single-value bug seen from the other
+   * side, and it is fixed by the same change in the hotseat: the map is
+   * cleared when the acting seat changes (see the effect below), so an
+   * incoming player never inherits the outgoing player's half-made choice.
+   */
+  /* Design note #399: the B&O private is won in the auction and owes its
+     winner a presidency AND a price. Held here until the prompt is answered,
+     because the certificate must not be granted without one. */
+  const [boParPrompt, setBoParPrompt] = useState<{ player: string } | null>(null);
+  const [srParValues, setSrParValues] = useState<Readonly<Record<number, string>>>({});
+  const parValueFor = useCallback(
+    (companyId: number): string => srParValues[companyId] ?? MOCK_BUY_STOCK_PAR_VALUE,
+    [srParValues],
+  );
+  const handleSelectParValue = useCallback((companyId: number, value: string) => {
+    setSrParValues((prev) => ({ ...prev, [companyId]: value }));
+  }, []);
+  /** Design note #351/#398: mirrored so the dispatch path can read a
+   *  selection synchronously, the same reason `sandboxStateRef` exists. Now
+   *  a map, because "the ladder's current selection" is a question that only
+   *  has an answer once you say WHICH ladder. */
+  const srParValuesRef = useRef<Readonly<Record<number, string>>>(srParValues);
   useEffect(() => {
-    const parsed = Number(srParValue);
-    srParValueRef.current = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }, [srParValue]);
+    srParValuesRef.current = srParValues;
+  }, [srParValues]);
+  const parValueNumberFor = useCallback((companyId: number): number | null => {
+    const parsed = Number(srParValuesRef.current[companyId] ?? MOCK_BUY_STOCK_PAR_VALUE);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, []);
 
   // Automatic Phase-Based Tab Navigation (design note below near its own
   // `useEffect`): holds the last-seen `current_round_type` so the
@@ -2012,8 +2069,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      would be four numbers none of which gates the acting player's buy, and
      an Operating Round spends a treasury rather than a wallet. The empty
      array is what makes the bar fall back to the single acting badge. */
+  /* ==================================================================
+   *  DESIGN NOTE 406: THE ROSTER IS NOT ONLY THE AUCTION'S
+   * ==================================================================
+   *
+   * REPORTED: add a player roster to the Stock Round action panel, matching
+   * the auction's style, with the active player in green.
+   *
+   * The roster already existed and already highlighted the acting seat in
+   * green -- it was simply refused to every round but one by the guard on
+   * this line. Nothing about the pills is auction-specific: they show who is
+   * at the table, whose turn it is, and what each seat can spend, all of
+   * which a Stock Round player wants at least as much.
+   *
+   * ESCROW IS AUCTION-ONLY and stays correct by construction: `escrowedBids`
+   * reads the waterfall document, which is absent outside the auction, so it
+   * returns zero and `rosterPillEscrow` renders nothing. The pill simply has
+   * one fewer figure in it during a Stock Round, which is the truth.
+   *
+   * OPERATING ROUNDS ARE STILL EXCLUDED. An OR turn belongs to a
+   * CORPORATION, not a seat -- the bar already names the acting corporation
+   * and its president -- so a seat roster there would be answering a
+   * question nobody is asking, and `actingSeatIndex` has no meaningful
+   * answer to give. */
   const playerRoster = useMemo(() => {
-    if (!gameState || gameState.current_round_type !== "WaterfallAuction") return [];
+    if (!gameState) return [];
+    if (
+      gameState.current_round_type !== "WaterfallAuction" &&
+      gameState.current_round_type !== "StockRound"
+    ) {
+      return [];
+    }
     const seat = actingSeatIndex(gameState);
     const active = seat === null ? null : gameState.player_addresses[seat];
     return gameState.player_addresses.map((address) => ({
@@ -2046,6 +2132,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (!address) return null;
     return sandboxPlayerLabel(address) ?? truncateAddress(address);
   }, [gameState]);
+
+  /* Design note #398, the "and for all players" half. In hotseat the seats
+     share one browser, so a par half-chosen by the outgoing player would
+     still be highlighted for the incoming one -- who would then buy a
+     president's certificate at a price they never picked. Cleared on the
+     seat change, the same trigger `StockRoundPanel` uses to drop its active
+     card. */
+  useEffect(() => {
+    setSrParValues({});
+  }, [activeSeatLabel]);
 
   // In-Place Accordion Ticker / Inline Control Strip state -- design note
   // #18, converted from a modal to an in-place accordion by design note
@@ -3527,16 +3623,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             /* Design note #354: the B&O private hands its winner the
                corporation's presidency, free. The rule lives in
                `sandboxSession.ts` as a named function -- see its note for
-               what moves, what does not, and why it is not inline here. */
-            if (privateId === BO_PRIVATE_ID && after) {
-              const granted = grantBOPresidency(after, player, BO_TICKER);
-              if (granted !== after) {
-                after = granted;
-                logInfo(
-                  "B&O Presidency",
-                  `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives the 20% B&O President's Certificate free and sets its par value. B&O floats at 60% sold.`,
-                );
-              }
+               what moves, what does not, and why it is not inline here.
+
+               Design note #399: and it is no longer granted HERE. The grant
+               needs a par price, the price is the winner's to choose, and
+               choosing it is a decision -- so the win raises a prompt and
+               the grant happens when that prompt is answered. Granting
+               first and pricing later produced a presided-over company with
+               no price, which design note #387 correctly refuses to draw. */
+            if (privateId === BO_PRIVATE_ID) {
+              setBoParPrompt({ player });
             }
           }
 
@@ -3611,8 +3707,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                than the state variable for design note #265's reason --
                within one dispatch the state may still be a render behind,
                and a par set from a stale selection would be the wrong
-               price forever. */
-            parValue: srParValueRef.current ?? undefined,
+               price forever.
+
+               Design note #398: and read for THE COMPANY IN THIS MESSAGE.
+               There is no longer a single "the par ladder's selection" to
+               read -- asking for one was the bug. The protocol id comes off
+               `msg` rather than from any ambient selection, because the
+               message is the only thing that knows which company this
+               particular dispatch is about. */
+            parValue: parValueNumberFor(buyStockProtocolId(msg)) ?? undefined,
             /* Design note #363: the board's own label -> (q, r) table, so a
                corporation that floats gets its home token on the hex the
                map actually draws rather than on a coordinate this reducer
@@ -3622,6 +3725,62 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
               return hex ? ([hex.q, hex.r] as const) : null;
             },
           });
+          /* ==============================================================
+           *  DESIGN NOTE 400: A FLOAT IS AN EVENT, NOT JUST A FLAG
+           * ==============================================================
+           *
+           * REPORTED: when a company like ERIE floats, the UI completely
+           * skips the home token placement -- no feedback that it happened.
+           *
+           * It did happen: `applyFloatThreshold` sets `is_floated`, credits
+           * ten times par, and pushes the home hex onto
+           * `station_token_hexes` (design note #363). All of it silently.
+           * The player crossed 60% sold, the board gained a token, and
+           * nothing said so -- so the one placement in the game that the
+           * player does not perform reads as a placement that did not
+           * occur.
+           *
+           * THE RULES FIX THE DESTINATION, so this is not made into a
+           * choice. 1830 puts the home token on the home hex; offering a
+           * picker would invent a decision and then refuse every answer but
+           * one. What was missing is the REPORT, not the interaction.
+           *
+           * DIFFED HERE RATHER THAN REPORTED BY THE REDUCER, for design
+           * note #337's reason: the reducer holds the game document and the
+           * shell owns the log. Threading an event list out through
+           * `applySandboxAction` -- which floats companies several frames
+           * deep inside a share purchase -- would put a logging concern
+           * into a pure function's return type.
+           *
+           * Naming the HEX is the point of the message. "ERIE floated" is a
+           * state change; "ERIE floated and placed its home token on E11"
+           * is the same change with the thing the player would otherwise go
+           * looking for on the map. */
+          /* Design note #401: a par sets a price, and a price is a cell on
+             the chart. Diffed here beside the float announcement, and for
+             the same reason -- the market atom is separate state, so the
+             shell is what can write to both. */
+          if (before) {
+            for (const company of after.public_companies) {
+              const wasUnparred =
+                before.public_companies.find((e) => e.company_id === company.company_id)
+                  ?.par_value ?? null;
+              if (wasUnparred === null && company.par_value !== null) {
+                const par = Number(company.par_value);
+                setSandboxMarket((prices) => placeParMark(prices, company.company_id, par, marketCellForPrice));
+              }
+            }
+            for (const company of after.public_companies) {
+              const previously = before.public_companies.find(
+                (entry) => entry.company_id === company.company_id,
+              );
+              // Design note #400: the branching lives in `describeFloat`,
+              // where a test can reach it.
+              const line = previously ? describeFloat(previously, company) : null;
+              if (line) logInfo("Float", line);
+            }
+          }
+
           sandboxStateRef.current = after;
           setSandboxState(after);
 
@@ -3763,6 +3922,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // the old variant-name labels never could be.
       gameState,
       marketGrid.positions,
+      /* Design note #398: the per-company par lookup. Stable (a `useCallback`
+         with no deps, reading a ref) but listed anyway -- an omitted stable
+         dependency is still a dependency, and the moment it stops being
+         stable a silent staleness bug is exactly the kind this file has
+         collected notes about. */
+      parValueNumberFor,
     ],
   );
 
@@ -3871,12 +4036,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             // A floated company's price comes from the Stock Market Matrix,
             // not a fresh par choice -- matches `BuyStock`'s real semantics.
             // Resolved from the company being BOUGHT, not from a selection.
-            par_value: isFloated ? null : srParValue,
+            // Design note #398: resolved from the company being BOUGHT,
+            // which is now genuinely possible -- it used to say that and
+            // then read a single shared value.
+            par_value: isFloated ? null : parValueFor(protocolId),
           },
         },
       );
     },
-    [runGameplayAction, gameId, gameState, srParValue],
+    [runGameplayAction, gameId, gameState, parValueFor],
+  );
+
+  /* Design note #399: the prompt's answer. Grants the certificate AND sets
+     the price in one reducer call, so the intermediate state -- presided
+     over, unpriced -- never exists for a render to catch. */
+  const handleConfirmBoPar = useCallback(
+    (parValue: string) => {
+      const winner = boParPrompt?.player;
+      setBoParPrompt(null);
+      if (!winner) return;
+      setSandboxState((current) => {
+        // `sandboxState` is nullable before the first fixture resolves; a
+        // prompt cannot be outstanding without state, but the type does not
+        // know that and a cast would be the wrong way to tell it.
+        if (!current) return current;
+        const granted = grantBOPresidency(current, winner, parValue, BO_TICKER);
+        if (granted === current) return current;
+        logInfoRef.current?.(
+          "B&O Presidency",
+          `${sandboxPlayerLabel(winner) ?? truncateAddress(winner)} receives the B&O President's Certificate and pars it at $${parValue}.`,
+        );
+        return granted;
+      });
+    },
+    [boParPrompt],
   );
 
   const handleBuyShare = useCallback(
@@ -5179,6 +5372,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           the Operating Round panel, because it is a full-screen decision
           about the PRESIDENT's money -- the corporation's own panels are
           about the corporation's. */}
+      {/* Design note #399: blocking, because until it is answered the B&O
+          is presided over with no price -- a state design note #387 refuses
+          to render a token or a figure for. */}
+      <BoParPrompt
+        open={boParPrompt !== null}
+        winnerLabel={
+          boParPrompt
+            ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
+            : ""
+        }
+        onConfirm={handleConfirmBoPar}
+      />
+
       <EmergencyTrainPurchaseModal
         plan={emergencyModalPlan}
         sandbox={sandbox}
@@ -5626,12 +5832,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 {activeMainTab === "corps" && (
                   <StockRoundPanel
                     publicCompanies={gameState?.public_companies ?? []}
-                    parValue={srParValue}
+                    // Design note #395 in that file: each card lists the
+                    // privates its own corporation holds, expandable to
+                    // their rules text.
+                    privateCompanies={gameState?.private_companies}
+                    // Design note #398: a lookup, not one shared string.
+                    parValueFor={parValueFor}
                     // Design note #356/#357: the round number bans SR1
                     // sales; the acting seat's cash gates every buy.
                     macroRoundNumber={gameState?.macro_round_number}
                     playerCash={activeSeatCash}
-                    onSelectParValue={setSrParValue}
+                    onSelectParValue={handleSelectParValue}
                     onBuyShare={handleBuyShare}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}
@@ -5864,6 +6075,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 {/* Automated contextual block underneath the board. */}
                 <ContextualSubPanel
                   gameState={gameState}
+                  // Design note #405: the footer now renders the ledger's
+                  // Player Assets table, which needs the same net-worth
+                  // query the ledger runs and a way to name a seat.
+                  queryClient={queryClient}
+                  contractAddress={CONTRACT_ADDRESS}
+                  gameId={gameId}
+                  playerLabel={sandbox ? sandboxPlayerLabel : undefined}
                   loading={gameStateLoading}
                   error={gameStateError}
                   // Design note #10 in that file: market price is not on
@@ -5891,6 +6109,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           // Design note #14 in that file: the merged Corporation Assets
           // table's Market Price column. Not on `GameStateResponse`.
           marketGrid={marketGrid}
+          // Design note #405: names, not truncated addresses.
+          playerLabel={sandbox ? sandboxPlayerLabel : undefined}
         />
       )}
 

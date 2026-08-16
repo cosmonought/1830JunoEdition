@@ -1234,14 +1234,14 @@ export function marketZoneTextColor(zone: ZoneType | null): string | null {
  *  (1-8: PRR/NYC/CPR/B&O/C&O/ERIE/NNH/B&M). Purely a frontend legibility
  *  aid, not backend data. */
 const TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c0392b", // PRR
-  2: "#2980b9", // NYC
-  3: "#8e44ad", // CPR
-  4: "#27ae60", // B&O
-  5: "#d68910", // C&O
-  6: "#16a085", // ERIE
-  7: "#b03a2e", // NNH
-  8: "#34495e", // B&M
+  1: "#c8102e", // PRR  -- red
+  2: "#1a1a1a", // NYC  -- black
+  3: "#7b4a22", // CPR  -- brown
+  4: "#12408f", // B&O  -- dark blue
+  5: "#5bc8e8", // C&O  -- light blue / cyan
+  6: "#f5cd3a", // ERIE -- yellow
+  7: "#ee7c22", // NNH  -- orange
+  8: "#1e7a45", // B&M  -- green
 };
 const FALLBACK_TICKER_COLOR = "#5a6270";
 
@@ -1454,22 +1454,53 @@ function deriveTokenClusterOffset(
  *  cell size -- kept as the ratio baseline `deriveParFrameBorderPx` scales
  *  against, the same baseline-ratio pattern `derivePriceFontSizePx`/
  *  `deriveTokenDiameterPx` use (design note #19/item 4). */
-const BASE_PAR_FRAME_BORDER_PX = 4;
+/* ==================================================================
+ *  DESIGN NOTE 402: THE GOLD FRAME SITS IN THE GRID, NOT ON IT
+ * ==================================================================
+ *
+ * REPORTED: the gold rectangle on the matrix looks "pasted on" -- reduce
+ * its stroke by ~40% and blend it into the grid.
+ *
+ * At 4px against a ~40px cell the frame was a tenth of a cell wide, which
+ * is heavier than any line the chart draws for itself: the grid's own
+ * gaps are 2px and every cell border is 1px. A rectangle drawn at four
+ * times the weight of everything it encloses cannot read as part of the
+ * same diagram, and the wide opaque glow underneath it compounded that by
+ * casting gold onto the neighbouring cells' backgrounds.
+ *
+ * 4 -> 2.4px is the requested ~40% cut, kept as a fractional baseline
+ * rather than rounded to 2 so the ratio survives `deriveParFrameBorderPx`'s
+ * scaling at large cell sizes -- the whole point of that helper is that the
+ * frame stays proportional, and hard-rounding the baseline would make the
+ * reduction disappear at the top of the size range.
+ *
+ * THE FLOOR DROPS WITH IT, 3 -> 2. A floor of 3 against a 2.4 baseline
+ * would silently cancel the change at ordinary cell sizes, which is the
+ * kind of "fix" that ships and does nothing.
+ *
+ * THE GLOW HALVES AND GOES TRANSLUCENT rather than being deleted. It is
+ * what stops the thinner line vanishing against the dark chart; at 45%
+ * opacity over a 10px blur it was a gold wash, at 22% over 5px it reads as
+ * the line's own edge. */
+const BASE_PAR_FRAME_BORDER_PX = 2.4;
 /** Same baseline pattern for the frame's soft outer glow blur radius. */
-const BASE_PAR_FRAME_GLOW_PX = 10;
+const BASE_PAR_FRAME_GLOW_PX = 5;
 
 /** Scales the gold par-box frame's border thickness proportionally to the
  *  live, dynamically-computed cell size, so the frame stays a "thick,
  *  distinctive" outline relative to the six cells it encloses at any matrix
  *  scale -- see design note #19/item 4. */
 function deriveParFrameBorderPx(cellSize: number): number {
-  return Math.max(3, Math.round(cellSize * (BASE_PAR_FRAME_BORDER_PX / CELL_SIZE_PX)));
+  // Design note #402: floor 3 -> 2, or the thinner baseline would round
+  // straight back up to the old weight at ordinary cell sizes.
+  return Math.max(2, Math.round(cellSize * (BASE_PAR_FRAME_BORDER_PX / CELL_SIZE_PX)));
 }
 
 /** Scales the gold par-box frame's outer glow blur radius alongside its
  *  border thickness -- see design note #19/item 4. */
 function deriveParFrameGlowPx(cellSize: number): number {
-  return Math.max(6, Math.round(cellSize * (BASE_PAR_FRAME_GLOW_PX / CELL_SIZE_PX)));
+  // Design note #402: floor 6 -> 3, same reasoning as the border's.
+  return Math.max(3, Math.round(cellSize * (BASE_PAR_FRAME_GLOW_PX / CELL_SIZE_PX)));
 }
 
 /** Floor a price cell's text can shrink to, even at `MIN_CELL_SIZE_PX` --
@@ -1851,7 +1882,11 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
               // `styles.parGroupFrame` still carries as its pre-measurement
               // fallback.
               borderWidth: `${parFrameBorderPx}px`,
-              boxShadow: `0 0 ${parFrameGlowPx}px rgba(234, 179, 8, 0.45)`,
+              // Design note #402: 0.45 -> 0.22. This is the value that
+              // actually renders -- the style literal is only the
+              // unscaled fallback -- so leaving it would have made
+              // the whole change invisible in practice.
+              boxShadow: `0 0 ${parFrameGlowPx}px rgba(234, 179, 8, 0.22)`,
             }}
           />
 
@@ -2168,11 +2203,16 @@ const styles: Record<string, React.CSSProperties> = {
   // Design note #22/item 1: recolored from `#ffd54a` to the explicitly
   // requested `#EAB308` gold.
   parGroupFrame: {
-    border: "4px solid #EAB308",
+    // Design note #402: ~40% thinner, and the glow softened from 0.45 over
+    // 10px to 0.22 over 5px so the frame stops washing gold onto the cells
+    // around it. Both are overridden per-render by the derive helpers; the
+    // literals here are the unscaled fallback and are kept in step with the
+    // baselines so the two can never describe different frames.
+    border: "2.4px solid #EAB308",
     borderRadius: "6px",
     boxSizing: "border-box",
     pointerEvents: "none",
-    boxShadow: "0 0 10px rgba(234, 179, 8, 0.45)",
+    boxShadow: "0 0 5px rgba(234, 179, 8, 0.22)",
     // Explicit positioned stacking layer -- design note #23(1). Without
     // `position` set, this element was "non-positioned" and painted BEFORE
     // every price cell (which sets `position: relative`) regardless of DOM

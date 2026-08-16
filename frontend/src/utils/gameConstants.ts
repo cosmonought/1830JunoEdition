@@ -51,3 +51,19 @@ export const ERA_FOR_PHASE_TINT: Readonly<Record<PhaseTint, TileColorTier>> = {
   green: "Green",
   brown: "Brown",
 };
+
+/**
+ * The corporation a `BuyStock` message is about, or `null` for any other
+ * message.
+ *
+ * Design note #398: the sandbox reducer needs a par price, and the only
+ * honest source is the company named in the message it is reducing. A
+ * helper rather than an inline cast at the call site so the shape
+ * assumption -- `BuyStock.protocol_id` -- is written down once and can be
+ * tested directly.
+ */
+export function buyStockProtocolId(msg: unknown): number {
+  const buy = (msg as { BuyStock?: { protocol_id?: unknown } } | null)?.BuyStock;
+  const id = buy?.protocol_id;
+  return typeof id === "number" ? id : -1;
+}

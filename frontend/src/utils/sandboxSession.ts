@@ -2451,9 +2451,39 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
  *                this state ("Auto-floated by the B&O private") for a
  *                company parred but not yet floated, so the panel was ready
  *                for a position the reducer never produced.
- *   STAYS UNSET  `par_value`. The panel's ladder shows while par is null,
- *                which IS the prompt; choosing a default here would answer
- *                a question that belongs to the winner.
+ *   SET NOW      `par_value`, from the winner's own choice.
+ *
+ *                ==================================================
+ *                 DESIGN NOTE 399: THE PROMPT HAS TO BE A PROMPT
+ *                ==================================================
+ *
+ *                This note used to read "STAYS UNSET -- the panel's ladder
+ *                shows while par is null, which IS the prompt". Playtest
+ *                says otherwise, and the reasoning was wrong in two ways
+ *                that only show up in play:
+ *
+ *                  NOBODY IS LOOKING AT THE PANEL. The B&O is won during
+ *                  the AUCTION. The Stock Round panel with its ladder is a
+ *                  different round on a different tab, so "the ladder is
+ *                  the prompt" meant the prompt appeared some minutes
+ *                  later, on a screen the player had to navigate to, with
+ *                  nothing connecting it to the private they just bought.
+ *
+ *                  AND THE LADDER STOPPED BEING VISIBLE. Design note #396
+ *                  hid every card's actions behind an active-card click, so
+ *                  the implicit prompt is now two clicks deep. That change
+ *                  was right on its own terms and it removed the last thing
+ *                  holding this design up.
+ *
+ *                An unparred company with a president is also a genuinely
+ *                broken state -- design note #387 withholds its market
+ *                token and its price, so the B&O would sit presided-over,
+ *                priced at "--", and absent from the chart until someone
+ *                found the ladder. Taking the par WITH the grant means that
+ *                state never exists.
+ *
+ *                `parValue` is therefore required by this function. The
+ *                caller collects it first; see `BoParPrompt`.
  *
  * A NAMED FUNCTION rather than sixty lines inline in the dispatch closure,
  * and that was not the first shape: the inline version passed a whole suite
@@ -2467,6 +2497,9 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
 export function grantBOPresidency(
   state: GameStateResponse,
   winner: string,
+  /** Design note #399: the winner's chosen par, collected before this runs.
+   *  A company cannot be presided over and priceless at the same time. */
+  parValue: string,
   boTicker = "B&O",
 ): GameStateResponse {
   const bo = state.public_companies.find((entry) => entry.ticker === boTicker);
@@ -2481,6 +2514,9 @@ export function grantBOPresidency(
       return {
         ...entry,
         president: winner,
+        // Design note #399: set here, with the certificate, so the pair
+        // cannot come apart.
+        par_value: parValue,
         ipo_pool_percentage: Math.max(
           0,
           entry.ipo_pool_percentage - SANDBOX_PRESIDENT_PERCENTAGE,
@@ -2495,6 +2531,50 @@ export function grantBOPresidency(
       };
     }),
   };
+}
+
+/**
+ * "ERIE floated with $1000 and placed its home station token on E11."
+ *
+ * ==================================================================
+ *  DESIGN NOTE 400 (message half): NAMED, SO IT CAN BE TESTED
+ * ==================================================================
+ *
+ * REPORTED: a company floating skips the home-token placement feedback
+ * entirely.
+ *
+ * The announcement was written inline in `App.tsx`'s dispatch closure, and
+ * mutation testing said what design note #354 already learned the hard way
+ * about `grantBOPresidency`: an inline version "passed a whole suite of
+ * assertions that only ever read the source text, and survived being
+ * switched off entirely". Switching the hex branch off here produced the
+ * same result -- every source regex still matched, because the strings were
+ * still in the file.
+ *
+ * So the decision that has branches is a function with a return value.
+ * `null` for a company that did not just float, which is also what makes
+ * "did this float?" answerable without re-deriving the comparison.
+ */
+export function describeFloat(
+  previous: { is_floated: boolean; station_token_hexes?: ReadonlyArray<unknown> | null },
+  company: {
+    ticker: string;
+    treasury: string;
+    is_floated: boolean;
+    home_hex_label?: string | null;
+    station_token_hexes?: ReadonlyArray<unknown> | null;
+  },
+): string | null {
+  if (previous.is_floated || !company.is_floated) return null;
+  const gained =
+    (company.station_token_hexes?.length ?? 0) > (previous.station_token_hexes?.length ?? 0);
+  if (gained && company.home_hex_label) {
+    return `${company.ticker} floated with $${company.treasury} and placed its home station token on ${company.home_hex_label}.`;
+  }
+  /* NNH has no home hex on this board (see `applyFloatThreshold`), so it
+     floats without a token. Said outright rather than leaving the sentence
+     half finished, which would read as a placement that failed. */
+  return `${company.ticker} floated with $${company.treasury}. It has no home hex on this board, so no home token was placed.`;
 }
 
 /** "Schuylkill Valley pays $5 to Alice." One line per payout, because the

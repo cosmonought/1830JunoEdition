@@ -157,7 +157,7 @@ export function ProposePrivatePurchase({
           : price > bounds.max
             ? `$${price} is above 200% of face value ($${bounds.max} maximum).`
             : price > treasury
-              ? `${buyerTicker}'s treasury holds $${treasury} -- it cannot pay $${price}.`
+              ? `${buyerTicker}'s treasury holds $${treasury} — it cannot pay $${price}.`
               : null;
 
   if (!open) return null;
@@ -341,7 +341,7 @@ export function PrivateTradePrompt({
           was never actually asked, has been misled by the UI. */}
       {!consentIsBinding && (
         <p style={styles.promptCaveat}>
-          The contract executes this purchase directly -- `BuyPrivateCompany` has no accept step,
+          The contract executes this purchase directly — `BuyPrivateCompany` has no accept step,
           so {proposal.ownerLabel} is not consulted on chain. Accepting buys it outright.
         </p>
       )}

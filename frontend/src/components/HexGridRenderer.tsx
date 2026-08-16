@@ -80,6 +80,8 @@ import {
   type QueryCapableClient,
   type StationTokenCompany,
 } from "./hexContractTypes";
+import { reservationsByHex } from "../utils/privateReservations";
+import type { PrivateCompanyState } from "../utils/gameState";
 import {
   archetypeForHex,
   axialToPixel,
@@ -124,6 +126,7 @@ import {
   drawOffboardTrack,
   drawPrintedTrack,
   drawRestrictionBadge,
+  drawReservationBadge,
   drawRouteOverlays,
   drawSingleNodeNameplate,
   drawStackedNameLabel,
@@ -350,6 +353,11 @@ export interface HexGridRendererProps {
    *  cursor change is a mode players forget they are in, and then every
    *  subsequent click does something they did not intend. */
   cursorMode?: "default" | "token";
+  /** Design note #318: the live private company roster, for the reservation
+   *  badges. Omitted draws none -- a board with no roster must not invent a
+   *  restriction, and every caller that does not have one (the lobby
+   *  preview, a thumbnail) genuinely has nothing to say about it. */
+  privateCompanies?: readonly PrivateCompanyState[];
   /** Fired synchronously on every genuine hex click, before the
    *  `GetLegalTilePlacements` query (if enabled) resolves -- lets the host
    *  app position a popup immediately instead of waiting on the network. */
@@ -600,6 +608,9 @@ function clampPanToBoard(
  *  `readonly` array literal here would not be assignable to that
  *  destructuring default. */
 const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
+/** Same reasoning: a stable identity so an omitted roster does not remount
+ *  the memo that derives the reservations. */
+const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
 
 export function HexGridRenderer({
   mapGrid,
@@ -620,7 +631,17 @@ export function HexGridRenderer({
   cursorMode = "default",
   suppressHoverTooltip = false,
   layFocus,
+  privateCompanies = EMPTY_PRIVATE_COMPANIES,
 }: HexGridRendererProps) {
+  /* Design note #318: derived once per roster change, not per frame. The
+     draw loop runs on every pan and zoom tick, and re-scanning the private
+     companies inside it would redo the same six-entry search sixty times a
+     second for a result that changes twice a game. */
+  const reservations = useMemo(
+    () => reservationsByHex(privateCompanies),
+    [privateCompanies],
+  );
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rafHandleRef = useRef<number | null>(null);
@@ -2332,6 +2353,33 @@ export function HexGridRenderer({
       });
     }
 
+    /* ---- Design note #318: private company reservations. -------------
+       Drawn after the printed restriction badges and before the station
+       token pass, which puts it in the same band as every other
+       game-state-derived mark: above the cardboard, below the pieces.
+
+       NOT clipped to the hex. Every pass above is, because printed artwork
+       belongs inside its own hex -- but this is a marker sitting on the
+       board, and a pill wide enough to carry "C&SL" legibly would be sliced
+       by the boundary at the smaller zoom levels. It is the only mark here
+       allowed to overhang, which is also what makes it read as a piece. */
+    // `forEach` rather than `for...of` over `.values()`: this build targets
+    // ES5 without `--downlevelIteration`, so iterating a Map's iterator does
+    // not compile. Same workaround the Set spreads in this file use.
+    reservations.forEach((reservation) => {
+      const center = axialToPixel(reservation.q, reservation.r, hexSize);
+      drawReservationBadge(
+        ctx,
+        center,
+        hexSize,
+        reservation.initials,
+        mapGrid,
+        reservation.q,
+        reservation.r,
+        claimedHexSlots,
+      );
+    });
+
     // ---- Impassable border edges (design note #38): a fixed set of four
     // board crossings (E7/F8, D12/C11, D12/C13, C17/B16) across which track
     // may never be built, marked with a thick red bar. Drawn after every
@@ -2566,6 +2614,9 @@ export function HexGridRenderer({
     hoveredHexCoord,
     boardContentBounds,
     publicCompanies,
+    // Design note #318: a private closing must repaint the board -- the
+    // badge's whole job is to disappear when the reservation lifts.
+    reservations,
     // Design note #137: a new route trace must repaint the canvas. Omitting
     // this from the dep list is the classic failure here -- the prop updates,
     // React re-renders, and the memoised draw callback never re-runs, so the

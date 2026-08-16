@@ -435,7 +435,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
   const handleSpectate = useCallback(
     (target: RoomDoc) => {
       if (target.chainGameId === null) {
-        setActionError("That game has not finished launching yet -- there is nothing on-chain to watch.");
+        setActionError("That game has not finished launching yet — there is nothing on-chain to watch.");
         return;
       }
       onSpectateGame(target.chainGameId, target.id);
@@ -489,7 +489,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       runAction("launch", async () => {
         if (!room || !activeRoomId) throw new Error("No room is open.");
         if (!address || !wallet.signingClient) {
-          throw new Error("Connect a wallet before launching -- this transaction moves real JUNO.");
+          throw new Error("Connect a wallet before launching — this transaction moves real JUNO.");
         }
         // Throws naming the exact missing variable if the chain is
         // unconfigured. This is the first thing here that genuinely needs a
@@ -541,7 +541,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           const message =
             `The room was created on-chain (tx ${result.transactionHash}) but no game_id ` +
             "attribute could be read from the transaction. Recover the id from that " +
-            "transaction before retrying -- launching again would create a second paid room.";
+            "transaction before retrying — launching again would create a second paid room.";
           await setRoomStatus(activeRoomId, "staging", message);
           throw new Error(message);
         }
@@ -649,7 +649,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       {chainError && (
         <Banner
           tone="warn"
-          text={`Chain not configured -- you can stage a room and chat, but nothing can launch on-chain. ${chainError}`}
+          text={`Chain not configured — you can stage a room and chat, but nothing can launch on-chain. ${chainError}`}
         />
       )}
       {wallet.error && <Banner tone="error" text={wallet.error} />}
@@ -672,7 +672,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         <div style={styles.sandboxCopy}>
           <span style={styles.sandboxTitle}>🧪 Offline Sandbox</span>
           <span style={styles.sandboxNote}>
-            Open the board with local mock state -- no wallet, no contract and no room needed.
+            Open the board with local mock state — no wallet, no contract and no room needed.
             The rail map, tile picker and panels all render; nothing is dispatched. This is the
             way in when the chain is unconfigured.
           </span>
@@ -766,7 +766,7 @@ function RoomBrowser({
   const createBlockedReason: string | null = !available
     ? "The real-time lobby is offline, so a room cannot be created. Check the REACT_APP_FIREBASE_* values in frontend/.env, then restart the dev server."
     : !address
-      ? "Connect a wallet first -- the room is stored under your address as its host."
+      ? "Connect a wallet first — the room is stored under your address as its host."
       : !anteValid
         ? `"${ante}" is not a valid ${NATIVE_DENOM_DISPLAY} amount. Use up to ${NATIVE_DENOM_EXPONENT} decimal places, for example 1.5.`
         : null;
@@ -797,7 +797,7 @@ function RoomBrowser({
       <section style={styles.panel}>
         <h2 style={styles.panelTitle}>Create a room</h2>
         <p style={styles.panelNote}>
-          Costs nothing. The room stays off-chain while players gather -- the on-chain game is
+          Costs nothing. The room stays off-chain while players gather — the on-chain game is
           created when you launch.
         </p>
 
@@ -842,7 +842,7 @@ function RoomBrowser({
         </label>
         <p style={styles.panelNote}>
           {anteValid
-            ? `Every player deposits exactly ${anteBase} ${NATIVE_DENOM} -- the contract enforces this to the last unit.`
+            ? `Every player deposits exactly ${anteBase} ${NATIVE_DENOM} — the contract enforces this to the last unit.`
             : `Not a valid amount. Up to ${NATIVE_DENOM_EXPONENT} decimal places.`}
         </p>
 
@@ -896,11 +896,11 @@ function RoomBrowser({
 
         <p style={styles.panelNote}>
           {tab === "open"
-            ? "Rooms still gathering players. Nothing is on-chain yet -- joining costs no gas."
+            ? "Rooms still gathering players. Nothing is on-chain yet — joining costs no gas."
             : "Rooms that have launched on-chain. Spectating is read-only: you can watch the board, ledger and market, but every action control is disabled."}
         </p>
 
-        {!available && <p style={styles.hint}>Real-time lobby is offline -- no rooms can be listed.</p>}
+        {!available && <p style={styles.hint}>Real-time lobby is offline — no rooms can be listed.</p>}
         {available && loading && <p style={styles.hint}>Loading rooms...</p>}
         {available && !loading && visibleRooms.length === 0 && (
           <p style={styles.hint}>
@@ -952,7 +952,7 @@ function OpenLobbyRow({
   // is nothing to explain and nothing to try. "No wallet" is the opposite:
   // entirely fixable, and worth saying out loud.
   const joinBlockedReason: string | null = !address
-    ? "Connect a wallet first -- a seat is claimed under your address."
+    ? "Connect a wallet first — a seat is claimed under your address."
     : null;
 
   return (
@@ -1105,7 +1105,7 @@ function StagingRoom({
               onClick={onToggleReady}
               disabled={busy !== null}
             >
-              {mySeat.ready ? "✓ Ready -- click to unready" : "Mark me Ready"}
+              {mySeat.ready ? "✓ Ready — click to unready" : "Mark me Ready"}
             </button>
           )}
 
@@ -1174,7 +1174,7 @@ function StagingRoom({
         {isLive && (
           <p style={styles.panelNote}>
             This room is live on-chain as game #{room.chainGameId}. Every player must ante in
-            before they can act -- the contract's roster, not this list, decides who is playing.
+            before they can act — the contract's roster, not this list, decides who is playing.
           </p>
         )}
       </section>

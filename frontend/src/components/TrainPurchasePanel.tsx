@@ -323,7 +323,7 @@ export function TrainPurchasePanel({
       ? null
       : limitHeadroom < depotSupply
         ? (limitDropsOnPurchase
-            ? `Room for ${limitHeadroom} more -- this purchase drops the limit to ${limitAfterPurchase}.`
+            ? `Room for ${limitHeadroom} more — this purchase drops the limit to ${limitAfterPurchase}.`
             : `Room for ${limitHeadroom} more before the ${trainLimit}-train limit.`)
         : depotSupply < 99 && depotSupply <= 2
           ? `Only ${depotSupply} left in the depot.`
@@ -336,7 +336,7 @@ export function TrainPurchasePanel({
   const bankTotal = nextTier && quantityValid ? nextTier.cost * quantity : 0;
   const bankProblem: string | null =
     nextTier === null
-      ? "The Bank Depot is empty -- every printed train has been bought."
+      ? "The Bank Depot is empty — every printed train has been bought."
       : atTrainLimit
         ? // Design note #230: the phase's own ceiling, named as such. A
           // corporation at its limit must sell or scrap before it can buy,
@@ -344,11 +344,11 @@ export function TrainPurchasePanel({
           // what is true rather than asking for a smaller number.
           (limitDropsOnPurchase
             ? `Buying a ${nextTier?.tier}-train would start the next phase and cut the limit to ${limitAfterPurchase}, and ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount}. Sell or scrap first.`
-            : `Train limit reached -- ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`)
+            : `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`)
         : !quantityValid
           ? `Enter a whole number between 1 and ${Math.max(1, supplyCap)}.`
           : bankTotal > treasury
-            ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} -- it cannot pay $${bankTotal}.`
+            ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
             : null;
 
   /* ==================================================================
@@ -382,7 +382,7 @@ export function TrainPurchasePanel({
   const tradeBlockedReason: string | null =
     blockedReason ??
     (atTrainLimit
-      ? `Train limit reached -- ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase. Scrap or sell a train before buying another.`
+      ? `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase. Scrap or sell a train before buying another.`
       : null);
   const canTrade = canAct && sessionReady && tradeBlockedReason === null;
 
@@ -513,7 +513,7 @@ export function TrainPurchasePanel({
                   ) : (
                     <span
                       style={styles.depotFlagPermanent}
-                      title={`${tier.tier}-trains never rust -- nothing in 1830 removes them from play.`}
+                      title={`${tier.tier}-trains never rust — nothing in 1830 removes them from play.`}
                     >
                       Permanent
                     </span>
@@ -603,7 +603,7 @@ export function TrainPurchasePanel({
                 style={styles.limitReadout}
                 title={
                   limitDropsOnPurchase
-                    ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} -- anything above ${limitAfterPurchase} is discarded when the phase turns.`
+                    ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} — anything above ${limitAfterPurchase} is discarded when the phase turns.`
                     : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains 1830 allows one corporation in this phase. Separate from the depot's own stock above.`
                 }
               >
@@ -710,7 +710,7 @@ export function TrainPurchasePanel({
                 // Design note #232: the roster is filtered to owners, so
                 // "empty" now means something specific and worth saying.
                 <p style={styles.empty}>
-                  No other corporation owns a train yet -- there is nothing to buy.
+                  No other corporation owns a train yet — there is nothing to buy.
                 </p>
               )}
               {sellers.map((company) => {

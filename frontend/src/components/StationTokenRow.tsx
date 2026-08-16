@@ -86,8 +86,8 @@ export function StationTokenRow({
       {slots.map((slot) => {
         const title = slot.isHome
           ? slot.placed
-            ? "Home station -- granted free when the corporation floated."
-            : "Home station -- placed free when the corporation floats."
+            ? "Home station — granted free when the corporation floated."
+            : "Home station — placed free when the corporation floats."
           : slot.placed
             ? `Placed. Cost $${slot.cost}.`
             : `Costs $${slot.cost} from the treasury.`;

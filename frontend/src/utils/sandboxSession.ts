@@ -1111,6 +1111,41 @@ export function applySandboxWaterfallAction(
     return {
       waterfall: {
         ...waterfall,
+        /* ==============================================================
+         *  DESIGN NOTE 302: A RAISE IS A BID, SO IT GOES IN THE BID LIST
+         * ==============================================================
+         *
+         * REPORTED: the mini-auction card shows the original bids rather
+         * than updating, and the player with the LOWEST bid is marked as
+         * leader.
+         *
+         * Both symptoms, one cause. A raise wrote only to
+         * `mini_auction.high_bid`/`high_bidder` and left `priv.bids`
+         * holding the OPENING bids that started the contest. The card
+         * renders `priv.bids`, so the amounts froze at the moment the
+         * mini-auction opened.
+         *
+         * The leader badge then looked wrong for a reason that is worth
+         * separating out, because the badge logic was correct all along:
+         * it marks whoever `high_bidder` names, and that IS the leader.
+         * What was wrong was the NUMBER printed beside them -- their stale
+         * opening bid, which in a contest the other player opened higher on
+         * is the smaller of the two. A correct badge on a stale figure
+         * reads exactly like a badge on the wrong player.
+         *
+         * So the raise is recorded where a bid belongs. One standing bid
+         * per player (the same rule `WaterfallBidHigher` follows), so a
+         * raise REPLACES rather than stacking. */
+        privates: waterfall.privates.map((entry) => {
+          if (entry.private_id !== mini.private_id) return entry;
+          const others = entry.bids.filter((bid) => bid.bidder !== actor);
+          return {
+            ...entry,
+            bids: [...others, { bidder: actor, bid_amount: String(amount) }].sort(
+              (a, b) => Number(a.bid_amount) - Number(b.bid_amount),
+            ),
+          };
+        }),
         mini_auction: {
           ...mini,
           high_bid: String(amount),
@@ -1157,9 +1192,35 @@ export function applySandboxWaterfallAction(
       };
     }
 
+    /* ==================================================================
+     *  DESIGN NOTE 313: DROPPING OUT REFUNDS THE BID, SO THE BID GOES
+     * ==================================================================
+     *
+     * REPORTED (with the escrow work): a player who drops out of a
+     * mini-auction does not get their escrowed money back.
+     *
+     * The card's own tooltip has promised "your escrowed bid is refunded in
+     * full" since design note #27, and the contest correctly removed them
+     * from `mini_auction.bidders` -- but their bid stayed in
+     * `privates[].bids`. With the escrow derived from that list
+     * (`auctionEscrow.ts` design note #1), the money stayed locked for the
+     * rest of the auction: a player could drop out of every contest and end
+     * up unable to bid on anything, with a full balance on screen and no
+     * available cash behind it.
+     *
+     * Removing the bid is also what makes the BID LIST honest. It is the
+     * roster of who is still committed to this company, and a name in it who
+     * has publicly walked away is telling the table something false --
+     * `mini_auction.bidders` and `priv.bids` are two views of one contest
+     * and they have to shrink together. */
     return {
       waterfall: {
         ...waterfall,
+        privates: waterfall.privates.map((entry) =>
+          entry.private_id === mini.private_id
+            ? { ...entry, bids: entry.bids.filter((bid) => bid.bidder !== actor) }
+            : entry,
+        ),
         mini_auction: {
           ...mini,
           bidders: remaining,
@@ -1412,7 +1473,58 @@ export function applySandboxAction(
   }
 
   if ("EmergencyBuyHardware" in msg) {
-    return buyDepotTrain(state, msg.EmergencyBuyHardware.protocol_id);
+    /* ================================================================
+     *  DESIGN NOTE 333: THE PRESIDENT'S MONEY ACTUALLY MOVES
+     * ================================================================
+     *
+     * This arm was `buyDepotTrain` verbatim -- the same call as the
+     * ordinary `BuyHardwareFromPool` above it, which charges the TREASURY
+     * and nothing else. The emergency case is precisely the one where the
+     * treasury cannot pay, and `adjustTreasury` floors at zero, so the
+     * corporation paid what it had, the shortfall evaporated, and the
+     * president's wallet was untouched.
+     *
+     * That is the exact failure this codebase keeps removing: a path that
+     * REPORTS a transaction it did not perform. `EmergencyTrainPurchaseModal`
+     * tells the president they are about to pay $220 of their own money;
+     * if the reducer does not take it, the modal is lying to them and the
+     * balances on screen quietly disagree with the sentence in the log.
+     *
+     * So the payment is split the way 1830 splits it: the treasury pays
+     * everything it has, and the president covers the remainder from
+     * personal cash. `buyDepotTrain` then runs with a treasury topped up
+     * to exactly the train's price, so its own arithmetic -- the bank
+     * credit, the delivery, the phase check -- is unchanged and there is
+     * no second copy of it here.
+     *
+     * WHAT THIS STILL DOES NOT DO is sell shares. If the president's cash
+     * is short too, `adjustCash`'s zero floor means they simply pay what
+     * they have and the purchase completes underfunded. The modal will not
+     * enable its confirm in that state (`mustRaiseBySelling > 0` disables
+     * it), so the sandbox cannot reach it through the UI -- and the real
+     * rule needs the forced-sale message that design note #1 in the modal
+     * records as missing from `ExecuteMsg`. */
+    const companyId = msg.EmergencyBuyHardware.protocol_id;
+    const tier = depotInventory(state).find(
+      (row) => row.remaining === null || row.remaining > 0,
+    );
+    if (!tier) return state;
+
+    const company = state.public_companies.find((entry) => entry.company_id === companyId);
+    const treasury = Number(company?.treasury) || 0;
+    const shortfall = Math.max(0, tier.cost - treasury);
+
+    if (shortfall === 0 || !company?.president) return buyDepotTrain(state, companyId);
+
+    // The president's contribution passes THROUGH the treasury, which is
+    // what makes `buyDepotTrain`'s single `adjustTreasury(-cost)` correct
+    // for both the ordinary and the emergency case.
+    const funded = adjustTreasury(
+      adjustCash(state, company.president, -shortfall),
+      companyId,
+      shortfall,
+    );
+    return buyDepotTrain(funded, companyId);
   }
 
   if ("BuyTrainFromCorporation" in msg) {
@@ -1691,6 +1803,144 @@ export function applySandboxAction(
  *  target differently in each. */
 export function isSeatDrivenRound(phase: RoundType): boolean {
   return phase !== "OperatingRound";
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 327: THE PRIVATES NEVER PAID
+ * ==================================================================
+ *
+ * REPORTED: private companies do not pay their per-Operating-Round revenue
+ * to their owners.
+ *
+ * They did not, and nothing in the app was arranged to. `revenue_per_or`
+ * has been on `PrivateCompanyState` since the schema was written and every
+ * private card has printed it -- as a PROPERTY of the company, like its
+ * name. No code path ever turned it into money. So a player who paid $220
+ * for the B&O in the auction watched a "$30 / OR" label sit on their card
+ * for the rest of the game while their cash never moved, which quietly
+ * inverts the auction's whole economics: the expensive privates are
+ * expensive precisely because they pay.
+ *
+ * ===================================================================
+ *  DESIGN NOTE 328: ONCE PER ROUND, NOT ONCE PER CORPORATION
+ * ===================================================================
+ *
+ * The subtle way to get this wrong is to pay on every Operating Round
+ * TURN. An Operating Round runs one turn per floated corporation, so on a
+ * board with six floated companies the privates would pay six times a
+ * round -- and the bug would look like generosity rather than an error,
+ * which is the kind that survives playtesting.
+ *
+ * This function is therefore a pure "what does one round of private income
+ * look like", and the CALLER owns the trigger. `App.tsx` fires it on the
+ * `current_round_type` transition INTO `OperatingRound`, which happens
+ * exactly once per round by construction.
+ *
+ * ===================================================================
+ *  DESIGN NOTE 329: WHO PAYS, AND WHO IS SKIPPED
+ * ===================================================================
+ *
+ * THE BANK PAYS. Private revenue is income from outside the game, not a
+ * transfer between players, so the bank is debited -- which matters
+ * because 1830 ends when the bank breaks, and privates paying out of
+ * nowhere would postpone the end of the game indefinitely.
+ *
+ * THREE PRIVATES ARE SKIPPED, for three different reasons:
+ *
+ *   UNOWNED    still in the auction. It pays nobody because nobody holds
+ *              it; the money simply is not earned yet.
+ *   CLOSED     out of the game at Phase 5. `closed` is checked before
+ *              `owner`, because a closed private can still carry its last
+ *              owner's address and paying on it would be paying for a
+ *              certificate that no longer exists.
+ *   CORPORATE  `owner_protocol_id` rather than `owner` -- a private bought
+ *              by a corporation pays that CORPORATION's treasury, not a
+ *              player's wallet. That is a real 1830 rule and it is modelled
+ *              here rather than skipped, because the phase-gated corporate
+ *              purchase is already implemented (`PrivateTradePanel`) and a
+ *              private that stopped paying the moment it was sold to a
+ *              company would make that feature look broken.
+ */
+export interface PrivatePayout {
+  privateId: number;
+  privateName: string;
+  amount: number;
+  /** Exactly one of these is set -- see design note #329. */
+  toPlayer: string | null;
+  toCompanyId: number | null;
+}
+
+export interface PrivatePayoutResult {
+  state: GameStateResponse;
+  payouts: PrivatePayout[];
+  /** What left the bank in total, for the caller's summary line. */
+  total: number;
+}
+
+/**
+ * One Operating Round's worth of private company income.
+ *
+ * Returns the SAME state object and an empty list when nothing is owed, so
+ * a caller can skip its log write and its re-render on identity.
+ */
+export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePayoutResult | null {
+  if (!state) return null;
+
+  const payouts: PrivatePayout[] = [];
+  for (const priv of state.private_companies) {
+    if (priv.closed) continue;
+    const amount = Number(priv.revenue_per_or) || 0;
+    if (amount <= 0) continue;
+
+    if (priv.owner_protocol_id !== null && priv.owner_protocol_id !== undefined) {
+      payouts.push({
+        privateId: priv.private_id,
+        privateName: priv.name,
+        amount,
+        toPlayer: null,
+        toCompanyId: priv.owner_protocol_id,
+      });
+    } else if (priv.owner) {
+      payouts.push({
+        privateId: priv.private_id,
+        privateName: priv.name,
+        amount,
+        toPlayer: priv.owner,
+        toCompanyId: null,
+      });
+    }
+  }
+
+  if (payouts.length === 0) return { state, payouts, total: 0 };
+
+  let next = state;
+  let total = 0;
+  for (const payout of payouts) {
+    total += payout.amount;
+    next = payout.toPlayer
+      ? adjustCash(next, payout.toPlayer, payout.amount)
+      : adjustTreasury(next, payout.toCompanyId as number, payout.amount);
+  }
+  // Design note #329: the bank funds it, in one write rather than one per
+  // private -- `adjustBank` floors at zero, and four separate calls against
+  // a nearly-empty bank would floor differently from one call for the sum.
+  next = adjustBank(next, -total);
+
+  return { state: next, payouts, total };
+}
+
+/** "Schuylkill Valley pays $5 to Alice." One line per payout, because the
+ *  Activity Log is a ledger and a summarised "privates paid $70" cannot be
+ *  reconciled against any individual balance on screen. */
+export function describePrivatePayout(
+  payout: PrivatePayout,
+  labelForAddress: (address: string) => string,
+  labelForCompany: (companyId: number) => string,
+): string {
+  const recipient = payout.toPlayer
+    ? labelForAddress(payout.toPlayer)
+    : labelForCompany(payout.toCompanyId as number);
+  return `${payout.privateName} pays $${payout.amount} to ${recipient}.`;
 }
 
 /* ------------------------------------------------------------------ */

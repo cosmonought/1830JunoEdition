@@ -1038,8 +1038,8 @@ export function TileSelectionPopup({
                   }}
                   title={
                     canRotate
-                      ? `Tile #${group.tileId} -- double-click (or press R) to rotate`
-                      : `Tile #${group.tileId} -- only one legal rotation here`
+                      ? `Tile #${group.tileId} — double-click (or press R) to rotate`
+                      : `Tile #${group.tileId} — only one legal rotation here`
                   }
                   style={{
                     flex: "0 0 auto",
@@ -1172,7 +1172,7 @@ export function TileSelectionPopup({
               there is no chain and no contract has approved this tile. */}
           {!offline && sessionStatus !== "ready" && (
             <div style={{ opacity: 0.75, marginBottom: 4 }}>
-              Session key not ready -- initialize it before dispatching.
+              Session key not ready — initialize it before dispatching.
             </div>
           )}
           {selectedGroup && selectedOrientation !== null && (

@@ -654,11 +654,18 @@ import {
   sandboxPlayerLabel,
   sandboxWaterfallState,
 } from "./utils/sandboxState";
+import { availableCash, escrowedBids } from "./utils/auctionEscrow";
+import {
+  EmergencyTrainPurchaseModal,
+  buildEmergencyPurchasePlan,
+} from "./components/EmergencyTrainPurchaseModal";
 import type { GameplayExecuteMsg, RouteWaypointDto } from "./utils/sessionKey";
 import {
   applySandboxAction,
   applySandboxMarketAction,
+  applyPrivateRevenue,
   applySandboxWaterfallAction,
+  describePrivatePayout,
   applySandboxLayTile,
   isRouteTerminusHex,
   sandboxRouteBreakdown,
@@ -946,7 +953,7 @@ function TopBar({
         rel="noopener noreferrer"
         className="neta-credit"
         style={styles.netaCredit}
-        title="Neta DAO -- opens netadao.org in a new tab"
+        title="Neta DAO — opens netadao.org in a new tab"
       >
         Powered by Neta DAO
       </a>
@@ -961,7 +968,7 @@ function TopBar({
           {/* The full message is long and names a rebuild requirement; the
               badge shows the actionable half and the tooltip carries the
               rest, so the bar never wraps. */}
-          Offline -- {firstMissingEnvVar(configError) ?? "chain not configured"}
+          Offline — {firstMissingEnvVar(configError) ?? "chain not configured"}
         </span>
       )}
 
@@ -1051,7 +1058,7 @@ function firstMissingEnvVar(message: string): string | null {
  *  alongside the formatted figure, so a player can verify the conversion and
  *  see that no precision was invented. */
 function nativeBalanceTitle(coin: { denom: string; amount: string } | null): string {
-  if (!coin) return "Native balance unavailable -- connect a wallet on a configured chain.";
+  if (!coin) return "Native balance unavailable — connect a wallet on a configured chain.";
   return `${coin.amount} ${coin.denom} (raw base-denom integer)`;
 }
 
@@ -1333,6 +1340,7 @@ function ContextualActionBar({
   mustBuyTrain,
   activePlayerName,
   activePlayerCash,
+  activePlayerEscrow,
   privateCompanies,
   privatePowerViewer,
   sandboxMode,
@@ -1387,6 +1395,8 @@ function ContextualActionBar({
     ticker: string;
     fullName: string | null;
     presidentLabel: string | null;
+    /** Design note #326: the president's personal cash, for the tooltip. */
+    presidentCash: number | null;
     treasury: number;
     /** Design note #237: the whole allowance, one entry per token, with its
      *  own escalating price. Replaces the `stationsLeft`/`stationLimit`
@@ -1433,7 +1443,10 @@ function ContextualActionBar({
    * what a player needs while looking at the board" -- and whether they can
    * afford the thing they are about to click is exactly that. */
   activePlayerName: string | null;
+  /** Design note #317: AVAILABLE cash during the auction, total otherwise. */
   activePlayerCash: number | null;
+  /** How much of their money is standing on bids. `0` outside the auction. */
+  activePlayerEscrow: number;
   /** Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
@@ -1659,7 +1672,7 @@ function ContextualActionBar({
             disabled: mustBuyTrain,
             title: !mustBuyTrain
               ? "Finish this corporation's turn and pass to the next in the queue."
-              : "A corporation must own a train. Buy one from the Bank Depot or another corporation -- if the treasury cannot cover it, the president buys it out of pocket.",
+              : "A corporation must own a train. Buy one from the Bank Depot or another corporation — if the treasury cannot cover it, the president buys it out of pocket.",
           },
         ];
         break;
@@ -1795,7 +1808,7 @@ function ContextualActionBar({
       {tokenTargetMode && (
         <div style={styles.tokenTargetBanner} role="status">
           <span style={styles.tokenTargetDot} aria-hidden="true" />
-          Placing station token -- click a city hex on the Rail Map.
+          Placing station token — click a city hex on the Rail Map.
           <button
             type="button"
             style={styles.tokenTargetCancel}
@@ -1911,7 +1924,33 @@ function ContextualActionBar({
                     color: corporationBarInk.inkMuted,
                     // Design note #298: identity detail, dropped when pinned.
                     ...(condensed ? { display: "none" } : {}),
+                    ...(activeCorporation.presidentCash !== null
+                      ? { cursor: "help", textDecoration: "underline dotted 1px" }
+                      : {}),
                   }}
+                  /* ==================================================
+                       DESIGN NOTE 326: THE PERSONAL PURSE, ON THE PERSON
+                      ==================================================
+
+                      Where design note #325's figure went. Attached to the
+                      president's NAME, so there is no ambiguity about
+                      whose money it is -- a number beside a crown is a
+                      fact about that human, where the same number floating
+                      in the rail below was a fact about "the acting
+                      turn", which in an Operating Round means the
+                      company.
+
+                      A tooltip rather than visible text because it is
+                      reference, not a driver: it answers "can they cover
+                      the emergency buy" when somebody asks, and the rest
+                      of the time the strip is about the corporation. The
+                      dotted underline is what makes it discoverable --
+                      an unmarked tooltip is one nobody hovers. */
+                  title={
+                    activeCorporation.presidentCash !== null
+                      ? `President's Personal Treasury: $${activeCorporation.presidentCash}`
+                      : undefined
+                  }
                 >
                   {"\u{1F451} "}
                   {activeCorporation.presidentLabel}
@@ -2001,7 +2040,7 @@ function ContextualActionBar({
                       }}
                       title={
                         activeCorporation.trains.length >= phase.trainLimit
-                          ? `At the limit -- ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically.`
+                          ? `At the limit — ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically.`
                           : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`
                       }
                     >
@@ -2050,18 +2089,35 @@ function ContextualActionBar({
                   {phase.label}
                 </span>
               )}
-              {/* Design note #300: the acting PLAYER's cash, which is a
-                  different pocket from the corporation's treasury shown in
-                  the strip above. */}
-              {activePlayerCash !== null && (
-                <span
-                  style={styles.playerCashBadge}
-                  title={`${activePlayerName ?? "The acting player"} holds $${activePlayerCash} personally. Separate from the corporation's treasury -- this is what buys shares, privates, and a president's emergency train.`}
-                >
-                  <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
-                  <span style={styles.playerCashValue}>${activePlayerCash}</span>
-                </span>
-              )}
+              {/* ==================================================
+                   DESIGN NOTE 325: TWO POCKETS, ONE ROW, CONSTANT CONFUSION
+                  ==================================================
+
+                  REPORTED: the standalone personal cash line in the
+                  Operating Round panel is confused with corporate treasury
+                  funds.
+
+                  Design note #300 added it here on the reasoning that a
+                  president facing an emergency train buy needs to know
+                  what they can personally cover. That is true and the
+                  placement was still wrong: this rail sits directly under
+                  the corporation strip, which shows `Treasury $X` in the
+                  same typeface at the same size. Two dollar figures, one
+                  above the other, both attached to the acting turn, and
+                  the tooltip explaining that they are different pockets
+                  only opens if you already suspected they were.
+
+                  An Operating Round spends the CORPORATION's money.
+                  Nothing on this rail is charged to a player's wallet, so
+                  the figure had no decision on this screen to inform.
+
+                  IT IS NOT DELETED, IT IS MOVED -- design note #326 hangs
+                  it off the president's own name in the strip above, where
+                  it is unambiguously a fact about the person rather than
+                  about the turn. The auction and Stock Round branch of this
+                  bar keeps its badge (design note #308): there the money
+                  IS the player's, and there it is the only figure on the
+                  row. */}
               {phaseAlert && (
                 <span
                   className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
@@ -2234,7 +2290,7 @@ function ContextualActionBar({
                   style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
                   onClick={onSkipSubPhase}
                   disabled={!sessionReady}
-                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. Dispatches AdvanceOperatingSubPhase -- the contract moves its own cursor one step.`}
+                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. Dispatches AdvanceOperatingSubPhase — the contract moves its own cursor one step.`}
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
@@ -2255,6 +2311,53 @@ function ContextualActionBar({
         </div>
       ) : (
       <div style={styles.actionBarButtons}>
+        {/* ==================================================================
+             DESIGN NOTE 308: THE AUCTION BAR HAD NEITHER NAME NOR MONEY
+            ==================================================================
+
+            Design note #300 put the acting player's cash on the Operating
+            Round branch of this bar. The auction and Stock Round take the
+            OTHER branch a few lines down, and got neither -- which is the
+            wrong way round if anything: an Operating Round spends the
+            CORPORATION's treasury, while a private auction spends the
+            player's own money and nothing else. The one screen where a
+            personal balance decides every action was the one not showing it.
+
+            It leads the row rather than trailing it, because in a hotseat
+            the first question on arriving at the bar is whose turn this is.
+
+            ==================================================================
+             DESIGN NOTE 309: THE BUTTONS SIT WHERE THE OTHER BRANCH PUTS THEM
+            ==================================================================
+
+            Pass and Undo were left-aligned here while the Operating Round's
+            controls are centred (`orPanelActionRow`'s `1fr auto 1fr` grid).
+            Switching rounds moved the buttons across the screen, so muscle
+            memory built in one phase missed in the next. A leading spacer
+            balances the trailing one that already pins the phase badge,
+            which centres the group between them without either rail having
+            to know what the other holds. */}
+        {activePlayerCash !== null && (
+          <span
+            style={styles.playerCashBadge}
+            /* Design note #317: when money is escrowed the badge says so,
+               because the figure beside the name has stopped being the
+               player's balance and become their SPENDING POWER -- two
+               different numbers that only coincide when nothing is bid. */
+            title={
+              activePlayerEscrow > 0
+                ? `${activePlayerName ?? "The acting player"} has $${activePlayerCash} available to bid. $${activePlayerEscrow} more is escrowed in standing bids and comes back if those bids lose.`
+                : `${activePlayerName ?? "The acting player"} holds $${activePlayerCash}. In the auction this is the only money in play \u2014 privates are bought from a player's own cash, not a corporation's treasury.`
+            }
+          >
+            <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
+            <span style={styles.playerCashValue}>${activePlayerCash}</span>
+            {activePlayerEscrow > 0 && (
+              <span style={styles.playerCashEscrow}>${activePlayerEscrow} held</span>
+            )}
+          </span>
+        )}
+        <span style={styles.actionBarSpacer} />
         {/* Design note #31: Pass leads -- it is the action available in
             every phase, and the one a player reaches for most. */}
         <button
@@ -2372,7 +2475,7 @@ function ContextualActionBar({
             </span>
             {dividendPayouts.length === 0 ? (
               <span style={styles.dividendNote}>
-                No shareholders on record -- the whole payout would go to the bank pool.
+                No shareholders on record — the whole payout would go to the bank pool.
               </span>
             ) : (
               dividendPayouts.map((row) => (
@@ -2686,7 +2789,7 @@ function MainTabBar({
         className="nav-tab"
         style={styles.tutorialsButton}
         onClick={onOpenTutorials}
-        title="Read any tutorial at any time -- the auction, the Stock Round, the Operating Round, or the stock market."
+        title="Read any tutorial at any time — the auction, the Stock Round, the Operating Round, or the stock market."
       >
         &#63; Tutorials
       </button>
@@ -2949,6 +3052,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     () => new Set<number>(),
   );
 
+  /** Design note #303: what each private actually sold for, by id. */
+  const [settledPrivatePrices, setSettledPrivatePrices] = useState<Readonly<Record<number, number>>>(
+    {},
+  );
+  /** Design note #310: mirrored into a ref so the undo snapshot can capture
+   *  it from inside the dispatch closure, the same reason `sandboxStateRef`
+   *  exists. */
+  const settledPrivatePricesRef = useRef<Readonly<Record<number, number>>>(settledPrivatePrices);
+  useEffect(() => {
+    settledPrivatePricesRef.current = settledPrivatePrices;
+  }, [settledPrivatePrices]);
+
   /* Design note #246: which train distribution the fixture uses. A SECOND
      axis alongside the scenario, not a sixth scenario -- which era you are
      testing and who owns trains are independent questions. Seeded to the
@@ -2980,9 +3095,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * The map grid rides along, because a tile lay changes both and undoing
    * one without the other would leave a tile on a board whose treasury had
    * never paid for it.
+   *
+   * ===================================================================
+   *  DESIGN NOTE 310: THE SNAPSHOT HAS TO COVER EVERY ATOM AN ACTION MOVES
+   * ===================================================================
+   *
+   * REPORTED: undo during the Auction breaks the turn cursor -- the bottom
+   * panel says it is one player's turn while the hotseat gate thinks it is
+   * another's, so seats get skipped and actions fire for the wrong player.
+   *
+   * The snapshot held `state`, `mapGrid` and `subPhase`, and the sandbox
+   * keeps its game state in FOUR atoms, not one. `sandboxWaterfall` owns
+   * `current_turn`, `mini_auction.current_turn` and `mini_auction.bidders`;
+   * `sandboxMarket` owns the token positions; `settledPrivatePrices` owns
+   * what each private actually sold for. None of the three were captured.
+   *
+   * So undo restored `active_player_index` (which is what the seating rail
+   * and the round panels read) and left `waterfall.current_turn` where the
+   * undone action had put it (which is what every control gate reads). The
+   * two pointers are supposed to be the same fact; after one undo they were
+   * one seat apart, and every subsequent action widened the gap.
+   *
+   * THE FIX IS THE SHAPE, NOT A PATCH. Rather than restoring the waterfall
+   * cursor specifically -- which would leave the market and the settled
+   * prices to be found the same way later -- the snapshot now carries every
+   * piece of state the dispatch path writes. The rule to keep: if
+   * `runGameplayAction` can change it, this record holds it.
    */
   const [, setSandboxHistory] = useState<
-    Array<{ state: GameStateResponse; mapGrid: MapGridResponse; subPhase: OperatingSubPhase }>
+    Array<{
+      state: GameStateResponse;
+      mapGrid: MapGridResponse;
+      subPhase: OperatingSubPhase;
+      /** Design note #310: the auction's own atom, including both turn
+       *  cursors and the mini-auction's bidder list. */
+      waterfall: WaterfallStateResponse | null;
+      market: SandboxMarketPrices;
+      settledPrices: Readonly<Record<number, number>>;
+    }>
   >([]);
   /** Bounded so a long hotseat session cannot grow the stack without limit.
    *  Deep enough that undo covers a whole corporation's turn. */
@@ -3215,6 +3365,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     // selector or undo history rather than carrying state from a board that
     // no longer exists.
     setSandboxHistory([]);
+    /* ===================================================================
+     *  DESIGN NOTE 330: A NEW BOARD GETS A NEW LOG
+     * ===================================================================
+     *
+     * REPORTED: switching to the Zero State scenario leaves residual
+     * activity log entries from previous sandbox runs.
+     *
+     * It did, and the Zero State is where it is most obviously wrong --
+     * that scenario's entire claim is that it is a game before anything has
+     * happened, and it opened with a log describing a route somebody ran on
+     * a board that no longer exists. But the bug is not specific to it: the
+     * log is a ledger OF ONE BOARD, and every scenario switch replaces the
+     * board. An entry saying "PRR bought a 4-train for $300" is not merely
+     * stale after the switch, it is false -- there is no such PRR any more,
+     * and its treasury reads whatever the new fixture seeds.
+     *
+     * The three session-residue atoms go with it, for the same reason and
+     * with a sharper symptom each:
+     *
+     *   `settledPrivatePrices`  a fresh auction would show "Sold to Carol
+     *                           for $145" on a private nobody has bid on.
+     *   `usedPrivateAbilities`  a fresh board would show "Used" on a power
+     *                           whose owner does not own it yet.
+     *   `actionLog`             the report above.
+     *
+     * GUARDED ON `sandbox`, and the guard is load-bearing rather than
+     * defensive. This effect also depends on `gameId`, which changes on a
+     * LIVE chain when the player opens a different room -- so an unguarded
+     * purge would wipe a log of blocks that really happened, which is the
+     * opposite of this fix. Sandbox logs describe a fixture; chain logs
+     * describe history. */
+    if (sandbox) {
+      setActionLog([]);
+      setSettledPrivatePrices({});
+      setUsedPrivateAbilities(new Set<number>());
+    }
     // Design note #246: flipping the trade fixture re-seeds too. It changes
     // who owns what, which is board state rather than a view setting, so
     // applying it to a board mid-hotseat would leave trains appearing in
@@ -3326,6 +3512,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (owned == null) return false;
     return owned.length === 0;
   }, [gameState, actingProtocolId]);
+
 
   /* ==================================================================
    *  DESIGN NOTE 207: THE TRAIN BEING RUN IS OBSERVED, NOT PICKED
@@ -3441,6 +3628,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       fullName: corporationFullName(company.ticker) ?? null,
       presidentLabel: company.president
         ? (sandboxPlayerLabel(company.president) ?? truncateAddress(company.president))
+        : null,
+      /** Design note #326: the president's OWN wallet, not the treasury.
+       *  `null` when there is no president or the room does not report their
+       *  cash -- the tooltip is then omitted entirely rather than promising
+       *  a figure it does not have. */
+      presidentCash: company.president
+        ? (() => {
+            const entry = gameState?.player_cash.find((row) => row.player === company.president);
+            const value = entry ? Number(entry.cash_vgp) : NaN;
+            return Number.isFinite(value) ? value : null;
+          })()
         : null,
       treasury: Number(company.treasury) || 0,
       // Design note #237: the row needs every token and its own price, not a
@@ -3592,6 +3790,66 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [sandboxMarket],
   );
 
+  /* DECLARED HERE, not up with `mustBuyTrain`, and the placement is not
+     cosmetic: this memo reads `sandboxMarketPrices` to value the
+     president's holdings, and `const` bindings are not hoisted. `useMemo`
+     runs its callback and evaluates its dependency array during the render
+     pass, so declaring it above that table would throw a ReferenceError on
+     first paint rather than fail later. */
+  /* ===================================================================
+   *  DESIGN NOTE 332: THE EMERGENCY, DETECTED
+   * ===================================================================
+   *
+   * `mustBuyTrain` says the corporation is OBLIGED to buy. This says it
+   * cannot AFFORD to, which is the harder half and the one that costs the
+   * president their own money -- see `EmergencyTrainPurchaseModal.tsx`
+   * design note #0.
+   *
+   * THE PRICE IS THE DEPOT'S CHEAPEST PURCHASABLE TIER, not the cheapest
+   * printed train. 1830's depot sells cheapest-FIRST, so once the 2s are
+   * gone the 3-train is the cheapest thing money can buy there, and pricing
+   * the emergency against a $80 train nobody can buy would understate the
+   * shortfall by $100. `depotInventory` already models that queue.
+   *
+   * `null` -- rather than a plan with a zero shortfall -- whenever there is
+   * no emergency, so the modal's own mount condition is one identity check
+   * and cannot disagree with this derivation about whether one exists. */
+  const emergencyPurchasePlan = useMemo(() => {
+    if (!mustBuyTrain || !gameState) return null;
+    const corporation = gameState.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    if (!corporation) return null;
+
+    const cheapest = depotInventory(gameState).find(
+      (row) => !row.rusted && (row.remaining === null || row.remaining > 0),
+    );
+    if (!cheapest) return null;
+
+    const treasury = Number(corporation.treasury) || 0;
+    // No shortfall, no emergency: the ordinary Buy Trains panel handles it.
+    if (treasury >= cheapest.cost) return null;
+
+    return buildEmergencyPurchasePlan({
+      state: gameState,
+      corporation,
+      trainModel: cheapest.tier,
+      trainCost: cheapest.cost,
+      priceForCompany: (companyId) => (sandbox ? (sandboxMarketPrices[companyId] ?? null) : null),
+      labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+    });
+  }, [mustBuyTrain, gameState, actingProtocolId, sandbox, sandboxMarketPrices]);
+
+  /* Dismissed by the player -- design note #3 in the modal. Keyed on the
+     corporation so dismissing PRR's emergency does not also hide ERIE's
+     when the turn moves on; a single boolean would suppress every
+     subsequent emergency for the rest of the session. */
+  const [dismissedEmergencyFor, setDismissedEmergencyFor] = useState<number | null>(null);
+  const emergencyModalPlan =
+    emergencyPurchasePlan && dismissedEmergencyFor !== emergencyPurchasePlan.corporationId
+      ? emergencyPurchasePlan
+      : null;
+
   const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
   // Resets the Contextual Top Action Bar's OR sub-phase back to "Track"
@@ -3654,8 +3912,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // the availability guard below, which is what stops the two from
       // disagreeing about where a Stock Round lands.
       setActiveMainTab(surfaceTabFor(currentRoundType));
+
+      /* ===============================================================
+       *  DESIGN NOTE 331: THE PRIVATES ARE PAID HERE, AND ONLY HERE
+       * ===============================================================
+       *
+       * `sandboxSession.ts` design note #328 explains why the reducer
+       * does not own this trigger: an Operating Round runs one TURN per
+       * floated corporation, so anything hung off a turn would pay the
+       * privates once per company per round.
+       *
+       * This branch is already the app's single "the round genuinely
+       * changed" edge -- it fires on a real transition compared against
+       * `prevRoundTypeRef`, not on every poll tick that reports the same
+       * round. That is exactly the once-per-round guarantee the payout
+       * needs, and reusing it is better than adding a second round-change
+       * detector that could disagree with this one about when a round
+       * started.
+       *
+       * SANDBOX ONLY. On a chain the contract pays the privates and the
+       * balances arrive in the next `GetGameState`; crediting them locally
+       * as well would double every owner's income on screen until the
+       * poll corrected it. */
+      if (sandbox && currentRoundType === "OperatingRound") {
+        payPrivateRevenueRef.current?.();
+      }
     }
-  }, [gameState?.current_round_type]);
+  }, [gameState?.current_round_type, sandbox]);
 
   // Design note #28: the tab set changes shape by phase, so the active tab
   // can cease to exist under the player -- sitting on "Auction" when the
@@ -3744,17 +4027,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
 
   /** Design note #300: the acting seat's personal cash. `null` when there
    *  is no seat on turn or the chain does not report it -- a missing wallet
-   *  must not render as $0, which is a real and very different state. */
+   *  must not render as $0, which is a real and very different state.
+   *
+   *  Design note #317: during the Waterfall Auction this is AVAILABLE cash,
+   *  not the total. The badge sits next to Pass and Undo on the one screen
+   *  where the difference decides every action, and a player reading $600
+   *  off the bar while $400 of it stands on a bid would be reading the one
+   *  figure they cannot spend. Outside the auction there is no escrow, so
+   *  `availableCash` returns the total and the badge is unchanged. */
   const activeSeatCash = useMemo(() => {
     if (!gameState) return null;
     const seat = actingSeatIndex(gameState);
     if (seat === null) return null;
     const address = gameState.player_addresses[seat];
-    const entry = gameState.player_cash.find((row) => row.player === address);
-    if (!entry) return null;
-    const value = Number(entry.cash_vgp);
-    return Number.isFinite(value) ? value : null;
-  }, [gameState]);
+    if (!address) return null;
+    return availableCash(gameState, waterfallState, address);
+  }, [gameState, waterfallState]);
+
+  /** What the acting seat has locked in standing bids, for the badge's
+   *  tooltip. Zero outside the auction. */
+  const activeSeatEscrow = useMemo(() => {
+    if (!gameState) return 0;
+    const seat = actingSeatIndex(gameState);
+    if (seat === null) return 0;
+    const address = gameState.player_addresses[seat];
+    return address ? escrowedBids(waterfallState, address) : 0;
+  }, [gameState, waterfallState]);
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
@@ -4619,7 +4917,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       const current = routeDraftsRef.current[activeTrainIndexRef.current] ?? [];
       if (current.length === 0 && !isRouteTerminusHex(mapGrid, boardLabel)) {
         setRouteFeedback(
-          `${info.hexLabel} cannot START a route. Routes begin at a city or a red off-board hex -- towns and plain track are passed through.`,
+          `${info.hexLabel} cannot START a route. Routes begin at a city or a red off-board hex — towns and plain track are passed through.`,
         );
         return;
       }
@@ -4665,7 +4963,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         // Refused with the reason rather than silently ignored.
         if (prev.some((entry) => entry.q === point.q && entry.r === point.r)) {
           setRouteFeedback(
-            `${point.hexLabel} is already on this route. A route may not visit the same hex twice -- click ${last.hexLabel} to step back instead.`,
+            `${point.hexLabel} is already on this route. A route may not visit the same hex twice — click ${last.hexLabel} to step back instead.`,
           );
           return all;
         }
@@ -4883,6 +5181,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     [sandbox, gameId, sandboxMarket],
   );
 
+  /** Design note #306 in `WaterfallAuctionDashboard.tsx`: close the auction
+   *  and open Stock Round 1. Local, because the sandbox owns its own round
+   *  cursor -- `PassTurn` is what advances a real room. */
+  const handleProceedToStockRound = useCallback(() => {
+    setSandboxState((current) => {
+      if (!current) return current;
+      const next = { ...current, current_round_type: "StockRound" as const, consecutive_passes: 0 };
+      sandboxStateRef.current = next;
+      return next;
+    });
+    setSandboxWaterfall((current) =>
+      current === null ? current : { ...current, waterfall_auction_active: false },
+    );
+    logInfoRef.current?.(
+      "Round",
+      "The Waterfall Auction is complete \u2014 Stock Round 1 begins.",
+    );
+  }, []);
+
   const handleUsePrivateAbility = useCallback(
     (ability: PrivateAbility) => {
       setUsedPrivateAbilities((prev) => {
@@ -4892,7 +5209,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       });
       logInfoRef.current?.(
         "Private Power",
-        `${ability.action} -- ${ability.description}`,
+        `${ability.action} — ${ability.description}`,
       );
     },
     [],
@@ -4912,6 +5229,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   useEffect(() => {
     logInfoRef.current = logInfo;
   }, [logInfo]);
+
+  /* ===================================================================
+   *  DESIGN NOTE 331 (cont.): PAYING THE PRIVATES
+   * ===================================================================
+   *
+   * Reached through a ref for the same reason `logInfoRef` exists: the
+   * round-transition effect that fires this is declared ~1300 lines above,
+   * and this handler needs `logInfo` and the sandbox state refs, which are
+   * not available up there. A ref is the established shape in this file for
+   * exactly that ordering problem.
+   *
+   * It reads and writes `sandboxStateRef` rather than `sandboxState` for
+   * design note #265's reason -- the effect fires inside a render pass in
+   * which the state variable may still be the previous value, and paying
+   * against a stale board would credit the wrong owners.
+   */
+  const payPrivateRevenue = useCallback(() => {
+    const before = sandboxStateRef.current;
+    if (!before) return;
+    const result = applyPrivateRevenue(before);
+    // Identity, not length: `applyPrivateRevenue` returns the same object
+    // when nothing is owed, so this is also the "no re-render" check.
+    if (!result || result.state === before) return;
+
+    sandboxStateRef.current = result.state;
+    setSandboxState(result.state);
+
+    const labelForAddress = (address: string) =>
+      sandboxPlayerLabel(address) ?? truncateAddress(address);
+    const labelForCompany = (companyId: number) =>
+      before.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+      `company #${companyId}`;
+
+    for (const payout of result.payouts) {
+      logInfoRef.current?.(
+        "Private Revenue",
+        describePrivatePayout(payout, labelForAddress, labelForCompany),
+      );
+    }
+  }, []);
+
+  const payPrivateRevenueRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    payPrivateRevenueRef.current = payPrivateRevenue;
+  }, [payPrivateRevenue]);
 
   const runGameplayAction = useCallback(
     async (fallbackLabel: string, msg: GameplayExecuteMsg) => {
@@ -5025,11 +5387,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         // Design note #178: UNDO. Snapshot before mutating -- except for
         // undo itself, which would otherwise push the state it is about to
         // discard and make the button a no-op that consumes a stack slot.
+        //
+        // Design note #310: every atom, read from the REFS rather than from
+        // the rendered values. The refs are what this dispatch is about to
+        // overwrite, so they are what "before" means here; the state
+        // variables in this closure may be a render behind when several
+        // actions fire in one tick.
         if (!("UndoLastAction" in msg) && before) {
           setSandboxHistory((stack) =>
-            [...stack, { state: before, mapGrid, subPhase: orSubPhase }].slice(
-              -SANDBOX_HISTORY_LIMIT,
-            ),
+            [
+              ...stack,
+              {
+                state: before,
+                mapGrid,
+                subPhase: orSubPhase,
+                waterfall: sandboxWaterfallRef.current,
+                market: sandboxMarketRef.current,
+                settledPrices: settledPrivatePricesRef.current,
+              },
+            ].slice(-SANDBOX_HISTORY_LIMIT),
           );
         }
 
@@ -5063,9 +5439,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             };
           }
           if (result.won) {
+            const { privateId, name, player, price } = result.won;
+            /* ==============================================================
+             *  DESIGN NOTE 303: A WON PRIVATE HAS TO BECOME AN OWNED ONE
+             * ==============================================================
+             *
+             * REPORTED: sold private companies disappear from the screen.
+             *
+             * The dashboard already renders a dimmed "Sold to X for $Y"
+             * card, and it lists them from `gameState.private_companies`
+             * filtered on `owner !== null`. Nothing ever set that owner.
+             * `applySandboxWaterfallAction` REPORTS the win -- it returns
+             * `won` so the caller can log it -- and the waterfall's own
+             * `removePrivate` drops the company off the live list. So the
+             * card left the auction grid and never arrived in the sold one.
+             *
+             * The reducer reporting rather than writing is the right split
+             * (it owns the auction atom, not the game state), so the write
+             * belongs here, where both are in hand. */
+            if (after) {
+              after = {
+                ...after,
+                private_companies: after.private_companies.map((entry) =>
+                  entry.private_id === privateId ? { ...entry, owner: player } : entry,
+                ),
+              };
+            }
+            /* The SETTLED price, which is not the same as the face value a
+               `PrivateCompanyState` carries -- a private won in a
+               mini-auction went for more, and the card was previously
+               reduced to quoting face value with a tooltip apologising for
+               it. Kept beside the state rather than written into `cost`,
+               which is a printed property of the company. */
+            setSettledPrivatePrices((prev) => ({ ...prev, [privateId]: price }));
             logInfo(
               "Private Won",
-              `${sandboxPlayerLabel(result.won.player) ?? truncateAddress(result.won.player)} won ${result.won.name} for $${result.won.price}.`,
+              `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
             );
           }
         }
@@ -5130,7 +5539,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             id,
             label,
             status: "info",
-            detail: "Spectator mode -- watching only. Join from the lobby to play.",
+            detail: "Spectator mode — watching only. Join from the lobby to play.",
             timestamp,
             timestampMs,
           },
@@ -5210,13 +5619,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       setSandboxHistory((stack) => {
         const previous = stack[stack.length - 1];
         if (!previous) {
-          logInfo("Undo", "Nothing to undo -- this is the start of the scenario.");
+          logInfo("Undo", "Nothing to undo — this is the start of the scenario.");
           return stack;
         }
         sandboxStateRef.current = previous.state;
         setSandboxState(previous.state);
         setMapGrid(previous.mapGrid);
         setOrSubPhase(previous.subPhase);
+        /* Design note #310: the other three atoms, restored through their
+           refs as well as their state so the very next dispatch reads the
+           reverted values rather than the ones it just undid. Writing only
+           the state would leave the refs holding the future. */
+        sandboxWaterfallRef.current = previous.waterfall;
+        setSandboxWaterfall(previous.waterfall);
+        sandboxMarketRef.current = previous.market;
+        setSandboxMarket(previous.market);
+        settledPrivatePricesRef.current = previous.settledPrices;
+        setSettledPrivatePrices(previous.settledPrices);
         // Any in-flight preview belonged to the state just discarded.
         setPreviewTile(null);
         setRadialSelector(null);
@@ -5379,7 +5798,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       if (offTerminus) {
         const last = offTerminus.hexLabels[offTerminus.hexLabels.length - 1];
         setRouteFeedback(
-          `${last} cannot END a route. Routes finish at a city or a red off-board hex -- click one to finish, or click ${last} again to step back.`,
+          `${last} cannot END a route. Routes finish at a city or a red off-board hex — click one to finish, or click ${last} again to step back.`,
         );
         return;
       }
@@ -5589,7 +6008,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         });
         logInfo(
           "Buy Private Company",
-          `${buyerTicker} bought ${target.name} from ${ownerLabel} for $${price} -- its own President owned it, so it completed immediately.`,
+          `${buyerTicker} bought ${target.name} from ${ownerLabel} for $${price} — its own President owned it, so it completed immediately.`,
         );
         return;
       }
@@ -5695,7 +6114,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       logInfo(
         "Place Station Token",
         next
-          ? "Targeting mode ON -- click a city hex on the Rail Map to place the token. Click the button again to cancel."
+          ? "Targeting mode ON — click a city hex on the Rail Map to place the token. Click the button again to cancel."
           : "Targeting mode cancelled.",
       );
       return next;
@@ -5916,7 +6335,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         logInfo(
           "Train Trade",
           samePresident
-            ? `${proposal.buyerTicker} bought a ${proposal.modelType}-train from ${proposal.sellerTicker} for $${proposal.price} -- same President, so it completed immediately.`
+            ? `${proposal.buyerTicker} bought a ${proposal.modelType}-train from ${proposal.sellerTicker} for $${proposal.price} — same President, so it completed immediately.`
             : `${proposal.buyerTicker} offered $${proposal.price} to ${proposal.sellerTicker} for a ${proposal.modelType}-train. Awaiting ${proposal.sellerPresidentLabel}.`,
         );
         return;
@@ -6173,7 +6592,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     forcedWithholdRef.current.add(key);
     logInfo(
       "Auto-Withhold",
-      "No trains ran, so there is nothing to pay out -- $0 withheld and the share price steps left.",
+      "No trains ran, so there is nothing to pay out — $0 withheld and the share price steps left.",
     );
     handleWithholdRevenue();
   }, [
@@ -6194,7 +6613,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     autoSkippedRef.current.add(key);
     logInfo(
       "Auto-Skip",
-      `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} -- ${autoSkipReason}.`,
+      `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} — ${autoSkipReason}.`,
     );
     handleSkipSubPhase();
   }, [autoSkipReason, actingProtocolId, orSubPhase, handleSkipSubPhase, logInfo]);
@@ -6294,9 +6713,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   /* Design note #163: the ONE gate. Everything else in the radial selector
      works regardless of whose turn it is. */
   const tileLayDisabledReason = useMemo(() => {
-    if (spectator) return "Planning Mode: Tile lay disabled -- you are spectating.";
+    if (spectator) return "Planning Mode: Tile lay disabled — you are spectating.";
     if (gameState?.current_round_type !== "OperatingRound") {
-      return "Planning Mode: Tile lay disabled -- track is laid in an Operating Round.";
+      return "Planning Mode: Tile lay disabled — track is laid in an Operating Round.";
     }
     if (orSubPhase !== "Track") {
       // DIRECTION-AWARE. This said "past the Track step" unconditionally,
@@ -6307,14 +6726,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       const order = OPERATING_SUB_PHASE_ORDER;
       const before = order.indexOf(orSubPhase) < order.indexOf("Track");
       return before
-        ? `Planning Mode: Tile lay disabled -- the turn is still on ${orSubPhase}. Advance to Lay Track first.`
-        : `Planning Mode: Tile lay disabled -- this corporation is past the Track step (now ${orSubPhase}).`;
+        ? `Planning Mode: Tile lay disabled — the turn is still on ${orSubPhase}. Advance to Lay Track first.`
+        : `Planning Mode: Tile lay disabled — this corporation is past the Track step (now ${orSubPhase}).`;
     }
     // `actingSeatIndex` resolves the ACTING corporation's president during an
     // Operating Round, which is exactly the person entitled to lay here.
     const acting = gameState ? actingSeatIndex(gameState) : null;
     if (acting === null || gameState?.player_addresses[acting] !== viewerAddress) {
-      return "Planning Mode: Tile lay disabled -- not your corporation's turn.";
+      return "Planning Mode: Tile lay disabled — not your corporation's turn.";
     }
     return null;
   }, [spectator, gameState, orSubPhase, viewerAddress]);
@@ -6589,6 +7008,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         active={marketTutorialArmed}
       />
 
+      {/* Design note #332: the mandatory buy the treasury cannot fund.
+          Mounted at the shell level beside the tutorials rather than inside
+          the Operating Round panel, because it is a full-screen decision
+          about the PRESIDENT's money -- the corporation's own panels are
+          about the corporation's. */}
+      <EmergencyTrainPurchaseModal
+        plan={emergencyModalPlan}
+        sandbox={sandbox}
+        onClose={() =>
+          setDismissedEmergencyFor(emergencyModalPlan?.corporationId ?? null)
+        }
+        onConfirm={() => {
+          const plan = emergencyModalPlan;
+          if (!plan) return;
+          setDismissedEmergencyFor(plan.corporationId);
+          /* Design note #333: `EmergencyBuyHardware`, NOT the ordinary
+             `BuyHardwareFromPool`. They are different contract messages and
+             the difference is the whole feature -- the ordinary one charges
+             the treasury and floors at zero, which in this state would buy
+             the train without anyone paying the shortfall. The log line is
+             written by `runGameplayAction` from the resolved state, so it
+             reports what actually moved rather than what was intended. */
+          void runGameplayAction(
+            `EmergencyBuyHardware: ${plan.trainModel}-train`,
+            { EmergencyBuyHardware: { game_id: gameId, protocol_id: plan.corporationId } },
+          );
+          logInfo(
+            "Emergency Purchase",
+            `${plan.presidentLabel} covered $${plan.shortfall} of ${plan.corporationTicker}'s $${plan.trainCost} ${plan.trainModel}-train from personal cash.`,
+          );
+        }}
+      />
+
       {/* Design note #34: one bar. The room context below used to be a
           second full-width strip of its own; it is now the middle of the
           single header. It still says WHICH room this shell is bound to --
@@ -6714,10 +7166,41 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   // fail with an error about turn state that mentions
                   // nothing to do with passing.
                   onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
+                  /* ==================================================
+                       DESIGN NOTE 311: PASSING IS ALWAYS LEGAL
+                      ==================================================
+
+                      REPORTED: Pass Turn is greyed out for the very first
+                      player of the auction.
+
+                      It was, and for every player, until somebody bid. The
+                      gate read "passing is illegal until at least one
+                      private has a standing bid" -- which is not an 1830
+                      rule and had the auction's own escape hatch backwards.
+                      An opening table with no bids anywhere is exactly the
+                      position the pass rule exists FOR: if all four players
+                      decline in succession, the cheapest private is marked
+                      down $5 and the round comes back around cheaper.
+                      Requiring a bid before anyone could pass made that
+                      markdown unreachable from the opening position, so the
+                      first player's only legal moves were to buy Schuylkill
+                      Valley at full price or to bid.
+
+                      `sandboxSession.ts`'s `WaterfallPass` branch has
+                      implemented the markdown since design note #271. This
+                      gate was the only thing standing in front of it.
+
+                      WHAT IS STILL BLOCKED, and it is a different question:
+                      a live mini-auction. `WaterfallPass` and
+                      `WaterfallMiniAuctionPass` are separate messages
+                      against separate cursors, and sending the former while
+                      a contest is running advances the main seat pointer
+                      out from under the mini-auction -- the same class of
+                      cursor desync as design note #310. Dropping out of a
+                      contest is the Drop out button on the card. */
                   passDisabledReason={
-                    isWaterfallPhase &&
-                    !(waterfallState?.privates ?? []).some((p) => p.bids.length > 0)
-                      ? "Passing is illegal until at least one private company has a standing bid."
+                    isWaterfallPhase && waterfallState?.mini_auction
+                      ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
                       : null
                   }
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
@@ -6731,6 +7214,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   mustBuyTrain={mustBuyTrain}
                   activePlayerName={activeSeatLabel}
                   activePlayerCash={activeSeatCash}
+                  activePlayerEscrow={activeSeatEscrow}
                   privateCompanies={gameState?.private_companies ?? []}
                   privatePowerViewer={viewerAddress}
                   sandboxMode={sandbox}
@@ -6802,6 +7286,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 // to compare a turn against, so the seat on turn is always
                 // the one this keyboard may act for.
                 hotseat={sandbox}
+                settledPrices={settledPrivatePrices}
+                // Design note #306 in that file: the auction is over and
+                // somebody has to open the Stock Round. Sandbox only --
+                // a live chain advances its own round, and a client button
+                // there would be a lie.
+                onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
                 sessionReady={controlsEnabled}
                 onBuyLowest={handleWaterfallBuyLowest}
                 onBidHigher={handleWaterfallBidHigher}
@@ -6852,7 +7342,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     }
                     blockedReason={
                       trainOffers.some((offer) => offer.buyer_protocol_id === actingProtocolId)
-                        ? "One offer at a time -- answer or rescind the outstanding one first."
+                        ? "One offer at a time — answer or rescind the outstanding one first."
                         : null
                     }
                     onBuyFromBank={handleBuyTrainsFromBank}
@@ -6979,7 +7469,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     actionsLockedReason={
                       gameState?.current_round_type === "StockRound"
                         ? null
-                        : "Viewing only -- shares can be bought and sold during a Stock Round."
+                        : "Viewing only — shares can be bought and sold during a Stock Round."
                     }
                   />
                 )}
@@ -7112,6 +7602,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // `gameState` hasn't resolved yet, falling back to
                       // HexGridRenderer's own stable empty-array default.
                       publicCompanies={gameState?.public_companies}
+                      // Design note #318: the reservation badges read this
+                      // roster and clear themselves when a private closes.
+                      privateCompanies={gameState?.private_companies}
                       routeOverlays={manualRouteOverlay}
                       // Design note #224: the Lay Track veil.
                       // Design note #240: one veil, two steps. Track lay
@@ -7596,10 +8089,41 @@ export default function App() {
  *  not card-surface colours -- the palette module is specifically the
  *  light-card system and mixing the two is how a "shared" palette stops
  *  meaning anything. */
+/* ==================================================================
+ *  DESIGN NOTE 324: THE PHASE BADGE IS A LABEL, NOT AN ALERT
+ * ==================================================================
+ *
+ * REPORTED: make the base "Phase: Yellow/Green/Brown" badge neutral so only
+ * upcoming phase-change alerts use high-contrast warning colours.
+ *
+ * The badge was tinted to match the era -- amber in Yellow, green in Green,
+ * brown in Brown -- which reads as a colour-coded STATUS on a bar where
+ * amber and red already mean "act now": `phaseShiftBadgeWarn` and
+ * `phaseShiftBadgeCritical` sit inches away in the same rail, in the same
+ * pill shape, in the same amber. So the permanent label and the two-buys
+ * warning were competing at the same volume, and the warning is the one
+ * that has to win: it appears for exactly the few purchases before a rust,
+ * and it is the only badge on the bar a player must react to.
+ *
+ * Neutral slate for all three. The era is still named in the text, which is
+ * what a label is for, and the ERA'S OWN COLOUR still appears everywhere it
+ * is load-bearing -- the tile catalog, the sub-phase stepper, the board
+ * tint. This badge was the one place the colour carried no information the
+ * word did not already carry.
+ *
+ * One record per tint rather than a single style, so the shape is still
+ * there if a future pass wants a subtle era cue back -- e.g. a left border
+ * -- without re-tinting the whole pill.
+ */
+const NEUTRAL_PHASE_BADGE: React.CSSProperties = {
+  borderColor: "#3a4055",
+  backgroundColor: "#1b1f29",
+  color: "#a8b0c0",
+};
 const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProperties>> = {
-  yellow: { borderColor: "#8a6d1f", backgroundColor: "#2a2413", color: "#e0c060" },
-  green: { borderColor: "#2f7a4a", backgroundColor: "#12291d", color: "#6fd39a" },
-  brown: { borderColor: "#8a5a2f", backgroundColor: "#2a1d12", color: "#d8a070" },
+  yellow: NEUTRAL_PHASE_BADGE,
+  green: NEUTRAL_PHASE_BADGE,
+  brown: NEUTRAL_PHASE_BADGE,
 };
 
 const styles: Record<string, React.CSSProperties> = {
@@ -8316,6 +8840,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 800,
     color: "#7ee0a1",
+    fontVariantNumeric: "tabular-nums",
+  },
+  /* Design note #317: escrow qualifies the figure beside it rather than
+     competing with it -- muted, and absent entirely when nothing is bid. */
+  playerCashEscrow: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 600,
+    color: "#8a919e",
     fontVariantNumeric: "tabular-nums",
   },
   orPanelRailLeft: {

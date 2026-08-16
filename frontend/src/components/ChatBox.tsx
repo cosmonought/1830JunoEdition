@@ -311,7 +311,7 @@ export function ChatBox({ roomId, address, displayName, title = "Room chat" }: C
       return <p style={styles.hint}>Real-time chat is offline. {error ?? ""}</p>;
     }
     if (messages.length === 0) {
-      return <p style={styles.hint}>No messages yet -- say hello while the table fills up.</p>;
+      return <p style={styles.hint}>No messages yet — say hello while the table fills up.</p>;
     }
     return messages.map((message) => (
       <div key={message.id} style={styles.message}>

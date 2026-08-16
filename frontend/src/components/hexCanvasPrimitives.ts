@@ -2108,6 +2108,142 @@ export function drawRestrictionBadgeAt(
   drawLabelWithBackground(ctx, text, badgeCenter, { background: false });
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 318: THE PRIVATE COMPANY RESERVATION BADGE
+ * ==================================================================
+ *
+ * REPORTED: nothing on the map shows that a hex is reserved by a private
+ * company. See `utils/privateReservations.ts` design note #0 for why the
+ * text-only version was not enough, and design note #1 for when this
+ * clears.
+ *
+ * IT IS DELIBERATELY NOT A `drawRestrictionBadge`. The "B"/"NY"/"OO" badges
+ * are PRINTED ON THE CARDBOARD -- permanent properties of the hex, black
+ * text on no background, part of the board's own artwork. A reservation is
+ * a temporary game-state fact that comes and goes with a company. Drawing
+ * it in the same visual language would be claiming a hex is printed with
+ * something it is not, and would leave a player unable to tell which marks
+ * survive to the endgame.
+ *
+ * So it reads as a PIECE SITTING ON the board: a raised dark pill with its
+ * own shadow, an amber rule, and a drawn padlock. Amber rather than red,
+ * because the hex is spoken for rather than dangerous -- the same
+ * distinction requirement 3 of this pass draws between an active event and
+ * a warning.
+ *
+ * THE LOCK IS DRAWN, NOT TYPED. `🔒` renders as a colour emoji on some
+ * platforms, a hollow glyph on others and a tofu box where the font is
+ * missing, and this file's whole doctrine is authored artwork over
+ * whatever the font stack happens to supply (see the header's "Art, not
+ * Math" note). Two paths -- a shackle arc and a body -- are three lines of
+ * code and identical everywhere.
+ */
+export function drawReservationBadgeAt(
+  ctx: CanvasRenderingContext2D,
+  badgeCenter: { x: number; y: number },
+  size: number,
+  /** The private's initials, e.g. `"C&SL"`. */
+  initials: string,
+): void {
+  const scale = Math.max(0.55, Math.min(1, size / 42));
+  const fontPx = Math.max(7, Math.round(9 * scale));
+  ctx.save();
+  ctx.font = `bold ${fontPx}px ${FONT_FAMILY_STACK}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+
+  const lockW = fontPx * 0.72;
+  const gap = fontPx * 0.34;
+  const padX = fontPx * 0.5;
+  const textW = ctx.measureText(initials).width;
+  const pillW = padX * 2 + lockW + gap + textW;
+  const pillH = fontPx * 1.65;
+  const x = badgeCenter.x - pillW / 2;
+  const y = badgeCenter.y - pillH / 2;
+  const radius = pillH / 2;
+
+  // The raised pill. A shadow is what makes it read as ON the board rather
+  // than printed into it.
+  ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+  ctx.shadowBlur = 4 * scale;
+  ctx.shadowOffsetY = 1 * scale;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + pillW - radius, y);
+  ctx.arc(x + pillW - radius, y + radius, radius, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + radius, y + pillH);
+  ctx.arc(x + radius, y + radius, radius, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(26, 29, 38, 0.94)";
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = "#c9a227";
+  ctx.lineWidth = Math.max(1, 1.2 * scale);
+  ctx.stroke();
+
+  // The padlock: shackle arc above a body rectangle.
+  const lockX = x + padX;
+  const bodyH = pillH * 0.4;
+  const bodyY = badgeCenter.y - bodyH * 0.15;
+  const shackleR = lockW * 0.32;
+  ctx.strokeStyle = "#e6c65a";
+  ctx.lineWidth = Math.max(1, 1.1 * scale);
+  ctx.beginPath();
+  ctx.arc(lockX + lockW / 2, bodyY, shackleR, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillStyle = "#e6c65a";
+  ctx.beginPath();
+  ctx.rect(lockX + lockW * 0.12, bodyY, lockW * 0.76, bodyH);
+  ctx.fill();
+
+  ctx.fillStyle = "#f2e6c0";
+  ctx.fillText(initials, lockX + lockW + gap, badgeCenter.y + fontPx * 0.05);
+  ctx.restore();
+}
+
+/**
+ * Places and draws a reservation badge on `(q, r)`.
+ *
+ * Goes through the same 12-slot claiming ledger every other badge pass uses
+ * (design note #72), so a reserved hex that also carries a revenue badge and
+ * a nameplate does not stack all three on one corner. The preference leads
+ * with the LOWER slots: the two reserved hexes both carry nameplates, which
+ * `NAMEPLATE_SLOT_PREFERENCE` puts at the top, and a badge that has to be
+ * legible at a glance should not be the one fighting for that space.
+ */
+export const RESERVATION_SLOT_PREFERENCE: readonly number[] = [3, 4, 5, 2, 6, 9, 11, 12];
+
+export function drawReservationBadge(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  size: number,
+  initials: string,
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  claimedHexSlots: Map<string, Set<number>>,
+): void {
+  const override = resolveSlotOverride(q, r, "restriction");
+  const preference = withSlotReserve(q, r, "restriction", RESERVATION_SLOT_PREFERENCE);
+  const blocked = hexBlockedSlots(mapGrid, q, r);
+  const dead = slotsBlockedByEdges(deadEdgesAt(q, r), false);
+  const slot = claimHexSlotPreferring(claimedHexSlots, q, r, override, preference, blocked, dead);
+  // Same 0.65 magnitude every other badge in this file uses, so a
+  // reservation badge sits at the radius its neighbours would have.
+  const direction = hexSlotDirection(slot);
+  drawReservationBadgeAt(
+    ctx,
+    {
+      x: center.x + direction.x * size * 0.65,
+      y: center.y + direction.y * size * 0.65,
+    },
+    size,
+    initials,
+  );
+}
+
 /** Draws a landmark's authentic, fixed starting track -- design note #211.
  *
  *  Boston and Baltimore are ordinary single-station preprinted hexes and go

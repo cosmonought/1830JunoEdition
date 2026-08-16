@@ -246,7 +246,7 @@ export function SandboxToolbar({
           title={
             trainFixture === "spread"
               ? "ON: the first two floated corporations each hold a 2-train and a 3-train, so the Buy-from-Corporation accordion has real trains to offer. Turn off to return to the ordinary depot-capped distribution."
-              : "OFF: trains are handed out in queue order until the depot would empty, which usually leaves only the first corporation holding any -- and the Buy-from-Corporation accordion empty. Turn on to equip two corporations for trade testing."
+              : "OFF: trains are handed out in queue order until the depot would empty, which usually leaves only the first corporation holding any — and the Buy-from-Corporation accordion empty. Turn on to equip two corporations for trade testing."
           }
         >
           <span
@@ -268,7 +268,7 @@ export function SandboxToolbar({
       </div>
 
       <p style={styles.footnote}>
-        Local mock state -- nothing is signed and nothing reaches a chain. Turn order and
+        Local mock state — nothing is signed and nothing reaches a chain. Turn order and
         balances move so the controls are testable; the contract remains the only authority
         on rules.
       </p>

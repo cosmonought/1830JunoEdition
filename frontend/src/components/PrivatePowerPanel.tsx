@@ -83,28 +83,28 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     privateId: 2,
     action: "Lay free tile",
     description:
-      "Champlain & St. Lawrence -- the owning corporation may lay a tile on B20 at no cost, without using its normal tile lay.",
+      "Champlain & St. Lawrence — the owning corporation may lay a tile on B20 (Burlington) at no cost, without using its normal tile lay.",
     phase: "OperatingRound",
   },
   {
     privateId: 3,
     action: "Place free station",
     description:
-      "Delaware & Hudson -- the owning corporation may lay a tile AND place a station on F16 at no cost.",
+      "Delaware & Hudson — the owning corporation may lay a tile AND place a station on F16 (Scranton) at no cost.",
     phase: "OperatingRound",
   },
   {
     privateId: 4,
     action: "Exchange for NYC share",
     description:
-      "Mohawk & Hudson -- the owner may exchange this private for a 10% share of the New York Central.",
+      "Mohawk & Hudson — the owner may exchange this private for a 10% share of the New York Central.",
     phase: "StockRound",
   },
   {
     privateId: 6,
     action: "Take B&O presidency",
     description:
-      "Baltimore & Ohio -- the owner holds the B&O's 20% President's Certificate and sets its par price.",
+      "Baltimore & Ohio — the owner holds the B&O's 20% President's Certificate and sets its par price.",
     phase: "StockRound",
   },
 ];
@@ -155,7 +155,7 @@ export function PrivatePowerPanel({
     <div style={styles.panel}>
       <div style={styles.headerRow}>
         <span style={styles.heading}>Private Powers</span>
-        <span style={styles.sandboxTag} title="These abilities have no contract message yet -- see this file's design note #1. The buttons run the local sandbox reducer so the flow can be tested.">
+        <span style={styles.sandboxTag} title="These abilities have no contract message yet — see this file's design note #1. The buttons run the local sandbox reducer so the flow can be tested.">
           sandbox only
         </span>
       </div>

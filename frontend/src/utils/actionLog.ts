@@ -239,7 +239,7 @@ export function describeGameplayAction(
       );
     return (
       `${ticker} paid dividends on $${revenue}` +
-      (split.length > 0 ? `: ${split.join(", ")}.` : " -- no shareholders on record.") +
+      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.") +
       priceSentence
     );
   }
@@ -326,7 +326,15 @@ export function describeGameplayAction(
 
   if ("WaterfallBidHigher" in msg) {
     const { private_id, bid_amount } = msg.WaterfallBidHigher;
-    return `${actingPlayer(context)} bid $${bid_amount} on private #${private_id}.`;
+    /* Design note #307: NAME IT. "private #3" is the contract's identifier
+       and means nothing at the table -- players know these companies by
+       name, and the state already carries it. Falls back to the number only
+       when the room does not report the private at all, which is a
+       different and much rarer failure. */
+    const target = context.gameState?.private_companies.find(
+      (entry) => entry.private_id === private_id,
+    );
+    return `${actingPlayer(context)} bid $${bid_amount} on ${target?.name ?? `private #${private_id}`}.`;
   }
 
   if ("WaterfallMiniAuctionRaise" in msg) {

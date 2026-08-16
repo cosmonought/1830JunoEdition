@@ -190,7 +190,7 @@ export function FinancialLedger({
               Corporations. */}
           <CorporationAssetsSection gameState={gameState} marketGrid={marketGrid} />
           {error && (
-            <p style={styles.staleNote}>Showing last known state -- latest refresh failed: {error}</p>
+            <p style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</p>
           )}
         </>
       )}
@@ -349,7 +349,7 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
       </div>
       {phase != null && !phase.known && (
         <p style={styles.footnote}>
-          Depot counts assume no trains have been bought -- this room is not reporting train
+          Depot counts assume no trains have been bought — this room is not reporting train
           ownership.
         </p>
       )}

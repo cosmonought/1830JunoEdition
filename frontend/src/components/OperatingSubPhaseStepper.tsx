@@ -220,7 +220,7 @@ export function OperatingSubPhaseStepper({
                   isCurrent
                     ? `Current step: ${label}. Complete it, or use Skip to move on.`
                     : isDone
-                      ? `${label} -- done. Undo steps back.`
+                      ? `${label} — done. Undo steps back.`
                       : `${label}. Steps are reached in order: act, or use Skip.`
                 }
               >

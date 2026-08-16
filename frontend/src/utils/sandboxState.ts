@@ -47,8 +47,17 @@
 // what the UI will actually receive:
 //
 //   - The New York, New Haven & Hartford is `NNH` on chain, not `NYNH`.
-//   - Mohawk & Hudson's reserved hex is F16, which this frontend has
-//     labelled "Scranton" since an earlier pass.
+//   - Mohawk & Hudson's reserved hex is F16 on chain.
+//
+// ⚠ THAT SECOND ONE IS NOW A KNOWN DIVERGENCE, not a naming note. F16 is
+// Scranton on this board and Scranton is DELAWARE & HUDSON's reserved hex;
+// M&H has no hex reservation in 1830 at all, only the NYC share exchange.
+// The frontend's display catalog was corrected in
+// `WaterfallAuctionDashboard.tsx` design note #312 -- see it for the full
+// reasoning. The contract still says F16 belongs to M&H, so this belongs on
+// the `auction.rs` audit list; nothing in the frontend reads the reserved
+// hex to make a decision, so the divergence is cosmetic until the contract
+// starts enforcing it.
 //
 // The privates are listed in ascending face value -- 20, 40, 70, 110, 160,
 // 220 -- which is both the physical game's order and the strict waterfall

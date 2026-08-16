@@ -162,7 +162,7 @@ export const JUNO_RPC_ENDPOINT = readOptional(process.env.REACT_APP_RPC_ENDPOINT
 function missing(name: string): never {
   throw new Error(
     `[config] ${name} is not set, so this app cannot talk to a chain. ` +
-      "Add it to frontend/.env (see .env.example) and RESTART the dev server -- " +
+      "Add it to frontend/.env (see .env.example) and RESTART the dev server — " +
       "react-scripts substitutes REACT_APP_* at build time. " +
       "Offline mode (tile catalog inspection) works without it.",
   );

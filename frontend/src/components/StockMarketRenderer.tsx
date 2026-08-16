@@ -1213,7 +1213,7 @@ export const ZONE_TEXT_COLORS: Readonly<Record<Exclude<ZoneType, "Normal">, stri
  *  or the rule without the label. */
 export function marketZoneTooltip(zone: ZoneType | null): string | null {
   if (zone === null || zone === "Normal") return null;
-  return `${ZONE_LEGEND_LABELS[zone]} -- ${ZONE_DESCRIPTIONS[zone]}`;
+  return `${ZONE_LEGEND_LABELS[zone]} — ${ZONE_DESCRIPTIONS[zone]}`;
 }
 
 /** The flat text ink for a zone, or `null` for a price that is either off
@@ -1300,7 +1300,7 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
       <div style={styles.parTrayHeader}>
         <span style={styles.parTrayTitle}>Par / IPO Tray</span>
         <span style={styles.parTrayHint} title="Par prices set here; a company moves onto the grid once it floats.">
-          Reference only -- markers are session-observed, not a live chain query
+          Reference only — markers are session-observed, not a live chain query
         </span>
       </div>
       {PAR_TRAY_ROWS.map((price) => {
@@ -1327,7 +1327,7 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
                   <span
                     key={marker.companyId}
                     style={{ ...styles.parTrayMarkerBadge, backgroundColor: tickerColor(marker.companyId) }}
-                    title={`${corporationLabel(marker.ticker)} -- parred at $${price}`}
+                    title={`${corporationLabel(marker.ticker)} — parred at $${price}`}
                   >
                     {marker.ticker}
                   </span>
@@ -1668,7 +1668,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
               cell.isParValueLadder ? `Par Value $${cell.price}` : `$${cell.price}`,
               zoneLabel && zoneDescription ? `${zoneLabel}: ${zoneDescription}` : undefined,
               certificateLimitNote,
-              cell.isGameEndCell ? "GAME END -- reaching this cell ends the game" : undefined,
+              cell.isGameEndCell ? "GAME END — reaching this cell ends the game" : undefined,
               // Design note #43: what the arrow in the corner means.
               cell.isRightCliff
                 ? "Right cliff: a price that would move right moves UP instead."
@@ -1708,7 +1708,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                   justifyContent: cell.isParValueLadder ? "center" : "flex-start",
                   alignItems: cell.isParValueLadder ? "center" : "flex-start",
                 }}
-                title={titleParts.join(" -- ")}
+                title={titleParts.join(" — ")}
               >
                 {/* ---- Design note #43: cliff arrows ---------------------
                     The board's edges are RULES, and until now the only
@@ -1841,7 +1841,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                         left: `calc(50% + ${offset.x}px - ${tokenDiameterPx / 2}px)`,
                         zIndex: 10 + index,
                       }}
-                      title={`${corporationLabel(occupant.ticker)} -- $${occupant.price ?? "?"}`}
+                      title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
                     >
                       {occupant.ticker}
                     </span>

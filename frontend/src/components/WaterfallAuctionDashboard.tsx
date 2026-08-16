@@ -82,6 +82,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
   CARD_BORDER,
@@ -90,7 +91,6 @@ import {
   CARD_BUY_GREEN_DARK,
   CARD_BUY_GREEN_INK,
   CARD_BUY_GREEN_TINT,
-  CARD_GLOW_MINI_AUCTION,
   CARD_DIVIDER,
   CARD_INK,
   CARD_INK_FAINT,
@@ -160,26 +160,51 @@ const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
     // Canonically correct: Schuylkill Valley is the one 1830 private with
     // NO special ability. Said outright rather than left blank, because a
     // blank slot reads as missing data.
-    ability: "No special power -- bought for its revenue and as cheap entry into the auction.",
+    ability: "No special power — bought for its revenue and as cheap entry into the auction.",
   },
   2: {
     revenue: 10,
     ability:
-      "Its owning corporation may lay a free track tile on the Champlain hex (B20), in addition to its normal tile lay for the turn.",
+      "Its owning corporation may lay a free track tile on B20 (Burlington), in addition to its normal tile lay for the turn.",
   },
-  // D&H and M&H are the two hex-blocking privates. Both state the rule the
-  // same way and with the same two exceptions, because it IS the same rule
-  // applied to two different hexes -- keeping the phrasing identical means
-  // a player reads it once and recognises it the second time.
+  /* ==================================================================
+   *  DESIGN NOTE 312: TWO PRIVATES CANNOT RESERVE THE SAME HEX
+   * ==================================================================
+   *
+   * REPORTED: Champlain & St. Lawrence and Delaware & Hudson both claim to
+   * reserve B20.
+   *
+   * They did, and only one of them was right. C&SL's hex IS B20 -- this
+   * board labels it Burlington (`hexBoardData.ts`), and `PrivatePowerPanel`
+   * has always pointed C&SL's free tile lay there. D&H's hex is F16, which
+   * this board labels Scranton, and `PrivatePowerPanel` has always pointed
+   * D&H's free tile-and-station there too. So the two panels that drive the
+   * actual ability buttons were correct all along; this catalog -- which is
+   * display text only -- had D&H's entry naming C&SL's hex.
+   *
+   * MOHAWK & HUDSON WAS THE SECOND HALF OF THE SAME SLIP. Entry 4 claimed
+   * M&H blocks F16, which is D&H's hex, so correcting D&H alone would have
+   * moved the collision rather than removed it. M&H's power in 1830 is not
+   * a hex reservation at all -- it is the exchange for a 10% NYC share,
+   * which is what `PrivatePowerPanel` already offers as its button. The
+   * blocking line was describing an ability M&H does not have, on a hex
+   * belonging to a different company.
+   *
+   * ⚠ THIS NOW DIVERGES FROM THE CONTRACT. `sandboxState.ts` design note #1
+   * records that `auction.rs` gives M&H a reserved hex of F16. That is a
+   * backend fact and this pass does not touch the backend, so the divergence
+   * is deliberate and belongs on the contract audit list: on this board F16
+   * is Scranton and Scranton is D&H's. Fixing it properly means changing
+   * `auction.rs`, not editing this text back. */
   3: {
     revenue: 15,
     ability:
-      "Blocks hex B20 (Burlington) from all track lays, except by the public corporation that owns this private -- or once this private closes.",
+      "Reserves F16 (Scranton): its owning corporation may lay a tile AND place a station there at no cost, and no other corporation may lay track on it until this private closes.",
   },
   4: {
     revenue: 20,
     ability:
-      "Blocks hex F16 from all track lays, except by the public corporation that owns this private -- or once this private closes.",
+      "May be exchanged for a 10% share of the NYC, if the NYC has floated. The exchange closes this private permanently.",
   },
   5: {
     revenue: 25,
@@ -189,9 +214,33 @@ const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
   6: {
     revenue: 30,
     ability:
-      "Auto-floats the public B&O: the winner receives its 20% President's Certificate free, and the remaining 80% opens in B&O's IPO pool.",
+      "Auto-floats the public B&O: the winner receives its 20% President's Certificate free, immediately sets B&O's par value, and the remaining 80% opens in the IPO pool.",
   },
 };
+
+/* ==================================================================
+ *  DESIGN NOTE 314: WHOSE MONEY THE CONTROLS ARE ABOUT TO SPEND
+ * ==================================================================
+ *
+ * The Available Cash figure and the bid gates have to agree on one seat,
+ * and which seat that is differs by mode.
+ *
+ * ONLINE the answer is the connected wallet, always -- a player watching
+ * somebody else's turn still wants to see what THEY can afford, and the
+ * controls are disabled anyway.
+ *
+ * HOTSEAT has no wallet, so the only seat the controls could be acting for
+ * is the one on turn, and during a mini-auction that is the mini-auction's
+ * cursor rather than the main one. Getting this wrong is not cosmetic: it
+ * would gate Alice's raise against Bob's balance.
+ */
+function miniAuctionSeat(
+  waterfall: WaterfallStateResponse | null,
+  hotseat: boolean,
+): string | null {
+  if (!hotseat || !waterfall) return null;
+  return waterfall.mini_auction?.current_turn ?? waterfall.current_turn ?? null;
+}
 
 export interface WaterfallAuctionDashboardProps {
   waterfallState: WaterfallStateResponse | null;
@@ -230,6 +279,26 @@ export interface WaterfallAuctionDashboardProps {
    * distinguishable again. `hotseat` unlocks the CONTROLS and leaves the
    * identity comparisons alone. */
   hotseat?: boolean;
+  /** Design note #303 (`App.tsx`): what each private actually SOLD for, by
+   *  id. A mini-auction settles above face value, and the sold card used to
+   *  quote the face value with a tooltip apologising for it. Empty on a
+   *  live chain, where the card falls back to face value as before. */
+  settledPrices?: Readonly<Record<number, number>>;
+  /* ==================================================================
+   *  DESIGN NOTE 306: "IS CONCLUDING" IS NOT A STATE A PLAYER CAN LEAVE
+   * ==================================================================
+   *
+   * With every private allocated the grid said "the Waterfall Auction is
+   * concluding" and offered nothing. That is a progress message for a
+   * process the player is waiting on -- but nothing was in progress: the
+   * auction was over and the round needed advancing, which is an action
+   * somebody has to take.
+   *
+   * So the message states what happens next and the button does it.
+   * Omitted (`undefined`) leaves the message without a control, which is
+   * the right shape on a live chain where the contract advances the round
+   * on its own and a client-side button would be a lie. */
+  onProceedToStockRound?: () => void;
   /** Dispatches `ExecuteMsg::WaterfallBuyLowest`. */
   onBuyLowest: () => void;
   /** Dispatches `ExecuteMsg::WaterfallBidHigher`. */
@@ -243,27 +312,71 @@ export interface WaterfallAuctionDashboardProps {
 /** Design note #32: injected keyframes. Inline `React.CSSProperties` cannot
  *  express `@keyframes`, so this follows the same `<style>`-tag convention
  *  `App.tsx` already uses for its turn-pulse animation. */
+/* ==================================================================
+ *  DESIGN NOTE 320: AN EVENT, NOT AN EMERGENCY
+ * ==================================================================
+ *
+ * REPORTED: the mini-auction card's border glow should be an animated
+ * multicolour chaser rather than a warning hue.
+ *
+ * The old ring pulsed red, and red on this screen already means something
+ * else. `phaseShiftBadgeCritical`, the rust chips and every disabled-reason
+ * tooltip use the warning palette for things that are going WRONG or are
+ * about to; a mini-auction is the most interesting thing that can happen in
+ * the auction and nothing is wrong at all. A player who has learned that
+ * red means trouble reads the liveliest card on the board as an alert.
+ *
+ * HOW IT IS BUILT, and why not simply `border-image`. A gradient cannot be
+ * animated by rotating a `border-image` -- browsers do not interpolate it.
+ * The reliable technique is a `::before` layer holding a `conic-gradient`
+ * inset behind the card, with the card's own background masking the middle,
+ * so what shows through is a ring of gradient; animating the gradient's
+ * angle spins it. `@property` would let the angle interpolate natively, but
+ * it is not universal, so the frames rotate the LAYER instead, which every
+ * engine that ships `conic-gradient` also ships.
+ *
+ * THE PALETTE deliberately runs the full hue circle rather than a two- or
+ * three-stop blend: the point is that it is unmistakably not any of the
+ * status colours this UI already assigns meaning to.
+ *
+ * REDUCED MOTION keeps design note #26's bargain -- the ring stays, in a
+ * static multicolour, so the card is still identifiable without the spin.
+ * A cue that cannot be switched off is an accessibility problem; a cue
+ * that DISAPPEARS when motion is reduced is an information problem, and
+ * turning the animation off must not cost the player the answer to "which
+ * card is live". */
 const MINI_AUCTION_GLOW_KEYFRAMES = `
-@keyframes waterfall-miniauction-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.55),
-                0 0 10px 2px rgba(239, 68, 68, 0.35),
-                0 3px 16px rgba(0, 0, 0, 0.45);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.9),
-                0 0 30px 10px rgba(248, 113, 113, 0.6),
-                0 3px 16px rgba(0, 0, 0, 0.45);
-  }
+@keyframes waterfall-miniauction-chase {
+  to { background-position: 0 0, 300% 0; }
 }
-/* A pulsing card is an attention cue, not decoration -- but a cue that
-   cannot be switched off is an accessibility problem. Honouring the OS
-   setting keeps the strong static ring (the 0% frame) for anyone who has
-   asked for less motion, so they still see WHICH card is live, just without
-   the pulse. This is why the keyframes ship as a raw CSS string: a media
-   query is another thing inline React styles cannot express. */
+/* The whole border, and the card's fill, live HERE rather than in the
+   inline style object -- inline styles beat a stylesheet, so a
+   \`backgroundColor\` or \`borderColor\` left inline would silently win over
+   the gradient and the chaser would never appear. \`privateCardMiniAuction\`
+   below keeps only layout. */
+.waterfall-miniauction-card {
+  border: 3px solid transparent;
+  border-left-width: 6px;
+  border-radius: 8px;
+  background:
+    linear-gradient(${CARD_SURFACE}, ${CARD_SURFACE}) padding-box,
+    linear-gradient(
+      90deg,
+      #ff4d4d, #ff9f1c, #ffd400, #4ade80, #22d3ee,
+      #4f7cff, #a855f7, #ff4dc4, #ff4d4d
+    ) border-box;
+  background-size: auto, 300% 100%;
+  background-position: 0 0, 0 0;
+  background-repeat: no-repeat;
+  animation: waterfall-miniauction-chase 3.2s linear infinite;
+  box-shadow: 0 0 18px rgba(120, 160, 255, 0.22), 0 3px 16px rgba(0, 0, 0, 0.45);
+}
+/* Design note #26's bargain, kept: a cue that cannot be switched off is an
+   accessibility problem, but a cue that DISAPPEARS under reduced motion is
+   an information problem -- turning the spin off must not cost the player
+   the answer to "which card is live". The multicolour ring stays, static. */
 @media (prefers-reduced-motion: reduce) {
-  .waterfall-miniauction-card { animation: none !important; }
+  .waterfall-miniauction-card { animation: none; }
 }
 `;
 
@@ -276,12 +389,21 @@ export function WaterfallAuctionDashboard({
   sessionReady,
   playerLabel,
   hotseat = false,
+  settledPrices,
+  onProceedToStockRound,
   onBuyLowest,
   onBidHigher,
   onMiniAuctionRaise,
   onMiniAuctionPass,
 }: WaterfallAuctionDashboardProps) {
   const privates = waterfallState?.privates ?? [];
+  /* Design note #314: the seat whose money the controls spend. In hotseat
+     that is whoever is on turn (there is no wallet to compare against);
+     online it is the connected player, whose funds stay on screen even
+     while somebody else acts. */
+  const fundsSeat =
+    (miniAuctionSeat(waterfallState, hotseat) ?? connectedWalletAddress) ?? null;
+  const viewerFunds = fundsSeat ? auctionFunds(gameState, waterfallState, fundsSeat) : null;
   /* ---- Design note #30: ONE ORDERED GRID, sold cards in place --------
    *
    * Sold privates were appended AFTER the live ones, which pushed them to
@@ -370,17 +492,29 @@ export function WaterfallAuctionDashboard({
   return (
     <div style={styles.root}>
       <style>{MINI_AUCTION_GLOW_KEYFRAMES}</style>
+      {/* ==================================================================
+           DESIGN NOTE 305: ONE LINE, NOT THREE SAYING THE SAME THING
+          ==================================================================
+
+          The header was a title ("Auction"), a subtitle ("Pre-game private
+          company waterfall") and a hint ("Allocating six private companies
+          before Stock Round 1") -- three restatements of the same fact
+          stacked vertically, followed by the one piece of live information
+          in the row.
+
+          A player reads a header once. Everything above the pass count was
+          telling them where they already knew they were, and it cost three
+          lines at the top of the screen the map is trying to use. */}
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Auction</span>
-        <span style={styles.headerSubtitle}>Pre-game private company waterfall</span>
+        <span style={styles.headerTitle}>Private Company Waterfall Auction</span>
         <span style={styles.headerHint}>
-          Allocating six private companies before Stock Round 1 --{" "}
+          {"\u2014 "}
           {waterfallState.consecutive_waterfall_passes > 0
             ? `${waterfallState.consecutive_waterfall_passes} consecutive pass(es) so far`
             : "no passes yet"}
         </span>
         {error && (
-          <span style={styles.staleNote}>Showing last known state -- latest refresh failed: {error}</span>
+          <span style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</span>
         )}
       </div>
 
@@ -397,6 +531,8 @@ export function WaterfallAuctionDashboard({
                 sessionReady={sessionReady}
                 isMyMainTurn={isMyMainTurn}
                 isMyMiniTurn={isMyMiniTurn}
+                funds={viewerFunds}
+                fundsSeat={fundsSeat}
                 onBuyLowest={onBuyLowest}
                 onBidHigher={onBidHigher}
                 onMiniAuctionRaise={onMiniAuctionRaise}
@@ -407,41 +543,66 @@ export function WaterfallAuctionDashboard({
                 key={`sold-${entry.sold.private_id}`}
                 sold={entry.sold}
                 playerLabel={playerLabel}
+                settledPrice={settledPrices?.[entry.sold.private_id]}
               />
             ),
           )}
           {privates.length === 0 && soldPrivates.length === 0 && (
             <p style={styles.placeholderText}>
-              All six private companies have been allocated -- the Waterfall Auction is concluding.
+              All six private companies have been allocated.
             </p>
           )}
         </div>
 
-        {/* ---- Turn strip + seating -- design notes #11/#14 ----------
+        {/* Design note #306: the auction is over -- say what is next, and
+            offer the step that gets there. */}
+        {privates.length === 0 && (
+          <div style={styles.auctionOverBanner}>
+            <span style={styles.auctionOverText}>
+              The Waterfall Auction is complete. Up next is the Stock Round.
+            </span>
+            {onProceedToStockRound && (
+              <button
+                type="button"
+                style={styles.proceedButton}
+                onClick={onProceedToStockRound}
+                disabled={!sessionReady}
+                title="Close the auction and open Stock Round 1."
+              >
+                Proceed to Stock Round 1 &#8250;
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ---- Seating + hint -- design notes #11/#14 -----------------
             All the BUY/BID/PASS controls moved into the cards above. What
-            remains here is the two things that are genuinely global rather
-            than per-company: whose turn it is, and the seating order.
+            remains here is the one thing that is genuinely global rather
+            than per-company: the seating order, and who in it is up.
 
-            The waterfall-level Pass stays here on purpose, and it is the
-            one action that resisted encapsulation. Passing is not a
-            statement about any single private -- it means "I decline to act
-            this turn at all" -- so putting a Pass button inside a company
-            card would misdescribe it, implying you were passing on THAT
-            company. (The mini-auction's Pass is different: it genuinely is
-            about one private, and it lives in that card.) */}
+            ==================================================================
+             DESIGN NOTE 322: ONE ANSWER TO "WHOSE TURN IS IT"
+            ==================================================================
+
+            REPORTED: the standalone Turn panel in the auction footer is
+            redundant.
+
+            It was, and it had become so by accretion rather than by
+            design. The panel was built when the footer was the only place
+            the turn appeared -- then design note #32 added `ON TURN` to
+            the seating rows, and design note #308 put the acting player's
+            name and cash on the action bar at the top of the screen. Three
+            surfaces, one fact, and the panel was the weakest of the three:
+            it named the seat without saying where that seat sat in the
+            order, which is the question a player in an auction actually
+            has.
+
+            The seating table answers both at once, so the banner goes and
+            the table stays. What does NOT go is the hint line -- it says
+            where the controls are, which nothing else on this screen
+            does, and it was merely housed in the same panel. */}
         <div style={styles.actionRail}>
-          <span style={styles.actionRailHeading}>Turn</span>
-
           <div style={styles.actionRailMain}>
-            <div style={styles.turnBanner}>
-              <span style={styles.turnBannerLabel}>
-                {miniAuction ? "Mini-Auction Turn" : "Waterfall Turn"}
-              </span>
-              <span style={styles.turnBannerAddress}>
-                {nameFor(miniAuction ? miniAuction.current_turn : waterfallState.current_turn, playerLabel)}
-              </span>
-            </div>
-
             {!miniAuction && (
               <span style={styles.hintText}>
                 {isMyMainTurn
@@ -451,7 +612,7 @@ export function WaterfallAuctionDashboard({
             )}
             {miniAuction && (
               <span style={styles.hintText}>
-                A mini-auction is running -- its Raise and Pass controls are inside the
+                A mini-auction is running — its Raise and Pass controls are inside the
                 highlighted company card above.
               </span>
             )}
@@ -478,19 +639,39 @@ export function WaterfallAuctionDashboard({
                       It was available all along: `player_cash` is on the
                       game state this component already receives. Nothing
                       had to be plumbed, only rendered. */
-                  const cash = gameState.player_cash.find(
-                    (entry) => entry.player === player,
-                  )?.cash_vgp;
+                  /* ==================================================
+                       DESIGN NOTE 316: AVAILABLE, NOT TOTAL
+                      ==================================================
+
+                      Design note #33 put each player's cash here because an
+                      auction is about who can pay. The figure it showed was
+                      the TOTAL, which during a live auction is the one
+                      number that cannot be spent: money standing on a bid
+                      is committed until that contest resolves.
+
+                      So the headline is AVAILABLE, with the escrow named
+                      beside it only when there is one -- a player with
+                      nothing bid sees a single unqualified figure, exactly
+                      as before, and a player with $400 on the D&H sees why
+                      their $600 has become $200. */
+                  const funds = auctionFunds(gameState, waterfallState, player);
                   return (
                     <div key={player} style={isTurnHolder ? styles.seatingRowActive : styles.seatingRow}>
                       <span style={styles.seatingIndex}>{index + 1}.</span>
                       <span style={styles.seatingAddress}>{nameFor(player, playerLabel)}</span>
-                      {cash !== undefined && (
+                      {funds && (
                         <span
                           style={styles.seatingCash}
-                          title={`${nameFor(player, playerLabel)} holds $${cash}.`}
+                          title={
+                            funds.escrowed > 0
+                              ? `${nameFor(player, playerLabel)} holds $${funds.total}, of which $${funds.escrowed} is escrowed in standing bids — $${funds.available} available to bid.`
+                              : `${nameFor(player, playerLabel)} holds $${funds.total}, none of it committed to a bid.`
+                          }
                         >
-                          ${cash}
+                          ${funds.available}
+                          {funds.escrowed > 0 && (
+                            <span style={styles.seatingEscrow}>+${funds.escrowed} held</span>
+                          )}
                         </span>
                       )}
                       {/* ==================================================
@@ -507,10 +688,32 @@ export function WaterfallAuctionDashboard({
                           What a pass-and-play player needs instead is who
                           is UP, which is what `ON TURN` says. Online both
                           appear, and they answer different questions. */}
-                      {isTurnHolder && <span style={styles.turnBadge}>ON TURN</span>}
                       {!hotseat && player === connectedWalletAddress && (
                         <span style={styles.youBadge}>YOU</span>
                       )}
+                      {/* ==================================================
+                           DESIGN NOTE 323: THE SLOT IS ALWAYS THERE
+                          ==================================================
+
+                          REPORTED: turn changes shift the cash values and
+                          player names horizontally.
+
+                          They did. `ON TURN` was rendered only on the
+                          active row, and the cash cell is pushed right by
+                          `marginLeft: auto` -- so the badge appearing
+                          squeezed that row's name and figure leftward by
+                          its own width, and every pass jolted one row in
+                          and the previous row out. A column of numbers
+                          that moves when nothing about it changed is the
+                          hardest kind to read down.
+
+                          The slot is now rendered on EVERY row and holds
+                          its width empty. Reserving space for a thing that
+                          is usually absent looks wasteful in a static
+                          mock-up and is the entire fix in a live one. */}
+                      <span style={styles.seatingTurnSlot}>
+                        {isTurnHolder && <span style={styles.turnBadge}>ON TURN</span>}
+                      </span>
                     </div>
                   );
                 })}
@@ -537,6 +740,8 @@ function PrivateCard({
   sessionReady,
   isMyMainTurn,
   isMyMiniTurn,
+  funds,
+  fundsSeat,
   onBuyLowest,
   onBidHigher,
   onMiniAuctionRaise,
@@ -551,6 +756,13 @@ function PrivateCard({
   sessionReady: boolean;
   isMyMainTurn: boolean;
   isMyMiniTurn: boolean;
+  /** Design note #314: the acting seat's total/escrowed/available split.
+   *  `null` when the room does not report their cash, which disables the
+   *  affordability gate rather than guessing at $0. */
+  funds: PlayerAuctionFunds | null;
+  /** Which address `funds` describes, so the card can find that player's own
+   *  escrow on THIS private -- see design note #315's raise case. */
+  fundsSeat: string | null;
   onBuyLowest: () => void;
   onBidHigher: (privateId: number, bidAmountVgp: number) => void;
   onMiniAuctionRaise: (bidAmountVgp: number) => void;
@@ -629,6 +841,39 @@ function PrivateCard({
 
   const canBuyOutright = priv.is_lowest_offered;
 
+  /* ---- Design note #315: THE AFFORDABILITY GATE ----------------------
+   *
+   * Both money gates, computed here so the button's `disabled` and its
+   * tooltip are driven by one expression -- a control that is off for a
+   * reason it does not state is the shape this codebase has removed
+   * repeatedly.
+   *
+   * The RAISE case subtracts the bid this player already has standing in
+   * this contest. That money is escrowed against this very private, so a
+   * raise only has to fund the increment; charging the full new figure
+   * against available cash would stop a player from defending a bid they
+   * have already paid for, which gets the position exactly backwards.
+   *
+   * BUYING OUTRIGHT is gated on available cash too, not on the total. A
+   * player's escrow elsewhere is refundable in principle, but it is not
+   * refunded YET -- the note is under another certificate and cannot also
+   * be handed over for this one. `WaterfallBuyLowest` settles immediately,
+   * so available is the only figure that can honestly fund it. */
+  const ownRaiseEscrow = fundsSeat
+    ? priv.bids
+        .filter((bid) => bid.bidder === fundsSeat)
+        .reduce((sum, bid) => sum + (Number(bid.bid_amount) || 0), 0)
+    : 0;
+  const bidReason = bidRejectionReason(funds, bidAmount, minimumBid);
+  const raiseReason = bidRejectionReason(funds, raiseAmount, minimumRaise, ownRaiseEscrow);
+  const buyPrice = Number(priv.face_value) || 0;
+  const buyReason =
+    funds && buyPrice > funds.available
+      ? funds.escrowed > 0
+        ? `Only $${funds.available} available — $${funds.escrowed} of your $${funds.total} is escrowed in standing bids.`
+        : `Only $${funds.available} available.`
+      : null;
+
   return (
     <div
       // The class exists ONLY so the reduced-motion media query above has
@@ -656,7 +901,14 @@ function PrivateCard({
             private can never be bid on (`CannotBidOnLowest`), so a card is
             at most one of these. */}
         <div style={styles.privateCardHeader}>
-          <span style={styles.privateCardName}>{priv.name}</span>
+          {/* Design note #304: the printed number. 1830's privates are
+              known by order as much as by name -- "the 3" is how players
+              refer to the Delaware & Hudson -- and the waterfall IS that
+              order, so the grid was showing a sequence with its index
+              filed off. */}
+          <span style={styles.privateCardName}>
+            <span style={styles.privateCardNumber}>{priv.private_id}.</span> {priv.name}
+          </span>
           <div style={styles.badgeSlot}>
             {priv.is_lowest_offered && <span style={styles.lowestBadge}>LOWEST OFFER</span>}
             {isCompetingBid && (
@@ -668,8 +920,8 @@ function PrivateCard({
                 }
                 title={
                   isCompetingInMiniAuction
-                    ? "A mini-auction is resolving this private right now -- the whole waterfall is paused on it."
-                    : "Two or more competing bidders -- resolves via mini-auction (waterfall.rs module doc comment #3)."
+                    ? "A mini-auction is resolving this private right now — the whole waterfall is paused on it."
+                    : "Two or more competing bidders — resolves via mini-auction (waterfall.rs module doc comment #3)."
                 }
               >
                 {isCompetingInMiniAuction ? "MINI-AUCTION LIVE" : "COMPETING BIDS"}
@@ -678,7 +930,7 @@ function PrivateCard({
             {isAutoAwardPending && (
               <span
                 style={styles.statusBadgeAutoAward}
-                title="Exactly one bidder -- this private is awarded to them automatically on the next cascade."
+                title="Exactly one bidder — this private is awarded to them automatically on the next cascade."
               >
                 AUTO-AWARD PENDING
               </span>
@@ -743,7 +995,39 @@ function PrivateCard({
                 <span style={styles.bidRowName}>
                   {nameFor(bid.bidder, playerLabel, 6, 4)}
                   {isTurn && <span style={styles.youBadge}>TURN</span>}
-                  {isLeader && <span style={styles.leaderBadge}>LEADER</span>}
+                  {/* ==================================================
+                       DESIGN NOTE 321: A STAR, NOT A WORD
+                      ==================================================
+
+                      Design note #302 put "LEADING" here and was right
+                      about WHO it belongs on -- `high_bidder` is and always
+                      was the real leader. What is wrong is the shape.
+
+                      The bid row is a name, a badge and a figure inside a
+                      card that has to fit six across, and "LEADING" is
+                      seven characters of chrome saying what the largest
+                      number in the column already says. Worse, it sat next
+                      to "TURN" in the same slot, so the busiest row on the
+                      screen carried two shouted words competing for the
+                      same glance.
+
+                      A gold star is the universal "this one is winning"
+                      mark, it costs one character, and it needs no
+                      translation. The word survives as the `title`, so the
+                      meaning is still one hover away and screen readers get
+                      a sentence rather than a glyph -- which is why the
+                      `aria-label` is the sentence and the star itself is
+                      `aria-hidden`. */}
+                  {isLeader && (
+                    <span
+                      style={styles.leadingStar}
+                      title={`${nameFor(bid.bidder, playerLabel)} holds the high bid in this mini-auction.`}
+                      aria-label="Leading bidder"
+                      role="img"
+                    >
+                      {"\u2605"}
+                    </span>
+                  )}
                 </span>
                 <span style={styles.bidAmount}>${bid.bid_amount}</span>
               </div>
@@ -791,8 +1075,13 @@ function PrivateCard({
                   type="button"
                   style={styles.inlineRaiseButton}
                   onClick={() => onMiniAuctionRaise(raiseAmount)}
-                  disabled={!sessionReady || !isMyMiniTurn || raiseAmount < minimumRaise}
-                  title="Raise your bid in this mini-auction."
+                  disabled={!sessionReady || !isMyMiniTurn || raiseReason !== null}
+                  title={
+                    raiseReason ??
+                    (ownRaiseEscrow > 0
+                      ? `Raise your bid in this mini-auction. $${ownRaiseEscrow} of this is already escrowed, so only the increase is charged against your available cash.`
+                      : "Raise your bid in this mini-auction.")
+                  }
                 >
                   Raise
                 </button>
@@ -821,15 +1110,17 @@ function PrivateCard({
                 type="button"
                 style={styles.primaryButton}
                 onClick={onBuyLowest}
-                disabled={!sessionReady || !isMyMainTurn}
-                title="Buys this company for face value."
+                disabled={!sessionReady || !isMyMainTurn || buyReason !== null}
+                title={buyReason ?? "Buys this company for face value."}
               >
                 Buy {priv.name} &mdash; ${priv.face_value}
               </button>
               <span style={styles.cardActionsHint}>
-                {isMyMainTurn
-                  ? "This is the lowest-offered private, so it is bought outright rather than bid on."
-                  : "Not your turn yet."}
+                {buyReason && isMyMainTurn
+                  ? buyReason
+                  : isMyMainTurn
+                    ? "This is the lowest-offered private, so it is bought outright rather than bid on."
+                    : "Not your turn yet."}
               </span>
             </>
           ) : (
@@ -851,8 +1142,11 @@ function PrivateCard({
                   type="button"
                   style={styles.secondaryButton}
                   onClick={() => onBidHigher(priv.private_id, bidAmount)}
-                  disabled={!sessionReady || !isMyMainTurn || bidAmount < minimumBid}
-                  title="Minimum bid = current high bid + $5. Funds are escrowed until sold or auctioned."
+                  disabled={!sessionReady || !isMyMainTurn || bidReason !== null}
+                  title={
+                    bidReason ??
+                    "Minimum bid = current high bid + $5. Funds are escrowed until this private is sold or auctioned."
+                  }
                 >
                   Place Bid
                 </button>
@@ -865,6 +1159,7 @@ function PrivateCard({
                   stays visible; the reasoning is one hover away. */}
               <span style={styles.cardActionsHint}>
                 Min ${minimumBid}
+                {funds && ` \u00b7 $${funds.available} available`}
                 {!isMyMainTurn && " \u00b7 not your turn"}
               </span>
             </>
@@ -889,15 +1184,21 @@ function PrivateCard({
 function SoldPrivateCard({
   sold,
   playerLabel,
+  settledPrice,
 }: {
   sold: { private_id: number; name: string; cost: string; owner: string | null };
   playerLabel?: (address: string) => string | null;
+  /** Design note #303: what it actually went for, when that is known. */
+  settledPrice?: number;
 }) {
   const ownerLabel = nameFor(sold.owner ?? "", playerLabel, 6, 4);
+  const paid = settledPrice ?? Number(sold.cost);
   return (
     <div style={styles.privateCardSold}>
       <div style={styles.privateCardHeader}>
-        <span style={styles.privateCardName}>{sold.name}</span>
+        <span style={styles.privateCardName}>
+          <span style={styles.privateCardNumber}>{sold.private_id}.</span> {sold.name}
+        </span>
       </div>
       <div style={styles.privateCardFigures}>
         <div style={styles.privateCardFigure}>
@@ -913,10 +1214,14 @@ function SoldPrivateCard({
             the narrowest grid column. */}
         <span
           style={styles.soldBadge}
-          title="Face value. The settled price is not exposed by any query -- a private won in a mini-auction may have gone for more."
+          title={
+            settledPrice === undefined
+              ? "Face value \u2014 the settled price is not exposed by any query, and a private won in a mini-auction may have gone for more."
+              : `${ownerLabel} won this for $${paid}. Face value $${sold.cost}.`
+          }
         >
           <span style={styles.soldBadgeLine}>Sold to {ownerLabel}</span>
-          <span style={styles.soldBadgePrice}>for ${sold.cost}</span>
+          <span style={styles.soldBadgePrice}>for ${paid}</span>
         </span>
       </div>
     </div>
@@ -1168,31 +1473,29 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
   },
+  /* Design note #320: LAYOUT ONLY. Every paint property -- border, fill,
+     shadow, animation -- is in the `.waterfall-miniauction-card` rule,
+     because an inline style would override the stylesheet and kill the
+     gradient. Anything added here that paints will break the chaser. */
   privateCardMiniAuction: {
     display: "flex",
     flexDirection: "column",
     gap: "9px",
     padding: "14px 16px",
-    backgroundColor: CARD_SURFACE,
-    borderWidth: "3px",
-    borderStyle: "solid",
-    borderColor: CARD_GLOW_MINI_AUCTION,
-    borderLeftWidth: "6px",
-    borderLeftColor: CARD_GLOW_MINI_AUCTION,
-    borderRadius: "8px",
     height: "100%",
     minHeight: "260px",
     boxSizing: "border-box",
-    // The resting shadow matches the animation's 0% frame, so the card looks
-    // right for the frame before the animation starts and stays correct if
-    // the keyframes are ever suppressed (reduced motion, above).
-    boxShadow:
-      "0 0 0 2px rgba(239, 68, 68, 0.55), 0 0 10px 2px rgba(239, 68, 68, 0.35), 0 3px 16px rgba(0, 0, 0, 0.45)",
-    animation: "waterfall-miniauction-glow 1.4s ease-in-out infinite",
   },
   /** Wrapper for the header + figures block. A plain div since design note
    *  #17 removed the accordion; kept as its own element so the card's
-   *  internal spacing did not have to change with it. */
+   *  internal spacing did not have to change with it.
+   *
+   *  Design note #319: `cursor: pointer` came off with the accordion, five
+   *  notes late. It was the last trace of a control that no longer exists:
+   *  the block is a `<div>` with no `onClick`, so the hand cursor was
+   *  promising a click that does nothing -- and on a screen of six cards
+   *  where the real actions are buttons an inch below, a player who tries
+   *  it learns to distrust the cursor everywhere else. */
   privateCardToggle: {
     display: "flex",
     flexDirection: "column",
@@ -1204,7 +1507,7 @@ const styles: Record<string, React.CSSProperties> = {
     font: "inherit",
     color: "inherit",
     textAlign: "left",
-    cursor: "pointer",
+    cursor: "default",
     width: "100%",
   },
   expandChevron: {
@@ -1511,15 +1814,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "10px",
   },
   /** Section caption for the interaction band. */
-  actionRailHeading: {
-    width: "100%",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 800,
-    letterSpacing: "0.6px",
-    textTransform: "uppercase",
-    color: "#7f8798",
-    marginBottom: "-4px",
-  },
   /** The mini-auction / turn-actions column inside the band. */
   actionRailMain: {
     display: "flex",
@@ -1535,27 +1829,6 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     flex: "0 1 280px",
     minWidth: "240px",
-  },
-  turnBanner: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    padding: "10px 12px",
-    backgroundColor: "#1b1f29",
-    border: "1px solid #2a2e3a",
-    borderRadius: "8px",
-  },
-  turnBannerLabel: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
-    color: "#8a90a0",
-  },
-  turnBannerAddress: {
-    fontSize: FONT_SIZE.control,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#e6e8ef",
   },
   actionCard: {
     display: "flex",
@@ -1690,6 +1963,25 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#7ee0a1",
     fontVariantNumeric: "tabular-nums",
     marginLeft: "auto",
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "5px",
+  },
+  /* Design note #316: escrow is context for the number beside it, so it is
+     muted and smaller rather than a second figure of equal weight. */
+  seatingEscrow: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 600,
+    color: "#8a919e",
+  },
+  /* Design note #323: fixed basis, never grows or shrinks, right-aligned so
+     the badge sits flush with the row end whether or not it is there. Wide
+     enough for "ON TURN" at `FONT_SIZE.micro` with its padding. */
+  seatingTurnSlot: {
+    flex: "0 0 62px",
+    display: "flex",
+    justifyContent: "flex-end",
+    alignItems: "center",
   },
   turnBadge: {
     fontSize: FONT_SIZE.micro,
@@ -1708,6 +2000,51 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "4px",
     padding: "1px 5px",
   },
+  /* Design note #302: red, per the brief. It marks the player everyone
+     else must outbid -- an alarm for the other bidders rather than a
+     decoration for the leader. */
+  /* Design note #306: the end-of-auction step. Full width and green -- it
+     is the only thing to do on this screen once the grid is empty, and a
+     quiet control in that position reads as decoration. */
+  auctionOverBanner: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: "10px",
+    padding: "10px 12px",
+    borderRadius: "8px",
+    border: "1px solid #2f7d55",
+    backgroundColor: "#16241d",
+  },
+  auctionOverText: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#cfe9d9" },
+  proceedButton: {
+    padding: "7px 16px",
+    borderRadius: "8px",
+    border: "1px solid #2f7d55",
+    backgroundColor: "#1d5c40",
+    color: "#eafff2",
+    fontSize: FONT_SIZE.control,
+    fontFamily: "inherit",
+    fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  /* Design note #321: standalone glyph, no plate. A pill around a single
+     character reads as a badge that has lost its label; the star carries
+     itself. Sized a step above the body text so it is findable at a glance
+     down a column, and given a soft gold shadow so it holds up against the
+     card's own surface without a background. */
+  leadingStar: {
+    fontSize: FONT_SIZE.control,
+    lineHeight: 1,
+    color: "#f2c14e",
+    marginLeft: "5px",
+    textShadow: "0 0 6px rgba(242, 193, 78, 0.55)",
+    cursor: "help",
+  },
+  privateCardNumber: { color: "#8a919e", fontWeight: 800 },
   leaderBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

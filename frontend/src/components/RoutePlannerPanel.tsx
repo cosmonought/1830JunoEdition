@@ -194,7 +194,7 @@ const MODES: ReadonlyArray<{ id: RouteBuildMode; label: string; title: string }>
     label: "Auto-Route",
     title:
       "Draft a route from this corporation's station tokens through its connected network. " +
-      "A suggestion, not a ruling -- connectivity, token access and train limits are still " +
+      "A suggestion, not a ruling — connectivity, token access and train limits are still " +
       "the contract's to judge. Click any hex afterwards to take it over by hand.",
   },
   {
@@ -202,7 +202,7 @@ const MODES: ReadonlyArray<{ id: RouteBuildMode; label: string; title: string }>
     label: "Manual Route",
     title:
       "Click a chain of neighbouring hexes on the Rail Map to sketch the route yourself. " +
-      "Plain track between stops is free -- only revenue centres count against the train.",
+      "Plain track between stops is free — only revenue centres count against the train.",
   },
 ];
 
@@ -326,7 +326,7 @@ export function RoutePlannerPanel({
   const blockedReason = !ownsAnyTrain
     ? noTrainReason
     : drafted.length === 0
-      ? "Draw a route first -- pick Auto-Route above, or click hexes on the Rail Map."
+      ? "Draw a route first — pick Auto-Route above, or click hexes on the Rail Map."
       : runnableDrafts.length === 0
         ? firstProblem(drafted)
         : null;
@@ -347,7 +347,7 @@ export function RoutePlannerPanel({
       {drafts.length === 0 ? (
         <div style={styles.table}>
           <div style={styles.tableRow}>
-            <span style={styles.empty}>No trains -- buy one before running a route.</span>
+            <span style={styles.empty}>No trains — buy one before running a route.</span>
           </div>
         </div>
       ) : (
@@ -389,7 +389,7 @@ export function RoutePlannerPanel({
                     title={
                       reach === undefined
                         ? `Draft the route for this ${draft.model}-train.`
-                        : `Draft the route for this ${draft.model}-train -- up to ${
+                        : `Draft the route for this ${draft.model}-train — up to ${
                             reach === 999 ? "unlimited" : reach
                           } revenue centres. Map clicks apply to the selected train.`
                     }
@@ -541,12 +541,12 @@ export function RoutePlannerPanel({
 function firstProblem(drafted: readonly TrainRouteDraft[]): string {
   const overLong = drafted.find((draft) => draft.exceedsMaxDistance);
   if (overLong) {
-    return `Too many stops for the ${overLong.model}-train. Plain track between stops is free -- only revenue centres count.`;
+    return `Too many stops for the ${overLong.model}-train. Plain track between stops is free — only revenue centres count.`;
   }
   if (drafted.some((draft) => draft.endsOffTerminus)) {
-    return "A route ends somewhere it cannot. Extend it to a city or a red off-board hex -- towns only add revenue in passing.";
+    return "A route ends somewhere it cannot. Extend it to a city or a red off-board hex — towns only add revenue in passing.";
   }
-  return "No drafted route is worth anything yet -- each needs at least two paying stops.";
+  return "No drafted route is worth anything yet — each needs at least two paying stops.";
 }
 
 const styles: Record<string, React.CSSProperties> = {

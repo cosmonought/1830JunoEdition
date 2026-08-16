@@ -208,7 +208,7 @@ function CorporationRoster({
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Corporations</span>
         <span style={styles.rosterEmpty}>
-          No corporation data yet -- waiting on the first GetGameState response.
+          No corporation data yet — waiting on the first GetGameState response.
         </span>
       </div>
     );
@@ -277,7 +277,7 @@ function CorporationRoster({
                       style={styles.rosterFloatedBadge}
                       title={
                         metFloatThreshold(company)
-                          ? `Floated -- ${soldToPlayersPercent(company)}% sold to players.`
+                          ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
                           : `Auto-floated by the B&O private company, not by reaching ${FLOAT_THRESHOLD_PERCENT}% sold.`
                       }
                     >
@@ -371,7 +371,7 @@ function CorporationRoster({
                       >
                         <span style={styles.rosterHoldingName}>
                           {holding.isPresident && (
-                            <span title="President -- controls this corporation" aria-label="President">
+                            <span title="President — controls this corporation" aria-label="President">
                               👑
                             </span>
                           )}
@@ -849,7 +849,7 @@ function CompanyActions({
               ))}
             </select>
             <span style={styles.multiBuyHint}>
-              Brown zone -- up to {multiBuyMax} from the Bank Pool
+              Brown zone — up to {multiBuyMax} from the Bank Pool
             </span>
           </div>
         )}
@@ -1150,7 +1150,7 @@ function sellOptionState(
   if (percentage > playerHoldingPercent) {
     return {
       enabled: false,
-      reason: `You hold ${playerHoldingPercent}% -- not enough for a ${percentage}% bundle`,
+      reason: `You hold ${playerHoldingPercent}% — not enough for a ${percentage}% bundle`,
     };
   }
   const poolRoom = Math.max(0, BANK_POOL_CAP_PERCENT - bankPoolPercent);
@@ -1158,7 +1158,7 @@ function sellOptionState(
     return {
       enabled: false,
       reason:
-        `Bank Pool is at ${bankPoolPercent}% and caps at ${BANK_POOL_CAP_PERCENT}% -- ` +
+        `Bank Pool is at ${bankPoolPercent}% and caps at ${BANK_POOL_CAP_PERCENT}% — ` +
         `only ${poolRoom}% more can be sold into it`,
     };
   }

@@ -279,7 +279,7 @@ export function TrainTradePanel({
                 <option key={m} value={m} disabled={!available}>
                   {m}-train
                   {count !== null && count > 0 ? ` (${count} available)` : ""}
-                  {!available ? " -- none owned" : ""}
+                  {!available ? " — none owned" : ""}
                 </option>
               );
             })}

@@ -164,5 +164,5 @@ export function describeTokenMigration(preview: TokenMigrationPreview | null): s
     // worth explaining a choice that does not exist.
     return toCityCount === 1 ? `Station token stays put (${named}).` : `Station token: ${named}.`;
   }
-  return `This tile splits the hex into ${toCityCount} cities. ${named} -- the tile lay cannot choose a different one.`;
+  return `This tile splits the hex into ${toCityCount} cities. ${named} — the tile lay cannot choose a different one.`;
 }

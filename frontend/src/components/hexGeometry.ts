@@ -467,7 +467,7 @@ export function evaluateHexForTileLaying(
     return {
       eligible: false,
       reason: "offboard",
-      message: `${hexLabel} is a red off-board area. It is a revenue destination, not a buildable hex -- no tile can ever be laid here.`,
+      message: `${hexLabel} is a red off-board area. It is a revenue destination, not a buildable hex — no tile can ever be laid here.`,
       hexLabel,
     };
   }
@@ -485,7 +485,7 @@ export function evaluateHexForTileLaying(
     return {
       eligible: false,
       reason: "gray-immutable",
-      message: `${hexLabel} is a preprinted gray hex. Gray hexes are permanently fixed -- their track can never be replaced or upgraded.`,
+      message: `${hexLabel} is a preprinted gray hex. Gray hexes are permanently fixed — their track can never be replaced or upgraded.`,
       hexLabel,
     };
   }
@@ -504,7 +504,7 @@ export function evaluateHexForTileLaying(
         return {
           eligible: false,
           reason: "max-tier",
-          message: `${hexLabel} already holds tile #${laid.tile_id}, which is ${entry.color} -- the top colour tier. There is no further upgrade for this hex.`,
+          message: `${hexLabel} already holds tile #${laid.tile_id}, which is ${entry.color} — the top colour tier. There is no further upgrade for this hex.`,
           hexLabel,
         };
       }
@@ -1656,7 +1656,7 @@ export function describeHexDesignationForLog(
         hexLabel: boardHex.label,
         terrainType: "DoubleCityHub",
         designation:
-          "Preprinted YELLOW OO double-city (OO_DESIGNATED_HEXES) -- Tile Selection Catalog verification pass: now strictly requires DoubleCityHub artwork (tile 15, the real 1830 tile 59), rejecting an ordinary MajorCityHub tile here",
+          "Preprinted YELLOW OO double-city (OO_DESIGNATED_HEXES) — Tile Selection Catalog verification pass: now strictly requires DoubleCityHub artwork (tile 15, the real 1830 tile 59), rejecting an ordinary MajorCityHub tile here",
       };
     }
     if (boardHex.townDesignation) {

@@ -584,13 +584,13 @@ export function RadialTokenConfirm({
       anchorOffsetY={anchorOffsetY}
       canvasEl={canvasEl}
       title={hexLabel}
-      hint={`Place ${ticker}'s station token -- $${cost}`}
+      hint={`Place ${ticker}'s station token — $${cost}`}
       showConfirm
       canConfirm={canConfirm}
       confirmDisabledReason={confirmDisabledReason}
       confirmTitle={`Place ${ticker}'s token on ${hexLabel} and charge $${cost} to its treasury.`}
       confirmAriaLabel="Confirm station token placement"
-      cancelTitle="Cancel -- nothing is placed and nothing is charged."
+      cancelTitle="Cancel — nothing is placed and nothing is charged."
       cancelAriaLabel="Cancel station token placement"
       radius={MIN_RADIUS}
       onConfirm={onConfirm}

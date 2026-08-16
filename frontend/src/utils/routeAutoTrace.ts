@@ -630,7 +630,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
 const NO_TOKEN_REASON =
   "This corporation has no station token on the board yet, so there is no city its trains can run from.";
 const NO_ROUTE_REASON =
-  "No route found from this corporation's tokens -- its network does not yet reach two paying stops. Lay more track, then try again.";
+  "No route found from this corporation's tokens — its network does not yet reach two paying stops. Lay more track, then try again.";
 
 export function autoTraceRoute(input: AutoTraceInput): AutoTraceResult {
   if (input.startHexes.length === 0) {

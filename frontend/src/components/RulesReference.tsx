@@ -307,9 +307,9 @@ const TRAIN_ROSTER: TrainRow[] = [
   { model: "2", quantity: "6", cost: "$80", rusts: "When the first 4-train is bought", reach: "2 revenue centres" },
   { model: "3", quantity: "5", cost: "$180", rusts: "When the first 6-train is bought", reach: "3 revenue centres" },
   { model: "4", quantity: "4", cost: "$300", rusts: "When the first D-train is bought", reach: "4 revenue centres" },
-  { model: "5", quantity: "3", cost: "$450", rusts: "Never -- permanent", reach: "5 revenue centres" },
-  { model: "6", quantity: "2", cost: "$630", rusts: "Never -- permanent", reach: "6 revenue centres" },
-  { model: "D", quantity: "Unlimited", cost: "$1,100", rusts: "Never -- permanent", reach: "Any number of revenue centres" },
+  { model: "5", quantity: "3", cost: "$450", rusts: "Never — permanent", reach: "5 revenue centres" },
+  { model: "6", quantity: "2", cost: "$630", rusts: "Never — permanent", reach: "6 revenue centres" },
+  { model: "D", quantity: "Unlimited", cost: "$1,100", rusts: "Never — permanent", reach: "Any number of revenue centres" },
 ];
 
 const CORE_LIMITS: RuleRow[] = [
@@ -325,7 +325,7 @@ const CORE_LIMITS: RuleRow[] = [
     label: "Buying a train from another corporation",
     value: "Any price at or above $1, by mutual agreement",
     note:
-      "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling -- moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary 1830 plays. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
+      "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling — moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary 1830 plays. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
   },
   {
     label: "Stock Round 1",
@@ -335,14 +335,14 @@ const CORE_LIMITS: RuleRow[] = [
   },
   {
     label: "Bank Pool cap (per corporation)",
-    value: "50% -- shares may not be sold into a pool already at 50%",
+    value: "50% — shares may not be sold into a pool already at 50%",
     note:
-      "The Bank Pool holds shares players have sold back. It caps at 50% of any one corporation's shares, and the cap is checked against the pool's CURRENT level, not against the size of your sale -- so the room for a sale is 50% minus whatever is already in the pool, and it grows again as other players buy out of it. A 40% bundle into a pool already holding 20% is rejected; the same bundle is legal once the pool drops to 10%. This is why a sell size can be greyed out one turn and available the next.",
+      "The Bank Pool holds shares players have sold back. It caps at 50% of any one corporation's shares, and the cap is checked against the pool's CURRENT level, not against the size of your sale — so the room for a sale is 50% minus whatever is already in the pool, and it grows again as other players buy out of it. A 40% bundle into a pool already holding 20% is rejected; the same bundle is legal once the pool drops to 10%. This is why a sell size can be greyed out one turn and available the next.",
   },
   {
-    label: "Capitalization mode -- Full Capitalization",
+    label: "Capitalization mode — Full Capitalization",
     value: "10x Par credited to treasury immediately upon floating at 60%",
-    note: "The moment a corporation crosses the 60% float threshold, its treasury is credited its full par price x 10 shares in one lump sum -- not gradually, and not scaled down to however many shares had actually sold at that moment. This is confirmed directly against this contract's own `trading.rs` (`FLOAT_CAPITALIZATION_MULTIPLIER = 10`, applied as soon as `FLOAT_THRESHOLD_PERCENTAGE = 60` is crossed), not just the reference rulebook.",
+    note: "The moment a corporation crosses the 60% float threshold, its treasury is credited its full par price x 10 shares in one lump sum — not gradually, and not scaled down to however many shares had actually sold at that moment. This is confirmed directly against this contract's own `trading.rs` (`FLOAT_CAPITALIZATION_MULTIPLIER = 10`, applied as soon as `FLOAT_THRESHOLD_PERCENTAGE = 60` is crossed), not just the reference rulebook.",
   },
   {
     label: "Corporation float threshold",
@@ -351,12 +351,12 @@ const CORE_LIMITS: RuleRow[] = [
   {
     label: "Per-player ownership cap (per corporation)",
     value: "60%",
-    note: "Waived for a share sitting in the Orange or Brown stock-market zones -- see the Stock Market tab's own zone legend.",
+    note: "Waived for a share sitting in the Orange or Brown stock-market zones — see the Stock Market tab's own zone legend.",
   },
   {
     label: "Shares per public company",
     value: "9 physical certificates (100% total)",
-    note: "One 20% president's certificate plus eight 10% certificates -- ten 10%-units of ownership in total, held as nine physical cards.",
+    note: "One 20% president's certificate plus eight 10% certificates — ten 10%-units of ownership in total, held as nine physical cards.",
   },
   {
     label: "President's certificate",
@@ -403,7 +403,7 @@ const STOCK_ROUND_FLOW: FlowStep[] = [
   {
     step: "Buy 1 share",
     detail:
-      "The active player may buy exactly one 10% certificate this turn, from either a company's IPO pool (paying its par price -- or setting that par price, on the company's very first-ever IPO sale) or the open Bank pool (paying its live market price). Crossing 60% player-owned floats the company and credits its treasury 10x par immediately.",
+      "The active player may buy exactly one 10% certificate this turn, from either a company's IPO pool (paying its par price — or setting that par price, on the company's very first-ever IPO sale) or the open Bank pool (paying its live market price). Crossing 60% player-owned floats the company and credits its treasury 10x par immediately.",
     quick: "Buy exactly one 10% certificate (IPO pool or Bank pool).",
   },
   {
@@ -439,13 +439,13 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
     // looking for a control that is not there.
     step: "Buy Private Company",
     detail:
-      "Unlocks in Phase 3. The President may spend the CORPORATION'S TREASURY -- never personal cash -- to buy a still-owned private company directly from the player holding it, at a price the two negotiate but bounded to 50%-200% of that private's face value. The private's revenue then flows to the corporation instead of the player.",
+      "Unlocks in Phase 3. The President may spend the CORPORATION'S TREASURY — never personal cash — to buy a still-owned private company directly from the player holding it, at a price the two negotiate but bounded to 50%-200% of that private's face value. The private's revenue then flows to the corporation instead of the player.",
     quick: "Phase 3+ only: buy a private from a player, 50%-200% of face value, from Treasury.",
   },
   {
     step: "Lay Track",
     detail:
-      "The active corporation's President may lay or upgrade one tile on the map, extending its rail network. Three rules bind every lay. COLOUR PROGRESSION: upgrades go Yellow -> Green -> Brown in strict order, with no skipping, and the higher colours only become available as the game phase advances. CONNECTIVITY: the hex must be reachable by track traced back to one of this corporation's own station tokens -- you cannot lay in unconnected territory. TRACK PRESERVATION: an upgrade must keep every path the old tile already carried, so a lay can never sever an existing route, including a rival's. Terrain is charged on top of the tile and comes out of the CORPORATION'S TREASURY, not personal cash: $80 across a river hex, $120 across a mountain hex, nothing on clear ground.",
+      "The active corporation's President may lay or upgrade one tile on the map, extending its rail network. Three rules bind every lay. COLOUR PROGRESSION: upgrades go Yellow -> Green -> Brown in strict order, with no skipping, and the higher colours only become available as the game phase advances. CONNECTIVITY: the hex must be reachable by track traced back to one of this corporation's own station tokens — you cannot lay in unconnected territory. TRACK PRESERVATION: an upgrade must keep every path the old tile already carried, so a lay can never sever an existing route, including a rival's. Terrain is charged on top of the tile and comes out of the CORPORATION'S TREASURY, not personal cash: $80 across a river hex, $120 across a mountain hex, nothing on clear ground.",
     quick: "Lay or upgrade one connected tile, preserving existing track. Terrain fees from Treasury.",
   },
   {
@@ -466,13 +466,13 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
     // that the Operating Round bar has had all along, in its own sub-phase.
     step: "Place a Station",
     detail:
-      "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot -- a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one station placement per corporation per Operating Round turn (e.g., one in OR 2.1, and another in OR 2.2).",
+      "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot — a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one station placement per corporation per Operating Round turn (e.g., one in OR 2.1, and another in OR 2.2).",
     quick: "Optionally place one Station token in a reachable city with a free slot ($40, then $100).",
   },
   {
     step: "Routes",
     detail:
-      "Each train runs a route and earns the revenue of the centres it visits, up to its own capacity -- a 2-train reaches 2 revenue centres, a 6-train reaches 6, a Diesel is unlimited. Large cities and small towns both count as one centre each against that capacity. Two rules bind a run: a train may not re-enter the same hex twice on a single route, and if the corporation owns several trains their routes must be COMPLETELY DISTINCT. No two trains owned by the same corporation may share a track segment, though multiple trains may visit or terminate in the same city if they use separate tracks to enter and leave. Autopath computes the highest legal total for you.",
+      "Each train runs a route and earns the revenue of the centres it visits, up to its own capacity — a 2-train reaches 2 revenue centres, a 6-train reaches 6, a Diesel is unlimited. Large cities and small towns both count as one centre each against that capacity. Two rules bind a run: a train may not re-enter the same hex twice on a single route, and if the corporation owns several trains their routes must be COMPLETELY DISTINCT. No two trains owned by the same corporation may share a track segment, though multiple trains may visit or terminate in the same city if they use separate tracks to enter and leave. Autopath computes the highest legal total for you.",
     quick: "Each train runs up to its capacity; multiple trains cannot share track. Autopath available.",
   },
   {
@@ -484,7 +484,7 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
   {
     step: "Buy Trains",
     detail:
-      "The President may buy the next train at the front of the Bank Depot at its face value, or a train from another corporation at any negotiated price of $1 or more. BOTH ARE PAID FROM THE CORPORATION'S TREASURY. The purchase is subject to the current Train Limit (see Limits, Caps, and Special Rules) and triggers a Rusting sweep if it is the room's first unit of a new tier. EMERGENCY TRAIN PURCHASE: a corporation that owns NO train must buy one, and if its treasury cannot cover the cheapest available train the President becomes personally liable -- they must contribute their own cash and, if that is still not enough, sell their own shares to raise the difference. Watch the rusting schedule and keep a viable fleet; this is the rule that ends games badly.",
+      "The President may buy the next train at the front of the Bank Depot at its face value, or a train from another corporation at any negotiated price of $1 or more. BOTH ARE PAID FROM THE CORPORATION'S TREASURY. The purchase is subject to the current Train Limit (see Limits, Caps, and Special Rules) and triggers a Rusting sweep if it is the room's first unit of a new tier. EMERGENCY TRAIN PURCHASE: a corporation that owns NO train must buy one, and if its treasury cannot cover the cheapest available train the President becomes personally liable — they must contribute their own cash and, if that is still not enough, sell their own shares to raise the difference. Watch the rusting schedule and keep a viable fleet; this is the rule that ends games badly.",
     quick: "Buy from the Depot at face value or a rival for $1+, from Treasury. Trainless = emergency.",
   },
 ];
@@ -498,7 +498,7 @@ const AUCTION_FLOW: FlowStep[] = [
   {
     step: "Buy Lowest",
     detail:
-      "Any player, on their turn in the auction's seating rotation, may buy the current lowest-priced still-unowned private company outright at its face value -- the only private WaterfallBuyLowest can target, and the only one that can never be bid on instead.",
+      "Any player, on their turn in the auction's seating rotation, may buy the current lowest-priced still-unowned private company outright at its face value — the only private WaterfallBuyLowest can target, and the only one that can never be bid on instead.",
     quick: "Buy the current lowest-offered private at face value.",
   },
   {
@@ -510,8 +510,8 @@ const AUCTION_FLOW: FlowStep[] = [
   {
     step: "Pass",
     detail:
-      "A player may decline to buy or bid this turn -- only a legal move once at least one private has a standing bid outstanding somewhere in the auction.",
-    quick: "Decline -- only legal while a bid stands somewhere.",
+      "A player may always decline to buy or bid this turn, including on the very first turn of the auction. If every player passes in succession, the lowest-offered private is marked down by $5; a private marked all the way to $0 is taken for free by the next player to act.",
+    quick: "Decline — always legal. A full round of passes cuts $5 off the cheapest private.",
   },
   {
     step: "Mini-Auction Raise",
@@ -522,7 +522,7 @@ const AUCTION_FLOW: FlowStep[] = [
   {
     step: "Mini-Auction Pass",
     detail:
-      "A competing bidder may instead drop out of the mini-auction -- their escrowed bid is fully refunded, and the auction continues among the remaining bidder(s).",
+      "A competing bidder may instead drop out of the mini-auction — their escrowed bid is fully refunded, and the auction continues among the remaining bidder(s).",
     quick: "Competing bidder: drop out (bid fully refunded).",
   },
 ];
@@ -613,7 +613,7 @@ function QuickReferenceStrip({
     <section style={styles.quickStrip}>
       <div style={styles.quickRefHeader}>
         <h3 style={styles.quickStripTitle}>
-          Quick Reference{connected ? ` -- ${ROUND_META[roundType as RulesRoundType].label}` : ""}
+          Quick Reference{connected ? ` — ${ROUND_META[roundType as RulesRoundType].label}` : ""}
         </h3>
         {connected && subPhaseMeta ? (
           <span style={styles.quickRefBadge}>
@@ -622,7 +622,7 @@ function QuickReferenceStrip({
         ) : (
           !connected && (
             <span style={styles.quickRefBadgeMuted}>
-              Not connected -- all three rounds shown
+              Not connected — all three rounds shown
             </span>
           )
         )}
@@ -742,7 +742,7 @@ function CurrentRoundReferenceSection({
       <div style={styles.quickRefHeader}>
         <h3 style={styles.sectionTitle}>Current Round&apos;s Rules Reference</h3>
         {!connected && (
-          <span style={styles.quickRefBadgeMuted}>Not connected -- showing all three round types</span>
+          <span style={styles.quickRefBadgeMuted}>Not connected — showing all three round types</span>
         )}
       </div>
 
@@ -810,8 +810,8 @@ function AboutSection() {
           1830: Railways &amp; Robber Barons puts you in the seat of a 19th-century financier,
           competing to build and profit from a rail network across the northeastern United States
           and Canada. You play two roles at once: a private investor buying and selling stock in
-          public railroad corporations, and -- whenever you hold a corporation's President's
-          certificate -- that corporation's own operating officer, deciding where it lays track,
+          public railroad corporations, and — whenever you hold a corporation's President's
+          certificate — that corporation's own operating officer, deciding where it lays track,
           which trains it buys, and whether it pays out or reinvests what it earns.
         </p>
         <p style={styles.aboutParagraph}>
@@ -820,7 +820,7 @@ function AboutSection() {
           (60% or more of its stock sold) runs its trains over its own track to earn revenue, then
           either distributes that revenue to its shareholders as a dividend or keeps it in its own
           treasury to reinvest. A corporation's money and a player's personal money are always kept
-          strictly separate -- laying track or buying a train spends the company's own treasury, not
+          strictly separate — laying track or buying a train spends the company's own treasury, not
           your personal wallet.
         </p>
         <p style={styles.aboutParagraph}>
@@ -832,8 +832,8 @@ function AboutSection() {
           net worth at the finish simply walks away with the largest slice of the real pool.
         </p>
         <p style={styles.aboutParagraph}>
-          A game reaches a natural end one of two ways: the Bank runs dry of cash -- the classic
-          1830 rulebook's own primary end condition (see Bank Treasury on the Game Ledger tab) -- or
+          A game reaches a natural end one of two ways: the Bank runs dry of cash — the classic
+          1830 rulebook's own primary end condition (see Bank Treasury on the Game Ledger tab) — or
           a corporation's President cannot cover a mandatory train purchase even after emptying both
           the company's treasury and their own personal cash, which bankrupts them and halts the
           game on the spot. In either case the final net-worth calculation above decides the payout,

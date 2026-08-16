@@ -140,7 +140,7 @@ export const WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
   {
     title: "When everybody passes",
     body:
-      "Passing does not stall the auction -- it moves it. If every player passes in a row " +
+      "Passing does not stall the auction — it moves it. If every player passes in a row " +
       "without anyone buying or bidding, three things happen before your turn comes back " +
       "around:\n" +
       "• The face value of the lowest unowned private company drops by $5. The auction is " +
@@ -148,14 +148,14 @@ export const WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
       "• Every private company already owned immediately pays its printed revenue to its " +
       "owner. Passing is not free for the players still waiting: it pays the players who " +
       "already bought.\n" +
-      "• If that price ever reaches $0, the player whose turn it is has no choice -- they must " +
+      "• If that price ever reaches $0, the player whose turn it is has no choice — they must " +
       "take the company for free.",
   },
   {
     title: "So passing has a cost",
     body:
       "Those two facts together are the whole tension of this phase. Waiting makes the cheapest " +
-      "company cheaper, which is good for you -- but it also hands income to everyone who " +
+      "company cheaper, which is good for you — but it also hands income to everyone who " +
       "already committed, which is good for them. A private you keep refusing eventually " +
       "becomes free, and then it becomes yours whether you wanted it or not.",
   },
@@ -222,7 +222,7 @@ export const STOCK_ROUND_TUTORIAL: readonly TutorialPage[] = [
     title: "Passing is not permanent",
     body:
       "Passing gives up your current turn, not the rest of the round. The moment any other " +
-      "player buys or sells, the round keeps going and the turn comes back around to you -- and " +
+      "player buys or sells, the round keeps going and the turn comes back around to you — and " +
       "you are free to act on it, having just watched what everyone else did.\n" +
       "This makes an early pass a real tactic rather than a surrender: you can decline to " +
       "commit, see whether a rival floats the corporation you were eyeing, and still buy in " +
@@ -233,20 +233,20 @@ export const STOCK_ROUND_TUTORIAL: readonly TutorialPage[] = [
     body:
       "A Stock Round ends only when EVERY player passes consecutively, with no buy or sell in " +
       "between. One purchase anywhere resets that count to zero and the round continues.\n" +
-      "So the round does not run for a fixed number of turns -- it runs until nobody in the " +
+      "So the round does not run for a fixed number of turns — it runs until nobody in the " +
       "room wants to do anything else. If you are waiting for the round to end, remember that " +
       "one more purchase by anyone starts the whole counting over.",
   },
   {
     title: "The Priority Deal",
     body:
-      "Whoever holds the Priority Deal acts FIRST in the next Stock Round -- first pick of the " +
+      "Whoever holds the Priority Deal acts FIRST in the next Stock Round — first pick of the " +
       "IPO, first chance to open a corporation at the par value you want. Look for the cyan " +
       "#1 beside a player's name in the Player Index and in Game Ledger > Player Assets.\n" +
       "It is not a reward for passing, and it is not random. At the end of a Stock Round the " +
       "Priority Deal moves to the player seated immediately to the LEFT of whoever took the " +
       "last action of that round. Acting last therefore hands the next round's opening move to " +
-      "your neighbour -- which is sometimes a price worth paying, and sometimes exactly the " +
+      "your neighbour — which is sometimes a price worth paying, and sometimes exactly the " +
       "mistake that loses you the corporation you were building toward.",
   },
 ];

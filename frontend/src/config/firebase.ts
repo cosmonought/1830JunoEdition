@@ -199,7 +199,7 @@ export function firebaseConfigError(): string | null {
       return (
         `[firebase] ${field.name} is not set, so real-time chat and the lobby are ` +
         "unavailable. Add it to frontend/.env (see .env.example) and RESTART the dev " +
-        "server -- react-scripts substitutes REACT_APP_* at build time. The rail map, " +
+        "server — react-scripts substitutes REACT_APP_* at build time. The rail map, " +
         "tile catalog and every on-chain query work without it."
       );
     }

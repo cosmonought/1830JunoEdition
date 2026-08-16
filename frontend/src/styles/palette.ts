@@ -60,15 +60,17 @@ export const CARD_ACCENT_ACTIVE = "#d4a017";
  *  waterfall for every player. */
 export const CARD_BORDER_CONTESTED = "#c05a3a";
 
-/** The pulsing ring on the tile whose mini-auction is live.
- *
- *  RED. It was briefly amber, to stop it colliding with `App.tsx`'s
- *  active-turn indicator, which also pulsed red -- two red pulses at once
- *  read as one effect. That collision is now solved at the OTHER end: the
- *  turn indicator is white (`TURN_PULSE_INK`), which frees red for the
- *  strongest in-panel signal the auction has. A mini-auction pauses the
- *  entire waterfall for every player, so red is the honest weight for it. */
-export const CARD_GLOW_MINI_AUCTION = "#ef4444";
+/* `CARD_GLOW_MINI_AUCTION` (a red `#ef4444`) was DELETED by
+   `WaterfallAuctionDashboard.tsx` design note #320, which replaced the red
+   pulse on a contested card with a multicolour border chaser.
+ 
+   Removed rather than left exported-and-unused. A colour token that nothing
+   imports is a standing invitation to reintroduce the exact problem #320
+   fixed -- red on that screen means "something is wrong", and a mini-auction
+   is the most interesting thing that can happen in the auction. The chaser's
+   palette is deliberately not a token: it is a nine-stop gradient that only
+   makes sense as a whole, and it lives in the keyframes beside the rule that
+   uses it. */
 
 /** The lowest-offered private: the one card in the waterfall that can be
  *  bought outright, and the only Buy button in the panel.
@@ -84,7 +86,7 @@ export const CARD_BUY_GREEN_TINT = "#d6f5e8";
 export const CARD_BUY_GREEN_INK = "#04553c";
 
 /** The active-turn pulse. White/crisp silver rather than red: see
- *  `CARD_GLOW_MINI_AUCTION` for the collision this resolves. White also
+ *  the note above for the red pulse this once collided with. White also
  *  survives being layered over any tab's background, which red did not do
  *  evenly across the linen-white card surfaces.
  *

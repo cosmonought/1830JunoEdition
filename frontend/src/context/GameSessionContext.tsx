@@ -127,7 +127,7 @@ export function GameSessionProvider({ children }: { children: React.ReactNode })
         !sessionAddress ||
         !masterAddress
       ) {
-        throw new Error("Session key is not ready -- call initializeSessionKey() first.");
+        throw new Error("Session key is not ready — call initializeSessionKey() first.");
       }
       return execViaSessionKey({
         sessionClient: sessionClientRef.current,

@@ -132,7 +132,7 @@ export function ContextualSubPanel({
       ) : (
         <OperatingRoundCorporationPanel gameState={gameState} marketGrid={marketGrid} />
       )}
-      {error && <p style={styles.staleNote}>Showing last known state -- latest refresh failed: {error}</p>}
+      {error && <p style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</p>}
     </div>
   );
 }
@@ -158,7 +158,7 @@ function WaterfallAuctionNotice() {
         <span style={styles.headerTitle}>Pre-Game Waterfall Auction</span>
       </div>
       <p style={styles.placeholderText}>
-        Allocating the six private companies before Stock Round 1 opens -- see the Waterfall Auction
+        Allocating the six private companies before Stock Round 1 opens — see the Waterfall Auction
         panel above for live bidding.
       </p>
     </>
@@ -187,7 +187,7 @@ function StockRoundPlayerIndex({
   return (
     <>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Stock Round -- Player Index</span>
+        <span style={styles.headerTitle}>Stock Round — Player Index</span>
         <span style={styles.headerHint}>
           SR{gameState.macro_round_number}
           {gameState.sub_round_index > 0 ? `.${gameState.sub_round_index}` : ""}
@@ -354,7 +354,7 @@ function OperatingRoundCorporationPanel({
   return (
     <>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Operating Round -- Corporations</span>
+        <span style={styles.headerTitle}>Operating Round — Corporations</span>
         <span style={styles.headerHint}>
           OR{gameState.macro_round_number}.{gameState.sub_round_index} of{" "}
           {gameState.operating_round_sequence_length}
@@ -442,8 +442,8 @@ function OperatingRoundCorporationPanel({
                       style={delta > 0 ? styles.priceUp : styles.priceDown}
                       title={
                         delta > 0
-                          ? `Paid dividends -- price rose from $${price - delta}.`
-                          : `Withheld revenue -- price fell from $${price - delta}.`
+                          ? `Paid dividends — price rose from $${price - delta}.`
+                          : `Withheld revenue — price fell from $${price - delta}.`
                       }
                     >
                       {delta > 0 ? "\u2191" : "\u2193"} ${price}

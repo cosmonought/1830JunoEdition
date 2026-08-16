@@ -82,7 +82,7 @@ function previewText(item: FeedItem): string {
     return `💬 ${item.chatAuthor}: "${item.chatText}"`;
   }
   const icon = iconForLogStatus(item.logStatus ?? "info");
-  const detail = item.logDetail && item.logDetail.length <= 40 ? ` -- ${item.logDetail}` : "";
+  const detail = item.logDetail && item.logDetail.length <= 40 ? ` — ${item.logDetail}` : "";
   return `${icon} ${item.logLabel}${detail}`;
 }
 
@@ -109,7 +109,7 @@ export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggle
         aria-label="Expand or collapse the chat and activity history"
       >
         <span style={styles.previewText}>
-          {latestItem ? previewText(latestItem) : "No activity yet -- click to expand the history."}
+          {latestItem ? previewText(latestItem) : "No activity yet — click to expand the history."}
         </span>
         {!isExpanded && unreadCount > 0 && (
           <span style={styles.unreadBadge}>{unreadCount > 99 ? "99+" : unreadCount}</span>

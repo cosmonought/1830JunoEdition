@@ -52,6 +52,8 @@ import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
 // Operating Round question) and the payout now rides in the livery stripe
 // (design note #392).
 import { TrainChips } from "./TrainBadges";
+// Design note #410: the corporate herald, shared with the action panel.
+import { CorporateLogo } from "./CorporateLogo";
 import { allowsMultipleBankPoolBuys, marketZoneForPrice } from "./StockMarketRenderer";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
@@ -345,12 +347,20 @@ function CorporationRoster({
                     check. */}
                 <div style={{ ...styles.rosterLivery, backgroundColor: color, color: liveryInk }}>
                   <span style={styles.rosterNameStack}>
-                    <span
-                      style={styles.rosterLiveryTicker}
+                    {/* Design note #410: the historical herald replaces the
+                        acronym. 26px against a stripe whose text content is
+                        ~33px tall, so it sits INSIDE the existing height
+                        rather than setting a new one -- the row does not
+                        grow. The fallback keeps the old typography exactly,
+                        so a missing file is indistinguishable from the
+                        previous design rather than being a visible hole. */}
+                    <CorporateLogo
+                      ticker={company.ticker}
+                      size={26}
+                      color={liveryInk}
                       title={corporationTitle(company.ticker)}
-                    >
-                      {company.ticker}
-                    </span>
+                      fallbackStyle={styles.rosterLiveryTicker}
+                    />
                     {corporationFullName(company.ticker) && (
                       <span style={styles.rosterLiveryName}>
                         {corporationFullName(company.ticker)}

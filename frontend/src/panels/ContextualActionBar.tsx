@@ -67,6 +67,8 @@ import {
   misplacedSurfaceTab,
   type MainTab,
 } from "../components/MainTabBar";
+// Design note #410: shared with the Stock Card stripe.
+import { CorporateLogo } from "../components/CorporateLogo";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
 
@@ -948,9 +950,24 @@ export default function ContextualActionBar({
             }}
           >
             <span style={styles.orContextIdentity}>
-              <span style={{ ...styles.orContextTicker, color: corporationBarInk.ink }}>
-                {activeCorporation?.ticker ?? "No corporation"}
-              </span>
+              {/* Design note #410: the same herald the Stock Card stripe
+                  shows, so a corporation is not a logo on one screen and an
+                  acronym on the other. `null` has no logo to draw -- there
+                  is no corporation, which is a sentence rather than a
+                  missing image. */}
+              {activeCorporation ? (
+                <CorporateLogo
+                  ticker={activeCorporation.ticker}
+                  size={24}
+                  color={corporationBarInk.ink}
+                  title={activeCorporation.fullName ?? activeCorporation.ticker}
+                  fallbackStyle={styles.orContextTicker}
+                />
+              ) : (
+                <span style={{ ...styles.orContextTicker, color: corporationBarInk.ink }}>
+                  No corporation
+                </span>
+              )}
               {activeCorporation?.fullName && (
                 <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
                   {activeCorporation.fullName}

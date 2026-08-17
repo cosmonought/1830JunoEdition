@@ -453,7 +453,29 @@ function CorporationRoster({
                     someone remembering to re-check the COMMENT when the
                     palette moves under it. */}
                 <div style={{ ...styles.rosterLivery, backgroundColor: color, color: liveryInk }}>
+                  {/* ==================================================
+                       DESIGN NOTE 501: THE MARK AND THE HANDLE, ONE LINE
+                      ==================================================
+
+                       REPORTED: put the herald and the acronym on the same
+                       line horizontally instead of stacking them.
+
+                       `rosterNameStack` is a COLUMN, and design note #465
+                       added the acronym as its second child -- so "beside
+                       the logo", which is what that note asked for and what
+                       its own text says ("the acronym rides next to it"),
+                       came out underneath it. The note and the layout have
+                       disagreed since the day it shipped.
+
+                       The stack keeps its column for the FULL NAME, which
+                       genuinely belongs on its own line: it is the thing you
+                       read second, it is long enough to need the card's
+                       whole width, and it already ellipsises. What changes
+                       is that the two SHORT identifiers -- the mark and the
+                       handle for the same company -- now share the line they
+                       were always described as sharing. */}
                   <span style={styles.rosterNameStack}>
+                    <span style={styles.rosterIdentityRow}>
                     {/* Design note #410: the historical herald replaces the
                         acronym. 26px against a stripe whose text content is
                         ~33px tall, so it sits INSIDE the existing height
@@ -493,7 +515,8 @@ function CorporationRoster({
                          missing, which would double it -- but only in the
                          failure case, and a doubled ticker is a better
                          failure than a nameless card. */}
-                    <span style={styles.rosterLiveryAcronym}>{company.ticker}</span>
+                      <span style={styles.rosterLiveryAcronym}>{company.ticker}</span>
+                    </span>
                     {corporationFullName(company.ticker) && (
                       <span style={styles.rosterLiveryName}>
                         {corporationFullName(company.ticker)}
@@ -575,15 +598,63 @@ function CorporationRoster({
                        number it has belongs. A floated one leaves the slot
                        empty, and an empty slot is not a badge -- which was
                        #465's actual objection. */}
+                  {/* ==================================================
+                       DESIGN NOTE 503: ONE SLOT, TWO LIVES
+                      ==================================================
+
+                       REPORTED: Last Run must completely REPLACE the float
+                       badge on the livery stripe once a corporation floats,
+                       rather than sitting as its own column in the stats row.
+
+                       This reverses design note #488, which moved Last Run
+                       down to the stats row, and #488's objection deserves an
+                       answer rather than a silent revert. It said: a bare
+                       figure beside a herald is "captioned by position", and
+                       captioned by position means captioned by nothing.
+
+                       That was true of the version it was describing -- a
+                       naked "$180" floating next to the logo, which is also
+                       what design note #447 objected to before it. It is not
+                       true of this one. The figure goes in the BADGE, with
+                       the badge's border and an explicit "LAST RUN" caption
+                       inside it, so it reads as a labelled statistic in a
+                       slot rather than as part of the corporation's name.
+
+                       WHY THE SLOT IS THE RIGHT HOME. The two facts are
+                       mutually exclusive in time and identical in role: an
+                       unfloated corporation's one live number is how close it
+                       is to floating; a floated one's is what it last earned.
+                       Neither exists while the other does. A slot that holds
+                       exactly one of them is the shape of the data -- which
+                       is also why #488's "empty slot" complaint disappears:
+                       the slot is never empty now.
+
+                       "--" NOT "$0" for a corporation that has never run.
+                       Design note #465's distinction, kept verbatim through
+                       three passes because it keeps being right: `"0"` is
+                       reported both by a corporation that earned nothing and
+                       by one that has never turned a wheel, and a dash is the
+                       only honest way to say the second. */}
                   <span style={styles.rosterLiveryRight}>
-                    {!company.is_floated && (
-                      <span
-                        style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
-                        title={`${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
-                      >
-                        {soldToPlayersPercent(company)}% / {FLOAT_THRESHOLD_PERCENT}%
-                      </span>
-                    )}
+                    <span
+                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
+                      title={
+                        company.is_floated
+                          ? hasRunRoutes
+                            ? `${company.ticker} last ran its trains for $${company.last_route_revenue}.`
+                            : `${company.ticker} has floated but has not yet run its trains.`
+                          : `${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`
+                      }
+                    >
+                      {company.is_floated ? (
+                        <>
+                          <span style={styles.rosterLiveryBadgeCaption}>Last run</span>
+                          {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
+                        </>
+                      ) : (
+                        `${soldToPlayersPercent(company)}% / ${FLOAT_THRESHOLD_PERCENT}%`
+                      )}
+                    </span>
                   </span>
                 </div>
 
@@ -607,30 +678,27 @@ function CorporationRoster({
                       and a company with no par has no token. Reading
                       `market` without checking par would let any future
                       producer put the figure back. */}
+                  {/* Design note #502: the `$`. Treasury has carried one
+                      since it joined this row (design note #489) and these
+                      two did not, so one line held three figures in dollars
+                      of which only the rightmost said so. The dash keeps its
+                      bare form deliberately -- "$--" would put a currency on
+                      an absent value. */}
                   <div style={styles.rosterPrice}>
                     <span style={styles.rosterPriceValue}>
-                      {company.par_value === null || market === null ? "--" : market}
+                      {company.par_value === null || market === null ? "--" : `$${market}`}
                     </span>
                     <span style={styles.rosterPriceLabel}>market</span>
                   </div>
                   <div style={styles.rosterPrice}>
-                    <span style={styles.rosterPriceValueMuted}>{company.par_value ?? "--"}</span>
+                    <span style={styles.rosterPriceValueMuted}>
+                      {company.par_value === null ? "--" : `$${company.par_value}`}
+                    </span>
                     <span style={styles.rosterPriceLabel}>IPO / par</span>
                   </div>
-                  {/* Design note #488: Last Run returns to the row, with the
-                      caption it always needed. "--" not "$0" for a
-                      corporation that has never run -- design note #465's
-                      distinction, which is the one part of that note this
-                      pass keeps verbatim: `"0"` is reported both by a
-                      corporation that earned nothing and by one that has
-                      never turned a wheel, and a dash is the only honest way
-                      to say the second. */}
-                  <div style={styles.rosterPrice}>
-                    <span style={styles.rosterPriceValueMuted}>
-                      {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
-                    </span>
-                    <span style={styles.rosterPriceLabel}>last run</span>
-                  </div>
+                  {/* Design note #503: Last Run is GONE from this row -- it
+                      is in the livery stripe, in the slot the float badge
+                      vacates. See that slot for the reasoning. */}
                   {/* ==================================================
                        DESIGN NOTE 489: TREASURY BELONGS WITH THE MONEY
                       ==================================================
@@ -763,9 +831,35 @@ function CorporationRoster({
                      #489 moved it up with the other dollar figures, which
                      is also what made room for two spelled-out labels
                      without the line wrapping. */}
+                {/* ==================================================
+                     DESIGN NOTE 504: CAPTION UNDER VALUE, BOTH ROWS
+                    ==================================================
+
+                     REPORTED: put the "Trains" and "Stations" labels
+                     underneath their chips, mirroring how Market, IPO/Par
+                     and Treasury sit under their values.
+
+                     Design note #490 replaced the pictograms with words,
+                     correctly, and put them BESIDE the values because the
+                     row it inherited was a single inline line. So the card
+                     ended up captioning its two rows two different ways:
+                     value-over-label on the price row, label-then-value on
+                     the asset row. A reader scanning down the card met the
+                     same relationship expressed twice in opposite orders.
+
+                     `assetItem` becomes a column and the label moves after
+                     the value, which is `rosterPrice`'s exact shape -- the
+                     two rows now share one grammar rather than resembling
+                     each other.
+
+                     THE LABEL STAYS `assetLabel`, not `rosterPriceLabel`.
+                     Design note #490 already tuned it to match that caption
+                     treatment (uppercase, faint, tracked); what was wrong
+                     was its POSITION, and swapping the style as well would
+                     change the type scale of a caption sitting under a chip
+                     row rather than under a number. */}
                 <div style={styles.assetRow}>
                   <span style={styles.assetItem}>
-                    <span style={styles.assetLabel}>Trains</span>
                     {/* Design note #409: the real chips, with the rust
                         colouring a share buyer is pricing. `compact` and the
                         light surface, matching the Operating Round's own
@@ -788,6 +882,7 @@ function CorporationRoster({
                     ) : (
                       <span style={styles.assetEmpty}>none</span>
                     )}
+                    <span style={styles.assetLabel}>Trains</span>
                   </span>
                   <span style={styles.assetDivider} aria-hidden="true">|</span>
                   {/* ==================================================
@@ -824,7 +919,6 @@ function CorporationRoster({
                       circles legible here -- the bar's near-white ink would
                       vanish on `CARD_SURFACE`. */}
                   <span style={styles.assetItem}>
-                    <span style={styles.assetLabel}>Stations</span>
                     <StationTokenRow
                       slots={stationTokenSlots(company)}
                       color={tickerColor(company.company_id)}
@@ -833,6 +927,9 @@ function CorporationRoster({
                       homeHexLabel={company.home_hex_label}
                       emptyLabel="none"
                     />
+                    {/* Design note #504: under the value, like every other
+                        caption on this card. */}
+                    <span style={styles.assetLabel}>Stations</span>
                   </span>
                 </div>
 
@@ -2265,6 +2362,42 @@ export function StockRoundPanel({
 
 export default StockRoundPanel;
 
+/* ==================================================================
+ *  DESIGN NOTE 507: ONE WIDTH, WRITTEN TWICE, UPDATED ONCE
+ * ==================================================================
+ *
+ * REPORTED: on the Stocks tab a recent widening of the Shares column pushed
+ * the Price column right, clipping it at the edge of the card.
+ *
+ * The ownership table encoded its numeric column width in TWO places:
+ *
+ *   `ownershipRow` / `ownershipHeadRow`  grid tracks, `... 46px 46px`
+ *   `ownershipNum`                       the cell, `minWidth: 68px`
+ *
+ * Design note #466 widened the second -- correctly, because "9 (100%)" is a
+ * real value and it was wrapping -- and left the first at 46px. A grid item
+ * cannot shrink below its own `min-width`, and a grid track does not clip
+ * what overflows it, so each numeric cell spilled 22px past its track. Two
+ * of them, and the Price column ends up 44px beyond where the grid put it:
+ * off the right edge of a fixed-width card.
+ *
+ * Nothing looked wrong at either site. 46px is a reasonable track and 68px
+ * is a correct minimum; they are only wrong TOGETHER, which is why the
+ * widening pass had no reason to notice.
+ *
+ * SO THERE IS ONE NUMBER NOW. The track and the minimum read the same
+ * constant, which makes the relationship "the track is at least as wide as
+ * its content requires" true by construction rather than by two edits
+ * staying in step. This is the same fix TD-1 applied to the corporation
+ * palette and design note #499 to the route table's headers.
+ *
+ * THE SPACE COMES FROM THE ENTITY COLUMN, which is what the report asks for
+ * and is also where it should come from: `minmax(0, 1fr)` is the only track
+ * that can give, it holds a name that already ellipsises, and on every row
+ * but the longest it has slack to spare. */
+const OWNERSHIP_NUM_WIDTH = "68px";
+const OWNERSHIP_GRID = `minmax(0, 1fr) ${OWNERSHIP_NUM_WIDTH} ${OWNERSHIP_NUM_WIDTH}`;
+
 const styles: Record<string, React.CSSProperties> = {
   /* ---- Corporation roster -- design note #8 ---- */
   /* Design note #11: responsive grid, breakpoint-equivalent without a
@@ -2456,10 +2589,20 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK,
     lineHeight: 1.35,
   },
+  /* Design note #504: a COLUMN, value over caption -- `rosterPrice`'s exact
+     shape, so both rows of the card caption their values the same way round.
+     It was an inline row with the label first, which made the asset row read
+     in the opposite order to the price row directly above it.
+
+     `alignItems: flex-start` rather than `center`: the chips are wider than
+     their captions, and centring would float each word under the middle of
+     its chip row instead of aligning it with the row's left edge, which is
+     where the eye returns after reading across. */
   assetItem: {
     display: "inline-flex",
-    alignItems: "center",
-    gap: "5px",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "3px",
     /* Design note #490: `cursor: "help"` is gone. It advertised a tooltip
        that carried the caption, and the caption is now on the card. A help
        cursor over content that explains itself is a promise of more. */
@@ -2548,6 +2691,9 @@ const styles: Record<string, React.CSSProperties> = {
    *  third colour onto a band that is already carrying two. */
   rosterLiveryBadge: {
     flexShrink: 0,
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "5px",
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
     letterSpacing: "0.04em",
@@ -2556,6 +2702,23 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     fontVariantNumeric: "tabular-nums",
+  },
+  /* Design note #503: the caption inside the badge, which is what answers
+     #488's "captioned by position means captioned by nothing". Lighter and
+     un-tracked against the figure's 800 weight, so the pill reads as
+     label-then-value rather than as two competing pieces of text.
+
+     `color: "inherit"` with alpha rather than a fixed grey: this badge sits
+     on eight different corporate fills and takes `liveryInk` from the
+     stripe, so a fixed caption colour would be unreadable on some of them --
+     the same argument design note #236 makes for the action bar's secondary
+     text. */
+  rosterLiveryBadgeCaption: {
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    textTransform: "uppercase",
+    color: "inherit",
+    opacity: 0.75,
   },
   /* Design note #490: the crown's replacement. A tag rather than running
      text, so it is skimmable in a dense table -- which is the job the glyph
@@ -2570,6 +2733,20 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rosterTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800, letterSpacing: "0.5px" },
   rosterNameStack: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
+  /* Design note #501: the herald and the acronym, side by side. A ROW inside
+     the column stack, so the full name below keeps its own line.
+
+     `minWidth: 0` for the same reason design note #499 needed it one file
+     over: without it a flex item refuses to shrink below its content, and a
+     long acronym would push the name's ellipsis out of the card instead of
+     being contained by it. */
+  rosterIdentityRow: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "7px",
+    minWidth: 0,
+  },
   rosterFullName: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
@@ -2657,7 +2834,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   ownershipRow: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 46px 46px",
+    gridTemplateColumns: OWNERSHIP_GRID,
     alignItems: "baseline",
     gap: "6px",
     fontSize: FONT_SIZE.small,
@@ -2667,7 +2844,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   ownershipHeadRow: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 46px 46px",
+    gridTemplateColumns: OWNERSHIP_GRID,
     alignItems: "baseline",
     gap: "6px",
     padding: "0 4px 2px",
@@ -2690,7 +2867,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "right",
     fontVariantNumeric: "tabular-nums",
     flex: "0 0 auto",
-    minWidth: "68px",
+    minWidth: OWNERSHIP_NUM_WIDTH,
     whiteSpace: "nowrap",
   },
   /* Design note #378: the line between shares nobody owns and shares

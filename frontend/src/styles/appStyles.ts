@@ -765,43 +765,6 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#c7cbd4",
     borderStyle: "dashed",
   },
-  /* Design note #491: the collapsed bar's jump to the Buy Trains panels.
-     PROMINENT, per the report -- solid rather than the dashed utility
-     treatment, and tinted with the same green the market line uses for a
-     gain, so it reads as the thing to do rather than as a utility sitting
-     beside End Turn.
-
-     Deliberately NOT `actionBarButtonPrimary` (if one is ever added): this
-     scrolls, and a control that only moves the viewport should not wear the
-     strongest affordance on a bar whose other buttons spend a turn. */
-  actionBarJumpButton: {
-    color: "#0d1117",
-    backgroundColor: "#4ade80",
-    borderColor: "#4ade80",
-    fontWeight: 800,
-  },
-  /* Design note #491: the landing zone for that button's scroll.
-     `actionBar` is `position: sticky; top: 0`, so `scrollIntoView` with
-     `block: "start"` aligns the target's top edge with the VIEWPORT's top --
-     which is underneath the bar, hiding the panel heading the player
-     scrolled down to read. `scroll-margin-top` is the property that exists
-     for exactly this, and the browser applies it during the smooth scroll
-     rather than needing the offset computed at the call site.
-
-     SIZED FROM THE CONDENSED BAR, which is the only state this scroll can be
-     triggered from (the button renders only when condensed): 3px + 3px of
-     `actionBarCondensed` padding around a button of 9px + 9px padding, a
-     15px `FONT_SIZE.strong` line and a 1px border -- about 44px. 64px clears
-     that and leaves the heading a visible gap below the bar rather than
-     tucked against it.
-
-     A CONSTANT RATHER THAN A MEASUREMENT, and the trade is worth naming: an
-     exact read would need the bar's height threaded from a component that
-     owns neither this element nor that ref. The failure mode of being wrong
-     here is cosmetic and one-directional -- too much clearance shows some
-     empty space above the panel, too little would hide its title -- so the
-     number errs high. */
-  trainPurchaseScrollAnchor: { scrollMarginTop: "64px" },
   actionBarDivider: {
     width: "1px",
     alignSelf: "stretch",
@@ -1134,6 +1097,56 @@ export const styles: Record<string, React.CSSProperties> = {
      line with the smallest type this bar uses rather than the control size.
      `wrap` so four trains on a narrow window become two short lines instead
      of overflowing the panel. */
+  /* ==================================================================
+   *  DESIGN NOTE 518: THE SUB-PHASE TRAIL
+   * ==================================================================
+   *
+   * Connected boxes rather than separated pills, which is what makes it read
+   * as a SEQUENCE rather than as a set of tags. The segments share edges --
+   * `marginLeft: -1px` collapses the doubled border between neighbours -- so
+   * the trail is one object with divisions rather than six objects in a row.
+   * That is the same construction the Par ladder on the stock cards uses,
+   * and for the same reason: both describe positions along one track.
+   *
+   * `flexWrap` because six steps at the era's full length can outrun a
+   * narrow window, and a wrapped trail still reads in order where a clipped
+   * one loses its tail. */
+  subPhaseTrail: {
+    display: "inline-flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    marginLeft: "10px",
+    borderRadius: "6px",
+  },
+  /* THE DEFAULT IS THE MUTED ONE. Five of the six steps are inactive at any
+     moment, so the quiet treatment is the base and emphasis is what gets
+     added -- rather than styling five exceptions around one norm. */
+  subPhaseStep: {
+    padding: "2px 8px",
+    marginLeft: "-1px",
+    border: "1px solid #2f3542",
+    backgroundColor: "#191d27",
+    color: "#6f7480",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.03em",
+    whiteSpace: "nowrap",
+  },
+  /* Past steps sit between done and pending: still dim, but not as faint as
+     what has not happened, so the trail reads left-to-right as travelled,
+     here, remaining. */
+  subPhaseStepDone: { color: "#8a90a0", backgroundColor: "#1c212c" },
+  /* The one the player is on. Lifted on all three channels -- fill, ink and
+     border -- because a single channel is not enough to win a glance across
+     six adjacent boxes, which is the whole job of this element. */
+  subPhaseStepCurrent: {
+    backgroundColor: "#1d3a55",
+    color: "#9ec5ff",
+    borderColor: "#38bdf8",
+    position: "relative",
+    zIndex: 1,
+  },
   condensedTrainRow: {
     display: "flex",
     flexDirection: "row",
@@ -1214,6 +1227,24 @@ export const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
     padding: "0 2px",
   },
+  /* Design note #509a: the treasury transition under Withhold, built from
+     the same vocabulary as `MarketMoveLine` -- herald, from-value, arrow,
+     to-value -- so a player reads the two consequences of a withhold as one
+     pair of before/after facts rather than as a sentence and a diagram. */
+  treasuryMove: {
+    display: "inline-flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    marginTop: "2px",
+  },
+  /* The departure is muted and the destination is not: a withhold always
+     RAISES the treasury, so the figure that matters is the one after. */
+  treasuryFrom: { color: "#9aa0ac" },
+  treasuryTo: { color: "#7ee0a1", fontWeight: 800 },
   dividendMoveArrowUp: { color: "#4ade80" },
   dividendMoveArrowDown: { color: "#f87171" },
   /* Design note #489: a move that goes nowhere is neither a gain nor a loss.

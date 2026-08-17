@@ -80,6 +80,10 @@ export interface RadialTileSelectorProps {
   /** The canvas the offset is relative to. The ring reads its live rect to
    *  turn that offset back into a screen position. */
   canvasEl: HTMLElement | null;
+  /** Design note #506: the central hex's centre-to-corner radius AS DRAWN,
+   *  through the board's live zoom. Sizes the candidates and sets the ring's
+   *  clearance. `null` falls back to the pre-#506 fixed constants. */
+  hexRadiusPx?: number | null;
   hexLabel: string;
   /** Already filtered to what may be laid here. */
   candidates: readonly LegalTilePlacement[];
@@ -182,7 +186,67 @@ export interface RadialTileSelectorProps {
  * the thumbnail, so the ring simply opens wider to keep the same spacing.
  * That is the whole reason this is a one-line change -- the geometry was
  * already parameterised on it. */
-const THUMB = 54;
+/* ==================================================================
+ *  DESIGN NOTE 506: THE RING WAS MEASURED IN THE WRONG UNIT
+ * ==================================================================
+ *
+ * REPORTED: the candidate tiles are too small and overlap the central hex
+ * they are meant to replace.
+ *
+ * Both symptoms are one cause, and this file's own header already named it
+ * as a known limitation: "STILL NOT FOLLOWED: pan and zoom of the board
+ * itself." The ring is positioned and sized in fixed CSS pixels; the hex it
+ * surrounds is drawn at `hexSize * zoom`. So every constant here was calibrated
+ * against a hex of one particular on-screen size, and is wrong by exactly the
+ * zoom factor at any other.
+ *
+ * THE ARITHMETIC. `DEFAULT_HEX_SIZE` is 42 -- a centre-to-corner radius, so a
+ * pointy-top hex 84px tall at zoom 1. `MIN_RADIUS` was 76, which clears a
+ * 42px radius by 34px and is comfortable. At zoom 2 the hex has an 84px
+ * radius and `MIN_RADIUS` is still 76 -- so the candidates are positioned
+ * INSIDE the hex they are replacing. The overlap is not a tuning problem, it
+ * is a unit error, and it gets worse the further a player zooms in to make a
+ * dense area readable, which is exactly when they open this menu.
+ *
+ * The same error shrinks the tiles: 54px against an 84px hex is 64%, and
+ * against a 168px hex it is 32%.
+ *
+ * SO BOTH ARE DERIVED FROM THE HEX AS DRAWN. `hexRadiusPx` is reported by
+ * the renderer through the live transform (design note #506 in
+ * `HexGridRenderer`), and the two functions below take it. Nothing here is
+ * tuned against a screenshot any more.
+ *
+ * `null` KEEPS THE OLD CONSTANTS, so a caller that has not got a radius --
+ * or a chain of props that has not been updated -- degrades to exactly the
+ * previous behaviour rather than collapsing the ring to zero.
+ */
+
+/** The candidate tile, as a fraction of the central hex's full height.
+ *
+ *  The requirement is "at least 60%", and this is a FLOOR rather than a
+ *  target: `candidateThumbSize` takes the larger of this and the absolute
+ *  pixel floor below, so zooming out cannot shrink a tile past legibility
+ *  and zooming in cannot let it fall below the ratio. */
+export const CANDIDATE_HEX_FRACTION = 0.6;
+
+/* Design note #471 raised this from 38 to 54 for readability in dense
+   areas, and design note #506 raises it again -- the report that motivated
+   the zoom fix also said the tiles were simply too small. 64px is the
+   absolute floor for a zoomed-OUT board, where the ratio rule would
+   otherwise produce something smaller than #471 already rejected. */
+const THUMB_FLOOR = 64;
+
+/** The size to draw each candidate at, for a central hex of `hexRadiusPx`.
+ *
+ *  A pointy-top hex's height is twice its centre-to-corner radius, so the
+ *  hex's "size" as a player perceives it is `2 * hexRadiusPx` -- and the
+ *  thumbnail is square with its own hex inscribed, so the two are directly
+ *  comparable. */
+export function candidateThumbSize(hexRadiusPx?: number | null): number {
+  const radius = Number(hexRadiusPx);
+  if (!Number.isFinite(radius) || radius <= 0) return THUMB_FLOOR;
+  return Math.max(THUMB_FLOOR, Math.round(2 * radius * CANDIDATE_HEX_FRACTION));
+}
 
 /* ===================================================================
  *  DESIGN NOTE 174: THE RADIUS IS SOLVED FOR, NOT PICKED
@@ -212,24 +276,65 @@ const THUMB = 54;
  * for two items sitting opposite each other).
  */
 
-/** Clear of the hex and of the action buttons above it. */
+/** The fallback when no hex radius is known -- the pre-#506 constant, so an
+ *  un-updated caller sees exactly the old ring. */
 const MIN_RADIUS = 76;
-/** Thumbnail width plus the smallest gap that still reads as a gap. */
-const NEEDED_SPACING = THUMB + 14;
+/** The smallest gap between a candidate and the hex that still reads as a
+ *  gap rather than as a touch. Also the gutter between two candidates. */
+const RING_GAP = 12;
 
-/** The radius this many candidates need in order not to touch. */
-export function ringRadiusFor(count: number): number {
-  if (count <= 2) return MIN_RADIUS;
-  const required = NEEDED_SPACING / (2 * Math.sin(Math.PI / count));
-  return Math.max(MIN_RADIUS, Math.ceil(required));
+/* ==================================================================
+ *  DESIGN NOTE 506a: A HALO, SOLVED RATHER THAN NUDGED
+ * ==================================================================
+ *
+ * The requirement is "absolutely zero overlap with the hex beneath". That is
+ * a guarantee, so it is computed rather than tuned:
+ *
+ *     ringRadius  >=  hexRadiusPx  +  thumb/2  +  RING_GAP
+ *
+ * BOTH TERMS ARE THE CONSERVATIVE EXTENT, deliberately. A pointy-top hex's
+ * distance from centre to edge varies with direction, between its apothem
+ * (0.866 R) at an edge midpoint and its full R at a vertex. Using R for the
+ * central hex AND thumb/2 for the candidate assumes both are pointing their
+ * vertices straight at each other, which is the worst case and is only
+ * actually true at two of the twelve positions. The cost is a few pixels of
+ * extra air at the other ten; the benefit is that the guarantee holds
+ * without anyone having to reason about relative hex orientation, which is
+ * the sort of reasoning that produces a bug at exactly one candidate count.
+ *
+ * IT IS A `Math.max` WITH THE SPACING TERM, not a replacement for it. Design
+ * note #174's `2R sin(pi/N)` keeps candidates from touching EACH OTHER, and
+ * this keeps them off the HEX. They bind in different regimes -- the
+ * clearance rule at low counts and high zoom, the spacing rule at high
+ * counts -- so both are required and the larger wins.
+ */
+
+/** The radius `count` candidates need: clear of each other, and clear of a
+ *  central hex of `hexRadiusPx`. */
+export function ringRadiusFor(count: number, hexRadiusPx?: number | null): number {
+  const thumb = candidateThumbSize(hexRadiusPx);
+  const radius = Number(hexRadiusPx);
+  /* The halo floor. Falls back to the old constant when the hex's drawn size
+     is unknown, which is the one case where no guarantee can be made. */
+  const clearance =
+    Number.isFinite(radius) && radius > 0
+      ? Math.ceil(radius + thumb / 2 + RING_GAP)
+      : MIN_RADIUS;
+  if (count <= 2) return clearance;
+  const spacing = (thumb + RING_GAP + 2) / (2 * Math.sin(Math.PI / count));
+  return Math.max(clearance, Math.ceil(spacing));
 }
 
 /** Polar position of candidate `index` of `count`, relative to the anchor.
  *
  *  Starts at 12 o'clock and runs clockwise, so the reading order matches
  *  the order the candidates were listed in. */
-export function ringPosition(index: number, count: number): { x: number; y: number } {
-  const radius = ringRadiusFor(count);
+export function ringPosition(
+  index: number,
+  count: number,
+  hexRadiusPx?: number | null,
+): { x: number; y: number } {
+  const radius = ringRadiusFor(count, hexRadiusPx);
   const angle = (index / Math.max(1, count)) * Math.PI * 2 - Math.PI / 2;
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
@@ -264,9 +369,15 @@ export interface RadialConfirmRingProps {
   anchorOffsetY: number;
   canvasEl: HTMLElement | null;
   /** Accessible name for the dialog, and the bold text in the caption pill. */
-  title: string;
+  /** Design note #512: `null` renders no title line. */
+  title: string | null;
+  /** Design note #512: the accessible name when `title` is null, so removing
+   *  the visible caption does not leave the dialog unnamed. */
+  hexLabelForAria: string;
   /** The one-line explanation under the title. */
-  hint: string;
+  /** Design note #512: `null` renders no hint line. With both null and no
+   *  note, the caption element itself is not rendered. */
+  hint: string | null;
   /* ==================================================================
    *  DESIGN NOTE 290: A SLOT WITH A JOB, WHICH `tag` NEVER HAD
    * ==================================================================
@@ -337,6 +448,7 @@ export function RadialConfirmRing({
   anchorOffsetY,
   canvasEl,
   title,
+  hexLabelForAria,
   hint,
   note,
   showConfirm,
@@ -403,6 +515,14 @@ export function RadialConfirmRing({
     return () => window.removeEventListener("keydown", onKey);
   }, [onDismiss]);
 
+  /* Design note #512: the caption exists only when it has something to say.
+     `null` for both lines AND no note means the element is not rendered at
+     all -- an empty positioned div still occupies its slot above the hex and
+     still paints, so suppressing the TEXT alone would leave the clutter it
+     was asked to remove. */
+  const caption =
+    title === null && hint === null && !note ? null : { title, hint };
+
   return (
     /* ===================================================================
         DESIGN NOTE 168: THE BACKDROP MUST NOT SWALLOW BOARD CLICKS
@@ -440,7 +560,13 @@ export function RadialConfirmRing({
           visibility: screen ? "visible" : "hidden",
         }}
         role="dialog"
-        aria-label={title}
+        /* Design note #512: the hex name leaves the VISIBLE caption but not
+           the accessible name. A dialog needs one, and "which hex is this
+           picker for" is exactly the question a screen-reader user cannot
+           answer by glancing at the ring's position on the board -- which is
+           how a sighted player answers it, and why the visible copy is
+           redundant for them and not for everyone. */
+        aria-label={title ?? hexLabelForAria}
       >
         {/* ---- Floating action buttons, above the hex ----
              Design note #174: the offset TRACKS THE RADIUS. A fixed -158px
@@ -479,12 +605,46 @@ export function RadialConfirmRing({
 
         {/* ---- The caption. Sits under the action buttons so the two read
                 as one floating control group attached to this hex. */}
+        {/* ==================================================================
+             DESIGN NOTE 512: TWO CAPTIONS, ONE OF THEM SAYING NOTHING
+            ==================================================================
+
+             REPORTED: the selector produces two cluttering tooltips -- one on
+             the initial click ("Pittsburgh (H10), 1 option") and one during
+             rotation ("Pittsburgh (H10) Click the tile to rotate (2 legal
+             facings)"). Remove the first entirely; truncate the second to
+             exactly "Click the tile to rotate".
+
+             THE CHOOSING CAPTION TOLD THE PLAYER WHAT THEY HAD JUST DONE.
+             They clicked that hex, so its name and coordinates are the one
+             thing they cannot be unsure of, and "N options" counts tiles
+             that are visibly arranged in a ring around the caption. Design
+             note #266 deleted the Auto-Route success message for exactly
+             this reason -- "every fact in it is now on screen as a fact
+             rather than as a sentence about one" -- and this is the same
+             sentence about the same kind of already-visible fact.
+
+             THE ROTATION CAPTION KEEPS ONLY ITS INSTRUCTION. The hex name
+             is redundant for the same reason; the facing count was design
+             note #173's answer to a real problem (a tile with one legal
+             facing makes "click to rotate" a lie) but it solved it by making
+             the player read a number to find out whether a gesture would do
+             anything. `title` and `hint` are now suppressed while choosing
+             and the hint is a fixed string while previewing, so the caption
+             carries an instruction or nothing at all.
+
+             THE ELEMENT GOES WITH THE TEXT, not just its content. An empty
+             positioned div still occupies its slot above the hex and still
+             paints its background; rendering nothing is what actually
+             removes the clutter. */}
+        {caption !== null && (
         <div style={{ ...styles.caption, top: `${-radius}px` }}>
-          <span style={styles.captionHex}>{title}</span>
-          <span style={styles.captionHint}>{hint}</span>
+          {caption.title !== null && <span style={styles.captionHex}>{caption.title}</span>}
+          {caption.hint !== null && <span style={styles.captionHint}>{caption.hint}</span>}
           {/* Design note #290: the migration line, when there is one. */}
           {note && <span style={styles.captionNote}>{note}</span>}
         </div>
+        )}
 
         {children}
       </div>
@@ -496,6 +656,7 @@ export function RadialTileSelector({
   anchorOffsetX,
   anchorOffsetY,
   canvasEl,
+  hexRadiusPx = null,
   hexLabel,
   candidates,
   selectedTileId,
@@ -524,27 +685,37 @@ export function RadialTileSelector({
     tiles.push({ tileId: placement.tile_id, firstOrientation: placement.orientation });
   }
 
-  // Design note #174: while previewing, the ring is hidden, so the minimum
-  // radius is enough to clear the hex.
-  const radius = previewing ? MIN_RADIUS : ringRadiusFor(tiles.length);
+  /* Design note #174: while previewing, the ring is hidden, so only the
+     clearance matters -- but it is still the HEX'S clearance (design note
+     #506), not a fixed constant, or the caption and action buttons sit on
+     top of a zoomed-in hex exactly as the candidates used to. */
+  const thumb = candidateThumbSize(hexRadiusPx);
+  const radius = previewing
+    ? ringRadiusFor(0, hexRadiusPx)
+    : ringRadiusFor(tiles.length, hexRadiusPx);
 
   return (
     <RadialConfirmRing
       anchorOffsetX={anchorOffsetX}
       anchorOffsetY={anchorOffsetY}
       canvasEl={canvasEl}
-      title={hexLabel}
-      hint={
-        previewing
-          ? legalRotationCount === 1
-            ? "Only one legal facing here"
-            : legalRotationCount !== undefined && legalRotationCount > 1
-              ? `Click the tile to rotate (${legalRotationCount} legal facings)`
-              : "Click the tile on the board to rotate"
-          : tiles.length === 0
-            ? "No legal upgrade here"
-            : `${tiles.length} option${tiles.length === 1 ? "" : "s"}`
-      }
+      /* Design note #512: no visible title in either stage. The hex name and
+         coordinates answer "which hex did I just click", which is the one
+         thing the player is certain of -- the ring is drawn on it. */
+      title={null}
+      hexLabelForAria={hexLabel}
+      /* Design note #512: exactly one string, and only while previewing.
+         The choosing stage says nothing at all -- "N options" counts tiles
+         that are arranged in a visible ring around the caption counting
+         them.
+
+         THE FACING COUNT IS GONE from the preview string too. Design note
+         #173 added it to stop "click to rotate" lying on a single-facing
+         tile, which was a real problem solved by making the player read a
+         number to predict a gesture. The tile is on the board and clicking
+         it either turns or does not; the count in parentheses was never the
+         thing that told them. */
+      hint={previewing ? "Click the tile to rotate" : null}
       // Design note #271b: only while a tile is actually being previewed --
       // before that there is no destination to describe.
       note={previewing ? (tokenNote ?? undefined) : undefined}
@@ -574,7 +745,7 @@ export function RadialTileSelector({
                 #2: it would cover the tile the player is now judging. ---- */}
         {!previewing &&
           tiles.map((tile, index) => {
-            const position = ringPosition(index, tiles.length);
+            const position = ringPosition(index, tiles.length, hexRadiusPx);
             /* Design note #471: the catalog lookup went with the tooltip.
                It existed only to name the tier in that string; the tier is
                visible as the thumbnail's own colour. */
@@ -599,7 +770,7 @@ export function RadialTileSelector({
                 <TilePreviewThumbnail
                   tileId={tile.tileId}
                   orientation={tile.firstOrientation}
-                  size={THUMB}
+                  size={thumb}
                   // Design note #488b: where this candidate would put the
                   // tokens already standing on the hex.
                   stationMarkers={stationMarkersFor?.(tile.tileId)}
@@ -666,7 +837,11 @@ export function RadialTokenConfirm({
       anchorOffsetX={anchorOffsetX}
       anchorOffsetY={anchorOffsetY}
       canvasEl={canvasEl}
+      /* Design note #512 is scoped to the TILE picker. The token ring keeps
+         its caption: it names a corporation and a price the player has not
+         seen elsewhere, which is the opposite of the tile ring's case. */
       title={hexLabel}
+      hexLabelForAria={hexLabel}
       hint={`Place ${ticker}'s station token — $${cost}`}
       showConfirm
       canConfirm={canConfirm}

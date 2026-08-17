@@ -463,6 +463,32 @@ export interface HexGridRendererProps {
      *  to the cursor. */
     centroidX: number;
     centroidY: number;
+    /* ==================================================================
+     *  DESIGN NOTE 516: THE NODE'S OWN POINT, NOT THE HEX'S
+     * ==================================================================
+     *
+     * REPORTED: the placement ring and preview token snap to the hex
+     * centroid, which fails on dual-city and OO tiles where the city nodes
+     * are offset from it.
+     *
+     * The centroid is the right anchor for a TILE picker -- that ring
+     * surrounds the whole hex, because the whole hex is being replaced. It
+     * is the wrong anchor for a STATION confirmation, which is about one
+     * slot on that hex, and design note #453 had already made the click
+     * resolve WHICH slot (`cityIndex`) without giving the caller anywhere
+     * to draw it. So the ring knew the answer and still floated at the
+     * middle.
+     *
+     * `nodeX`/`nodeY` are that slot's centre, in the same canvas-CSS space
+     * and through the same transform as `centroidX`/`centroidY`, so a
+     * caller swaps one pair for the other with no further maths.
+     *
+     * THEY FALL BACK TO THE CENTROID rather than being nullable. A hex with
+     * no resolvable city node has exactly one sensible anchor and it is the
+     * centre -- making the caller handle `null` would push a decision
+     * outward that has only one correct answer. */
+    nodeX: number;
+    nodeY: number;
     q: number;
     r: number;
     /** The HUMAN name -- "New York (G19)". For messages, never for lookups
@@ -2818,15 +2844,46 @@ export function HexGridRenderer({
           // 0..1..0 over the cycle, so the ring breathes rather than
           // stepping. `pulsePhase` is a plain 0..1 ramp from the loop.
           const swell = Math.sin(pulsePhase * Math.PI * 2) * 0.5 + 0.5;
+          /* ==================================================================
+           *  DESIGN NOTE 515: THE RING FRAMES THE SLOT, NOT THE HEX
+           * ==================================================================
+           *
+           * REPORTED: the pulse has too large an orbit and radiates outward
+           * rather than marking the node.
+           *
+           * Every term here was a fraction of `hexSize`, which is the wrong
+           * unit for a mark on a CITY SLOT. On a plain single-city hex the
+           * token is `hexSize * 0.22` and a 0.24-0.30 ring frames it; on a
+           * laid multi-city tile the token docks at `tileCityTokenRadius`,
+           * which is roughly half that -- so the same ring drew a halo at
+           * twice the radius of the thing it was pointing at, on precisely
+           * the tiles where saying WHICH node is the whole job.
+           *
+           * So the radius comes from the token that will land there, and the
+           * pulse is a tight band around it rather than a wide sweep. The
+           * blur shrinks with it: a shadow reaching 0.40 of a hex is the
+           * "radiating wildly" the report describes, and most of it fell
+           * outside any plausible reading of "this slot".
+           *
+           * `tileCityTokenRadius` is the same helper the real token docks
+           * against (design note #151), so the ring cannot frame a size the
+           * token will not be. */
+          const laidHere = mapGrid.tiles.find((tile) => tile.q === hex.q && tile.r === hex.r);
+          const slotRadius =
+            (laidHere ? tileCityTokenRadius(laidHere.tile_id, hexSize) : undefined) ??
+            hexSize * 0.22;
+          // A thin band just outside the token: enough to read as a frame,
+          // not enough to read as an orbit.
+          const ringRadius = slotRadius * (1.28 + swell * 0.14);
           for (const node of cityNodePoints(mapGrid, hex.q, hex.r, hexSize)) {
             ctx.save();
             ctx.globalAlpha = 0.45 + swell * 0.5;
             ctx.strokeStyle = glow;
             ctx.shadowColor = glow;
-            ctx.shadowBlur = hexSize * (0.18 + swell * 0.22);
-            ctx.lineWidth = Math.max(1.5, hexSize * 0.05);
+            ctx.shadowBlur = slotRadius * (0.35 + swell * 0.35);
+            ctx.lineWidth = Math.max(1.5, slotRadius * 0.22);
             ctx.beginPath();
-            ctx.arc(node.x, node.y, hexSize * (0.24 + swell * 0.06), 0, Math.PI * 2);
+            ctx.arc(node.x, node.y, ringRadius, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
           }
@@ -3395,6 +3452,12 @@ export function HexGridRenderer({
       const centre = axialToPixel(q, r, hexSize);
       const centroidX = centre.x * view.zoom + view.panX;
       const centroidY = centre.y * view.zoom + view.panY;
+      /* Design note #506: the hex's on-screen radius, reported alongside its
+         on-screen centre and for the same reason -- `hexSize` is the board's
+         unit and says nothing about how big the hex actually looks. The
+         radial ring has to clear this hex, and a clearance computed from the
+         unscaled constant is wrong by exactly the zoom factor. */
+      const hexRadiusPx = hexSize * view.zoom;
 
       const eligibility = evaluateHexForTileLaying(q, r, mapGrid);
       if (eligibility.reason === "not-a-hex") {
@@ -3419,6 +3482,7 @@ export function HexGridRenderer({
           clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
         });
         return;
       }
@@ -3443,6 +3507,16 @@ export function HexGridRenderer({
          and zoom without its own correction. */
       const cityIndex = cityIndexAtPoint(mapGrid, q, r, contentX, contentY, hexSize);
 
+      /* Design note #516: the chosen slot's centre, put through the same
+         transform as the centroid above. `cityNodePoints` is the SAME
+         geometry `cityIndexAtPoint` just resolved the click against and the
+         same the pulse ring draws on, so the confirmation lands exactly
+         where the glow promised and where the token will sit. */
+      const nodes = cityNodePoints(mapGrid, q, r, hexSize);
+      const chosenNode = cityIndex === null ? undefined : nodes[cityIndex];
+      const nodeX = chosenNode ? chosenNode.x * view.zoom + view.panX : centroidX;
+      const nodeY = chosenNode ? chosenNode.y * view.zoom + view.panY : centroidY;
+
       onHexClick?.({
         q,
         r,
@@ -3454,6 +3528,14 @@ export function HexGridRenderer({
         clientY: event.clientY,
         centroidX,
         centroidY,
+        nodeX,
+        nodeY,
+        /* Design note #506: `hexRadiusPx` is deliberately NOT reported here.
+           `onHexClick` is the raw click notification -- route points, token
+           placement, the sandbox lay -- and none of its consumers position a
+           surface that has to clear the hex. Only the tile picker does, and
+           it reads `onHexClickQuery`. Adding a field to both would widen a
+           callback for a reader that does not exist. */
       });
 
       // Design note #120: this guard used to be a single condition covering
@@ -3597,6 +3679,7 @@ export function HexGridRenderer({
           clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
           // Non-null: `"not-a-hex"` already returned above, and it is the
           // only reason with no message.
           reason: eligibility.reason!,
@@ -3650,6 +3733,7 @@ export function HexGridRenderer({
           clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
           placements,
         });
         return;
@@ -3665,6 +3749,7 @@ export function HexGridRenderer({
         clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
       });
 
       queryClient
@@ -3697,6 +3782,7 @@ export function HexGridRenderer({
             clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
             response: response as LegalTilePlacementsResponse,
           });
         })
@@ -3712,6 +3798,7 @@ export function HexGridRenderer({
             clientY: event.clientY,
           centroidX,
           centroidY,
+        hexRadiusPx,
             message,
           });
         });
@@ -3828,12 +3915,45 @@ export function HexGridRenderer({
      the picker opens. The guard in `handlePointerMove` only stops the next
      one from being set, and a click does not move the pointer -- so without
      this the stale tooltip would sit under the ring until the player
-     happened to move the mouse. */
+     happened to move the mouse.
+
+     ==================================================================
+      DESIGN NOTE 505: THE THIRD TOOLTIP -- THE ONE NOT YET SHOWING
+     ==================================================================
+
+     REPORTED: clicking a hex to open the tile selector still pops a dense
+     tooltip over the active hex, blocking the radial UI.
+
+     Design note #269 built exactly the right two guards and missed a third
+     state. It reasoned about the tooltip as either ALREADY SHOWING (cleared
+     by this effect) or ABOUT TO BE SET BY A MOUSE MOVE (refused by
+     `handlePointerMove`). There is a state between them: ARMED BUT NOT YET
+     FIRED.
+
+     Design note #365 gives the tooltip a two-second dwell, so a hover
+     schedules `tooltipTimerRef` and returns. Click at 1.9 seconds and the
+     ring opens, this effect clears a `hoveredCoordLabel` that is still
+     `null`, and 100ms later the timer fires and sets it -- on top of the
+     open ring, which is precisely the report.
+
+     It survived #269 because it is TIMING-DEPENDENT and both natural ways
+     to test it pass: click after the tooltip has appeared and the clear
+     works; click before the dwell elapses and nothing was ever armed. Only
+     the narrow window in between reproduces it, and the window is exactly as
+     wide as a player's hesitation before committing to a hex -- which is to
+     say, the most common way this hex gets clicked.
+
+     `cancelTooltipTimer()` closes it at the cause. The render gate below is
+     the belt to this braces: it makes "no tooltip while a picker owns the
+     hex" a property of what is DRAWN rather than a property of three state
+     transitions all being handled, so a fourth path to setting the label
+     cannot reintroduce this. */
   useEffect(() => {
     if (!suppressHoverTooltip) return;
+    cancelTooltipTimer();
     setHoveredCoordLabel((prev) => (prev === null ? prev : null));
     setHoveredOffboardHex((prev) => (prev === null ? prev : null));
-  }, [suppressHoverTooltip]);
+  }, [suppressHoverTooltip, cancelTooltipTimer]);
 
   /** The pointer has left the canvas entirely -- clears the off-board hover
    *  tooltip (design note #15/item 4) in addition to `handlePointerUp`'s own
@@ -3953,7 +4073,12 @@ export function HexGridRenderer({
           the canvas's own panel) flip which corner of the tooltip sits at
           the cursor, using `right`/`bottom` (viewport-anchored, same as
           `left`/`top`) instead of just always growing down-right. */}
-      {hoveredCoordLabel && (
+      {/* Design note #505: gated at the RENDER, not only at the three places
+          that set it. "A picker owns this hex, so nothing else annotates it"
+          is then true by construction -- a future fourth path to setting the
+          label cannot reintroduce the pop-over-the-ring bug, because there is
+          nowhere left for it to appear. */}
+      {hoveredCoordLabel && !suppressHoverTooltip && (
         <div
           style={{
             ...HOVER_TOOLTIP_STYLE,

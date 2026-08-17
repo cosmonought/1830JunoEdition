@@ -160,6 +160,27 @@ export interface TrainPurchasePanelProps {
    *  with. A test that cannot reach a surface cannot check it, and this
    *  section carries the train-limit gate. */
   defaultCorporateOpen?: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 508: THE PANEL TRAVELS WITH THE BAR NOW
+   * ==================================================================
+   *
+   * REPORTED: the train purchasing interface should condense and travel
+   * with the collapsed/sticky Action Panel.
+   *
+   * This panel is mounted INSIDE `ContextualActionBar` as of #508, which is
+   * `position: sticky` -- so it follows the player down the page instead of
+   * being scrolled away from. That is also what retires the "Buy Trains"
+   * jump button design note #491 added: a control whose only job was to
+   * scroll back to a panel that no longer goes anywhere.
+   *
+   * `condensed` is what makes that affordable. A sticky element costs the
+   * board its full height for the whole scroll (design note #298), so the
+   * pinned form drops what is PROSE and keeps what is CONTROL: the tier, the
+   * price, the quantity and the Buy button. The corporate accordion needs no
+   * special handling -- it is already collapsed by default (design note #0)
+   * and its header stays reachable, so a trade is one click away in either
+   * state rather than being hidden by the collapse. */
+  condensed?: boolean;
 }
 
 export function TrainPurchasePanel({
@@ -173,6 +194,7 @@ export function TrainPurchasePanel({
   onProposeTrade,
   labelForAddress,
   defaultCorporateOpen = false,
+  condensed = false,
 }: TrainPurchasePanelProps) {
   /* ---- Bank section state ---- */
   const [quantityText, setQuantityText] = useState("1");
@@ -453,7 +475,7 @@ export function TrainPurchasePanel({
     canTrade && !!selectedSeller && !priceProblem;
 
   return (
-    <div style={styles.root}>
+    <div style={{ ...styles.root, ...(condensed ? styles.rootCondensed : {}) }}>
       {/* ================= BANK ================= */}
       <section style={styles.section}>
         <div style={styles.sectionHeader}>
@@ -681,11 +703,18 @@ export function TrainPurchasePanel({
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}
             {/* Design note #1: stated, because it is the question a player
-                asks the moment they see a quantity field. */}
-            <p style={styles.note}>
-              One tier per purchase. The depot sells cheapest-first, so a 3-train and a 4-train are
-              two separate actions with a phase change between them.
-            </p>
+                asks the moment they see a quantity field.
+
+                Design note #508: except when pinned. This is the longest
+                piece of prose in the panel and it explains a rule rather
+                than a value -- read once, not on every scroll -- so it is
+                the first thing the condensed form gives back to the board. */}
+            {!condensed && (
+              <p style={styles.note}>
+                One tier per purchase. The depot sells cheapest-first, so a 3-train and a 4-train
+                are two separate actions with a phase change between them.
+              </p>
+            )}
           </>
         ) : (
           <p style={styles.empty}>{bankProblem}</p>
@@ -1006,6 +1035,18 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#12141b",
     border: "1px solid #3a3f4b",
     borderRadius: "10px",
+  },
+  /* Design note #508: the pinned form. Tighter on every axis and without
+     the standalone card treatment -- inside the action bar it is a SECTION
+     of that panel rather than a panel of its own, and a bordered box inside
+     a bordered box reads as two things when it is one. */
+  rootCondensed: {
+    gap: "8px",
+    padding: "8px 10px",
+    backgroundColor: "transparent",
+    border: "none",
+    borderTop: "1px solid #2b3242",
+    borderRadius: 0,
   },
   section: { display: "flex", flexDirection: "column", gap: "10px" },
   sectionHeader: { display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" },

@@ -33,13 +33,15 @@
 import React from "react";
 
 import { TrainChips } from "../components/TrainBadges";
-import { StickyTickerLine } from "../components/TopTicker";
-import type { FeedItem } from "../utils/feed";
 import PrivatePowerPanel, {
   type PrivateAbility,
   type PrivateAbilityAction,
 } from "../components/PrivatePowerPanel";
 import { RoutePlannerPanel, AutoRouteButton } from "../components/RoutePlannerPanel";
+import TrainPurchasePanel, {
+  type TrainPurchaseCompany,
+  type TrainTradeProposal,
+} from "../components/TrainPurchasePanel";
 import type { TrainRouteDraft } from "../components/RoutePlannerPanel";
 import StationTokenRow from "../components/StationTokenRow";
 import {
@@ -84,6 +86,7 @@ import {
 import { CorporateLogo } from "../components/CorporateLogo";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { shouldCondenseSticky, stickyTopOffset } from "../utils/stickyCollapse";
+import type { DepotTier } from "../utils/gamePhase";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
@@ -381,6 +384,8 @@ export default function ContextualActionBar({
   tokenTargetMode,
   setTokenTargetMode,
   onSkipSubPhase,
+  orSequence = null,
+  trainPurchase = null,
   onOpenPrivateTrade,
   ownsAnyTrain,
   mustBuyTrain,
@@ -396,7 +401,6 @@ export default function ContextualActionBar({
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
-  onJumpToTrainPurchase,
   dividendRevenue,
   dividendRevenueIsThisTurn,
   dividendPerShare,
@@ -420,8 +424,6 @@ export default function ContextualActionBar({
   activeTab,
   onSelectTab,
   isMyTurn,
-  latestFeedItem = null,
-  onOpenActivityLog,
   phase,
 }: {
   roundType: RoundType | null;
@@ -527,11 +529,35 @@ export default function ContextualActionBar({
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
-  /** Design note #491: scroll the Buy Trains panels into view. Navigation
-   *  only -- it dispatches nothing and buys nothing. Optional, so a caller
-   *  with no such panel on screen simply omits it and the button does not
-   *  render rather than appearing and scrolling to nowhere. */
-  onJumpToTrainPurchase?: () => void;
+  /* Design note #510: `onJumpToTrainPurchase` is GONE with the button it
+     drove -- see the render site. */
+  /** Design note #517: which Operating Round this is, as the board counts
+   *  them -- `macro_round_number` and `sub_round_index`, rendered "3.2".
+   *
+   *  PASSED RATHER THAN DERIVED, because this bar has no game state: it
+   *  takes a `roundType` and a sub-phase and knows nothing about round
+   *  numbering. `null` before the first poll resolves, which keeps the bare
+   *  "Operating Round" wording rather than printing a placeholder pair. */
+  orSequence?: { cycle: number; index: number } | null;
+  /** Design note #508: everything `TrainPurchasePanel` needs, as one object.
+   *
+   *  ONE PROP RATHER THAN EIGHT, deliberately. These are not facts this bar
+   *  reasons about -- it neither reads nor derives any of them -- they are a
+   *  child's props passing through. Spreading them across the bar's own
+   *  interface would put eight train-shaped fields next to the round type
+   *  and the sub-phase, implying the bar has an opinion about the depot.
+   *
+   *  `null` OUTSIDE THE STEP, which renders nothing. */
+  trainPurchase?: {
+    depot: readonly DepotTier[];
+    buyer: TrainPurchaseCompany | null;
+    companies: readonly TrainPurchaseCompany[];
+    canAct: boolean;
+    blockedReason: string | null;
+    onBuyFromBank: (tier: string, quantity: number) => void;
+    onProposeTrade: (proposal: TrainTradeProposal) => void;
+    labelForAddress: (address: string) => string;
+  } | null;
   /** Design note #188: the acting corporation's last route revenue, and the
    *  per-10%-share split of it. */
   dividendRevenue: number;
@@ -594,11 +620,11 @@ export default function ContextualActionBar({
    *  JSX call site for where that `<style>` tag is injected) to this bar's
    *  own outer wrapper. */
   isMyTurn: boolean;
-  /** Design note #458: the newest activity-log line, kept visible while the
-   *  page scrolls. `null` renders nothing. */
-  latestFeedItem?: FeedItem | null;
-  /** Scrolls the player back to the full ticker. */
-  onOpenActivityLog?: () => void;
+  /* Design note #500: `latestFeedItem` and `onOpenActivityLog` are GONE.
+     They fed a one-line echo of `TopTicker`'s newest entry inside this
+     panel; the ticker itself is on the same screen. Removed rather than
+     left unread, because an unused prop is an invitation to render it
+     again. */
   /** Derived phase (`utils/gamePhase.ts`) for the far-right badge -- see
    *  design note #40 for why it moved here from the header. */
   phase?: GamePhase | null;
@@ -623,6 +649,12 @@ export default function ContextualActionBar({
       label: OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel,
       position: index + 1,
       total: steps.length,
+      /* Design note #518: the whole sequence, for the expanded breadcrumb.
+         The SAME `visibleSubPhases` result the position is measured against,
+         so the trail and the counter cannot disagree about how many steps
+         this era has -- which is exactly the two-numbers-for-one-step fault
+         the note above the round label records. */
+      steps,
     };
   }, [currentGlobalEra, privateCompanies, orSubPhase]);
 
@@ -714,6 +746,15 @@ export default function ContextualActionBar({
   });
   const declaredRevenue = declaration.revenue;
   const declaredPerShare = declaration.perShare;
+
+  /* Design note #509a: the two ends of the withhold, and the ink for the
+     herald beside them. `dividendPanel` sits on the panel's own dark
+     surface rather than on the corporation's livery, so the logo's text
+     FALLBACK takes the panel ink -- not `bestContrastTextColor`, which
+     answers a different question (what is legible ON the brand colour). */
+  const treasuryNow = activeCorporation?.treasury ?? 0;
+  const treasuryAfterWithhold = treasuryNow + declaredRevenue;
+  const corporationInk = "#e2e6ee";
 
   let contextualButtons: ActionBarButton[];
   if (roundType === "OperatingRound") {
@@ -1136,9 +1177,17 @@ export default function ContextualActionBar({
 
           `null` keeps the honest wording: before the first `GetGameState`
           resolves there genuinely is no round yet. */}
+      {/* Design note #517: the round's own number. "Operating Round" alone
+          named the KIND of round in a game that runs several of them back to
+          back -- so a player checking which one they were in, or reading a
+          log line about "OR 3.2", had nothing on the panel to match it
+          against. `cycle.index` is the board's own notation and the same
+          pair `ContextualSubPanel` already prints. */}
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
-          ? "Operating Round"
+          ? orSequence
+            ? `Operating Round ${orSequence.cycle}.${orSequence.index}`
+            : "Operating Round"
           : roundType === "StockRound"
             ? "Stock Round"
             : roundType === "WaterfallAuction"
@@ -1158,17 +1207,79 @@ export default function ContextualActionBar({
           nothing, and it is now the ONLY thing naming the current step in
           the header, so dropping it when pinned would leave a player who
           scrolled unable to tell Lay Track from Station Tokens. */}
+      {/* ==================================================================
+           DESIGN NOTE 518: THE TRAIL, WHEN THERE IS ROOM FOR IT
+          ==================================================================
+
+           REPORTED: the expanded header shows the current sub-phase as a
+           bare string. Replace it with a horizontal list of every OR
+           sub-phase, styled as connected boxes, with the active one
+           emphasised and the rest dimmed. Keep the compact string when the
+           panel collapses.
+
+           This restores what design note #481 removed, and the reason it is
+           not a reversal is the CONDITION. #481 replaced a full stepper with
+           an inline phrase because the strip cost a row of the panel in
+           every state including the pinned one, and #298's rule is that a
+           pinned bar must earn every row. That argument is about the PINNED
+           form and was applied to both.
+
+           So the two forms split rather than one replacing the other. The
+           expanded panel has the room and shows the whole trail -- which
+           answers "what is still to come", a question a bare label cannot;
+           the pinned form keeps #481's phrase, which answers "where am I"
+           in three words. Neither state gains a row it was not already
+           spending.
+
+           THE COUNTER GOES WITH THE TRAIL. "4/6" beside six visible boxes
+           is the redundancy the round label's own note objects to -- two
+           renderings of one position, inches apart. The compact form keeps
+           it, because there it is the only thing carrying the position. */}
       {roundType === "OperatingRound" && orSubPhaseProgress && (
-        <span
-          style={styles.actionBarSubPhaseInline}
-          title={`Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} in this corporation's turn.`}
-        >
-          {orSubPhaseProgress.label}
-          <span style={styles.actionBarSubPhaseCount}>
-            {" "}
-            {orSubPhaseProgress.position}/{orSubPhaseProgress.total}
+        condensed ? (
+          <span
+            style={styles.actionBarSubPhaseInline}
+            title={`Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} in this corporation's turn.`}
+          >
+            {orSubPhaseProgress.label}
+            <span style={styles.actionBarSubPhaseCount}>
+              {" "}
+              {orSubPhaseProgress.position}/{orSubPhaseProgress.total}
+            </span>
           </span>
-        </span>
+        ) : (
+          <span
+            style={styles.subPhaseTrail}
+            role="list"
+            aria-label={`Operating Round steps — currently ${orSubPhaseProgress.label}`}
+          >
+            {orSubPhaseProgress.steps.map((phase, index) => {
+              const isCurrent = phase === orSubPhase;
+              const isDone = index < orSubPhaseProgress.position - 1;
+              return (
+                <span
+                  key={phase}
+                  role="listitem"
+                  aria-current={isCurrent ? "step" : undefined}
+                  style={{
+                    ...styles.subPhaseStep,
+                    ...(isDone ? styles.subPhaseStepDone : {}),
+                    ...(isCurrent ? styles.subPhaseStepCurrent : {}),
+                  }}
+                  title={
+                    isCurrent
+                      ? `Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} — this corporation is here now.`
+                      : isDone
+                        ? `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — already past.`
+                        : `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — still to come.`
+                  }
+                >
+                  {OPERATING_SUB_PHASE_LABELS[phase].stepLabel}
+                </span>
+              );
+            })}
+          </span>
+        )
       )}
       {/* Operating Round turn stepper. Renders directly under the round
           label it elaborates: the label says WHICH step, the strip says
@@ -1607,10 +1718,31 @@ export default function ContextualActionBar({
                    redundant with the full ticker sitting on the same
                    screen. It is left in the expanded bar because that is
                    the change that was asked for and no more; the honest
-                   next step is to take it out altogether. */}
-              {!condensed && (
-                <StickyTickerLine latestItem={latestFeedItem} onExpand={onOpenActivityLog} />
-              )}
+                   next step is to take it out altogether.
+
+                   ==================================================
+                    DESIGN NOTE 500: THE HONEST NEXT STEP, TAKEN
+                   ==================================================
+
+                   REPORTED: remove the Activity Log ticker from the Action
+                   Panel in all states.
+
+                   Which is the sentence the note above ends on. The pinned
+                   form lost it already; the expanded form kept a copy that
+                   its own note called "redundant with the full ticker
+                   sitting on the same screen", and that redundancy is the
+                   whole case. `TopTicker` is mounted at the top of the app
+                   with the same feed, the same filter and an accordion for
+                   the history. A one-line echo of its newest entry, inside
+                   the panel a player uses to ACT, spent a row of the one
+                   surface whose rows are contested to repeat something
+                   already on screen.
+
+                   `latestFeedItem` and `onOpenActivityLog` go with it
+                   rather than being left as unused props: a prop with no
+                   reader is how the line comes back. `App.tsx` keeps
+                   `latestFeedItem` -- `TopTicker` is its real consumer and
+                   always was. */}
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
@@ -1711,53 +1843,13 @@ export default function ContextualActionBar({
                   Select a hex on the map to lay or upgrade track. Click the preview to rotate.
                 </span>
               )}
-              {/* ==================================================================
-                   DESIGN NOTE 491: THE COLLAPSED BAR HID THE ONLY STEP THAT
-                   HAPPENS SOMEWHERE ELSE
-                  ==================================================================
-
-                  REPORTED: when the Action panel is collapsed during Buy
-                  Trains, the player sees only "End Turn" and can miss the
-                  purchasing menus below.
-
-                  Buy Trains is the one sub-phase whose controls are not on
-                  this bar at all. Design note #203 moved both halves of the
-                  step -- the depot and the corporation-to-corporation trade
-                  -- out to `TrainPurchasePanel`, correctly, and left the bar
-                  holding "End Turn" and nothing else. Expanded that is fine:
-                  the panel is visible right underneath. PINNED it is not,
-                  because the bar is pinned precisely when the player has
-                  scrolled, and what they have scrolled away from is the
-                  panel. The step then presents as a single button whose
-                  only offer is to end the turn -- which is also the one
-                  action 1830 may forbid here (design note #293).
-
-                  So the collapsed bar gets a way BACK to the step. It is
-                  navigation, not a second purchase control: it dispatches
-                  nothing, and there is still exactly one place a train is
-                  bought. Design note #182's argument against a generic "Buy
-                  Train" button is unaffected -- that objected to a duplicate
-                  ACTION, and this is a scroll.
-
-                  BEFORE END TURN, per the report and because that is the
-                  order the step is done in: buy, then finish. It is also the
-                  safer reading order when End Turn is disabled, since the
-                  button that explains what to do first now precedes the one
-                  refusing to move on.
-
-                  CONDENSED ONLY. Expanded, the panel it scrolls to is
-                  already on screen, and a button that scrolls to something
-                  visible is noise. */}
-              {condensed && orSubPhase === "Hardware" && mayActThisTurn && onJumpToTrainPurchase && (
-                <button
-                  type="button"
-                  style={{ ...styles.actionBarButton, ...styles.actionBarJumpButton }}
-                  onClick={onJumpToTrainPurchase}
-                  title="Scroll down to the Bank Depot and corporation train trade panels."
-                >
-                  &#8595; Buy Trains
-                </button>
-              )}
+              {/* Design note #510: the "Buy Trains" jump button is GONE.
+                  Design note #491 added it because the purchase panels sat
+                  far below a pinned bar and a scrolled player could not see
+                  them. Design note #508 moved those panels INTO the bar, so
+                  they travel with it -- and a button whose only job was to
+                  scroll to something that no longer goes anywhere is a
+                  control with nothing left to do. */}
               {contextualButtons.map((btn) => (
                 <button
                   key={btn.key}
@@ -2020,7 +2112,27 @@ export default function ContextualActionBar({
               })}
             </div>
           )}
-          {orSubPhase === "Dividends" && !condensed && (
+          {/* ==================================================================
+               DESIGN NOTE 509: THE DECISION TRAVELS WITH THE BUTTONS
+              ==================================================================
+
+               REPORTED: the Dividends block must stay visible and travel with
+               the collapsed/sticky panel, so a player does not have to scroll
+               back to the top to read the market moves.
+
+               Design note #490 gated this on `!condensed`, reasoning from
+               design note #298's rule that the pinned bar keeps what a player
+               needs WHILE LOOKING AT THE BOARD. That rule is right and this
+               was the wrong side of it: the payout table and the two market
+               moves are not orientation, they are the INPUTS to the two
+               buttons sitting directly above them. Hiding them when pinned
+               left a player scrolled down the page with Pay and Withhold
+               live and no way to see what either one does.
+
+               The Buy Trains panel below travels for the same reason and by
+               the same mechanism -- the bar is `position: sticky`, so
+               anything inside it follows. */}
+          {orSubPhase === "Dividends" && (
             <div style={styles.dividendPanel}>
               <div style={styles.dividendColumn}>
                 <span style={styles.dividendHeading}>
@@ -2047,11 +2159,52 @@ export default function ContextualActionBar({
                 />
               </div>
 
+              {/* ==================================================================
+                   DESIGN NOTE 509a: SHOW THE MONEY MOVING, DO NOT DESCRIBE IT
+                  ==================================================================
+
+                   REPORTED: replace the explanatory string under Withhold with
+                   the corporation's herald and a strict
+                   `[current treasury] -> [new treasury]`.
+
+                   The sentence it replaces -- "The full amount stays in the
+                   corporation's treasury. Shareholders receive nothing this
+                   Operating Round." -- was two clauses of rules text on a
+                   panel whose other column shows an actual table of figures.
+                   It described a consequence the player then had to compute:
+                   they know the treasury and they know the revenue, and the
+                   panel made them add.
+
+                   The transition states it. And it mirrors `MarketMoveLine`
+                   deliberately -- same arrow, same green-for-a-rise rule
+                   (design note #489) -- so the two things a withhold does,
+                   move the treasury up and the share price left, read as one
+                   pair of before/after facts rather than as a paragraph and a
+                   diagram.
+
+                   THE HERALD IS THE SUBJECT. Whose treasury this is was the
+                   one fact the sentence carried that the numbers do not, and
+                   a logo says it in the space a pronoun took. */}
               <div style={styles.dividendColumn}>
                 <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
-                <span style={styles.dividendNote}>
-                  The full amount stays in the corporation's treasury. Shareholders receive
-                  nothing this Operating Round.
+                <span style={styles.treasuryMove}>
+                  {activeCorporation && (
+                    <CorporateLogo
+                      ticker={activeCorporation.ticker}
+                      size={18}
+                      color={corporationInk}
+                      title={`${activeCorporation.ticker} treasury`}
+                    />
+                  )}
+                  <span style={styles.treasuryFrom}>${treasuryNow}</span>
+                  <span
+                    style={{ ...styles.dividendMoveArrow, ...styles.dividendMoveArrowUp }}
+                    role="img"
+                    aria-label="rises to"
+                  >
+                    &#10132;
+                  </span>
+                  <span style={styles.treasuryTo}>${treasuryAfterWithhold}</span>
                 </span>
                 <MarketMoveLine
                   currentPrice={dividendPrice}
@@ -2060,6 +2213,44 @@ export default function ContextualActionBar({
                 />
               </div>
             </div>
+          )}
+
+          {/* ==================================================================
+               DESIGN NOTE 508: THE PURCHASE PANELS MOVED INTO THE BAR
+              ==================================================================
+
+               REPORTED: the train purchasing interface should condense and
+               travel with the collapsed/sticky Action Panel.
+
+               Design note #203 moved both halves of this step OUT of the bar
+               and into `TrainPurchasePanel`, correctly -- the bar could not
+               host a depot queue and a corporation roster as inline controls.
+               What that left was a step whose entire interface lived below a
+               `position: sticky` bar, so scrolling the board scrolled the
+               controls away and left "End Turn" pinned on its own.
+
+               Design note #491 patched the symptom with a jump button. This
+               removes the cause: the panel is rendered HERE, inside the bar,
+               so it is sticky by inheritance and there is nothing to jump to.
+
+               IT IS STILL ONE COMPONENT, which is what keeps #203's argument
+               intact -- there is exactly one place a train is bought, it has
+               simply changed address. `condensed` is the panel's own pinned
+               form (design note #508 there), not a second cut-down copy of
+               it. */}
+          {orSubPhase === "Hardware" && trainPurchase && (
+            <TrainPurchasePanel
+              depot={trainPurchase.depot}
+              buyer={trainPurchase.buyer}
+              companies={trainPurchase.companies}
+              sessionReady={sessionReady}
+              canAct={trainPurchase.canAct}
+              blockedReason={trainPurchase.blockedReason}
+              onBuyFromBank={trainPurchase.onBuyFromBank}
+              onProposeTrade={trainPurchase.onProposeTrade}
+              labelForAddress={trainPurchase.labelForAddress}
+              condensed={condensed}
+            />
           )}
         </div>
       ) : (

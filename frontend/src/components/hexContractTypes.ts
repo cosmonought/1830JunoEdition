@@ -505,6 +505,11 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
     }
   /** Design note #141: the hex failed one of the four static board gates
    *  (`evaluateHexForTileLaying`), so `GetLegalTilePlacements` was never
@@ -534,6 +539,11 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
       reason: HexClickRejection;
       /** `null` for a click on empty space beyond the board, which is not
        *  worth telling anyone about -- see `evaluateHexForTileLaying`. */
@@ -552,6 +562,11 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
     }
   | {
       status: "success";
@@ -566,6 +581,11 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
       response: LegalTilePlacementsResponse;
     }
   | {
@@ -581,6 +601,11 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
       message: string;
     }
   /** Design note #120: no chain client is wired up, so
@@ -609,5 +634,10 @@ export type HexClickQueryState =
        *  the right anchor for a cursor-following tooltip. */
       centroidX: number;
       centroidY: number;
+      /** Design note #506: the hex's centre-to-corner radius AS DRAWN,
+       *  in canvas-CSS pixels -- `hexSize` through the live zoom. In-situ
+       *  UI that must CLEAR the hex needs its on-screen size, and the
+       *  centroid alone cannot supply it. */
+      hexRadiusPx: number;
       placements: LegalTilePlacement[];
     };

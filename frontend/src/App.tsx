@@ -562,6 +562,17 @@ import { corporationFullName } from "./utils/corporationNames";
 // tellable apart. Shared with `RoutePlannerPanel`'s chips -- the same pure
 // function on both surfaces rather than two tables.
 import { routeEmphasisFor, routeTrainColor } from "./styles/routeLivery";
+// Design note #522: the Sandbox multiplayer bridge.
+import SandboxRoomBar from "./components/SandboxRoomBar";
+import {
+  appendSandboxAction,
+  decodeAction,
+  hostSandboxRoom,
+  parseRoomCode,
+  readSandboxLog,
+  subscribeSandboxLog,
+} from "./utils/sandboxRoom";
+import { isFirebaseConfigured } from "./config/firebase";
 import StockMarketRenderer, {
   marketCellForPrice,
   parBoxCellFor,
@@ -586,7 +597,11 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 import TrainTradePanel from "./components/TrainTradePanel";
-import TrainPurchasePanel, {
+/* Design note #508: the default export is gone from this import -- the panel
+   is mounted by `ContextualActionBar` now, so this file supplies its props
+   and no longer renders it. `TrainTradePrompt` still mounts here: it is the
+   offer LEDGER, not the purchase control, and it never moved. */
+import {
   TrainTradePrompt,
   type TrainTradeProposal,
 } from "./components/TrainPurchasePanel";
@@ -2644,6 +2659,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         // scrolled, panned or zoomed.
         offsetX: state.centroidX,
         offsetY: state.centroidY,
+        /* Design note #506: and the hex's radius AS DRAWN, from the same
+           report and through the same transform. The ring sizes its
+           candidates and its clearance against this, so both follow the
+           board's zoom instead of assuming one. */
+        hexRadiusPx: state.hexRadiusPx,
         provisional: state.status === "offline",
         placements: state.status === "success" ? state.response.placements : state.placements,
       });
@@ -2803,9 +2823,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return {
       visible,
       highlighted,
-      glowColor: glowColorFor(stationTickerColor(actingProtocolId)),
+      /* ==============================================================
+       *  DESIGN NOTE 514: THE RING WORE B&O'S BLUE
+       * ==============================================================
+       *
+       * REPORTED: the placement preview renders as a blue B&O token
+       * whatever corporation is acting.
+       *
+       * `actingProtocolId` is derived from the operating queue and falls
+       * back to `MOCK_LAY_TILE_PROTOCOL_ID` when that queue is empty --
+       * and that constant is `4`, which its own comment names as B&O.
+       * Design note #433 introduced the fallback so nothing would render
+       * `undefined` before an Operating Round had opened, which is a real
+       * concern and the wrong answer HERE: a station placement always has
+       * a corporation, because `activeStationCompany` is the company whose
+       * tokens are being placed. It is in scope, it is exact, and it needs
+       * no fallback at all.
+       *
+       * Reading the queue for this was asking a question about turn ORDER
+       * to answer a question about IDENTITY. The two agree during an
+       * ordinary Operating Round turn, which is why the wrong colour only
+       * appeared when they came apart -- a home-station placement raised
+       * before the queue exists being the case reported. */
+      glowColor: glowColorFor(stationTickerColor(activeStationCompany.company_id)),
     };
-  }, [tokenTargetMode, activeStationCompany, actingProtocolId, gameState, mapGrid]);
+  }, [tokenTargetMode, activeStationCompany, gameState, mapGrid]);
 
 
   /* ===================================================================
@@ -2886,6 +2928,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      *  page scroll cannot detach the ring from its hex. */
     offsetX: number;
     offsetY: number;
+    /** Design note #506: the hex's centre-to-corner radius as drawn. */
+    hexRadiusPx: number;
     /** These candidates came from the local catalog, not from a chain. */
     provisional: boolean;
     /** Verbatim `GetLegalTilePlacements`, when a chain answered. */
@@ -2943,6 +2987,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * destroys money they have already earned. Unknown therefore falls back
    * to the field, which is the conservative side of the rule this note
    * exists to enforce. */
+  /* ==================================================================
+   *  DESIGN NOTE 522 (App side): THE ROOM, AND ITS CURSOR
+   * ==================================================================
+   *
+   * Four pieces of state, and three of them are refs for the same reason:
+   * `runGameplayAction` reads them, and that callback is in the dependency
+   * array of the two effects that DISPATCH on the player's behalf (design
+   * note #439's auto-skip and forced withhold). Rebuilding it on every
+   * applied action would re-arm those effects mid-replay, which is a render
+   * becoming a transaction -- and during a replay, a transaction becoming a
+   * second log entry.
+   *
+   * `appliedIndexRef` is how far this browser has replayed. It is the
+   * cursor the listener takes its tail from AND the index the next append
+   * claims, which is what keeps a client's own writes in sequence with what
+   * it has already applied. */
+  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(null);
+  const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
+  const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
+  const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
+  const sandboxRoomRef = useRef<string | null>(null);
+  const appliedIndexRef = useRef(0);
+  const sandboxSeatRef = useRef<string>("");
+  useEffect(() => {
+    sandboxRoomRef.current = sandboxRoomCode;
+  }, [sandboxRoomCode]);
+  /* Who the log records as having acted. A LABEL, not an identity -- the
+     sandbox has no authentication and this is for the readout, not for
+     permission. */
+  useEffect(() => {
+    sandboxSeatRef.current = sandboxPlayerLabel(viewerAddress ?? "") ?? "sandbox";
+  }, [viewerAddress]);
+
   const [routesRunThisTurn, setRoutesRunThisTurn] = useState<{
     protocolId: number;
     ran: boolean;
@@ -3781,7 +3858,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
          Design note #492a: `resetRouteRevenue` marks the first
          `RunManualRoute` of a turn's batch, so the sandbox reducer starts
          its per-turn sum from zero instead of adding to the last turn's. */
-      options?: { automatic?: boolean; resetRouteRevenue?: boolean },
+      /* Design note #522: `isRemoteReplay` marks an action arriving FROM the
+         Firestore log rather than from this browser's own click. It is the
+         one thing that distinguishes the two directions of the loop, and
+         everything else about the dispatch is identical -- which is the
+         point: a replayed action must take exactly the path a local one
+         takes, or the two clients run different code and diverge. */
+      options?: { automatic?: boolean; resetRouteRevenue?: boolean; isRemoteReplay?: boolean },
     ) => {
       /* ==================================================================
        *  DESIGN NOTE 262: THE LOG DESCRIBES THE EVENT, NOT THE MESSAGE
@@ -3866,6 +3949,60 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // `utils/sandboxSession.ts` design note 0 for why that boundary is the
       // whole design rather than an unfinished edge.
       if (sandbox) {
+        /* ==================================================================
+         *  DESIGN NOTE 522: IN A ROOM, THE LOG IS THE ONLY WAY IN
+         * ==================================================================
+         *
+         * The event-sourcing loop, and the whole reason it is ONE branch
+         * rather than a parallel path: a local click in a room does not
+         * touch state at all. It appends to Firestore and stops. The
+         * `onSnapshot` listener then replays it back through this same
+         * function with `isRemoteReplay`, which is what actually moves the
+         * board.
+         *
+         * SO THE LOCAL PLAYER TAKES THE SAME ROUTE AS EVERYONE ELSE. That
+         * costs a round trip before your own action appears, and it buys the
+         * property that makes this design work: there is exactly one order
+         * of operations, the one in the log, and every client -- including
+         * the one that acted -- derives its state from it. An optimistic
+         * local apply would give the actor a state nobody else has, and
+         * reconciling it would mean rewinding and replaying on every
+         * remote action.
+         *
+         * `appliedIndexRef` is the cursor, and the append reads it for the
+         * next index. It is a ref rather than state because this callback
+         * must not be rebuilt when it moves -- `runGameplayAction` sits in
+         * the dependency array of the auto-skip and forced-withhold effects
+         * (design note #439), and rebuilding it re-arms effects that
+         * DISPATCH.
+         *
+         * SOLO SANDBOX IS UNTOUCHED. No room, no interception, no await on a
+         * network -- the branch below runs exactly as it did before. */
+        if (sandboxRoomRef.current && options?.isRemoteReplay !== true) {
+          const ok = await appendSandboxAction(
+            sandboxRoomRef.current,
+            appliedIndexRef.current,
+            sandboxSeatRef.current,
+            msg,
+          ).catch(() => false);
+          if (!ok) {
+            setSandboxRoomError("Could not reach the room — that action was not sent.");
+          }
+          return;
+        }
+
+        /* Design note #522a: the tile grid is its own atom and no reducer
+           in `sandboxSession` touches it -- so the one message that changes
+           it applies it here, on the single path both a local click and a
+           replayed action take. Derived entirely from the message's own
+           parameters, which is what makes it reproducible from the log. */
+        if ("LayTile" in msg) {
+          const lay = msg.LayTile;
+          setMapGrid((current) =>
+            applySandboxLayTile(current, lay.q, lay.r, lay.tile_id, lay.orientation),
+          );
+        }
+
         /* ==================================================================
          *  DESIGN NOTE 265: THE LOG REPORTS WHAT HAPPENED, NOT WHAT WAS ASKED
          * ==================================================================
@@ -4983,6 +5120,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       cityIndex,
       centroidX,
       centroidY,
+      // Design note #516: the chosen city slot's own point.
+      nodeX,
+      nodeY,
     }: {
       q: number;
       r: number;
@@ -4990,6 +5130,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       cityIndex: number | null;
       centroidX: number;
       centroidY: number;
+      /** Design note #516: the chosen city slot's centre, already through
+       *  the board's live transform. Falls back to the centroid when the hex
+       *  has no resolvable node. */
+      nodeX: number;
+      nodeY: number;
     }) => {
       const placement = homeStationPlacement;
       if (!placement) return;
@@ -5008,8 +5153,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         hexLabel,
         cityIndex,
         kind: "free",
-        offsetX: centroidX,
-        offsetY: centroidY,
+        /* Design note #516: the NODE, not the hex centre. On a dual-city
+           home hex (ERIE's) or any OO tile the two are different points,
+           and the ring belongs on the slot the token will occupy. */
+        offsetX: nodeX,
+        offsetY: nodeY,
       });
     },
     [homeStationPlacement],
@@ -5611,6 +5759,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       cityIndex,
       centroidX,
       centroidY,
+      // Design note #516: the chosen city slot's own point.
+      nodeX,
+      nodeY,
     }: {
       q: number;
       r: number;
@@ -5618,6 +5769,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       cityIndex: number | null;
       centroidX: number;
       centroidY: number;
+      /** Design note #516: the chosen city slot's centre, already through
+       *  the board's live transform. Falls back to the centroid when the hex
+       *  has no resolvable node. */
+      nodeX: number;
+      nodeY: number;
     }) => {
       /* ==================================================================
        *  DESIGN NOTE 238: THE THREE REFUSALS, BEFORE ANYTHING IS SIGNED
@@ -5663,8 +5819,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         hexLabel,
         cityIndex,
         kind: "paid",
-        offsetX: centroidX,
-        offsetY: centroidY,
+        // Design note #516: the node's own point -- see the free placement.
+        offsetX: nodeX,
+        offsetY: nodeY,
       });
     },
     [mapGrid, activeStationCompany, gameState],
@@ -6441,8 +6598,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    *  same Action Log entry, the same reducer. */
   const handleSandboxLayTile = useCallback(
     (q: number, r: number, tileId: number, orientation: number) => {
-      setMapGrid((current) => applySandboxLayTile(current, q, r, tileId, orientation));
+      /* Design note #522a: the board write used to happen HERE, beside the
+         dispatch. It moved into `runGameplayAction`'s sandbox branch, and
+         the move is what makes a tile lay replicate at all.
 
+         A remote client never runs this function -- it receives `LayTile`
+         from the log and replays it through the dispatch. With the
+         `setMapGrid` outside, that replay charged the treasury and left the
+         board blank: the acting player saw their tile and nobody else did.
+         Inside, the same message paints the same hex on every client,
+         including the one that acted. */
       runGameplayAction("LayTile (sandbox)", {
         LayTile: {
           game_id: gameId,
@@ -6628,35 +6793,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   );
 
   /* ==================================================================
-   *  DESIGN NOTE 491 (App side): THE SCROLL TARGET
-   * ==================================================================
-   *
-   * The collapsed action bar's "Buy Trains" button needs somewhere to send
-   * the viewport. `TrainPurchasePanel` is rendered by this shell, so the
-   * ref belongs here rather than being reached for by id from inside the
-   * bar -- a `getElementById` in a presentational panel is a dependency on
-   * markup it does not own and cannot see.
-   *
-   * `block: "start"` rather than `"center"`: the panel is tall (a depot
-   * section plus a trade accordion), and centring a tall element puts its
-   * heading off the top of the screen -- the player arrives mid-panel with
-   * no title to confirm where they landed.
-   *
-   * The bar itself is `position: sticky; top: 0`, so it stays pinned over
-   * the destination and the button remains available to scroll again. That
-   * also means "start" would align the panel with the viewport top and put
-   * its heading UNDER the bar -- handled by `trainPurchaseScrollAnchor`'s
-   * `scroll-margin-top` on the wrapper, which is the property browsers apply
-   * during the scroll itself. See that style for how the offset is sized.
-   *
-   * Nothing is un-collapsed on arrival: the bar staying pinned is what keeps
-   * the button reachable for a second press. */
-  const trainPurchaseRef = useRef<HTMLDivElement | null>(null);
-  const handleJumpToTrainPurchase = useCallback(() => {
-    trainPurchaseRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
-
-  /* ==================================================================
    *  DESIGN NOTE 496 (App side): WHOSE TOKEN THE CURSOR IS CARRYING
    * ==================================================================
    *
@@ -6688,6 +6824,141 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (!ticker) return null;
     return { ticker, color: stationTickerColor(companyId) };
   }, [homeStationPlacement, tokenTargetMode, actingProtocolId, gameState]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 523: THE LISTENER IS THE ONLY WRITER
+   * ==================================================================
+   *
+   * The read half of the loop. Everything that changes sandbox state in a
+   * room arrives here first, in log order, and is replayed through
+   * `runGameplayAction` -- which is requirement 3 and not a stylistic
+   * preference: `applySandboxAction` takes a context assembled in that
+   * function from `mapGrid`, the market and the era. Calling the reducer
+   * directly would replay every action against a context this file would
+   * then have to rebuild by hand, and the first field anyone forgot would
+   * be a silent divergence rather than a crash.
+   *
+   * THE TAIL, NOT THE DELTA. `subscribeSandboxLog` hands back the whole
+   * ordered log every time (its own design note), and this takes everything
+   * past `appliedIndexRef`. A snapshot that arrives twice, out of order, or
+   * after a reconnect therefore cannot double-apply or skip -- the cursor
+   * decides what is new, not the event.
+   *
+   * SEQUENTIAL AND AWAITED, for the reason `handleRunTrains` awaits its own
+   * loop: the sandbox reducer is synchronous through refs, so firing the
+   * tail in parallel would let action N+1 read the state before N wrote it.
+   * `replayingRef` additionally stops a second snapshot interleaving with a
+   * replay already in flight.
+   *
+   * `automatic: true` keeps replayed actions off the Undo stack (design
+   * note #475). Undo is a LOCAL affordance over a shared log: popping a
+   * snapshot cannot unsend somebody else's action, and letting it try would
+   * put this browser behind a log it still believes it has applied. */
+  const replayingRef = useRef(false);
+  useEffect(() => {
+    if (!sandbox || !sandboxRoomCode) return undefined;
+    let live = true;
+
+    const drain = async (actions: Array<{ index: number; payload: string; id: string; actor: string }>) => {
+      if (replayingRef.current) return;
+      replayingRef.current = true;
+      try {
+        for (const action of actions) {
+          if (!live) return;
+          if (action.index < appliedIndexRef.current) continue;
+          const msg = decodeAction(action);
+          /* A corrupt entry is SKIPPED PAST, cursor and all. Stopping would
+             wedge the room on one bad document; re-reading it every
+             snapshot would wedge it in a loop. */
+          appliedIndexRef.current = action.index + 1;
+          if (!msg) continue;
+          // eslint-disable-next-line no-await-in-loop
+          await runGameplayAction("Sandbox room", msg, {
+            isRemoteReplay: true,
+            automatic: true,
+          });
+        }
+        if (live) setSandboxAppliedCount(appliedIndexRef.current);
+      } finally {
+        replayingRef.current = false;
+      }
+    };
+
+    const unsubscribe = subscribeSandboxLog(
+      sandboxRoomCode,
+      (actions) => {
+        void drain(actions);
+      },
+      (message) => setSandboxRoomError(message),
+    );
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [sandbox, sandboxRoomCode, runGameplayAction]);
+
+  /** Design note #522: opens a room and publishes its code. */
+  const handleHostSandboxRoom = useCallback(async () => {
+    setSandboxRoomBusy(true);
+    setSandboxRoomError(null);
+    try {
+      const code = await hostSandboxRoom(sandboxSeatRef.current || "host");
+      if (!code) {
+        setSandboxRoomError("Firestore is not configured in this build.");
+        return;
+      }
+      /* The cursor starts at zero for a room that starts empty, so the host
+         replays its own actions from the log exactly as a joiner does --
+         one code path, no host special case. */
+      appliedIndexRef.current = 0;
+      setSandboxAppliedCount(0);
+      setSandboxRoomCode(code);
+    } catch (error) {
+      setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
+    } finally {
+      setSandboxRoomBusy(false);
+    }
+  }, []);
+
+  /** Design note #522: joins an existing room and fast-forwards to it. */
+  const handleJoinSandboxRoom = useCallback(async (raw: string) => {
+    const code = parseRoomCode(raw);
+    if (!code) {
+      setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
+      return;
+    }
+    setSandboxRoomBusy(true);
+    setSandboxRoomError(null);
+    try {
+      /* Read the log once before subscribing purely to TELL THE PLAYER
+         whether the room exists. An empty log is indistinguishable from a
+         wrong code otherwise, and the subscription below would happily
+         listen to a room nobody is in. The replay itself is left to the
+         listener: doing it here would apply the history twice. */
+      const existing = await readSandboxLog(code);
+      appliedIndexRef.current = 0;
+      setSandboxAppliedCount(0);
+      setSandboxRoomCode(code);
+      if (existing.length === 0) {
+        setSandboxRoomError("Joined — no actions in this room yet.");
+      }
+    } catch (error) {
+      setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
+    } finally {
+      setSandboxRoomBusy(false);
+    }
+  }, []);
+
+  /** Leaves the room. The BOARD IS LEFT WHERE IT IS rather than reset: the
+   *  player is dropping out of the sync, not abandoning the position, and
+   *  wiping a game they can still look at would be a surprising amount of
+   *  destruction for a button labelled "Leave". */
+  const handleLeaveSandboxRoom = useCallback(() => {
+    setSandboxRoomCode(null);
+    setSandboxRoomError(null);
+    appliedIndexRef.current = 0;
+    setSandboxAppliedCount(0);
+  }, []);
 
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
 
@@ -7135,6 +7406,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                     row of twenty greyed-out buttons is visual noise offering
                     a spectator nothing; the badge in the room strip already
                     explains why they are gone. */}
+                {/* Design note #521: sandbox multiplayer, offered rather than
+                    demanded -- solo play needs no gesture. Above the action
+                    bar and outside the spectator branch: a spectator has no
+                    action bar (design note #23) and the room strip is not an
+                    action, so hiding it with the controls would take away the
+                    one thing a watcher might legitimately want. */}
+                {sandbox && (
+                  <SandboxRoomBar
+                    roomCode={sandboxRoomCode}
+                    available={isFirebaseConfigured()}
+                    appliedCount={sandboxAppliedCount}
+                    error={sandboxRoomError}
+                    busy={sandboxRoomBusy}
+                    onHost={handleHostSandboxRoom}
+                    onJoin={handleJoinSandboxRoom}
+                    onLeave={handleLeaveSandboxRoom}
+                  />
+                )}
                 {spectator ? (
                   <div style={styles.spectatorNotice}>
                     👁 Watching game #{gameId}. Board, ledger and market are live; every action
@@ -7142,16 +7431,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   </div>
                 ) : (
                 <ContextualActionBar
-                  /* Design note #458: the newest log line rides in the
-                     sticky bar, so it survives scrolling the board and the
-                     tables below. Expanding scrolls back to the full ticker
-                     rather than opening a second copy of it. */
-                  latestFeedItem={latestFeedItem}
-                  onOpenActivityLog={() => {
-                    if (!isTickerExpanded) handleToggleTickerExpand();
-                    window.scrollTo({ top: 0, behavior: "smooth" });
-                  }}
+                  /* Design note #500: `latestFeedItem`/`onOpenActivityLog`
+                     are gone. The bar no longer echoes the activity log --
+                     `TopTicker` above carries it, from this same
+                     `latestFeedItem`. */
                   roundType={gameState?.current_round_type ?? null}
+                  /* Design note #517: the board's own round numbering, from
+                     the same two fields `ContextualSubPanel` prints as
+                     "OR n.m". `null` before the first poll. */
+                  orSequence={
+                    gameState
+                      ? {
+                          cycle: gameState.macro_round_number,
+                          index: gameState.sub_round_index,
+                        }
+                      : null
+                  }
                   // Design note #390: the bar compares these two and
                   // replaces itself with a Return button when the player is
                   // on another round's playing surface.
@@ -7223,10 +7518,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
-                  // Design note #491: navigation back to the Buy Trains
-                  // panels, which are the one sub-phase's controls that do
-                  // not live on the bar itself.
-                  onJumpToTrainPurchase={handleJumpToTrainPurchase}
+                  /* Design note #508: the Buy Trains panels are rendered BY
+                     the bar now, so they inherit its stickiness and travel
+                     with it. Passed as one object -- the bar is a conduit for
+                     these, not a reader of them. */
+                  trainPurchase={
+                    gameState && orSubPhase === "Hardware"
+                      ? {
+                          depot,
+                          buyer:
+                            gameState.public_companies.find(
+                              (company) => company.company_id === actingProtocolId,
+                            ) ?? null,
+                          companies: gameState.public_companies,
+                          canAct:
+                            sandbox ||
+                            (viewerAddress !== null &&
+                              gameState.public_companies.find(
+                                (company) => company.company_id === actingProtocolId,
+                              )?.president === viewerAddress),
+                          blockedReason: trainOffers.some(
+                            (offer) => offer.buyer_protocol_id === actingProtocolId,
+                          )
+                            ? "One offer at a time — answer or rescind the outstanding one first."
+                            : null,
+                          onBuyFromBank: handleBuyTrainsFromBank,
+                          onProposeTrade: handleProposeTrainTrade,
+                          labelForAddress: (address: string) =>
+                            sandboxPlayerLabel(address) ?? truncateAddress(address),
+                        }
+                      : null
+                  }
                   dividendRevenue={dividendRevenue}
                   dividendRevenueIsThisTurn={dividendRevenueIsThisTurn}
                   dividendPerShare={dividendPerShare}
@@ -7355,43 +7677,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                      this follows it instead of quietly pointing at the wrong
                      surface -- the same anti-drift reason the round
                      transitions already call it rather than naming tabs. */}
-                {activeMainTab === surfaceTabFor("OperatingRound") &&
-                  gameState?.current_round_type === "OperatingRound" &&
-                  orSubPhase === "Hardware" && (
-                  <div ref={trainPurchaseRef} style={styles.trainPurchaseScrollAnchor}>
-                  <TrainPurchasePanel
-                    depot={depot}
-                    buyer={
-                      gameState.public_companies.find(
-                        (company) => company.company_id === actingProtocolId,
-                      ) ?? null
-                    }
-                    companies={gameState.public_companies}
-                    sessionReady={controlsEnabled}
-                    // Design note #2 in `PrivateTradePanel`: a hotseat
-                    // sandbox is one human at one wallet, so gating on the
-                    // viewer's address would make the whole flow untestable
-                    // in the one place it can be run end to end.
-                    canAct={
-                      sandbox ||
-                      (viewerAddress !== null &&
-                        gameState.public_companies.find(
-                          (company) => company.company_id === actingProtocolId,
-                        )?.president === viewerAddress)
-                    }
-                    blockedReason={
-                      trainOffers.some((offer) => offer.buyer_protocol_id === actingProtocolId)
-                        ? "One offer at a time — answer or rescind the outstanding one first."
-                        : null
-                    }
-                    onBuyFromBank={handleBuyTrainsFromBank}
-                    onProposeTrade={handleProposeTrainTrade}
-                    labelForAddress={(address) =>
-                      sandboxPlayerLabel(address) ?? truncateAddress(address)
-                    }
-                  />
-                  </div>
-                )}
+                {/* Design note #508: `TrainPurchasePanel` used to mount here,
+                    below the action bar. It is rendered BY the bar now, so it
+                    inherits the bar's stickiness and travels with the player
+                    instead of scrolling away -- which is also what retired
+                    design note #491's jump button. */}
                 {/* ===================================================================
                      DESIGN NOTE 233: THE LEDGER APPEARS WHEN THERE IS ONE
                     ===================================================================
@@ -8049,6 +8339,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         <RadialTileSelector
           anchorOffsetX={radialSelector.offsetX}
           anchorOffsetY={radialSelector.offsetY}
+          // Design note #506: sizes the candidates and the ring's clearance.
+          hexRadiusPx={radialSelector.hexRadiusPx}
           canvasEl={boardEl}
           hexLabel={radialSelector.hexLabel}
           candidates={radialCandidates}

@@ -383,6 +383,33 @@ export function operatingRoundsForPhase(phase: GamePhase | null): number {
 export function beginOperatingRound(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
+  /* ==================================================================
+   *  DESIGN NOTE 511: THE SEQUENCE LOCKS AT THE START OF THE CYCLE
+   * ==================================================================
+   *
+   * REPORTED: buying a 3-train during Yellow shifts the game to Green
+   * mid-round, and it then expects a SECOND Operating Round before
+   * returning to the Stock Round. A cycle that began in Yellow must run one
+   * OR and stop.
+   *
+   * Design note #431 fixed the opposite fault -- the count was read from a
+   * state field nothing maintained -- by DERIVING it from the phase. That
+   * was right about where the rule lives and wrong about WHEN to ask: it
+   * derived live, at the moment the last corporation finished, by which
+   * point a train bought three turns earlier may have moved the phase.
+   *
+   * 1830 fixes the number of Operating Rounds when the cycle OPENS. A phase
+   * change during the cycle takes effect for the NEXT one; it does not
+   * extend the one in progress. So the count is stamped once, here, and
+   * every later reader takes the stored value.
+   *
+   * `continuingSequence` is what distinguishes the two callers. Opening a
+   * cycle (from a Stock Round, or recovering an empty queue) re-derives;
+   * opening the SECOND Operating Round of an existing cycle carries the
+   * locked number forward. Without the flag this function cannot tell them
+   * apart -- it rebuilds the queue identically either way -- and re-deriving
+   * on the continuation is exactly how the lock would leak. */
+  continuingSequence = false,
 ): GameStateResponse {
   const order = buildOperatingOrder(state, priceFor);
   return syncSeatToActingCorporation({
@@ -396,9 +423,29 @@ export function beginOperatingRound(
        nothing else ever set this, so it was a field that looked
        authoritative and was decorative. Stamping the phase's real count
        here means the readout ("OR n of N") and the loop that ends the round
-       are the same number rather than two that can disagree. */
-    operating_round_sequence_length: operatingRoundsForPhase(derivePhase(state)),
+       are the same number rather than two that can disagree.
+
+       Design note #511: and stamped ONCE PER CYCLE. A continuation keeps
+       the number the cycle opened with, whatever the phase has done since. */
+    operating_round_sequence_length: continuingSequence
+      ? operatingRoundSequenceLength(state)
+      : operatingRoundsForPhase(derivePhase(state)),
   });
+}
+
+/** The locked sequence length for the cycle in progress -- design note #511.
+ *
+ *  Falls back to the phase's own count when the field is absent or
+ *  nonsensical, which covers a fixture that predates the lock and a state
+ *  restored from an older snapshot. A bad stored number must not be able to
+ *  strand a cycle: `Math.max(1, ...)` guarantees at least one Operating
+ *  Round, so a zero can never end a cycle before it has run. */
+export function operatingRoundSequenceLength(state: GameStateResponse): number {
+  const stored = Number(state.operating_round_sequence_length);
+  if (!Number.isFinite(stored) || stored < 1) {
+    return operatingRoundsForPhase(derivePhase(state));
+  }
+  return Math.max(1, Math.floor(stored));
 }
 
 /** Moves the Operating Round corporation cursor on by one, and closes the
@@ -474,14 +521,20 @@ function advanceCorporation(
 
   /* Every corporation has operated. Another round in the sequence, or out.
 
-     Design note #431: the count comes from the PHASE. Reading
-     `state.operating_round_sequence_length` here is what produced the
-     reported Yellow-phase loop -- the fixtures set it to 2 and nothing
-     maintained it, so a phase that runs one Operating Round ran two. */
-  const sequenceLength = operatingRoundsForPhase(derivePhase(state));
+     Design note #431 read this from the PHASE, because the state field was
+     unmaintained. Design note #511 maintains it -- `beginOperatingRound`
+     stamps it when the cycle opens -- so the LOCKED value is what decides,
+     and a phase shift during the cycle cannot lengthen it. Deriving live
+     here is the reported Yellow-to-Green bug: a 3-train bought mid-cycle
+     turned a one-round Yellow cycle into a two-round Green one halfway
+     through. */
+  const sequenceLength = operatingRoundSequenceLength(state);
   if (state.sub_round_index < sequenceLength) {
     return syncSeatToActingCorporation({
-      ...beginOperatingRound(state, priceFor),
+      /* `true`: this is the SECOND round of an existing cycle, so it keeps
+         the cycle's locked count rather than re-deriving from a phase that
+         may have moved. */
+      ...beginOperatingRound(state, priceFor, true),
       sub_round_index: state.sub_round_index + 1,
     });
   }

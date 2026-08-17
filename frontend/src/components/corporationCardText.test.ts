@@ -93,10 +93,122 @@ describe("the labels are words", () => {
   });
 
   it("captions treasury on the figures row", () => {
-    // Design note #489 moved it up beside market, IPO/par and last run, and
-    // a caption is what makes it a column rather than a loose number.
+    // Design note #489 moved it up beside market and IPO/par, and a caption
+    // is what makes it a column rather than a loose number.
     expect(SOURCE).toContain(">treasury<");
-    expect(SOURCE).toContain(">last run<");
+  });
+});
+
+/* ==================================================================
+ *  DESIGN NOTE 503 (harness): ONE SLOT, TWO LIVES
+ * ==================================================================
+ *
+ * This block asserted `>last run<` -- the caption of a column in the figures
+ * row -- and design note #503 removed that column, moving Last Run into the
+ * livery stripe's badge slot where it replaces the float progress badge.
+ *
+ * The assertion is REPLACED rather than deleted, and it is a stronger one
+ * than the string it pins. What matters about the new arrangement is not
+ * that the words exist somewhere; it is that the two facts are MUTUALLY
+ * EXCLUSIVE and share one slot -- an unfloated corporation shows how close
+ * it is to floating, a floated one shows what it last earned, and neither
+ * appears while the other does. A test for the caption alone would pass
+ * against a card that rendered both at once, which is the exact regression
+ * this arrangement can suffer.
+ */
+describe("the livery stripe's one badge slot", () => {
+  it("captions the run inside the badge rather than leaving a bare figure", () => {
+    /* Design note #488's objection to the previous version of this idea was
+       that a naked figure beside the herald is "captioned by position",
+       which means captioned by nothing. The caption is what answers it. */
+    expect(SOURCE).toContain(">Last run<");
+  });
+
+  it("no longer carries last run as a column in the figures row", () => {
+    // The lowercase caption was `rosterPriceLabel`'s, i.e. the stats row.
+    expect(CODE).not.toContain(">last run<");
+  });
+
+  it("branches the slot on float rather than rendering both", () => {
+    /* The exclusivity, checked structurally: the float-progress figure and
+       the last-run figure must sit on opposite sides of one `is_floated`
+       conditional. Asserting the ternary is cruder than rendering the
+       component, and it is the check that would actually fail if someone
+       restored the second badge alongside the first. */
+    expect(CODE).toMatch(/company\.is_floated \?[\s\S]{0,400}?Last run/);
+    expect(CODE).toMatch(/Last run[\s\S]{0,400}?FLOAT_THRESHOLD_PERCENT/);
+  });
+});
+
+/* ==================================================================
+ *  DESIGN NOTES 501 / 502 / 504 (harness): THE CARD'S GRAMMAR
+ * ==================================================================
+ *
+ * Three layout requirements from one pass, and each is a RELATIONSHIP rather
+ * than a value -- which is why they are pinned here instead of being left to
+ * the eye. All three were wrong in the same way: the card expressed one idea
+ * two different ways in two different places, and nothing noticed because
+ * each half was individually correct.
+ */
+describe("the card's identity line", () => {
+  /* READ FROM `CODE`, NOT `SOURCE`. These are ORDER assertions, and this
+     file's own header note explains why that distinction matters: the design
+     notes discuss these identifiers by name, at length, in between the lines
+     of JSX being checked. Matching the raw source measures the distance
+     between two mentions in prose rather than between two elements. The
+     first draft of this block asserted a 600-character window and failed on
+     a 2,479-character gap that was almost entirely design note #465. */
+  it("puts the herald and the acronym in one row", () => {
+    /* Design note #501. `rosterNameStack` is a column, and the acronym was
+       its second CHILD -- so design note #465's "the acronym rides next to
+       it" produced a stacked pair. The row wrapper is what makes the note
+       and the layout agree. */
+    expect(CODE).toContain("rosterIdentityRow");
+    expect(CODE).toMatch(/rosterIdentityRow[\s\S]{0,400}?CorporateLogo/);
+    expect(CODE).toMatch(/rosterIdentityRow[\s\S]{0,600}?rosterLiveryAcronym/);
+  });
+
+  it("keeps the full name out of that row", () => {
+    // The long one still gets its own line -- it is read second and it
+    // ellipsises. Only the two SHORT identifiers share a line.
+    expect(CODE).toMatch(/rosterLiveryAcronym[\s\S]{0,200}?<\/span>[\s\S]{0,200}?rosterLiveryName/);
+  });
+});
+
+describe("the money figures carry a dollar sign", () => {
+  it("prefixes market and IPO/par", () => {
+    /* Design note #502: treasury has said `$` since design note #489 put it
+       on this row, and the other two did not -- one line, three figures in
+       dollars, one of them saying so. */
+    expect(CODE).toMatch(/\$\$\{market\}/);
+    expect(CODE).toMatch(/\$\$\{company\.par_value\}/);
+  });
+
+  it("keeps the dash bare rather than rendering a currency on nothing", () => {
+    // "$--" would put a unit on an absent value.
+    expect(CODE).not.toContain("$--");
+  });
+});
+
+describe("the asset row captions the same way round as the figures row", () => {
+  it("stacks its items in a column", () => {
+    /* Design note #504: `assetItem` was an inline ROW with the label first,
+       so the card captioned label-then-value here and value-then-label one
+       row above. */
+    expect(CODE).toMatch(/assetItem: \{[\s\S]{0,200}?flexDirection: "column"/);
+  });
+
+  it("puts each label after its value in source order", () => {
+    /* The property the column direction only enables. Trains: the chips (or
+       the "none" fallback) come first, then the word. Same for Stations. */
+    expect(CODE).toMatch(/assetEmpty[\s\S]{0,200}?>Trains</);
+    expect(CODE).toMatch(/StationTokenRow[\s\S]{0,600}?>Stations</);
+  });
+
+  it("does not put a label before its value any more", () => {
+    // The old order, stated as the thing that must not come back.
+    expect(CODE).not.toMatch(/>Trains<[\s\S]{0,200}?TrainChips/);
+    expect(CODE).not.toMatch(/>Stations<[\s\S]{0,200}?StationTokenRow/);
   });
 });
 

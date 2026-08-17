@@ -3038,7 +3038,38 @@ export function drawStationTokenMarker(
   // across this file share with their own independently-tuned minimums (as
   // low as 5px, for the tightest off-board value badges) that a shared
   // global floor would silently override and likely overflow.
-  ctx.font = fitFontSize(ctx, ticker, 11, radius * 1.7, 9, "bold");
+  /* ==================================================================
+   *  DESIGN NOTE 513: FOUR LETTERS DO NOT FIT A THREE-LETTER DISC
+   * ==================================================================
+   *
+   * REPORTED: four-letter acronyms like "ERIE" spill over the token's disc.
+   *
+   * `fitFontSize` shrinks until the text fits `maxWidth` -- but it FLOORS at
+   * its `minFontSizePx`, returning that size even when it does not fit
+   * (see its own loop: the `while` exits and the floor is returned
+   * unmeasured). Design note #46 set that floor to 9px for legibility, which
+   * is right for "PRR" and wrong for "ERIE": at the token's ordinary radius
+   * the four-letter string needs less than 9px to stay inside, so the floor
+   * hands back a size that overflows.
+   *
+   * Six of 1830's eight tickers are three characters or fewer. ERIE and NNH
+   * are the outliers, and ERIE is the one that actually overflows -- which
+   * is why this survived: the disc is correctly sized for the common case.
+   *
+   * TWO CHANGES, and the second is what makes the first safe. The available
+   * width drops for a long ticker, because the disc is a CIRCLE: a chord
+   * near its centre is at its widest, and text set edge-to-edge across that
+   * chord touches the rim it is supposed to sit inside. And the floor drops
+   * with it, so `fitFontSize` is allowed to reach a size that genuinely
+   * fits instead of bottoming out above one.
+   *
+   * SCALED, NOT SPECIAL-CASED. The threshold is a length rather than a list
+   * of tickers, so a future corporation with a long acronym is handled by
+   * the same rule rather than by someone remembering to add it. */
+  const longTicker = ticker.length > 3;
+  const textWidth = radius * (longTicker ? 1.45 : 1.7);
+  const floorPx = longTicker ? 7 : 9;
+  ctx.font = fitFontSize(ctx, ticker, 11, textWidth, floorPx, "bold");
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 

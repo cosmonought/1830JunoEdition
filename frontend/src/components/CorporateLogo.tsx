@@ -111,6 +111,23 @@ export interface CorporateLogoProps {
   /** Style applied to the TEXT fallback only, so a caller can keep its
    *  existing typography when the image is unavailable. */
   fallbackStyle?: React.CSSProperties;
+  /* ==================================================================
+   *  DESIGN NOTE 429: A CIRCLE NEEDS A TIGHTER CAP THAN A STRIPE
+   * ==================================================================
+   *
+   * The default width cap is `size * 2.4`, chosen for the livery STRIPE --
+   * a wide horizontal band where the NYC oval is welcome to be twice as
+   * wide as it is tall.
+   *
+   * The market chart's occupant tokens are CIRCLES. A herald at 2.4x the
+   * circle's height would run out of both sides of it, and the badge's
+   * `overflow: hidden` would then crop the mark rather than fit it --
+   * which is worse than the text fallback, because a cropped herald looks
+   * like a rendering fault while an acronym looks like a decision.
+   *
+   * So the cap is overridable, in pixels. `undefined` keeps the ratio every
+   * existing caller was built against, so this is a pure addition. */
+  maxWidth?: number;
 }
 
 export function CorporateLogo({
@@ -119,6 +136,7 @@ export function CorporateLogo({
   color,
   title,
   fallbackStyle,
+  maxWidth,
 }: CorporateLogoProps) {
   const [failed, setFailed] = useState(false);
 
@@ -153,7 +171,7 @@ export function CorporateLogo({
            the PRR keystone -- so a square box would letterbox some and crop
            none, while an uncapped width lets the widest one shove the float
            badge off the end of the stripe. */
-        maxWidth: `${Math.round(size * 2.4)}px`,
+        maxWidth: `${maxWidth ?? Math.round(size * 2.4)}px`,
         /* Never distort a herald. `contain` fits the whole mark inside the
            box and leaves the spare axis empty. */
         objectFit: "contain",

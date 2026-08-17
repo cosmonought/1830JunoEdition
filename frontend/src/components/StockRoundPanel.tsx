@@ -69,6 +69,7 @@ import { FONT_SIZE } from "../styles/typography";
 // tokens use, so a corporate colour is legible on the card for the
 // same reason it is legible on the board.
 import { bestContrastTextColor } from "./hexContractTypes";
+import { corporationLiveryColor } from "../styles/corporationLivery";
 import {
   CARD_BORDER,
   CARD_BORDER_ACTIVE,
@@ -344,17 +345,39 @@ function CorporationRoster({
 
                     `tickerColor` is the same lookup those surfaces use, so
                     the stripe cannot drift from the token. The requirement
-                    says "exactly match", and this is the mechanism for
-                    that: one table, not a second palette that looks close.
+                    says "exactly match", and design note #428 is finally the
+                    mechanism for it: ONE table in
+                    `styles/corporationLivery.ts` that this file, the market
+                    chart and the map all import. This sentence used to
+                    describe an intention -- there were three hand-kept
+                    copies at the time it was written.
 
                     THE INK IS COMPUTED, NOT CHOSEN. `bestContrastTextColor`
-                    is the same helper the map's station tokens use to put
-                    an acronym on an arbitrary corporate fill. Hard-coding
-                    white would fail on C&O's amber (#d68910); hard-coding
-                    black would fail on CPR's purple. Deriving it per colour
-                    means a corporation added later is legible by
-                    construction rather than by someone remembering to
-                    check. */}
+                    is the same helper the map's station tokens use to put an
+                    acronym on an arbitrary corporate fill.
+
+                    TD-3: THE EXAMPLES WERE STALE, and stale in the worst
+                    way -- they argued the opposite of the live palette. This
+                    read "hard-coding white would fail on C&O's amber
+                    (#d68910); hard-coding black would fail on CPR's purple".
+                    Design note #408 replaced the whole palette with the
+                    physical board's: C&O is now `#5bc8e8` CYAN, which is
+                    light and therefore takes BLACK ink -- so the old
+                    sentence cited it as a case against the very choice it
+                    now needs. CPR is `#7b4a22` brown, not purple.
+
+                    The live cases, checked against the table rather than
+                    remembered: hard-coding white fails on ERIE's yellow
+                    (`#f5cd3a`), which needs black; hard-coding black fails
+                    on B&O's dark blue (`#12408f`), which needs white. Three
+                    of the eight take black and five take white, so any fixed
+                    choice is wrong for at least three corporations.
+
+                    Deriving it per colour means a corporation added later is
+                    legible by construction rather than by someone
+                    remembering to check -- and, as this correction shows, by
+                    someone remembering to re-check the COMMENT when the
+                    palette moves under it. */}
                 <div style={{ ...styles.rosterLivery, backgroundColor: color, color: liveryInk }}>
                   <span style={styles.rosterNameStack}>
                     {/* Design note #410: the historical herald replaces the
@@ -1685,22 +1708,17 @@ function truncateHolder(address: string): string {
   return address.length <= 14 ? address : `${address.slice(0, 8)}...${address.slice(-4)}`;
 }
 
-/** Design note #5: hand-kept duplicate of StockMarketRenderer.tsx's
- *  module-local (unexported) `TICKER_COLORS`. */
-const TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c8102e", // PRR  -- red
-  2: "#1a1a1a", // NYC  -- black
-  3: "#7b4a22", // CPR  -- brown
-  4: "#12408f", // B&O  -- dark blue
-  5: "#5bc8e8", // C&O  -- light blue / cyan
-  6: "#f5cd3a", // ERIE -- yellow
-  7: "#ee7c22", // NNH  -- orange
-  8: "#1e7a45", // B&M  -- green
-};
-const FALLBACK_TICKER_COLOR = "#5a6270";
-function tickerColor(companyId: number): string {
-  return TICKER_COLORS[companyId] ?? FALLBACK_TICKER_COLOR;
-}
+/* Design note #428: the module-local `TICKER_COLORS` is GONE. It was a
+   hand-kept copy of the same eight colours `hexContractTypes.ts` and
+   `StockMarketRenderer.tsx` also held -- three mirrors that design note
+   #408 could only keep in step by instructing future readers to update all
+   of them together. The table now lives in `styles/corporationLivery.ts`
+   and `tickerColor` is its reader, so a recolour physically cannot reach
+   one surface and miss another. */
+const tickerColor = corporationLiveryColor;
+
+/* Design note #389 said "one table, not a second palette that looks close",
+   and this file was the second palette. It is now literally true. */
 
 /** Standard 1830 par ladder, per this pass's own requirement.
  *  Exported since design note #399: the B&O prompt offers the same six

@@ -577,6 +577,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
+import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
+import { CorporateLogo } from "./CorporateLogo";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -779,11 +781,20 @@ const GAME_END_CELL_BACKGROUND = "linear-gradient(155deg, #3fe07a 0%, #1fae4a 55
  *  a standalone case rather than one of a matching pair. */
 const GAME_END_CELL_TEXT_COLOR = "#07260f";
 
-function isRealMarketCell(x: number, y: number): boolean {
-  const row = REAL_MARKET_ROWS.find((r) => r.y === y);
-  if (!row) return false;
-  return x >= row.startX && x < row.startX + row.cells.length;
-}
+/* `isRealMarketCell` DELETED -- the last ESLint warning in the codebase.
+ *
+ * It answered "is (x, y) a coordinate this board actually has", and nothing
+ * had called it since design note #43a moved that question inside
+ * `buildPriceGrid`, which now precomputes an `occupied` set for the cliff
+ * logic and consults that instead. The function was left behind as a
+ * plausible-looking helper that duplicated a check already made elsewhere.
+ *
+ * Removed rather than silenced with a disable comment: a second
+ * implementation of "which cells exist" is exactly the kind of near-miss
+ * duplicate design note #428 has just finished consolidating one file over,
+ * and an unused export is how the second copy gets adopted. `cellAt` is the
+ * live way to ask -- it returns the cell itself, so a caller that needs the
+ * price or the zone does not then have to look it up twice. */
 
 /** Mirrors `market::PAR_VALUE_LADDER` exactly: `(price, x, y)`, the six
  *  standard 1830 par prices, now at their true real-board coordinates
@@ -1297,24 +1308,14 @@ export function marketZoneTextColor(zone: ZoneType | null): string | null {
 /* Ticker color palette -- see design note #6                         */
 /* ------------------------------------------------------------------ */
 
-/** Keyed by `public_company::CORE_PUBLIC_COMPANIES`'s fixed `company_id`s
- *  (1-8: PRR/NYC/CPR/B&O/C&O/ERIE/NNH/B&M). Purely a frontend legibility
- *  aid, not backend data. */
-const TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c8102e", // PRR  -- red
-  2: "#1a1a1a", // NYC  -- black
-  3: "#7b4a22", // CPR  -- brown
-  4: "#12408f", // B&O  -- dark blue
-  5: "#5bc8e8", // C&O  -- light blue / cyan
-  6: "#f5cd3a", // ERIE -- yellow
-  7: "#ee7c22", // NNH  -- orange
-  8: "#1e7a45", // B&M  -- green
-};
-const FALLBACK_TICKER_COLOR = "#5a6270";
-
-function tickerColor(companyId: number): string {
-  return TICKER_COLORS[companyId] ?? FALLBACK_TICKER_COLOR;
-}
+/* Design note #428: the module-local `TICKER_COLORS` is GONE. It was a
+   hand-kept copy of the same eight colours `hexContractTypes.ts` and
+   `StockRoundPanel.tsx` also held -- three mirrors that design note
+   #408 could only keep in step by instructing future readers to update all
+   of them together. The table now lives in `styles/corporationLivery.ts`
+   and `tickerColor` is its reader, so a recolour physically cannot reach
+   one surface and miss another. */
+const tickerColor = corporationLiveryColor;
 
 /* ------------------------------------------------------------------ */
 /* Disconnected Par/IPO Tray -- see design note #10                   */
@@ -1393,10 +1394,46 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
                 markers.map((marker) => (
                   <span
                     key={marker.companyId}
-                    style={{ ...styles.parTrayMarkerBadge, backgroundColor: tickerColor(marker.companyId) }}
+                    style={{
+                      ...styles.parTrayMarkerBadge,
+                      backgroundColor: tickerColor(marker.companyId),
+                      /* Design note #430: the ink is COMPUTED, not white.
+                         This badge hardcoded `#ffffff`, which is fine on
+                         five of the eight liveries and unreadable on the
+                         three light ones -- C&O cyan, ERIE yellow and NNH
+                         orange. It mattered less while the pill only ever
+                         held a logo-free acronym on the darker half of the
+                         palette; it matters now, because this colour is
+                         what the TEXT FALLBACK is drawn in, and a fallback
+                         nobody can read is not a fallback. Same helper the
+                         livery stripe and the map tokens use. */
+                      color: bestContrastTextColor(tickerColor(marker.companyId)),
+                    }}
                     title={`${corporationLabel(marker.ticker)} — parred at $${price}`}
                   >
-                    {marker.ticker}
+                    {/* ==================================================
+                         DESIGN NOTE 430: THE HERALD, WHERE IT FITS
+                        ==================================================
+
+                        TD-2. The par tray's pills are the largest corporate
+                        badges on this screen -- `FONT_SIZE.strong` text with
+                        11px of horizontal padding -- so a herald reads
+                        cleanly at this size, which is the whole test for
+                        whether a raster mark belongs somewhere.
+
+                        `CorporateLogo` brings its own `onError` fallback to
+                        the acronym, so a missing or undecodable file
+                        degrades to exactly what this pill rendered before.
+                        That is why no preloading or cache is involved: this
+                        is the DOM, the browser owns the image lifecycle, and
+                        an `<img>` that fails simply swaps itself for text. */}
+                    <CorporateLogo
+                      ticker={marker.ticker}
+                      size={PAR_TRAY_LOGO_PX}
+                      color={bestContrastTextColor(tickerColor(marker.companyId))}
+                      title={`${corporationLabel(marker.ticker)} — parred at $${price}`}
+                      fallbackStyle={styles.parTrayMarkerFallback}
+                    />
                   </span>
                 ))
               )}
@@ -1485,6 +1522,30 @@ function tokenCountScale(count: number): number {
  *  so a multi-occupant cluster still fits legibly. */
 const MIN_TOKEN_DIAMETER_PX = 16;
 const MAX_TOKEN_DIAMETER_PX = 46;
+
+/* ==================================================================
+ *  DESIGN NOTE 430: WHERE A HERALD STOPS BEING LEGIBLE
+ * ==================================================================
+ *
+ * The diameter at or above which an occupant token carries its historical
+ * herald instead of its acronym.
+ *
+ * 26px is chosen against the marks themselves rather than as a round
+ * number: the PRR keystone and the B&M shield survive being scaled into a
+ * ~15px inner box (the token's diameter less its border and the 0.56 fit
+ * factor) because both are single bold silhouettes; below that the NYC oval
+ * and the CPR beaver become indistinguishable smudges of the same colour as
+ * the circle behind them.
+ *
+ * The map's station tokens sit at 18px and stay on text for this exact
+ * reason (`hexCanvasPrimitives.ts`) -- this constant is that same judgement
+ * expressed as a number, because unlike the map these tokens resize. */
+const MIN_LOGO_TOKEN_DIAMETER_PX = 26;
+
+/** The herald's height inside a par-tray pill. Sized to the pill's own
+ *  `FONT_SIZE.strong` line rather than to a fixed box, so the badge does
+ *  not change height when a logo loads or falls back to text. */
+const PAR_TRAY_LOGO_PX = 17;
 function deriveTokenDiameterPx(cellSize: number, occupantCount: number): number {
   const single = Math.max(MIN_TOKEN_DIAMETER_PX, Math.min(MAX_TOKEN_DIAMETER_PX, Math.round(cellSize * 0.62)));
   return Math.max(Math.round(MIN_TOKEN_DIAMETER_PX * 0.85), Math.round(single * tokenCountScale(occupantCount)));
@@ -1982,6 +2043,9 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                       style={{
                         ...styles.tokenBadge,
                         backgroundColor: tickerColor(occupant.company_id),
+                        // Design note #430: computed ink, for the same
+                        // reason the par pill above takes it.
+                        color: bestContrastTextColor(tickerColor(occupant.company_id)),
                         width: `${tokenDiameterPx}px`,
                         height: `${tokenDiameterPx}px`,
                         fontSize: `${tokenFontSizePx}px`,
@@ -1991,7 +2055,45 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                       }}
                       title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
                     >
-                      {occupant.ticker}
+                      {/* ==================================================
+                           DESIGN NOTE 430: A SIZE THRESHOLD, NOT A BLANKET
+                          ==================================================
+
+                          These tokens are not one size. `deriveTokenDiameterPx`
+                          scales them from the live cell width and then
+                          shrinks them again per occupant, so the range runs
+                          from 46px on a wide chart down to about 14px for a
+                          crowded cell on a narrow one.
+
+                          A herald is legible at the top of that range and is
+                          a coloured smudge at the bottom -- which is the
+                          same judgement that keeps the map's 18px station
+                          tokens on text (TD-2's own third bullet, and
+                          `hexCanvasPrimitives`'s existing behaviour).
+                          Rendering logos on every token regardless would
+                          have honoured the letter of "put the heralds on the
+                          market chart" and made the crowded cells worse.
+
+                          So the threshold decides per token, from the same
+                          number the circle is drawn at. Above it, the mark;
+                          below it, the acronym that has always been there.
+                          One rule, applied to a measurement rather than to a
+                          surface, so it stays correct as the chart resizes. */}
+                      {tokenDiameterPx >= MIN_LOGO_TOKEN_DIAMETER_PX ? (
+                        <CorporateLogo
+                          ticker={occupant.ticker}
+                          size={Math.round(tokenDiameterPx * 0.56)}
+                          /* Design note #429: bounded to the circle. Without
+                             this the default 2.4x cap would run a wide
+                             herald out of both sides and the badge's
+                             `overflow: hidden` would crop it. */
+                          maxWidth={Math.round(tokenDiameterPx * 0.78)}
+                          color={bestContrastTextColor(tickerColor(occupant.company_id))}
+                          title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
+                        />
+                      ) : (
+                        occupant.ticker
+                      )}
                     </span>
                   );
                 })}
@@ -2216,11 +2318,24 @@ const styles: Record<string, React.CSSProperties> = {
     // Upsized alongside `parTrayPrice` -- see design note #17.
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    color: "#ffffff",
+    /* Design note #430: `color: "#ffffff"` REMOVED. The ink is computed per
+       livery at the call site now -- five of the eight need white and three
+       need black, so a hardcoded value was wrong for three corporations. */
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     padding: "5px 11px",
     borderRadius: "999px",
     border: "1px solid rgba(0, 0, 0, 0.35)",
     whiteSpace: "nowrap",
+  },
+  /* Design note #430: the par pill's TEXT fallback keeps the pill's own
+     typography exactly, so a corporation whose logo is missing is
+     indistinguishable from how every pill looked before this change. */
+  parTrayMarkerFallback: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
   },
   // The grid is sized to `REAL_BOARD_COLUMNS`, which now equals the
   // backend's full `MARKET_MAX_X` range (both sides adopted the real
@@ -2358,7 +2473,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontWeight: 700,
-    color: "#ffffff",
+    // Design note #430: computed per livery at the call site.
     borderRadius: "50%",
     border: "2px solid rgba(0, 0, 0, 0.4)",
     boxShadow: "0 2px 4px rgba(0, 0, 0, 0.55)",

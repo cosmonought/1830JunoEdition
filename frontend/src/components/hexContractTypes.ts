@@ -25,6 +25,8 @@
 //
 // IMPORT DIRECTION IS ONE-WAY: never import from `HexGridRenderer.tsx`.
 
+import { corporationLiveryColor } from "../styles/corporationLivery";
+
 /** Mirrors `msg.rs`'s `MapTileEntry` exactly -- one laid hex tile. */
 export interface MapTileEntry {
   q: number;
@@ -179,21 +181,34 @@ export const STATION_HOME_HEXES: ReadonlyArray<{
   { companyId: 8, q: 9, r: 4, label: "E23" }, // B&M -> Boston
 ];
 
-/** Station Tokens (design note #36): a small, deliberately DUPLICATED copy
- *  of `StockMarketRenderer.tsx`'s own `TICKER_COLORS` -- same values, same
- *  `company_id` keys. See design note #36 for why this is copied rather
- *  than imported. */
-export const STATION_TICKER_COLORS: Readonly<Record<number, string>> = {
-  1: "#c8102e", // PRR  -- red
-  2: "#1a1a1a", // NYC  -- black
-  3: "#7b4a22", // CPR  -- brown
-  4: "#12408f", // B&O  -- dark blue
-  5: "#5bc8e8", // C&O  -- light blue / cyan
-  6: "#f5cd3a", // ERIE -- yellow
-  7: "#ee7c22", // NNH  -- orange
-  8: "#1e7a45", // B&M  -- green
-};
-export const STATION_FALLBACK_TICKER_COLOR = "#5a6270";
+/* ==================================================================
+ *  DESIGN NOTE 428: RE-EXPORTED, NOT DEFINED
+ * ==================================================================
+ *
+ * The table itself now lives in `styles/corporationLivery.ts` -- see that
+ * module for the palette, design note #408's audit, and why three copies
+ * became one.
+ *
+ * THESE NAMES SURVIVE AS ALIASES, deliberately. `STATION_TICKER_COLORS`,
+ * `STATION_FALLBACK_TICKER_COLOR` and `stationTickerColor` have eight-plus
+ * call sites across `App.tsx`, `HexGridRenderer`, `hexCanvasPrimitives`,
+ * `ContextualSubPanel`, `FinancialLedger`, `TrainPurchasePanel`,
+ * `StationTokenRow` and `ContextualActionBar`, plus a design-notes markdown
+ * that references them by name. Renaming all of that in the same pass that
+ * moves the data would make one behavioural change indistinguishable from
+ * forty mechanical ones in review.
+ *
+ * So the move is invisible to every existing consumer, and new code can
+ * import `corporationLiveryColor` from the styles module directly. The
+ * aliases are not deprecated-and-abandoned: they are this file's station
+ * token vocabulary, and a hex-map module asking for "the station ticker
+ * colour" reads better here than the generic name would. */
+export {
+  CORPORATION_LIVERY_COLORS as STATION_TICKER_COLORS,
+  CORPORATION_LIVERY_FALLBACK as STATION_FALLBACK_TICKER_COLOR,
+  relativeLuminance,
+  bestContrastTextColor,
+} from "../styles/corporationLivery";
 
 /* ==================================================================
  *  DESIGN NOTE 234: A NEAR-WHITE RING AROUND WHITE LETTERING
@@ -349,7 +364,8 @@ export function glowColorFor(color: string, minimumLuminance = 0.32): string {
  * the cards different opinions about who a corporation is. */
 
 export function stationTickerColor(companyId: number): string {
-  return STATION_TICKER_COLORS[companyId] ?? STATION_FALLBACK_TICKER_COLOR;
+  // Design note #428: delegates rather than re-implementing the `?? fallback`.
+  return corporationLiveryColor(companyId);
 }
 
 /** Corporate Acronym Overlay guarantee (design note #45): a small,
@@ -384,39 +400,12 @@ export function stationTickerLabel(companyId: number): string {
   return STATION_TICKER_LABELS[companyId] ?? "";
 }
 
-/** Crisp Token Typography (design note #46): WCAG relative luminance of a
- *  `#rrggbb` hex color -- the standard sRGB-to-linear formula, used below to
- *  pick whichever of pure white/pure black actually contrasts better
- *  against a given badge fill, rather than assuming one fixed choice works
- *  for every corporate color. */
-export function relativeLuminance(hex: string): number {
-  const toLinear = (channel: number): number => {
-    const s = channel / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  const r = toLinear(parseInt(hex.slice(1, 3), 16));
-  const g = toLinear(parseInt(hex.slice(3, 5), 16));
-  const b = toLinear(parseInt(hex.slice(5, 7), 16));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-/** Crisp Token Typography (design note #46): returns whichever of pure
- *  white (`#FFFFFF`) or pure black (`#000000`) has the higher WCAG contrast
- *  ratio against `backgroundHex`, per the standard
- *  `(lighter + 0.05) / (darker + 0.05)` formula. See design note #46 for
- *  why this is picked dynamically per badge rather than one color asserted
- *  for every corporate ticker color -- several of `STATION_TICKER_COLORS`'s
- *  own established brand colors (duplicated from `StockMarketRenderer.tsx`,
- *  out of scope to re-tune here) don't actually reach the 7:1 AAA threshold
- *  against EITHER pure color alone; this always returns the better of the
- *  two available options, which is the closest a flat single-color badge
- *  fill can get without changing the brand palette itself. */
-export function bestContrastTextColor(backgroundHex: string): string {
-  const bgLuminance = relativeLuminance(backgroundHex);
-  const contrastWithWhite = 1.05 / (bgLuminance + 0.05);
-  const contrastWithBlack = (bgLuminance + 0.05) / 0.05;
-  return contrastWithWhite >= contrastWithBlack ? "#FFFFFF" : "#000000";
-}
+/* Design note #428: `relativeLuminance` and `bestContrastTextColor` were
+   DEFINED here and are now re-exported from `styles/corporationLivery.ts`
+   at the top of this file. They are generic colour maths that lived here
+   only because the map's station tokens were the first surface needing to
+   put an acronym on an arbitrary corporate fill; four other surfaces call
+   them now, and all four are about that palette. */
 
 /** Mirrors `msg.rs`'s `LegalTilePlacement` exactly. */
 export interface LegalTilePlacement {

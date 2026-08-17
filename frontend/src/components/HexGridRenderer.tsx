@@ -3299,7 +3299,35 @@ export function HexGridRenderer({
        * WITHOUT A VEIL NOTHING CHANGES. Gates 2 and 3 below still report
        * their reasons, because with no dimming those hexes look identical to
        * legal ones and the cue is the only feedback there is. */
-      if (layFocus && !layFocus.highlighted.has(`${q},${r}`)) {
+      /* ==================================================================
+       *  DESIGN NOTE 437: THE GATE IS THE ACTOR'S, NOT EVERYONE'S
+       * ==================================================================
+       *
+       * REPORTED: non-active players cannot select hexes to view the tile
+       * selector during an Operating Round.
+       *
+       * This gate was `if (layFocus && ...)`, so it applied to anyone
+       * looking at a board that had a focus set -- and during the Track
+       * step every viewer gets one, built from the ACTING corporation's
+       * reach. A player waiting their turn could therefore only click the
+       * hexes the current corporation could build on, which is the least
+       * useful subset for someone planning their own turn.
+       *
+       * `dim` is the right condition and not merely a convenient one. It is
+       * documented above as being set from `isMyTurn` precisely because
+       * "only the shell knows who is watching" -- it already means "this
+       * viewer is the one who may act on this set". The refusal and the
+       * veil are two expressions of that single fact, so they read one
+       * flag: a second boolean saying the same thing is a thing that can
+       * disagree with it, and a board that dims for one player while
+       * refusing another's clicks is exactly that disagreement.
+       *
+       * For a non-acting viewer there is now no veil and no refusal -- the
+       * glow still marks the acting corporation's legal set, which is
+       * information worth having while watching, and clicks fall through to
+       * open the picker anywhere. Whether they may LAY is a separate
+       * question the ring's confirm button answers (`canLayTileNow`). */
+      if (layFocus?.dim && !layFocus.highlighted.has(`${q},${r}`)) {
         clickQuerySeqRef.current += 1;
         return;
       }

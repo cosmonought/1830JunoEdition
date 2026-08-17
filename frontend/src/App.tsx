@@ -546,6 +546,7 @@ import {
   evaluateStationPlacement,
   nextStationTokenCost,
   placeableStationHexes,
+  stationPlacementBlockReason,
   stationTokenSlots,
 } from "./utils/stationTokens";
 import { corporationFullName } from "./utils/corporationNames";
@@ -553,8 +554,8 @@ import StockMarketRenderer, {
   marketCellForPrice,
   parBoxCellFor,
   projectDividendCellMove,
+  projectDividendFrom,
   projectShareSaleMove,
-  projectDividendMove,
   type MarketGridResponse,
 } from "./components/StockMarketRenderer";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
@@ -626,6 +627,7 @@ import {
   sandboxWaterfallState,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
+import { undoSkippedCount, undoTargetIndex } from "./utils/undoTarget";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
 
@@ -1011,6 +1013,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       waterfall: WaterfallStateResponse | null;
       market: SandboxMarketPrices;
       settledPrices: Readonly<Record<number, number>>;
+      /** Design note #439: whether the action this snapshot precedes was
+       *  dispatched BY THE GAME rather than by the player. Undo walks past
+       *  these -- see `handleUndoLastAction`. */
+      automatic: boolean;
     }>
   >([]);
   /** Bounded so a long hotseat session cannot grow the stack without limit.
@@ -1444,7 +1450,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * when the roster is REPORTED and EMPTY; ignorance permits, because the
    * cost of a wrong "must buy" is a stuck game and the cost of a wrong
    * "may leave" is a move the contract will refuse on its own. */
-  const mustBuyTrain = useMemo(() => {
+  const trainlessAndReported = useMemo(() => {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
@@ -1801,6 +1807,70 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * `null` -- rather than a plan with a zero shortfall -- whenever there is
    * no emergency, so the modal's own mount condition is one identity check
    * and cannot disagree with this derivation about whether one exists. */
+  /* ==================================================================
+   *  DESIGN NOTE 433: NO ROUTE, NO OBLIGATION
+   * ==================================================================
+   *
+   * REPORTED: a floated company with no valid routes is being forced to buy
+   * a train -- End Turn is blocked and there is no way out of the turn.
+   *
+   * Design note #293 built this gate and stated the rule as "a corporation
+   * that owns no train MUST buy one ... There is no branch of that rule
+   * where the turn simply ends." That is half of 1830's rule and the half
+   * that produces a deadlock.
+   *
+   * The full rule is conditional on being able to USE the train: a
+   * corporation is obliged to buy only if it has no trains AND has a route
+   * it could actually run. A company whose token sits on a city no track
+   * reaches has nothing to run, so it is not obliged, and 1830 lets its
+   * turn end. Forcing the purchase there is worse than a rules error --
+   * design note #293 deliberately keeps the button disabled even on an
+   * empty treasury, on the reasoning that the president must pay. So a
+   * corporation with no route and a poor president had End Turn disabled,
+   * the emergency modal demanding money for a train that could go nowhere,
+   * and no third control on the screen. That is a stuck game.
+   *
+   * THE PROBE ASKS A HYPOTHETICAL, which is what makes it different from
+   * `maxRouteRevenue` (design note #414) a few hundred lines below. That
+   * one measures what the trains a corporation OWNS can earn, and returns
+   * `null` when it owns none -- which is exactly the situation here, so it
+   * cannot answer this question. This asks instead: if this corporation
+   * bought the cheapest train available, could it run anything? A 2-train
+   * (two revenue centres) is the right hypothetical because it is the
+   * smallest thing the depot sells, so a "no" from it is a "no" for every
+   * train -- a bigger train reaches strictly more.
+   *
+   * `assignRouteSet` is the same search Auto Route and the auto-withhold use.
+   * A third opinion about what is runnable is how "the board says I can run
+   * and the button says I cannot" happens.
+   *
+   * IGNORANCE PERMITS, consistent with design note #293b above. No tokens on
+   * the board, no map yet, or a corporation the state does not carry all
+   * resolve to "no obligation" and leave End Turn live -- the contract
+   * refuses an illegal exit on its own, and a wrongly-enabled button costs a
+   * rejected message while a wrongly-disabled one costs the game. */
+  const couldRunARouteIfItHadATrain = useMemo(() => {
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    const startHexes = corporation?.station_token_hexes ?? [];
+    if (startHexes.length === 0) return false;
+
+    const result = assignRouteSet({
+      mapGrid,
+      era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+      startHexes,
+      // The cheapest train in the depot -- see the note above on why the
+      // smallest hypothetical is the correct one.
+      trains: [{ trainIndex: 0, maxRevenueCentres: 2 }],
+    });
+    return result.totalRevenue > 0;
+  }, [gameState, actingProtocolId, mapGrid, currentPhase]);
+
+  /** Design note #433: BOTH conditions. Owning no train is necessary and was
+   *  being treated as sufficient. */
+  const mustBuyTrain = trainlessAndReported && couldRunARouteIfItHadATrain;
+
   const emergencyPurchasePlan = useMemo(() => {
     /* ==============================================================
      *  DESIGN NOTE 358: THREE CONDITIONS, NOT ONE
@@ -2343,10 +2413,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    *  Spectators are excluded here as well as by `runGameplayAction`'s own
    *  gate, for the same reason the action bar is hidden from them: a control
    *  they can open and never use is noise, not courtesy. */
-  const tileSelectorArmed =
-    !spectator &&
-    (gameState?.current_round_type ?? null) === "OperatingRound" &&
-    orSubPhase === "Track";
+  /* ==================================================================
+   *  DESIGN NOTE 437: LOOKING IS NOT ACTING
+   * ==================================================================
+   *
+   * REPORTED: non-active players cannot select hexes to view the tile
+   * selector during an Operating Round.
+   *
+   * One flag was answering two questions. `tileSelectorArmed` decided both
+   * "may this person OPEN the picker" and, through `layTrackFocus` and the
+   * click interceptor, "is this the Lay Track step" -- so narrowing it to
+   * the acting player's Track step, which is correct for the second, also
+   * closed the picker to everyone else for the whole round.
+   *
+   * Design note #163 had already drawn this line once and drawn it in the
+   * right place: "`canLayTileNow` is deliberately NOT the condition. That
+   * value also refuses when it is not your turn, and a player should still
+   * be able to browse upgrades on somebody else's Track step." The
+   * principle was sound and the gate it protected was still the wrong one,
+   * because `tileSelectorArmed` itself carried `!spectator` and the
+   * sub-phase.
+   *
+   * So the flag splits in two, and each half answers its own question:
+   *
+   *   INSPECTING is available to anyone, in any sub-phase of an Operating
+   *   Round, spectators included. Reading the board is not a move, and a
+   *   player deciding what to do on their turn wants to study the upgrades
+   *   available at a hex before it arrives.
+   *
+   *   ACTING keeps every restriction it had. `canLayTileNow` (design note
+   *   #163) still gates the ring's confirm button, and it still refuses a
+   *   spectator, a wrong sub-phase and a wrong turn -- so a browsing player
+   *   sees a disabled Lay Track button carrying the reason, not a live one.
+   *
+   * THE COST IS REAL AND WORTH NAMING. The original note's third argument
+   * for the narrow gate was that "gating only here would leave every stray
+   * click costing a query round-trip" -- `GetLegalTilePlacements` fires on
+   * a resolved hex click. Widening the inspector widens that. It is
+   * accepted because the query is read-only, cheap, and already fires on
+   * every Track-step click; a player browsing is doing the thing the query
+   * exists to answer. The `sandbox` and `spectator` exclusions on the
+   * `queryClient` prop are unchanged, so neither path adds chain traffic. */
+  const tileInspectorArmed =
+    (gameState?.current_round_type ?? null) === "OperatingRound";
+
+  /** The Lay Track step proper -- what the veil and the legal-placement
+   *  reach are about. Distinct from `tileInspectorArmed` above: this is the
+   *  step, that is permission to look at it. */
+  const tileLayStepActive =
+    !spectator && tileInspectorArmed && orSubPhase === "Track";
 
   /* ==================================================================
    *  DESIGN NOTE 224: ONLY LIGHT WHAT THIS CORPORATION CAN REACH
@@ -2370,7 +2485,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * the contract stays the authority, which is the safe direction to fail.
    */
   const layTrackFocus = useMemo(() => {
-    if (!tileSelectorArmed) return undefined;
+    // Design note #437: the STEP, not the inspector. Veiling the board
+    // while a player is merely browsing would tell them they may not build
+    // on hexes that are simply not their concern this second.
+    if (!tileLayStepActive) return undefined;
     const corporation = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
@@ -2398,7 +2516,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // is too dark to read as light against the veiled board.
       glowColor: glowColorFor(stationTickerColor(actingProtocolId)),
     };
-  }, [tileSelectorArmed, gameState, actingProtocolId, mapGrid]);
+  }, [tileLayStepActive, gameState, actingProtocolId, mapGrid]);
 
 
   /* Design note #199, layer 3: a ring left open when the turn moves on. The
@@ -2407,10 +2525,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      closing on the next click would leave the carousel floating over a board
      that has moved past it. */
   useEffect(() => {
-    if (tileSelectorArmed) return;
+    if (tileInspectorArmed) return;
     setRadialSelector(null);
     setPreviewTile(null);
-  }, [tileSelectorArmed]);
+  }, [tileInspectorArmed]);
 
   const handleHexClickQuery = useCallback((state: HexClickQueryState) => {
     setHexClickQuery(state);
@@ -2444,7 +2562,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      * refuses when it is not your turn, and a player should still be able to
      * browse upgrades on somebody else's Track step -- which is the half of
      * design note #163 worth keeping. The sub-phase is the whole gate. */
-    if (!tileSelectorArmed) {
+    if (!tileInspectorArmed) {
       setRadialSelector(null);
       setPreviewTile(null);
       return;
@@ -2488,7 +2606,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     // `boardEl` dropped: design note #171 replaced the `getBoundingClientRect`
     // arithmetic that needed it with the centroid the renderer now reports,
     // so this closure reads nothing from the DOM at all any more.
-  }, [tileSelectorArmed]);
+  }, [tileInspectorArmed]);
 
   /* Design note #162: CLICK THE PREVIEW TO ROTATE IT.
    *
@@ -3457,7 +3575,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   }, [payPrivateRevenue]);
 
   const runGameplayAction = useCallback(
-    async (fallbackLabel: string, msg: GameplayExecuteMsg) => {
+    async (
+      fallbackLabel: string,
+      msg: GameplayExecuteMsg,
+      /* Design note #439: set by the two effects that dispatch on the
+         player's behalf (the sub-phase auto-skip and the forced withhold).
+         Everything else is a click and defaults to `false`. */
+      options?: { automatic?: boolean },
+    ) => {
       /* ==================================================================
        *  DESIGN NOTE 262: THE LOG DESCRIBES THE EVENT, NOT THE MESSAGE
        * ==================================================================
@@ -3487,8 +3612,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         marketPrices: Object.fromEntries(
           (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
         ),
-        projectPrice: (price: number, choice: "pay" | "withhold") =>
-          projectDividendMove(price, choice)?.price ?? null,
+        /* Design note #434: steps from the CELL. This took a bare price and
+           re-derived a coordinate from it, so the log quoted the same wrong
+           destination the readout did. `marketGrid.positions` is the same
+           source the panel reads, so the sentence and the screen agree. */
+        projectPrice: (companyId: number, choice: "pay" | "withhold") =>
+          projectDividendFrom(
+            marketGrid?.positions.find((p) => p.company_id === companyId) ?? null,
+            choice,
+          )?.price ?? null,
       };
       /* Design note #265: seeded from the BEFORE state, then re-derived
          against the resolved one inside the sandbox branch. A live chain has
@@ -3585,6 +3717,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                 waterfall: sandboxWaterfallRef.current,
                 market: sandboxMarketRef.current,
                 settledPrices: settledPrivatePricesRef.current,
+                automatic: options?.automatic === true,
               },
             ].slice(-SANDBOX_HISTORY_LIMIT),
           );
@@ -3731,11 +3864,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           setSandboxMarket(marketResult.prices);
         }
         if (marketResult.moved) {
-          const { companyId, from, to } = marketResult.moved;
+          const { companyId, from, to, reason } = marketResult.moved;
           const ticker =
             before?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
             `#${companyId}`;
-          logInfo("Market Move", `${ticker} fell from $${from} to $${to} on the sale.`);
+          /* Design note #435: says what actually moved it. This read "fell
+             from $X to $Y on the sale" for EVERY move, so a withheld
+             dividend -- the most common way a price falls in 1830, and the
+             one a new president is most confused by -- was reported as a
+             share sale that never happened. The direction is derived too:
+             a payout RISES, and "fell" was wrong for it in the same
+             sentence. */
+          const [verb, cause] =
+            reason === "payout"
+              ? (["rose", "on the dividend payout"] as const)
+              : reason === "withhold"
+                ? (["fell", "on the withheld dividend"] as const)
+                : (["fell", "on the share sale"] as const);
+          logInfo("Market Move", `${ticker} ${verb} from $${from} to $${to} ${cause}.`);
         }
 
         if (after) {
@@ -4052,11 +4198,46 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     // local restore there would put the UI out of step with the chain.
     if (sandbox) {
       setSandboxHistory((stack) => {
-        const previous = stack[stack.length - 1];
-        if (!previous) {
+        /* ==============================================================
+         *  DESIGN NOTE 439: UNDO REWINDS TO A DECISION, NOT TO A STEP
+         * ==============================================================
+         *
+         * REPORTED: Undo after the game has auto-skipped a sub-phase drops
+         * the player into the sub-phase that was skipped.
+         *
+         * It did, and the mechanism was faithful rather than broken: every
+         * dispatch pushes a snapshot, and the auto-skip and forced-withhold
+         * effects dispatch real messages. A turn that ran Track -> (skip
+         * Tokens) -> (skip Routes) -> (withhold $0) left four snapshots on
+         * the stack, three of them recording moves the player never made.
+         * One Undo therefore landed on the Dividends step -- and landed
+         * there STUCK, because `autoSkippedRef` had already recorded that
+         * step as handled and would not skip it a second time.
+         *
+         * So Undo now rewinds to the last snapshot the PLAYER created and
+         * discards the automatic ones stacked above it. One press returns
+         * to the last thing they actually chose, which is what the button
+         * has always claimed to do.
+         *
+         * THE AUTOMATIC STEPS RE-RUN, and that is the point rather than a
+         * side effect. Restoring the pre-Track state also restores the
+         * sub-phase cursor, and `autoSkippedRef`/`forcedWithholdRef` are
+         * keyed by `(corporation, step)` -- so the guards still hold within
+         * the turn and the skips reapply from whatever the player does
+         * next. Undo puts the player back at the decision; the consequences
+         * of that decision are recomputed rather than replayed.
+         *
+         * ALL-AUTOMATIC IS A REAL CASE. A corporation whose whole turn was
+         * skipped has no player snapshot to return to, so the oldest entry
+         * is used -- the start of what this stack remembers, which is the
+         * furthest back Undo can honestly go. */
+        const target = undoTargetIndex(stack);
+        const previous = target === null ? undefined : stack[target];
+        if (target === null || !previous) {
           logInfo("Undo", "Nothing to undo — this is the start of the scenario.");
           return stack;
         }
+        const skipped = undoSkippedCount(stack);
         sandboxStateRef.current = previous.state;
         setSandboxState(previous.state);
         setMapGrid(previous.mapGrid);
@@ -4074,8 +4255,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         // Any in-flight preview belonged to the state just discarded.
         setPreviewTile(null);
         setRadialSelector(null);
-        logInfo("Undo", "Reverted the last sandbox action.");
-        return stack.slice(0, -1);
+        logInfo(
+          "Undo",
+          skipped > 0
+            ? `Reverted the last action, rewinding past ${skipped} automatically-skipped step${skipped === 1 ? "" : "s"}.`
+            : "Reverted the last sandbox action.",
+        );
+        return stack.slice(0, target);
       });
       return;
     }
@@ -4180,29 +4366,142 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * something the chain has already done. */
   const pendingHomeToken = useMemo(() => {
     if (!gameState) return null;
-    return pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
-  }, [gameState, homeHexToAxial]);
+    const owed = pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
+    if (!owed) return null;
+
+    /* ==================================================================
+     *  DESIGN NOTE 440: THE PRESIDENT'S PROMPT, NOT EVERYONE'S
+     * ==================================================================
+     *
+     * REPORTED: the home station prompt fires for all players.
+     *
+     * It did. `pendingHomeTokens` answers "which corporation owes a token",
+     * which is a fact about the BOARD and therefore true for every viewer
+     * at once -- so a modal keyed on it alone appeared on four screens,
+     * three of them belonging to players with no right to answer it. Worse,
+     * it is a BLOCKING modal with no dismissal (see the component's own
+     * note on why that is correct for the president), so the other three
+     * players were locked out of the game by a decision that was not
+     * theirs.
+     *
+     * The presidency is already carried on the pending entry, so the gate
+     * is a comparison rather than new plumbing.
+     *
+     * HOTSEAT KEEPS THE PROMPT, and that is why this tests the SEAT rather
+     * than the wallet. At a shared keyboard `viewerAddress` is the seat
+     * currently being played, which is exactly who should be answering --
+     * gating on a connected wallet would silence the prompt for the one
+     * mode where every seat is the viewer in turn. `sandboxSeatIndex`
+     * drives `viewerAddress` there, so following the seat is following the
+     * person holding the mouse.
+     *
+     * A CORPORATION WITH NO PRESIDENT ON RECORD prompts nobody. That state
+     * is reachable through the B&O private before its par is set, and a
+     * modal nobody can answer is the same lockout in a different costume --
+     * `pendingHomeTokens` already excludes hexes it cannot resolve, and
+     * this excludes presidencies it cannot attribute. */
+    if (!owed.president || owed.president !== viewerAddress) return null;
+    return owed;
+  }, [gameState, homeHexToAxial, viewerAddress]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 440: THE HOME STATION IS PLACED ON THE MAP
+   * ==================================================================
+   *
+   * REPORTED: the prompt auto-places the token without map interaction.
+   *
+   * `null` when no home placement is in flight. When the president accepts
+   * the prompt this holds the corporation, the one legal hex, and the tab
+   * they came FROM -- so the flow can put them back where they were rather
+   * than stranding them on the map.
+   *
+   * WHY THE RETURN TAB IS CAPTURED RATHER THAN ASSUMED. A float can happen
+   * during a Stock Round (a purchase crosses 60%) or in the auction (the
+   * B&O private), so "back" is not a constant. Reading `activeMainTab` at
+   * the moment of the click records where the player actually was, which is
+   * the only honest answer -- the requirement says "the Stocks tab" because
+   * that is where a float usually happens, not because it always does. */
+  const [homeStationPlacement, setHomeStationPlacement] = useState<{
+    companyId: number;
+    q: number;
+    r: number;
+    returnTab: MainTab;
+  } | null>(null);
+
+  /** Design note #440: the single lit hex. Shaped exactly like
+   *  `layTrackFocus`/`tokenTargetFocus` so it drops into the same `layFocus`
+   *  prop -- one veil mechanism, three users, rather than a third way of
+   *  dimming a board. */
+  const homeStationFocus = useMemo(() => {
+    if (!homeStationPlacement) return undefined;
+    const only = new Set<string>([`${homeStationPlacement.q},${homeStationPlacement.r}`]);
+    return {
+      // `visible` and `highlighted` are the SAME single hex here, which is
+      // the whole point: everything else on the board goes dark.
+      visible: only,
+      highlighted: only,
+      glowColor: glowColorFor(stationTickerColor(homeStationPlacement.companyId)),
+    };
+  }, [homeStationPlacement]);
 
   /** Design note #416: the prompt's answer. Free -- this deliberately does
    *  NOT dispatch `PlaceStationToken`, which charges the escalating token
    *  price (design note #239). A home station costs nothing, and routing it
    *  through the paid message would bill a corporation for the one token
    *  1830 gives it. */
+  /** Design note #440: the prompt's answer ARMS THE MAP. It no longer
+   *  places anything -- it records where the player was, sends them to the
+   *  Rail Map with the board veiled to one hex and the station cursor live,
+   *  and waits for the click. `handleCommitHomeStation` below is what
+   *  actually puts the token down. */
   const handlePlaceHomeStation = useCallback(
     (companyId: number, q: number, r: number) => {
+      setHomeStationPlacement({ companyId, q, r, returnTab: activeMainTab });
+      setActiveMainTab("map");
       const ticker =
         gameState?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
         `#${companyId}`;
+      logInfo(
+        "Home Station",
+        `Click the lit hex on the Rail Map to place the ${ticker} home station.`,
+      );
+    },
+    [gameState, activeMainTab, logInfo],
+  );
+
+  /** Design note #440: the board click that finishes it.
+   *
+   *  Free -- this deliberately does NOT dispatch `PlaceStationToken`, which
+   *  charges the escalating token price (design note #239). A home station
+   *  costs nothing, and routing it through the paid message would bill a
+   *  corporation for the one token 1830 gives it. */
+  const handleCommitHomeStation = useCallback(
+    ({ q, r }: { q: number; r: number }) => {
+      const placement = homeStationPlacement;
+      if (!placement) return;
+      /* The veil already refuses every other hex (`layFocus.highlighted` is
+         a one-element set), so this is a second lock on the same door --
+         cheap, and the kind of guard that matters if the veil is ever
+         loosened for a reason unrelated to this flow. */
+      if (q !== placement.q || r !== placement.r) return;
+
+      const ticker =
+        gameState?.public_companies.find((e) => e.company_id === placement.companyId)?.ticker ??
+        `#${placement.companyId}`;
       setSandboxState((current) => {
         if (!current) return current;
-        const placed = placeHomeStationToken(current, companyId, q, r);
+        const placed = placeHomeStationToken(current, placement.companyId, q, r);
         if (placed === current) return current;
         sandboxStateRef.current = placed;
         return placed;
       });
       logInfo("Home Station", `${ticker} places its home station token.`);
+      setHomeStationPlacement(null);
+      // Back where they came from -- see the state's own note on why this
+      // is captured rather than hardcoded to the Stocks tab.
+      setActiveMainTab(placement.returnTab);
     },
-    [gameState, logInfo],
+    [homeStationPlacement, gameState, logInfo],
   );
 
   /* Design note #399: the prompt's answer. Grants the certificate AND sets
@@ -4374,8 +4673,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * over from the derived value further down this component: that value is
    * declared after this callback, and naming it in a dependency array here
    * would evaluate it before its own initialiser had run. */
-  const handleDeclareDividendsChoice = useCallback(
-    (distribute: boolean) => {
+  /* Design note #439: `automatic` for the same reason the skip has it --
+     the forced $0 withhold (design note #414) is the game acting, and Undo
+     must rewind past it to whatever the player last chose. */
+  const declareDividendsChoice = useCallback(
+    (distribute: boolean, automatic = false) => {
       const corporation = gameState?.public_companies.find(
         (entry) => entry.company_id === actingProtocolId,
       );
@@ -4392,18 +4694,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
             distribute,
           },
         },
+        { automatic },
       );
       setOrSubPhase("Hardware");
     },
     [runGameplayAction, gameId, actingProtocolId, gameState],
   );
+  /* All three take NO arguments, so an `onClick` handler's event object can
+     never arrive where `distribute` or `automatic` is expected -- design
+     note #439's hazard, avoided by construction rather than by care. */
   const handlePayDividends = useCallback(
-    () => handleDeclareDividendsChoice(true),
-    [handleDeclareDividendsChoice],
+    () => declareDividendsChoice(true),
+    [declareDividendsChoice],
   );
   const handleWithholdRevenue = useCallback(
-    () => handleDeclareDividendsChoice(false),
-    [handleDeclareDividendsChoice],
+    () => declareDividendsChoice(false),
+    [declareDividendsChoice],
+  );
+  /** The forced $0 withhold's entry point -- design note #439. */
+  const withholdRevenueAutomatically = useCallback(
+    () => declareDividendsChoice(false, true),
+    [declareDividendsChoice],
   );
 
   /* ==================================================================
@@ -4767,7 +5078,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * sequence the stepper renders, and `visibleSubPhases` drops `BuyPrivate`
    * before Phase 3 -- so advancing walks the steps the player can actually
    * see rather than a hidden one. */
-  const handleSkipSubPhase = useCallback(() => {
+  /* Design note #439: TWO ENTRY POINTS, ONE IMPLEMENTATION.
+   *
+   * The skip is dispatched both by the player (the Skip button) and by the
+   * game (the auto-skip effect), and Undo has to tell them apart. A single
+   * function taking `automatic = false` would be wrong in the dangerous
+   * direction: `onClick={onSkipSubPhase}` hands React's MouseEvent in as the
+   * first argument, and a truthy event would mark every MANUAL skip as
+   * automatic -- so Undo would walk straight past the player's own choices.
+   *
+   * Two named callbacks make the caller state which it is, and neither can
+   * be invoked with the wrong one by accident. */
+  const skipSubPhase = useCallback((automatic: boolean) => {
     /* Design note #278: skipping Routes is the observation that makes a
        stale `last_route_revenue` harmless -- whatever the field says, this
        corporation did not run this turn, so there is nothing to allocate
@@ -4775,12 +5097,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (orSubPhase === "Routes") {
       setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: false });
     }
-    runGameplayAction("AdvanceOperatingSubPhase", {
-      AdvanceOperatingSubPhase: {
-        game_id: gameId,
-        protocol_id: actingProtocolId,
+    runGameplayAction(
+      "AdvanceOperatingSubPhase",
+      {
+        AdvanceOperatingSubPhase: {
+          game_id: gameId,
+          protocol_id: actingProtocolId,
+        },
       },
-    });
+      { automatic },
+    );
     if (!sandbox) return;
     setOrSubPhase((current) => {
       // Design note #385: the same filtered list the strip renders, so Skip
@@ -4796,6 +5122,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       return steps[at + 1];
     });
   }, [runGameplayAction, gameId, actingProtocolId, sandbox, gameState, orSubPhase]);
+
+  /** The Skip button. Safe to pass straight to `onClick` -- it takes no
+   *  arguments, so an event object cannot be mistaken for a flag. */
+  const handleSkipSubPhase = useCallback(() => skipSubPhase(false), [skipSubPhase]);
+  /** The auto-skip effect's entry point -- design note #439. */
+  const skipSubPhaseAutomatically = useCallback(() => skipSubPhase(true), [skipSubPhase]);
 
   // Audit G-15. Each refreshes the offer list on completion: the whole point
   // of these four is that they change what BOTH players can do next, and the
@@ -5143,6 +5475,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return null;
   }, [ownsAnyTrain, maxRouteRevenue]);
 
+  /* ==================================================================
+   *  DESIGN NOTE 438: WHY THIS CORPORATION CANNOT PLACE A STATION
+   * ==================================================================
+   *
+   * `null` when it can. The three blocking conditions are checked in the
+   * order a player would discover them -- do I have a token, can I pay for
+   * it, is there anywhere to put it -- so the reason reported is the first
+   * one that actually stops them rather than whichever is cheapest to test.
+   *
+   * THE TOPOLOGICAL CHECK IS THE REAL ONE, and it reuses
+   * `placeableStationHexes`, which is the same set the targeting veil
+   * lights (design note #240). A cheaper approximation -- "does the network
+   * touch any city" -- would disagree with the veil about reservations,
+   * occupied slots and OO tiles, and the failure would be the worst kind:
+   * a step skipped for a corporation the map would have let place, or a
+   * player held on a step whose veil lights nothing.
+   *
+   * SCOPED, because it walks every board hex. It runs only during an
+   * Operating Round on the Tokens step; everywhere else this is `null`,
+   * meaning "not asked". */
+  const stationPlacementBlock = useMemo<string | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
+    if (orSubPhase !== "Tokens") return null;
+    /* Design note #438: the rule itself lives in `utils/stationTokens.ts`,
+       beside `placeableStationHexes` which it consults and beside
+       `evaluateStationPlacement` which decides what "placeable" means. A
+       predicate about station legality that lived in the shell would be the
+       fourth opinion on that question in three files. */
+    return stationPlacementBlockReason({
+      mapGrid,
+      company: activeStationCompany,
+      allCompanies: gameState?.public_companies ?? [],
+      boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
+    });
+  }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
+
   /** Why this step has no decision in it, or `null` when it does. */
   const autoSkipReason = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
@@ -5153,6 +5521,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
          control drafts a route that cannot exist. */
       return noEarnableRevenue;
     }
+    /* ==================================================================
+     *  DESIGN NOTE 438: A STATION STEP WITH NOWHERE TO PLACE
+     * ==================================================================
+     *
+     * REPORTED: players are forced to manually skip Place Station even when
+     * they have no valid placements.
+     *
+     * The step held every corporation every turn, and for most of a game
+     * most corporations cannot place at all: the allowance runs out, the
+     * treasury is short, or the network reaches no city with a free slot.
+     * Design notes #292 and #414 had already established that a step with
+     * no decision in it should not be held on -- Routes and Dividends both
+     * exit themselves -- and Tokens was simply never given the same
+     * treatment.
+     *
+     * THREE REASONS, REPORTED SEPARATELY, because they call for different
+     * responses from the player and the log line is the only place they
+     * find out which one applied. Running out of tokens is permanent; being
+     * short of cash is fixable next turn; having no reachable slot is a
+     * fact about the map that a tile lay might change.
+     *
+     * `stationPlacementBlock` does the work -- see its own note for why the
+     * topological check reuses `placeableStationHexes` rather than a
+     * cheaper approximation. */
+    if (orSubPhase === "Tokens") return stationPlacementBlock;
     /* ==================================================================
      *  DESIGN NOTE 292: A TRAINLESS DIVIDEND IS DECIDED, NOT SKIPPED
      * ==================================================================
@@ -5181,7 +5574,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       return "it is already at its train limit";
     }
     return null;
-  }, [gameState, spectator, orSubPhase, noEarnableRevenue, atTrainLimitNow]);
+  }, [gameState, spectator, orSubPhase, noEarnableRevenue, stationPlacementBlock, atTrainLimitNow]);
 
   /* Design note #292: the forced withhold. Same once-per-(corporation,step)
      guard as the auto-skip beside it, and for the same reason -- online the
@@ -5205,7 +5598,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       "Auto-Withhold",
       `${ownsAnyTrain ? "No route earned anything" : "No trains ran"}, so there is nothing to pay out — $0 withheld and the share price steps left.`,
     );
-    handleWithholdRevenue();
+    withholdRevenueAutomatically();
   }, [
     gameState,
     spectator,
@@ -5213,7 +5606,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     noEarnableRevenue,
     ownsAnyTrain,
     actingProtocolId,
-    handleWithholdRevenue,
+    withholdRevenueAutomatically,
     logInfo,
   ]);
 
@@ -5227,8 +5620,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       "Auto-Skip",
       `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} — ${autoSkipReason}.`,
     );
-    handleSkipSubPhase();
-  }, [autoSkipReason, actingProtocolId, orSubPhase, handleSkipSubPhase, logInfo]);
+    // Design note #439: the AUTOMATIC entry point, so Undo rewinds past it.
+    skipSubPhaseAutomatically();
+  }, [autoSkipReason, actingProtocolId, orSubPhase, skipSubPhaseAutomatically, logInfo]);
 
   // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`
   // dispatch the Stock Round's "Pass Turn" button uses (per `msg.rs`'s own
@@ -5543,17 +5937,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     return rows.sort((a, b) => b.percentage - a.percentage);
   }, [dividendCorp, dividendPerShare]);
 
-  const dividendPrice = useMemo(() => {
-    const cell = marketGrid?.positions.find((p) => p.company_id === actingProtocolId);
-    return cell ? Number(cell.price) : null;
-  }, [marketGrid, actingProtocolId]);
+  /* ==================================================================
+   *  DESIGN NOTE 434: THE CELL WAS IN HAND AND WAS BEING THROWN AWAY
+   * ==================================================================
+   *
+   * REPORTED: withholding on a $67 corporation moved its token to $60 -- a
+   * cell it was never on -- and the token then vanished from the matrix.
+   *
+   * `marketGrid.positions` carries `(x, y, price)` per corporation. This
+   * read that entry, kept ONLY the price, and handed the bare number to
+   * `projectDividendMove`, which had to find a cell again by searching
+   * `PRICE_GRID` for that price. The chart repeats prices across rows and
+   * the search returns the FIRST match, so a token correctly parked in the
+   * $67 par box at `(6, 5)` was projected from `(1, 10)` -- the $67 in the
+   * top row -- and one step left of THAT is `(0, 10)`, which is $60.
+   *
+   * The coordinates were never ambiguous; they were discarded one line
+   * before the code that needed them.
+   *
+   * SAME FAMILY AS DESIGN NOTE #415, and worth naming as such: that was
+   * `marketCellForPrice` resolving a PAR to the wrong cell, this is the
+   * same first-match search resolving a MOVE from the wrong cell. Both come
+   * from treating a price as an address on a board where it is not one.
+   *
+   * The projection now carries the cell through, so the readout, the action
+   * log and the token itself all step from the coordinate the marker is
+   * actually standing on -- and all three use `projectDividendCellMove`,
+   * which the token move already used. That is why the token appeared to
+   * disagree with its own preview: it was the only one of the three doing
+   * it correctly. */
+  const dividendCell = useMemo(
+    () => marketGrid?.positions.find((p) => p.company_id === actingProtocolId) ?? null,
+    [marketGrid, actingProtocolId],
+  );
+  const dividendPrice = useMemo(
+    () => (dividendCell?.price != null ? Number(dividendCell.price) : null),
+    [dividendCell],
+  );
   const payProjection = useMemo(
-    () => projectDividendMove(dividendPrice, "pay"),
-    [dividendPrice],
+    () => projectDividendFrom(dividendCell, "pay"),
+    [dividendCell],
   );
   const withholdProjection = useMemo(
-    () => projectDividendMove(dividendPrice, "withhold"),
-    [dividendPrice],
+    () => projectDividendFrom(dividendCell, "withhold"),
+    [dividendCell],
   );
 
 
@@ -5664,8 +6091,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           branch where it declines one. Mounted at shell level beside the
           other two prompts rather than inside the map panel, because it can
           fire while the player is on any tab. */}
+      {/* Design note #440: the modal hides itself once the player has
+          accepted it and been sent to the map -- a backdrop over the board
+          they were just asked to click would be the flow blocking its own
+          final step. `pendingHomeToken` stays true throughout (the token is
+          still owed until the click lands), which is what brings the prompt
+          back if the placement is somehow abandoned. */}
       <HomeStationPrompt
-        pending={pendingHomeToken}
+        pending={homeStationPlacement ? null : pendingHomeToken}
         presidentLabel={
           pendingHomeToken?.president
             ? sandboxPlayerLabel(pendingHomeToken.president) ??
@@ -6284,16 +6717,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // and token mode as a third reason to disarm the
                       // query interceptor. All three want the raw click
                       // rather than a tile picker.
-                      // Design note #199, layer 2: `!tileSelectorArmed` joins
+                      // Design note #199, layer 2: `!tileInspectorArmed` joins
                       // the three mode flags. Outside the Lay Track sub-phase
                       // the interceptor is disarmed entirely, so a stray board
                       // click costs no `GetLegalTilePlacements` round-trip and
                       // cannot open a carousel over a board whose click means
                       // something else.
                       queryClient={
-                        !tileSelectorArmed ||
+                        !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
+                        // Design note #440: a home placement owns the board.
+                        homeStationPlacement !== null ||
+                        // Design note #440: a home placement owns the board.
+                        homeStationPlacement !== null ||
+                        // Design note #440: a home placement owns the board.
+                        homeStationPlacement !== null ||
+                        // Design note #440: a home placement owns the board.
+                        homeStationPlacement !== null ||
                         previewRotateArmed ||
                         spectator ||
                         sandbox
@@ -6301,7 +6742,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                           : queryClient
                       }
                       contractAddress={
-                        !tileSelectorArmed ||
+                        !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
                         previewRotateArmed ||
@@ -6310,7 +6751,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                           : CONTRACT_ADDRESS
                       }
                       gameId={
-                        !tileSelectorArmed ||
+                        !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
                         previewRotateArmed
@@ -6318,22 +6759,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                           : gameId
                       }
                       protocolId={
-                        !tileSelectorArmed ||
+                        !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
                         previewRotateArmed
                           ? undefined
                           : actingProtocolId
                       }
-                      cursorMode={tokenTargetMode ? "token" : "default"}
+                      cursorMode={
+                        /* Design note #440: a home placement arms the same
+                           crosshair the ordinary token step uses -- the
+                           gesture a player is being asked for is identical,
+                           so the cursor should not differ. */
+                        homeStationPlacement || tokenTargetMode ? "token" : "default"
+                      }
                       onHexClick={
-                        tokenTargetMode
-                          ? handleTokenHexClick
-                          : routeSelectMode
-                            ? handleRouteHexClick
-                            : previewRotateArmed
-                              ? handlePreviewRotate
-                              : undefined
+                        /* Design note #440: FIRST in the chain. A home
+                           placement is modal in intent -- the player has
+                           accepted a prompt and been sent here to do one
+                           thing -- so it takes the click ahead of every
+                           other board mode rather than competing with
+                           whichever happened to be left on. */
+                        homeStationPlacement
+                          ? handleCommitHomeStation
+                          : tokenTargetMode
+                            ? handleTokenHexClick
+                            : routeSelectMode
+                              ? handleRouteHexClick
+                              : previewRotateArmed
+                                ? handlePreviewRotate
+                                : undefined
                       }
                       onHexClickQuery={handleHexClickQuery}
                       previewTile={previewTile}
@@ -6365,7 +6820,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                       // here rather than inferred in the renderer because
                       // both rings are mounted by this file.
                       suppressHoverTooltip={
-                        (tileSelectorArmed && radialSelector !== null) || pendingToken !== null
+                        (tileInspectorArmed && radialSelector !== null) || pendingToken !== null
                       }
                       /* ==================================================
                            DESIGN NOTE 377 (shell half): WHOSE VEIL IS IT
@@ -6388,11 +6843,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                           targeting step inherits the same asymmetry without
                           a second flag saying the same thing. */
                       layFocus={
-                        layTrackFocus
-                          ? { ...layTrackFocus, dim: isMyTurn }
-                          : tokenTargetFocus
-                            ? { ...tokenTargetFocus, dim: isMyTurn }
-                            : undefined
+                        /* Design note #440: the home placement's veil takes
+                           precedence, and its `dim` is unconditionally
+                           `true` rather than `isMyTurn`. The other two ask
+                           "is the viewer the acting corporation's
+                           president"; this focus only exists because THIS
+                           viewer accepted the prompt, so the question is
+                           already answered by its presence. Passing
+                           `isMyTurn` here would darken the board for a
+                           president whose corporation floated outside its
+                           own operating turn -- which is most floats. */
+                        homeStationFocus
+                          ? { ...homeStationFocus, dim: true }
+                          : layTrackFocus
+                            ? { ...layTrackFocus, dim: isMyTurn }
+                            : tokenTargetFocus
+                              ? { ...tokenTargetFocus, dim: isMyTurn }
+                              : undefined
                       }
                     />
                   ) : (
@@ -6645,7 +7112,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         />
       )}
       {/* Design note #199, layer 3: not mounted outside the Lay Track step. */}
-      {activeMainTab === "map" && tileSelectorArmed && radialSelector && (
+      {activeMainTab === "map" && tileInspectorArmed && radialSelector && (
         <RadialTileSelector
           anchorOffsetX={radialSelector.offsetX}
           anchorOffsetY={radialSelector.offsetY}

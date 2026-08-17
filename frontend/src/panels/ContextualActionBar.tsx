@@ -793,11 +793,41 @@ export default function ContextualActionBar({
   /* Design note #278: the Dividends step's Pay-or-Withhold binary. Derived
      here rather than passed in, because both halves -- the step and the
      revenue -- are already props, and a second boolean saying what they
-     jointly mean is a thing that can disagree with them. */
+     jointly mean is a thing that can disagree with them.
+
+     ==================================================================
+      DESIGN NOTE 436: $0 IS A DECISION TOO, AND SKIP IS NOT IT
+     ==================================================================
+
+     REPORTED: at $0 route revenue, hide Skip and offer only Withhold.
+
+     `dividendRevenue > 0` used to gate this, and design note #422's own
+     text argued for the exception: "IT STAYS AT $0, which is the case the
+     rule does not cover. A corporation that ran nothing has no money to
+     allocate and no reason to be held on this step; `DeclareDividends` for
+     zero is a message with no effect, so Skip is the honest control there."
+
+     The premise is wrong, and design note #414 had already established why
+     one step over: a $0 declaration is NOT a message with no effect. It is
+     the withhold that steps the share price one cell LEFT, which is the
+     single most consequential thing that happens to a corporation that
+     could not run. Skip dispatches `AdvanceOperatingSubPhase` -- it moves
+     the cursor and settles nothing -- so at $0 the two controls did
+     visibly similar things and only one of them obeyed the rules.
+
+     Worse, Skip was the more prominent of the pair by position, so the
+     easiest action on the screen was the one that silently omitted a
+     mandatory market move. That is how a corporation's price stays put
+     through a round it should have fallen in.
+
+     So the step is forced at $0 as well. `App`'s auto-withhold effect
+     (design note #414) will usually have declared it before the player
+     sees this, and the two agree by construction now rather than by
+     coincidence: both treat "nothing was earned" as a decision to make,
+     not a step to step past. */
   const dividendChoiceForced =
     roundType === "OperatingRound" &&
     orSubPhase === "Dividends" &&
-    dividendRevenue > 0 &&
     dividendRevenueIsThisTurn;
 
   /* ==================================================================

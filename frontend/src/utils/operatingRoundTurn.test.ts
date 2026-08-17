@@ -175,17 +175,45 @@ describe("PassTurn during an Operating Round", () => {
     expect(state.operating_round_just_ended).toBe(true);
   });
 
-  it("runs a second Operating Round when the sequence calls for one", () => {
-    let state = beginOperatingRound({
-      ...stateEnteringOperatingRound(),
-      operating_round_sequence_length: 2,
-      sub_round_index: 1,
-    });
+  /* ==================================================================
+   *  UPDATED BY DESIGN NOTE 431: THE PHASE SETS THE COUNT
+   * ==================================================================
+   *
+   * This test previously set `operating_round_sequence_length: 2` on the
+   * state and asserted a second Operating Round ran. It passed, and it was
+   * asserting the bug: nothing ever WROTE that field, so the fixtures'
+   * hardcoded `2` made the Yellow phase -- which runs one Operating Round
+   * -- run two, and the game never returned to the Stock Round.
+   *
+   * A test that supplies the number it then checks is only testing that the
+   * number was read. The rule is that the count comes from the PHASE, so
+   * the fixture now sets the TRAINS and lets it be derived: a 3-train is
+   * Green, and Green runs two.
+   *
+   * Rewritten rather than deleted -- the behaviour it describes (a second
+   * round runs when the sequence calls for one) is still correct and still
+   * worth pinning. Only the mechanism that decides "calls for one" changed.
+   * `operatingRoundPhaseLoop.test.ts` covers the counts themselves. */
+  it("runs a second Operating Round when the PHASE calls for one", () => {
+    const green = stateEnteringOperatingRound([
+      company({ company_id: 1, ticker: "PRR", president: ALICE, owned_trains: ["3"] }),
+      company({ company_id: 2, ticker: "NYC", par_value: "82", president: BOB }),
+      company({ company_id: 8, ticker: "B&M", par_value: "90", president: CAROL }),
+    ]);
+    let state = beginOperatingRound({ ...green, sub_round_index: 1 });
     for (let i = 0; i < 3; i += 1) state = applySandboxAction(state, PASS);
     // The queue rebuilt for OR 2 rather than the round closing.
     expect(state.operating_round_just_ended).toBeFalsy();
     expect(state.sub_round_index).toBe(2);
     expect(state.active_corporation_index).toBe(0);
+  });
+
+  it("closes after ONE round when the phase is Yellow", () => {
+    // The mirror of the case above, and the reported bug. Every corporation
+    // here is trainless, which derives to the Yellow phase.
+    let state = beginOperatingRound(stateEnteringOperatingRound());
+    for (let i = 0; i < 3; i += 1) state = applySandboxAction(state, PASS);
+    expect(state.operating_round_just_ended).toBe(true);
   });
 
   it("TERMINATES -- the regression that started all of this", () => {

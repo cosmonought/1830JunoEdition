@@ -1049,18 +1049,42 @@ export interface MarketProjection {
   moves: boolean;
 }
 
-export function projectDividendMove(
-  currentPrice: number | null | undefined,
+/* ==================================================================
+ *  DESIGN NOTE 434: PROJECTED FROM A CELL, NOT FROM A PRICE
+ * ==================================================================
+ *
+ * REPLACES `projectDividendMove(price, choice)`, which took a bare number
+ * and searched `PRICE_GRID` for the first cell carrying it.
+ *
+ * That search is the bug reported as "withholding moved $67 to $60". The
+ * chart repeats prices across rows -- $67 appears in the top row at
+ * `(1, 10)` and in the par ladder at `(6, 5)` -- and `find` returns the
+ * first. A corporation parked in its par box was therefore projected from
+ * the top row, and one step left of `(1, 10)` is `(0, 10)`, which is $60.
+ * One step left of where it actually stood, `(6, 5)`, is `(5, 5)` = $65.
+ *
+ * The old signature could not be fixed, only replaced: a price does not
+ * identify a cell on this board, so any function taking one has to guess.
+ * Deleting it rather than leaving it beside this is deliberate -- it is the
+ * strictly more convenient call, and a caller reaching for the shorter
+ * argument list is how the guess gets reintroduced.
+ *
+ * TAKES A NULLABLE ENTRY so callers can hand it a `MarketPositionEntry`
+ * lookup result directly. Both call sites had one in hand and were
+ * discarding the coordinates before calling.
+ *
+ * CLAMPS AT THE EDGE. Where the step would leave the chart the marker stays
+ * put and `moves` is `false` -- never an invented cell, which is the other
+ * half of "tokens disappear off the matrix". */
+export function projectDividendFrom(
+  from: { x: number; y: number; price?: string | null } | null | undefined,
   choice: "pay" | "withhold",
 ): MarketProjection | null {
-  if (currentPrice == null || !Number.isFinite(currentPrice)) return null;
-  const cell = PRICE_GRID.find((candidate) => candidate.price === currentPrice);
-  if (!cell) return null;
-  const targetX = cell.x + (choice === "pay" ? 1 : -1);
-  const next = PRICE_GRID.find(
-    (candidate) => candidate.y === cell.y && candidate.x === targetX,
-  );
-  return next ? { price: next.price, moves: true } : { price: currentPrice, moves: false };
+  if (!from) return null;
+  const start = cellAt(from.x, from.y);
+  if (!start) return null;
+  const next = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
+  return next ? { price: next.price, moves: true } : { price: start.price, moves: false };
 }
 
 /**

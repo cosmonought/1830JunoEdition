@@ -311,3 +311,57 @@ export function placeableStationHexes(input: {
   }
   return out;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 438: WHY THIS CORPORATION CANNOT PLACE A STATION
+ * ==================================================================
+ *
+ * `null` when it can. The three blocking conditions are checked in the
+ * order a player discovers them -- do I have a token, can I pay for it, is
+ * there anywhere to put it -- so the reason reported is the first that
+ * actually stops them rather than whichever is cheapest to test.
+ *
+ * THE TOPOLOGICAL CHECK IS THE REAL ONE, and it reuses
+ * `placeableStationHexes`, which is the same set the targeting veil lights
+ * (App design note #240). A cheaper approximation -- "does the network
+ * touch any city" -- would disagree with the veil about reservations,
+ * occupied slots and OO tiles, and the failure would be the worst kind: a
+ * step skipped for a corporation the map would have let place, or a player
+ * held on a step whose veil lights nothing.
+ *
+ * IT IS THE EXPENSIVE ONE TOO -- it walks every board hex -- so it runs
+ * last, after the two cheap facts have had their chance to answer.
+ *
+ * PHRASED AS A REASON, NOT A BOOLEAN. The caller puts this in an
+ * "Auto-Skip — ..." log line, and the three cases call for different
+ * responses: an exhausted allowance is permanent, a short treasury is
+ * fixable next turn, and no reachable slot is a fact about the map that a
+ * tile lay might change. A bare `true` would collapse them. */
+export function stationPlacementBlockReason(input: {
+  mapGrid: MapGridResponse;
+  company: (StationPlacementCompany & { treasury: string }) | null | undefined;
+  allCompanies: readonly StationPlacementCompany[];
+  boardHexes: ReadonlyArray<readonly [number, number]>;
+}): string | null {
+  const { mapGrid, company, allCompanies, boardHexes } = input;
+  // No corporation resolved: not a block, an absence. The caller must not
+  // skip a step over missing data -- see App design note #293b's reasoning
+  // about ignorance permitting rather than refusing.
+  if (!company) return null;
+
+  const placed = company.station_token_hexes.length;
+  if (placed >= company.station_token_limit) {
+    return `all ${company.station_token_limit} of its station tokens are already on the board`;
+  }
+
+  const cost = nextStationTokenCost(company);
+  const treasury = Number(company.treasury) || 0;
+  if (cost !== null && treasury < cost) {
+    return `its treasury holds $${treasury} and the next station costs $${cost}`;
+  }
+
+  if (placeableStationHexes({ mapGrid, company, allCompanies, boardHexes }).size === 0) {
+    return "its network reaches no city with a free station slot";
+  }
+  return null;
+}

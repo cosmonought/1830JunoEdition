@@ -14,26 +14,32 @@
 // half was happening off-screen, on a tab the player was not looking at.
 //
 // ==================================================================
-//  WHY THIS IS A CONFIRMATION AND NOT A MAP CLICK
+//  DESIGN NOTE 440: IT IS A MAP CLICK NOW
 // ==================================================================
 //
-// The requirement says "click/place", and a literal reading is that the
-// player should click the hex on the Rail Map. This does not do that, and
-// the reason is that the hex is FIXED: a map interaction that accepts
-// exactly one hex and rejects the other eighty is not a choice, it is a
-// scavenger hunt with a modal's worth of instructions attached. A player
-// who does not already know where the Erie starts would hunt; one who does
-// would resent the extra step.
+// This prompt used to BE the placement: one button, one confirmation, token
+// down. The note that stood here argued for that and against the map --
+// "a map interaction that accepts exactly one hex and rejects the other
+// eighty is not a choice, it is a scavenger hunt with a modal's worth of
+// instructions attached."
 //
-// So the prompt names the hex, says it is printed on the board, and asks
-// for one deliberate confirmation. The player witnesses the placement --
-// which is the requirement's actual purpose -- without being made to
-// perform a search whose answer the app already knows.
+// The objection was to the SEARCH, and the search turns out to be
+// avoidable. The board can be veiled down to the single legal hex with the
+// placement cursor already armed, so there is nothing to hunt for: one lit
+// hex on an otherwise dark map IS the answer, and clicking it is one
+// gesture. That turns the old objection into a description of how this is
+// implemented rather than an argument against it.
 //
-// IF A LATER PASS WANTS THE MAP INTERACTION, this component is the place to
-// start: it already holds the `(q, r)` the token is bound for, so wiring it
-// to highlight that hex and wait for a click is additive rather than a
-// rewrite. The `onPlace` contract does not change.
+// What a confirmation could never do is show the player WHERE. A modal
+// naming "E11" hands a new president a coordinate; a map with E11 lit and
+// everything else dark shows them where their corporation stands on the
+// board they are about to operate on. This is the first thing that ever
+// happens to a corporation, and it now happens on the map.
+//
+// SO THIS COMPONENT ANNOUNCES AND HANDS OFF. `onPlace` no longer means
+// "place it" -- it means "take me there". The signature is unchanged
+// because it already carries exactly what both readings need: the
+// corporation and the hex.
 //
 // ==================================================================
 //  BLOCKING, AND WHY THAT IS SAFE HERE
@@ -136,17 +142,41 @@ export function HomeStationPrompt({
           <span style={styles.hexLabel}>{pending.hexLabel}</span>
         </div>
 
+        {/* ==================================================
+             DESIGN NOTE 440: THE ROUTE SENTENCE WAS WRONG
+            ==================================================
+
+             REPORTED: remove the misleading rules text from this prompt.
+
+             It read "Every route it runs must touch a city it holds a token
+             in, starting here." Two claims, and the load-bearing half is
+             false. A route must include at least one city the corporation
+             has a token in -- it does not have to START at one, and once
+             the corporation places further tokens it need not involve THIS
+             hex at all. Told at the moment the home token goes down, the
+             sentence reads as "your trains will always run from here",
+             which is a wrong mental model handed to a player at exactly
+             the moment they are forming one.
+
+             The surviving half -- that the hex is printed and fixed -- is
+             the fact this prompt exists to convey, so it stays and the
+             route rule goes. A placement confirmation is not the place to
+             teach a routing rule, and certainly not a garbled one. */}
         <span style={styles.consequence}>
-          Printed on the board and fixed by the rules — the {pending.ticker} has no other legal
-          home. Every route it runs must touch a city it holds a token in, starting here.
+          Printed on the board and fixed by the rules — the {pending.ticker} has no other
+          legal home.
         </span>
 
+        {/* Design note #440: this OPENS THE MAP; it does not place. The
+            caller arms the placement cursor, veils the board down to this
+            one hex and navigates there, so the token goes down under the
+            player's own click on the board it belongs to. */}
         <button
           type="button"
           style={styles.confirm}
           onClick={() => onPlace(pending.companyId, pending.q, pending.r)}
         >
-          Place the {pending.ticker} station on {pending.hexLabel}
+          Place the {pending.ticker} station on {pending.hexLabel} &#8250;
         </button>
       </div>
     </div>

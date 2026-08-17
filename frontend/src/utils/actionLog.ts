@@ -96,8 +96,14 @@ export interface ActionLogContext {
    *  then omits the price move rather than inventing one. */
   marketPrices?: Readonly<Record<number, number | undefined>>;
   /** Where the price would land if this corporation pays out. Supplied by
-   *  the caller because the projection lives with the chart. */
-  projectPrice?: (price: number, choice: "pay" | "withhold") => number | null;
+   *  the caller because the projection lives with the chart.
+   *
+   *  Design note #434: keyed by COMPANY, not by price. It took a price, and
+   *  the projection then had to find a cell by searching for that price --
+   *  which on a chart that repeats prices across rows found the wrong one,
+   *  so this log quoted a destination the token never went to. The caller
+   *  looks the corporation's real `(x, y)` up instead. */
+  projectPrice?: (companyId: number, choice: "pay" | "withhold") => number | null;
 }
 
 const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six"] as const;
@@ -215,7 +221,7 @@ export function describeGameplayAction(
     const price = context.marketPrices?.[protocol_id];
     const moved =
       price !== undefined && context.projectPrice
-        ? context.projectPrice(price, distribute ? "pay" : "withhold")
+        ? context.projectPrice(protocol_id, distribute ? "pay" : "withhold")
         : null;
     const priceSentence =
       price !== undefined && moved !== null && moved !== price

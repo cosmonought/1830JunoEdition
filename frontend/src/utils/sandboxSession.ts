@@ -77,7 +77,7 @@ import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
-import { depotInventory, derivePhase } from "./gamePhase";
+import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
 import { stationTokenPrice } from "./stationTokens";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
 import {
@@ -86,6 +86,7 @@ import {
   OFFBOARD_REVENUE,
   STATIC_BOARD_HEXES,
   offboardValueForEra,
+  terrainBuildFeeAt,
 } from "../components/hexBoardData";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
@@ -97,8 +98,17 @@ export const SANDBOX_NOMINAL_SHARE_PRICE = 67;
 /** A nominal train cost, same reasoning as the share price above. */
 export const SANDBOX_NOMINAL_TRAIN_COST = 80;
 
-/** A nominal terrain cost for a tile lay. */
-export const SANDBOX_NOMINAL_TILE_COST = 20;
+/* `SANDBOX_NOMINAL_TILE_COST` (a flat $20) DELETED by design note #432.
+ *
+ * It was charged for every tile on every hex, which is not a rule 1830 has:
+ * the fee belongs to the GROUND, and `terrainBuildFeeAt` mirrors the
+ * contract's real $0 / $80 river / $120 mountain figures.
+ *
+ * Removed rather than left exported-and-unused, for the reason `palette.ts`
+ * records about its own deleted token: a plausible-looking constant that
+ * nothing imports is a standing invitation to reintroduce the exact
+ * behaviour that was just removed -- and "nominal tile cost" reads like
+ * something a tile lay ought to consult. */
 
 /** A nominal station-token / private-purchase cost. */
 export const SANDBOX_NOMINAL_TOKEN_COST = 40;
@@ -287,6 +297,49 @@ function syncSeatToActingCorporation(state: GameStateResponse): GameStateRespons
   return { ...state, active_player_index: seat };
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 431: 1830'S OPERATING ROUND COUNTS
+ * ==================================================================
+ *
+ * How many Operating Rounds run between two Stock Rounds, by phase:
+ *
+ *     Yellow (2-trains)          1 OR
+ *     Green  (3- and 4-trains)   2 ORs
+ *     Brown  (5-, 6-, Diesel)    3 ORs
+ *
+ * THE PHASE IS DERIVED FROM THE TRAINS IN PLAY, not read from
+ * `current_global_era`. Both are on the state and they answer subtly
+ * different questions: `current_global_era` is the contract's TILE colour
+ * -- which yellow/green/brown tiles may be laid -- while the OR count is
+ * set by the highest train tier anyone owns. They advance together in an
+ * ordinary game and they are not the same field, and `derivePhase` is
+ * already this app's single answer to "what phase is it" (the badge, the
+ * train chips and the rust warnings all read it). Using it here means the
+ * OR count cannot disagree with the phase the player can see.
+ *
+ * `null` phase -- a board whose trains are not reported at all -- yields 1,
+ * the Yellow count. That is the SAFE direction: one round too few returns
+ * the player to a Stock Round they can act in, while one too many is the
+ * bug being fixed, and a game that will not leave the Operating Round is
+ * far worse than one that leaves it early.
+ *
+ * "GRAY" in the requirement is 1830's Diesel phase. This codebase's
+ * `PhaseTint` has three values and folds 5/6/D into `brown` (see
+ * `gamePhase.ts`'s `TRAIN_TIER_PRESENTATION`), and all of them run 3 ORs,
+ * so the three-way tint is sufficient and adding a fourth would be a
+ * distinction with no consequence here. */
+export function operatingRoundsForPhase(phase: GamePhase | null): number {
+  switch (phase?.tint) {
+    case "green":
+      return 2;
+    case "brown":
+      return 3;
+    case "yellow":
+    default:
+      return 1;
+  }
+}
+
 /** Opens an Operating Round: builds the queue, parks the cursor on the
  *  first corporation and seats its president.
  *
@@ -305,6 +358,12 @@ export function beginOperatingRound(
     active_corporation_index: 0,
     consecutive_passes: 0,
     operating_round_just_ended: false,
+    /* Design note #431: WRITTEN, not read. The fixtures hardcode `2` and
+       nothing else ever set this, so it was a field that looked
+       authoritative and was decorative. Stamping the phase's real count
+       here means the readout ("OR n of N") and the loop that ends the round
+       are the same number rather than two that can disagree. */
+    operating_round_sequence_length: operatingRoundsForPhase(derivePhase(state)),
   });
 }
 
@@ -328,7 +387,36 @@ export function beginOperatingRound(
  *  on the state and say exactly how many Operating Rounds this phase runs,
  *  so the decision needs no scheduling this file would have to invent: run
  *  the queue again if the sequence has another round in it, otherwise raise
- *  the one-shot flag and let the shell move to the Stock Round. */
+ *  the one-shot flag and let the shell move to the Stock Round.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 431: THE SEQUENCE LENGTH IS THE PHASE'S, NOT THE STATE'S
+ *  ==================================================================
+ *
+ *  REPORTED: after every corporation operates in the Yellow phase, the game
+ *  opens another Operating Round instead of returning to the Stock Round.
+ *
+ *  Design note #411 above read `operating_round_sequence_length` off the
+ *  state and called it settled -- "both already on the state and say exactly
+ *  how many Operating Rounds this phase runs". The field exists; nothing
+ *  maintains it. `sandboxState.ts` hardcodes `2` into every fixture and no
+ *  code path has ever written it since.
+ *
+ *  So in Yellow -- where 1830 runs exactly ONE Operating Round per cycle --
+ *  the check was `sub_round_index (1) < 2`, which is true, so the queue
+ *  rebuilt and the round ran again. The Stock Round was reachable only by
+ *  accident of the fixture's number happening to match the phase.
+ *
+ *  This is the same shape of bug as #411 itself: a value that has to be
+ *  correct, read from a field that nothing sets. #411 fixed it for
+ *  `active_operating_order` by BUILDING the queue where the round begins;
+ *  this fixes it for the count by DERIVING it from the phase, which is
+ *  where 1830 actually defines it.
+ *
+ *  `operatingRoundsForPhase` is the rule. The state field is now written to
+ *  match on every round open rather than read -- see `beginOperatingRound`
+ *  -- so `ContextualSubPanel`, which renders it as "OR n of N", starts
+ *  telling the truth instead of always saying 2. */
 function advanceCorporation(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
@@ -350,8 +438,13 @@ function advanceCorporation(
     return syncSeatToActingCorporation({ ...state, active_corporation_index: next });
   }
 
-  // Every corporation has operated. Another round in the sequence, or out.
-  const sequenceLength = Math.max(1, state.operating_round_sequence_length || 1);
+  /* Every corporation has operated. Another round in the sequence, or out.
+
+     Design note #431: the count comes from the PHASE. Reading
+     `state.operating_round_sequence_length` here is what produced the
+     reported Yellow-phase loop -- the fixtures set it to 2 and nothing
+     maintained it, so a phase that runs one Operating Round ran two. */
+  const sequenceLength = operatingRoundsForPhase(derivePhase(state));
   if (state.sub_round_index < sequenceLength) {
     return syncSeatToActingCorporation({
       ...beginOperatingRound(state, priceFor),
@@ -1707,8 +1800,17 @@ export interface SandboxMarketResult {
   /** What the trade was priced at, so the caller can charge the same figure
    *  it displayed. `null` for a message that moves no money. */
   tradePrice: number | null;
-  /** Where a token moved, for the log line. */
-  moved: { companyId: number; from: number; to: number } | null;
+  /** Where a token moved, and WHY, for the log line.
+   *
+   *  Design note #435: `reason` is new. Without it the shell had one
+   *  sentence for every marker move and it named a sale, so a withheld
+   *  dividend was reported as one. Three movers, three words. */
+  moved: {
+    companyId: number;
+    from: number;
+    to: number;
+    reason: "sale" | "withhold" | "payout";
+  } | null;
 }
 
 export interface SandboxMarketContext {
@@ -1776,7 +1878,7 @@ export function applySandboxMarketAction(
       // Priced at the price BEFORE the drop: the seller is paid what the
       // share was worth when they sold it, and the fall is the consequence.
       tradePrice: proceeds,
-      moved: { companyId: protocol_id, from: mark.price, to: landed.price },
+      moved: { companyId: protocol_id, from: mark.price, to: landed.price, reason: "sale" },
     };
   }
 
@@ -1792,7 +1894,17 @@ export function applySandboxMarketAction(
     return {
       prices: { ...prices, [protocol_id]: landed },
       tradePrice: null,
-      moved: { companyId: protocol_id, from: mark.price, to: landed.price },
+      /* Design note #435: the REASON travels with the move. The shell
+         logged every marker move as "on the sale", because that was the
+         only mover when the sentence was written -- so a withheld dividend
+         reported a sale that had not happened, on the one screen a player
+         checks to understand why their price fell. */
+      moved: {
+        companyId: protocol_id,
+        from: mark.price,
+        to: landed.price,
+        reason: distribute ? "payout" : "withhold",
+      },
     };
   }
 
@@ -1988,7 +2100,38 @@ export function applySandboxAction(
   // acts for a company out of turn still charges the right treasury.
 
   if ("LayTile" in msg) {
-    return adjustTreasury(state, msg.LayTile.protocol_id, -SANDBOX_NOMINAL_TILE_COST);
+    /* ================================================================
+     *  DESIGN NOTE 432: THE TERRAIN IS WHAT COSTS MONEY
+     * ================================================================
+     *
+     * REPORTED: laying track on the $80 water hex J14 deducted $20.
+     *
+     * It deducted `SANDBOX_NOMINAL_TILE_COST` -- a flat $20 charged for
+     * every tile on every hex, clear ground and mountain alike. The $20
+     * was never a rule; it was a placeholder from before the board had
+     * terrain, and it survived because a fixed fee looks like a fee.
+     *
+     * 1830 charges nothing for the tile itself. What it charges for is the
+     * GROUND: $80 to bridge a river, $120 to cross a mountain, $0 on clear
+     * land. `terrainBuildFeeAt` is the frontend's mirror of
+     * `hexmap::terrain_build_fee` and has carried those exact figures all
+     * along -- the renderer has been DRAWING $80 on J14 while the reducer
+     * charged $20 for it, which is this codebase's recurring failure shape:
+     * a UI quoting a transaction the state does not perform.
+     *
+     * BY COORDINATE, NOT BY TILE. The fee is a property of the hex, not of
+     * the tile laid on it, so it comes off `(q, r)` in the message. The
+     * report's phrasing -- "grabbing the tile's base revenue value" -- is
+     * close to what was happening and worth being exact about: the $20 was
+     * not read from the tile at all, it was a constant. Either way the
+     * money owed was the hex's and the number charged was not.
+     *
+     * ZERO IS A REAL ANSWER. Most of the board is clear ground and lays
+     * free; `adjustTreasury` with `-0` is a no-op, so an ordinary lay now
+     * costs nothing rather than $20, which is also the correction 1830
+     * asks for. */
+    const { protocol_id, q, r } = msg.LayTile;
+    return adjustTreasury(state, protocol_id, -terrainBuildFeeAt(q, r));
   }
 
   if ("BuyHardwareFromPool" in msg) {

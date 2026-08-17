@@ -33,7 +33,12 @@
 import React from "react";
 
 import { TrainChips } from "../components/TrainBadges";
-import PrivatePowerPanel, { type PrivateAbility } from "../components/PrivatePowerPanel";
+import { StickyTickerLine } from "../components/TopTicker";
+import type { FeedItem } from "../utils/feed";
+import PrivatePowerPanel, {
+  type PrivateAbility,
+  type PrivateAbilityAction,
+} from "../components/PrivatePowerPanel";
 import { RoutePlannerPanel, RouteModeToggle } from "../components/RoutePlannerPanel";
 import type { RouteBuildMode, TrainRouteDraft } from "../components/RoutePlannerPanel";
 import StationTokenRow from "../components/StationTokenRow";
@@ -308,6 +313,8 @@ export default function ContextualActionBar({
   activeTab,
   onSelectTab,
   isMyTurn,
+  latestFeedItem = null,
+  onOpenActivityLog,
   phase,
 }: {
   roundType: RoundType | null;
@@ -336,6 +343,11 @@ export default function ContextualActionBar({
     homeHexLabel: string | null;
     privates: readonly PrivateCompanyState[];
     presidentLabel: string | null;
+    /** Design note #441: the president's ADDRESS, not their display name.
+     *  A corporate private power is executed by the person holding this
+     *  corporation's controls, and that is an identity comparison -- two
+     *  seats can share a truncated label, so the label cannot answer it. */
+    presidentAddress: string | null;
     /** Design note #326: the president's personal cash, for the tooltip. */
     presidentCash: number | null;
     treasury: number;
@@ -401,8 +413,10 @@ export default function ContextualActionBar({
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
   sandboxMode: boolean;
-  usedPrivateAbilities: ReadonlySet<number>;
-  onUsePrivateAbility: (ability: PrivateAbility) => void;
+  /** Design note #442: keyed by ACTION, not by private id -- the D&H's
+   *  two powers are spent independently. */
+  usedPrivateAbilities: ReadonlySet<string>;
+  onUsePrivateAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
@@ -468,6 +482,11 @@ export default function ContextualActionBar({
    *  JSX call site for where that `<style>` tag is injected) to this bar's
    *  own outer wrapper. */
   isMyTurn: boolean;
+  /** Design note #458: the newest activity-log line, kept visible while the
+   *  page scrolls. `null` renders nothing. */
+  latestFeedItem?: FeedItem | null;
+  /** Scrolls the player back to the full ticker. */
+  onOpenActivityLog?: () => void;
   /** Derived phase (`utils/gamePhase.ts`) for the far-right badge -- see
    *  design note #40 for why it moved here from the header. */
   phase?: GamePhase | null;
@@ -1350,6 +1369,11 @@ export default function ContextualActionBar({
             {/* LEFT RAIL -- docked status. Fixed home, so the phase badge and
                 the rust warning sit in the same place all game. */}
             <div style={styles.orPanelRailLeft}>
+              {/* Design note #458: the sticky bar is the one element that
+                  survives scrolling, so the newest instruction rides in it.
+                  Left rail, because the centre column is the action group
+                  (design note #426) and the right holds Undo. */}
+              <StickyTickerLine latestItem={latestFeedItem} onExpand={onOpenActivityLog} />
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
@@ -1593,6 +1617,47 @@ export default function ContextualActionBar({
                   task -- and they now head `RoutePlannerPanel` below as one
                   segmented control. See that file's design note #0 for why
                   the three regions became one column. */}
+              {/* ==================================================
+                   DESIGN NOTE 451: UNDO, AND WHAT IT WOULD UNDO
+                  ==================================================
+
+                   REPORTED: add Undo to the collapsed/sticky action bar so
+                   it is always accessible, and put the sub-phase name beside
+                   it so the logic of what is being undone is visible.
+
+                   Undo lived only on the NON-Operating-Round branch of this
+                   bar -- the auction and Stock Round row. During an
+                   Operating Round, which is the round with the most
+                   undoable actions in it and the only one with sub-steps to
+                   get lost in, the button was simply absent. A player who
+                   laid the wrong tile had to leave the round's own panel to
+                   find the control that would take it back.
+
+                   THE PAIR IS THE POINT, not two controls that happen to be
+                   adjacent. `Undo` alone answers "can I take that back";
+                   `Track ⟲ Undo` answers "take back what I did in Track",
+                   which is the question actually being asked. Design note
+                   #439 made Undo rewind past auto-skipped steps to the last
+                   thing the player chose -- so naming the step it will land
+                   on is what makes that behaviour legible rather than
+                   surprising.
+
+                   IT SITS IN THE RIGHT RAIL, which the grid keeps clear of
+                   the centred action group (design note #426). So adding it
+                   moves nothing: the primary buttons stay exactly where
+                   muscle memory left them. */}
+              <span style={styles.undoStepLabel}>
+                {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel}
+              </span>
+              <button
+                type="button"
+                style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+                onClick={onUndoLastAction}
+                disabled={!sessionReady}
+                title={`Undo the last action you took. Rewinds to your last real decision, skipping any steps the game advanced for you.`}
+              >
+                &#8630; Undo
+              </button>
             </div>
           </div>
         </div>
@@ -1916,6 +1981,14 @@ export default function ContextualActionBar({
         roundType={roundType}
         orSubPhase={roundType === "OperatingRound" ? orSubPhase : null}
         sandbox={sandboxMode}
+        /* Design note #441: a corporate power belongs to the corporation
+           OPERATING and is executed by whoever holds its controls. The bar
+           already resolves both -- `activeCorporation` is the acting
+           company and `presidentAddress` the person entitled to act for it
+           -- so the panel is handed the same answers the rest of this bar
+           is gated on rather than deriving a second set. */
+        actingProtocolId={activeCorporation?.companyId ?? null}
+        actingPresident={activeCorporation?.presidentAddress ?? null}
         usedAbilities={usedPrivateAbilities}
         onUseAbility={onUsePrivateAbility}
         controlsEnabled={sessionReady}

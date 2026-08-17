@@ -539,7 +539,10 @@ import {
   glowColorFor,
   stationTickerColor,
 } from "./components/hexContractTypes";
-import { type PrivateAbility } from "./components/PrivatePowerPanel";
+import {
+  type PrivateAbility,
+  type PrivateAbilityAction,
+} from "./components/PrivatePowerPanel";
 import { corporationPrivateCompanies } from "./utils/gameState";
 import type { RouteBuildMode, TrainRouteDraft } from "./components/RoutePlannerPanel";
 import {
@@ -628,6 +631,7 @@ import {
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { undoSkippedCount, undoTargetIndex } from "./utils/undoTarget";
+import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
 
@@ -929,8 +933,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      Local, because there is no contract message to read it back from --
      the panel exists so the surface and its two gates are testable, and
      this is the smallest state that makes "Used" mean something. */
-  const [usedPrivateAbilities, setUsedPrivateAbilities] = useState<ReadonlySet<number>>(
-    () => new Set<number>(),
+  const [usedPrivateAbilities, setUsedPrivateAbilities] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
   );
 
   /** Design note #303: what each private actually sold for, by id. */
@@ -1345,7 +1349,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     if (sandbox) {
       setActionLog([]);
       setSettledPrivatePrices({});
-      setUsedPrivateAbilities(new Set<number>());
+      setUsedPrivateAbilities(new Set<string>());
     }
     // Design note #246: flipping the trade fixture re-seeds too. It changes
     // who owns what, which is board state rather than a view setting, so
@@ -1583,6 +1587,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       presidentLabel: company.president
         ? (sandboxPlayerLabel(company.president) ?? truncateAddress(company.president))
         : null,
+      // Design note #441: the identity, for the corporate-power gate.
+      presidentAddress: company.president ?? null,
       /** Design note #326: the president's OWN wallet, not the treasury.
        *  `null` when there is no president or the room does not report their
        *  cash -- the tooltip is then omitted entirely rather than promising
@@ -2689,6 +2695,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     q: number;
     r: number;
     hexLabel: string;
+    /** Design note #453: which city on the hex, or `null` when the geometry
+     *  cannot say. Travels to `PlaceStationToken.city_index`. */
+    cityIndex: number | null;
+    /* ==================================================================
+     *  DESIGN NOTE 454: THE FREE PLACEMENTS CONFIRM TOO
+     * ==================================================================
+     *
+     * REPORTED: clicking a hex instantly places the token without
+     * confirmation.
+     *
+     * The ORDINARY Tokens step has confirmed since design note #201 --
+     * `RadialTokenConfirm` is the check/X ring the tile selector's confirm
+     * is modelled on. What placed instantly were the two FREE placements
+     * added later: the home station at float (design note #440) and the
+     * D&H's F16 token (#444). Both wrote straight to state on the board
+     * click, so the newest flows were the ones missing the oldest
+     * safeguard.
+     *
+     * They route through this staging state now, so every station placement
+     * in the app answers the same ring. `kind` is what the confirmation
+     * then dispatches -- a paid `PlaceStationToken`, or a free write that
+     * must NOT go through that message because it charges the escalating
+     * token price (design note #239). */
+    kind: "paid" | "free";
     offsetX: number;
     offsetY: number;
   } | null>(null);
@@ -3496,19 +3526,56 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     );
   }, []);
 
+  /* ==================================================================
+   *  DESIGN NOTE 444: A PRIVATE POWER THAT TOUCHES THE BOARD GOES THERE
+   * ==================================================================
+   *
+   * REPORTED: the D&H's "Place Station" button does nothing.
+   *
+   * It did nothing in the most literal way available: this handler marked
+   * the ability spent and wrote a log line. There was no dispatch, no
+   * placement and no navigation -- the button reported an action it had
+   * not performed, which is the failure shape this codebase keeps removing.
+   *
+   * The hex-holding powers now route through the same map flow the home
+   * station uses (design note #440): veil the board to the one hex the
+   * power names, arm the cursor the gesture needs, and hand the player the
+   * board. The ability is marked spent WHEN THE CLICK LANDS, not when the
+   * button is pressed -- a player who opens the map and changes their mind
+   * has not used their D&H.
+   *
+   * THE SHARE EXCHANGES STAY AS THEY WERE, marked and logged. They touch no
+   * hex, and `ExecuteMsg` has no message for them (this file's design note
+   * #1 on the panel records that the whole panel is sandbox-only for
+   * exactly that reason). Routing them to a map would be theatre. */
   const handleUsePrivateAbility = useCallback(
-    (ability: PrivateAbility) => {
-      setUsedPrivateAbilities((prev) => {
-        const next = new Set(prev);
-        next.add(ability.privateId);
-        return next;
-      });
-      logInfoRef.current?.(
-        "Private Power",
-        `${ability.action} — ${ability.description}`,
-      );
+    (ability: PrivateAbility, action: PrivateAbilityAction) => {
+      const reservation = privateHexFor(ability.privateId);
+      const targetsHex = action.key === "dh-tile" || action.key === "dh-token" ||
+        action.key === "csl-tile";
+
+      if (targetsHex && reservation) {
+        setHomeStationPlacement({
+          kind: action.key === "dh-token" ? "private-station" : "private-tile",
+          companyId: actingProtocolId,
+          q: reservation.q,
+          r: reservation.r,
+          hexLabel: reservation.hexLabel,
+          abilityKey: action.key,
+          returnTab: activeMainTab,
+        });
+        setActiveMainTab("map");
+        logInfoRef.current?.(
+          "Private Power",
+          `${action.label} — click ${reservation.hexLabel} on the Rail Map, the only hex left lit.`,
+        );
+        return;
+      }
+
+      setUsedPrivateAbilities((prev) => new Set(prev).add(action.key));
+      logInfoRef.current?.("Private Power", `${action.label} — ${ability.description}`);
     },
-    [],
+    [actingProtocolId, activeMainTab],
   );
 
   const logInfo = useCallback((label: string, detail: string) => {
@@ -4400,9 +4467,75 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
      * modal nobody can answer is the same lockout in a different costume --
      * `pendingHomeTokens` already excludes hexes it cannot resolve, and
      * this excludes presidencies it cannot attribute. */
-    if (!owed.president || owed.president !== viewerAddress) return null;
+    /* ==================================================================
+     *  DESIGN NOTE 455: THE FLOAT DOES NOT WAIT FOR A TURN
+     * ==================================================================
+     *
+     * REPORTED: the prompt waits until it is the President's active turn to
+     * appear.
+     *
+     * It did, and design note #441's gate was not the cause -- comparing
+     * against `viewerAddress` is correct online, where that value is the
+     * connected wallet and does not move. In HOTSEAT it moves: sandbox
+     * derives `viewerAddress` from `sandboxSeatIndex`, and the Auto-Follow
+     * effect walks that pointer to whoever is acting. So the president
+     * became "the viewer" only when the turn reached them, and a float
+     * triggered by ANOTHER player's purchase sat waiting for a turn that
+     * might be three seats away.
+     *
+     * A float is not a turn action. It is a threshold crossing caused by
+     * whoever bought the 60th percent -- frequently not the president at
+     * all -- and 1830 resolves it immediately, before play continues. So
+     * the prompt fires on the FACT, not on the cursor.
+     *
+     * HOTSEAT ANSWERS FOR THE PRESIDENT, WHOEVER IS SEATED. One keyboard,
+     * one screen: the person at it is every seat in turn, so requiring the
+     * seat pointer to have arrived at the president is requiring a
+     * formality that has no counterpart in the physical game -- where the
+     * president simply reaches over and places their token. `hotseatSeat`
+     * below is that reading, and it is scoped to sandbox so an online
+     * client still shows this to exactly one player.
+     *
+     * THE SEAT FOLLOWS THE PROMPT, not the other way round. When the
+     * prompt fires for a president who is not the seated player, the
+     * accompanying effect moves the seat to them -- so the map flow that
+     * follows (design note #440) acts as the right corporation rather than
+     * as whoever happened to be up. Without that the placement would be
+     * attributed to the wrong seat's view. */
+    const isPresident = !!owed.president && owed.president === viewerAddress;
+    const hotseatSeat = sandbox && !!owed.president;
+    if (!isPresident && !hotseatSeat) return null;
     return owed;
-  }, [gameState, homeHexToAxial, viewerAddress]);
+  }, [gameState, homeHexToAxial, viewerAddress, sandbox]);
+
+  /** Design note #455: the seat index of the outstanding prompt's
+   *  president, or `null` when there is no prompt or the right seat is
+   *  already selected. Derived rather than computed inside the effect so
+   *  the effect's dependency is a stable number and it cannot re-fire on
+   *  every unrelated state change. */
+  const pendingHomeTokenSeatFix = useMemo(() => {
+    if (!sandbox || !pendingHomeToken?.president || !gameState) return null;
+    const seat = gameState.player_addresses.indexOf(pendingHomeToken.president);
+    if (seat === -1 || seat === sandboxSeatIndex) return null;
+    return seat;
+  }, [sandbox, pendingHomeToken, gameState, sandboxSeatIndex]);
+
+  /* Design note #455: seat the president the prompt is addressed to.
+   *
+   * Hotseat only -- online there is no seat pointer to move, and the prompt
+   * is already on the right client. Runs when a prompt is outstanding and
+   * the seated player is not its president, which is precisely the case the
+   * old gate silently swallowed.
+   *
+   * It also switches Auto-Follow OFF for the duration in effect: the
+   * follow effect would otherwise pull the seat straight back to the acting
+   * corporation on the next render, and the two would fight. Restoring it
+   * is not needed -- the follow effect re-runs on the next state change and
+   * takes the seat back once the prompt is answered. */
+  useEffect(() => {
+    if (!sandbox || !pendingHomeTokenSeatFix) return;
+    setSandboxSeatIndex(pendingHomeTokenSeatFix);
+  }, [sandbox, pendingHomeTokenSeatFix]);
 
   /* ==================================================================
    *  DESIGN NOTE 440: THE HOME STATION IS PLACED ON THE MAP
@@ -4422,9 +4555,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * the only honest answer -- the requirement says "the Stocks tab" because
    * that is where a float usually happens, not because it always does. */
   const [homeStationPlacement, setHomeStationPlacement] = useState<{
+    /* ==============================================================
+     *  DESIGN NOTE 444: ONE VEIL, THREE ERRANDS
+     * ==============================================================
+     *
+     * Design note #440 built this for the home station. The D&H's two
+     * powers need exactly the same thing -- send the player to the Rail
+     * Map, black out every hex but one, arm the right cursor, and put them
+     * back afterwards -- so they use it rather than growing a second
+     * mechanism beside it.
+     *
+     * `kind` is what differs, and it differs in only two ways: which
+     * cursor to arm, and what the click does.
+     *
+     *   `home-station`    free token, the corporation's printed home hex
+     *   `private-station` free token, the D&H's F16
+     *   `private-tile`    an ORDINARY tile lay, at the hex's real terrain
+     *                     cost -- the click is NOT intercepted, it falls
+     *                     through to the tile picker, and the veil is doing
+     *                     all the work.
+     *
+     * That last one is why `kind` is not simply a boolean "is this a
+     * token". A tile lay through this flow is the normal lay path with the
+     * board narrowed to one hex; anything else would be a second tile
+     * pipeline to keep in step with the first. */
+    kind: "home-station" | "private-station" | "private-tile";
     companyId: number;
     q: number;
     r: number;
+    hexLabel: string;
+    /** Design note #442: which action to mark spent once it lands. `null`
+     *  for the home station, which is an obligation rather than a power. */
+    abilityKey: string | null;
     returnTab: MainTab;
   } | null>(null);
 
@@ -4452,11 +4614,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
   /** Design note #440: the prompt's answer ARMS THE MAP. It no longer
    *  places anything -- it records where the player was, sends them to the
    *  Rail Map with the board veiled to one hex and the station cursor live,
-   *  and waits for the click. `handleCommitHomeStation` below is what
-   *  actually puts the token down. */
+   *  and waits for the click. `handleStageFreeStation` below stages that
+   *  click, and `commitFreeStationPlacement` puts the token down once the
+   *  confirmation ring is answered (design note #454). */
   const handlePlaceHomeStation = useCallback(
     (companyId: number, q: number, r: number) => {
-      setHomeStationPlacement({ companyId, q, r, returnTab: activeMainTab });
+      setHomeStationPlacement({
+        kind: "home-station",
+        companyId,
+        q,
+        r,
+        hexLabel:
+          STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label ?? "its home hex",
+        abilityKey: null,
+        returnTab: activeMainTab,
+      });
       setActiveMainTab("map");
       const ticker =
         gameState?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
@@ -4475,8 +4647,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    *  charges the escalating token price (design note #239). A home station
    *  costs nothing, and routing it through the paid message would bill a
    *  corporation for the one token 1830 gives it. */
-  const handleCommitHomeStation = useCallback(
-    ({ q, r }: { q: number; r: number }) => {
+  /* Design note #454: the board click STAGES a free placement; it no longer
+     performs one. `RadialTokenConfirm` then asks, and
+     `commitFreeStationPlacement` below is what the check actually runs.
+
+     This is the same STAGE-then-CONFIRM shape design note #201 gave the
+     paid placement, arriving late for the two free ones -- and the reason
+     it matters more here, not less: a home station is permanent, free, and
+     the first piece a corporation ever puts on the board. An accidental
+     click placing it instantly is not recoverable through the ordinary
+     flow. */
+  const handleStageFreeStation = useCallback(
+    ({
+      q,
+      r,
+      hexLabel,
+      cityIndex,
+      centroidX,
+      centroidY,
+    }: {
+      q: number;
+      r: number;
+      hexLabel: string;
+      cityIndex: number | null;
+      centroidX: number;
+      centroidY: number;
+    }) => {
       const placement = homeStationPlacement;
       if (!placement) return;
       /* The veil already refuses every other hex (`layFocus.highlighted` is
@@ -4484,6 +4680,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
          cheap, and the kind of guard that matters if the veil is ever
          loosened for a reason unrelated to this flow. */
       if (q !== placement.q || r !== placement.r) return;
+      // Design note #444: a tile lay is not staged here. It falls through
+      // to the tile picker and finishes in `handleConfirmRadialLay`.
+      if (placement.kind === "private-tile") return;
+
+      setPendingToken({
+        q,
+        r,
+        hexLabel,
+        cityIndex,
+        kind: "free",
+        offsetX: centroidX,
+        offsetY: centroidY,
+      });
+    },
+    [homeStationPlacement],
+  );
+
+  /** Design note #454: what the confirmation ring runs for a free
+   *  placement.
+   *
+   *  Free -- this deliberately does NOT dispatch `PlaceStationToken`, which
+   *  charges the escalating token price (design note #239). A home station
+   *  costs nothing, and routing it through the paid message would bill a
+   *  corporation for the one token 1830 gives it. */
+  const commitFreeStationPlacement = useCallback(
+    ({ q, r }: { q: number; r: number }) => {
+      const placement = homeStationPlacement;
+      if (!placement) return;
 
       const ticker =
         gameState?.public_companies.find((e) => e.company_id === placement.companyId)?.ticker ??
@@ -4495,7 +4719,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         sandboxStateRef.current = placed;
         return placed;
       });
-      logInfo("Home Station", `${ticker} places its home station token.`);
+      logInfo(
+        "Station Token",
+        placement.kind === "home-station"
+          ? `${ticker} places its home station token on ${placement.hexLabel}.`
+          : `${ticker} places a free station token on ${placement.hexLabel} using the Delaware & Hudson.`,
+      );
+      if (placement.abilityKey) {
+        setUsedPrivateAbilities((prev) => new Set(prev).add(placement.abilityKey as string));
+      }
       setHomeStationPlacement(null);
       // Back where they came from -- see the state's own note on why this
       // is captured rather than hardcoded to the Stocks tab.
@@ -4953,12 +5185,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       q,
       r,
       hexLabel,
+      cityIndex,
       centroidX,
       centroidY,
     }: {
       q: number;
       r: number;
       hexLabel: string;
+      cityIndex: number | null;
       centroidX: number;
       centroidY: number;
     }) => {
@@ -4998,7 +5232,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
       // Design note #201: STAGE, do not place. Targeting mode stays on, so a
       // click on another city re-aims rather than being swallowed by an open
       // confirmation for a hex the player has changed their mind about.
-      setPendingToken({ q, r, hexLabel, offsetX: centroidX, offsetY: centroidY });
+      // Design note #453: the node travels with the stage, so the
+      // confirmation dispatches the city the player actually clicked.
+      setPendingToken({
+        q,
+        r,
+        hexLabel,
+        cityIndex,
+        kind: "paid",
+        offsetX: centroidX,
+        offsetY: centroidY,
+      });
     },
     [mapGrid, activeStationCompany, gameState],
   );
@@ -5007,8 +5251,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    *  charged -- design note #201. */
   const handleConfirmTokenPlacement = useCallback(() => {
     if (!pendingToken) return;
-    const { q, r } = pendingToken;
+    const { q, r, cityIndex, kind } = pendingToken;
     setPendingToken(null);
+
+    /* Design note #454: a FREE placement -- the home station or the D&H's
+       F16 token -- finishes through its own committer. It must not reach
+       `PlaceStationToken`, which charges the escalating price (design note
+       #239): routing it there would bill a corporation for a token 1830
+       gives it. */
+    if (kind === "free") {
+      commitFreeStationPlacement({ q, r });
+      return;
+    }
+
     setTokenTargetMode(false);
     // A corporation places at most one token per turn, so the Tokens step
     // is done -- the same "the action completes the step" rule the tile
@@ -5020,9 +5275,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         protocol_id: actingProtocolId,
         q,
         r,
+        /* Design note #453: OMITTED when the geometry could not tell which
+           city was clicked. `sessionKey.ts` documents the absent key as
+           "resolve the lowest-indexed city with a free slot" -- always a
+           legal placement -- so omitting is the correct expression of "I do
+           not know", and sending a guessed `0` would not be. */
+        ...(cityIndex === null ? {} : { city_index: cityIndex }),
       },
     });
-  }, [pendingToken, gameId, runGameplayAction, actingProtocolId]);
+  }, [pendingToken, gameId, runGameplayAction, actingProtocolId, commitFreeStationPlacement]);
 
   /** The red X. Discards the staging and leaves targeting armed, so the
    *  player is back where they were rather than having to re-open the mode. */
@@ -5881,6 +6142,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
         LayTile: { game_id: gameId, protocol_id: actingProtocolId, q, r, tile_id: tileId, orientation },
       });
     }
+    /* ==============================================================
+     *  DESIGN NOTE 444: THE D&H TILE ERRAND ENDS HERE
+     * ==============================================================
+     *
+     * A `private-tile` placement does not intercept the board click -- it
+     * only veils -- so this is where its round trip finishes: mark the
+     * power spent and put the player back on the tab they came from.
+     *
+     * MARKED ON THE LAY, NOT ON THE BUTTON PRESS. A player who opens the
+     * map, looks at F16 and dismisses the picker has not used their D&H,
+     * and the power is still theirs next turn. */
+    if (homeStationPlacement?.kind === "private-tile") {
+      if (homeStationPlacement.abilityKey) {
+        setUsedPrivateAbilities((prev) =>
+          new Set(prev).add(homeStationPlacement.abilityKey as string),
+        );
+      }
+      setHomeStationPlacement(null);
+      setActiveMainTab(homeStationPlacement.returnTab);
+    }
     handleDismissRadial();
   }, [
     radialSelector,
@@ -5892,6 +6173,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
     gameId,
     handleDismissRadial,
     actingProtocolId,
+    homeStationPlacement,
   ]);
 
 
@@ -6278,6 +6560,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                   </div>
                 ) : (
                 <ContextualActionBar
+                  /* Design note #458: the newest log line rides in the
+                     sticky bar, so it survives scrolling the board and the
+                     tables below. Expanding scrolls back to the full ticker
+                     rather than opening a second copy of it. */
+                  latestFeedItem={latestFeedItem}
+                  onOpenActivityLog={() => {
+                    if (!isTickerExpanded) handleToggleTickerExpand();
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
                   roundType={gameState?.current_round_type ?? null}
                   // Design note #390: the bar compares these two and
                   // replaces itself with a Return button when the player is
@@ -6727,14 +7018,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
-                        // Design note #440: a home placement owns the board.
-                        homeStationPlacement !== null ||
-                        // Design note #440: a home placement owns the board.
-                        homeStationPlacement !== null ||
-                        // Design note #440: a home placement owns the board.
-                        homeStationPlacement !== null ||
-                        // Design note #440: a home placement owns the board.
-                        homeStationPlacement !== null ||
+                        /* Design note #440/#444: a TOKEN placement owns the
+                           board and the picker must not open over it. The
+                           tile errand is the opposite -- it needs the picker,
+                           so it deliberately does not disarm here. */
+                        (homeStationPlacement !== null &&
+                          homeStationPlacement.kind !== "private-tile") ||
+                        /* Design note #440/#444: a TOKEN placement owns the
+                           board and the picker must not open over it. The
+                           tile errand is the opposite -- it needs the picker,
+                           so it deliberately does not disarm here. */
+                        (homeStationPlacement !== null &&
+                          homeStationPlacement.kind !== "private-tile") ||
+                        /* Design note #440/#444: a TOKEN placement owns the
+                           board and the picker must not open over it. The
+                           tile errand is the opposite -- it needs the picker,
+                           so it deliberately does not disarm here. */
+                        (homeStationPlacement !== null &&
+                          homeStationPlacement.kind !== "private-tile") ||
+                        /* Design note #440/#444: a TOKEN placement owns the
+                           board and the picker must not open over it. The
+                           tile errand is the opposite -- it needs the picker,
+                           so it deliberately does not disarm here. */
+                        (homeStationPlacement !== null &&
+                          homeStationPlacement.kind !== "private-tile") ||
                         previewRotateArmed ||
                         spectator ||
                         sandbox
@@ -6771,7 +7078,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                            crosshair the ordinary token step uses -- the
                            gesture a player is being asked for is identical,
                            so the cursor should not differ. */
-                        homeStationPlacement || tokenTargetMode ? "token" : "default"
+                        /* Design note #444: the TILE errand keeps the
+                           default cursor -- it ends in the tile picker, and
+                           a crosshair would promise a token placement. */
+                        (homeStationPlacement &&
+                          homeStationPlacement.kind !== "private-tile") ||
+                        tokenTargetMode
+                          ? "token"
+                          : "default"
                       }
                       onHexClick={
                         /* Design note #440: FIRST in the chain. A home
@@ -6780,8 +7094,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
                            thing -- so it takes the click ahead of every
                            other board mode rather than competing with
                            whichever happened to be left on. */
-                        homeStationPlacement
-                          ? handleCommitHomeStation
+                        /* Design note #444: a `private-tile` errand does NOT
+                           intercept. The veil has already narrowed the board
+                           to one hex, and the click then runs the ordinary
+                           tile-picker path -- so a D&H tile lay is the same
+                           pipeline as every other lay, at the same terrain
+                           cost, rather than a second one to keep in step. */
+                        homeStationPlacement &&
+                        homeStationPlacement.kind !== "private-tile"
+                          ? handleStageFreeStation
                           : tokenTargetMode
                             ? handleTokenHexClick
                             : routeSelectMode
@@ -7100,7 +7421,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
           anchorOffsetY={pendingToken.offsetY}
           canvasEl={boardEl}
           hexLabel={pendingToken.hexLabel}
-          cost={stationTokenCost}
+          /* Design note #454: a free placement costs nothing, and the ring
+             says so. Quoting the escalating price on a home station would
+             be the ring describing a charge that never happens -- the same
+             mismatch design note #239 removed from the button. */
+          cost={pendingToken.kind === "free" ? 0 : stationTokenCost}
           ticker={
             gameState?.public_companies.find((c) => c.company_id === actingProtocolId)?.ticker ??
             "this corporation"

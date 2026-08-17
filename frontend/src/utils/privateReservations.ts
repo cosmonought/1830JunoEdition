@@ -202,3 +202,35 @@ export function describeReservation(
     : `held by ${reservation.privateName}, still unsold in the auction`;
   return `${where} is reserved — ${held}. No other corporation may lay track here until the private closes; ${reservation.power}.`;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 444: THE HEX A PRIVATE POWER ACTS ON
+ * ==================================================================
+ *
+ * `activeReservations` above answers "which hexes are currently spoken
+ * for", which is a question about the live game -- it filters on ownership
+ * and closure because a badge must not mark a hex nothing protects.
+ *
+ * This answers a different and simpler question: WHERE does this private's
+ * power act? That is a printed property of the board and true whether the
+ * private is owned, unowned or closed, so it consults the rules table and
+ * nothing else.
+ *
+ * Separate rather than a flag on the function above, because conflating
+ * them is how a power would silently stop being executable at the moment
+ * the badge stopped drawing -- two different conditions that happen to
+ * involve the same table.
+ *
+ * `null` for the four privates that hold no ground, and for a rule whose
+ * label the board does not carry (the same guard `activeReservations`
+ * makes, for the same reason: `hexBoardData.ts` has moved F16 once already).
+ */
+export function privateHexFor(
+  privateId: number,
+): { q: number; r: number; hexLabel: string } | null {
+  const rule = RESERVATION_RULES.find((entry) => entry.privateId === privateId);
+  if (!rule) return null;
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === rule.hexLabel);
+  if (!hex) return null;
+  return { q: hex.q, r: hex.r, hexLabel: rule.hexLabel };
+}

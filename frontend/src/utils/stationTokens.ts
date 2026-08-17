@@ -60,10 +60,10 @@
 // whether it is this corporation's turn -- those are elsewhere in the UI or
 // on chain, and duplicating them here would be a second opinion.
 
-import { archetypeForHex } from "../components/hexGeometry";
+import { archetypeForHex, axialToPixel } from "../components/hexGeometry";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { tileCitySlotCounts } from "../components/TileGraphics";
+import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
 import { hexKey, reachableNetwork } from "./trackReach";
 
 /** The home token, granted at float rather than bought. */
@@ -364,4 +364,72 @@ export function stationPlacementBlockReason(input: {
     return "its network reaches no city with a free station slot";
   }
   return null;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 453: WHICH CITY NODE THE POINTER LANDED ON
+ * ==================================================================
+ *
+ * A hex can carry more than one city -- New York's #54/#62, every OO tile --
+ * and `PlaceStationToken.city_index` exists precisely so a player can say
+ * which. Nothing was answering the question, so every placement omitted the
+ * field and the contract fell back to "lowest-indexed city with a free
+ * slot": always legal, and on a two-city hex a coin toss against what the
+ * player actually clicked.
+ *
+ * HOW IT DECIDES. Each city's slot points are already computed for drawing
+ * (`tileCitySlotPoints` -- the same geometry that positions the tokens), so
+ * a city's position is the centroid of its own slots. The click resolves to
+ * whichever centroid is nearest. That reuses the drawing geometry rather
+ * than describing the tile a second time, which is what keeps "where the
+ * token appears" and "which city you clicked" from drifting apart.
+ *
+ * NEAREST, WITH NO RADIUS. A click has already been established as landing
+ * inside this hex before this runs, and every point inside a hex is nearer
+ * one of its cities than the other. Adding a hit radius would create dead
+ * zones between the cities where a click inside a legal hex resolved to
+ * nothing -- a worse answer than the nearest city, and one the player
+ * cannot see the boundary of.
+ *
+ * `null` FOR "COULD NOT TELL", never a defaulted `0`:
+ *
+ *   - no tile laid. An untiled preprinted double city (New York before it
+ *     is tiled) has no per-city geometry to measure against. Guessing here
+ *     would send a confident wrong index; omitting the field lets the
+ *     contract apply its documented fallback.
+ *   - a tile this catalog does not know, or one with no cities at all.
+ *
+ * A ONE-CITY TILE SHORT-CIRCUITS TO `0` without measuring. Its index is not
+ * a guess -- there is only one -- and the arithmetic would be wasted on the
+ * overwhelming majority of hexes.
+ */
+export function cityIndexAtPoint(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  pointX: number,
+  pointY: number,
+  hexSize: number,
+): number | null {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (!laid) return null;
+
+  const cityCount = tileCitySlotCounts(laid.tile_id).length;
+  if (cityCount === 0) return null;
+  if (cityCount === 1) return 0;
+
+  const center = axialToPixel(q, r, hexSize);
+  let best: { index: number; distanceSq: number } | null = null;
+
+  for (let city = 0; city < cityCount; city += 1) {
+    const points = tileCitySlotPoints(laid.tile_id, city, laid.orientation, center, hexSize);
+    if (points.length === 0) continue;
+    // The city's own position: the centroid of the slots it draws tokens in.
+    const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+    const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+    const distanceSq = (cx - pointX) ** 2 + (cy - pointY) ** 2;
+    if (best === null || distanceSq < best.distanceSq) best = { index: city, distanceSq };
+  }
+
+  return best?.index ?? null;
 }

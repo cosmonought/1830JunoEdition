@@ -2866,10 +2866,17 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
  *                charging par here would bill the player twice for one
  *                private.
  *   STAYS PUT    `is_floated`. 1830 floats on 60% SOLD, and 20% is not 60%.
- *                `StockRoundPanel` design note #24 already renders exactly
- *                this state ("Auto-floated by the B&O private") for a
- *                company parred but not yet floated, so the panel was ready
- *                for a position the reducer never produced.
+ *                No corporation floats during the Auction Round at all --
+ *                the auction sells privates, and no share changes hands in
+ *                it. `StockRoundPanel` renders "parred, presided over, not
+ *                yet floated" as an ordinary state.
+ *
+ *                Design note #445: this used to cite that panel's
+ *                "Auto-floated by the B&O private" badge as evidence the UI
+ *                was "ready for" this position. The badge named a rule 1830
+ *                does not have and has been removed; the reducer's
+ *                behaviour here was always correct and is what the panel
+ *                now agrees with.
  *   SET NOW      `par_value`, from the winner's own choice.
  *
  *                ==================================================

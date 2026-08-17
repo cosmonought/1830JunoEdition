@@ -51,11 +51,16 @@
 
 import React from "react";
 
-import type { GameStateResponse, QueryCapableClient } from "../utils/gameState";
-import { usePlayerNetWorths } from "../utils/gameState";
+import type {
+  GameStateResponse,
+  PublicCompanyState,
+  QueryCapableClient,
+} from "../utils/gameState";
+import { corporationPrivateCompanies, usePlayerNetWorths } from "../utils/gameState";
 // Design note #405: the Game Ledger's own Player Assets table, rendered here
 // rather than replicated -- see the footer half of that note below.
 import { PlayerAssetsSection } from "./FinancialLedger";
+import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { corporationFullName } from "../utils/corporationNames";
 import { derivePhase, rustOutlook } from "../utils/gamePhase";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
@@ -379,6 +384,12 @@ function OperatingRoundCorporationPanel({
             <th style={styles.thNumB}>Market Value</th>
             <th style={styles.thNumB}>Treasury</th>
             <th style={styles.thNumB}>Last Route Payout</th>
+            {/* Design note #449: what each corporation's TREASURY owns. The
+                privates a company holds pay it every Operating Round and
+                carry the powers it may exercise on its turn, so this table
+                -- the one a player reads while deciding what to do on that
+                turn -- was the place they were missing from. */}
+            <th style={styles.thB}>Privates</th>
             <th style={styles.thCenterB}>Trains</th>
             <th style={styles.thCenter}>Train Limit</th>
           </tr>
@@ -386,18 +397,60 @@ function OperatingRoundCorporationPanel({
         <tbody>
           {gameState.public_companies.length === 0 && (
             <tr>
-              <td style={styles.td} colSpan={7}>
+              <td style={styles.td} colSpan={8}>
                 No companies registered yet.
               </td>
             </tr>
           )}
-          {gameState.public_companies.map((company) => {
+          {/* ==================================================
+               DESIGN NOTE 449: OPERATING ORDER, AND UNFLOATED DIMMED
+              ==================================================
+
+               REPORTED: sort strictly by operating order, and gray out
+               unfloated corporations.
+
+               The table rendered in `company_id` order -- the contract's
+               table order -- while the round it describes runs in a
+               completely different one. A player reading down this list to
+               work out who acts next was reading the wrong sequence, and
+               nothing on screen said so.
+
+               THE SAME RULE `buildOperatingOrder` USES: market price
+               descending, then par, then id. Reproduced rather than
+               imported because that function returns only the FLOATED
+               queue, and this table shows every corporation including the
+               ones that cannot operate -- so the two answer different
+               questions over the same comparison. The comparison is the
+               part that must not drift, and it is three lines.
+
+               UNFLOATED SORT LAST AND DIM. A corporation with no price is
+               not somewhere in the middle of the operating order, it is
+               absent from it, so it belongs after the queue rather than
+               interleaved by whatever par it happens to carry. Dimming is
+               the second half of the same statement: the row is context,
+               not a participant. The UNFLOATED badge stays -- the dimming
+               says "not in this round", the badge says which rule. */}
+          {[...gameState.public_companies]
+            .sort((a, b) => {
+              if (a.is_floated !== b.is_floated) return Number(b.is_floated) - Number(a.is_floated);
+              const priceOf = (c: PublicCompanyState) =>
+                priceByCompany.get(c.company_id) ?? (Number(c.par_value ?? 0) || 0);
+              return priceOf(b) - priceOf(a) || a.company_id - b.company_id;
+            })
+            .map((company) => {
             const isActive = company.company_id === activeCompanyId;
             const price = priceByCompany.get(company.company_id);
             const delta = deltas.get(company.company_id);
             const trains = company.owned_trains;
+            const privates = corporationPrivateCompanies(company.company_id, gameState);
             return (
-              <tr key={company.company_id} style={isActive ? styles.trActive : undefined}>
+              <tr
+                key={company.company_id}
+                style={{
+                  ...(isActive ? styles.trActive : {}),
+                  ...(company.is_floated ? {} : styles.trUnfloated),
+                }}
+              >
                 {/* ---- Corporation: token dot, ticker, full name ---- */}
                 <td style={styles.tdB}>
                   <span style={styles.corpCell}>
@@ -461,6 +514,15 @@ function OperatingRoundCorporationPanel({
                 {/* ---- Last route payout -- design note #10 ---- */}
                 <td style={styles.tdNumB}>
                   <LastRoutePayout surface="dark" revenue={company.last_route_revenue} />
+                </td>
+
+                {/* ---- Privates this corporation's treasury owns ----
+                     Design note #449. `PrivateCompanyPills` is the same
+                     component the auction table and the Ledger render, so a
+                     private looks the same wherever it is listed and its
+                     rules text is one click away here too. */}
+                <td style={styles.tdB}>
+                  <PrivateCompanyPills privates={privates} surface="table" emptyLabel="--" />
                 </td>
 
                 {/* ---- Trains, as chips ---- */}
@@ -569,6 +631,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #1e2129",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
+  /* Design note #449: a corporation that cannot operate is context, not a
+     participant. Dimmed rather than hidden -- a player still wants to see
+     which companies exist and how close they are to floating. */
+  trUnfloated: { opacity: 0.5 },
   trActive: {
     backgroundColor: "#1f2a1f",
   },

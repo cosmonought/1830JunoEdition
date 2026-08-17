@@ -82,6 +82,7 @@ import {
 } from "./hexContractTypes";
 import { reservationsByHex } from "../utils/privateReservations";
 import type { PrivateCompanyState } from "../utils/gameState";
+import { cityIndexAtPoint } from "../utils/stationTokens";
 import {
   archetypeForHex,
   axialToPixel,
@@ -431,6 +432,28 @@ export interface HexGridRendererProps {
     /** The hex's canonical board label -- "G19". `null` for a coordinate
      *  that is not a real board hex. THIS is the identifier. */
     boardLabel: string | null;
+    /* ==================================================================
+     *  DESIGN NOTE 453: WHICH CITY, NOT JUST WHICH HEX
+     * ==================================================================
+     *
+     * REPORTED: clicking a hex to place a station ignores the specific city
+     * node the user clicked.
+     *
+     * It did, because this payload had no way to say. `PlaceStationToken`
+     * carries an optional `city_index` and `sessionKey.ts` records exactly
+     * why it matters: "a hex carrying two separate cities (New York #54/#62,
+     * the OO tiles) needs it to be answerable at all". Every caller omitted
+     * it, so the contract fell back to "lowest-indexed city with a free
+     * slot" -- which is always legal and, on a double-city hex, is a coin
+     * toss against what the player clicked.
+     *
+     * `null` MEANS "COULD NOT TELL", NOT "CITY ZERO", and the distinction is
+     * the whole reason this is nullable. On an untiled preprinted double
+     * city there is no per-city geometry to hit-test against, so the honest
+     * answer is nothing -- and omitting the field lets the contract apply
+     * its documented fallback rather than having this file guess and send a
+     * wrong index with full confidence. */
+    cityIndex: number | null;
     clientX: number;
     clientY: number;
   }) => void;
@@ -3220,12 +3243,20 @@ export function HexGridRenderer({
       // (`translate(pan)` then `scale(zoom)`), which is the inverse of the
       // `contentX`/`contentY` computation above -- so it tracks pan and
       // zoom for free rather than needing its own correction.
+      /* Design note #453: which city node the pointer actually landed on.
+         Measured in CONTENT space (`contentX`/`contentY`) because that is
+         where `tileCitySlotPoints` returns its points -- the same
+         untransformed layer `pixelToAxial` reads, so the answer tracks pan
+         and zoom without its own correction. */
+      const cityIndex = cityIndexAtPoint(mapGrid, q, r, contentX, contentY, hexSize);
+
       onHexClick?.({
         q,
         r,
         hexLabel,
         // Design note #242: the identifier, alongside the display name.
         boardLabel: boardHexLabel(q, r),
+        cityIndex,
         clientX: event.clientX,
         clientY: event.clientY,
         centroidX,

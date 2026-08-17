@@ -1564,6 +1564,56 @@ const MAX_TOKEN_DIAMETER_PX = 46;
  * The map's station tokens sit at 18px and stay on text for this exact
  * reason (`hexCanvasPrimitives.ts`) -- this constant is that same judgement
  * expressed as a number, because unlike the map these tokens resize. */
+/* ==================================================================
+ *  DESIGN NOTE 452: A CROWDED CELL HAS TO BE READABLE
+ * ==================================================================
+ *
+ * REPORTED: corporate tokens completely obscure the cell values.
+ *
+ * They do, and it is worst exactly where it matters most. Design note #24
+ * already spreads a stack into a ring so no token buries another, but the
+ * ring is centred on the cell -- so the more corporations share a price,
+ * the more completely the PRICE underneath disappears. A cell with four
+ * tokens on it is the one a player most wants to read, and the only one
+ * they cannot.
+ *
+ * HOVER SCATTERS AND SHRINKS. On hover the tokens both scale down and push
+ * outward from the cell's centre, opening a window onto the number without
+ * moving any token off its own cell. Two effects rather than one because
+ * either alone is not enough at four occupants: shrinking keeps them
+ * overlapping the centre, and scattering alone pushes them into the
+ * neighbouring cells' tokens.
+ *
+ * CSS, NOT REACT STATE. A hover that re-renders eight-plus grid items per
+ * pointer move is a lot of work for a visual effect, and `:hover` on the
+ * wrapper does it for free with no state to get stuck. It also degrades
+ * correctly on touch, where there is no hover and the tokens simply stay
+ * put -- a touch user taps the cell for the tooltip, which carries the
+ * price already.
+ *
+ * THE TRANSFORM IS A TRANSLATION IN THE TOKEN'S OWN DIRECTION, set per
+ * token as a CSS custom property from the same `deriveTokenClusterOffset`
+ * that positioned it. So a token moves further out along the line it is
+ * already on, rather than in some fixed direction that would collapse two
+ * tokens together on the way.
+ *
+ * `pointer-events` stays on the tokens so their tooltips still work; the
+ * wrapper keeps `pointer-events: none` (design note #23) so the hover is
+ * driven by the tokens themselves rather than by an invisible box over the
+ * whole cell. */
+const MARKET_TOKEN_SCATTER_CSS = `
+.market-token-cluster .market-token {
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+.market-token-cluster:hover .market-token {
+  transform: translate(var(--scatter-x, 0px), var(--scatter-y, 0px)) scale(0.72);
+  opacity: 0.88;
+}
+@media (prefers-reduced-motion: reduce) {
+  .market-token-cluster .market-token { transition: none; }
+}
+`;
+
 const MIN_LOGO_TOKEN_DIAMETER_PX = 26;
 
 /** The herald's height inside a par-tray pill. Sized to the pill's own
@@ -2057,6 +2107,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
             return (
               <div
                 key={group.key}
+                className="market-token-cluster"
                 style={{ ...styles.tokenWrapper, gridColumn: group.x + 1, gridRow: 11 - group.y }}
               >
                 {group.occupants.map((occupant, index) => {
@@ -2064,8 +2115,21 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                   return (
                     <span
                       key={occupant.company_id}
+                      className="market-token"
                       style={{
                         ...styles.tokenBadge,
+                        /* Design note #452: how far, and in which
+                           direction, this token moves on hover. Derived
+                           from the offset that already positioned it, so it
+                           travels further along its own spoke rather than
+                           toward a fixed point two tokens might share.
+
+                           A LONE OCCUPANT HAS A ZERO OFFSET and therefore
+                           does not move -- correct, because a single token
+                           only needs the scale-down to reveal the price
+                           behind it. */
+                        ["--scatter-x" as string]: `${offset.x * 0.55}px`,
+                        ["--scatter-y" as string]: `${offset.y * 0.55}px`,
                         backgroundColor: tickerColor(occupant.company_id),
                         // Design note #430: computed ink, for the same
                         // reason the par pill above takes it.
@@ -2131,6 +2195,9 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
       {/* Design note #25: the par track, in the whitespace beside the
           matrix. `flex: 0 0 auto` so it keeps its natural width and the
           grid's own `ResizeObserver` measures only what is left. */}
+      {/* Design note #452: the same `<style>`-tag escape hatch the tab bar
+          and the turn pulse use -- inline styles cannot express `:hover`. */}
+      <style>{MARKET_TOKEN_SCATTER_CSS}</style>
       <ParIpoTray markersByPrice={parMarkersByPrice} />
       </div>
     </div>

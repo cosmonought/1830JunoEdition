@@ -274,8 +274,41 @@ function CorporationRoster({
     <div style={styles.section}>
       <span style={styles.sectionLabel}>Corporations</span>
       <div style={styles.rosterGrid}>
-        {publicCompanies.map((company) => {
+        {/* ==================================================
+             DESIGN NOTE 446: FLOATED COMPANIES LEAD
+            ==================================================
+
+             REPORTED: sort the cards so floated companies appear first.
+
+             The roster rendered in `company_id` order -- the contract's
+             table order, which is an implementation detail and not a
+             ranking a player has any use for. Floated and unfloated
+             companies are different KINDS of thing: one has a price, a
+             treasury, an operating turn and a token on the board, the
+             other has none of those and cannot until 60% sells. Reading a
+             mixed list means re-checking each card's badge to know which
+             kind you are looking at.
+
+             STABLE WITHIN EACH GROUP. `company_id` breaks the tie rather
+             than price, so a card does not jump position when the market
+             moves -- eight cards reshuffling on every dividend would cost
+             more than the ordering gains. The two groups are what the
+             sort is for; the order inside them only has to be steady. */}
+        {[...publicCompanies]
+          .sort(
+            (a, b) =>
+              Number(b.is_floated) - Number(a.is_floated) || a.company_id - b.company_id,
+          )
+          .map((company) => {
           const color = tickerColor(company.company_id);
+          /* Design note #447: `last_route_revenue` is OPTIONAL on the
+             contract response, and `gameState.ts` is explicit that
+             `undefined` means "this build cannot tell you" while "0" means
+             "it earned nothing". A company that has never operated reports
+             "0" too, so the honest test for "is there a run to report" is
+             a positive figure -- anything else shows a dash rather than
+             asserting a $0 payout that may never have happened. */
+          const hasRunRoutes = (Number(company.last_route_revenue ?? 0) || 0) > 0;
           // Design note #389: derived from the fill, so every corporation's
           // stripe is legible without a per-company decision.
           const liveryInk = bestContrastTextColor(color);
@@ -426,20 +459,42 @@ function CorporationRoster({
                       one-glance facts about whether the share is worth
                       buying, which is why they share the row a player
                       reads first. */}
+                  {/* ==================================================
+                       DESIGN NOTE 447: THE PAYOUT LEAVES THE STRIPE
+                      ==================================================
+
+                       REPORTED: the "$0" floats awkwardly beside the logo.
+
+                       Design note #392 put it here on the reasoning that
+                       "the stripe had unused width on the right" and that
+                       last payout is a one-glance fact about whether the
+                       share is worth buying. The second half is true; the
+                       first was a layout observation that stopped holding
+                       the moment the herald replaced the acronym (design
+                       note #410). A bare figure now sits next to a logo,
+                       aligned to nothing, with no caption -- so it reads as
+                       part of the corporation's identity rather than as a
+                       number, and "$0" beside a herald looks like an error.
+
+                       It moves to the value row below, where it lines up
+                       with Market and Par under a caption. Three labelled
+                       figures in a row is a table; one unlabelled figure
+                       floating beside a logo is a smudge. */}
                   <span style={styles.rosterLiveryRight}>
-                    <span
-                      style={{ ...styles.rosterLiveryPayout, color: liveryInk }}
-                      title={`Last route payout: $${company.last_route_revenue}. What this corporation most recently earned from running trains.`}
-                    >
-                      ${company.last_route_revenue}
-                    </span>
                     {company.is_floated ? (
                       <span
                         style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
                         title={
                           metFloatThreshold(company)
                             ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
-                            : `Auto-floated by the B&O private company, not by reaching ${FLOAT_THRESHOLD_PERCENT}% sold.`
+                            /* Design note #445: NO RULE IS NAMED. This said
+                               "Auto-floated by the B&O private company",
+                               which describes a rule 1830 does not have --
+                               see the design note below. A float without
+                               60% sold is a disagreement between the flag
+                               and the arithmetic, and the honest thing to
+                               report is the disagreement. */
+                            : `Reported floated, but only ${soldToPlayersPercent(company)}% is sold to players — 1830 floats at ${FLOAT_THRESHOLD_PERCENT}%.`
                         }
                       >
                         FLOATED
@@ -484,6 +539,33 @@ function CorporationRoster({
                   <div style={styles.rosterPrice}>
                     <span style={styles.rosterPriceValueMuted}>{company.par_value ?? "--"}</span>
                     <span style={styles.rosterPriceLabel}>IPO / par</span>
+                  </div>
+                  {/* Design note #447: the last payout, arriving from the
+                      livery stripe. Third in the row and flush right, under
+                      its own caption, so it reads as one of three labelled
+                      figures rather than as an ornament on the herald.
+
+                      "--" RATHER THAN "$0" FOR A COMPANY THAT HAS NEVER
+                      RUN, and the distinction is the whole reason the old
+                      placement looked broken. `last_route_revenue` is "0"
+                      both for a corporation that ran and earned nothing and
+                      for one that has never turned a wheel, and those are
+                      different facts -- the first is a bad turn, the second
+                      is a company that has not operated yet. A dash says
+                      "no run on record"; "$0" claims a run that paid
+                      nothing. */}
+                  <div style={styles.rosterPrice}>
+                    <span
+                      style={styles.rosterPriceValueMuted}
+                      title={
+                        hasRunRoutes
+                          ? `Last route payout: $${company.last_route_revenue}. What this corporation most recently earned from running trains.`
+                          : "This corporation has not run a route yet."
+                      }
+                    >
+                      {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
+                    </span>
+                    <span style={styles.rosterPriceLabel}>last run</span>
                   </div>
                 </div>
 
@@ -637,7 +719,7 @@ function CorporationRoster({
                     IPO and Bank Pool counts sat in their own row underneath
                     (design note #355), in a different format, with no
                     columns shared between them. So the question every 18xx
-                    player asks of a corporation -- "where are the ten
+                    player asks of a corporation -- "where are the nine
                     certificates" -- had its answer split across two shapes
                     that did not line up, and the two halves could not be
                     read as a total.
@@ -707,8 +789,35 @@ function CorporationRoster({
                       as any other figure here. */}
                   <div style={styles.ownershipRow} role="row">
                     <span style={styles.ownershipName} role="cell">IPO</span>
+                    {/* ==================================================
+                         DESIGN NOTE 448: NINE CERTIFICATES, NOT TEN
+                        ==================================================
+
+                         REPORTED: the maximum share count for the IPO and
+                         player tables should be 9, not 10 -- there are
+                         physically nine certificates.
+
+                         And there are: one 20% President's Certificate plus
+                         eight 10% shares. `percentage / 10` counts PERCENT
+                         BLOCKS, which is ten of them, so a full IPO read
+                         "10" for a stack of nine pieces of card -- and the
+                         extra digit is what clipped the column.
+
+                         `certificateCount` already knew this: its own note
+                         explains that a president on 60% holds five
+                         certificates, not six, and that the certificate
+                         LIMIT is per certificate rather than per percent.
+                         The player rows have used it all along; the two
+                         bank rows were doing raw division beside them, so
+                         one table was counting in two different units.
+
+                         WHILE THE PRESIDENCY IS UNSOLD the 20% certificate
+                         is still sitting in the IPO, so the IPO counts as
+                         holding it -- `president === null` is exactly that
+                         test, and it is why this cannot be a constant 9. */}
                     <span style={styles.ownershipNum} role="cell">
-                      {company.ipo_pool_percentage / 10} ({company.ipo_pool_percentage}%)
+                      {certificateCount(company.ipo_pool_percentage, company.president === null)} (
+                      {company.ipo_pool_percentage}%)
                     </span>
                     <span
                       style={styles.ownershipNum}
@@ -720,8 +829,14 @@ function CorporationRoster({
                   </div>
                   <div style={styles.ownershipRow} role="row">
                     <span style={styles.ownershipName} role="cell">Bank Pool</span>
+                    {/* Design note #448: the same unit as every other row.
+                        A President's Certificate cannot reach the Bank Pool
+                        -- a president must dump the presidency before
+                        selling out -- so this is never a double
+                        certificate and `false` is not a simplification. */}
                     <span style={styles.ownershipNum} role="cell">
-                      {company.bank_pool_percentage / 10} ({company.bank_pool_percentage}%)
+                      {certificateCount(company.bank_pool_percentage, false)} (
+                      {company.bank_pool_percentage}%)
                     </span>
                     <span
                       style={styles.ownershipNum}
@@ -895,12 +1010,39 @@ function CorporationRoster({
                     cards on a screen that also has to hold the market
                     chart. */}
 
-                {/* Design note #24: floated WITHOUT reaching the threshold.
-                    Says which rule did it, so the badge never looks like it
-                    is contradicting the percentages beside it. */}
+                {/* ==================================================
+                     DESIGN NOTE 445: THE RULE THIS NAMED DOES NOT EXIST
+                    ==================================================
+
+                     REPORTED (critical): the codebase assumes a corporation
+                     can float during the Auction Round, and winning the B&O
+                     private auto-floats the B&O.
+
+                     THE REDUCER WAS ALREADY RIGHT. `grantBOPresidency` moves
+                     20% and the presidency and sets par, and its own note
+                     spells out that `is_floated` STAYS PUT. The sandbox
+                     fixture ships B&O as `floated: false`. Nothing in this
+                     frontend floats a company outside the 60% threshold.
+
+                     WHAT WAS WRONG WAS THIS LABEL, and it was wrong in the
+                     way that matters most: it TAUGHT the rule. A badge
+                     reading "Auto-floated by the B&O private" tells every
+                     player that such a route exists, and design note #24
+                     below went further and described the state as one the
+                     panel was "ready for". A UI that explains a
+                     non-existent rule is how the rule gets believed --
+                     including by whoever reads this code next and
+                     implements it.
+
+                     So no cause is named. If `is_floated` is true below
+                     60%, the flag and the arithmetic disagree, and that is
+                     a data fault to surface rather than a rule to
+                     rationalise. On a correct contract the branch never
+                     renders at all. */}
                 {company.is_floated && !metFloatThreshold(company) && (
-                  <span style={styles.autoFloatNote}>
-                    Auto-floated by the B&amp;O private &middot; {soldToPlayersPercent(company)}% sold
+                  <span style={styles.floatMismatchNote}>
+                    Floated flag set at {soldToPlayersPercent(company)}% sold &middot; expected{" "}
+                    {FLOAT_THRESHOLD_PERCENT}%
                   </span>
                 )}
 
@@ -1653,23 +1795,27 @@ function CompanyActions({
 // second code path to keep working. The accordion is the card.
 
 /* ==================================================================== */
-/*  DESIGN NOTE 24: FLOAT IS THE 60% RULE, WITH NO EXCEPTIONS           */
+/*  DESIGN NOTE 24 / 445: FLOAT IS THE 60% RULE, WITH NO EXCEPTIONS     */
 /* ==================================================================== */
 //
 // A company floats when 60% of its shares are in player hands. There is no
-// auto-float route.
+// auto-float route, and no corporation floats during the Auction Round --
+// the auction sells PRIVATES, and no share changes hands in it.
 //
-// An earlier pass here carried an "auto-floated by the B&O private" note,
-// because `auction.rs` sets `company.is_floated = true` the moment that
-// private is won. That is a contract bug rather than a rule -- winning the
-// B&O private grants the President's Certificate and prompts a par choice,
-// nothing more -- and it is on the audit list. The note is gone; this UI
-// states the real rule.
+// Winning the B&O private grants the President's Certificate and prompts a
+// par choice. That is all it does. The B&O then floats on the ordinary
+// 60%-sold condition in a subsequent Stock Round, like every other company.
+//
+// DESIGN NOTE 445: this note previously said the badge above was "ready
+// for" the auto-floated state, and the badge itself named the rule. Both
+// have been removed. The distinction that matters: `auction.rs` setting
+// `is_floated` is a CONTRACT BUG on the audit list, and a frontend that
+// explains a bug in the language of a rule is how the bug becomes the rule.
 //
 // `is_floated` is still what the BADGE reads, because it is contract state
 // and the frontend does not get to overrule it. But when it disagrees with
-// the 60% math the card now says the two disagree, rather than inventing a
-// rule to reconcile them. On a corrected contract that branch never fires.
+// the 60% math the card reports the DISAGREEMENT and names no cause. On a
+// corrected contract that branch never fires.
 
 /** Percent of a company's shares actually in player hands. */
 function soldToPlayersPercent(company: PublicCompanyState): number {
@@ -1677,8 +1823,9 @@ function soldToPlayersPercent(company: PublicCompanyState): number {
 }
 
 /** Whether this company floated the ORDINARY way -- by reaching the 60%
- *  threshold. `false` plus `is_floated === true` means it was auto-floated,
- *  which today means the B&O private. */
+ *  threshold. `false` plus `is_floated === true` is a CONTRADICTION, not a
+ *  second way of floating -- see design note #445. The card reports it as
+ *  one rather than attributing it to a rule. */
 function metFloatThreshold(company: PublicCompanyState): boolean {
   return soldToPlayersPercent(company) >= FLOAT_THRESHOLD_PERCENT;
 }
@@ -2370,7 +2517,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignSelf: "flex-start",
   },
   /** Design note #24: the contract-state-vs-math disagreement note. */
-  autoFloatNote: {
+  /* Design note #445: renamed from `autoFloatNote`. It no longer marks a
+     float route; it marks a flag that disagrees with the share counts. */
+  floatMismatchNote: {
     fontSize: FONT_SIZE.micro,
     fontStyle: "italic",
     color: CARD_INK_FAINT,

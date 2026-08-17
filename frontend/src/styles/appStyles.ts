@@ -391,11 +391,37 @@ export const styles: Record<string, React.CSSProperties> = {
    * padding comes down to a standard compact button. The label is
    * unchanged and still reads at a glance -- what shrank is the empty
    * space around it. */
+  /* ==================================================================
+   *  DESIGN NOTE 456: THE TAB ROW HAD NO ESCAPE
+   * ==================================================================
+   *
+   * REPORTED: the "? Tutorials" button overflows its container.
+   *
+   * The row is a flex line with no `flexWrap` and no `minWidth: 0` on its
+   * children, and Tutorials is pinned right past an `auto` margin. Flex
+   * items refuse to shrink below their content width by default, so once
+   * four or five tab labels plus the button exceed the bar, nothing gives
+   * -- the row simply runs past its own padding, and the item on the far
+   * side of the auto margin is the one that visibly leaves.
+   *
+   * `flexWrap` is the fix and `rowGap` is what makes it survivable: a
+   * wrapped row needs vertical separation or the second line collides with
+   * the first. The bottom padding goes from `0` to `6px` for the same
+   * reason -- the original `6px 16px 0` assumed exactly one line and let
+   * the active tab's edge sit flush with the panel below it.
+   *
+   * `alignItems: center` because a wrapped Tutorials button is shorter than
+   * a tab and would otherwise stretch. */
   mainTabBar: {
     display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
     gap: "6px",
-    padding: "6px 16px 0",
+    rowGap: "6px",
+    padding: "6px 16px",
     backgroundColor: "#0F172A",
+    boxSizing: "border-box",
+    maxWidth: "100%",
   },
   /* ---- Design note #46: every tab is visibly a control. ----
      The resting border was `#2a2e3a` against a `#1a1d26` bar -- barely a
@@ -420,8 +446,17 @@ export const styles: Record<string, React.CSSProperties> = {
   /* The active tab is the only WHITE-edged thing in the bar, and the only
      one with a lift. It also keeps `#1E293B` so it still docks seamlessly
      into the panel below (design note #7 in `TopTicker.tsx`). */
+  /* Design note #456: condensed. At `8px 16px` beside a `control`-sized
+     label this was the widest single item in the row and the first thing to
+     be pushed out. It is a secondary control -- it opens a reader over the
+     current screen rather than navigating -- so it can afford to be smaller
+     than the tabs it sits beside. `flexShrink` lets it give way before the
+     row breaks, and `minWidth: 0` is what actually permits that: without
+     it a flex item will not shrink below its content. */
   tutorialsButton: {
-    padding: "8px 16px",
+    flexShrink: 1,
+    minWidth: 0,
+    padding: "6px 10px",
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -645,6 +680,25 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#9fe5b5",
     whiteSpace: "nowrap",
+  },
+  /* Design note #451: names the step Undo would rewind. Muted and small --
+     it is a caption on the button beside it, not a control. */
+  undoStepLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: "#8f98a8",
+    whiteSpace: "nowrap",
+  },
+  /* Design note #458: the left rail of the non-Operating-Round bar. Holds
+     the sticky log line; `minWidth: 0` is what lets its text ellipsis
+     rather than forcing the grid wider. */
+  actionBarRailLeft: {
+    display: "flex",
+    alignItems: "center",
+    minWidth: 0,
+    overflow: "hidden",
   },
   actionBarRailRight: {
     display: "flex",

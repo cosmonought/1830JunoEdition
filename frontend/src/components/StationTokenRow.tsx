@@ -192,8 +192,31 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     lineHeight: 1,
   },
-  // Struck through, not just dimmed: a spent token's price is a historical
-  // fact rather than an amount the player might still pay.
-  pricePlaced: { textDecoration: "line-through", fontWeight: 400 },
+  /* ==================================================================
+   *  DESIGN NOTE 450: NO SLASH THROUGH THE HOME HEX
+   * ==================================================================
+   *
+   * REPORTED: remove the diagonal slash through the home hex text on the
+   * Operating Round action bar's token display -- graying it out is enough.
+   *
+   * The strikethrough was added for PRICES, and the reasoning held for
+   * them: "$40" on a spent slot is an amount the player will never pay, so
+   * striking it says historical rather than payable.
+   *
+   * Design note #362 then changed what the first slot CONTAINS. The home
+   * token has no price -- it is granted free -- so its caption became the
+   * hex label, "E11". A strikethrough through a place name says something
+   * quite different from one through a price: it reads as cancelled,
+   * removed, or no longer valid, when the truth is the opposite -- that hex
+   * is where the corporation permanently sits. The one slot whose caption
+   * is a FACT rather than an OFFER was the one being crossed out.
+   *
+   * Dimming already carries "spent" on every slot, and it carries it
+   * without asserting anything about the text's validity. So the
+   * strikethrough goes -- for the prices too, rather than being made
+   * conditional: `fontWeight` plus the inherited muted ink is a legible
+   * "already used", and one rule for the row beats two that have to be kept
+   * in step with which slot holds which kind of caption. */
+  pricePlaced: { fontWeight: 400 },
   empty: { fontSize: FONT_SIZE.small, fontStyle: "italic" },
 };

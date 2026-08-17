@@ -166,8 +166,10 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
    *  `ipo = 100 - sold - (floated ? 10 : 0)` with `bank = floated ? 10 : 0`,
    *  which invented a 10% Bank Pool for every floated company whether or
    *  not anyone had ever sold into it -- and produced B&O's nonsensical
-   *  "IPO 70 / player 20 / bank 10" when the B&O auto-float rule says the
-   *  unsold 80% goes to the IPO pool and the bank starts empty.
+   *  "IPO 70 / player 20 / bank 10" when the B&O's unsold 80% belongs in
+   *  the IPO pool and the bank starts empty. (Design note #445: an earlier
+   *  version of this sentence attributed that split to a "B&O auto-float
+   *  rule". There is no such rule -- the 80% is simply unsold.)
    *
    *  A formula that fabricates plausible-looking numbers is worse than
    *  hand-authored ones here: it looks systematic, so nobody checks it. */

@@ -122,9 +122,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     width: "100%",
     padding: "10px 28px",
-    backgroundColor: "#0F172A",
-    borderTop: "1px solid #1e2937",
-    borderBottom: "1px solid #2a2e3a",
+    /* Design note #457: the same surface and the same left accent the
+       ticker above now carries, so the two read as one block -- the log and
+       the chat are one conversation, and the boundary that matters is the
+       one between them and the tab bar, not the one between each other. */
+    backgroundColor: "#131a27",
+    borderLeft: "3px solid #2f6f6a",
+    borderBottom: "1px solid #0b1119",
     boxSizing: "border-box",
     flexWrap: "wrap",
   },

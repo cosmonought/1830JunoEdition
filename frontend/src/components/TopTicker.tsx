@@ -179,6 +179,53 @@ export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggle
   );
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 458: THE LATEST LINE, WHERE THE PLAYER IS LOOKING
+ * ==================================================================
+ *
+ * REPORTED: the Activity Log ticker scrolls out of view when scrolling
+ * down the page, so the most recent instruction is lost exactly when the
+ * player is working on the map or the tables below it.
+ *
+ * The ticker sits in the page chrome at the top, above the tab bar, and
+ * scrolls away with it. The action bar directly below is `position:
+ * sticky` (design note #426) and does not. So the fix is not to make a
+ * second ticker sticky -- it is to put the one line that matters inside
+ * the element that already stays.
+ *
+ * ONE LINE, NOT THE PANEL. This renders `feedItemText` and nothing else:
+ * no expansion, no history, no chat input. The full ticker is still the
+ * place to read back through what happened; this answers only "what just
+ * happened", which is the question a player scrolling the board has.
+ *
+ * IT SHARES THE FORMATTER, so the sticky copy and the ticker cannot
+ * disagree about the sentence -- design note #425 made that one string for
+ * exactly this class of reason, and this is the third surface to read it.
+ *
+ * CLICKABLE, because a player who reads a truncated line needs somewhere to
+ * go. `onExpand` scrolls them back to the full ticker rather than opening a
+ * second copy of it. */
+export function StickyTickerLine({
+  latestItem,
+  onExpand,
+}: {
+  latestItem: FeedItem | null;
+  onExpand?: () => void;
+}) {
+  if (!latestItem) return null;
+  return (
+    <button
+      type="button"
+      style={styles.stickyLine}
+      onClick={onExpand}
+      title={`${feedItemText(latestItem)}\n\nClick to open the full activity log.`}
+    >
+      <span style={styles.stickyLineDot} aria-hidden="true" />
+      <span style={styles.stickyLineText}>{feedItemText(latestItem)}</span>
+    </button>
+  );
+}
+
 export default TopTicker;
 
 /* ------------------------------------------------------------------ */
@@ -233,9 +280,36 @@ function LogEntry({ item }: { item: FeedItem }) {
 // see App.tsx design note #20/item 3), #0F172A for the recessed expanded
 // body beneath it.
 const styles: Record<string, React.CSSProperties> = {
+  /* ==================================================================
+   *  DESIGN NOTE 457: THE LOG BELONGS TO THE CHAT, NOT TO THE TABS
+   * ==================================================================
+   *
+   * REPORTED: the ticker's background matches the tab bar above it, so it
+   * is easy to miss.
+   *
+   * It matched because it was chosen to. Design note #20 paired the
+   * ticker's header (`#1E293B`) with the tab bar's active tab, on the
+   * reasoning that both are chrome. The consequence is that the one line on
+   * screen carrying "what just happened" reads as a continuation of the
+   * navigation -- an area the eye has already learned to skip, because
+   * nothing in it ever changes.
+   *
+   * IT BELONGS DOWNWARD. Below the ticker is `InlineQuickChat`, and the two
+   * are one conversation: the log is what the game said, the chat is what
+   * the players said, and expanding the ticker shows them interleaved in a
+   * single feed. Grouping it with the thing it is part of costs nothing and
+   * gives it an edge the tabs do not share.
+   *
+   * A LEFT ACCENT RATHER THAN A BRIGHTER FILL. Raising the whole surface
+   * would have made the newest game event the loudest thing on the page,
+   * competing with the board. A 3px rule down the live edge separates it
+   * from the tabs without shouting, and it is the same device the chat
+   * entries already use to mark an author. */
   root: {
     width: "100%",
-    backgroundColor: "#1E293B",
+    backgroundColor: "#131a27",
+    borderTop: "1px solid #0b1119",
+    borderLeft: "3px solid #2f6f6a",
     boxSizing: "border-box",
   },
   headerRow: {
@@ -245,7 +319,9 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     minHeight: "52px",
     padding: "16px 28px",
-    backgroundColor: "#1E293B",
+    // Design note #457: transparent, so the row takes the root's own
+    // surface rather than reasserting the tab bar's.
+    backgroundColor: "transparent",
     border: "none",
     color: "#F8FAFC",
     fontFamily: FONT_FAMILY,
@@ -358,6 +434,40 @@ const styles: Record<string, React.CSSProperties> = {
      Deleted rather than left unused -- an orphaned badge style is an
      invitation to render a badge again, which is the thing this pass was
      asked to remove. */
+  /* Design note #458: one clipped line inside the sticky action bar. It
+     must never wrap -- the bar has a fixed height band (design note #426's
+     `maxHeight`), and a two-line log entry would push the controls out of
+     it. Ellipsis rather than a scrollbar: the full text is one click away
+     and a scrolling sliver of text in a toolbar is unreadable. */
+  stickyLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    minWidth: 0,
+    maxWidth: "100%",
+    padding: "2px 8px",
+    borderRadius: "6px",
+    border: "1px solid transparent",
+    backgroundColor: "transparent",
+    color: "#9aa2b1",
+    font: "inherit",
+    fontSize: FONT_SIZE.micro,
+    textAlign: "left",
+    cursor: "pointer",
+  },
+  stickyLineDot: {
+    width: "6px",
+    height: "6px",
+    borderRadius: "50%",
+    backgroundColor: "#2f6f6a",
+    flexShrink: 0,
+  },
+  stickyLineText: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
   logLabelFull: {
     flex: 1,
     color: "#c7cbd4",

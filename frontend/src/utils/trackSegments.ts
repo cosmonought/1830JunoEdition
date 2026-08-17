@@ -55,17 +55,25 @@
 //  DESIGN NOTE 2: WHERE THERE IS NO ARTWORK, EVERYTHING CONNECTS
 // ===================================================================
 //
-// Landmarks and off-board red hexes carry track that `hexBoardData` records
-// as a bare EDGE LIST -- `LANDMARK_TRACKS`, `OFFBOARD_TRACKS` -- with no
-// per-rail structure at all. There is nothing to be precise with, so those
-// fall back to the old behaviour: every live edge connects to every other.
+// Landmarks carry track that `hexBoardData` records as a bare EDGE LIST --
+// `LANDMARK_TRACKS` -- with no per-rail structure at all. There is nothing
+// to be precise with, so those fall back to the old behaviour: every live
+// edge connects to every other.
 //
 // That is the conservative direction for connectivity (it can only report
 // MORE reach, never less, so it cannot hide a legal move) and it is stated
 // here rather than left implicit, because it is the one place this module
-// still gives the answer design note #0 calls wrong. Closing it needs those
-// two tables to gain rail structure, which is a data change rather than a
-// logic one.
+// still gives the answer design note #0 calls wrong. Closing it needs that
+// table to gain rail structure, which is a data change rather than a logic
+// one.
+//
+// RED OFF-BOARD HEXES USED TO BE COVERED BY THIS PARAGRAPH AND NO LONGER
+// ARE -- see design note #484. `OFFBOARD_TRACKS` is a bare edge list too, so
+// they fell here by the same route, but the "conservative" argument above
+// does not hold for them: surplus reach across a red hex is not a longer
+// path through real rail, it is a connection between two networks that 1830
+// says are separate. They are terminal now, and the fallback below covers
+// landmarks and catalog gaps only.
 //
 // The same fallback covers a hex whose tile id is absent from the artwork
 // catalog -- a catalog gap should not make the board less connected than it
@@ -93,6 +101,68 @@ export function hexKey(q: number, r: number): string {
 const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
   STATIC_BOARD_HEXES.map((hex) => [hexKey(hex.q, hex.r), hex.label]),
 );
+
+/* ==================================================================
+ *  DESIGN NOTE 484: A RED OFF-BOARD AREA IS A TERMINUS, NOT A JUNCTION
+ * ==================================================================
+ *
+ * REPORTED: the network calculator treats red off-board areas as
+ * traversable nodes, so a network that enters one is granted legal tile
+ * placement on every other hex touching it.
+ *
+ * It did, and design note #2 above is where it came from. Off-board track is
+ * a bare edge list in `OFFBOARD_TRACKS` with no per-rail structure, so it
+ * fell through to the "every live edge connects to every other" fallback.
+ * That fallback is the conservative direction for ORDINARY track -- claiming
+ * more reach than exists can only offer a move the contract then refuses.
+ * On a red hex it is not conservative at all, because the surplus reach is
+ * not a longer path through real rail. It is a WORMHOLE.
+ *
+ * Chicago (F2) prints stubs on edges 0, 1 and 5 -- real neighbours F4, E3
+ * and G3. Under the fallback a corporation whose rail met F4 was told it
+ * reached E3 and G3 too, so the veil lit builds on the far side of a hex no
+ * train may pass through. Every red zone has the same shape: A11 spliced
+ * B10 to B12, K13 spliced J14 to J12, B24 spliced B22 to C23, J2 spliced J4
+ * to I3. Five false junctions, each fusing two unrelated networks into one.
+ *
+ * 1830 IS UNAMBIGUOUS HERE. A red area is a revenue destination where a
+ * route ENDS. A train runs in and stops. It never runs out the far side, and
+ * two pieces of track that both meet the same red zone are not thereby
+ * connected to each other.
+ *
+ * SO THERE IS NO TRAVERSAL -- not a restricted one, none. `null` for every
+ * (entry, exit) pair on a red hex, which is the identical answer this
+ * function already gives for two curves that never touch. Stating it once
+ * here reaches every caller: `traversalsFrom` returns `[]` so both the reach
+ * walk and the Auto-Route tracer halt on arrival, and `segmentsTouchingEdge`
+ * falls through to its dead-end branch and reports the whole-hex identity a
+ * train stopping there occupies.
+ *
+ * THE HEX ITSELF IS STILL REACHED, and that distinction is the whole fix.
+ * This function answers "may I pass THROUGH", not "may I get here".
+ * `neighbourAcross` is what admits a hex to the network and it is untouched,
+ * so a red zone still joins the network, still renders as reached, and still
+ * counts as a destination worth running to. What it no longer does is hand
+ * out the hexes behind it.
+ *
+ * DERIVED FROM `type: "RedOffboard"`, the same discriminator
+ * `evaluateHexForTileLaying` gates on, rather than from `OFFBOARD_LABELS`.
+ * Both tables currently name the same seven hexes; keying off the board's
+ * own type field means they cannot drift into disagreeing about which hexes
+ * are red -- which would show up as a lay the veil offers and the click
+ * handler then refuses.
+ */
+const OFFBOARD_TERMINAL_COORDS: ReadonlySet<string> = new Set(
+  STATIC_BOARD_HEXES.filter((hex) => hex.type === "RedOffboard").map((hex) =>
+    hexKey(hex.q, hex.r),
+  ),
+);
+
+/** True when `(q, r)` is a red off-board revenue terminal -- a hex a route
+ *  may END at but never pass through. See design note #484. */
+export function isOffboardTerminal(q: number, r: number): boolean {
+  return OFFBOARD_TERMINAL_COORDS.has(hexKey(q, r));
+}
 
 /* `isBoardHex` lives in `hexGeometry` -- it is a question about board
    geometry, and the tile-legality filter asks it too. Re-exported here so a
@@ -155,6 +225,12 @@ export function traversalSegments(
 ): readonly SegmentKey[] | null {
   if (entryEdge === exitEdge) return null;
 
+  /* Design note #484: a red off-board area is where a route ends. Tested
+     FIRST, ahead of the laid-tile lookup, so the answer cannot depend on a
+     chain reporting a tile on a hex that can never hold one -- terminality
+     is a property of the board, not of what happens to sit on it. */
+  if (isOffboardTerminal(q, r)) return null;
+
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laid && TILE_GRAPHICS_CATALOG[laid.tile_id]) {
     const indices = artworkPathsForTraversal(laid.tile_id, laid.orientation, entryEdge, exitEdge);
@@ -185,9 +261,17 @@ export function traversalSegments(
 
 /** Every way out of this hex, having entered at `entryEdge`.
  *
- *  Only exits whose neighbour is a real board hex carrying matching rail --
- *  the both-sides rule (`trackReach`'s design note #1), applied here so no
- *  caller has to remember it. */
+ *  STRICTLY PORT TO PORT: an exit appears only when `traversalSegments`
+ *  finds an authored rail joining the two edges, so two disconnected curves
+ *  on one tile yield two disjoint answers rather than one junction.
+ *
+ *  WHAT THIS DOES NOT CHECK, and the previous version of this comment
+ *  wrongly claimed it did: whether anything lies beyond the exit. The
+ *  both-sides rule (`trackReach`'s design note #1) lives in
+ *  `neighbourAcross`, and it has to stay there -- a tile lay extends the
+ *  network across an edge with nothing behind it yet, so a caller looking
+ *  for build sites needs the exits this returns WITHOUT that filter.
+ *  Applying it here would have hidden every extension on the board. */
 export function traversalsFrom(
   mapGrid: MapGridResponse,
   q: number,

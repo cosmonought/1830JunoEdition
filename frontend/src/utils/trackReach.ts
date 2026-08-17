@@ -60,6 +60,44 @@ export function hexKey(q: number, r: number): string {
   return `${q},${r}`;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 483: A NETWORK ENDS AT PORTS, NOT AT HEXES
+ * ==================================================================
+ *
+ * REPORTED: the network calculator traces connectivity through
+ * discontinuous track on a hex, so two separate curves on one tile are
+ * treated as joined and illegal placements are offered.
+ *
+ * Design note #4 below fixed HALF of this. The BFS was made to walk
+ * `(hex, arrivalEdge)` states through `traversalsFrom`, so the walk itself
+ * is strict: a crossover entered on one straight no longer licenses the
+ * other. What it produced was still a set of HEX keys -- and everything
+ * downstream then asked that set the hex-as-a-node question all over again:
+ *
+ *   `extensionNeighbours` took a network hex and offered a build across
+ *   EVERY live edge of it, read straight off `liveEdgesForHex`. So a
+ *   corporation whose rail reaches edge 0 of a #20 crossover was offered
+ *   tile lays beyond edges 1 and 4 -- exactly the reported bug, one layer
+ *   below where the fix was applied.
+ *
+ *   `sandboxTileLegality.orientationJoinsNetwork` did the same for
+ *   ROTATIONS: it asked whether a neighbouring hex was in the network and
+ *   whether that neighbour carried rail to the shared edge, which is true
+ *   of the far arm of a crossover the corporation cannot reach.
+ *
+ * The strictness was being computed and then thrown away. A hex key cannot
+ * express "reached, but only on this rail", so any consumer holding one has
+ * to re-derive the missing half, and both of them re-derived it wrongly.
+ *
+ * A PORT IS THE MISSING VALUE: `"q,r:edge"`, meaning the corporation's own
+ * track reaches the inside of this hex AT this edge. It is produced by the
+ * same walk that produces the hex set, so the two cannot disagree, and it
+ * is what both consumers above actually needed.
+ */
+export function portKey(q: number, r: number, edge: number): string {
+  return `${q},${r}:${edge}`;
+}
+
 const BOARD_KEYS: ReadonlySet<string> = new Set(
   STATIC_BOARD_HEXES.map((hex) => hexKey(hex.q, hex.r)),
 );
@@ -106,21 +144,22 @@ const BOARD_KEYS: ReadonlySet<string> = new Set(
  * half. Using the two-sided test here would light nothing at all on a fresh
  * board, since no unbuilt neighbour has track yet.
  */
-function extensionNeighbours(
-  mapGrid: MapGridResponse,
+/* Design note #483: takes a PORT, not a hex. The old signature was
+   `(mapGrid, q, r)` and it read `liveEdgesForHex` itself -- which is the
+   line that offered builds across a crossover's far arm, because every live
+   edge of a reached hex looked like an edge the corporation had reached.
+   The edge is now supplied by the walk that proved it reachable. */
+function extensionAcross(
   q: number,
   r: number,
-): Array<{ q: number; r: number }> {
-  const out: Array<{ q: number; r: number }> = [];
-  for (const edge of liveEdgesForHex(mapGrid, q, r)) {
-    const offset = HEX_NEIGHBOR_OFFSETS[edge];
-    if (!offset) continue;
-    const nq = q + offset[0];
-    const nr = r + offset[1];
-    if (!BOARD_KEYS.has(hexKey(nq, nr))) continue;
-    out.push({ q: nq, r: nr });
-  }
-  return out;
+  edge: number,
+): { q: number; r: number } | null {
+  const offset = HEX_NEIGHBOR_OFFSETS[edge];
+  if (!offset) return null;
+  const nq = q + offset[0];
+  const nr = r + offset[1];
+  if (!BOARD_KEYS.has(hexKey(nq, nr))) return null;
+  return { q: nq, r: nr };
 }
 
 export interface LayableHexInput {
@@ -155,6 +194,11 @@ export interface LayableHexResult {
    * disagree about where the network ends.
    */
   network: ReadonlySet<string>;
+  /** Design note #483: the reachable edges of that network, `"q,r:edge"`.
+   *  Carried out to the rotation filter, which needs to know WHICH edge of a
+   *  network hex the corporation can join -- a question the hex set cannot
+   *  answer and which every consumer that tried to re-derive it got wrong. */
+  ports: ReadonlySet<string>;
   /** The connected network the set was grown from, for the caller's own
    *  messaging ("your network reaches N hexes"). */
   networkSize: number;
@@ -227,18 +271,48 @@ export interface LayableHexResult {
  * leaving that city is available to it. There is no arrival edge to
  * constrain a start.
  */
-export function reachableNetwork(
+export interface ReachableTrack {
+  /** Every hex the corporation's rails physically reach. */
+  hexes: Set<string>;
+  /* ==================================================================
+   *  DESIGN NOTE 483 (cont.): WHAT THE PORT SET IS FOR
+   * ==================================================================
+   *
+   * `portKey(q, r, edge)` for every edge the walk PROVED reachable -- an
+   * edge the corporation's own continuous track arrives at from inside the
+   * hex. Two consumers need it and neither can derive it from `hexes`:
+   *
+   *   THE TILE-LAY EXTENSION. A build joins the network only across an edge
+   *   the network actually reaches, so the candidate hexes are the
+   *   neighbours across these ports and nothing else.
+   *
+   *   THE ROTATION FILTER (`sandboxTileLegality`). An orientation survives
+   *   only if one of its live edges faces a port, rather than merely facing
+   *   a hex that happens to be in the network.
+   *
+   * INCLUDES EDGES WITH NOTHING BEYOND THEM, deliberately. `hexes` only
+   * grows across a two-sided join (design note #1), because a network
+   * cannot flow into bare cardboard -- but bare cardboard is exactly where
+   * a tile gets laid, so the port survives where the hex does not.
+   */
+  ports: Set<string>;
+}
+
+/** The walk, with both of its results. `reachableNetwork` below is this
+ *  function's `hexes` and exists because most callers want only that. */
+export function reachableTrack(
   mapGrid: MapGridResponse,
   stationHexes: ReadonlyArray<readonly [number, number]>,
-): Set<string> {
-  const network = new Set<string>();
+): ReachableTrack {
+  const hexes = new Set<string>();
+  const ports = new Set<string>();
   /** `q,r:arrivalEdge` -- one hex may legitimately be entered several ways. */
   const visited = new Set<string>();
   const queue: Array<{ q: number; r: number; arrivalEdge: number | null }> = [];
 
   for (const [q, r] of stationHexes) {
     if (!BOARD_KEYS.has(hexKey(q, r))) continue;
-    network.add(hexKey(q, r));
+    hexes.add(hexKey(q, r));
     // `null` arrival: a station is entered from inside, so every rail on it
     // is available.
     queue.push({ q, r, arrivalEdge: null });
@@ -251,20 +325,38 @@ export function reachableNetwork(
     visited.add(stateKey);
 
     /* Which edges may this visit leave by? From a station, all of them.
-       Having arrived on a rail, only the edges that rail reaches. */
+       Having arrived on a rail, only the edges that rail reaches.
+
+       `traversalsFrom` is the strict half: it asks `traversalSegments` for
+       the authored rail joining the two edges and drops the pair when there
+       is none. That is what makes two curves on one tile two curves rather
+       than a junction. */
     const exits =
       at.arrivalEdge === null
         ? liveEdgesForHex(mapGrid, at.q, at.r)
         : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).map((t) => t.exitEdge);
 
     for (const edge of exits) {
+      /* Design note #483: recorded BEFORE the two-sided join is tested. An
+         edge the corporation's track runs to is reached whether or not
+         anything sits beyond it -- and the case where nothing does is the
+         one a tile lay is for. */
+      ports.add(portKey(at.q, at.r, edge));
+
       const next = neighbourAcross(mapGrid, at.q, at.r, edge);
       if (!next) continue;
-      network.add(hexKey(next.q, next.r));
+      hexes.add(hexKey(next.q, next.r));
       queue.push({ q: next.q, r: next.r, arrivalEdge: next.arrivalEdge });
     }
   }
-  return network;
+  return { hexes, ports };
+}
+
+export function reachableNetwork(
+  mapGrid: MapGridResponse,
+  stationHexes: ReadonlyArray<readonly [number, number]>,
+): Set<string> {
+  return reachableTrack(mapGrid, stationHexes).hexes;
 }
 
 export function layableHexes(input: LayableHexInput): LayableHexResult {
@@ -272,10 +364,16 @@ export function layableHexes(input: LayableHexInput): LayableHexResult {
 
   const roots = stationHexes.filter(([q, r]) => BOARD_KEYS.has(hexKey(q, r)));
   if (roots.length === 0) {
-    return { hexes: new Set(), network: new Set(), networkSize: 0, unconstrained: true };
+    return {
+      hexes: new Set(),
+      network: new Set(),
+      ports: new Set(),
+      networkSize: 0,
+      unconstrained: true,
+    };
   }
 
-  const network = reachableNetwork(mapGrid, roots);
+  const { hexes: network, ports } = reachableTrack(mapGrid, roots);
 
   // ---- Grow it along its own rails, then keep only what can take a tile.
   //
@@ -285,12 +383,19 @@ export function layableHexes(input: LayableHexInput): LayableHexResult {
   // the "every surrounding hex" bug lived). `evaluateHexForTileLaying` then
   // removes what the static board forbids anywhere: open water, off-board
   // terminals, the preprinted gray hexes that are already their final tile.
+  //
+  /* Design note #483: the extension candidates come from PORTS. This used to
+     iterate the network's hexes and read every live edge off each one, which
+     re-introduced the hex-as-a-node model the walk had just finished
+     rejecting -- a crossover reached on one straight offered builds beyond
+     the other. Iterating ports instead means an extension is offered across
+     exactly the edges the corporation's own continuous track arrives at. */
   const candidates = new Set<string>(network);
-  network.forEach((key) => {
-    const [q, r] = key.split(",").map(Number);
-    for (const next of extensionNeighbours(mapGrid, q, r)) {
-      candidates.add(hexKey(next.q, next.r));
-    }
+  ports.forEach((port) => {
+    const [coords, edgeText] = port.split(":");
+    const [q, r] = coords.split(",").map(Number);
+    const next = extensionAcross(q, r, Number(edgeText));
+    if (next) candidates.add(hexKey(next.q, next.r));
   });
 
   const hexes = new Set<string>();
@@ -299,5 +404,5 @@ export function layableHexes(input: LayableHexInput): LayableHexResult {
     if (evaluateHexForTileLaying(q, r, mapGrid).eligible) hexes.add(key);
   });
 
-  return { hexes, network, networkSize: network.size, unconstrained: false };
+  return { hexes, network, ports, networkSize: network.size, unconstrained: false };
 }

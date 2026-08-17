@@ -472,6 +472,104 @@ export function playerCompanyHoldings(
 }
 
 /* ==================================================================
+ *  DESIGN NOTE 497: THE LEDGER SAID "NOT CONNECTED" TO ITS OWN DATA
+ * ==================================================================
+ *
+ * REPORTED: the Game Ledger's Player Assets table shows "not connected" for
+ * Stock Value and Net Worth, masking local Sandbox figures behind a
+ * wallet-connection check.
+ *
+ * It did. `netWorthsEnabled` is `queryClient && contractAddress && gameId`,
+ * and a sandbox has none of the three -- design note #24 in `App.tsx` is
+ * explicit that "sandbox never touches the network at all". So both columns
+ * fell to the `!netWorthsEnabled` placeholder for the whole of offline mode,
+ * on the one screen whose job is to total up what everybody owns.
+ *
+ * `FinancialLedger`'s design note #4 is why, and it was right WHEN WRITTEN:
+ *
+ *   "This panel can't compute it itself from `gameState` alone:
+ *    `GameStateResponse` carries each company's `par_value` but not its live
+ *    market price (that's a separate `GetMarketGrid` query), so reproducing
+ *    the real figure client-side would mean either a second query plus
+ *    duplicating the backend's own valuation math, or silently substituting
+ *    par value for market price -- both worse than just calling the
+ *    dedicated endpoint."
+ *
+ * The premise expired. `marketGrid` has since become a PROP of that panel
+ * (its own design note #14, for the Corporation Assets table's Market Price
+ * column), and `PlayerAssetsSection` already unpacks it into a
+ * `marketPrices` map to decide certificate exemptions. The live prices the
+ * note says would need a second query are sitting in the same function that
+ * prints "not connected".
+ *
+ * So the valuation is derivable, and the note's own escape clause -- do not
+ * substitute par value for market price -- is honoured below: this reads the
+ * live price and returns `null` for a corporation that has none, rather than
+ * quietly pricing it at par.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 497a: AN ESTIMATE THAT KNOWS IT IS ONE
+ * ==================================================================
+ *
+ * This does NOT replace `QueryMsg::PlayerNetWorth`. The chain's figure stays
+ * authoritative wherever there is a chain to ask, and the caller prefers it.
+ * What this replaces is the BLANK -- and the distinction matters, because
+ * the two can legitimately differ: the contract may value things this does
+ * not know about, and a client-side total presented as authoritative would
+ * be the "silently substituting" failure the note above warns against
+ * wearing a different hat.
+ *
+ * `null` PROPAGATES rather than being coerced to zero. A player holding a
+ * corporation with no market position has an UNKNOWN portfolio value, not a
+ * zero one, and reporting "$0 net worth" for someone holding five
+ * certificates is worse than reporting nothing at all.
+ */
+
+/** One 1830 certificate is 10% of a corporation, and a market price is
+ *  quoted per certificate -- so a 30% holding is three certificates at that
+ *  price. Named rather than inlined as `/ 10`, because the divisor is a rule
+ *  rather than an arithmetic convenience. */
+const PERCENT_PER_CERTIFICATE = 10;
+
+/** What `playerAddress`'s shares are worth at live market prices, or `null`
+ *  when any corporation they hold has no price to value them at.
+ *
+ *  `marketPrices` is keyed by `company_id`, exactly as `FinancialLedger`'s
+ *  own `marketPrices` map already is. */
+export function estimateStockPortfolioValue(
+  playerAddress: string,
+  state: GameStateResponse,
+  marketPrices: Readonly<Record<number, number | null>>,
+): number | null {
+  let total = 0;
+  for (const holding of playerCompanyHoldings(playerAddress, state)) {
+    const price = marketPrices[holding.company.company_id];
+    /* Unknown price, unknown total. Skipping the corporation instead would
+       under-report the portfolio by however much it is worth, and an
+       under-report is indistinguishable from a correct smaller number --
+       which is exactly the kind of wrong figure a player would act on. */
+    if (price == null || !Number.isFinite(price)) return null;
+    total += (holding.percentage / PERCENT_PER_CERTIFICATE) * price;
+  }
+  return total;
+}
+
+/** Liquid cash plus portfolio value, or `null` when either is unknown. */
+export function estimatePlayerNetWorth(
+  playerAddress: string,
+  state: GameStateResponse,
+  marketPrices: Readonly<Record<number, number | null>>,
+): { stockValue: number; netWorth: number } | null {
+  const stockValue = estimateStockPortfolioValue(playerAddress, state, marketPrices);
+  if (stockValue === null) return null;
+  const entry = state.player_cash.find((row) => row.player === playerAddress);
+  const cash = Number(entry?.cash_vgp ?? NaN);
+  // No cash record is not zero cash -- same argument as the `null` above.
+  if (!Number.isFinite(cash)) return null;
+  return { stockValue, netWorth: cash + stockValue };
+}
+
+/* ==================================================================
  *  DESIGN NOTE 379: A PRIVATE CAN BELONG TO A COMPANY, NOT A PLAYER
  * ==================================================================
  *

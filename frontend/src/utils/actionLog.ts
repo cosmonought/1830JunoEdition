@@ -59,6 +59,10 @@ import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { boardHexLabel } from "../components/hexGeometry";
+import {
+  OPERATING_SUB_PHASE_LABELS,
+  type OperatingSubPhase,
+} from "../components/OperatingSubPhaseStepper";
 import { depotInventory } from "./gamePhase";
 import { sandboxRouteBreakdown } from "./sandboxSession";
 import { stationTokenPrice } from "./stationTokens";
@@ -104,6 +108,37 @@ export interface ActionLogContext {
    *  so this log quoted a destination the token never went to. The caller
    *  looks the corporation's real `(x, y)` up instead. */
   projectPrice?: (companyId: number, choice: "pay" | "withhold") => number | null;
+  /* ==================================================================
+   *  DESIGN NOTE 478: THE STEP IS PART OF WHAT PASSING MEANS
+   * ==================================================================
+   *
+   * REPORTED: passing in an Operating Round logs "[Player] passed the
+   * turn"; it should read "[Corporation] passed [step]" -- "PRR passed Lay
+   * Track".
+   *
+   * Two separate errors sat in that one sentence.
+   *
+   *   THE WRONG ACTOR. An Operating Round is corporation-driven: the queue
+   *   names companies and the human is only whoever presides over the one
+   *   that is up (`gameState.ts`'s `actingSeatIndex` makes the same
+   *   distinction for the same reason). Naming the president in a log of
+   *   corporate actions puts a different KIND of noun in one line of a
+   *   column that is otherwise all tickers, and in a hotseat where one
+   *   player presides over three companies it does not identify which one
+   *   passed.
+   *
+   *   THE MISSING OBJECT. "Passed the turn" is true of every pass, so a run
+   *   of them is a run of identical lines. What a reader wants to know is
+   *   what was declined -- track, a token, a route -- because that is what
+   *   explains the corporation's position later.
+   *
+   * The step cannot be derived here. The contract persists a sub-phase
+   * cursor but the client's own copy (`orSubPhase`, App.tsx) is the one
+   * that says which step the button was pressed FROM, and it is not part of
+   * `GameStateResponse`. So it is passed in, and stays optional: a caller
+   * without one gets the shorter sentence rather than a guessed step, which
+   * is the same rule design note #2 applies to `afterState`. */
+  orSubPhase?: OperatingSubPhase | null;
 }
 
 const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six"] as const;
@@ -131,6 +166,30 @@ function actingPlayer(context: ActionLogContext): string {
   const state = context.gameState;
   const address = state?.player_addresses[state.active_player_index];
   return address ? context.labelForAddress(address) : "A player";
+}
+
+/** Whoever is acting, as the round defines "whoever" -- the corporation
+ *  currently up in an Operating Round, the seated player everywhere else.
+ *
+ *  Design note #478: this is the distinction `actingPlayer` above cannot
+ *  make, and every OR line that named a human was making the same mistake.
+ *  Exported because App.tsx needs the same answer when it records what an
+ *  Undo would revert. */
+export function actingActor(context: ActionLogContext): string {
+  const state = context.gameState;
+  if (state?.current_round_type === "OperatingRound") {
+    const companyId = state.active_operating_order[state.active_corporation_index];
+    if (companyId !== undefined) return corp(state, companyId);
+  }
+  return actingPlayer(context);
+}
+
+/** The verb-led name of the step the cursor is on -- "Lay Track", not
+ *  "Track". Design note #478: the strip's own `stepLabel`, so the log and
+ *  the stepper cannot describe the same step differently. */
+function stepName(context: ActionLogContext): string | null {
+  const step = context.orSubPhase;
+  return step ? OPERATING_SUB_PHASE_LABELS[step].stepLabel : null;
 }
 
 /** " Treasury now $X." for a corporation that just spent, or "" when the
@@ -332,7 +391,14 @@ export function describeGameplayAction(
   }
 
   if ("AdvanceOperatingSubPhase" in msg) {
-    return `${corp(gameState, msg.AdvanceOperatingSubPhase.protocol_id)} skipped a step.`;
+    /* Design note #478: "skipped a step" had the right actor and the wrong
+       amount of information -- it is the one message whose whole content IS
+       which step, and it was the only part left out. The cursor has not
+       moved yet at dispatch time, so `orSubPhase` is still the step being
+       declined. */
+    const ticker = corp(gameState, msg.AdvanceOperatingSubPhase.protocol_id);
+    const step = stepName(context);
+    return step ? `${ticker} passed ${step}.` : `${ticker} skipped a step.`;
   }
 
   /* ---- Stock Round and the auction: the player acts. ---- */
@@ -377,8 +443,28 @@ export function describeGameplayAction(
     return `${actingPlayer(context)} bid $${msg.BidOnPrivate.bid_amount} on a private company.`;
   }
 
-  if ("PassTurn" in msg) return `${actingPlayer(context)} passed the turn.`;
-  if ("UndoLastAction" in msg) return `${actingPlayer(context)} undid the last action.`;
+  if ("PassTurn" in msg) {
+    /* Design note #478. In an Operating Round the Pass button ends the
+       CORPORATION's turn from whatever step it is standing on, so both
+       facts belong in the sentence. Outside one, `PassTurn` really is a
+       seated player passing and the original wording is the correct one --
+       there is no corporation to name and no sub-phase to be on. */
+    if (gameState?.current_round_type === "OperatingRound") {
+      const step = stepName(context);
+      return step
+        ? `${actingActor(context)} passed ${step}.`
+        : `${actingActor(context)} passed its turn.`;
+    }
+    return `${actingPlayer(context)} passed the turn.`;
+  }
+  if ("UndoLastAction" in msg) {
+    /* Design note #479: ONLINE, THE CLIENT DOES NOT KNOW WHAT IT UNDID.
+       The sandbox names the reverted action from its snapshot stack (see
+       App.tsx's `handleUndoLastAction`); a live chain resolves undo itself,
+       a block or two later, so naming an action here would be a guess
+       printed as a fact. It names the actor and stops. */
+    return `${actingActor(context)} reverted their last action.`;
+  }
   if ("BeginOperatingRound" in msg) return "The Operating Round began.";
 
   // `ExecuteOperatingRound` and anything added later: the caller's own label

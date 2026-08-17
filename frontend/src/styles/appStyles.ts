@@ -613,6 +613,40 @@ export const styles: Record<string, React.CSSProperties> = {
     borderColor: `rgba(${TURN_PULSE_INK_RGB}, 0.75)`,
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 481: THE SUB-PHASE, BESIDE THE TITLE
+   * ==================================================================
+   *
+   * Sized and coloured to read as a CONTINUATION of `actionBarRoundLabel`
+   * rather than as a second heading: same uppercase treatment and letter
+   * spacing, one step lighter in weight and colour. "OPERATING ROUND ·
+   * LAY TRACK 2/5" should scan as one line, because it is one fact --
+   * where the turn is -- split across two spans only because half of it is
+   * conditional.
+   *
+   * `whiteSpace: nowrap` because the bar wraps (`flexWrap` on `actionBar`),
+   * and a step name broken across two lines inside a wrapping row is how a
+   * 48px bar becomes a 70px one. */
+  actionBarSubPhaseInline: {
+    fontSize: FONT_SIZE.control,
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    color: "#d7dce5",
+    whiteSpace: "nowrap",
+    /* The separator is drawn rather than typed: a literal "·" in the JSX
+       would need its own span to be spaced correctly and would be read
+       aloud by a screen reader as "middle dot". */
+    paddingLeft: "10px",
+    borderLeft: "1px solid #2f3646",
+  },
+  /* The position, deliberately quieter than the name. A player reads
+     "Lay Track" every turn and "2/5" only when they want to know how much
+     of the turn is left, so the two should not compete. */
+  actionBarSubPhaseCount: {
+    fontWeight: 700,
+    color: "#8f98a8",
+  },
   actionBarRoundLabel: {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
@@ -731,6 +765,43 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#c7cbd4",
     borderStyle: "dashed",
   },
+  /* Design note #491: the collapsed bar's jump to the Buy Trains panels.
+     PROMINENT, per the report -- solid rather than the dashed utility
+     treatment, and tinted with the same green the market line uses for a
+     gain, so it reads as the thing to do rather than as a utility sitting
+     beside End Turn.
+
+     Deliberately NOT `actionBarButtonPrimary` (if one is ever added): this
+     scrolls, and a control that only moves the viewport should not wear the
+     strongest affordance on a bar whose other buttons spend a turn. */
+  actionBarJumpButton: {
+    color: "#0d1117",
+    backgroundColor: "#4ade80",
+    borderColor: "#4ade80",
+    fontWeight: 800,
+  },
+  /* Design note #491: the landing zone for that button's scroll.
+     `actionBar` is `position: sticky; top: 0`, so `scrollIntoView` with
+     `block: "start"` aligns the target's top edge with the VIEWPORT's top --
+     which is underneath the bar, hiding the panel heading the player
+     scrolled down to read. `scroll-margin-top` is the property that exists
+     for exactly this, and the browser applies it during the smooth scroll
+     rather than needing the offset computed at the call site.
+
+     SIZED FROM THE CONDENSED BAR, which is the only state this scroll can be
+     triggered from (the button renders only when condensed): 3px + 3px of
+     `actionBarCondensed` padding around a button of 9px + 9px padding, a
+     15px `FONT_SIZE.strong` line and a 1px border -- about 44px. 64px clears
+     that and leaves the heading a visible gap below the bar rather than
+     tucked against it.
+
+     A CONSTANT RATHER THAN A MEASUREMENT, and the trade is worth naming: an
+     exact read would need the bar's height threaded from a component that
+     owns neither this element nor that ref. The failure mode of being wrong
+     here is cosmetic and one-directional -- too much clearance shows some
+     empty space above the panel, too little would hide its title -- so the
+     number errs high. */
+  trainPurchaseScrollAnchor: { scrollMarginTop: "64px" },
   actionBarDivider: {
     width: "1px",
     alignSelf: "stretch",
@@ -907,15 +978,11 @@ export const styles: Record<string, React.CSSProperties> = {
      pure separation in a panel whose own rows are ~30px -- halved, which
      still reads as three distinct bands. */
   orPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
-  orPanelStepperRow: {
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "center",
-    borderBottom: "1px solid #2b3242",
-    // Design note #299: the rule below the strip is the separator; 4px of
-    // padding on top of the stepper's own is a second one made of air.
-    paddingBottom: "1px",
-  },
+  /* Design note #481: `orPanelStepperRow` is GONE, and so is the rule that
+     divided it from the action row. The strip it framed is now an inline
+     phrase beside the round title (`actionBarSubPhaseInline` below), which
+     is what removed the row rather than merely emptying it -- a style kept
+     "in case" is how a deleted row comes back. */
   /* Design note #426: this row was ALREADY true-centred -- `1fr auto 1fr`
      rails plus `justifyContent: center` on `orPanelActions` inside them.
      It is the model the non-Operating-Round bar (`actionBarButtons`) has
@@ -1026,6 +1093,15 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     flexWrap: "wrap",
     justifySelf: "start",
+    /* Design note #482: THE CENTRING WAS ONLY EVER CONDITIONAL. The row's
+       `1fr auto 1fr` rails centre the action group on the panel -- but a
+       `1fr` track is `minmax(auto, 1fr)` and will not shrink below its
+       content, so a rail holding a long line of text widens instead of
+       clipping and drags the centre column with it. `minWidth: 0` is what
+       makes the rail yield, and it is what the sibling rail on the
+       non-Operating-Round bar has had since design note #458. Without it,
+       the centring holds only for as long as nothing wide is put in here. */
+    minWidth: 0,
   },
   orPanelRailRight: {
     display: "flex",
@@ -1043,14 +1119,70 @@ export const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     justifyContent: "center",
   },
+  /* Design note #490: this is now a SECTION of the action panel rather than
+     a card floating beneath it, and the styling follows the move.
+
+     The full border is gone. A box inside a box reads as a separate object
+     -- which is exactly what this block used to be and no longer is -- so
+     what remains is a single hairline along the top, doing the one job the
+     border was really doing: separating the figures from the button row
+     immediately above them. `marginTop` pays for that rule; `orPanel`'s own
+     3px column gap is too tight to sit a divider in. */
+  /* Design note #498: the collapsed bar's Run Routes train row. Sized DOWN
+     from the ordinary chip -- it exists in the pinned form, whose whole
+     premise is that height is being taken from the board, so it buys its
+     line with the smallest type this bar uses rather than the control size.
+     `wrap` so four trains on a narrow window become two short lines instead
+     of overflowing the panel. */
+  condensedTrainRow: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    marginTop: "4px",
+    paddingTop: "4px",
+    borderTop: "1px solid #2b3242",
+  },
+  condensedTrainChip: {
+    display: "inline-flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "6px",
+    padding: "2px 8px",
+    borderRadius: "6px",
+    border: "1px solid #3a4150",
+    // Design note #494: overridden per chip with that train's route ink.
+    borderBottomWidth: "2px",
+    borderBottomStyle: "solid",
+    backgroundColor: "#232936",
+    color: "#c8cdd8",
+    fontSize: FONT_SIZE.small,
+    fontFamily: "inherit",
+    fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  condensedTrainChipActive: {
+    backgroundColor: "#1d3a55",
+    color: "#9ec5ff",
+    borderColor: "#38bdf8",
+  },
+  /* The figure this row exists for, in tabular numerals so a column of
+     values does not jitter as the drafts change under the pointer. */
+  condensedTrainValue: {
+    fontVariantNumeric: "tabular-nums",
+    color: "#7ee0a1",
+    fontWeight: 800,
+  },
   dividendPanel: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: "12px",
-    padding: "10px 12px",
-    borderRadius: "8px",
-    border: "1px solid #2b3242",
-    backgroundColor: "#161b27",
+    padding: "8px 4px 2px",
+    marginTop: "5px",
+    borderTop: "1px solid #2b3242",
   },
   dividendColumn: { display: "flex", flexDirection: "column", gap: "4px" },
   dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#e2e6ee" },
@@ -1084,6 +1216,11 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   dividendMoveArrowUp: { color: "#4ade80" },
   dividendMoveArrowDown: { color: "#f87171" },
+  /* Design note #489: a move that goes nowhere is neither a gain nor a loss.
+     It takes the muted note ink rather than green or red, because those two
+     are the only colours on this line carrying a claim about VALUE, and a
+     token pinned at the end of its row has not changed any. */
+  dividendMoveArrowFlat: { color: "#8a90a0" },
   dividendMoveNote: { color: "#8a90a0", fontWeight: 400 },
   depotSupply: { fontSize: FONT_SIZE.small, color: "#9aa0ac" },
   /* Design note #279: the Track step's "the action is on the map" hint, and

@@ -971,11 +971,20 @@ export const SLOT_RING_RATIO = 0.86;
  *  #151.
  *
  *  A token filled to exactly the ring radius covers the ring, and since the
- *  token carries its own outline at `max(2, size * 0.05)` -- CENTRED on its
- *  radius, so it spills a further `size * 0.025` outward -- filling to the
- *  ring would actually paint over it entirely. A two-slot pill would then
- *  render as two flat discs with no visible socket, and an empty slot
- *  beside a filled one would share no geometry with it.
+ *  token carries its own outline CENTRED on its radius -- so half of it
+ *  spills outward -- filling to the ring would actually paint over it
+ *  entirely. A two-slot pill would then render as two flat discs with no
+ *  visible socket, and an empty slot beside a filled one would share no
+ *  geometry with it.
+ *
+ *  DESIGN NOTE 487 CHANGED WHAT THAT OUTLINE MEASURES. It was
+ *  `max(2, size * 0.05)` -- an absolute width, which is why this inset had
+ *  to be generous enough to swallow the worst case. It is now
+ *  `radius * STATION_TOKEN_RING_WIDTH_RATIO`, so the spill is a fixed
+ *  fraction of the token and 0.84 clears it at every radius rather than
+ *  only at the largest. The figure is unchanged: it was already sufficient,
+ *  and loosening it now would move every docked token on the board for no
+ *  reported reason.
  *
  *  0.84 leaves that outline room to land just inside the ring, so the ring
  *  survives as a thin collar: what a wooden token sitting in a printed

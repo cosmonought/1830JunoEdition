@@ -254,14 +254,48 @@ export function buildOperatingOrder(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
 ): number[] {
+  /* ==================================================================
+   *  DESIGN NOTE 468: THE PRICE FALLBACK IS LOAD-BEARING
+   * ==================================================================
+   *
+   * REPORTED (critical): a corporation with no matrix coordinate breaks the
+   * queue and soft-locks the Operating Round transition.
+   *
+   * The `??` chain is what stops that, and it is worth naming rather than
+   * leaving as an idiom. A corporation floats the moment 60% sells, and its
+   * market MARK is written by a separate atom on a separate code path
+   * (design note #272) -- so there is a real window, and in the B&O's case
+   * there was a persistent state, where a company is legitimately floated
+   * and has no price yet.
+   *
+   * Falling back to PAR rather than to zero is the difference between a
+   * queue that is merely approximate for one render and one that is wrong:
+   * par is what the corporation is worth until the chart says otherwise, so
+   * a queue built on it is in the right order and simply not yet updated.
+   * Zero would sort every unmarked corporation to the back regardless of
+   * value.
+   *
+   * `Number(...) || 0` CATCHES THE REST -- a par that is `null`, an empty
+   * string, or anything `Number` turns into `NaN`. That matters more than
+   * it looks: `NaN` propagates through `sort`'s comparator and produces a
+   * comparison that is neither less, greater nor equal, which yields an
+   * order that is not total. A queue that is not totally ordered can put
+   * the cursor back on a corporation that has already operated -- which is
+   * the infinite Operating Round, arriving by a different route than design
+   * note #411's empty queue. Every entry here is therefore a finite number
+   * before it reaches the sort. */
   const priced = state.public_companies
     .filter((company) => company.is_floated && !!company.president)
-    .map((company) => ({
-      companyId: company.company_id,
-      price:
-        priceFor?.(company.company_id) ??
-        (company.par_value === null ? 0 : Number(company.par_value) || 0),
-    }));
+    .map((company) => {
+      const fromMarket = priceFor?.(company.company_id);
+      const fromPar = Number(company.par_value ?? 0);
+      const price = Number.isFinite(fromMarket as number)
+        ? (fromMarket as number)
+        : Number.isFinite(fromPar)
+          ? fromPar
+          : 0;
+      return { companyId: company.company_id, price };
+    });
 
   /* Ties broken by `company_id` ascending. The real tie-break is
      `calculate_operating_order`'s and belongs to the contract; what matters
@@ -836,6 +870,11 @@ export function sandboxRouteRevenue(
  *  no board at all (falling back to the flat nominal). */
 export interface SandboxActionContext {
   mapGrid?: MapGridResponse;
+  /** Design note #492a: this is the FIRST `RunManualRoute` of a turn's
+   *  batch, so `last_route_revenue` starts from zero rather than adding to
+   *  whatever the previous turn left. Read by that arm alone; every other
+   *  message ignores it. */
+  resetRouteRevenue?: boolean;
   /** Scales red off-board terminals, whose value rises with the era. */
   era?: TileColorTier;
   /** Design note #411: a corporation's current market price, for building
@@ -2346,12 +2385,48 @@ export function applySandboxAction(
      * simultaneously kept.
      *
      * Running a route now only RECORDS what it earned. Exactly one of the
-     * two dividend choices then moves that money, once. */
+     * two dividend choices then moves that money, once.
+     *
+     * ================================================================
+     *  DESIGN NOTE 492a: A TURN'S ROUTES ARE A SUM, NOT THE LAST ONE
+     * ================================================================
+     *
+     * This ASSIGNED `String(earned)`, and `RunManualRoute` declares one
+     * train (design note #275) -- so a corporation running three trains sent
+     * three messages and each overwrote the one before it. The field ended
+     * the turn holding the third train's revenue, and the Operating Round
+     * table's "Last Route Payout" column under-reported every multi-train
+     * run it has ever shown.
+     *
+     * It ADDS now, and `ctx.resetRouteRevenue` marks the first message of a
+     * batch so the sum belongs to this turn rather than growing forever.
+     * `App.handleRunTrains` is the only sender and dispatches its whole batch
+     * in one loop, so it is the one caller that knows which message is first
+     * -- the reducer cannot tell, and guessing from the state would be a
+     * heuristic where a fact is available.
+     *
+     * WHY NOT RESET ON A TURN BOUNDARY INSTEAD. There is no message for one.
+     * `AdvanceOperatingSubPhase` fires on a SKIP, inside a turn, and the
+     * Routes-to-Dividends step change is `App`-local state that this reducer
+     * never sees. A reset keyed to any of those would fire at the wrong
+     * moments and zero a total mid-run.
+     *
+     * THE DIVIDEND MONEY DOES NOT DEPEND ON THIS. `DeclareDividends` below
+     * prefers the message's own `revenue_amount`, which `App` fills from the
+     * committed total (design note #492). This field is what the LEDGER
+     * shows, and it was wrong on its own account. */
+    const previous = ctx?.resetRouteRevenue
+      ? 0
+      : Number(
+          state.public_companies.find((entry) => entry.company_id === protocol_id)
+            ?.last_route_revenue ?? 0,
+        ) || 0;
+    const running = Math.max(0, previous) + earned;
     return {
       ...state,
       public_companies: state.public_companies.map((company) =>
         company.company_id === protocol_id
-          ? { ...company, last_route_revenue: String(earned) }
+          ? { ...company, last_route_revenue: String(running) }
           : company,
       ),
     };
@@ -2981,6 +3056,38 @@ export function grantBOPresidency(
  * `null` for a company that did not just float, which is also what makes
  * "did this float?" answerable without re-deriving the comparison.
  */
+/* ==================================================================
+ *  DESIGN NOTE 467: THE FLOAT LINE DESCRIBED A WORLD THAT ENDED
+ * ==================================================================
+ *
+ * REPORTED: the activity log says "It has no home hex on this board" when
+ * the PRR floats. The PRR has a home hex.
+ *
+ * This function had two branches, and the wrong one had become
+ * unreachable-in-reverse. It reported the token placement when a token had
+ * just appeared (`gained`), and fell through to "no home hex" otherwise --
+ * which was correct while `applyFloatThreshold` placed the home token as
+ * part of floating.
+ *
+ * Design note #416 stopped it doing that. The token is now PROMPTED, so no
+ * float ever gains one in the same breath, `gained` is always false, and
+ * every corporation in the game -- home hex or not -- got the sentence
+ * written for the one that has none. A true statement about NNH, applied
+ * to all eight.
+ *
+ * THE BRANCHES ARE THE SAME TWO, RE-AIMED. The question is no longer "did a
+ * token appear" -- none ever does here -- it is "does this corporation have
+ * a home to place one on". That is a property of the company, known
+ * immediately, and it splits exactly the two cases the log needs to
+ * describe:
+ *
+ *   HAS A HOME   the placement is now OWED, and saying so is what makes the
+ *                prompt that follows make sense rather than arrive
+ *                unexplained.
+ *   HAS NONE     NNH, which genuinely has no home hex on this board. The
+ *                old sentence was always right about this one and is kept
+ *                verbatim for it.
+ */
 export function describeFloat(
   previous: { is_floated: boolean; station_token_hexes?: ReadonlyArray<unknown> | null },
   company: {
@@ -2992,15 +3099,15 @@ export function describeFloat(
   },
 ): string | null {
   if (previous.is_floated || !company.is_floated) return null;
-  const gained =
-    (company.station_token_hexes?.length ?? 0) > (previous.station_token_hexes?.length ?? 0);
-  if (gained && company.home_hex_label) {
-    return `${company.ticker} floated with $${company.treasury} and placed its home station token on ${company.home_hex_label}.`;
+
+  if (company.home_hex_label) {
+    return `${company.ticker} floated with $${company.treasury}. Its home station on ${company.home_hex_label} must now be placed.`;
   }
+
   /* NNH has no home hex on this board (see `applyFloatThreshold`), so it
-     floats without a token. Said outright rather than leaving the sentence
-     half finished, which would read as a placement that failed. */
-  return `${company.ticker} floated with $${company.treasury}. It has no home hex on this board, so no home token was placed.`;
+     floats without one. Said outright rather than leaving the sentence half
+     finished, which would read as a placement that failed. */
+  return `${company.ticker} floated with $${company.treasury}. It has no home hex on this board, so no home token is placed.`;
 }
 
 /** "Schuylkill Valley pays $5 to Alice." One line per payout, because the

@@ -43,8 +43,12 @@
 //    `MOCK_TRAIN_CATALOG`/`TERRAIN_BUILD_COST_LABEL` elsewhere in this
 //    codebase) so a given company reads as the same color everywhere.
 
-import React, { useEffect, useState } from "react";
-import type { PrivateCompanyState, PublicCompanyState } from "../utils/gameState";
+import React, { useEffect, useRef, useState } from "react";
+import type {
+  PrivateCompanyState,
+  PublicCompanyState,
+  RoundType,
+} from "../utils/gameState";
 import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
 // Design note #409: `TrainChips` is back -- inline in the asset row, not in
 // the stacked cell design note #393 removed. `CapacityPill` and
@@ -62,6 +66,10 @@ import {
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
+import {
+  applyCardOrder,
+  operatingRoundCardOrder,
+} from "../utils/corporationCardOrder";
 import { StationTokenRow } from "./StationTokenRow";
 import { stationTokenSlots } from "../utils/stationTokens";
 import { FONT_SIZE } from "../styles/typography";
@@ -170,6 +178,9 @@ export interface StockRoundPanelProps {
    *  player fire a `BuyStock` the contract is certain to reject, and a
    *  rejected transaction is a worse explanation than a disabled button. */
   actionsLockedReason?: string | null;
+  /** Design note #464: the round, so the card order is recomputed at the
+   *  Operating Round boundary and held through the Stock Round. */
+  roundType: RoundType | null;
 }
 
 /* ==================================================================== */
@@ -186,11 +197,17 @@ export interface StockRoundPanelProps {
 // THE PRESIDENT IS THE POINT. Presidency is the only thing in 1830 that
 // confers control, it changes hands silently the moment someone outbuys the
 // incumbent, and missing that it has moved is how players lose games. So it
-// is marked three ways at once, deliberately redundantly: a 👑 glyph, a
-// bold gold row, and the word "president" spelled out. Colour alone would
-// fail a colourblind player; a glyph alone is easy to skim past; the word
-// alone is invisible in a dense table. All three together are hard to miss
-// and survive any one channel being unavailable.
+// is marked two ways at once, deliberately redundantly: a bold gold row and
+// the word "President" spelled out. Colour alone would fail a colourblind
+// player; the word alone is easy to skim past in a dense table, which is why
+// it is set as a tag rather than as running text.
+//
+// A CROWN GLYPH WAS THE THIRD CHANNEL and design note #490 removed it with
+// the rest of the card's emoji. It was the weakest of the three: an emoji
+// renders in the platform's own colour font at its own weight, ignoring
+// `color` and `fontWeight`, so it could not be tuned to sit with the
+// typography around it -- and a channel that cannot be styled to match the
+// table it is in is decoration wearing an accessibility argument.
 //
 // WHAT THIS DOES NOT DO: it never derives the president. `president` is a
 // field on `PublicCompanyState`, set by the contract, and the largest
@@ -212,6 +229,7 @@ function CorporationRoster({
   phase,
   outlook,
   marketPrices,
+  roundType,
   connectedAddress,
   macroRoundNumber,
   playerCash,
@@ -232,6 +250,9 @@ function CorporationRoster({
   phase?: GamePhase | null;
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
   marketPrices?: Readonly<Record<number, number | null>>;
+  /** Design note #464: the round, so the card order can be recomputed at
+   *  the Operating Round boundary and held everywhere else. */
+  roundType: RoundType | null;
   connectedAddress: string | null;
   /** Design note #356: the Stock Round's number; `1` bans selling. */
   macroRoundNumber?: number;
@@ -259,6 +280,33 @@ function CorporationRoster({
    *  renders no trading controls at all. */
   tradingOpen: boolean;
 }) {
+  /* ==================================================================
+   *  DESIGN NOTE 464: RECOMPUTED AT THE OPERATING ROUND BOUNDARY
+   * ==================================================================
+   *
+   * `null` until the first Operating Round establishes an order, which
+   * leaves the roster in the contract's own table order -- a neutral
+   * starting arrangement rather than one that reshuffles as the opening
+   * Stock Round's first companies float.
+   *
+   * The effect fires on the TRANSITION into an Operating Round, not while
+   * one is in progress: `prevRoundRef` is what makes it an edge rather than
+   * a level, so a poll landing mid-round cannot re-sort the cards under a
+   * player who is reading them.
+   */
+  const [cardOrder, setCardOrder] = useState<number[] | null>(null);
+  const prevRoundRef = useRef<RoundType | null>(null);
+  useEffect(() => {
+    const entering = roundType === "OperatingRound" && prevRoundRef.current !== "OperatingRound";
+    prevRoundRef.current = roundType;
+    if (!entering) return;
+    setCardOrder(operatingRoundCardOrder(publicCompanies, marketPrices));
+    // `publicCompanies`/`marketPrices` are read at the transition and
+    // deliberately NOT dependencies -- including them would re-run this
+    // every poll, which is the continuous re-sorting being removed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundType]);
+
   if (publicCompanies.length === 0) {
     return (
       <div style={styles.section}>
@@ -275,31 +323,19 @@ function CorporationRoster({
       <span style={styles.sectionLabel}>Corporations</span>
       <div style={styles.rosterGrid}>
         {/* ==================================================
-             DESIGN NOTE 446: FLOATED COMPANIES LEAD
+             DESIGN NOTE 464 (supersedes #446): THE ORDER IS HELD
             ==================================================
 
-             REPORTED: sort the cards so floated companies appear first.
+             Design note #446 sorted floated companies to the front on every
+             render. Right about the order, wrong about the moment: a Stock
+             Round is where a player USES these cards, and buying is what
+             causes floats -- so the act of using the screen rearranged it
+             under them.
 
-             The roster rendered in `company_id` order -- the contract's
-             table order, which is an implementation detail and not a
-             ranking a player has any use for. Floated and unfloated
-             companies are different KINDS of thing: one has a price, a
-             treasury, an operating turn and a token on the board, the
-             other has none of those and cannot until 60% sells. Reading a
-             mixed list means re-checking each card's badge to know which
-             kind you are looking at.
-
-             STABLE WITHIN EACH GROUP. `company_id` breaks the tie rather
-             than price, so a card does not jump position when the market
-             moves -- eight cards reshuffling on every dividend would cost
-             more than the ordering gains. The two groups are what the
-             sort is for; the order inside them only has to be steady. */}
-        {[...publicCompanies]
-          .sort(
-            (a, b) =>
-              Number(b.is_floated) - Number(a.is_floated) || a.company_id - b.company_id,
-          )
-          .map((company) => {
+             `cardOrder` is recomputed only when an Operating Round begins
+             (see `utils/corporationCardOrder.ts`), and held until the next
+             one. `applyCardOrder` just files the live roster into it. */}
+        {applyCardOrder(publicCompanies, cardOrder).map((company) => {
           const color = tickerColor(company.company_id);
           /* Design note #447: `last_route_revenue` is OPTIONAL on the
              contract response, and `gameState.ts` is explicit that
@@ -316,7 +352,12 @@ function CorporationRoster({
              badges this row replaced absorbed that internally. Normalised
              once here rather than guarded at each of the three reads. */
           const trains = company.owned_trains ?? [];
-          const tokensPlaced = company.station_token_hexes?.length ?? 0;
+          /* Design note #490: `tokensPlaced` is gone. It existed only to
+             fill the tooltip the icons needed ("Station tokens: 2 of 4
+             placed on the map"), and `StationTokenRow` has always drawn
+             that same fact as circles -- so the count was a second, worse
+             rendering of the row sitting beside it, kept alive by the
+             caption mechanism this pass removes. */
           /* Design note #395: the same predicate `corporationPrivateCompanies`
              applies -- open, and held by THIS corporation. Filtered here
              rather than imported because that helper takes a whole
@@ -427,6 +468,32 @@ function CorporationRoster({
                       title={corporationTitle(company.ticker)}
                       fallbackStyle={styles.rosterLiveryTicker}
                     />
+                    {/* ==================================================
+                         DESIGN NOTE 465: THE ACRONYM COMES BACK
+                        ==================================================
+
+                         REPORTED: put the corporation's acronym immediately
+                         to the right of its logo for quick readability.
+
+                         Design note #410 replaced the acronym WITH the
+                         herald, and the trade was not even: a herald is
+                         unmistakable once you know it and unreadable until
+                         you do. Eight historical marks a new player has
+                         never seen are eight things to learn before the
+                         roster can be scanned, and the full name beside
+                         them is too long to serve as the quick label -- it
+                         is what you read second.
+                         "PRR" is what a player says out loud and what every
+                         other surface in this app calls the company.
+
+                         BESIDE, NOT INSTEAD. The herald keeps its place and
+                         its recognisability; the acronym rides next to it
+                         as the readable handle. `CorporateLogo`'s text
+                         fallback still renders the ticker when a file is
+                         missing, which would double it -- but only in the
+                         failure case, and a doubled ticker is a better
+                         failure than a nameless card. */}
+                    <span style={styles.rosterLiveryAcronym}>{company.ticker}</span>
                     {corporationFullName(company.ticker) && (
                       <span style={styles.rosterLiveryName}>
                         {corporationFullName(company.ticker)}
@@ -480,26 +547,36 @@ function CorporationRoster({
                        with Market and Par under a caption. Three labelled
                        figures in a row is a table; one unlabelled figure
                        floating beside a logo is a smudge. */}
+                  {/* ==================================================
+                       DESIGN NOTE 488: THE STRIPE CARRIES ONE FACT NOW
+                      ==================================================
+
+                       Design note #465 put Last Run in this slot, on the
+                       reasoning that the "Floated" badge it replaced was
+                       restating a permanent fact and the slot was already
+                       captioned by position. The first half still holds.
+                       The second does not: "captioned by position" means
+                       captioned by nothing, and a figure beside a herald
+                       reads as part of the corporation's identity -- which
+                       is the objection #465 inherited from #447 and only
+                       half solved.
+
+                       Last Run moves down to the stat row, where Market and
+                       IPO/Par already sit under real captions. Four
+                       captioned figures in one line is a table; three in a
+                       table plus one in the letterhead is not.
+
+                       WHAT STAYS HERE is float PROGRESS -- "40% / 60%" --
+                       which is the one fact about this corporation that is
+                       neither a price nor permanent, and which disappears
+                       the moment it is answered. An unfloated corporation
+                       has no market price, no last run and no treasury
+                       worth reading, so the stripe is where the only live
+                       number it has belongs. A floated one leaves the slot
+                       empty, and an empty slot is not a badge -- which was
+                       #465's actual objection. */}
                   <span style={styles.rosterLiveryRight}>
-                    {company.is_floated ? (
-                      <span
-                        style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
-                        title={
-                          metFloatThreshold(company)
-                            ? `Floated — ${soldToPlayersPercent(company)}% sold to players.`
-                            /* Design note #445: NO RULE IS NAMED. This said
-                               "Auto-floated by the B&O private company",
-                               which describes a rule 1830 does not have --
-                               see the design note below. A float without
-                               60% sold is a disagreement between the flag
-                               and the arithmetic, and the honest thing to
-                               report is the disagreement. */
-                            : `Reported floated, but only ${soldToPlayersPercent(company)}% is sold to players — 1830 floats at ${FLOAT_THRESHOLD_PERCENT}%.`
-                        }
-                      >
-                        FLOATED
-                      </span>
-                    ) : (
+                    {!company.is_floated && (
                       <span
                         style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
                         title={`${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
@@ -540,32 +617,53 @@ function CorporationRoster({
                     <span style={styles.rosterPriceValueMuted}>{company.par_value ?? "--"}</span>
                     <span style={styles.rosterPriceLabel}>IPO / par</span>
                   </div>
-                  {/* Design note #447: the last payout, arriving from the
-                      livery stripe. Third in the row and flush right, under
-                      its own caption, so it reads as one of three labelled
-                      figures rather than as an ornament on the herald.
-
-                      "--" RATHER THAN "$0" FOR A COMPANY THAT HAS NEVER
-                      RUN, and the distinction is the whole reason the old
-                      placement looked broken. `last_route_revenue` is "0"
-                      both for a corporation that ran and earned nothing and
-                      for one that has never turned a wheel, and those are
-                      different facts -- the first is a bad turn, the second
-                      is a company that has not operated yet. A dash says
-                      "no run on record"; "$0" claims a run that paid
-                      nothing. */}
+                  {/* Design note #488: Last Run returns to the row, with the
+                      caption it always needed. "--" not "$0" for a
+                      corporation that has never run -- design note #465's
+                      distinction, which is the one part of that note this
+                      pass keeps verbatim: `"0"` is reported both by a
+                      corporation that earned nothing and by one that has
+                      never turned a wheel, and a dash is the only honest way
+                      to say the second. */}
                   <div style={styles.rosterPrice}>
-                    <span
-                      style={styles.rosterPriceValueMuted}
-                      title={
-                        hasRunRoutes
-                          ? `Last route payout: $${company.last_route_revenue}. What this corporation most recently earned from running trains.`
-                          : "This corporation has not run a route yet."
-                      }
-                    >
+                    <span style={styles.rosterPriceValueMuted}>
                       {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
                     </span>
                     <span style={styles.rosterPriceLabel}>last run</span>
+                  </div>
+                  {/* ==================================================
+                       DESIGN NOTE 489: TREASURY BELONGS WITH THE MONEY
+                      ==================================================
+
+                       REPORTED: move Treasury up onto the row with Market,
+                       IPO/Par and Last Run, flush right.
+
+                       It was on the asset row below, between a coin emoji
+                       and a row of train chips -- filed with what the
+                       corporation OWNS. That is a defensible taxonomy and
+                       the wrong one for a share buyer: treasury is a
+                       FIGURE IN DOLLARS, and the three figures in dollars
+                       it should be compared against were on the line above
+                       it. A player judging whether a corporation can afford
+                       a train was reading its cash in a different row, a
+                       different type size and a different alignment from
+                       every other number on the card.
+
+                       FLUSH RIGHT, not fourth in the line, and the
+                       distinction matters. Market, IPO/Par and Last Run are
+                       PER-SHARE facts that read left to right as a
+                       sequence; treasury is the corporation's own money and
+                       belongs to a different question. `marginLeft: auto`
+                       pushes it to the far edge so the row reads as three
+                       related figures and one balance, which is what it is.
+
+                       It also keeps the row honest at every card width: the
+                       auto margin absorbs the slack rather than letting
+                       four evenly-spaced columns drift apart on a wide
+                       card. */}
+                  <div style={{ ...styles.rosterPrice, ...styles.rosterTreasury }}>
+                    <span style={styles.rosterPriceValue}>${company.treasury}</span>
+                    <span style={styles.rosterPriceLabel}>treasury</span>
                   </div>
                 </div>
 
@@ -627,36 +725,69 @@ function CorporationRoster({
                     TRAINS. A corporation with 2 of 3 tokens down has one
                     more city it can claim, and that is a real input to a
                     share decision that the old row simply omitted. */}
+                {/* ==================================================
+                     DESIGN NOTE 490: THE WORDS, NOT THE PICTOGRAMS
+                    ==================================================
+
+                     REPORTED: the cards lean on emojis and tooltips and are
+                     hard to read. Write "Trains" and "Stations" out beside
+                     their values.
+
+                     Design note #393 put a coin, a locomotive and a marker
+                     here and argued "THE ICONS ARE THE CAPTIONS... they
+                     cost no line of their own", with a `title` on each
+                     spelling out the words. Both halves were wrong in the
+                     same way, and the second is the worse one.
+
+                       AN EMOJI IS NOT TYPOGRAPHY. It renders in whatever
+                       colour font the platform ships, at whatever weight,
+                       ignoring `color`, `fontWeight` and the type scale
+                       entirely -- so the one element in the row that was
+                       supposed to be a caption is the only one that cannot
+                       be styled to look like one. Three saturated
+                       pictograms on a card whose whole palette is ink on
+                       cream also out-shout the numbers they label.
+
+                       A TOOLTIP IS NOT A LABEL. It requires a pointer, a
+                       hover and a wait, and it is unreachable on touch. The
+                       words were "free" only in the sense that they cost
+                       nothing to a reader who never sees them.
+
+                     `TrainChips` and `StationTokenRow` are still the values
+                     -- both carry information a count cannot (rust
+                     proximity, which token costs what) and neither is
+                     replaced. Only the captions change, from pictogram to
+                     word.
+
+                     TREASURY IS GONE FROM THIS ROW ENTIRELY -- design note
+                     #489 moved it up with the other dollar figures, which
+                     is also what made room for two spelled-out labels
+                     without the line wrapping. */}
                 <div style={styles.assetRow}>
-                  <span
-                    style={styles.assetItem}
-                    title={`Treasury: $${company.treasury} in this corporation's own funds.`}
-                  >
-                    <span aria-hidden="true">&#128176;</span>
-                    <span style={styles.assetValue}>${company.treasury}</span>
-                  </span>
-                  <span style={styles.assetDivider} aria-hidden="true">|</span>
-                  {/* Design note #409: the real chips, with the rust
-                      colouring a share buyer is pricing. `compact` and the
-                      light surface, matching the Operating Round's own
-                      rendering so the two screens cannot disagree about
-                      which tier is about to rust. */}
-                  <span
-                    style={styles.assetItem}
-                    title={
-                      trains.length > 0
-                        ? `Trains owned: ${trains.join(", ")}. Colour marks how close each is to rusting.`
-                        : "This corporation owns no trains."
-                    }
-                  >
-                    <span aria-hidden="true">&#128642;</span>
-                    <TrainChips
-                      trains={trains}
-                      phase={phase ?? null}
-                      surface="light"
-                      compact
-                      outlook={outlook}
-                    />
+                  <span style={styles.assetItem}>
+                    <span style={styles.assetLabel}>Trains</span>
+                    {/* Design note #409: the real chips, with the rust
+                        colouring a share buyer is pricing. `compact` and the
+                        light surface, matching the Operating Round's own
+                        rendering so the two screens cannot disagree about
+                        which tier is about to rust.
+
+                        Design note #490: the empty case gets WORDS too. An
+                        absent chip row beside the label "Trains" says
+                        nothing; "none" says the corporation owns none, which
+                        is the fact that decides whether it is about to be
+                        forced into an emergency purchase. */}
+                    {trains.length > 0 ? (
+                      <TrainChips
+                        trains={trains}
+                        phase={phase ?? null}
+                        surface="light"
+                        compact
+                        outlook={outlook}
+                      />
+                    ) : (
+                      <span style={styles.assetEmpty}>none</span>
+                    )}
                   </span>
                   <span style={styles.assetDivider} aria-hidden="true">|</span>
                   {/* ==================================================
@@ -692,17 +823,15 @@ function CorporationRoster({
                       Passing the card palette's own inks is what keeps the
                       circles legible here -- the bar's near-white ink would
                       vanish on `CARD_SURFACE`. */}
-                  <span
-                    style={styles.assetItem}
-                    title={`Station tokens: ${tokensPlaced} of ${company.station_token_limit} placed on the map.`}
-                  >
+                  <span style={styles.assetItem}>
+                    <span style={styles.assetLabel}>Stations</span>
                     <StationTokenRow
                       slots={stationTokenSlots(company)}
                       color={tickerColor(company.company_id)}
                       ink={CARD_INK}
                       inkMuted={CARD_INK_MUTED}
                       homeHexLabel={company.home_hex_label}
-                      emptyLabel="No stations"
+                      emptyLabel="none"
                     />
                   </span>
                 </div>
@@ -900,10 +1029,18 @@ function CorporationRoster({
                         }}
                       >
                         <span style={styles.ownershipName} role="cell">
+                          {/* Design note #490: the crown glyph is gone with
+                              the rest of the card's emoji. Presidency is
+                              still marked twice -- the bold gold row style
+                              and the word below -- which is what design note
+                              #378's redundancy argument was actually about:
+                              colour alone fails a colourblind player, so the
+                              WORD has to be there, and once it is, a
+                              pictogram that renders in a platform colour
+                              font at a platform weight is decoration rather
+                              than a third channel. */}
                           {holding.isPresident && (
-                            <span title="President — controls this corporation" aria-label="President">
-                              &#128081;
-                            </span>
+                            <span style={styles.presidentTag}>President</span>
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                         </span>
@@ -1568,14 +1705,23 @@ function CompanyActions({
           ) : (
             <button
               type="button"
-              style={styles.actionButton}
               onClick={() =>
                 onBuyShare(company.company_id, source, multiBuyMax > 1 ? effectiveQuantity : 1)
               }
+              /* Design note #466: greyed as well as disabled. `disabled`
+                 alone leaves a button at full contrast that silently
+                 refuses the click -- `actionButtonDisabled` is the same
+                 treatment every other refused control in this file wears
+                 (inline styles cannot express `:disabled`, per Lobby's own
+                 design note #3). */
+              style={{
+                ...styles.actionButton,
+                ...(controlsDisabled || cannotAfford ? styles.actionButtonDisabled : {}),
+              }}
               disabled={controlsDisabled || cannotAfford}
               title={
                 cannotAfford
-                  ? `Costs $${totalCost} — you hold $${playerCash}.`
+                  ? `Insufficient funds — costs $${totalCost}, you hold $${playerCash}.`
                   : undefined
               }
             >
@@ -1627,14 +1773,28 @@ function CompanyActions({
 
       </div>
 
-      {/* Design note #357: the reason, where the player is looking. A
-          disabled button with only a tooltip is a button that looks broken
-          to anyone who does not hover it. */}
-      {cannotAfford && (
-        <span style={styles.cannotAffordNote}>
-          ${totalCost} needed &middot; you hold ${playerCash}
-        </span>
-      )}
+      {/* ==================================================
+           DESIGN NOTE 466: THE REASON MOVES ONTO THE CONTROL
+          ==================================================
+
+           REPORTED: grey the Buy button out and say "Insufficient funds" in
+           its tooltip, rather than leaving it clickable with a red warning
+           appended below.
+
+           The button was ALREADY disabled -- what it lacked was the greyed
+           LOOK, so it read as live and refused silently. Design note #357
+           answered that with a red line underneath, on the reasoning that
+           "a disabled button with only a tooltip is a button that looks
+           broken to anyone who does not hover it". Sound, and it treated
+           the symptom: the button still looked enabled, so a second element
+           was added to explain why it was not.
+
+           Greying it removes the premise. A visibly disabled control does
+           not look broken, it looks unavailable -- and the red line was
+           costing a row on every card whose owner happened to be short of
+           cash, which during a Stock Round is most of them most of the
+           time. The figures it carried survive in the tooltip, which now
+           leads with the phrase the requirement asks for. */}
 
       {/* ---- Par + Sell, one line where the card is wide enough ----------
           Design note #22. Both are the same KIND of control -- a row of
@@ -1971,6 +2131,7 @@ export function StockRoundPanel({
   phase,
   outlook,
   actionsLockedReason,
+  roundType,
 }: StockRoundPanelProps) {
   // Design note #32: out of phase counts as "controls disabled" exactly the
   // same way an unready session does -- one flag, so no control can be
@@ -2069,6 +2230,8 @@ export function StockRoundPanel({
         phase={phase}
         outlook={outlook}
         marketPrices={marketPrices}
+        // Design note #464: the round drives the card-order boundary.
+        roundType={roundType}
         connectedAddress={connectedAddress}
         macroRoundNumber={macroRoundNumber}
         playerCash={playerCash}
@@ -2242,6 +2405,17 @@ const styles: Record<string, React.CSSProperties> = {
     // Inherits the computed ink; stated so nothing downstream re-tints it.
     color: "inherit",
   },
+  /* Design note #465: the readable handle, beside the herald. Monospace
+     and tracked out so it reads as a TICKER rather than as the first word
+     of the full name that follows it. */
+  rosterLiveryAcronym: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
   rosterLiveryName: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
@@ -2285,8 +2459,28 @@ const styles: Record<string, React.CSSProperties> = {
   assetItem: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "3px",
-    cursor: "help",
+    gap: "5px",
+    /* Design note #490: `cursor: "help"` is gone. It advertised a tooltip
+       that carried the caption, and the caption is now on the card. A help
+       cursor over content that explains itself is a promise of more. */
+  },
+  /* Design note #490: the word that replaced the pictogram. Set to match
+     `rosterPriceLabel` -- uppercase, faint, letter-spaced -- so the two
+     rows of the card caption their values the same way instead of one using
+     typography and the other using pictures. */
+  assetLabel: {
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK_FAINT,
+    textTransform: "uppercase",
+    letterSpacing: "0.4px",
+    fontWeight: 700,
+  },
+  /* "none", where a value would be. Italic and muted so an empty holding
+     reads as an answer rather than as a component that failed to render. */
+  assetEmpty: {
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK_MUTED,
+    fontStyle: "italic",
   },
   assetValue: {
     fontWeight: 700,
@@ -2363,6 +2557,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     fontVariantNumeric: "tabular-nums",
   },
+  /* Design note #490: the crown's replacement. A tag rather than running
+     text, so it is skimmable in a dense table -- which is the job the glyph
+     was doing and the only part of it worth keeping. */
+  presidentTag: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    textTransform: "uppercase",
+    letterSpacing: "0.4px",
+    color: CARD_INK_MUTED,
+    flexShrink: 0,
+  },
   rosterTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800, letterSpacing: "0.5px" },
   rosterNameStack: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
   rosterFullName: {
@@ -2413,6 +2618,13 @@ const styles: Record<string, React.CSSProperties> = {
      four chips, which will not sit beside two more cells on a narrow
      card. ---- */
   rosterPrice: { display: "flex", flexDirection: "column", gap: "1px" },
+  /* Design note #489: flush right. `marginLeft: auto` rather than
+     `justify-content: space-between` on the row, because the row's other
+     three cells must stay grouped at the left as a sequence -- spacing them
+     apart would make treasury look like the fourth in a series instead of
+     the balance it is. `alignItems: flex-end` right-aligns the value over
+     its caption, so the dollar figure ends flush with the card edge. */
+  rosterTreasury: { marginLeft: "auto", alignItems: "flex-end", textAlign: "right" },
   rosterPriceValue: {
     fontSize: FONT_SIZE.heading, fontWeight: 800, color: CARD_INK,
     fontVariantNumeric: "tabular-nums", lineHeight: 1.1,
@@ -2469,7 +2681,18 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex", alignItems: "center", gap: "5px",
     minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   },
-  ownershipNum: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
+  /* Design note #466: wide enough for the longest value it can hold.
+     "9 (100%)" is that value -- a full IPO -- and it wrapped, because the
+     column was sized by content and this is the one row where the content
+     is at its widest. `whiteSpace: nowrap` alone would have overflowed
+     instead of wrapping; the basis is what actually makes room. */
+  ownershipNum: {
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+    flex: "0 0 auto",
+    minWidth: "68px",
+    whiteSpace: "nowrap",
+  },
   /* Design note #378: the line between shares nobody owns and shares
      somebody does. Reset from the browser default, which is an inset 3D
      bevel that reads as a separator between SECTIONS rather than as a rule
@@ -2693,11 +2916,18 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #347: neutral grey, deliberately NOT the primary button's
      colour desaturated -- this is a state of the company, not a control
      waiting to become available. */
-  cannotAffordNote: {
-    fontSize: FONT_SIZE.micro,
-    color: "#e8a0a0",
-    fontVariantNumeric: "tabular-nums",
+  /* Design note #466: the greyed-out treatment for a refused Buy. Inline
+     styles cannot express `:disabled` (Lobby.tsx design note #3), so every
+     disabled control in this codebase computes its own look. */
+  actionButtonDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
   },
+  /* `cannotAffordNote` DELETED by design note #466. It was the red line
+     under a Buy button that looked enabled; the button is greyed now, so
+     the line has nothing left to explain. Deleted rather than left unused
+     -- an orphaned "here is why this is refused" style is an invitation to
+     render a second refusal message beside the first. */
   soldOutButton: {
     backgroundColor: "#20242e",
     borderColor: "#343b48",

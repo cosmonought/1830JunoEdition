@@ -263,6 +263,37 @@ export {
 export const STATION_TOKEN_RING = "#334155";
 
 /* ==================================================================
+ *  DESIGN NOTE 487: THE RING IS A FRACTION OF THE TOKEN, NOT OF THE HEX
+ * ==================================================================
+ *
+ * REPORTED: subsequent station tokens render with a strange ring border
+ * that makes them look non-uniform next to home station tokens.
+ *
+ * They do, and the two tokens are drawn by the SAME function with the same
+ * colours -- which is why this took finding. The difference is the radius,
+ * and the ring did not follow it.
+ *
+ *   `drawStationTokenMarker` stroked at `Math.max(2, size * 0.05)`, where
+ *   `size` is the HEX size. Constant for every token on the board.
+ *
+ *   The RADIUS is not constant. A token docked into a laid tile's city slot
+ *   takes `tileCityTokenRadius` -- `markerSize * 0.22 * 0.86 * 0.84`, and
+ *   `markerSize` itself shrinks another 15% on a multi-city tile. A home
+ *   token on an untiled preprinted city keeps the legacy `size * 0.22`.
+ *
+ * So a docked token is roughly two thirds the radius of a preprinted one
+ * and wears exactly the same absolute ring: proportionally half again as
+ * heavy. That reads as a different piece -- a small disc with a fat collar
+ * beside a large disc with a thin one -- which is precisely the report.
+ *
+ * The ratio below is the CURRENT appearance of the legacy path, preserved
+ * exactly: `0.05 / 0.22`. Tokens at the old radius are pixel-identical;
+ * every smaller token now wears a ring in proportion to itself, so all of
+ * them look like the same wooden piece at different distances.
+ */
+export const STATION_TOKEN_RING_WIDTH_RATIO = 0.05 / 0.22;
+
+/* ==================================================================
  *  DESIGN NOTE 253: A BRAND COLOUR THAT CAN ACT AS LIGHT
  * ==================================================================
  *

@@ -90,6 +90,10 @@ import {
 } from "./hexGeometry";
 import { TILE_GRAPHICS_CATALOG, tileArtworkEdgePairs } from "./TileGraphics";
 import type { LegalTilePlacement, MapGridResponse } from "./hexContractTypes";
+// Design note #483: the port key is `trackReach`'s to define. Importing it
+// rather than re-templating `"q,r:edge"` here keeps one format -- a second
+// hand-built copy is how a set lookup starts silently missing.
+import { portKey } from "../utils/trackReach";
 
 /* ------------------------------------------------------------------ */
 /* Revenue-centre counts                                              */
@@ -423,6 +427,27 @@ export interface SandboxLegalityContext {
    * measure -- no token on the board, or a build with no game state yet --
    * gets exactly the previous behaviour rather than an empty carousel. */
   networkHexes?: ReadonlySet<string>;
+  /* ==================================================================
+   *  DESIGN NOTE 483: THE EDGE, NOT JUST THE HEX
+   * ==================================================================
+   *
+   * `networkHexes` alone was not enough and the gap is the reported bug.
+   * The old check asked two questions -- is the neighbour a network hex,
+   * and does it carry rail to the shared edge -- and BOTH are true of the
+   * far arm of a crossover the corporation cannot reach. Tile #20 is two
+   * separate straights; a corporation whose track meets edge 0 puts the hex
+   * in `networkHexes`, and edge 1 is a live edge of that same hex, so an
+   * orientation facing edge 1 passed a filter designed to catch exactly
+   * this.
+   *
+   * `networkPorts` carries the answer the walk already had:
+   * `trackReach.portKey(q, r, edge)` for the edges the corporation's own
+   * continuous track actually arrives at. Facing a port is the real join.
+   *
+   * SUPPLIED TOGETHER OR NOT AT ALL. Both come off one `layableHexes`
+   * result, so a caller cannot hold a fresh hex set and a stale port set. A
+   * caller with neither is unchecked, exactly as before. */
+  networkPorts?: ReadonlySet<string>;
 }
 
 /**
@@ -479,6 +504,7 @@ function orientationJoinsNetwork(
   entry: TileCatalogEntry,
   orientation: number,
   networkHexes: ReadonlySet<string>,
+  networkPorts: ReadonlySet<string> | undefined,
 ): boolean {
   if (networkHexes.has(`${q},${r}`)) return true;
 
@@ -488,8 +514,19 @@ function orientationJoinsNetwork(
     const nq = q + offset[0];
     const nr = r + offset[1];
     if (!networkHexes.has(`${nq},${nr}`)) continue;
-    // The network hex must carry rail to the edge they share.
-    if (liveEdgesForHex(mapGrid, nq, nr).includes((edge + 3) % 6)) return true;
+    const shared = (edge + 3) % 6;
+    if (networkPorts) {
+      /* Design note #483: the strict test. The corporation's track must
+         REACH the shared edge from inside the neighbour, which is what a
+         port records -- not merely that some rail on that hex touches it. */
+      if (networkPorts.has(portKey(nq, nr, shared))) return true;
+      continue;
+    }
+    /* No port set supplied. Fall back to the edge test, which is what this
+       function did before design note #483 -- looser, and the looser
+       direction is the safe one here: it can only OFFER an orientation the
+       contract will refuse, never hide a legal one. */
+    if (liveEdgesForHex(mapGrid, nq, nr).includes(shared)) return true;
   }
   return false;
 }
@@ -540,7 +577,7 @@ function staysOnBoard(
 
 export function filterSandboxPlacements(
   placements: readonly LegalTilePlacement[],
-  { mapGrid, q, r, era, networkHexes }: SandboxLegalityContext,
+  { mapGrid, q, r, era, networkHexes, networkPorts }: SandboxLegalityContext,
 ): LegalTilePlacement[] {
   const restriction = hexLabelRestriction(mapGrid, q, r);
   const wanted = hexCentres(mapGrid, q, r);
@@ -600,7 +637,10 @@ export function filterSandboxPlacements(
     }
 
     // 6. Connection to the network, per orientation -- design note #6.
-    if (networkHexes && !orientationJoinsNetwork(mapGrid, q, r, entry, orientation, networkHexes)) {
+    if (
+      networkHexes &&
+      !orientationJoinsNetwork(mapGrid, q, r, entry, orientation, networkHexes, networkPorts)
+    ) {
       return false;
     }
 

@@ -68,8 +68,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 
-import { TilePreviewThumbnail } from "./HexGridRenderer";
-import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
+import { TilePreviewThumbnail, type StationPreviewMarker } from "./HexGridRenderer";
 import type { LegalTilePlacement } from "./hexContractTypes";
 import { FONT_SIZE } from "../styles/typography";
 
@@ -135,6 +134,24 @@ export interface RadialTileSelectorProps {
    * `utils/tokenMigration.ts` owns what the sentence should be. `null` on
    * every hex with no tokens, which is most of them. */
   tokenNote?: string | null;
+  /* ==================================================================
+   *  DESIGN NOTE 488b: THE CAPTION'S PICTURE
+   * ==================================================================
+   *
+   * Design note #271b above answered "which half does my station end up in"
+   * with a sentence. This is the same answer drawn on the tile, and the two
+   * MUST come from one computation -- `previewTokenMigration` -- or the ring
+   * can say "city 2 of 2" while the marker sits on city 1. That is the
+   * near-miss duplicate class TD-1 catalogued, and a caption disagreeing
+   * with the artwork beside it is the version of it a player actually sees.
+   *
+   * A FUNCTION OF `tileId`, not a flat list, because the destination depends
+   * on the candidate: the same token maps to city 0 of a one-city tile and
+   * city 1 of a two-city one. The ring shows every candidate at once, so it
+   * needs the answer per thumbnail rather than for the one being previewed.
+   *
+   * OPTIONAL. Omitted, every thumbnail draws exactly what it drew before. */
+  stationMarkersFor?: (tileId: number) => readonly StationPreviewMarker[];
   onSelectCandidate: (tileId: number, orientation: number) => void;
   onConfirm: () => void;
   /** Step back one stage -- design note #2. */
@@ -147,7 +164,25 @@ export interface RadialTileSelectorProps {
    FROM this number (design note #174 below), so shrinking the thumbnail
    shrinks the ring proportionally and the spacing maths needs no edit --
    which is the property that note was written to get. 54 -> 38. */
-const THUMB = 38;
+/* ==================================================================
+ *  DESIGN NOTE 471: BIGGER CANDIDATES
+ * ==================================================================
+ *
+ * REPORTED: increase the rendering scale of the candidate tiles so they are
+ * easier to read in dense map areas.
+ *
+ * 38px carried a whole hex's artwork -- track curves, city circles, a
+ * revenue number -- at roughly the size of a favicon. In a dense area,
+ * where the choice between two upgrades turns on which edges each connects,
+ * that is exactly where it failed.
+ *
+ * 54px is a ~42% linear increase and costs nothing in layout, because
+ * design note #174 SOLVES the ring radius from this constant rather than
+ * hardcoding it: `ringRadiusFor` requires `2 * R * sin(pi / N)` to clear
+ * the thumbnail, so the ring simply opens wider to keep the same spacing.
+ * That is the whole reason this is a one-line change -- the geometry was
+ * already parameterised on it. */
+const THUMB = 54;
 
 /* ===================================================================
  *  DESIGN NOTE 174: THE RADIUS IS SOLVED FOR, NOT PICKED
@@ -259,6 +294,29 @@ export interface RadialConfirmRingProps {
    *  the player is still choosing from the ring; the token flow always shows
    *  it, because there is nothing to choose. */
   showConfirm: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 471: THE X BEHIND THE TOP HEX
+   * ==================================================================
+   *
+   * REPORTED: remove the obscured red X close button from the radial tile
+   * selector -- clicking away already closes it.
+   *
+   * The action row sits at `-radius - 38`, directly above the ring, and
+   * design note #174 made the radius grow with the candidate count. At any
+   * useful count the 12 o'clock thumbnail rises to meet the buttons, so the
+   * X ends up BEHIND a tile: a red control the player can see the edges of
+   * and cannot reliably hit.
+   *
+   * It is also redundant in that state. `onDismiss` closes the ring on any
+   * click outside it, which is the gesture people reach for anyway.
+   *
+   * NOT REMOVED OUTRIGHT, because the X is not redundant everywhere. While
+   * a tile is PREVIEWED it is half of a check/X pair -- confirm or discard
+   * -- and the ring is hidden then (design note #2), so nothing overlaps
+   * it. The station-token ring is the same shape and the same argument. So
+   * the button is suppressed exactly where it is both hidden and
+   * unnecessary: the candidate ring. */
+  showCancel?: boolean;
   canConfirm: boolean;
   confirmDisabledReason?: string;
   confirmTitle: string;
@@ -282,6 +340,7 @@ export function RadialConfirmRing({
   hint,
   note,
   showConfirm,
+  showCancel = true,
   canConfirm,
   confirmDisabledReason,
   confirmTitle,
@@ -405,15 +464,17 @@ export function RadialConfirmRing({
               &#10004;
             </button>
           )}
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label={cancelAriaLabel}
-            title={cancelTitle}
-            style={{ ...styles.fab, ...styles.fabCancel }}
-          >
-            &#10006;
-          </button>
+          {showCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              aria-label={cancelAriaLabel}
+              title={cancelTitle}
+              style={{ ...styles.fab, ...styles.fabCancel }}
+            >
+              &#10006;
+            </button>
+          )}
         </div>
 
         {/* ---- The caption. Sits under the action buttons so the two read
@@ -444,6 +505,7 @@ export function RadialTileSelector({
   provisional = false,
   legalRotationCount,
   tokenNote = null,
+  stationMarkersFor,
   onSelectCandidate,
   onConfirm,
   onCancel,
@@ -488,6 +550,11 @@ export function RadialTileSelector({
       note={previewing ? (tokenNote ?? undefined) : undefined}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
+      /* Design note #471: the candidate ring's X sits behind its own top
+         thumbnail and duplicates click-away. The preview state keeps it --
+         there it is the discard half of a check/X pair, with the ring
+         hidden behind the previewed tile. */
+      showCancel={previewing}
       canConfirm={canConfirm}
       confirmDisabledReason={confirmDisabledReason ?? "Tile lay disabled"}
       confirmTitle={`Lay this tile on ${hexLabel}.`}
@@ -508,14 +575,22 @@ export function RadialTileSelector({
         {!previewing &&
           tiles.map((tile, index) => {
             const position = ringPosition(index, tiles.length);
-            const entry = TILE_CATALOG_BY_ID.get(tile.tileId);
-            const tier = entry?.color;
+            /* Design note #471: the catalog lookup went with the tooltip.
+               It existed only to name the tier in that string; the tier is
+               visible as the thumbnail's own colour. */
             return (
               <button
                 key={tile.tileId}
                 type="button"
                 onClick={() => onSelectCandidate(tile.tileId, tile.firstOrientation)}
-                title={`Preview tile #${tile.tileId}${tier ? ` (${tier})` : ""} on ${hexLabel}`}
+                /* Design note #471: NO `title`. A native tooltip on every
+                   thumbnail in a ring of eight means one follows the cursor
+                   continuously as the player sweeps the options, covering
+                   the very tiles they are comparing. The tile's id is
+                   already printed on it (`candidateNumber`) and its tier is
+                   its colour -- both readable without hovering, which is
+                   what a chooser wants. */
+                aria-label={`Preview tile ${tile.tileId} on ${hexLabel}`}
                 style={{
                   ...styles.candidate,
                   transform: `translate(-50%, -50%) translate(${position.x}px, ${position.y}px)`,
@@ -525,6 +600,9 @@ export function RadialTileSelector({
                   tileId={tile.tileId}
                   orientation={tile.firstOrientation}
                   size={THUMB}
+                  // Design note #488b: where this candidate would put the
+                  // tokens already standing on the hex.
+                  stationMarkers={stationMarkersFor?.(tile.tileId)}
                 />
                 <span style={styles.candidateNumber}>{tile.tileId}</span>
               </button>
@@ -551,6 +629,13 @@ export interface RadialTokenConfirmProps {
   cost: number;
   /** The corporation the token belongs to. */
   ticker: string;
+  /** Design note #462: the corporation's livery, so the ring shows the
+   *  actual token rather than describing it. */
+  liveryColor: string;
+  /** Ink that contrasts with `liveryColor` -- computed by the caller with
+   *  the same helper the map tokens use, so the preview and the piece it
+   *  previews cannot pick different text colours. */
+  liveryInk: string;
   canConfirm: boolean;
   confirmDisabledReason?: string;
   onConfirm: () => void;
@@ -569,6 +654,8 @@ export function RadialTokenConfirm({
   hexLabel,
   cost,
   ticker,
+  liveryColor,
+  liveryInk,
   canConfirm,
   confirmDisabledReason,
   onConfirm,
@@ -592,7 +679,40 @@ export function RadialTokenConfirm({
       onConfirm={onConfirm}
       onCancel={onCancel}
       onDismiss={onCancel}
-    />
+    >
+      {/* ==================================================
+           DESIGN NOTE 462: SHOW THE PIECE BEING PLACED
+          ==================================================
+
+           REPORTED: the confirmation ring does not show a preview of the
+           station token.
+
+           The ring named the corporation in its caption and drew nothing.
+           Its sibling, `RadialTileSelector`, has always previewed the TILE
+           under the ring -- you see the artwork you are about to commit --
+           and the token ring asked for the same commitment with nothing on
+           screen but a ticker in a sentence.
+
+           This is the token, drawn the way the map draws it: the livery
+           fill, the contrast ink, the ticker, a dark rim. Centred in the
+           ring, so it sits over the city node the player just clicked and
+           the question becomes "does that look right there" rather than
+           "do I trust the label".
+
+           `pointerEvents: none` -- the confirm and cancel buttons are the
+           interactive parts of this ring and a preview that swallowed
+           clicks would make the centre a dead zone. */}
+      <span
+        aria-hidden="true"
+        style={{
+          ...styles.tokenPreview,
+          backgroundColor: liveryColor,
+          color: liveryInk,
+        }}
+      >
+        {ticker}
+      </span>
+    </RadialConfirmRing>
   );
 }
 
@@ -601,6 +721,32 @@ export function RadialTokenConfirm({
 /* ------------------------------------------------------------------ */
 
 const styles: Record<string, React.CSSProperties> = {
+  /* Design note #462: the station token, previewed at the ring's centre.
+     Same silhouette the canvas draws -- circle, livery fill, contrast ink,
+     dark rim, monospace ticker -- so the preview and the piece are visibly
+     the same object rather than two designers' idea of one. */
+  tokenPreview: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "30px",
+    height: "30px",
+    borderRadius: "50%",
+    border: "2px solid rgba(0, 0, 0, 0.45)",
+    boxShadow: "0 2px 5px rgba(0,0,0,0.55)",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "9px",
+    fontWeight: 700,
+    lineHeight: 1,
+    letterSpacing: "-0.02em",
+    // The ring's buttons are the interactive parts; a preview that ate
+    // clicks would make the centre a dead zone.
+    pointerEvents: "none",
+  },
   backdrop: {
     position: "fixed",
     inset: 0,

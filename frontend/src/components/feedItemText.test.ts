@@ -18,8 +18,20 @@
 // is somebody adding a NEW one. A test that checked for "🟢" specifically
 // would pass the moment a different emoji was introduced, which is exactly
 // when it should fail.
+//
+// ==================================================================
+//  DESIGN NOTE 477 (harness): AND THE CLOCK LEADS IT
+// ==================================================================
+//
+// The exact-string expectations below CHANGED with design note #477 rather
+// than being added to, because the format changed: every line now opens
+// `[hh:mm] `. That is worth flagging rather than quietly editing -- a test
+// whose expected value is edited to match new output is usually a test that
+// stopped guarding anything. These were edited deliberately, and the
+// `describe("clock prefix")` block below is what now holds the new contract
+// in place.
 
-import { feedItemText } from "./TopTicker";
+import { clockPrefix, feedItemText } from "./TopTicker";
 import type { FeedItem } from "../utils/feed";
 
 function logItem(over: Partial<FeedItem> = {}): FeedItem {
@@ -42,18 +54,19 @@ const EMOJI = /\p{Extended_Pictographic}/u;
 describe("feedItemText", () => {
   it("renders the requirement's worked example verbatim", () => {
     expect(feedItemText(logItem())).toBe(
-      "[OR 1] Private Revenue — Schuylkill Valley pays $5 to Alice",
+      "[12:00] [OR 1] Private Revenue — Schuylkill Valley pays $5 to Alice",
     );
   });
 
-  it("leads with the round prefix and nothing else", () => {
-    expect(feedItemText(logItem())).toMatch(/^\[OR 1\] /);
+  it("leads with the clock, then the round, then the sentence", () => {
+    // The universal format: `[hh:mm] [Phase/Round] [Actor] [Action]`.
+    expect(feedItemText(logItem())).toMatch(/^\[12:00\] \[OR 1\] /);
   });
 
-  it("omits the prefix entirely when there is no round", () => {
-    // Not "[] ", and not "[undefined] ".
+  it("omits the round prefix entirely when there is no round", () => {
+    // Not "[] ", and not "[undefined] ". The clock still leads.
     expect(feedItemText(logItem({ logRound: undefined }))).toBe(
-      "Private Revenue — Schuylkill Valley pays $5 to Alice",
+      "[12:00] Private Revenue — Schuylkill Valley pays $5 to Alice",
     );
   });
 
@@ -66,7 +79,7 @@ describe("feedItemText", () => {
 
   it("marks a failure in words", () => {
     expect(feedItemText(logItem({ logStatus: "error" }))).toBe(
-      "[OR 1] Failed: Private Revenue — Schuylkill Valley pays $5 to Alice",
+      "[12:00] [OR 1] Failed: Private Revenue — Schuylkill Valley pays $5 to Alice",
     );
   });
 
@@ -87,7 +100,9 @@ describe("feedItemText", () => {
       chatAuthor: "Alice",
       chatText: "taking the D&H",
     } as FeedItem;
-    expect(feedItemText(chat)).toBe('Alice: "taking the D&H"');
+    // Design note #477: a chat line takes the same gutter, so the log rows
+    // and the chat rows it interleaves with line up on one left edge.
+    expect(feedItemText(chat)).toBe('[12:00] Alice: "taking the D&H"');
   });
 
   it("emits no emoji for any status, round or detail combination", () => {
@@ -97,6 +112,42 @@ describe("feedItemText", () => {
         expect(text).not.toMatch(EMOJI);
       }
     }
+  });
+});
+
+describe("clock prefix", () => {
+  it("drops the seconds a locale time string carries", () => {
+    // `toLocaleTimeString()` gives hh:mm:ss. Three characters of precision
+    // nobody wants about a board game, and enough width to unbalance a
+    // gutter that is only useful because it is a fixed width.
+    expect(clockPrefix(logItem({ timestampLabel: "09:07:42" }))).toBe("[09:07] ");
+  });
+
+  it("keeps a 12-hour suffix", () => {
+    // Trimming seconds must not trim the am/pm that follows them.
+    expect(clockPrefix(logItem({ timestampLabel: "2:32:07 PM" }))).toBe("[2:32 PM] ");
+  });
+
+  it("leaves a label that already lacks seconds alone", () => {
+    expect(clockPrefix(logItem({ timestampLabel: "14:32" }))).toBe("[14:32] ");
+  });
+
+  it("passes an unrecognised label through whole rather than dropping it", () => {
+    // A locale this regex does not anticipate costs a slightly wider gutter.
+    // Emitting nothing, or "[Invalid Date]", would cost more.
+    expect(clockPrefix(logItem({ timestampLabel: "午後2:32:07" }))).toBe("[午後2:32:07] ");
+  });
+
+  it("emits nothing at all for an item with no timestamp label", () => {
+    // Not "[] ", and not "[undefined] ".
+    expect(clockPrefix(logItem({ timestampLabel: "" }))).toBe("");
+  });
+
+  it("is what every surface leads with, not something the ticker adds", () => {
+    // The three surfaces share `feedItemText` (design note #425), so the
+    // prefix has to live inside it rather than in one caller.
+    const item = logItem({ timestampLabel: "08:05:00" });
+    expect(feedItemText(item).startsWith(clockPrefix(item))).toBe(true);
   });
 });
 

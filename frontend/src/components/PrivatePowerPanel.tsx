@@ -330,10 +330,18 @@ export function PrivatePowerPanel({
     if (ability.scope === "player") {
       return viewerAddress !== null && priv.owner === viewerAddress;
     }
+    /* Design note #470: EXACT identity, both halves. `owner_protocol_id`
+       must equal the corporation currently operating -- not merely be
+       non-null, and not the president's other corporation -- and the viewer
+       must be the person holding that corporation's controls. A private
+       owned by a player rather than a railroad has a null protocol id and
+       matches nothing, which is the rule rather than a guard. */
     return (
       actingProtocolId !== null &&
+      priv.owner_protocol_id !== null &&
       priv.owner_protocol_id === actingProtocolId &&
       viewerAddress !== null &&
+      actingPresident !== null &&
       actingPresident === viewerAddress
     );
   };
@@ -346,9 +354,36 @@ export function PrivatePowerPanel({
       entry.priv !== undefined &&
       !entry.priv.closed &&
       ownsForScope(entry.ability, entry.priv) &&
-      // Design note #349: an ability whose round is somewhere else entirely
-      // is not context, it is clutter. Only the ones that opt in.
-      !(entry.ability.hideOutOfRound && roundType !== entry.ability.phase),
+      /* ==================================================================
+       *  DESIGN NOTE 470: THE OUT-OF-ROUND POWERS LEAKED INTO THE OR
+       * ==================================================================
+       *
+       * REPORTED: the Private Powers panel leaks into the Operating Round
+       * action panel even when the acting corporation does not own the
+       * private.
+       *
+       * `ownsForScope` already refuses a CORPORATE power the acting
+       * corporation does not own (design note #441), and that half held. The
+       * leak was the two PLAYER-scoped exchanges -- Mohawk and Camden. Their
+       * phase is `"StockRound"` and neither sets `hideOutOfRound`, so during
+       * an Operating Round they rendered DISABLED: a Private Powers heading
+       * and two dead rows, on a panel whose entire subject is the acting
+       * corporation, describing privates that corporation does not own and
+       * cannot use.
+       *
+       * Design note #349 introduced `hideOutOfRound` as an opt-in, reasoning
+       * that a disabled row is "useful context rather than noise" when the
+       * wait is short. That is true of a power the viewer will use SOON on
+       * this same panel. It is not true here: the Operating Round's panel
+       * belongs to a corporation, and a player's personal share exchange has
+       * no relationship to it at all -- the wait is not short, it is a
+       * different subject.
+       *
+       * SO THE ROUND MUST MATCH, ALWAYS. `hideOutOfRound` becomes redundant
+       * rather than wrong, and is left on the two entries that set it as a
+       * statement of intent; nothing now depends on it. A power is shown in
+       * its own round or not at all. */
+      roundType === entry.ability.phase,
   );
 
   // Design note #2: nothing owned means nothing to say. A permanent empty

@@ -182,6 +182,23 @@ export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
  * (no Brown tile carries `SmallTown`/`DoubleTown` terrain); revenue badges
  * paint their own background.
  */
+/* ==================================================================
+ *  DESIGN NOTE 473: ONE TRACK INK, NAMED
+ * ==================================================================
+ *
+ * The colour track is drawn in. Design note #161 unified it across all
+ * three tiers and left the value inlined three times in the table below --
+ * fine while the table was the only consumer, and not fine once the
+ * off-board stubs had to match it (they were on the older `#2b2b2b` and the
+ * seam showed exactly where a player traces a route off the map).
+ *
+ * Naming it makes "the off-board track matches tile track" a fact the code
+ * states rather than a coincidence of two literals agreeing. The tier table
+ * still exists and still maps each tier separately -- #161's reasoning for
+ * keeping it holds: it is what makes "ink is a function of the tier"
+ * structural, and it is what caught the problem the last time a fill moved. */
+export const STANDARD_TRACK_INK = "#1a1a1a";
+
 export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
   // Design note #161 UNIFIED THESE AGAIN, and the reason is worth keeping.
   //
@@ -200,9 +217,9 @@ export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
   //
   // Slightly deeper than the old `#2b2b2b` (the non-tile default below),
   // which buys Brown a full contrast step for free.
-  Yellow: "#1a1a1a",
-  Green: "#1a1a1a",
-  Brown: "#1a1a1a",
+  Yellow: STANDARD_TRACK_INK,
+  Green: STANDARD_TRACK_INK,
+  Brown: STANDARD_TRACK_INK,
 };
 
 /** The track ink for a tile whose tier is unknown -- an id missing from the
@@ -624,7 +641,39 @@ export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorT
  * decides which hexes open the picker, so no value here can make an
  * illegal hex clickable or a legal one dead. This constant governs
  * appearance only, which is what makes tuning it safe. */
-export const LAY_TRACK_DIM_ALPHA = 0.42;
+export const LAY_TRACK_DIM_ALPHA = 0.55;
+
+/* ==================================================================
+ *  DESIGN NOTE 472: 0.42 -> 0.55, AND A SECOND, HARDER VEIL
+ * ==================================================================
+ *
+ * REPORTED: darken the base veil by a further 30% during Lay Track so the
+ * candidate tiles stand out; and when a hex is opened, severely dim every
+ * OTHER hex -- including the other valid placements -- so the focus is
+ * entirely on the one being decided.
+ *
+ * The base value takes design note #420's 0.42 up by ~30% to 0.55. #420
+ * settled 0.42 by arguing a veiled hex must "still read as cardboard"; that
+ * test still passes here -- colour, track and tokens remain legible -- and
+ * the lit set now separates from it at a glance rather than on inspection.
+ *
+ * THE SECOND ALPHA IS A DIFFERENT STATEMENT, not a darker version of the
+ * first, which is why it is its own constant rather than a multiplier.
+ *
+ *   THE BASE VEIL answers "where MAY I build" -- it is a survey, and every
+ *   legal hex has to stay comparable against every other, so the unlit ones
+ *   are pushed back but the board is still a board.
+ *
+ *   THE FOCUS VEIL answers "what am I deciding RIGHT NOW". A radial menu is
+ *   open over one hex and the player is choosing between tiles for it; the
+ *   other legal placements have stopped being options this second and
+ *   become distractions competing with a ring of thumbnails. At 0.82 they
+ *   recede to context.
+ *
+ * Deliberately NOT opaque. Even here the board must be visible enough to
+ * judge a tile against its neighbours -- which is the whole reason the
+ * player opened this hex rather than another. */
+export const LAY_TRACK_FOCUS_DIM_ALPHA = 0.82;
 export const LAY_TRACK_DIM_INK = "#070b14";
 /** The ring on a buildable hex. Green, matching the tile picker's own
  *  confirm affordance (`fabConfirm`), so "you may act here" is one colour

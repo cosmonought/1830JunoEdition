@@ -338,12 +338,21 @@ export function TrainPurchasePanel({
     nextTier === null
       ? "The Bank Depot is empty — every printed train has been bought."
       : atTrainLimit
-        ? // Design note #230: the phase's own ceiling, named as such. A
-          // corporation at its limit must sell or scrap before it can buy,
-          // which is a different action in a different panel -- so this says
-          // what is true rather than asking for a smaller number.
+        ? /* Design note #230: the phase's own ceiling, named as such -- this
+             says what is true rather than asking for a smaller number.
+
+             Design note #485: it no longer says what to DO about it. Both
+             strings used to end by directing the president to sell or scrap
+             a train first, and 1830 permits neither: there is no voluntary
+             discard, and the Bank never buys a train back. A corporation at
+             its limit is simply train-locked. The only thing that can move a
+             train off its roster is ANOTHER corporation buying it, which is
+             that corporation's decision and not an action available on this
+             panel -- so an instruction here could not be followed even in
+             principle. Naming the lock and stopping is the honest end of the
+             sentence. */
           (limitDropsOnPurchase
-            ? `Buying a ${nextTier?.tier}-train would start the next phase and cut the limit to ${limitAfterPurchase}, and ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount}. Sell or scrap first.`
+            ? `Buying a ${nextTier?.tier}-train would start the next phase and cut the limit to ${limitAfterPurchase}, and ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount}.`
             : `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`)
         : !quantityValid
           ? `Enter a whole number between 1 and ${Math.max(1, supplyCap)}.`
@@ -376,13 +385,22 @@ export function TrainPurchasePanel({
    * two rules.
    *
    * IT DISABLES RATHER THAN HIDING. The rival's trains are still worth
-   * seeing: knowing who holds what is what tells a president they need to
-   * scrap before they can trade. A vanished section would answer a question
-   * nobody asked by removing the one they did. */
+   * seeing: knowing who holds what is what tells a president which rivals
+   * are themselves train-locked, and who might come asking to buy one of
+   * theirs. A vanished section would answer a question nobody asked by
+   * removing the one they did.
+   *
+   * Design note #485: the reason no longer ends "Scrap or sell a train
+   * before buying another." A corporation cannot scrap, and the Bank does
+   * not buy trains back -- the sentence instructed the player to take an
+   * action 1830 does not contain. The rule it was reaching for is the
+   * genuine one stated above: the cap is on HOLDINGS, so a full fleet cannot
+   * accept another train from any source. That is a lock, not a prerequisite,
+   * and it clears only when a rival corporation chooses to buy. */
   const tradeBlockedReason: string | null =
     blockedReason ??
     (atTrainLimit
-      ? `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase. Scrap or sell a train before buying another.`
+      ? `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
       : null);
   const canTrade = canAct && sessionReady && tradeBlockedReason === null;
 

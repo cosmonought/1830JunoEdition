@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import {
+  tileCityAnchors,
   tileCitySlotCounts,
   tileCitySlotPoints,
   tileCityTokenRadius,
@@ -53,6 +54,7 @@ import {
   HEX_START_VALUE_OVERRIDE,
   IMPASSABLE_BORDER_EDGES,
   LAY_TRACK_DIM_ALPHA,
+  LAY_TRACK_FOCUS_DIM_ALPHA,
   LAY_TRACK_DIM_INK,
   LAY_TRACK_HIGHLIGHT_INK,
   LANDMARK_HEXES,
@@ -69,6 +71,7 @@ import {
   terrainBuildFeeAt,
 } from "./hexBoardData";
 import {
+  bestContrastTextColor,
   chainTileRevenue,
   stationTickerColor,
   stationTickerLabel,
@@ -80,9 +83,12 @@ import {
   type QueryCapableClient,
   type StationTokenCompany,
 } from "./hexContractTypes";
+// Design note #496: the station cursor composites the real herald, so it
+// resolves the path the same way every other logo surface does.
+import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
 import type { PrivateCompanyState } from "../utils/gameState";
-import { cityIndexAtPoint } from "../utils/stationTokens";
+import { cityIndexAtPoint, cityNodePoints } from "../utils/stationTokens";
 import {
   archetypeForHex,
   axialToPixel,
@@ -401,6 +407,24 @@ export interface HexGridRendererProps {
      * DEFAULT `false`: a caller that has not thought about whose turn it is
      * gets the undimmed board, which is the safe half of the asymmetry. */
     dim?: boolean;
+    /* ==================================================================
+     *  DESIGN NOTE 472: THE HEX BEING DECIDED, RIGHT NOW
+     * ==================================================================
+     *
+     * `"q,r"` of the hex whose tile selector is open, or omitted when none
+     * is. Everything else on the board -- including the OTHER legal
+     * placements -- veils at `LAY_TRACK_FOCUS_DIM_ALPHA` instead of the
+     * ordinary one.
+     *
+     * A KEY RATHER THAN A SET, deliberately. Exactly one radial menu can be
+     * open at a time (`radialSelector` is a single nullable object), so a
+     * set would be a shape that permits a state the app cannot reach, and
+     * the first reader would wonder what two focused hexes look like.
+     *
+     * SET BY THE SHELL, like `dim`, because only the shell knows a ring is
+     * open -- the renderer draws a board and has no idea a menu exists over
+     * it. */
+    soleFocusKey?: string;
   };
   /** Design note #159: the pointer's meaning right now.
    *
@@ -410,6 +434,21 @@ export interface HexGridRendererProps {
    *  cursor change is a mode players forget they are in, and then every
    *  subsequent click does something they did not intend. */
   cursorMode?: "default" | "token";
+  /** Design note #496: whose token the `"token"` cursor is placing. The
+   *  cursor composites this corporation's herald over its livery, so the
+   *  pointer is the piece rather than a generic disc.
+   *
+   *  BOTH FIELDS TOGETHER, rather than a ticker this component then looks a
+   *  colour up for: `stationTickerColor` is keyed by `company_id`, and the
+   *  caller is the one holding that id. Deriving it here would mean either a
+   *  second ticker-to-colour table or a reverse lookup, and design note #428
+   *  spent a whole pass removing the last duplicate of that mapping.
+   *
+   *  OMITTED KEEPS THE GENERIC ICON, deliberately: every caller that arms
+   *  targeting without knowing the corporation (a preview, a thumbnail) gets
+   *  exactly the previous behaviour rather than a cursor in some default
+   *  company's colours. */
+  tokenCursor?: { ticker: string; color: string } | null;
   /** Design note #318: the live private company roster, for the reservation
    *  badges. Omitted draws none -- a board with no roster must not invent a
    *  restriction, and every caller that does not have one (the lobby
@@ -748,6 +787,7 @@ export function HexGridRenderer({
   highlightedTrainIndex = null,
   onHighlightRoute,
   cursorMode = "default",
+  tokenCursor = null,
   suppressHoverTooltip = false,
   layFocus,
   privateCompanies = EMPTY_PRIVATE_COMPANIES,
@@ -1080,6 +1120,61 @@ export function HexGridRenderer({
   /** The full draw pass: background, landmark shading, every laid tile's
    *  fill + track path, then landmark labels on top so they stay legible
    *  regardless of what's drawn beneath them. */
+  /* ==================================================================
+   *  DESIGN NOTE 463: A REPAINT LOOP, AND ONLY WHEN IT EARNS ITS KEEP
+   * ==================================================================
+   *
+   * This canvas has never had an animation loop -- it repaints on prop
+   * change and on pan/zoom, which is exactly right for a board that only
+   * moves when something happens to it. A pulsing glow needs frames.
+   *
+   * So the loop exists and is GATED: it runs only while a token placement
+   * is armed (`cursorMode === "token"`), which is a few seconds of a turn
+   * rather than the whole game. Outside that the canvas is as static as it
+   * always was, and `pulsePhase` holds still at 0 so the draw path costs
+   * nothing extra.
+   *
+   * `prefers-reduced-motion` STOPS THE LOOP ENTIRELY rather than shortening
+   * it. The glow's job is to say "these nodes"; a ring at its steady
+   * mid-swell says that perfectly well without moving, and honouring the
+   * preference by animating more gently would be missing its point.
+   *
+   * A 1.6s cycle: slow enough to read as breathing rather than blinking,
+   * which is the difference between a hint and an alarm. */
+  /* Design note #496: the station-placement pointer, composited from the
+     acting corporation's herald. Called unconditionally -- it is a hook, and
+     it costs nothing when `tokenCursorTicker` is null (which is every render
+     outside a token step, since the prop is only supplied while one is
+     armed). */
+  const stationCursor = useStationCursor(
+    cursorMode === "token" ? (tokenCursor?.ticker ?? null) : null,
+    cursorMode === "token" ? (tokenCursor?.color ?? null) : null,
+  );
+
+  const [pulsePhase, setPulsePhase] = useState(0);
+  useEffect(() => {
+    if (cursorMode !== "token") {
+      setPulsePhase(0);
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      // Held at the swell's midpoint -- a visible ring that does not move.
+      setPulsePhase(0.25);
+      return;
+    }
+    let handle = 0;
+    const started = performance.now();
+    const step = (now: number) => {
+      setPulsePhase((((now - started) / 1600) % 1 + 1) % 1);
+      handle = requestAnimationFrame(step);
+    };
+    handle = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(handle);
+  }, [cursorMode]);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1340,7 +1435,13 @@ export function HexGridRenderer({
           // per-tile query value to feed. The contract still sends it and
           // `MapTileEntry.paths` still types it; this renderer just has no
           // use for it now.
-          drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, false);
+          // Design note #486: `showRestriction` false, for the same reason
+          // `showRevenue` is. The hex-level `drawRestrictionBadge` pass below
+          // already labels every B/NY/OO hex and persists across upgrades
+          // (design note #49), and a restricted tile can only be laid on the
+          // hex carrying that badge -- so a tile-level label here is a second
+          // copy of the same letter a slot away, not a second statement.
+          drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, false, undefined, false);
         });
       } else {
         // Unknown tile_id -- see design notes #2 and #118. Renders generic
@@ -1746,7 +1847,12 @@ export function HexGridRenderer({
           // Fallback: a pre-G-12 chain, an unknown tile, or an untiled
           // preprinted city -- all cases where there is no per-slot answer
           // to be had, so the legacy per-hex anchor is the honest one.
-          const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile);
+          /* Design note #459: the city travels to the fallback too. On an
+             UNLAID preprinted OO hex there is no tile artwork to anchor to,
+             so this is the only thing that can tell the two printed circles
+             apart -- without it a token placed in the north-east city was
+             drawn in the south-west one. */
+          const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile, chainCity);
           withHexClip(ctx, tokenCenter, hexSize, () => {
             drawStationTokenMarker(
               ctx,
@@ -2608,9 +2714,18 @@ export function HexGridRenderer({
            the hexes outside their reach. `visible` carries the network as
            well as the legal targets (design note #241), so the route an
            extension joins stays lit alongside the placements. */
-        if (layFocus.dim && !layFocus.visible.has(key)) {
+        /* Design note #472: two veils, one pass.
+           - A ring is open  -> every hex but that one goes to the deep
+             alpha, legal or not. The decision is about ONE hex now.
+           - No ring open    -> the ordinary survey veil, on the hexes
+             outside the corporation's reach. */
+        const focused = layFocus.soleFocusKey !== undefined;
+        const veiled = focused
+          ? key !== layFocus.soleFocusKey
+          : layFocus.dim && !layFocus.visible.has(key);
+        if (veiled) {
           ctx.save();
-          ctx.globalAlpha = LAY_TRACK_DIM_ALPHA;
+          ctx.globalAlpha = focused ? LAY_TRACK_FOCUS_DIM_ALPHA : LAY_TRACK_DIM_ALPHA;
           ctx.fillStyle = LAY_TRACK_DIM_INK;
           drawHexPath(ctx, center, hexSize);
           ctx.fill();
@@ -2663,7 +2778,67 @@ export function HexGridRenderer({
          * which makes the glow the ONLY guide to the legal set. The three
          * falloff passes below matter more for that reason, not less: it
          * now has to carry the signal alone. */
-        if (layFocus.highlighted.has(key)) {
+        /* ==================================================================
+         *  DESIGN NOTE 463: THE NODE, NOT JUST THE HEX
+         * ==================================================================
+         *
+         * REPORTED: valid city markers do not glow, so which node to click
+         * is not obvious.
+         *
+         * The hex-level glow below marks WHERE, and on a one-city hex that
+         * is the whole answer. On a two-city hex it is not: the player is
+         * told this hex, and then has to guess which of two printed circles
+         * the click means. NNH's home is the case reported and every OO hex
+         * has it.
+         *
+         * So while a token placement is armed, each city node on a
+         * highlighted hex gets its own pulsing ring. `cityNodePoints` is the
+         * SAME geometry `cityIndexAtPoint` resolves a click against, which
+         * is what makes the glow a promise rather than a decoration -- a
+         * marker cannot pulse somewhere a click would not land.
+         *
+         * ONLY WHILE TARGETING IS ARMED (`cursorMode === "token"`). This is
+         * a strong, moving signal; during an ordinary tile lay it would be
+         * noise about an action the player is not taking.
+         *
+         * THE PULSE IS DRAWN, NOT ANIMATED IN CSS, because this is a canvas
+         * -- see `pulsePhase` for the repaint loop and why it only runs
+         * while it is needed. */
+        /* Design note #472: the node glow stands down under a focus veil.
+           It marks a SET of candidate nodes, and while a ring is open the
+           set has collapsed to one hex -- pulsing rings on the veiled
+           remainder would be inviting clicks the player has just moved
+           past. */
+        if (
+          cursorMode === "token" &&
+          layFocus.soleFocusKey === undefined &&
+          layFocus.highlighted.has(key)
+        ) {
+          const glow = layFocus.glowColor ?? LAY_TRACK_HIGHLIGHT_INK;
+          // 0..1..0 over the cycle, so the ring breathes rather than
+          // stepping. `pulsePhase` is a plain 0..1 ramp from the loop.
+          const swell = Math.sin(pulsePhase * Math.PI * 2) * 0.5 + 0.5;
+          for (const node of cityNodePoints(mapGrid, hex.q, hex.r, hexSize)) {
+            ctx.save();
+            ctx.globalAlpha = 0.45 + swell * 0.5;
+            ctx.strokeStyle = glow;
+            ctx.shadowColor = glow;
+            ctx.shadowBlur = hexSize * (0.18 + swell * 0.22);
+            ctx.lineWidth = Math.max(1.5, hexSize * 0.05);
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, hexSize * (0.24 + swell * 0.06), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+
+        /* Design note #472: likewise the hex glow. Under a focus veil only
+           the open hex keeps it -- it is the one thing the player is
+           looking at, and the others have been pushed back deliberately. */
+        if (
+          layFocus.highlighted.has(key) &&
+          (layFocus.soleFocusKey === undefined || key === layFocus.soleFocusKey)
+        ) {
           const glow = layFocus.glowColor ?? LAY_TRACK_HIGHLIGHT_INK;
           ctx.save();
 
@@ -2737,7 +2912,21 @@ export function HexGridRenderer({
           // `pathsForTile` falls back to the catalog mirror, which is why
           // the mirror had to carry `paths` too: a previewed double-town
           // must draw identically to the same tile once it is laid.
-          drawTrackPath(ctx, previewCenter, hexSize, previewCatalogEntry, previewTile.orientation);
+          // Design note #486: the ghost sits ON a board hex, so it collides
+          // with that hex's own restriction badge exactly as a laid tile
+          // does. `showRevenue` stays true -- the ghost is not on the board
+          // yet, so `drawValueBadge`'s laid-tile pass never reaches it and
+          // this is the only thing that can show its value.
+          drawTrackPath(
+            ctx,
+            previewCenter,
+            hexSize,
+            previewCatalogEntry,
+            previewTile.orientation,
+            true,
+            undefined,
+            false,
+          );
         });
       }
       ctx.restore();
@@ -2837,6 +3026,10 @@ export function HexGridRenderer({
     // only appear on the next unrelated redraw.
     highlightedTrainIndex,
     showCityNames,
+    // Design note #463: the pulse advances, so the board repaints with it.
+    // Only ever changes while a placement is armed.
+    pulsePhase,
+    cursorMode,
   ]);
 
   /** Coalesces pan/zoom-driven redraws to at most one per animation
@@ -3331,37 +3524,37 @@ export function HexGridRenderer({
        * their reasons, because with no dimming those hexes look identical to
        * legal ones and the cue is the only feedback there is. */
       /* ==================================================================
-       *  DESIGN NOTE 437: THE GATE IS THE ACTOR'S, NOT EVERYONE'S
+       *  DESIGN NOTE 469: LOOKING IS NEVER GATED
        * ==================================================================
        *
-       * REPORTED: non-active players cannot select hexes to view the tile
-       * selector during an Operating Round.
+       * REPORTED: spectators are restricted to clicking only the active
+       * player's valid hexes; any hex should open the tile selector for
+       * planning, while execution stays blocked.
        *
-       * This gate was `if (layFocus && ...)`, so it applied to anyone
-       * looking at a board that had a focus set -- and during the Track
-       * step every viewer gets one, built from the ACTING corporation's
-       * reach. A player waiting their turn could therefore only click the
-       * hexes the current corporation could build on, which is the least
-       * useful subset for someone planning their own turn.
+       * THE GATE THAT STOOD HERE IS GONE. Design note #257 silenced clicks
+       * on veiled hexes, and #437 narrowed that silence to the acting player
+       * (`layFocus?.dim`). Both were answering "how do we refuse this click
+       * without a popup" -- and the honest answer is that opening a PICKER
+       * is not a click that needs refusing. It shows candidate tiles. It
+       * commits nothing.
        *
-       * `dim` is the right condition and not merely a convenient one. It is
-       * documented above as being set from `isMyTurn` precisely because
-       * "only the shell knows who is watching" -- it already means "this
-       * viewer is the one who may act on this set". The refusal and the
-       * veil are two expressions of that single fact, so they read one
-       * flag: a second boolean saying the same thing is a thing that can
-       * disagree with it, and a board that dims for one player while
-       * refusing another's clicks is exactly that disagreement.
+       * So every viewer, on every hex, during an Operating Round, can open
+       * it. A player planning next turn can read what a hex will accept; a
+       * spectator can follow what the options were; the acting player can
+       * look past their own reach without the board going quiet on them.
        *
-       * For a non-acting viewer there is now no veil and no refusal -- the
-       * glow still marks the acting corporation's legal set, which is
-       * information worth having while watching, and clicks fall through to
-       * open the picker anywhere. Whether they may LAY is a separate
-       * question the ring's confirm button answers (`canLayTileNow`). */
-      if (layFocus?.dim && !layFocus.highlighted.has(`${q},${r}`)) {
-        clickQuerySeqRef.current += 1;
-        return;
-      }
+       * EXECUTION IS UNTOUCHED AND WAS NEVER HERE. `canLayTileNow` gates the
+       * ring's confirm button and refuses a spectator, the wrong sub-phase,
+       * the wrong turn and an out-of-reach hex -- with the reason ON the
+       * disabled button (`tileLayDisabledReason`). That is strictly better
+       * feedback than the silence this replaces: a player who clicks a hex
+       * they cannot build on now learns why, instead of wondering whether
+       * the click registered.
+       *
+       * THE VEIL STILL DOES ITS JOB. Dimming and the glow continue to mark
+       * the acting corporation's legal set, so "where may I build" is still
+       * answered at a glance. What is no longer true is that the board
+       * refuses to talk about anywhere else. */
 
       /* ---- Gates 2 and 3 -- design note #141 ---------------------------
        *
@@ -3524,10 +3717,14 @@ export function HexGridRenderer({
         });
     },
     [
-      // Design note #223: a stale set here would gate clicks against the
-      // PREVIOUS corporation's reach -- refusing hexes the current one may
-      // build on, and accepting ones it may not.
-      layFocus,
+      /* `layFocus` DROPPED by design note #469. Design note #223 listed it
+         because this handler gated clicks against the corporation's reach:
+         "a stale set here would gate clicks against the PREVIOUS
+         corporation's reach". There is no gate any more -- opening a picker
+         commits nothing, so it is not refused -- and the veil that still
+         reads `layFocus` lives in `draw`, which has its own dependency on
+         it. Keeping it here would re-create this callback on every reach
+         change for no behaviour that reads it. */
       view.panX,
       view.panY,
       view.zoom,
@@ -3725,9 +3922,13 @@ export function HexGridRenderer({
           // `, crosshair` is the fallback, not decoration: a browser that
           // rejects the URI keeps the old behaviour instead of silently
           // reverting to an arrow that says nothing.
+          // Design note #496: `stationCursor` is the acting corporation's
+          // herald on its own livery, or the generic disc when no
+          // corporation was supplied. The hotspot and the `crosshair`
+          // fallback are unchanged from design note #183.
           cursor:
             cursorMode === "token"
-              ? `url("${STATION_TOKEN_CURSOR}") 16 16, crosshair`
+              ? `url("${stationCursor}") 16 16, crosshair`
               : detailedView
                 ? "grab"
                 : "default",
@@ -3850,6 +4051,47 @@ export interface TilePreviewThumbnailProps {
    * and the bug was a caller being asked to know it. */
   hexSize?: number;
   className?: string;
+  /* ==================================================================
+   *  DESIGN NOTE 488: SHOW THE PIECES, NOT JUST A SENTENCE ABOUT THEM
+   * ==================================================================
+   *
+   * REPORTED: upgrading a multi-city tile gives no way to tell which city
+   * node the player's station ends up on.
+   *
+   * Design note #271b in `RadialTileSelector` answered this in WORDS -- the
+   * `tokenNote` caption, "PRR to city 2 of 2". That was the right first
+   * move and it is not enough on an OO upgrade, because the question is
+   * spatial: which of the two circles I am looking at. A caption asks the
+   * player to hold "city 2" in their head, work out which circle the
+   * catalog calls city 2, and check it against artwork they have not seen
+   * yet. The marker just shows them.
+   *
+   * DRAWN FROM `tileCityAnchors`, which is what the BOARD draws laid tokens
+   * against (`stationMarkerPoint`'s own laid-tile branch). That is the
+   * whole point of using it rather than a preview-only approximation: the
+   * circle the player sees here is computed by the same function that will
+   * place the real token, so the preview cannot promise a node the board
+   * then disagrees with. `utils/tokenMigration.ts` design note #1 already
+   * anticipated this ("it is what `tileCityAnchors` already draws against
+   * -- so the preview shows the marker the token will actually occupy
+   * rather than a promise about one"); this is that sentence's caller.
+   *
+   * EMPTY OR OMITTED ON EVERY ORDINARY HEX, which is most of them. A tile
+   * with nothing standing on it draws exactly what it drew before. */
+  stationMarkers?: readonly StationPreviewMarker[];
+}
+
+/** One station token to draw onto a previewed tile -- design note #488.
+ *
+ *  `cityIndex` is the destination city on the CANDIDATE tile, not the
+ *  current one. Resolving it is `utils/tokenMigration.ts`' job and
+ *  deliberately not this component's: the caption and the marker have to
+ *  come from one computation or they can disagree, which is the precise
+ *  failure TD-1 catalogued for the corporation palette. */
+export interface StationPreviewMarker {
+  cityIndex: number;
+  ticker: string;
+  color: string;
 }
 
 /** A small, self-contained canvas that renders exactly one catalog tile in
@@ -3867,6 +4109,18 @@ export interface TilePreviewThumbnailProps {
  *  the thing it is about to place. The outer dark ring keeps it visible on
  *  the light tile colours (`#FDE900` especially) as well as on the dark
  *  board chrome, which a plain white disc would not manage. */
+/** Design note #488: the token radius at which a corporate ticker is still
+ *  worth drawing. Below it the marker renders as a plain liveried disc.
+ *
+ *  9px is `drawStationTokenMarker`'s own font floor (design note #46), and
+ *  a two-to-three character bold ticker needs roughly its own height again
+ *  in radius to sit inside the disc rather than across its edge -- so the
+ *  threshold is that floor, not a tuned constant. It is compared against the
+ *  MEASURED docking radius rather than against `size`, which is the property
+ *  TD-2 called for: it stays correct as the thumbnail is resized, and design
+ *  note #471 has already resized it once (38 -> 54). */
+const TICKER_LEGIBLE_RADIUS = 9;
+
 const STATION_TOKEN_CURSOR =
   "data:image/svg+xml;utf8," +
   encodeURIComponent(
@@ -3877,6 +4131,152 @@ const STATION_TOKEN_CURSOR =
       "</svg>",
   );
 
+/* ==================================================================
+ *  DESIGN NOTE 496: THE CURSOR IS THE PIECE IN YOUR HAND
+ * ==================================================================
+ *
+ * REPORTED: the "Place Station" action uses a generic cursor icon. Render
+ * the active corporation's herald instead, to reinforce whose token is
+ * being placed.
+ *
+ * `STATION_TOKEN_CURSOR` above is that generic icon -- a white disc with a
+ * dark rim and crosshair ticks, identical for all eight corporations. It was
+ * right about the GESTURE (design note #183 matched it to
+ * `drawStationTokenMarker`, so the pointer looks like the thing it places)
+ * and said nothing about WHOSE gesture it is. On a board where the token
+ * about to land is liveried and lettered, the pointer that places it was the
+ * one unliveried thing in the interaction.
+ *
+ * A COMPOSED PNG, not the `.webp` referenced directly. Three reasons, and
+ * the first is the one that decides it:
+ *
+ *   `cursor: url(...)` HAS NO ERROR PATH. An `<img>` gets `onError` and
+ *   falls back to the ticker -- which is exactly what `CorporateLogo` does
+ *   and why a missing herald degrades gracefully everywhere else. A CSS
+ *   cursor that fails to decode falls through to the keyword after the
+ *   comma, so a broken herald would silently become `crosshair` and the
+ *   feature would look unbuilt rather than broken. That is the precise
+ *   failure mode `CorporateLogo`'s own header warns about at length.
+ *
+ *   WEBP-AS-CURSOR IS NOT UNIFORMLY SUPPORTED. The heralds are WebP wearing
+ *   a corrected extension (see that file). PNG is the format every engine
+ *   accepts in a cursor.
+ *
+ *   THE HERALD ALONE IS NOT A TOKEN. It is artwork on a transparent field;
+ *   a station token is a liveried disc with a rim. Compositing lets the
+ *   cursor be the PIECE -- ring in the corporation's colour, herald inside
+ *   it -- rather than a floating logo.
+ *
+ * SO: draw into a 32px canvas, `toDataURL("image/png")`, and hand that to
+ * CSS. The image load is asynchronous, so this is state rather than a
+ * derivation, and the FALLBACK IS RENDERED FIRST -- a liveried disc with the
+ * ticker, using the same `bestContrastTextColor` the real token does. The
+ * cursor is therefore correct and corporation-specific from the first frame
+ * and merely gets sharper when the herald arrives, instead of flickering
+ * from generic to branded.
+ *
+ * 32px because browsers cap cursors (Chrome refuses past 128) and 32 is the
+ * size every engine honours without scaling. The hotspot stays `16 16`:
+ * design note #183's point that a token is placed AT a point rather than
+ * pointed at from a corner is unchanged. */
+const CURSOR_PX = 32;
+
+function drawCursorDisc(
+  ctx: CanvasRenderingContext2D,
+  liveryColor: string,
+  ticker: string,
+  withText: boolean,
+): void {
+  const c = CURSOR_PX / 2;
+  ctx.clearRect(0, 0, CURSOR_PX, CURSOR_PX);
+  ctx.beginPath();
+  ctx.arc(c, c, c - 3, 0, Math.PI * 2);
+  ctx.fillStyle = liveryColor;
+  ctx.fill();
+  // A dark rim, the same charcoal `drawStationTokenMarker` uses, so the disc
+  // reads as a piece against both the pale tile fills and the dark chrome.
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  if (!withText || !ticker) return;
+  ctx.font = fitFontSize(ctx, ticker, 11, (c - 4) * 1.7, 7, "bold");
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = bestContrastTextColor(liveryColor);
+  ctx.fillText(ticker, c, c);
+}
+
+/** The station-placement cursor for one corporation: its herald on its own
+ *  livery, as a PNG data URI. Falls back to the liveried ticker disc while
+ *  the image loads and permanently if it fails -- design note #496. */
+function useStationCursor(ticker: string | null, liveryColor: string | null): string {
+  const [cursor, setCursor] = useState<string>(STATION_TOKEN_CURSOR);
+
+  useEffect(() => {
+    if (!ticker || !liveryColor) {
+      setCursor(STATION_TOKEN_CURSOR);
+      return undefined;
+    }
+    if (typeof document === "undefined") return undefined;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = CURSOR_PX;
+    canvas.height = CURSOR_PX;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setCursor(STATION_TOKEN_CURSOR);
+      return undefined;
+    }
+
+    // The fallback, painted immediately: correct, liveried, and already
+    // better than the generic icon before any network work begins.
+    drawCursorDisc(ctx, liveryColor, ticker, true);
+    let live = true;
+    try {
+      setCursor(canvas.toDataURL("image/png"));
+    } catch {
+      /* `toDataURL` throws on a tainted canvas. Nothing here is
+         cross-origin, but a thrown cursor should not take the board down --
+         the generic icon is a complete answer. */
+      setCursor(STATION_TOKEN_CURSOR);
+      return undefined;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      if (!live) return;
+      try {
+        // Redraw the disc WITHOUT the ticker, then the herald over it: the
+        // text was the stand-in for the artwork, not a label beside it.
+        drawCursorDisc(ctx, liveryColor, ticker, false);
+        const inset = 6;
+        const box = CURSOR_PX - inset * 2;
+        // Fitted to the shorter side so a wide herald is not squashed --
+        // `CorporateLogo`'s design note #429 makes the same call for the
+        // circular market tokens, and for the same reason: a distorted
+        // herald reads as a rendering fault.
+        const scale = Math.min(box / image.width, box / image.height);
+        const w = image.width * scale;
+        const h = image.height * scale;
+        ctx.drawImage(image, (CURSOR_PX - w) / 2, (CURSOR_PX - h) / 2, w, h);
+        setCursor(canvas.toDataURL("image/png"));
+      } catch {
+        /* Leave the ticker disc already set. */
+      }
+    };
+    // No `onerror` handler is needed beyond ignoring it: the ticker disc is
+    // already the current cursor, which is exactly the degradation
+    // `CorporateLogo` performs for a missing herald.
+    image.src = logoSrcFor(ticker);
+
+    return () => {
+      live = false;
+    };
+  }, [ticker, liveryColor]);
+
+  return cursor;
+}
+
 export function TilePreviewThumbnail({
   tileId,
   orientation = 0,
@@ -3884,6 +4284,7 @@ export function TilePreviewThumbnail({
   // Design note #368: derived from `size`, never a bare constant.
   hexSize = (size - 2) / 2,
   className,
+  stationMarkers,
 }: TilePreviewThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -3935,8 +4336,47 @@ export function TilePreviewThumbnail({
       });
     }
 
+    /* Design note #488: the tokens already standing on the hex, drawn where
+       this candidate would put them. AFTER the artwork and outside the clip
+       for the same reason the board draws its own token pass last -- a token
+       is a piece sitting on the cardboard, not part of it.
+
+       `tileCityAnchors` returns city nodes in `city_index` order, so the
+       index carried by the marker indexes it directly. An out-of-range index
+       draws nothing rather than falling back to node 0: a token silently
+       shown on the wrong circle is worse than one not shown, since the whole
+       point of this pass is to be believed. */
+    if (stationMarkers && stationMarkers.length > 0) {
+      const anchors = tileCityAnchors(tileId, orientation, center, hexSize);
+      // Docked radius, so the marker sits inside the city circle the artwork
+      // actually drew rather than at the legacy preprinted size. Same helper,
+      // and therefore the same number, the board docks against.
+      const dockRadius = tileCityTokenRadius(tileId, hexSize);
+      for (const marker of stationMarkers) {
+        const point = anchors[marker.cityIndex];
+        if (!point) continue;
+        /* THE TICKER IS GATED ON MEASURED SIZE, following the judgement
+           TD-2 recorded for the market chart's occupant tokens and the map's
+           18px station tokens: below a threshold the acronym stops being
+           text and becomes a smudge, and a smudge reads as a rendering
+           fault where a plain disc reads as a decision.
+
+           `drawStationTokenMarker` floors its font at 9px (design note #46)
+           and does not shrink past it, so on a 54px candidate thumbnail --
+           token radius around 5px -- a three-letter ticker would spill well
+           outside its own disc. Passing an empty ticker takes that
+           function's own existing early return after the fill and ring, so
+           this is the same primitive at both sizes rather than a second
+           marker renderer. Position and colour still answer the question
+           this pass exists for: WHICH circle. */
+        const radius = dockRadius ?? hexSize * 0.22;
+        const ticker = radius >= TICKER_LEGIBLE_RADIUS ? marker.ticker : "";
+        drawStationTokenMarker(ctx, point, hexSize, ticker, marker.color, false, radius);
+      }
+    }
+
     ctx.restore();
-  }, [tileId, orientation, size, hexSize]);
+  }, [tileId, orientation, size, hexSize, stationMarkers]);
 
   /* Design note #368: the element's own bounds are the hexagon too, not
      just the artwork inside it. The canvas is transparent outside the hex

@@ -20,10 +20,14 @@
 // the contract applies its documented fallback -- which is a different and
 // better outcome than sending a confident wrong index.
 
-import { cityIndexAtPoint } from "./stationTokens";
+import { cityIndexAtPoint, cityNodePoints } from "./stationTokens";
 import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
-import { axialToPixel } from "../components/hexGeometry";
+import { axialToPixel, twoNodePositions } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
+
+/** The board's own OO set, read rather than retyped. */
+const OO_HEX_LABELS = Array.from(YELLOW_OO_HEXES);
 
 const HEX_SIZE = 40;
 const Q = 3;
@@ -35,8 +39,6 @@ function gridWith(tileId: number, orientation = 0): MapGridResponse {
     tiles: [{ q: Q, r: R, tile_id: tileId, orientation }],
   } as unknown as MapGridResponse;
 }
-
-const emptyGrid = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
 
 /** The centroid of a city's own slot points -- the position the hit-test
  *  measures against, derived here the same way so a test does not hardcode
@@ -63,10 +65,12 @@ const MULTI_CITY_TILES = [8, 14, 15, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 53,
   .filter((id) => tileCitySlotCounts(id).length > 1);
 
 describe("cityIndexAtPoint", () => {
-  it("returns null on an untiled hex", () => {
-    // A preprinted double city has no per-city geometry to measure. Guessing
-    // would send a confident wrong index; null omits the field.
-    expect(cityIndexAtPoint(emptyGrid, Q, R, 0, 0, HEX_SIZE)).toBeNull();
+  it("returns null on an untiled hex with no printed cities", () => {
+    // An ordinary blank hex genuinely has nothing to measure. Guessing would
+    // send a confident wrong index; null omits the field.
+    const blank = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+    // (0,0) in this board's table is not a city hex.
+    expect(cityIndexAtPoint(blank, 0, 0, 0, 0, HEX_SIZE)).toBeNull();
   });
 
   it("returns null for a tile the catalog does not know", () => {
@@ -135,5 +139,96 @@ describe("multi-city tiles -- the case the bug was about", () => {
         expect(answer).toBeLessThan(count);
       }
     }
+  });
+});
+
+
+/* ==================================================================
+ *  DESIGN NOTE 459 (harness): THE PREPRINTED OO HEXES
+ * ==================================================================
+ *
+ * The reported bug -- clicking the Erie's upper-right city places on the
+ * lower-left one -- was NOT in the multi-city maths above. It was a missing
+ * branch: `cityIndexAtPoint` bailed to `null` for any hex with no LAID
+ * tile, and E11 is a PREPRINTED OO hex that arrives with two station
+ * circles already on it and no tile.
+ *
+ * `null` then meant "omit `city_index`", the contract applied its
+ * lowest-free-city fallback, and every click on either circle resolved to
+ * city 0. So these tests use the real board hexes rather than a fixture: if
+ * E11 ever stops being an OO hex, or the board moves it, this should fail.
+ */
+describe("preprinted OO hexes -- the Erie's home", () => {
+  const untiled = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+
+  /** The four hexes 1830 prints with two station circles and no tile. */
+  const OO_HEXES: Array<[string, number, number]> = OO_HEX_LABELS.map((label) => {
+    const hex = STATIC_BOARD_HEXES.find((h) => h.label === label);
+    return [label, hex?.q ?? NaN, hex?.r ?? NaN] as [string, number, number];
+  });
+
+  it("knows where the four OO hexes are", () => {
+    for (const [label, q, r] of OO_HEXES) {
+      expect(`${label}:${Number.isFinite(q)}`).toBe(`${label}:true`);
+      expect(Number.isFinite(r)).toBe(true);
+    }
+  });
+
+  it.each(OO_HEXES)("%s resolves the north-east circle to city 0", (_label, q, r) => {
+    const [ne] = twoNodePositions(axialToPixel(q, r, HEX_SIZE), HEX_SIZE);
+    expect(cityIndexAtPoint(untiled, q, r, ne.x, ne.y, HEX_SIZE)).toBe(0);
+  });
+
+  it.each(OO_HEXES)("%s resolves the south-west circle to city 1", (_label, q, r) => {
+    // THE REPORTED BUG. This returned `null` -> omitted -> city 0.
+    const [, sw] = twoNodePositions(axialToPixel(q, r, HEX_SIZE), HEX_SIZE);
+    expect(cityIndexAtPoint(untiled, q, r, sw.x, sw.y, HEX_SIZE)).toBe(1);
+  });
+
+  it("E11 -- the Erie's home -- distinguishes its two circles", () => {
+    const erie = STATIC_BOARD_HEXES.find((h) => h.label === "E11");
+    expect(erie).toBeDefined();
+    const nodes = twoNodePositions(axialToPixel(erie!.q, erie!.r, HEX_SIZE), HEX_SIZE);
+    const answers = nodes.map((n) =>
+      cityIndexAtPoint(untiled, erie!.q, erie!.r, n.x, n.y, HEX_SIZE),
+    );
+    // Not both 0 -- which is exactly what the bug produced.
+    expect(answers).toEqual([0, 1]);
+  });
+});
+
+describe("cityNodePoints", () => {
+  it("marks both circles on a preprinted OO hex", () => {
+    const untiled = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+    const erie = STATIC_BOARD_HEXES.find((h) => h.label === "E11")!;
+    expect(cityNodePoints(untiled, erie.q, erie.r, HEX_SIZE)).toHaveLength(2);
+  });
+
+  it("agrees with the hit-test about where every node is", () => {
+    /* The property that makes the glow a promise: a marker cannot pulse
+       anywhere a click would resolve elsewhere. */
+    const untiled = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+    for (const label of OO_HEX_LABELS) {
+      const hex = STATIC_BOARD_HEXES.find((h) => h.label === label)!;
+      const nodes = cityNodePoints(untiled, hex.q, hex.r, HEX_SIZE);
+      nodes.forEach((node, index) => {
+        expect(cityIndexAtPoint(untiled, hex.q, hex.r, node.x, node.y, HEX_SIZE)).toBe(index);
+      });
+    }
+  });
+
+  it("agrees on laid multi-city tiles too", () => {
+    for (const tileId of MULTI_CITY_TILES) {
+      const grid = gridWith(tileId);
+      const nodes = cityNodePoints(grid, Q, R, HEX_SIZE);
+      nodes.forEach((node, index) => {
+        expect(cityIndexAtPoint(grid, Q, R, node.x, node.y, HEX_SIZE)).toBe(index);
+      });
+    }
+  });
+
+  it("draws nothing on a hex with no cities", () => {
+    const blank = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
+    expect(cityNodePoints(blank, 0, 0, HEX_SIZE)).toEqual([]);
   });
 });

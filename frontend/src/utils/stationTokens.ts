@@ -60,7 +60,11 @@
 // whether it is this corporation's turn -- those are elsewhere in the UI or
 // on chain, and duplicating them here would be a second opinion.
 
-import { archetypeForHex, axialToPixel } from "../components/hexGeometry";
+import {
+  archetypeForHex,
+  axialToPixel,
+  twoNodePositions,
+} from "../components/hexGeometry";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
@@ -411,14 +415,49 @@ export function cityIndexAtPoint(
   pointY: number,
   hexSize: number,
 ): number | null {
+  const center = axialToPixel(q, r, hexSize);
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
-  if (!laid) return null;
+
+  /* ==================================================================
+   *  DESIGN NOTE 459: A PREPRINTED OO HEX IS STILL TWO CITIES
+   * ==================================================================
+   *
+   * REPORTED: clicking the upper-right city on the Erie's home tile places
+   * the token on the lower-left one.
+   *
+   * This function bailed to `null` for any hex with no LAID tile, on the
+   * reasoning that an untiled hex has no per-city geometry to measure. That
+   * is true of an ordinary blank hex and false of the four preprinted OO
+   * hexes -- E5, D10, E11 and H18 -- which arrive with two station circles
+   * already printed on them. E11 is the Erie's home, so the one hex a new
+   * president is guaranteed to click was in the gap.
+   *
+   * The consequence was silent and looked like a targeting bug rather than
+   * a missing branch: `null` means "I cannot tell", the caller correctly
+   * omits `city_index`, and the contract applies its documented fallback of
+   * the lowest-indexed free city -- which is 0. So every click on either
+   * circle resolved to city 0, and `stationMarkerPoint`'s own OO branch
+   * then drew that token at the BOTTOM-LEFT circle. Two independently
+   * reasonable defaults compounding into "the upper-right node does not
+   * work".
+   *
+   * `twoNodePositions` is the tuple the board actually draws those two
+   * circles from (`drawOOCityMarkers` reads the same one), so hit-testing
+   * against it cannot disagree with what the player sees. Index 0 is the
+   * north-east circle and index 1 the south-west, which is the order the
+   * geometry module documents and the order the city indices follow. */
+  if (!laid) {
+    if (archetypeForHex(mapGrid, q, r) !== "DoubleCity") return null;
+    const nodes = twoNodePositions(center, hexSize);
+    const d0 = (nodes[0].x - pointX) ** 2 + (nodes[0].y - pointY) ** 2;
+    const d1 = (nodes[1].x - pointX) ** 2 + (nodes[1].y - pointY) ** 2;
+    return d0 <= d1 ? 0 : 1;
+  }
 
   const cityCount = tileCitySlotCounts(laid.tile_id).length;
   if (cityCount === 0) return null;
   if (cityCount === 1) return 0;
 
-  const center = axialToPixel(q, r, hexSize);
   let best: { index: number; distanceSq: number } | null = null;
 
   for (let city = 0; city < cityCount; city += 1) {
@@ -432,4 +471,58 @@ export function cityIndexAtPoint(
   }
 
   return best?.index ?? null;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 463: THE NODES A CLICK CAN LAND ON
+ * ==================================================================
+ *
+ * Every city node on a hex, as points in the hex layer's own coordinate
+ * space, in CITY INDEX ORDER.
+ *
+ * REPORTED: valid city markers do not glow, so the specific node that can
+ * be clicked is not obvious -- NNH's home is the case named, and every
+ * two-city hex has the same problem.
+ *
+ * WHY THIS SHARES `cityIndexAtPoint`'S GEOMETRY, and why that is the whole
+ * point rather than mere tidiness. A glow is a promise about what a click
+ * will do. If the glow were drawn from one source of node positions and the
+ * hit-test resolved against another, the two could disagree -- and the
+ * failure would be the cruellest kind: a marker that pulses invitingly and
+ * then places the token somewhere else. Both now read the same two
+ * branches, in the same order:
+ *
+ *   LAID TILE      `tileCitySlotPoints` per city, centroid per city.
+ *   PREPRINTED OO  `twoNodePositions`, index 0 north-east, 1 south-west.
+ *
+ * `[]` for a hex with no cities, which draws nothing -- correct, and the
+ * same silence the hit-test's `null` produces.
+ */
+export function cityNodePoints(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  hexSize: number,
+): Array<{ x: number; y: number }> {
+  const center = axialToPixel(q, r, hexSize);
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+
+  if (!laid) {
+    const archetype = archetypeForHex(mapGrid, q, r);
+    if (archetype === "DoubleCity") return [...twoNodePositions(center, hexSize)];
+    if (archetype === "SingleCity") return [center];
+    return [];
+  }
+
+  const cityCount = tileCitySlotCounts(laid.tile_id).length;
+  const out: Array<{ x: number; y: number }> = [];
+  for (let city = 0; city < cityCount; city += 1) {
+    const points = tileCitySlotPoints(laid.tile_id, city, laid.orientation, center, hexSize);
+    if (points.length === 0) continue;
+    out.push({
+      x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+      y: points.reduce((sum, p) => sum + p.y, 0) / points.length,
+    });
+  }
+  return out;
 }

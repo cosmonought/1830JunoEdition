@@ -39,12 +39,20 @@ import PrivatePowerPanel, {
   type PrivateAbility,
   type PrivateAbilityAction,
 } from "../components/PrivatePowerPanel";
-import { RoutePlannerPanel, RouteModeToggle } from "../components/RoutePlannerPanel";
-import type { RouteBuildMode, TrainRouteDraft } from "../components/RoutePlannerPanel";
+import { RoutePlannerPanel, AutoRouteButton } from "../components/RoutePlannerPanel";
+import type { TrainRouteDraft } from "../components/RoutePlannerPanel";
 import StationTokenRow from "../components/StationTokenRow";
 import {
-  OperatingSubPhaseStepper,
+  /* Design note #481: `OperatingSubPhaseStepper` itself is no longer
+     imported. The strip it renders became an inline phrase here; the
+     component is left in place rather than deleted because it is a correct,
+     self-contained rendering of the turn sequence and the rules reference is
+     the natural home for one. `visibleSubPhases` is what this file needs
+     from it now -- the same era/privates filtering the strip did, so the
+     count beside the title is "2 of 5" in the Yellow era and "2 of 6" from
+     Phase 3, rather than a fixed six. */
   OPERATING_SUB_PHASE_LABELS,
+  visibleSubPhases,
   type OperatingSubPhase,
 } from "../components/OperatingSubPhaseStepper";
 import {
@@ -75,6 +83,11 @@ import {
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
+import { shouldCondenseSticky, stickyTopOffset } from "../utils/stickyCollapse";
+import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
+// Design note #494: the per-train route ink, so the collapsed chips match
+// the lines on the map.
+import { routeTrainColor } from "../styles/routeLivery";
 import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
 
 /* ------------------------------------------------------------------ */
@@ -149,6 +162,10 @@ function MarketMoveLine({
    *  DESIGN NOTE 214: THE ARROW CARRIES THE MEANING
    * ================================================================
    *
+   * (Superseded in its GLYPH choice by design note #489 below; the colour
+   * argument it makes is unchanged and still the reason the arrow is tinted
+   * at all.)
+   *
    * The arrows were a vertical pair -- U+2B06 UP and U+2B07 DOWN -- in the
    * same neutral grey as the surrounding text. Two problems, and the second
    * is the one that mattered.
@@ -172,9 +189,40 @@ function MarketMoveLine({
    * arrow is the only glyph the direction colours, and it is deliberately
    * heavier than the text around it so it wins the glance without needing
    * the prices to shout.
-   */
-  const rising = direction === "pay";
-  const arrow = rising ? "↗" : "↘";
+   *
+   * ================================================================
+   *  DESIGN NOTE 489: THE MONEY MOVED, NOT THE CARDBOARD
+   * ================================================================
+   *
+   * REPORTED: the diagonal arrows are confusing. Use a plain
+   * `[old] -> [new]`, green for an increase and red for a decrease,
+   * ignoring the physical grid direction.
+   *
+   * #214 chose diagonals to describe the token's TRAVEL on the chart, and
+   * that is the thing this line was never actually about. A player reading
+   * a payout panel is deciding between two amounts of money. The chart's
+   * geometry -- rightward along a row, leftward on a withhold -- is how the
+   * board implements that consequence, not the consequence itself, and
+   * spending a glyph on it made the reader translate a direction into a
+   * value every time.
+   *
+   * SO THE ARROW IS STRAIGHT (U+2794) and says only "becomes". The
+   * comparison it used to carry moves into the colour, where it is read
+   * without being decoded.
+   *
+   * AND THE COLOUR IS COMPUTED FROM THE PRICES, which is the part that
+   * fixes a real bug rather than restyling one. `rising` was
+   * `direction === "pay"` -- an assumption that paying out always raises
+   * the price. It does not at the RIGHT-HAND END OF A ROW, where the token
+   * cannot advance: `projection.moves` is false, `projection.price` equals
+   * `currentPrice`, and the old line rendered a confident green up-arrow
+   * between two identical numbers. Same in mirror image for a withhold at
+   * the left edge. Comparing the two numbers cannot produce that, because
+   * the numbers are what the player is being asked about.
+   *
+   * FLAT IS ITS OWN CASE, neither green nor red. A ceiling is not a gain,
+   * and colouring it as one is the misreport this note exists to remove. */
+  const movement = marketMoveDirection(currentPrice, projection?.price);
 
   // No chart position at all -- an unfloated corporation, or a price the
   // grid has no cell for. Saying so beats printing an arrow between two
@@ -193,23 +241,33 @@ function MarketMoveLine({
       <span
         style={{
           ...styles.dividendMoveArrow,
-          ...(rising ? styles.dividendMoveArrowUp : styles.dividendMoveArrowDown),
+          ...(movement === "rise" ? styles.dividendMoveArrowUp : {}),
+          ...(movement === "fall" ? styles.dividendMoveArrowDown : {}),
+          ...(movement === "flat" ? styles.dividendMoveArrowFlat : {}),
         }}
         // The arrow is decoration for a sighted reader and the whole
-        // direction for everyone else, so it is labelled rather than hidden.
+        // comparison for everyone else, so it is labelled rather than
+        // hidden. Design note #489: the label states the OUTCOME, matching
+        // what the colour now encodes.
         role="img"
-        aria-label={rising ? "rises to" : "falls to"}
+        aria-label={
+          movement === "rise" ? "rises to" : movement === "fall" ? "falls to" : "stays at"
+        }
       >
-        {arrow}
+        &#10132;
       </span>{" "}
       <ZonedPrice price={projection.price} />
-      {/* The edge of the chart. The format is unchanged -- both prices and
-          the arrow are still there, and they are simply equal -- with the
-          reason appended, because a line reading "$100 ↗ $100" with no
-          explanation looks like a bug rather than a ceiling. */}
+      {/* The edge of the chart. Both prices and the arrow are still there
+          and simply equal, with the reason appended -- a line reading
+          "$100 ➔ $100" with no explanation looks like a bug rather than a
+          ceiling. Which edge is a fact about the TOKEN's travel, so this is
+          the one place `direction` is still the right thing to read: at a
+          flat move the prices cannot say which end of the row was hit. */}
       {!projection.moves && (
         <span style={styles.dividendMoveNote}>
-          {rising ? " (already at the top of its row)" : " (already at the bottom of its row)"}
+          {direction === "pay"
+            ? " (already at the top of its row)"
+            : " (already at the bottom of its row)"}
         </span>
       )}
     </span>
@@ -238,27 +296,76 @@ function MarketMoveLine({
  * progress indicator that is always visible stops being read. It comes back
  * the moment the bar unsticks.
  */
-function useCondensedOnScroll(threshold = 24): boolean {
+/* ==================================================================
+ *  DESIGN NOTE 480 (cont.): MEASURE THE PANEL, NOT THE PAGE
+ * ==================================================================
+ *
+ * This used to be `window.scrollY > 24` -- see `utils/stickyCollapse.ts`
+ * for why that collapsed the bar while it was still sitting in the middle
+ * of the viewport with nothing to gain by it.
+ *
+ * The hook now hands back a ref as well as the flag, because the question
+ * it answers is about a specific element and cannot be answered without
+ * one. Both of this component's root branches attach it; only one is ever
+ * mounted, so there is no contention.
+ *
+ * THE rAF IS KEPT and matters more than it did. The old body read one
+ * number off `window`; this one calls `getBoundingClientRect`, which forces
+ * layout. Doing that on every pixel of a wheel gesture is the difference
+ * between a cheap scroll handler and a janky one, so the read is coalesced
+ * to at most one per frame.
+ *
+ * `resize` IS LISTENED TO ALONGSIDE `scroll`, because a window resize can
+ * reflow everything above the panel and move its pin line without the
+ * scroll position changing by a pixel. The sticky offset is re-read then
+ * too -- a media query is entitled to change it. */
+function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean] {
+  const ref = React.useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = React.useState(false);
+
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    /* Read on a rAF rather than on every scroll event: this flips one
-       boolean, and re-rendering the action bar on every pixel of a wheel
-       gesture is the classic scroll-listener jank. */
+
     let queued = false;
-    const onScroll = () => {
+    /* Cached because it changes only with layout, not with scrolling, and
+       `getComputedStyle` in a scroll handler is a second forced style
+       recalculation per frame for a value that is almost always "0px". */
+    let stickyTop: number | null = null;
+
+    const measure = () => {
+      const node = ref.current;
+      if (!node) return;
+      if (stickyTop === null) {
+        stickyTop = stickyTopOffset(window.getComputedStyle(node).top);
+      }
+      const distanceToPin = node.getBoundingClientRect().top - stickyTop;
+      setCondensed((was) => shouldCondenseSticky(distanceToPin, was));
+    };
+
+    const schedule = () => {
       if (queued) return;
       queued = true;
       window.requestAnimationFrame(() => {
         queued = false;
-        setCondensed(window.scrollY > threshold);
+        measure();
       });
     };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [threshold]);
-  return condensed;
+
+    const onResize = () => {
+      stickyTop = null;
+      schedule();
+    };
+
+    measure();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  return [ref, condensed];
 }
 
 
@@ -289,6 +396,7 @@ export default function ContextualActionBar({
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
+  onJumpToTrainPurchase,
   dividendRevenue,
   dividendRevenueIsThisTurn,
   dividendPerShare,
@@ -300,8 +408,7 @@ export default function ContextualActionBar({
   selectedHardwareModel,
   onEndOperatingTurn,
   onUndoLastAction,
-  routeBuildMode,
-  onSelectRouteBuildMode,
+  onAutoRoute,
   onSelectRouteTrain,
   highlightedRouteIndex,
   onHighlightRoute,
@@ -420,6 +527,11 @@ export default function ContextualActionBar({
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
+  /** Design note #491: scroll the Buy Trains panels into view. Navigation
+   *  only -- it dispatches nothing and buys nothing. Optional, so a caller
+   *  with no such panel on screen simply omits it and the button does not
+   *  render rather than appearing and scrolling to nowhere. */
+  onJumpToTrainPurchase?: () => void;
   /** Design note #188: the acting corporation's last route revenue, and the
    *  per-10%-share split of it. */
   dividendRevenue: number;
@@ -448,8 +560,8 @@ export default function ContextualActionBar({
   /** Design note #266: which drafting tool built the path on screen. The
    *  old `routeSelectMode` boolean plus a separate Auto Route ACTION became
    *  one two-position mode -- see `RoutePlannerPanel`'s design note #1. */
-  routeBuildMode: RouteBuildMode;
-  onSelectRouteBuildMode: (mode: RouteBuildMode) => void;
+  /** Design note #493: re-run the tracer. An action, not a mode. */
+  onAutoRoute: () => void;
   onSelectRouteTrain: (trainIndex: number) => void;
   /** Design note #373: the shared route cursor, owned by the shell. */
   highlightedRouteIndex: number | null;
@@ -497,7 +609,22 @@ export default function ContextualActionBar({
   const phaseAlert = phaseAlertLevel(phase ?? null);
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
-  const condensed = useCondensedOnScroll();
+  const [actionBarRef, condensed] = useCondensedWhenPinned();
+
+  /* Design note #481: the strip, as three facts instead of six chips.
+     `null` when the cursor sits on a step this era does not show -- the
+     same -1 case `OperatingSubPhaseStepper` guards, and the same answer:
+     say nothing rather than render "0 of 5". */
+  const orSubPhaseProgress = React.useMemo(() => {
+    const steps = visibleSubPhases(currentGlobalEra, privateCompanies);
+    const index = steps.indexOf(orSubPhase);
+    if (index < 0) return null;
+    return {
+      label: OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel,
+      position: index + 1,
+      total: steps.length,
+    };
+  }, [currentGlobalEra, privateCompanies, orSubPhase]);
 
   /* Design note #236: the acting corporation's own colours, resolved once.
    *
@@ -562,6 +689,31 @@ export default function ContextualActionBar({
         : roundType === "OperatingRound"
           ? "The Operating Round"
           : "This round";
+
+  /* ==================================================================
+   *  DESIGN NOTE 485a: ONE REVENUE FIGURE, FOUR SURFACES
+   * ==================================================================
+   *
+   * What this turn's declaration is actually worth. `dividendRevenue` is
+   * the corporation's `last_route_revenue`, which is a PREVIOUS turn's
+   * figure for a corporation that skipped Routes -- design note #278
+   * established that and used it to hide the Pay button, then left the
+   * number itself in circulation.
+   *
+   * Four surfaces quote it: the Pay label, the Pay tooltip, the Withhold
+   * label/tooltip, and the consequence panel's "Pay out $N · $M/share"
+   * heading. Three of them were quoting the stale one, so a corporation
+   * that ran nothing displayed a payout table for a run that did not
+   * happen. Derived once, here, above every reader -- through the same
+   * `dividendDeclaration` App uses for the dispatch (design note #486), so
+   * the number on the button and the number in the message are one
+   * derivation rather than two that agree today. */
+  const declaration = dividendDeclaration({
+    lastRouteRevenue: dividendRevenue,
+    skippedRoutes: !dividendRevenueIsThisTurn,
+  });
+  const declaredRevenue = declaration.revenue;
+  const declaredPerShare = declaration.perShare;
 
   let contextualButtons: ActionBarButton[];
   if (roundType === "OperatingRound") {
@@ -643,7 +795,7 @@ export default function ContextualActionBar({
            -- and it covers the stranded-train case, the trainless case and
            the ran-a-worthless-route case without naming any of them. */
         contextualButtons = [
-          ...(dividendRevenue > 0 && dividendRevenueIsThisTurn
+          ...(declaration.mayPay
             ? [
                 {
                   key: "pay-dividends",
@@ -651,22 +803,22 @@ export default function ContextualActionBar({
                   // decision turns on, and it was the one thing the button did
                   // not say. 1830 splits revenue ten ways -- one share is 10% --
                   // so a $180 route pays $18 a share.
-                  label: `Pay Dividends ($${dividendPerShare} per share)`,
+                  label: `Pay Dividends ($${declaredPerShare} per share)`,
                   onClick: onPayDividends,
-                  title: `Splits $${dividendRevenue} between every shareholder at $${dividendPerShare} per 10% share.`,
+                  title: `Splits $${declaredRevenue} between every shareholder at $${declaredPerShare} per 10% share.`,
                 },
               ]
             : []),
           {
             key: "withhold-revenue",
             label:
-              dividendRevenue > 0
+              declaredRevenue > 0
                 ? "Withhold to Corporate Treasury"
                 : "Withhold $0 — Share Price Steps Left",
             onClick: onWithholdRevenue,
             title:
-              dividendRevenue > 0
-                ? `Keeps all $${dividendRevenue} in the corporation's treasury. Shareholders receive nothing.`
+              declaredRevenue > 0
+                ? `Keeps all $${declaredRevenue} in the corporation's treasury. Shareholders receive nothing.`
                 : "This corporation earned nothing this turn. 1830 has no $0 dividend — the revenue is withheld and the share price moves one step left.",
           },
         ];
@@ -844,10 +996,32 @@ export default function ContextualActionBar({
      sees this, and the two agree by construction now rather than by
      coincidence: both treat "nothing was earned" as a decision to make,
      not a step to step past. */
+  /* ==================================================================
+   *  DESIGN NOTE 485: SKIP IS NEVER A DIVIDEND DECLARATION
+   * ==================================================================
+   *
+   * REPORTED: a corporation landing on Dividends with $0 revenue must not
+   * be offered Skip -- only "Withhold $0".
+   *
+   * `dividendRevenueIsThisTurn` was the third clause, and it is false in
+   * precisely the situation the report is about: a corporation that skipped
+   * Routes (design note #278 sets it that way so a stale
+   * `last_route_revenue` cannot be paid out). So the one corporation
+   * guaranteed to have $0 was the one the Skip button was kept alive for.
+   *
+   * The clause is gone rather than inverted, because there is no state of
+   * an Operating Round in which Skip is the right control here. 1830
+   * requires a declaration every turn: revenue splits or it is withheld,
+   * and $0 withheld is what steps the marker LEFT. `AdvanceOperatingSubPhase`
+   * settles nothing and moves no marker, so offering it on this step offers
+   * a way to omit a mandatory market move -- which design note #436 already
+   * argued for the $0 case without following it to the case where the
+   * revenue figure is not this turn's.
+   *
+   * Skip remains correct on Track, Tokens and Routes, all of which are
+   * genuinely declinable. This is the one step that is not. */
   const dividendChoiceForced =
-    roundType === "OperatingRound" &&
-    orSubPhase === "Dividends" &&
-    dividendRevenueIsThisTurn;
+    roundType === "OperatingRound" && orSubPhase === "Dividends";
 
   /* ==================================================================
    *  DESIGN NOTE 31: ONE BAR, EVERYWHERE
@@ -906,6 +1080,7 @@ export default function ContextualActionBar({
   if (misplacedTab !== null) {
     return (
       <div
+        ref={actionBarRef}
         style={{
           ...styles.actionBar,
           ...(condensed ? styles.actionBarCondensed : {}),
@@ -931,6 +1106,7 @@ export default function ContextualActionBar({
   return (
     <>
     <div
+      ref={actionBarRef}
       style={{
         ...styles.actionBar,
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
@@ -969,6 +1145,31 @@ export default function ContextualActionBar({
               ? "Auction Round"
               : "No live round"}
       </span>
+      {/* Design note #481: the sub-phase, inline. Operating Round only --
+          there is no sub-phase sequence in a Stock Round or the auction,
+          and a step counter next to those titles would be inventing
+          structure the round does not have.
+
+          IT SURVIVES THE COLLAPSE, unlike the strip it replaces. Design
+          note #298 dropped the stepper when pinned on the grounds that it
+          is orientation rather than input, and that a progress indicator
+          which is always on screen stops being read. Neither objection
+          survives the change of form: at three words it costs the board
+          nothing, and it is now the ONLY thing naming the current step in
+          the header, so dropping it when pinned would leave a player who
+          scrolled unable to tell Lay Track from Station Tokens. */}
+      {roundType === "OperatingRound" && orSubPhaseProgress && (
+        <span
+          style={styles.actionBarSubPhaseInline}
+          title={`Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} in this corporation's turn.`}
+        >
+          {orSubPhaseProgress.label}
+          <span style={styles.actionBarSubPhaseCount}>
+            {" "}
+            {orSubPhaseProgress.position}/{orSubPhaseProgress.total}
+          </span>
+        </span>
+      )}
       {/* Operating Round turn stepper. Renders directly under the round
           label it elaborates: the label says WHICH step, the strip says
           where that step sits in the turn. Operating Round only -- there is
@@ -1337,43 +1538,79 @@ export default function ContextualActionBar({
             )}
           </div>
 
-          {!condensed && (
-          <div style={styles.orPanelStepperRow}>
-            {/* Design note #235: UNDO lives on the sub-phase line now. It is
-                the only control that moves the turn cursor BACKWARDS, so it
-                belongs beside the strip that displays that cursor -- the two
-                things that move the same pointer, together. */}
-            <OperatingSubPhaseStepper
-              current={orSubPhase}
-              era={currentGlobalEra}
-              // Design note #385: the strip drops `Buy Private` once every
-              // private is closed or inside a corporation, so the step is
-              // not there to be skipped.
-              privates={privateCompanies}
-              trailing={
-                <button
-                  type="button"
-                  style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
-                  onClick={onUndoLastAction}
-                  disabled={!sessionReady}
-                  title="Step the turn back. Always available, independent of round type."
-                >
-                  Undo
-                </button>
-              }
-            />
-          </div>
-          )}
+          {/* ==============================================================
+               DESIGN NOTE 481: THE STEPPER ROW WAS A ROW FOR ONE WORD
+              ==============================================================
 
+               REPORTED: two Undo buttons when expanded, and the sub-phase
+               takes an entire unnecessary row.
+
+               Both were the same row. It held the six-chip progress strip
+               and, in its `trailing` slot, a second Undo -- design note
+               #235's reasoning, which was sound when it was written and
+               stopped being true underneath it. #235 put Undo beside the
+               cursor it moves; design note #451 then put Undo in the action
+               row's right rail, WITH the sub-phase name next to it, for
+               the same reason. Two notes, one argument, two buttons. #451's
+               placement wins because it sits with the other turn controls,
+               which is where a player looks for it.
+
+               THE STRIP IS NOW A PHRASE. It rendered five or six chips,
+               chevrons and step numbers across the full width of the panel
+               to say "you are on step 2 of 5, called Lay Track" -- which is
+               a sentence, and now reads as one, inline beside the round
+               title. The three facts the strip carried are all still there:
+               the step's name, its position, and how many there are. What
+               is gone is a horizontal rule and 30-odd pixels of height,
+               permanently, on the panel that sits above the board.
+
+               WHAT IS LOST, honestly: the chips named the steps that come
+               NEXT, so a newcomer could read the whole sequence off the
+               bar. `RulesReference.tsx` still lists it, and the strip
+               component is kept intact rather than deleted so that view can
+               use it -- see this file's import, which is now the only thing
+               that changed about it. */}
           <div style={styles.orPanelActionRow}>
             {/* LEFT RAIL -- docked status. Fixed home, so the phase badge and
                 the rust warning sit in the same place all game. */}
             <div style={styles.orPanelRailLeft}>
-              {/* Design note #458: the sticky bar is the one element that
-                  survives scrolling, so the newest instruction rides in it.
-                  Left rail, because the centre column is the action group
-                  (design note #426) and the right holds Undo. */}
-              <StickyTickerLine latestItem={latestFeedItem} onExpand={onOpenActivityLog} />
+              {/* ==============================================================
+                   DESIGN NOTE 482: THE TICKER LEAVES THE PINNED BAR
+                  ==============================================================
+
+                   REPORTED: the activity ticker pushes the action buttons
+                   off-centre in the collapsed bar.
+
+                   It did, and the mechanism is worth recording because the
+                   row was BUILT not to allow it. `orPanelActionRow` is a
+                   `1fr auto 1fr` grid precisely so the centre column is
+                   centred on the panel rather than on the leftovers
+                   (design note #426). But a `1fr` track is
+                   `minmax(auto, 1fr)`: it refuses to shrink below its
+                   content, so a rail holding a long, unconstrained line of
+                   text does not get clipped -- it grows, and takes the
+                   centre column with it. The sibling rail on the
+                   non-Operating-Round bar has carried `minWidth: 0` for
+                   exactly this reason since design note #458; this one
+                   never did.
+
+                   So there are two fixes here and both are wanted. The
+                   rail gets its `minWidth: 0`, which makes the centring
+                   structural rather than dependent on what happens to be
+                   in the rail. And the ticker is gone from the pinned form
+                   outright, which is what was asked for.
+
+                   ON #458's ARGUMENT: it put the line here because the
+                   sticky bar is the one element that survives scrolling --
+                   which is a claim about the PINNED state specifically. It
+                   does not survive the removal, and the copy kept below is
+                   redundant with the full ticker sitting on the same
+                   screen. It is left in the expanded bar because that is
+                   the change that was asked for and no more; the honest
+                   next step is to take it out altogether. */}
+              {!condensed && (
+                <StickyTickerLine latestItem={latestFeedItem} onExpand={onOpenActivityLog} />
+              )}
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
@@ -1474,6 +1711,53 @@ export default function ContextualActionBar({
                   Select a hex on the map to lay or upgrade track. Click the preview to rotate.
                 </span>
               )}
+              {/* ==================================================================
+                   DESIGN NOTE 491: THE COLLAPSED BAR HID THE ONLY STEP THAT
+                   HAPPENS SOMEWHERE ELSE
+                  ==================================================================
+
+                  REPORTED: when the Action panel is collapsed during Buy
+                  Trains, the player sees only "End Turn" and can miss the
+                  purchasing menus below.
+
+                  Buy Trains is the one sub-phase whose controls are not on
+                  this bar at all. Design note #203 moved both halves of the
+                  step -- the depot and the corporation-to-corporation trade
+                  -- out to `TrainPurchasePanel`, correctly, and left the bar
+                  holding "End Turn" and nothing else. Expanded that is fine:
+                  the panel is visible right underneath. PINNED it is not,
+                  because the bar is pinned precisely when the player has
+                  scrolled, and what they have scrolled away from is the
+                  panel. The step then presents as a single button whose
+                  only offer is to end the turn -- which is also the one
+                  action 1830 may forbid here (design note #293).
+
+                  So the collapsed bar gets a way BACK to the step. It is
+                  navigation, not a second purchase control: it dispatches
+                  nothing, and there is still exactly one place a train is
+                  bought. Design note #182's argument against a generic "Buy
+                  Train" button is unaffected -- that objected to a duplicate
+                  ACTION, and this is a scroll.
+
+                  BEFORE END TURN, per the report and because that is the
+                  order the step is done in: buy, then finish. It is also the
+                  safer reading order when End Turn is disabled, since the
+                  button that explains what to do first now precedes the one
+                  refusing to move on.
+
+                  CONDENSED ONLY. Expanded, the panel it scrolls to is
+                  already on screen, and a button that scrolls to something
+                  visible is noise. */}
+              {condensed && orSubPhase === "Hardware" && mayActThisTurn && onJumpToTrainPurchase && (
+                <button
+                  type="button"
+                  style={{ ...styles.actionBarButton, ...styles.actionBarJumpButton }}
+                  onClick={onJumpToTrainPurchase}
+                  title="Scroll down to the Bank Depot and corporation train trade panels."
+                >
+                  &#8595; Buy Trains
+                </button>
+              )}
               {contextualButtons.map((btn) => (
                 <button
                   key={btn.key}
@@ -1506,9 +1790,8 @@ export default function ContextualActionBar({
                   component itself still lives there rather than being
                   rebuilt here. */}
               {showRouteToggle && (
-                <RouteModeToggle
-                  mode={routeBuildMode}
-                  onSelectMode={onSelectRouteBuildMode}
+                <AutoRouteButton
+                  onAutoRoute={onAutoRoute}
                   ownsAnyTrain={ownsAnyTrain}
                   controlsEnabled={sessionReady}
                   noTrainReason={NO_TRAIN_ROUTE_REASON}
@@ -1660,6 +1943,124 @@ export default function ContextualActionBar({
               </button>
             </div>
           </div>
+
+          {/* Design note #490: the payout detail, inside the panel and under
+              the buttons it explains. `orPanel` is a flex COLUMN, so this
+              lands directly below `orPanelActionRow` with no positioning of
+              its own -- which is why the move needed no new layout, only a
+              different parent.
+
+              Design note #188 (kept): the consequence of each option, laid
+              out before the player commits. Two things they could not
+              otherwise see -- WHO gets paid and how much, and WHERE the
+              stock token lands -- both computable from state already on
+              screen, and both previously left for the player to work out. */}
+          {/* ==================================================================
+               DESIGN NOTE 498: THE PINNED BAR DROPPED THE ONE STEP THAT IS
+               ABOUT THE TRAINS
+              ==================================================================
+
+              REPORTED: during Run Routes the collapsed Action Panel does not
+              give enough context about the active trains.
+
+              It gave none. Design note #298's rule for the pinned form --
+              keep what a player needs WHILE LOOKING AT THE BOARD, drop the
+              rest -- is right, and Run Routes is the step where it misfires.
+              Everything about this step IS the board: which train is being
+              drafted for, what its run is worth, whether the other two have
+              routes at all. `RoutePlannerPanel` carries all of it and scrolls
+              away, so a pinned player drawing a route on the map had no way
+              to see the value of what they were drawing.
+
+              So this row is the exception #298's own reasoning asks for, and
+              it is narrow: condensed only, Routes only, one line.
+
+              THE CHIPS ARE LIVE, not a readout. They call the same
+              `onSelectRouteTrain`/`onHighlightRoute` the planner rows do, so
+              from the collapsed bar a player can still switch which train the
+              map is drafting for and light its route up (design note #495's
+              emphasis). A dead label here would have shown the problem
+              without giving anywhere to act on it. */}
+          {orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
+            <div style={styles.condensedTrainRow} role="group" aria-label="Drafted routes">
+              {trainDrafts.map((draft) => {
+                const isActive = draft.trainIndex === activeTrainIndex;
+                return (
+                  <button
+                    key={draft.trainIndex}
+                    type="button"
+                    aria-pressed={isActive}
+                    onClick={() => onSelectRouteTrain(draft.trainIndex)}
+                    onMouseEnter={() => onHighlightRoute?.(draft.trainIndex)}
+                    onMouseLeave={() => onHighlightRoute?.(null)}
+                    disabled={!sessionReady}
+                    style={{
+                      ...styles.condensedTrainChip,
+                      ...(isActive ? styles.condensedTrainChipActive : {}),
+                      // Design note #494: the route's own ink, so the chip and
+                      // the line on the map are the same colour.
+                      borderBottomColor: routeTrainColor(draft.trainIndex),
+                    }}
+                    title={
+                      draft.value === null
+                        ? `${draft.model}-train has no route drafted yet. Click to draft for it, then click hexes on the map.`
+                        : `${draft.model}-train runs for $${draft.value}. Click to draft for it.`
+                    }
+                  >
+                    {draft.model}-Train
+                    {/* Design note #498: the VALUE, which is the number this
+                        row exists to carry. An em dash rather than "$0" for a
+                        train with no route: zero is a priced run that earns
+                        nothing, and no route is not that. */}
+                    <span style={styles.condensedTrainValue}>
+                      {draft.value === null ? "—" : `$${draft.value}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {orSubPhase === "Dividends" && !condensed && (
+            <div style={styles.dividendPanel}>
+              <div style={styles.dividendColumn}>
+                <span style={styles.dividendHeading}>
+                  Pay out ${declaredRevenue} &middot; ${declaredPerShare}/share
+                </span>
+                {dividendPayouts.length === 0 ? (
+                  <span style={styles.dividendNote}>
+                    No shareholders on record — the whole payout would go to the bank pool.
+                  </span>
+                ) : (
+                  dividendPayouts.map((row) => (
+                    <span key={row.holder} style={styles.dividendRow}>
+                      <span>{row.holder}</span>
+                      <span style={styles.dividendAmount}>
+                        ${row.amount} <span style={styles.dividendPct}>({row.percentage}%)</span>
+                      </span>
+                    </span>
+                  ))
+                )}
+                <MarketMoveLine
+                  currentPrice={dividendPrice}
+                  projection={payProjection}
+                  direction="pay"
+                />
+              </div>
+
+              <div style={styles.dividendColumn}>
+                <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
+                <span style={styles.dividendNote}>
+                  The full amount stays in the corporation's treasury. Shareholders receive
+                  nothing this Operating Round.
+                </span>
+                <MarketMoveLine
+                  currentPrice={dividendPrice}
+                  projection={withholdProjection}
+                  direction="withhold"
+                />
+              </div>
+            </div>
+          )}
         </div>
       ) : (
       <div style={styles.actionBarButtons}>
@@ -1876,52 +2277,34 @@ export default function ContextualActionBar({
           `MOCK_TRAIN_CATALOG`'s own doc comment), so selecting a card here
           only changes which model is highlighted/labeled; the purchase
           itself still targets whichever unit the pool auto-assigns. */}
-      {/* Design note #188: the consequence of each option, laid out before
-          the player commits. Two things they could not otherwise see: WHO
-          gets paid and how much, and WHERE the stock token lands. Both are
-          computable from state already on screen, and both were being left
-          for the player to work out. */}
-      {roundType === "OperatingRound" && orSubPhase === "Dividends" && (
-        <div style={styles.dividendPanel}>
-          <div style={styles.dividendColumn}>
-            <span style={styles.dividendHeading}>
-              Pay out ${dividendRevenue} &middot; ${dividendPerShare}/share
-            </span>
-            {dividendPayouts.length === 0 ? (
-              <span style={styles.dividendNote}>
-                No shareholders on record — the whole payout would go to the bank pool.
-              </span>
-            ) : (
-              dividendPayouts.map((row) => (
-                <span key={row.holder} style={styles.dividendRow}>
-                  <span>{row.holder}</span>
-                  <span style={styles.dividendAmount}>
-                    ${row.amount} <span style={styles.dividendPct}>({row.percentage}%)</span>
-                  </span>
-                </span>
-              ))
-            )}
-            <MarketMoveLine
-              currentPrice={dividendPrice}
-              projection={payProjection}
-              direction="pay"
-            />
-          </div>
+      {/* ===================================================================
+           DESIGN NOTE 490: THE CONSEQUENCE BELONGS TO THE BUTTON
+          ===================================================================
 
-          <div style={styles.dividendColumn}>
-            <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
-            <span style={styles.dividendNote}>
-              The full amount stays in the corporation's treasury. Shareholders receive nothing
-              this Operating Round.
-            </span>
-            <MarketMoveLine
-              currentPrice={dividendPrice}
-              projection={withholdProjection}
-              direction="withhold"
-            />
-          </div>
-        </div>
-      )}
+          REPORTED: the Dividends step opens a separate, redundant panel
+          below the Action panel to show payouts and market moves.
+
+          It did, and the split was structural rather than cosmetic: this
+          block sat OUTSIDE the action bar's own root `<div>`, as a sibling
+          of it, so a bordered card appeared under the bar the moment the
+          sub-phase changed and vanished again when it advanced. The player
+          read the payout in one panel and clicked the button that caused it
+          in another, with a border between the cause and the effect.
+
+          Design note #188's content was right -- WHO gets paid and WHERE
+          the token lands are exactly the two things a player cannot
+          otherwise see -- and it is kept verbatim. Only its address changed:
+          it now renders inside `orPanel`, directly beneath the action row
+          that carries Pay and Withhold, so each column sits under the
+          button it describes.
+
+          NOT RENDERED WHEN CONDENSED. Design note #298's rule for the
+          pinned bar is that it keeps what a player needs WHILE LOOKING AT
+          THE BOARD and drops the rest. A payout table is the opposite of
+          that: it is read while deciding, not while scrolling a map, and a
+          pinned bar carrying two columns of figures would cost the board
+          more height than any other state of this panel. The buttons stay;
+          the reading matter returns the moment the bar unsticks. */}
       {/* ===================================================================
            DESIGN NOTE 203: THE HARDWARE TRAY MOVED OUT OF THE BAR
           ===================================================================

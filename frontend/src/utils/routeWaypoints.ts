@@ -71,3 +71,78 @@ export function axialHexDistance(a: { q: number; r: number }, b: { q: number; r:
   const dr = b.r - a.r;
   return (Math.abs(dq) + Math.abs(dq + dr) + Math.abs(dr)) / 2;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 474: A ROUTE MUST CONTAIN A TOKEN, NOT START AT ONE
+ * ==================================================================
+ *
+ * REPORTED (critical): the Run Routes validator requires a route to begin
+ * at, or contain, the corporation's HOME station token.
+ *
+ * The audit found something slightly different from the report and worse:
+ * the manual validator checked no token at all. `handleRunTrains` filtered
+ * drafts on revenue, train distance and terminus, and nothing else -- so a
+ * player could draw a run across somebody else's network entirely, price
+ * it, and dispatch it for the contract to refuse.
+ *
+ * Where the HOME hex genuinely was load-bearing is the auto-router
+ * (`assignRouteSet`), which starts its search from `station_token_hexes`.
+ * That is correct as a search strategy and would be wrong as a rule, and it
+ * is easy to mistake one for the other -- the two arms it builds through a
+ * token put that token in the MIDDLE of the route, which is exactly what
+ * 1830 requires.
+ *
+ * THE RULE, stated once so both halves agree: a route is legal if at least
+ * one hex on it carries a station token belonging to the running
+ * corporation. Not the first hex. Not the home hex. Any hex, any token.
+ *
+ * WHY "ANY TOKEN" AND NOT "THE HOME TOKEN" MATTERS IN PLAY. A corporation
+ * that has placed a second or third token can run routes nowhere near where
+ * it started -- that is most of what the extra tokens are FOR. Requiring
+ * the home hex would forbid the ordinary mid-game run and get more wrong as
+ * the game went on, which is the shape of bug that looks fine in testing
+ * and breaks a real session.
+ *
+ * COMPARED BY COORDINATE, never by label. `hexLabel` on a `RoutePoint` is a
+ * display name ("New York (G19)") per `boardHexLabel`'s design note #242,
+ * and `station_token_hexes` is `(q, r)` pairs. Matching on the human string
+ * would work until the first hex whose name has a place in it.
+ */
+export function routeIncludesOwnedToken(
+  points: readonly { q: number; r: number }[],
+  tokenHexes: ReadonlyArray<readonly [number, number]>,
+): boolean {
+  if (points.length === 0 || tokenHexes.length === 0) return false;
+  return points.some((point) =>
+    tokenHexes.some(([q, r]) => q === point.q && r === point.r),
+  );
+}
+
+/** Why this route cannot run for want of a token, or `null` when it can.
+ *
+ *  Phrased for the player rather than as a boolean, because the two failing
+ *  cases call for different actions and the difference is not obvious from
+ *  the board:
+ *
+ *    NO TOKENS AT ALL -- the corporation has not placed its home station
+ *    yet, which since design note #416 is a thing the president must do
+ *    deliberately. The route is fine; the corporation is not ready.
+ *
+ *    TOKENS, BUT NOT ON THIS ROUTE -- the run is somewhere the corporation
+ *    does not reach. That is a routing mistake, and the fix is to redraw.
+ *
+ *  A route SHORTER THAN TWO HEXES is not judged here at all: it is not yet
+ *  a route, and design note #256's own message already covers it. */
+export function routeTokenBlockReason(
+  points: readonly { q: number; r: number }[],
+  tokenHexes: ReadonlyArray<readonly [number, number]>,
+): string | null {
+  if (points.length < 2) return null;
+  if (tokenHexes.length === 0) {
+    return "This corporation has no station token on the board yet, so no route can include one. Place its home station first.";
+  }
+  if (!routeIncludesOwnedToken(points, tokenHexes)) {
+    return "A route must pass through a city this corporation has a station token in — anywhere along the run, not just at the ends.";
+  }
+  return null;
+}

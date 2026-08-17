@@ -133,7 +133,6 @@ export function StationTokenRow({
                 // this row is about to spend, so it is marked -- otherwise a
                 // row of identical unplaced circles says nothing about which
                 // price applies now.
-                ...(slot.isNext ? styles.tokenNext : {}),
                 opacity: slot.placed ? 0.55 : 1,
               }}
               aria-hidden="true"
@@ -182,10 +181,27 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     flexShrink: 0,
   },
-  // A second, offset ring rather than a thicker border: thickening would eat
-  // into a 16px circle until the fill -- the brand colour, which is the whole
-  // identity -- stopped being visible.
-  tokenNext: { boxShadow: "0 0 0 2px rgba(255,255,255,0.55)" },
+  /* ==================================================================
+   *  DESIGN NOTE 487a: THE HALO WAS RESTATING THE ORDER
+   * ==================================================================
+   *
+   * REPORTED: subsequent tokens carry a strange ring border that makes them
+   * look non-uniform next to the home token.
+   *
+   * `tokenNext` was `boxShadow: 0 0 0 2px rgba(255,255,255,0.55)` -- a
+   * second, offset white ring on whichever slot was next to be bought. It
+   * did make that slot obvious, and it made it obvious by making one circle
+   * in a row of identical circles look like a different component.
+   *
+   * WHAT IT SAID IS ALREADY SAID BY POSITION. `stationTokenSlots` sets
+   * `isNext: index === placedCount` -- so the next token is, always and by
+   * construction, the leftmost circle that has not greyed out. The halo was
+   * a second rendering of the row's own ordering, and it cost the row its
+   * uniformity to say something the row was already saying.
+   *
+   * `isNext` SURVIVES ON THE DATA and is still what the placement button
+   * reads for its price. Only the ring is gone; nothing downstream loses
+   * the fact. */
   price: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

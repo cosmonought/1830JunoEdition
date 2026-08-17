@@ -102,6 +102,8 @@
 import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
+// Design note #497: the local valuation, for when there is no chain to ask.
+import { estimatePlayerNetWorth } from "../utils/gameState";
 import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
 // Design note #170 (ContextualSubPanel): a name beats a truncated hash, and
@@ -443,10 +445,23 @@ export function PlayerAssetsSection({
   const companies = gameState.public_companies;
   const hasCompanies = companies.length > 0;
 
-  /** Placeholder shared by the two query-backed money columns, so a failed or
-   *  unconfigured net-worth query says WHY it is blank instead of showing a
-   *  bare dash that looks like "this player owns nothing". */
+  /** Placeholder shared by the two money columns when NEITHER the chain nor
+   *  the local estimate can answer, so a blank cell says WHY instead of
+   *  showing a bare dash that looks like "this player owns nothing".
+   *
+   *  Design note #497: "not connected" is now the last resort rather than
+   *  the offline default. It is reached only when there is no query AND no
+   *  market grid to value holdings against -- at which point the cell really
+   *  does have nothing behind it. */
   const pendingLabel = !netWorthsEnabled ? "not connected" : netWorthsLoading ? "loading..." : "--";
+
+  /** Design note #497a: what the `~` means. Every estimated cell carries it,
+   *  so the mark is explained wherever it appears rather than in a footnote
+   *  the reader has to go and find. */
+  const ESTIMATE_TOOLTIP =
+    "Calculated from this board's own holdings and live market prices. " +
+    "The contract's PlayerNetWorth query is the authority when a chain is connected; " +
+    "offline and in sandbox this is the same arithmetic run locally.";
 
   return (
     <section style={{ ...styles.section, ...styles.sectionPlayers }}>
@@ -518,6 +533,13 @@ export function PlayerAssetsSection({
                 // column (design note #6(2)).
                 const cashEntry = gameState.player_cash.find((entry) => entry.player === player);
                 const netWorth = netWorths[player];
+                /* Design note #497: the local valuation, computed only when
+                   the chain has not answered. `null` when a held corporation
+                   has no market price -- an unknown total rather than a
+                   wrong one. */
+                const estimated = netWorth
+                  ? null
+                  : estimatePlayerNetWorth(player, gameState, marketPrices);
                 const privates = playerPrivateCompanies(player, gameState);
                 const certs = certificateBreakdown(
                   player,
@@ -556,10 +578,42 @@ export function PlayerAssetsSection({
                       {formatCertificateCount(certs)}
                     </td>
                     <td style={styles.tdNumB}>{cashEntry ? `$${cashEntry.cash_vgp}` : "--"}</td>
-                    <td style={styles.tdNumB}>
-                      {netWorth ? `$${netWorth.stock_portfolio_value}` : pendingLabel}
+                    {/* ==================================================
+                         DESIGN NOTE 497: THE CHAIN FIRST, THEN THE BOARD
+                        ==================================================
+
+                        Precedence, most authoritative first:
+
+                          1. `netWorth` -- `QueryMsg::PlayerNetWorth`, summed
+                             on-chain. Unchanged, and still preferred
+                             wherever there is a chain to ask.
+                          2. `estimated` -- the same arithmetic over the
+                             holdings and live prices this table already has
+                             in hand. This is what a sandbox now shows
+                             instead of "not connected".
+                          3. `pendingLabel` -- neither is available.
+
+                        THE ESTIMATE IS MARKED, with a `~` and a tooltip. An
+                        unmarked client-side total presented beside a
+                        chain-authoritative one in the same column would be
+                        the "silently substituting" failure design note #4
+                        warned about -- the point of that warning was never
+                        that the number is unobtainable, it was that a guess
+                        must not pass for the contract's answer. */}
+                    <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
+                      {netWorth
+                        ? `$${netWorth.stock_portfolio_value}`
+                        : estimated
+                          ? `~$${Math.round(estimated.stockValue)}`
+                          : pendingLabel}
                     </td>
-                    <td style={styles.tdNumB}>{netWorth ? `$${netWorth.net_worth}` : pendingLabel}</td>
+                    <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
+                      {netWorth
+                        ? `$${netWorth.net_worth}`
+                        : estimated
+                          ? `~$${Math.round(estimated.netWorth)}`
+                          : pendingLabel}
+                    </td>
                     <td style={hasCompanies ? styles.tdB : styles.td}>
                       {/* ==================================================
                            DESIGN NOTE 423: THE SAME PILLS THE AUCTION USES

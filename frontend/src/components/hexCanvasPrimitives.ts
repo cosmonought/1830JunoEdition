@@ -46,6 +46,7 @@
 import {
   COLOR_TIER_STROKE,
   DEFAULT_TRACK_INK,
+  STANDARD_TRACK_INK,
   TILE_TRACK_INK,
   LANDMARK_HEXES,
   STATIC_BOARD_HEXES,
@@ -83,6 +84,7 @@ import {
 } from "./hexTileCatalog";
 import {
   STATION_TOKEN_RING,
+  STATION_TOKEN_RING_WIDTH_RATIO,
   bestContrastTextColor,
   type MapGridResponse,
   type MapTileEntry,
@@ -725,6 +727,13 @@ export function drawTrackPath(
    *  back to the terrain bucket -- the one place that fallback is still
    *  correct, since there is no chain record to disagree with. */
   revenueOverride?: number,
+  /** Design note #486: draw the tile's own "B"/"NY"/"OO" restriction label.
+   *  Same gate, and for the same reason, as `showRevenue` above: the main
+   *  BOARD loop passes `false` because `drawRestrictionBadge` already labels
+   *  the hex, and on the board a restricted tile can only ever sit on the
+   *  hex that carries the matching badge. Default `true` for every isolated
+   *  rendering, which has no hex badge to duplicate. */
+  showRestriction = true,
 ): void {
   // ==== Design note #131: hardcoded artwork wins, unconditionally. ====
   // FIRST statement in the function, ahead of `rotateConnections`/
@@ -739,7 +748,7 @@ export function drawTrackPath(
   const trackInk = TILE_TRACK_INK[entry.color] ?? DEFAULT_TRACK_INK;
 
   if (drawHardcodedTileArtwork(ctx, center, size, entry.tileId, orientation, trackInk)) {
-    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
+    drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride, showRestriction);
     return;
   }
 
@@ -773,7 +782,7 @@ export function drawTrackPath(
    * "B"/"NY"/"OO" restriction label -- because neither is track art, and the
    * artwork branch already calls it on its own way out. */
   drawUnknownTilePlaceholder(ctx, center, size, entry.tileId);
-  drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride);
+  drawTileOverlays(ctx, center, size, entry, showRevenue, revenueOverride, showRestriction);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2020,12 +2029,44 @@ export function drawValueBadgeAt(
  *  `showRevenue` is false from the main BOARD loop only: laid hexes already
  *  get a badge from `drawValueBadge`'s own placement-aware pass, which knows
  *  about off-board tiers and per-hex value overrides, so drawing here too
- *  would stamp two numbers on one hex. The restriction label is NOT gated
- *  the same way -- `drawRestrictionBadge` labels the HEX (and only the nine
- *  real B/NY/OO hexes), whereas this labels the TILE, which is a different
- *  statement: it tells you what the piece in your hand is restricted to,
- *  which is exactly what the tray needs and what the board's hex badge
- *  cannot say. */
+ *  would stamp two numbers on one hex.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 486: THE SAME ARGUMENT APPLIES TO THE RESTRICTION LABEL
+ * ==================================================================
+ *
+ * REPORTED: upgrading an OO tile from yellow to green puts TWO "OO" markers
+ * on the tile.
+ *
+ * It did, and the paragraph this note replaces is why. It read: "The
+ * restriction label is NOT gated the same way -- `drawRestrictionBadge`
+ * labels the HEX (and only the nine real B/NY/OO hexes), whereas this labels
+ * the TILE, which is a different statement: it tells you what the piece in
+ * your hand is restricted to, which is exactly what the tray needs and what
+ * the board's hex badge cannot say."
+ *
+ * Every clause of that is true, and the conclusion still does not follow.
+ * The two statements differ where the tile and the hex can differ -- IN THE
+ * TRAY, where a piece is in the player's hand and sits on no hex at all. On
+ * the BOARD they cannot differ, because 1830 only permits an OO tile to be
+ * laid on an OO hex: that is what the restriction restricts. So on every
+ * board hex that can ever show a tile-level label, the hex-level badge is
+ * already saying the identical thing, one slot away.
+ *
+ * The result was two "OO"s -- `drawRestrictionBadge`'s at the upper-left
+ * corner (slot 12) and this one due north -- close enough to read as a
+ * rendering fault rather than as two different claims. The bug is not
+ * specific to OO or to green: it fires for all nine restricted tiles, so
+ * #54/#62 double "NY" on New York and #53/#61 double "B" on Boston and
+ * Baltimore in exactly the same way. Only OO was reported because its
+ * upgrade is the one players perform most.
+ *
+ * SO IT IS GATED EXACTLY LIKE `showRevenue`, for exactly the reason
+ * `showRevenue` is: the board has a placement-aware pass that owns this mark
+ * for the hex, and a second unaware one stamps a duplicate. Default `true`,
+ * so the tray, the picker carousel and the isolated thumbnails -- every
+ * caller with no hex underneath it and no hex badge to collide with -- are
+ * unchanged and keep the label they genuinely need. */
 export function drawTileOverlays(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
@@ -2039,6 +2080,10 @@ export function drawTileOverlays(
    *  predates Audit G-11, or a tray thumbnail with no chain record) falls
    *  back to the terrain bucket. */
   revenueOverride?: number,
+  /** Design note #486: draw the tile's own "B"/"NY"/"OO" label. `false` from
+   *  the main BOARD loop and its ghost preview, where `drawRestrictionBadge`
+   *  already labels the hex; `true` everywhere else. */
+  showRestriction = true,
 ): void {
   if (showRevenue) {
     const badgeTerrain = valueBadgeTerrainFor(entry.terrain);
@@ -2071,7 +2116,7 @@ export function drawTileOverlays(
     }
   }
 
-  const label = restrictionLabelFor(entry.terrain);
+  const label = showRestriction ? restrictionLabelFor(entry.terrain) : null;
   if (label) {
     // Design note #129: the SAME `RESTRICTION_BADGE_OFFSET` distance the
     // board uses (0.65 of hex size from centre), pointed due north. A tray
@@ -2124,9 +2169,16 @@ export function valueBadgeTerrainFor(
  *  label. #57 is the ordinary yellow city every plain-city hex starts from,
  *  #63 the ordinary brown city, #45 an ordinary brown plain -- none is
  *  restricted to particular hexes in real 1830, and labelling them would
- *  tell the player something untrue about where they may be laid. The nine
+ *  tell the player something untrue about where they may be laid. The TEN
  *  that really are label-restricted: #53/#61 (B), #54/#62 (NY),
- *  #59/#64/#65/#66/#67/#68 (OO). */
+ *  #59/#64/#65/#66/#67/#68 (OO).
+ *
+ *  (That count read "nine" until design note #486's harness counted the
+ *  list rather than the prose: 2 + 2 + 6. The enumeration was right the
+ *  whole time and only the number in front of it was wrong, which is why it
+ *  survived -- nobody reading for WHICH tiles had reason to re-add them.
+ *  `tilePreviewMarkers.test.ts` now pins the count, so the two cannot part
+ *  company again.) */
 export function restrictionLabelFor(terrain: TerrainType): "B" | "NY" | "OO" | null {
   switch (terrain) {
     case "BostonHub":
@@ -2530,10 +2582,41 @@ export function drawLandmarkTrack(
 }
 
 /** Draws an off-board hex's pre-printed track stubs -- see `OFFBOARD_TRACKS`
- *  and design note #10. A short stub line from each live edge partway
- *  toward the hex's center, deliberately with NO station circle (unlike
- *  `drawLandmarkTrack` above) -- an off-board hex is a revenue
- *  destination, not a real station a train can dwell at. */
+ *  and design note #10. A short stub from each live edge partway toward the
+ *  hex's center, deliberately with NO station circle (unlike
+ *  `drawLandmarkTrack` above) -- an off-board hex is a revenue destination,
+ *  not a real station a train can dwell at.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 473: THE INK, AND THE ARROWHEAD
+ *  ==================================================================
+ *
+ *  REPORTED: the track on red off-board hexes does not match the track
+ *  colour used on ordinary tiles, and its ends are blunt stubs rather than
+ *  the tapered arrows 1830 prints.
+ *
+ *  THE INK. This hardcoded `"#2b2b2b"` -- the historic `DEFAULT_TRACK_INK`.
+ *  Design note #161 then deepened tile track to `#1a1a1a` across all three
+ *  tiers, and `DEFAULT_TRACK_INK` was left where it was precisely so that
+ *  "every existing non-tile track call ... is byte-identical to before".
+ *  That was the right call for gray hexes and landmark stubs, which sit on
+ *  pale printed stock. It is the wrong one here: a red off-board hex
+ *  connects directly to laid tiles, and the seam between `#2b2b2b` and
+ *  `#1a1a1a` falls exactly on the edge a player traces a route across. It
+ *  now reads `STANDARD_TRACK_INK`, the same value the tier table carries.
+ *
+ *  THE ARROWHEAD IS THE CANONICAL ART. On a real 1830 board an off-board
+ *  connection is drawn as a track that TAPERS to a point -- it is the
+ *  visual statement that the route leaves the map here rather than
+ *  continuing to a station. A blunt round cap says the opposite: it looks
+ *  like a piece of track that was cut off, which is how an unfinished
+ *  rendering looks rather than how a terminus looks.
+ *
+ *  DRAWN AS A FILLED TRIANGLE ON A SHORTENED STUB, not as a stroke trick.
+ *  Tapering a stroke would need a variable-width path; a stub that stops
+ *  short with a triangle on its inner end is the same silhouette, is
+ *  trivially correct at every zoom, and keeps the curve itself the same
+ *  `bezierTrackSegment` every other track in this file draws. */
 export function drawOffboardTrack(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
@@ -2543,21 +2626,55 @@ export function drawOffboardTrack(
   const apothem = size * (Math.sqrt(3) / 2);
   const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
 
-  ctx.strokeStyle = "#2b2b2b";
-  ctx.lineWidth = Math.max(3, size * 0.12);
+  const lineWidth = Math.max(3, size * 0.12);
+  ctx.strokeStyle = STANDARD_TRACK_INK;
+  ctx.fillStyle = STANDARD_TRACK_INK;
+  ctx.lineWidth = lineWidth;
   ctx.lineCap = "round";
 
-  // Rail Map Overhaul (design note #42): each stub is now a
-  // perpendicular-entering Bezier curve (`bezierTrackSegment`) instead of a
-  // straight `lineTo` stub, matching every other track-drawing function in
-  // this file.
+  /* How far in the stub runs, and how much of that the head occupies. The
+     shaft stops where the head begins so the round cap is never visible
+     past the point -- a cap poking out of an arrowhead is the blunt end
+     this replaces, just smaller. */
+  const TIP_FRACTION = 0.52;
+  const HEAD_LENGTH = size * 0.20;
+
+  // Rail Map Overhaul (design note #42): each stub is a
+  // perpendicular-entering Bezier curve (`bezierTrackSegment`) rather than a
+  // straight `lineTo`, matching every other track-drawing function here.
   for (const edge of edges) {
     const edgeEnd = edgePoint(edge);
-    const stubEnd = {
-      x: center.x + (edgeEnd.x - center.x) * 0.55,
-      y: center.y + (edgeEnd.y - center.y) * 0.55,
+
+    // The point the arrow aims at, on the line from the edge to the centre.
+    const tip = {
+      x: center.x + (edgeEnd.x - center.x) * TIP_FRACTION,
+      y: center.y + (edgeEnd.y - center.y) * TIP_FRACTION,
     };
-    bezierTrackSegment(ctx, edgeEnd, stubEnd, size, edgeInwardNormal(edge), null);
+
+    // Unit vector along the stub, pointing INWARD (edge -> tip).
+    const dx = tip.x - edgeEnd.x;
+    const dy = tip.y - edgeEnd.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+
+    // The shaft ends where the head starts.
+    const shaftEnd = {
+      x: tip.x - ux * HEAD_LENGTH,
+      y: tip.y - uy * HEAD_LENGTH,
+    };
+    bezierTrackSegment(ctx, edgeEnd, shaftEnd, size, edgeInwardNormal(edge), null);
+
+    /* The head. Half-width matches the shaft so the taper starts flush with
+       it rather than stepping out -- an arrow wider than its own track
+       reads as a separate glyph sitting on the end. */
+    const half = lineWidth * 0.95;
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(shaftEnd.x - uy * half, shaftEnd.y + ux * half);
+    ctx.lineTo(shaftEnd.x + uy * half, shaftEnd.y - ux * half);
+    ctx.closePath();
+    ctx.fill();
   }
 }
 
@@ -2706,6 +2823,27 @@ export function stationMarkerPoint(
    *  behaviour for an unlaid, still-blank designated hex, which is the one
    *  case where there is no artwork to follow. */
   laidTile?: MapTileEntry,
+  /* ==================================================================
+   *  DESIGN NOTE 459: WHICH OF THE TWO PREPRINTED CIRCLES
+   * ==================================================================
+   *
+   * Which city on this hex the token belongs to, when the chain has said
+   * (`tokenCityIndex`). Only consulted on the UNLAID preprinted-OO branch
+   * below -- a laid tile has real artwork and `tileCityAnchors` already
+   * follows it.
+   *
+   * That branch hardcoded index 1, the bottom-left circle, because before
+   * `station_tokens` carried a city index there was nothing else it could
+   * do. There is now, and leaving the hardcode meant a token placed in the
+   * north-east city was drawn in the south-west one -- which is half of why
+   * the upper-right node looked broken (see `cityIndexAtPoint`'s own note
+   * for the other half).
+   *
+   * `undefined` KEEPS THE OLD BEHAVIOUR, deliberately. A pre-G-12 chain
+   * reports no city index, and bottom-left is where those tokens have
+   * always been drawn -- changing it for them would move existing tokens on
+   * boards this cannot ask about. */
+  cityIndex?: number,
 ): { x: number; y: number } {
   const center = axialToPixel(q, r, size);
 
@@ -2724,10 +2862,15 @@ export function stationMarkerPoint(
 
   const hex = STATIC_BOARD_HEXES.find((h) => h.q === q && h.r === r);
   if (hex && YELLOW_OO_HEXES.has(hex.label)) {
-    // Index 1: bottom-left circle, mirrors `drawOOCityMarkers`'s own
-    // placement -- both now read from the same `twoNodePositions` tuple
-    // (design note #58) instead of hand-deriving the offset here.
-    return twoNodePositions(center, size)[1];
+    /* Both circles come from the same `twoNodePositions` tuple
+       `drawOOCityMarkers` draws from (design note #58), so a token cannot
+       land anywhere the board has not drawn a station.
+
+       Design note #459: the CITY decides which, when it is known. Index 1 --
+       bottom-left -- remains the answer for a chain that does not report
+       one, which is the behaviour every existing board was drawn with. */
+    const nodes = twoNodePositions(center, size);
+    return cityIndex === undefined ? nodes[1] : (nodes[cityIndex] ?? nodes[1]);
   }
 
   /* ==================================================================
@@ -2863,7 +3006,24 @@ export function drawStationTokenMarker(
   // a small disc, inside a white city circle, with white lettering on it,
   // removed the contrast in the one place it was needed.
   ctx.strokeStyle = muted ? color : STATION_TOKEN_RING;
-  ctx.lineWidth = muted ? 1.75 : Math.max(2, size * 0.05);
+  /* Design note #487: scaled off the TOKEN's radius, not the hex's size.
+     This was `Math.max(2, size * 0.05)` -- one absolute width for tokens
+     drawn at three different radii, so a docked token wore a collar half
+     again as heavy as a preprinted one and stopped looking like the same
+     piece. The ratio reproduces the old width exactly at the legacy
+     `size * 0.22` radius.
+
+     THE FLOOR DROPS FROM 2 TO 1 and has to: a 2px floor is the same bug in
+     miniature, reasserting an absolute width the moment a token is small
+     enough for it to matter. 1px is the thinnest a canvas can honestly
+     draw, and the device-pixel-ratio transform this canvas already applies
+     keeps it from disappearing on a retina display.
+
+     `muted` keeps its own fixed 1.75. That badge is a RESERVATION preview
+     rather than a token (design note #116), it is only ever drawn at the
+     preprinted radius, and it is deliberately un-scaled so it reads the
+     same at every zoom. */
+  ctx.lineWidth = muted ? 1.75 : Math.max(1, radius * STATION_TOKEN_RING_WIDTH_RATIO);
   ctx.stroke();
 
   if (!ticker) {

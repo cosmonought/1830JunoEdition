@@ -154,3 +154,59 @@ describe("hex mapping", () => {
     }
   });
 });
+
+
+/* ==================================================================
+ *  DESIGN NOTE 470 (harness): THE ROUND MUST MATCH
+ * ==================================================================
+ *
+ * REPORTED: the Private Powers panel leaks into the Operating Round action
+ * panel even when the acting corporation does not own the private.
+ *
+ * `ownsForScope` already refused a corporate power the acting corporation
+ * did not own. The leak was the PLAYER-scoped exchanges: their phase is
+ * StockRound, neither set `hideOutOfRound`, and the filter only hid an
+ * ability when that flag was set -- so during an Operating Round they
+ * rendered as disabled rows on a panel about a corporation that has nothing
+ * to do with them.
+ *
+ * These are table-level assertions rather than render tests: the property
+ * that must hold is "no ability is shown outside its own round", and that is
+ * decided by `phase` plus the filter. A future power added with the wrong
+ * phase is what these catch.
+ */
+describe("round scoping", () => {
+  it("puts every hex power in the Operating Round", () => {
+    for (const ability of PRIVATE_ABILITIES) {
+      if (ability.scope !== "corporation") continue;
+      expect(ability.phase).toBe("OperatingRound");
+    }
+  });
+
+  it("puts every share exchange in the Stock Round", () => {
+    // These are what leaked. Their phase is what the filter now compares
+    // against, so it has to be right.
+    for (const ability of PRIVATE_ABILITIES) {
+      if (ability.scope !== "player") continue;
+      expect(ability.phase).toBe("StockRound");
+    }
+  });
+
+  it("gives every ability exactly one round", () => {
+    for (const ability of PRIVATE_ABILITIES) {
+      expect(["OperatingRound", "StockRound"]).toContain(ability.phase);
+    }
+  });
+
+  it("has no ability that would render in both rounds", () => {
+    // The filter is `roundType === ability.phase`, so a power can appear in
+    // one round only. Asserted as a property of the table so a future
+    // "either round" escape hatch has to be added deliberately.
+    const byRound = new Map<string, number>();
+    for (const ability of PRIVATE_ABILITIES) {
+      byRound.set(ability.phase, (byRound.get(ability.phase) ?? 0) + 1);
+    }
+    expect(byRound.get("OperatingRound")).toBe(2); // C&SL, D&H
+    expect(byRound.get("StockRound")).toBe(2); // M&H, C&A
+  });
+});

@@ -31,11 +31,12 @@
 // 5. **In-place accordion body (this pass, design note #20).** `items` is
 //    the FILTERED array App.tsx already computes from `feedFilter` (the
 //    same filter driving the pills InlineQuickChat.tsx now renders) --
-//    this component just slices the last `HISTORY_LINE_COUNT` entries and
-//    renders them, so filtering "instantly filters both the single-line
-//    preview AND the 7-line expanded history view" (this pass's own
-//    requirement) by construction: both this component's `latestItem` prop
-//    and its `items` prop come from the same filtered source in App.tsx.
+//    this component renders them all, so filtering "instantly filters both
+//    the single-line preview AND the expanded history view" (this pass's
+//    own requirement) by construction: both this component's `latestItem`
+//    prop and its `items` prop come from the same filtered source in
+//    App.tsx. (It USED to slice the last `HISTORY_LINE_COUNT` entries here;
+//    design note #476 removed that -- the panel now holds the whole game.)
 //    `maxHeight` on the scroll body is sized for ~7 compact rows
 //    (`HISTORY_LINE_COUNT * HISTORY_LINE_HEIGHT_PX`), auto-scrolled to the
 //    bottom (most recent) whenever it's open or a new filtered item
@@ -62,6 +63,8 @@ import type { FeedItem } from "../utils/feed";
 import { colorForAuthor } from "../utils/feed";
 import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 
+/** How many rows the scroll body is TALL. Design note #476: not how many it
+ *  holds -- it holds the whole game. */
 const HISTORY_LINE_COUNT = 7;
 // Bumped 36 -> 46 alongside the typography scale: this constant sizes the
 // scroll body to ~7 rows, so leaving it while row TEXT grew would have shown
@@ -118,7 +121,10 @@ export interface TopTickerProps {
  * it reads as a gutter rather than as one badge among several. */
 export function feedItemText(item: FeedItem): string {
   if (item.kind === "chat") {
-    return `${item.chatAuthor}: "${item.chatText}"`;
+    // Design note #477: the same gutter. The log and the chat interleave in
+    // one feed, so a line that skipped the prefix would break the column
+    // the whole format exists to create.
+    return `${clockPrefix(item)}${item.chatAuthor}: "${item.chatText}"`;
   }
   const round = item.logRound ? `[${item.logRound}] ` : "";
   /* Design note #425: the FULL detail, not a 40-character preview of it.
@@ -128,20 +134,94 @@ export function feedItemText(item: FeedItem): string {
      expanded view then renders in full. */
   const detail = item.logDetail ? ` — ${item.logDetail}` : "";
   const failed = item.logStatus === "error" ? "Failed: " : "";
-  return `${round}${failed}${item.logLabel}${detail}`;
+  return `${clockPrefix(item)}${round}${failed}${item.logLabel}${detail}`;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 477: THE TIME LEADS
+ * ==================================================================
+ *
+ * REPORTED: the timestamp sits at the end of the line; the format should be
+ * `[hh:mm] [Phase/Round] [Actor] [Action]`.
+ *
+ * WHY THE FRONT IS RIGHT and not merely requested. The expanded history is
+ * now the whole game (design note #476), so it is a column of entries a
+ * player scrolls to find something in. A column is scanned down its LEFT
+ * edge, and the two facts that locate an entry -- when, and in which round
+ * -- were the two furthest from it: the round was second, and the time was
+ * past the end of a sentence of variable length, so it landed in a
+ * different column on every row and could not be scanned at all.
+ *
+ * Leading with both puts a fixed-width gutter down the left of the log:
+ * `[14:32] [OR 1]` is the same shape on every line, and the prose starts
+ * where the eye already is.
+ *
+ * hh:mm, NOT hh:mm:ss. `timestampLabel` is a full `toLocaleTimeString()`,
+ * which carries seconds -- three characters of precision nobody needs about
+ * a board game and enough width to unbalance the gutter. Seconds are
+ * dropped for DISPLAY only; `timestampMs` remains the sort key
+ * (`feed.ts` design note on why the label was never one).
+ *
+ * PARSED RATHER THAN REFORMATTED FROM THE EPOCH, deliberately. The label is
+ * already localised -- 12-hour with an am/pm suffix in some locales, 24-hour
+ * in others -- and re-deriving it from `timestampMs` here would impose this
+ * module's idea of a locale on a string the rest of the app formats
+ * elsewhere. Trimming what is there keeps one formatter.
+ *
+ * ANY LABEL IT CANNOT PARSE IS PASSED THROUGH WHOLE. A locale this regex
+ * does not anticipate produces a slightly wider gutter, which is a
+ * cosmetic defect; dropping the time entirely, or emitting `[Invalid
+ * Date]`, would not be. */
+export function clockPrefix(item: FeedItem): string {
+  const label = item.timestampLabel;
+  if (!label) return "";
+  // `14:32:07` -> `14:32`; `2:32:07 PM` -> `2:32 PM`.
+  const trimmed = label.replace(/^(\d{1,2}:\d{2}):\d{2}/, "$1");
+  return `[${trimmed}] `;
 }
 
 export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggleExpand }: TopTickerProps) {
-  // Design note #5: last HISTORY_LINE_COUNT of the already-filtered items,
-  // oldest-to-newest so the most recent entry reads at the bottom (the
-  // scroll body auto-scrolls there below).
-  const historyItems = items.slice(Math.max(0, items.length - HISTORY_LINE_COUNT));
+  // Design note #5: the already-filtered items, oldest-to-newest so the most
+  // recent entry reads at the bottom (the scroll body auto-scrolls there
+  // below).
+  /* ==================================================================
+   *  DESIGN NOTE 476: THE WHOLE GAME, NOT THE LAST SEVEN LINES
+   * ==================================================================
+   *
+   * REPORTED: the Activity Log truncates and retains only the last handful
+   * of entries.
+   *
+   * The STATE was never truncated -- `setActionLog` has always prepended
+   * without a cap. What threw the history away was this line: the expanded
+   * panel sliced the last `HISTORY_LINE_COUNT` items before rendering them,
+   * so everything older existed in memory and could not be reached by
+   * scrolling because it was never in the DOM to scroll to.
+   *
+   * That made the scroll container a lie. It had `overflowY: auto` and a
+   * `maxHeight` of exactly seven lines, so it looked scrollable and had
+   * nothing above the fold -- the one arrangement where a scrollbar never
+   * appears and the player concludes the log simply forgets.
+   *
+   * `HISTORY_LINE_COUNT` survives as what it always physically was: the
+   * VIEWPORT height, in lines. It sizes the box; it no longer decides what
+   * exists.
+   *
+   * THE COST IS BOUNDED IN PRACTICE. A full 1830 game is a few hundred
+   * entries, each a short string -- well inside what a list renders without
+   * complaint. If a very long session ever makes this heavy the answer is
+   * windowing, which needs the full array to window OVER; truncating the
+   * source would remain the wrong fix. */
+  const historyItems = items;
 
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isExpanded) return;
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
+    // Design note #476: with the full history rendered the newest entry is
+    // at the bottom of a potentially long list, so this is what puts the
+    // player at "now" when they open the panel rather than at the start of
+    // the game.
   }, [isExpanded, historyItems.length]);
 
   return (
@@ -238,8 +318,12 @@ function ChatEntry({ item }: { item: FeedItem }) {
   return (
     <div style={{ ...styles.chatEntry, borderLeftColor: color }}>
       <div style={styles.chatEntryHeader}>
+        {/* Design note #477: the clock LEADS here too. The log rows and the
+            chat rows interleave in one scrolling column, so a chat row whose
+            time sat on the right would break the left gutter every log row
+            above and below it lines up on. */}
+        <span style={styles.timestamp}>{clockPrefix(item).trim()}</span>
         <span style={{ ...styles.chatAuthor, color }}>{item.chatAuthor}</span>
-        <span style={styles.timestamp}>{item.timestampLabel}</span>
       </div>
       <div style={styles.chatText}>{item.chatText}</div>
     </div>
@@ -266,7 +350,10 @@ function LogEntry({ item }: { item: FeedItem }) {
       >
         {feedItemText(item)}
       </span>
-      <span style={styles.timestamp}>{item.timestampLabel}</span>
+      {/* Design note #477: no trailing timestamp. It leads the string now,
+          and printing it at both ends would be the same fact twice on every
+          line -- once in the gutter the format exists to create and once
+          past the end of the sentence, where it was unscannable. */}
     </div>
   );
 }
@@ -369,6 +456,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   // ---- Scrollable ~7-line history -- design note #5. ----
   historyList: {
+    /* Design note #476: the VIEWPORT, not the retention. Seven lines of
+       box, scrolling over however many entries the game has produced. */
     maxHeight: `${HISTORY_LINE_COUNT * HISTORY_LINE_HEIGHT_PX}px`,
     overflowY: "auto",
     display: "flex",

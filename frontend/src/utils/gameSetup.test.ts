@@ -16,7 +16,7 @@
 // one log entry and diverge on move one. The shuffle is deliberately NOT in
 // it, and one test states that as a property rather than trusting the note.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import {
   BANK_START,
   CERT_LIMIT_BY_PLAYER_COUNT,
@@ -27,6 +27,7 @@ import {
   dealSandboxGame,
   isLegalPlayerCount,
   shuffleForTurnOrder,
+  waterfallForRoster,
   withEmptyRoster,
   startingCashForPlayers,
   type SetupPlayer,
@@ -250,5 +251,85 @@ describe("withEmptyRoster", () => {
     });
     expect(dealt!.playerAddresses).toEqual(["p-real1", "p-real2"]);
     expect(dealt!.playerAddresses).toHaveLength(2);
+  });
+});
+
+/* ==================================================================
+ *  DESIGN NOTE 542 (harness): THE FOURTH ATOM
+ * ==================================================================
+ *
+ * The Action Bar was right and the auction panel was wrong, because they
+ * read different stores and only one had been cleaned. "The roster" is not a
+ * place in this codebase -- it is repeated across four independent atoms, and
+ * a fix applied to one looks complete on whichever screen the author was
+ * looking at.
+ *
+ * These pin the auction half specifically: a room's auction must carry the
+ * dealt seats and NONE of the fixture's bidders.
+ */
+function fixtureAuction(): WaterfallStateResponse {
+  return {
+    game_id: 1,
+    waterfall_auction_active: true,
+    current_turn: "mock-alice",
+    consecutive_waterfall_passes: 2,
+    mini_auction: { private_id: 3 } as never,
+    privates: [
+      { private_id: 1, name: "SV", face_value: "20", is_lowest_offered: true, bids: [] },
+      {
+        private_id: 2,
+        name: "CS",
+        face_value: "40",
+        is_lowest_offered: false,
+        bids: [{ bidder: "mock-bob", bid_amount: "80" }],
+      },
+    ],
+  } as unknown as WaterfallStateResponse;
+}
+
+describe("waterfallForRoster", () => {
+  it("puts the turn on the first dealt seat", () => {
+    const dealt = waterfallForRoster(fixtureAuction(), ["p-ada", "p-grace"]);
+    expect(dealt!.current_turn).toBe("p-ada");
+  });
+
+  it("clears every bid the fixture left behind", () => {
+    /* Inherited bids are worse than inherited names: a name is a label, a
+       standing bid is ACTIONABLE and belongs to somebody who is not here. */
+    const dealt = waterfallForRoster(fixtureAuction(), ["p-ada", "p-grace"]);
+    for (const entry of dealt!.privates) expect(entry.bids).toEqual([]);
+  });
+
+  it("starts the auction clean, not mid-flight", () => {
+    const dealt = waterfallForRoster(fixtureAuction(), ["p-ada", "p-grace"]);
+    expect(dealt!.mini_auction).toBeNull();
+    expect(dealt!.consecutive_waterfall_passes).toBe(0);
+  });
+
+  it("keeps the privates themselves", () => {
+    // The six companies are what the auction is FOR -- only the bidding on
+    // them is reset.
+    const dealt = waterfallForRoster(fixtureAuction(), ["p-ada"]);
+    expect(dealt!.privates).toHaveLength(2);
+    expect(dealt!.privates[0].name).toBe("SV");
+  });
+
+  it("matches nobody when no roster has been dealt", () => {
+    /* An empty roster is the pre-`SetupGame` state. `current_turn` must not
+       accidentally equal a real id, or a client would believe it is their
+       turn before the game exists. */
+    const dealt = waterfallForRoster(fixtureAuction(), []);
+    expect(dealt!.current_turn).toBe("");
+  });
+
+  it("passes null through, for a room that starts outside the auction", () => {
+    expect(waterfallForRoster(null, ["p-ada"])).toBeNull();
+  });
+
+  it("does not mutate the fixture it was given", () => {
+    const before = fixtureAuction();
+    waterfallForRoster(before, ["p-ada"]);
+    expect(before.current_turn).toBe("mock-alice");
+    expect(before.privates[1].bids).toHaveLength(1);
   });
 });

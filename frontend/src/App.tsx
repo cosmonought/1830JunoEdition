@@ -569,6 +569,7 @@ import {
   dealSandboxGame,
   isSetupGameMsg,
   shuffleForTurnOrder,
+  waterfallForRoster,
   withEmptyRoster,
   type SetupGameMsg,
 } from "./utils/gameSetup";
@@ -1484,7 +1485,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture)
       : null,
   );
-  const sandboxWaterfallRef = useRef<WaterfallStateResponse | null>(null);
+  /* Design note #542: seeded, not null-until-an-effect-runs -- the same
+     correction design note #537a made for `sandboxStateRef`, applied to the
+     atom that was missed. */
+  const sandboxWaterfallRef = useRef<WaterfallStateResponse | null>(
+    sandbox
+      ? sandboxRoomSeed
+        ? waterfallForRoster(sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState), [])
+        : sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState)
+      : null,
+  );
   useEffect(() => {
     sandboxStateRef.current = sandboxState;
   }, [sandboxState]);
@@ -1912,12 +1922,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * scenario means "show me that screen", not "carry my half-finished
    * auction into it".
    */
-  const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(
-    () => (sandbox ? sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState) : null),
-  );
+  /* Design note #542: the auction atom is roster-bearing too, and a room's
+     copy must never carry the fixture's bidders. Seeded empty, then filled
+     by `SetupGame` -- the same shape `sandboxState` follows, for the same
+     reason. */
+  const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(() => {
+    if (!sandbox) return null;
+    const base = sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState);
+    return sandboxRoomSeed ? waterfallForRoster(base, []) : base;
+  });
   useEffect(() => {
+    /* Design note #537's guard, applied to this atom: a room's auction comes
+       from the log, so the scenario re-seed must not overwrite it. */
+    if (sandboxRoomCode) return;
     setSandboxWaterfall(sandbox ? sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState) : null);
-  }, [sandbox, sandboxPhase, gameId, sandboxIsZeroState]);
+  }, [sandbox, sandboxPhase, gameId, sandboxIsZeroState, sandboxRoomCode]);
   useEffect(() => {
     sandboxWaterfallRef.current = sandboxWaterfall;
   }, [sandboxWaterfall]);
@@ -4344,6 +4363,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ));
           sandboxStateRef.current = seated;
           setSandboxState(seated);
+
+          /* Design note #542: the auction atom is dealt in the SAME handler,
+             from the same roster. Two atoms advancing on one action is this
+             file's established pattern (the market already does it), and
+             splitting them is how the Action Bar and the auction panel came
+             to disagree about who is playing. */
+          /* Design note #542: from the REF, with no fallback. A fallback
+             would have to recompute the fixture, which pulls `sandboxPhase`,
+             `gameId` and `sandboxIsZeroState` into this callback's
+             dependencies -- rebuilding it, and re-arming the two effects
+             that dispatch (design note #439). The ref is seeded at
+             construction below for exactly this reason. */
+          const dealtWaterfall = waterfallForRoster(
+            sandboxWaterfallRef.current,
+            dealt.playerAddresses,
+          );
+          sandboxWaterfallRef.current = dealtWaterfall;
+          setSandboxWaterfall(dealtWaterfall);
           logInfo(
             "Room",
             `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.`,
@@ -7720,8 +7757,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #399: blocking, because until it is answered the B&O
           is presided over with no price -- a state design note #387 refuses
           to render a token or a figure for. */}
+      {/* ==================================================================
+           DESIGN NOTE 543: A PRIZE IS SHOWN TO WHOEVER WON IT
+          ==================================================================
+
+           REPORTED: at the end of the auction BOTH players were told they
+           had won the B&O and both could set its par price.
+
+           `setBoParPrompt` fires wherever the winning action is APPLIED, and
+           in a room every client applies every action -- that is the whole
+           design (design note #522). So the prompt was raised on both
+           screens, correctly, and then rendered on both because `open` asked
+           only whether a prompt existed, not whose it was.
+
+           In solo hotseat that is right: one person is playing everybody, so
+           every prompt is theirs. The identity test is the same branch
+           design note #534 uses for the turn gate -- no room, no test.
+
+           IT MATTERS MORE THAN A LABEL. The prompt does not merely announce
+           the win; it SETS THE PAR PRICE, which is a real decision with a
+           real consequence for the corporation. Two people answering it is
+           two dispatches of one mandatory choice. */}
       <BoParPrompt
-        open={boParPrompt !== null}
+        open={
+          boParPrompt !== null &&
+          (!sandboxRoomCode || boParPrompt.player === viewerAddress)
+        }
         winnerLabel={
           boParPrompt
             ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)

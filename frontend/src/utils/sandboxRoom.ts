@@ -408,8 +408,32 @@ export async function upsertSandboxPlayer(
     const snapshot = await tx.get(ref);
     if (!snapshot.exists()) return;
     const room = toRoomDoc(roomCode, snapshot.data());
-    const others = (room?.players ?? []).filter((entry) => entry.id !== player.id);
-    tx.update(ref, { players: [...others, player] });
+    /* ==================================================================
+     *  DESIGN NOTE 541: EDITING A NAME IS NOT REJOINING
+     * ==================================================================
+     *
+     * REPORTED: clicking "Set Name" twice appears to reorder the players.
+     *
+     * It did exactly that. This filtered the player out and appended them:
+     * `[...others, player]`. So every nickname edit and every ready toggle
+     * moved that player to the BACK of the array, and two people editing
+     * in turn churned the whole roster.
+     *
+     * The order is not cosmetic. `toSetupPlayers` reads this array to build
+     * the payload the host shuffles, so a lobby whose list reshuffles itself
+     * while people are typing is a lobby whose seating nobody can predict --
+     * and it moves under the reader while they are looking at it.
+     *
+     * SO AN EXISTING PLAYER IS UPDATED IN PLACE and only a genuinely new one
+     * is appended. Arrival order is then stable for the whole lobby, which
+     * is the one thing a waiting-room roster should be. */
+    const existing = room?.players ?? [];
+    const index = existing.findIndex((entry) => entry.id === player.id);
+    const players =
+      index === -1
+        ? [...existing, player]
+        : existing.map((entry, at) => (at === index ? player : entry));
+    tx.update(ref, { players });
   });
   return true;
 }

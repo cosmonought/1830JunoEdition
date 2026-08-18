@@ -53,7 +53,7 @@ import type { GameplayExecuteMsg } from "./sessionKey";
    keeps `withEmptyRoster` exact about the shape it returns -- a structural
    generic was the first attempt and it widened the corporation and private
    arrays to `Record<string, unknown>`, which no caller could then use. */
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 
 /** The printed 1830 tables. Sourced from the physical rulebook's own setup
  *  chart; `RulesReference.tsx`'s Core Limits section renders these. */
@@ -265,5 +265,54 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
       owner: null,
       owner_protocol_id: null,
     })),
+  };
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 542: THE AUCTION IS A FOURTH ATOM, AND IT WAS MISSED
+ * ==================================================================
+ *
+ * REPORTED: the Action Bar's turn order is right, but the bottom Seating
+ * Order is wrong and the bid labels name the wrong people.
+ *
+ * Two different atoms, and only one of them had been cleaned. `App.tsx`'s
+ * own design note above `sandboxWaterfall` says it outright -- the sandbox
+ * "keeps its game state in FOUR atoms, not one" -- and `withEmptyRoster`
+ * plus the `SetupGame` handler between them touched exactly one:
+ * `sandboxState`. The Action Bar reads that, so it was correct. The auction
+ * dashboard reads `sandboxWaterfall`, which was still the fixture: mock
+ * seating, mock bidders, mock `current_turn`.
+ *
+ * That is the same class of miss as the one before it, one atom over. The
+ * lesson worth recording is that "the roster" is not a place in this
+ * codebase -- it is a fact repeated across four independent stores, and a
+ * fix applied to any one of them looks complete on whichever screen the
+ * author happened to be looking at.
+ *
+ * A ROOM'S AUCTION STARTS CLEAN. No bids, nobody having passed, the turn on
+ * the first seat in the dealt order. The fixture's half-finished auction is
+ * a testbed for rendering a mid-auction screen alone; it is not an opening
+ * position, and inheriting somebody else's bids is worse than inheriting
+ * their names because the bids are ACTIONABLE.
+ */
+export function waterfallForRoster(
+  /* NULL-SAFE, because `sandboxWaterfallState` returns `null` outside the
+     auction phase -- a room that starts mid-game has no auction atom at all.
+     Handling it here rather than at each call site keeps the two seeding
+     points identical, which is the property that let them drift apart in the
+     first place. */
+  base: WaterfallStateResponse | null,
+  playerAddresses: readonly string[],
+): WaterfallStateResponse | null {
+  if (!base) return null;
+  return {
+    ...base,
+    /* The first seat in the dealt turn order. Empty roster -> empty string,
+       which matches nobody -- so no client believes it is their turn, which
+       is the right answer before a game has been dealt. */
+    current_turn: playerAddresses[0] ?? "",
+    consecutive_waterfall_passes: 0,
+    mini_auction: null,
+    privates: base.privates.map((entry) => ({ ...entry, bids: [] })),
   };
 }

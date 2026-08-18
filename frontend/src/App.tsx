@@ -667,7 +667,7 @@ import {
   type SandboxTrainFixture,
   type SandboxScenarioId,
   sandboxMarketPositions,
-  sandboxPlayerLabel,
+  sandboxPlayerLabel as fixturePlayerLabel,
   sandboxWaterfallState,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
@@ -1164,8 +1164,65 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   //  identity lights up controls and decides whose figures to show. It never
   //  signs. `runGameplayAction` still refuses to build a chain message in
   //  sandbox; it routes to the local reducer instead.
+  /* ==================================================================
+   *  DESIGN NOTE 535: THE ROOM'S OWN NAMES
+   * ==================================================================
+   *
+   * REPORTED: a live game still shows the offline mock players rather than
+   * the real ones from the lobby.
+   *
+   * Half of that was the roster, fixed in the setup handler below. This is
+   * the other half: `sandboxPlayerLabel` resolves a name by looking the
+   * address up in `SANDBOX_PLAYERS` and indexing `["Alice", "Bob", ...]`.
+   * A real player's id is a minted `p-xxxx` that is not in that array, so it
+   * returned `null` and every caller fell through to `truncateAddress` --
+   * the game was not showing Alice INSTEAD of the real name, it was showing
+   * a truncated id because it had no name to show.
+   *
+   * `nicknamesRef` carries the room's own roster, written when the setup
+   * event lands. The wrapper below keeps the ORIGINAL FUNCTION NAME, so
+   * every existing call site resolves correctly without being touched --
+   * roughly a dozen of them, in the ledger, the action log, the auction
+   * table and the sub-panel. Renaming them all would have been a much larger
+   * diff for the same behaviour, and the one this shape avoids is the diff
+   * that misses one.
+   *
+   * THE FIXTURE TABLE IS THE FALLBACK, not the other way round. Solo
+   * sandbox has no room roster, so it falls straight through to Alice and
+   * Bob exactly as before. */
+  /* Design note #534: this browser's identity and its room, declared above
+     `viewerAddress` because that value is derived from both. */
+  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(sandboxRoomSeed);
+  const localId = localPlayerId();
+
+  /* ==================================================================
+   *  DESIGN NOTE 534: IN A ROOM, YOU ARE YOURSELF
+   * ==================================================================
+   *
+   * REPORTED: the sandbox lets the local browser act for every player,
+   * because it was built as an offline hotseat.
+   *
+   * `viewerAddress` is the single identity input to everything that gates
+   * an action: `isMyTurn` compares it against the acting seat, and every
+   * `canAct` in the app compares it against a corporation's president. The
+   * hotseat works by making it a SEAT PICKER -- whoever the player selected
+   * is who they are, which is exactly right when one person is playing
+   * everybody.
+   *
+   * So the whole fix is one branch. In a Firebase room this browser is one
+   * person with one id (design note #528), and pointing `viewerAddress` at
+   * it makes every existing gate correct at once -- rather than adding a
+   * second "is it my turn" test beside the dozen that already exist and
+   * hoping the two agree.
+   *
+   * SOLO HOTSEAT IS UNTOUCHED. No room, no branch: the seat picker still
+   * decides who you are, and one player still controls everybody. That mode
+   * is how the whole game gets exercised without a second human, and design
+   * note #24 is explicit that it must keep working. */
   const viewerAddress = sandbox
-    ? (SANDBOX_PLAYERS[sandboxSeatIndex] ?? SANDBOX_PLAYERS[0])
+    ? sandboxRoomCode
+      ? localId
+      : (SANDBOX_PLAYERS[sandboxSeatIndex] ?? SANDBOX_PLAYERS[0])
     : wallet.address;
 
 
@@ -2252,6 +2309,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   useDocumentTitleFlash(isMyTurn);
 
+  /* Design note #536: mirrored into a ref for `runGameplayAction`'s turn
+     gate. A dependency would rebuild that callback on every turn change,
+     and the auto-skip and forced-withhold effects (design note #439) key on
+     its identity -- so a turn passing would re-arm two effects that
+     DISPATCH. */
+  const isMyTurnRef = useRef(isMyTurn);
+  useEffect(() => {
+    isMyTurnRef.current = isMyTurn;
+  }, [isMyTurn]);
+
   /** Design note #300: the acting seat's personal cash. `null` when there
    *  is no seat on turn or the chain does not report it -- a missing wallet
    *  must not render as $0, which is a real and very different state.
@@ -3040,14 +3107,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      value rather than an effect, so the listener's very first run already
      has the room -- an effect would open a solo session for one render and
      then swap it, replaying the log into a board that had already begun. */
-  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(sandboxRoomSeed);
+  /* Design note #534: DECLARED EARLY, above `viewerAddress`, because that
+     value branches on it. The rest of the room's state stays below with the
+     listener that drives it -- only the two things identity depends on are
+     hoisted, so the move is as small as the dependency. */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
   /* Design note #527: the anteroom's own state, from the room DOCUMENT
      rather than the log. `null` while it loads or when there is no room. */
   const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
-  const localId = localPlayerId();
+
   const sandboxRoomRef = useRef<string | null>(null);
   const appliedIndexRef = useRef(0);
   const sandboxSeatRef = useRef<string>("");
@@ -4040,6 +4110,41 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          *
          * SOLO SANDBOX IS UNTOUCHED. No room, no interception, no await on a
          * network -- the branch below runs exactly as it did before. */
+        /* ==================================================================
+             DESIGN NOTE 536: A ROOM IS NOT A HOTSEAT
+            ==================================================================
+
+           REPORTED: the local browser can act on anybody's turn, because
+           the sandbox was built as an offline hotseat.
+
+           THE GATE IS HERE, at the dispatch, and that placement is this
+           codebase's own convention -- design note #23 makes the identical
+           argument for read-only mode: "the guarantee is
+           `runGameplayAction`'s gate, which holds whether or not this bar
+           renders". Disabled buttons are the courtesy; this is the promise.
+           A dozen surfaces can dispatch, and gating each one is a dozen
+           chances to miss one.
+
+           `automatic` IS EXEMPT, deliberately. The sub-phase auto-skip and
+           the forced $0 withhold are the GAME acting on a rule with no
+           decision in it (design note #475), and they fire on whoever's turn
+           it is -- including the moment a turn passes to somebody else.
+           Blocking them would strand a room on a step nobody can leave.
+
+           REPLAY IS EXEMPT for the more obvious reason: a replayed action
+           already happened, on its own author's turn. Re-checking it here
+           would mean every client refusing every action but its own and
+           the log applying to nobody. */
+        if (
+          sandboxRoomRef.current &&
+          options?.isRemoteReplay !== true &&
+          options?.automatic !== true &&
+          !isMyTurnRef.current
+        ) {
+          setSandboxRoomError("It is not your turn.");
+          return;
+        }
+
         if (sandboxRoomRef.current && options?.isRemoteReplay !== true) {
           const ok = await appendSandboxAction(
             sandboxRoomRef.current,
@@ -4085,6 +4190,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              those are the only things the player count decides. */
           const base = sandboxStateRef.current;
           if (!base) return;
+          /* ==============================================================
+           *  DESIGN NOTE 535a: THE FIXTURE'S OWNERS GO WITH ITS PLAYERS
+           * ==============================================================
+           *
+           * Replacing `player_addresses` alone is not enough, and the gap is
+           * the reported bug's deeper half. The sandbox fixture is a MID-GAME
+           * testbed: its corporations already have presidents and its
+           * privates already have owners, and every one of those is a mock
+           * address (`SANDBOX_PLAYERS[...]`, see `sandboxState.ts`).
+           *
+           * Swap the roster and leave those alone, and the board is presided
+           * over by people who are not in the game -- corporations nobody in
+           * the room can act for, because every `canAct` compares a
+           * president against the viewer and none of them will ever match.
+           *
+           * SO A ROOM STARTS UNOWNED, which is also what 1830 actually says:
+           * every certificate begins in the IPO and every corporation is
+           * unfloated until somebody buys in. The fixture's pre-owned state
+           * is a convenience for testing a mid-game screen alone, not a
+           * legal opening position.
+           *
+           * The BOARD survives -- corporations, privates, the map and the
+           * market are what a room plays with. Only the ownership links to
+           * players who no longer exist are cut. */
           const seated: GameStateResponse = {
             ...base,
             player_addresses: dealt.playerAddresses,
@@ -4094,7 +4223,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             max_players: dealt.playerAddresses.length,
             active_player_index: 0,
             priority_deal_index: 0,
+            public_companies: base.public_companies.map((company) => ({
+              ...company,
+              president: null,
+              player_holdings: [],
+              is_floated: false,
+            })),
+            private_companies: base.private_companies.map((entry) => ({
+              ...entry,
+              owner: null,
+              owner_protocol_id: null,
+            })),
           };
+          /* Design note #535: the room's names, for every label surface. A
+             ref rather than state because `sandboxPlayerLabel` is a
+             `useCallback` many components close over -- rebuilding it on
+             every setup would churn them for a value that changes once. */
+          setRoomNicknames(Object.fromEntries(
+            msg.SetupGame.players.map((player) => [player.id, player.nickname || "Player"]),
+          ));
           sandboxStateRef.current = seated;
           setSandboxState(seated);
           logInfo(
@@ -7687,7 +7834,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   activeTab={activeMainTab}
                   onSelectTab={setActiveMainTab}
                   orSubPhase={orSubPhase}
-                  sessionReady={controlsEnabled}
+                  /* Design note #536: the courtesy half. In a room the
+                     controls go dead off-turn so a player is not invited to
+                     click something the dispatch gate will refuse; solo
+                     hotseat passes `controlsEnabled` unchanged and keeps
+                     every seat playable. */
+                  sessionReady={controlsEnabled && (!sandboxRoomCode || isMyTurn)}
                   // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`
                   // and `PassTurn` are different contract messages, not one
                   // action with two names -- sending the wrong one would
@@ -8615,6 +8767,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
  *  two different systems and neither can be derived from the other: the
  *  `u64` the contract assigned, and the Firestore room id chat/presence
  *  live under. */
+/* ==================================================================
+ *  DESIGN NOTE 535b: MODULE SCOPE, SO NO HOOK DEPENDS ON IT
+ * ==================================================================
+ *
+ * The first cut of this resolver was a `useCallback` inside `AppShell`, and
+ * the linter immediately named the cost: twelve hooks read it, so it became
+ * a dependency of all twelve. A stable `[]` callback would have been
+ * harmless in practice and would still have meant editing a dozen dependency
+ * arrays to say so -- churn in exactly the hooks (the dispatch, the
+ * auto-skip, the forced withhold) where an accidental rebuild re-arms an
+ * effect that dispatches.
+ *
+ * A module-level map avoids the question rather than answering it. Its
+ * lifetime is the tab, which is the same lifetime as the player id it keys
+ * on (design note #528) and as the room itself -- and `AppShell` remounts on
+ * any game change, so there is no stale-between-games case for it to carry.
+ *
+ * IT IS A FALLTHROUGH, not a replacement: no room means an empty map and the
+ * fixture's own Alice/Bob table answers, exactly as it did before.
+ */
+let ROOM_NICKNAMES: Record<string, string> = {};
+
+function setRoomNicknames(next: Record<string, string>): void {
+  ROOM_NICKNAMES = next;
+}
+
+function sandboxPlayerLabel(address: string): string | null {
+  return ROOM_NICKNAMES[address] ?? fixturePlayerLabel(address);
+}
+
 function GameRouter() {
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(readActiveGame);
 

@@ -92,3 +92,77 @@ export function sandboxPlayerLabel(address: string): string | null {
   if (ROOM_ROSTER_ACTIVE) return null;
   return fixturePlayerLabel(address);
 }
+
+
+/* ==================================================================
+ *  DESIGN NOTE 569: A SEAT COLOUR THAT DOES A JOB
+ * ==================================================================
+ *
+ * ASKED: "Do the player tiles/cards work better with colors? or should they
+ * all be a uniform stripe? The colors don't get used elsewhere as far as I
+ * can remember."
+ *
+ * That last clause is the whole argument, and it points at a fix rather than
+ * at a removal. Colour that appears in exactly one place is decoration and
+ * the player is right to be suspicious of it. Colour that means the same
+ * thing in several places is a language.
+ *
+ * SO IT GETS A SECOND JOB, and the job was already asking for it: the action
+ * bar is easy to see during an Operating Round because it wears the acting
+ * CORPORATION's livery, and hard to see during the Auction and Stock Rounds
+ * because those rounds have no corporation to borrow from. They have an
+ * acting PLAYER. Same mechanism, same meaning -- "this belongs to whoever is
+ * up" -- extended to the two rounds that were missing it.
+ *
+ * NOT THE CORPORATION LIVERIES, on instruction and for a reason worth
+ * stating: a player stripe in the PRR's red would read as a claim about the
+ * PRR, and on a screen where corporations and players sit side by side that
+ * ambiguity is expensive. These are chosen well away from the eight
+ * corporate hues and from each other.
+ *
+ * CHOSEN OR ASSIGNED. A seat that has picked a colour keeps it; a seat that
+ * has not gets the next one by index. Both paths are here rather than the
+ * picker owning the fallback, so a player who never opens the control is
+ * never colourless and two players can never end up with one colour.
+ */
+export const SEAT_COLORS = [
+  "#3f6fa8",
+  "#a8593f",
+  "#4f8a5c",
+  "#7a5aa8",
+  "#a88a3f",
+  "#3f8a94",
+] as const;
+
+export const SEAT_COLOR_NAMES: Readonly<Record<string, string>> = {
+  "#3f6fa8": "Slate blue",
+  "#a8593f": "Brick",
+  "#4f8a5c": "Moss",
+  "#7a5aa8": "Plum",
+  "#a88a3f": "Ochre",
+  "#3f8a94": "Teal",
+};
+
+let ROOM_COLORS: Record<string, string> = {};
+
+export function setRoomColors(next: Record<string, string>): void {
+  ROOM_COLORS = next;
+}
+
+/** This seat's colour: their own choice, else the palette by index.
+ *
+ *  `index` rather than a hash of the address, deliberately -- a hash gives
+ *  two seats the same colour roughly a third of the time at six players,
+ *  and "roughly" is not a property a table of six people can live with. */
+export function seatColor(address: string, index: number): string {
+  return ROOM_COLORS[address] ?? SEAT_COLORS[index % SEAT_COLORS.length];
+}
+
+/** Which colours are already spoken for, so a picker can grey them out. */
+export function takenSeatColors(exceptId?: string): ReadonlySet<string> {
+  const taken = new Set<string>();
+  for (const [id, color] of Object.entries(ROOM_COLORS)) {
+    if (id !== exceptId) taken.add(color);
+  }
+  return taken;
+}

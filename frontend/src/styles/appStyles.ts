@@ -850,7 +850,38 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#171c28",
     border: "1px solid #2b3242",
   },
-  orContextIdentity: { display: "inline-flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" },
+  /* Design note #575: a COLUMN now -- herald+acronym on one line, full name
+     under it, matching `rosterIdentityRow` on the Stock Card. It was a
+     baseline-aligned row, which is why the acronym had nowhere to go without
+     pushing the name onto a second line anyway. */
+  orContextIdentity: {
+    display: "inline-flex",
+    flexDirection: "column",
+    gap: "1px",
+    minWidth: 0,
+  },
+  orContextIdentityRow: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "7px",
+    minWidth: 0,
+  },
+  /* Design note #575: `rosterLiveryAcronym`'s typography exactly -- the
+     monospace face and its tracking included. Approximating it would give
+     the same company two slightly different looks on two screens, which is
+     the specific thing this change was asked for to stop.
+
+     `flexShrink: 0` for that file's own reason: the acronym is the handle
+     and must not be the thing that ellipsises when the bar is narrow. */
+  orContextAcronym: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  },
   /* `orContextDot` is GONE -- design note #236. The whole bar is the
      corporation's colour now, so a dot of that same colour drawn on it was
      invisible by construction. */

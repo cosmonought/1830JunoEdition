@@ -57,10 +57,9 @@ import type {
   PublicCompanyState,
   QueryCapableClient,
 } from "../utils/gameState";
-import { corporationPrivateCompanies, usePlayerNetWorths } from "../utils/gameState";
-// Design note #405: the Game Ledger's own Player Assets table, rendered here
-// rather than replicated -- see the footer half of that note below.
-import { PlayerAssetsSection } from "./FinancialLedger";
+import { corporationPrivateCompanies } from "../utils/gameState";
+// Design note #572: `usePlayerNetWorths` and the Ledger's `PlayerAssetsSection`
+// went with the footer table they fed. The Ledger still owns both.
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { corporationFullName } from "../utils/corporationNames";
 import { derivePhase, rustOutlook } from "../utils/gamePhase";
@@ -155,14 +154,12 @@ export function ContextualSubPanel({
       {gameState.current_round_type === "WaterfallAuction" ? (
         <WaterfallAuctionNotice />
       ) : gameState.current_round_type === "StockRound" ? (
-        <StockRoundPlayerIndex
-          gameState={gameState}
-          marketGrid={marketGrid}
-          queryClient={queryClient}
-          contractAddress={contractAddress}
-          gameId={gameId}
-          playerLabel={playerLabel}
-        />
+        /* Design note #572: NOTHING. The player cards on this same tab now
+           answer what the footer's table was here to answer, and two tables
+           of one dataset make the reader prove they agree. Deleted rather
+           than left returning `null` -- a component that renders nothing is
+           an invitation to find a use for it. */
+        null
       ) : (
         <OperatingRoundCorporationPanel gameState={gameState} marketGrid={marketGrid} />
       )}
@@ -202,79 +199,6 @@ function WaterfallAuctionNotice() {
 /* ------------------------------------------------------------------ */
 /* Stock Round: Player Index -- see design note #2                    */
 /* ------------------------------------------------------------------ */
-
-function StockRoundPlayerIndex({
-  gameState,
-  marketGrid,
-  queryClient,
-  contractAddress,
-  gameId,
-  playerLabel,
-}: {
-  gameState: GameStateResponse;
-  marketGrid?: MarketGridResponse | null;
-  queryClient?: QueryCapableClient;
-  contractAddress?: string;
-  gameId?: number;
-  playerLabel?: (address: string) => string | null;
-}) {
-  // Design note #405: the ledger's own query, not a second implementation.
-  const {
-    netWorths,
-    loading: netWorthsLoading,
-    error: netWorthsError,
-  } = usePlayerNetWorths(
-    queryClient,
-    contractAddress ?? "",
-    gameId ?? 0,
-    gameState.player_addresses ?? [],
-  );
-  // Same derivation the ledger uses -- the hook reports loading and errors
-  // but not whether it was ever asked to run.
-  const netWorthsEnabled = Boolean(
-    queryClient && contractAddress !== undefined && gameId !== undefined,
-  );
-  /* ==================================================================
-   *  DESIGN NOTE 405 (footer half): THE LEDGER'S TABLE, NOT A COPY
-   * ==================================================================
-   *
-   * REPORTED: this footer prints raw `juno1san...` wallet addresses;
-   * replace the whole panel with a replication of the Game Ledger's Player
-   * Assets table so portfolio and net worth can be tracked during the
-   * round.
-   *
-   * The panel this replaces built its own table from `player_addresses`
-   * and printed the address in the first column. Rebuilding that table to
-   * look like the ledger's would have reproduced the look and then drifted
-   * on the substance -- the certificate-limit exemption needs live market
-   * prices, the money columns need the net-worth query and its three
-   * separate pending states, and none of that survives being copied by
-   * eye. So the ledger's own component renders here.
-   *
-   * The header stays: it carries the round number, which the ledger has no
-   * reason to know and the footer is the only place that shows.
-   */
-  return (
-    <>
-      <div style={styles.header}>
-        <span style={styles.headerTitle}>Stock Round — Player Assets</span>
-        <span style={styles.headerHint}>
-          SR{gameState.macro_round_number}
-          {gameState.sub_round_index > 0 ? `.${gameState.sub_round_index}` : ""}
-        </span>
-      </div>
-      <PlayerAssetsSection
-        gameState={gameState}
-        marketGrid={marketGrid}
-        netWorths={netWorths}
-        netWorthsEnabled={netWorthsEnabled}
-        netWorthsLoading={netWorthsLoading}
-        netWorthsError={netWorthsError}
-        playerLabel={playerLabel}
-      />
-    </>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Operating Round: Corporation panel -- see design note #3           */

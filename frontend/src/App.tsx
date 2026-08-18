@@ -568,6 +568,7 @@ import {
   dealSandboxGame,
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
+  isExchangePrivateMsg,
   isSetBoParMsg,
   isSandboxOnlyMsg,
   isSetupGameMsg,
@@ -771,8 +772,10 @@ import {
   type BoardMode,
 } from "./utils/activeGame";
 import { STATION_PLACEMENT_HIGHLIGHT_INK } from "./components/hexBoardData";
-import PlayerCards, { seatStripeColor } from "./components/PlayerCards";
+import PlayerCards from "./components/PlayerCards";
+import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 import { playerFinances } from "./utils/playerFinance";
+import { applyPrivateExchange, resolvePrivateExchange } from "./utils/privateExchange";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -781,6 +784,8 @@ import { truncateAddress } from "./utils/address";
 import {
   clearRoomNicknames,
   sandboxPlayerLabel,
+  seatColor,
+  setRoomColors,
   setRoomNicknames,
 } from "./utils/playerLabels";
 
@@ -1245,6 +1250,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ? localId
       : (SANDBOX_PLAYERS[sandboxSeatIndex] ?? SANDBOX_PLAYERS[0])
     : wallet.address;
+
+  /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
+     must not name `viewerAddress` as a dependency -- it feeds
+     `runGameplayAction`'s neighbourhood and design note #536 explains why an
+     identity that changes on every seat switch is expensive there. */
+  const viewerAddressRef = useRef<string | null>(null);
+  viewerAddressRef.current = viewerAddress ?? null;
+
+  /* Design note #573b: the last refusal, for the panel. A REASON rather than
+     a boolean -- "you cannot" sends the player looking for why, and the
+     answer ("you hold 60% of the PRR") is the whole content of the message. */
+  const [privateAbilityError, setPrivateAbilityError] = useState<string | null>(null);
 
 
   // Design note #22. Read once at mount rather than subscribed to: the name
@@ -2311,9 +2328,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       gameState?.current_global_era,
       gameState?.private_companies,
     );
-    const opening = sandbox ? "Track" : initialOrSubPhase(gameState?.current_global_era);
+    /* ==================================================================
+     *  DESIGN NOTE 574: THE TESTING SHORTCUT OUTLIVED THE TESTING
+     * ==================================================================
+     *
+     * REPORTED: once the first 3-train is bought and corporations can buy
+     * private companies, the action bar correctly offers "Buy Private
+     * Company" -- and the Operating Round goes straight to Lay Track.
+     *
+     * This read `sandbox ? "Track" : initialOrSubPhase(...)`, and the note
+     * defending it is worth quoting because it was RIGHT when written: "the
+     * sandbox has no cursor to disagree with. It is a testing surface whose
+     * whole purpose is reaching the board quickly, and opening it on a step
+     * where the picker is locked -- with the remedy one unexplained click
+     * away -- fails at that."
+     *
+     * Every clause of that is about a solo testing session. The sandbox is
+     * now also the multiplayer game mode, and in a real game skipping the
+     * opening step is not a convenience, it is a rule not being applied:
+     * `BuyPrivate` is where a corporation may buy a private from a player,
+     * and a step the game silently walks past is a trade nobody gets to
+     * make.
+     *
+     * SO THE ROOM DECIDES, which is the same line design note #536 draws
+     * ("a room is not a hotseat") and for the same reason -- a solo sandbox
+     * keeps its shortcut, because there is still nobody there to be cheated
+     * by it. */
+    const opening =
+      sandbox && !sandboxRoomCode
+        ? "Track"
+        : initialOrSubPhase(gameState?.current_global_era);
     setOrSubPhase(steps.includes(opening) ? opening : steps[0]);
-  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, sandbox]);
+  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, sandbox, sandboxRoomCode]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -2569,6 +2615,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandbox &&
     gameState?.current_round_type === "WaterfallAuction" &&
     (waterfallState?.privates.length ?? -1) === 0;
+
+  /* ==================================================================
+   *  DESIGN NOTE 565: DERIVE THE QUESTION, DO NOT LATCH IT
+   * ==================================================================
+   *
+   * REPORTED: refreshing during the Stock Round brings back the modal asking
+   * the B&O's winner to set a par value -- a decision made rounds ago.
+   *
+   * A refresh replays the room's whole log from index zero (design note
+   * #551, and that is what makes a rejoin work at all). So the auction's
+   * winning action runs again, `setBoParPrompt` fires again exactly as it
+   * did the first time, and the prompt is raised on a board where it has
+   * long since been answered. The `SetBoPar` event that answered it is
+   * further down the same log and now closes the prompt when it replays --
+   * but that only holds while the two arrive in that order, and it would
+   * still flash the modal on the way past.
+   *
+   * SO THE MODAL ASKS THE BOARD, not a flag. "Does the B&O still owe a
+   * price" is a question `public_companies` can answer at any moment, and
+   * an answer derived from state cannot be stale, cannot be raised twice,
+   * and cannot survive the thing that resolved it. `pendingHomeTokens`
+   * (design note #416) is the same shape and records the same argument: "a
+   * reload, a late poll, or two corporations floating on one dispatch all
+   * resolve correctly, and a prompt cannot be lost."
+   *
+   * THE LATCH STAYS, because it carries something the board does not: WHO
+   * won. A par set by the wrong player would be a worse bug than a modal
+   * shown twice. The latch says who may answer; this says whether there is
+   * still anything to answer. */
+  const boParAlreadySet =
+    (gameState?.public_companies.find((c) => c.ticker === BO_TICKER)?.par_value ?? null) !== null;
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
@@ -4101,6 +4178,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
 
+      /* ==================================================================
+       *  DESIGN NOTE 573: THE EXCHANGES ACTUALLY EXCHANGE
+       * ==================================================================
+       *
+       * They used to fall through to the mark-it-used line below, which is
+       * the whole reported bug: the button greyed out and no share arrived.
+       *
+       * A REFUSAL LEAVES THE POWER ALONE (design note #573b). The `return`
+       * before `setUsedPrivateAbilities` is the entire difference between
+       * "you cannot do this yet" and "you have spent this on nothing". */
+      if (action.key === "mh-exchange" || action.key === "ca-exchange") {
+        const owner = viewerAddressRef.current;
+        const outcome = resolvePrivateExchange(
+          gameStateRef.current,
+          ability.privateId,
+          owner ?? "",
+        );
+        if (!outcome.ok) {
+          setPrivateAbilityError(outcome.reason);
+          logInfoRef.current?.("Private Power", outcome.reason);
+          return;
+        }
+        setPrivateAbilityError(null);
+        void runGameplayActionRef.current?.(
+          `${action.label} — exchanging for a 10% ${outcome.ticker} share.`,
+          {
+            ExchangePrivate: {
+              private_id: outcome.privateId,
+              company_id: outcome.companyId,
+              player: outcome.player,
+              source: outcome.source,
+            },
+          },
+          /* `automatic`: an exchange may be taken between other players'
+             turns (the M&H's own rule), so the turn gate would refuse the
+             one moment the power is most useful. Ownership is the gate here
+             and `resolvePrivateExchange` has already checked it. */
+          { automatic: true },
+        );
+        /* Deliberately NOT marked used: design note #573a closes the COMPANY
+           instead, which removes the row entirely rather than greying it. */
+        return;
+      }
+
       setUsedPrivateAbilities((prev) => new Set(prev).add(action.key));
       logInfoRef.current?.("Private Power", `${action.label} — ${ability.description}`);
     },
@@ -4463,6 +4584,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              The state is left ALONE in that case rather than half-applied:
              a board dealt for a count that does not exist is worse than one
              that visibly never started. */
+        if (isExchangePrivateMsg(msg)) {
+          /* Design note #573: the resolved grant, applied everywhere. The
+             legality question was answered once, by the acting client,
+             before this was ever appended -- see `ExchangePrivateMsg`. */
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const { private_id, company_id, player, source } = msg.ExchangePrivate;
+          const priv = base.private_companies.find((e) => e.private_id === private_id);
+          const exchanged = applyPrivateExchange(base, {
+            ok: true,
+            privateId: private_id,
+            companyId: company_id,
+            ticker:
+              base.public_companies.find((c) => c.company_id === company_id)?.ticker ?? "",
+            player,
+            source,
+          });
+          if (exchanged === base) return;
+          sandboxStateRef.current = exchanged;
+          setSandboxState(exchanged);
+          const ticker =
+            base.public_companies.find((c) => c.company_id === company_id)?.ticker ??
+            `#${company_id}`;
+          logInfo(
+            "Private Power",
+            `${sandboxPlayerLabel(player) ?? truncateAddress(player)} exchanged the ` +
+              `${priv?.name ?? "private company"} for a 10% share of ${ticker}. ` +
+              `The private company closes.`,
+          );
+          return;
+        }
+
         if (isSetBoParMsg(msg)) {
           /* Design note #550: applied on every client, from the log. The
              winner travels IN the message -- see `SetBoParMsg.player` for
@@ -4489,6 +4642,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               setSandboxMarket(marked);
             }
           }
+          /* Design note #565: the prompt closes wherever the answer lands,
+             not only on the browser that gave it. `handleConfirmBoPar`
+             cleared it locally, which was every client that had raised one
+             minus the ones that had not yet seen the answer. */
+          setBoParPrompt(null);
           logInfo(
             "B&O Presidency",
             `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives the B&O President's Certificate and pars it at $${parValue}.`,
@@ -4629,6 +4787,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           setRoomNicknames(Object.fromEntries(
             msg.SetupGame.players.map((player) => [player.id, player.nickname || "Player"]),
           ));
+          /* Design note #569: and their colours, from the same payload and in
+             the same breath. Two registries fed by one event, because a seat
+             whose name arrived and whose colour did not would be painted a
+             default that some other seat may also have chosen. */
+          setRoomColors(
+            Object.fromEntries(
+              msg.SetupGame.players
+                .filter((player) => typeof player.color === "string" && player.color)
+                .map((player) => [player.id, player.color as string]),
+            ),
+          );
           sandboxStateRef.current = seated;
           setSandboxState(seated);
 
@@ -7748,6 +7917,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         id: localId,
         nickname: nickname.trim() || "Player",
         isReady: mine?.isReady ?? false,
+        // Design note #569: carried, not dropped. The upsert REPLACES the
+        // entry, so a field left out of one write is erased by it.
+        ...(mine?.color ? { color: mine.color } : {}),
+      });
+    },
+    [sandboxRoomCode, sandboxRoom, localId],
+  );
+
+  /* Design note #569: `null` clears the choice and returns this seat to the
+     assigned default. Written through the same upsert as the nickname, so
+     design note #541's in-place update keeps the roster order. */
+  const handleSetSandboxColor = useCallback(
+    (color: string | null) => {
+      if (!sandboxRoomCode) return;
+      const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      void upsertSandboxPlayer(sandboxRoomCode, {
+        id: localId,
+        nickname: mine?.nickname ?? "Player",
+        isReady: mine?.isReady ?? false,
+        ...(color ? { color } : {}),
       });
     },
     [sandboxRoomCode, sandboxRoom, localId],
@@ -7761,6 +7950,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         id: localId,
         nickname: mine?.nickname || "Player",
         isReady,
+        // Design note #569: carried, for the same reason the nickname write
+        // carries the ready flag -- this replaces the whole entry.
+        ...(mine?.color ? { color: mine.color } : {}),
       });
     },
     [sandboxRoomCode, sandboxRoom, localId],
@@ -7962,6 +8154,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         error={sandboxRoomError}
         busy={sandboxRoomBusy}
         onSetNickname={handleSetSandboxNickname}
+        onSetColor={handleSetSandboxColor}
         onToggleReady={handleToggleSandboxReady}
         onStart={handleStartSandboxGame}
         onLeave={handleLeaveSandboxRoom}
@@ -8102,7 +8295,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <AuctionPromptModal
         parPending={
           boParPrompt !== null &&
-          (!sandboxRoomCode || boParPrompt.player === viewerAddress)
+          (!sandboxRoomCode || boParPrompt.player === viewerAddress) &&
+          !boParAlreadySet
         }
         parWinnerLabel={
           boParPrompt
@@ -8112,7 +8306,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onConfirmPar={handleConfirmBoPar}
         handoffPending={auctionHandoffPending}
         awaitingParFrom={
-          boParPrompt && sandboxRoomCode && boParPrompt.player !== viewerAddress
+          boParPrompt && !boParAlreadySet && sandboxRoomCode && boParPrompt.player !== viewerAddress
             ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
             : null
         }
@@ -8409,6 +8603,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
                   ownsAnyTrain={ownsAnyTrain}
                   mustBuyTrain={mustBuyTrain}
+                  /* Design note #570: the acting seat's colour, so the bar
+                     is as findable in a Stock Round as an Operating Round
+                     bar already is. `null` in an OR, which has the
+                     corporation's livery instead. */
+                  actingSeatColor={
+                    gameState &&
+                    (gameState.current_round_type === "StockRound" ||
+                      gameState.current_round_type === "WaterfallAuction")
+                      ? (() => {
+                          const acting = actingAddress(gameState, waterfallState);
+                          if (!acting) return null;
+                          const seat = gameState.player_addresses.indexOf(acting);
+                          return seat === -1 ? null : seatColor(acting, seat);
+                        })()
+                      : null
+                  }
                   activePlayerName={activeSeatLabel}
                   activePlayerCash={activeSeatCash}
                   activePlayerEscrow={activeSeatEscrow}
@@ -8418,6 +8628,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   sandboxMode={sandbox}
                   usedPrivateAbilities={usedPrivateAbilities}
                   onUsePrivateAbility={handleUsePrivateAbility}
+                  privateAbilityError={privateAbilityError}
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
@@ -8738,7 +8949,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
                     The Ledger's Player Assets TABLE is untouched. Two views
                     of one dataset, each shaped for its own screen. */}
-                {gameState?.current_round_type === "StockRound" && (
+                {/* Design note #571: the tab guard was MISSING, so the cards
+                    travelled to the Rail Map and Stock Market tabs with the
+                    player. `activeMainTab === "corps"` is the same condition
+                    the corporation cards above use -- they are two halves of
+                    one screen and only one of them was scoped to it. */}
+                {activeMainTab === "corps" && gameState?.current_round_type === "StockRound" && (
                   <section style={styles.playerCardsSection}>
                     <h3 style={styles.playerCardsTitle}>Players</h3>
                     <PlayerCards
@@ -8753,8 +8969,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                         gameState?.player_addresses[gameState.priority_deal_index] ?? null
                       }
                       viewerAddress={viewerAddress ?? null}
-                      colorForCompany={stationTickerColor}
-                      colorForSeat={seatStripeColor}
+                      // Design note #569: their own choice, else the palette.
+                      colorForSeat={(index) =>
+                        seatColor(gameState?.player_addresses[index] ?? "", index)
+                      }
+                      // Design note #568: the auction's own text, same catalog.
+                      privateDescription={(privateId) =>
+                        PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
+                      }
                     />
                   </section>
                 )}

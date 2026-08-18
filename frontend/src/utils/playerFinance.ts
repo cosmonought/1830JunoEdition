@@ -115,7 +115,41 @@ export function playerFinances(
   const cashRaw = Number(cashEntry?.cash_vgp ?? NaN);
   const cash = Number.isFinite(cashRaw) ? cashRaw : null;
 
-  const worth = estimatePlayerNetWorth(address, state, marketPrices);
+  /* ==================================================================
+   *  DESIGN NOTE 566: PAR IS A PRICE, NOT A GUESS
+   * ==================================================================
+   *
+   * REPORTED: some Net Worth entries render as a dash rather than a value.
+   *
+   * `estimateStockPortfolioValue` returns `null` the moment ANY held
+   * corporation has no market price, and its own note defends that hard:
+   * skipping the company "would under-report the portfolio by however much
+   * it is worth, and an under-report is indistinguishable from a correct
+   * smaller number". Right, and it leaves a third option unconsidered.
+   *
+   * A corporation whose president has set a par but whose token is not yet
+   * on the chart is not unpriced. Its shares sell from the IPO at par, that
+   * is the figure a player would pay for the next one, and it is on
+   * `PublicCompanyState` already. Reaching for it is not estimating -- it is
+   * reading the price the game is currently charging.
+   *
+   * SO THE DASH IS RESERVED for a corporation with NO price of any kind,
+   * which is the case the original note was actually protecting, and which
+   * cannot be valued by anyone. The distinction is between "we do not know"
+   * and "we know, from the other one of the two places a share price lives".
+   *
+   * ONLY THE CARD, deliberately. The Ledger's column keeps the stricter
+   * reading -- it sits beside the contract's own `PlayerNetWorth` answer and
+   * should not quietly diverge from what the chain would say. */
+  const pricesWithPar: Record<number, number | null> = { ...marketPrices };
+  for (const company of state.public_companies) {
+    const known = pricesWithPar[company.company_id];
+    if (known !== null && known !== undefined && Number.isFinite(known)) continue;
+    const par = Number(company.par_value ?? NaN);
+    pricesWithPar[company.company_id] = Number.isFinite(par) && par > 0 ? par : null;
+  }
+
+  const worth = estimatePlayerNetWorth(address, state, pricesWithPar);
 
   const holdings: PlayerHoldingRow[] = [];
   let shares = 0;
@@ -140,7 +174,7 @@ export function playerFinances(
      construction rather than by agreement. */
   const liquid = cash === null
     ? null
-    : sellableHoldings(state, address, (companyId) => marketPrices[companyId] ?? null).reduce(
+    : sellableHoldings(state, address, (companyId) => pricesWithPar[companyId] ?? null).reduce(
         (sum, entry) => sum + entry.proceeds,
         cash,
       );

@@ -43,11 +43,36 @@
 // has an empty holdings list which is a real and readable state ("bought
 // nothing yet"). Owning no privates after the auction is equally real, but
 // the auction is over by then and the table has no further story to tell.
+//
+// ==================================================================
+//  DESIGN NOTE 567: WHAT CAME OFF THE CARD, AND WHY
+// ==================================================================
+//
+// The first pass carried three marks that each looked like information and
+// were not, and the playtest found all three:
+//
+//   THE HERALDS. A corporate logo beside a three-letter ticker identifies
+//   nothing the ticker had not already identified, at 14px where the artwork
+//   is a smudge. They earn their place on a corporation CARD, which is about
+//   one company and has room to be about it.
+//
+//   THE "YOU" BADGE. Every player is reading their own screen; the card that
+//   is theirs is the one they already know. It is worth drawing only when
+//   two players share a display name, which is the sole case where the
+//   reader genuinely cannot tell -- so that is exactly when it appears.
+//
+//   "PD". An abbreviation invented to fit a space that turned out not to be
+//   tight. "Priority Deal" is two words and the stripe holds them.
+//
+// The crown moved to the RIGHT of the acronym for the same family of
+// reason: on the left it pushed every ticker in the column out of alignment
+// by the width of a glyph most rows do not have, so the one column that
+// should scan cleanly was ragged in proportion to how many presidencies were
+// on screen.
 
-import React from "react";
+import React, { useState } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
-import { CorporateLogo } from "./CorporateLogo";
 import { PresidentCrown } from "./PresidentCrown";
 import { bestContrastTextColor } from "../styles/corporationLivery";
 import type { PlayerFinances } from "../utils/playerFinance";
@@ -60,30 +85,20 @@ export interface PlayerCardsProps {
   activeAddress: string | null;
   /** Who holds the Priority Deal, and so opens the next Stock Round. */
   priorityAddress: string | null;
-  /** This browser's own seat, for the YOU marker. */
+  /** Design note #567: only used to disambiguate two identical display
+   *  names -- otherwise a player knows which card is theirs. */
   viewerAddress: string | null;
-  /** The corporation's livery, for the herald column. */
-  colorForCompany: (companyId: number) => string;
   /** A player's own stripe colour. Distinct per seat. */
   colorForSeat: (index: number) => string;
+  /** Design note #568: the private's rules text, for the expandable rows.
+   *  `null` renders the name as plain text rather than a control. */
+  privateDescription?: (privateId: number) => string | null;
 }
 
-/** Design note #563: the seat palette. Deliberately NOT the corporation
- *  liveries -- a player stripe in the PRR's red would read as a claim about
- *  the PRR. Six, because 1830 seats six, and spaced around the hue circle so
- *  adjacent seats never look alike. */
-export const SEAT_STRIPE_COLORS = [
-  "#3f6fa8",
-  "#a8593f",
-  "#4f8a5c",
-  "#7a5aa8",
-  "#a88a3f",
-  "#3f8a94",
-] as const;
-
-export function seatStripeColor(index: number): string {
-  return SEAT_STRIPE_COLORS[index % SEAT_STRIPE_COLORS.length];
-}
+/* Design note #569: the palette moved to `utils/playerLabels.ts`, beside the
+   room registry that can override it. A component that owned the colours
+   would have been the only place that knew them, and the action bar needs
+   the same answer. */
 
 function money(value: number | null): string {
   /* Design note #562: an em dash, never "$0". A missing figure and a figure
@@ -98,10 +113,27 @@ export function PlayerCards({
   activeAddress,
   priorityAddress,
   viewerAddress,
-  colorForCompany,
   colorForSeat,
+  privateDescription,
 }: PlayerCardsProps) {
+  /* Design note #568: which private row is open, keyed by id. One map for
+     the whole grid rather than state per card -- a player may want the
+     Camden & Amboy's text open on two cards at once to compare, and nothing
+     about the disclosure is per-player. */
+  const [openPrivates, setOpenPrivates] = useState<Readonly<Record<number, boolean>>>({});
+  const togglePrivate = (privateId: number) =>
+    setOpenPrivates((prev) => ({ ...prev, [privateId]: !prev[privateId] }));
+
   if (players.length === 0) return null;
+
+  /* Design note #567: the YOU badge earns its place only when a name is
+     ambiguous. Computed once for the grid, because "is this name shared" is
+     a question about the ROSTER and not about any one card. */
+  const nameCounts = new Map<string, number>();
+  for (const player of players) {
+    const name = label(player.address);
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
 
   return (
     <div style={styles.grid}>
@@ -119,7 +151,10 @@ export function PlayerCards({
             <header style={{ ...styles.stripe, backgroundColor: stripe, color: ink }}>
               <span style={styles.stripeName}>{label(player.address)}</span>
               <span style={styles.stripeMarks}>
-                {player.address === viewerAddress && <span style={styles.youTag}>YOU</span>}
+                {player.address === viewerAddress &&
+                  (nameCounts.get(label(player.address)) ?? 0) > 1 && (
+                    <span style={styles.youTag}>YOU</span>
+                  )}
                 {player.address === priorityAddress && (
                   /* Design note #563: the Priority Deal lives in the stripe
                      because it is a property of the SEAT rather than of the
@@ -128,9 +163,9 @@ export function PlayerCards({
                      holdings; this is not. */
                   <span
                     style={{ ...styles.priorityTag, color: ink, borderColor: ink }}
-                    title="Priority Deal: starts the next Stock Round."
+                    title="Starts the next Stock Round."
                   >
-                    PD
+                    Priority Deal
                   </span>
                 )}
               </span>
@@ -180,7 +215,6 @@ export function PlayerCards({
               <table style={styles.holdings}>
                 <thead>
                   <tr>
-                    <th style={styles.holdingHeadIcon} aria-label="Herald" />
                     <th style={styles.holdingHead}>Co.</th>
                     <th style={styles.holdingHeadNum}>%</th>
                   </tr>
@@ -188,25 +222,20 @@ export function PlayerCards({
                 <tbody>
                   {player.holdings.length === 0 ? (
                     <tr>
-                      <td colSpan={3} style={styles.holdingEmpty}>
+                      <td colSpan={2} style={styles.holdingEmpty}>
                         No shares yet.
                       </td>
                     </tr>
                   ) : (
                     player.holdings.map((holding) => (
                       <tr key={holding.companyId}>
-                        <td style={styles.holdingIcon}>
-                          <CorporateLogo
-                            ticker={holding.ticker}
-                            size={14}
-                            color={colorForCompany(holding.companyId)}
-                          />
-                        </td>
+                        {/* Design note #567: crown AFTER the acronym, so the
+                            tickers stay left-aligned with each other. */}
                         <td style={styles.holdingName}>
+                          {holding.ticker}
                           {holding.isPresident && (
                             <PresidentCrown scale={0.9} style={styles.holdingCrown} />
                           )}
-                          {holding.ticker}
                         </td>
                         <td style={styles.holdingNum}>{holding.percentage}%</td>
                       </tr>
@@ -227,15 +256,57 @@ export function PlayerCards({
                   </tr>
                 </thead>
                 <tbody>
-                  {player.privates.map((entry) => (
-                    <tr key={entry.privateId}>
-                      <td style={styles.privateName} title={entry.name}>
-                        {entry.acronym ?? entry.name}
-                      </td>
-                      <td style={styles.privateNum}>${entry.value}</td>
-                      <td style={styles.privateNum}>${entry.income}</td>
-                    </tr>
-                  ))}
+                  {player.privates.map((entry) => {
+                    const description = privateDescription?.(entry.privateId) ?? null;
+                    const open = openPrivates[entry.privateId] === true;
+                    /* Design note #568: the NUMBER stays, on instruction --
+                       "referring to Private Company 1 is easier than
+                       remembering some of the names". Design note #423
+                       removed the numeric chips because a bare `3` names
+                       nothing away from the auction's numbered list; a
+                       number IN FRONT OF the name is the opposite trade and
+                       costs two characters. */
+                    const title = `${entry.privateId}. ${entry.name}`;
+                    return (
+                      <React.Fragment key={entry.privateId}>
+                        <tr>
+                          <td style={styles.privateName}>
+                            {description ? (
+                              <button
+                                type="button"
+                                style={styles.privateButton}
+                                onClick={() => togglePrivate(entry.privateId)}
+                                aria-expanded={open}
+                                title={`${title} — what it does`}
+                              >
+                                <span style={styles.privateCaret} aria-hidden="true">
+                                  {open ? "▾" : "▸"}
+                                </span>
+                                <span style={styles.privateLabel}>{title}</span>
+                              </button>
+                            ) : (
+                              <span style={styles.privateLabel} title={title}>
+                                {title}
+                              </span>
+                            )}
+                          </td>
+                          <td style={styles.privateNum}>${entry.value}</td>
+                          <td style={styles.privateNum}>${entry.income}</td>
+                        </tr>
+                        {open && description && (
+                          /* The auction's own text, from the one catalog both
+                             screens read (design note #391) -- so a player
+                             who learned what the D&H does while bidding on it
+                             reads the same sentence here. */
+                          <tr>
+                            <td colSpan={3} style={styles.privateDescription}>
+                              {description}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -321,7 +392,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   holdings: { borderCollapse: "collapse", width: "100%", fontVariantNumeric: "tabular-nums" },
-  holdingHeadIcon: { width: "18px" },
   holdingHead: {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
@@ -334,7 +404,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#5f636d",
   },
-  holdingIcon: { width: "18px", lineHeight: 0 },
   holdingName: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
@@ -342,7 +411,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
-  holdingCrown: { color: "#c9a94c", marginRight: "3px" },
+  holdingCrown: { color: "#c9a94c", marginLeft: "4px" },
   holdingNum: { textAlign: "right", fontSize: FONT_SIZE.micro, fontWeight: 800 },
   holdingEmpty: { fontSize: FONT_SIZE.micro, color: "#8a8f99", fontStyle: "italic" },
   privates: {
@@ -365,13 +434,39 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#5f636d",
     padding: "3px 10px",
   },
-  privateName: {
+  /* Design note #568: the name column takes what is left after the two
+     numeric columns, and ellipsises rather than wrapping -- "Camden &
+     A..." was accepted explicitly, and a wrapped name would make the rows
+     different heights for no gain. */
+  privateName: { padding: "2px 10px", maxWidth: 0, width: "100%" },
+  privateButton: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "4px",
+    width: "100%",
+    padding: 0,
+    border: "none",
+    background: "none",
+    font: "inherit",
+    color: "inherit",
+    textAlign: "left",
+    cursor: "pointer",
+    minWidth: 0,
+  },
+  privateCaret: { fontSize: FONT_SIZE.micro, opacity: 0.6, flex: "none" },
+  privateLabel: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    padding: "2px 10px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
+    minWidth: 0,
+  },
+  privateDescription: {
+    padding: "2px 10px 7px 22px",
+    fontSize: FONT_SIZE.micro,
+    lineHeight: 1.45,
+    color: "#4d515a",
   },
   privateNum: {
     textAlign: "right",

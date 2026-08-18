@@ -103,6 +103,8 @@ export interface SetupPlayer {
   /** Stable per browser session -- the log's actor stamp. */
   id: string;
   nickname: string;
+  /** Design note #569: the seat's chosen colour, if they picked one. */
+  color?: string;
 }
 
 /** What the host publishes when it starts the game.
@@ -283,6 +285,25 @@ export interface SetBoParMsg {
   };
 }
 
+/** Design note #573: the Mohawk & Hudson's and Camden & Amboy's exchanges.
+ *  Sandbox-only, and logged because it is a CHOICE (design note #550) --
+ *  a share arriving in one browser only is the same class of bug as the B&O
+ *  presidency was.
+ *
+ *  The RESOLVED grant travels, not the request. Legality is decided once, on
+ *  the acting client, against the state it can see; replaying the decision
+ *  rather than re-deciding it means every client applies the same result
+ *  even if their view of the IPO differs by a share -- the property design
+ *  note #549 is about. */
+export interface ExchangePrivateMsg {
+  ExchangePrivate: {
+    private_id: number;
+    company_id: number;
+    player: string;
+    source: "Ipo" | "Bank";
+  };
+}
+
 export interface PlaceHomeStationMsg {
   PlaceHomeStation: {
     company_id: number;
@@ -312,7 +333,8 @@ export type SandboxLogMsg =
   | SetupGameMsg
   | OpenStockRoundMsg
   | SetBoParMsg
-  | PlaceHomeStationMsg;
+  | PlaceHomeStationMsg
+  | ExchangePrivateMsg;
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
@@ -330,17 +352,28 @@ export function isPlaceHomeStationMsg(msg: unknown): msg is PlaceHomeStationMsg 
   return typeof msg === "object" && msg !== null && "PlaceHomeStation" in msg;
 }
 
+export function isExchangePrivateMsg(msg: unknown): msg is ExchangePrivateMsg {
+  return typeof msg === "object" && msg !== null && "ExchangePrivate" in msg;
+}
+
 /** Neither sandbox-only event may reach `execGameplay` -- the contract has
  *  no such message. One predicate so a third event cannot be added to the
  *  union and forgotten at the one call site that must refuse them. */
 export function isSandboxOnlyMsg(
   msg: unknown,
-): msg is SetupGameMsg | OpenStockRoundMsg | SetBoParMsg | PlaceHomeStationMsg {
+):
+  msg is
+    | SetupGameMsg
+    | OpenStockRoundMsg
+    | SetBoParMsg
+    | PlaceHomeStationMsg
+    | ExchangePrivateMsg {
   return (
     isSetupGameMsg(msg) ||
     isOpenStockRoundMsg(msg) ||
     isSetBoParMsg(msg) ||
-    isPlaceHomeStationMsg(msg)
+    isPlaceHomeStationMsg(msg) ||
+    isExchangePrivateMsg(msg)
   );
 }
 

@@ -41,6 +41,7 @@ import React, { useState } from "react";
 import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
 import type { SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
+import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
 
 export interface SandboxWaitingRoomProps {
   roomCode: string;
@@ -50,6 +51,8 @@ export interface SandboxWaitingRoomProps {
   error: string | null;
   busy: boolean;
   onSetNickname: (nickname: string) => void;
+  /** Design note #569: `null` returns this seat to the assigned default. */
+  onSetColor: (color: string | null) => void;
   onToggleReady: (isReady: boolean) => void;
   onStart: () => void;
   onLeave: () => void;
@@ -62,6 +65,7 @@ export function SandboxWaitingRoom({
   error,
   busy,
   onSetNickname,
+  onSetColor,
   onToggleReady,
   onStart,
   onLeave,
@@ -121,6 +125,53 @@ export function SandboxWaitingRoom({
           </button>
         </form>
 
+        {/* ==================================================================
+             DESIGN NOTE 569a: PICK A COLOUR, OR DO NOT
+            ==================================================================
+
+            Optional by construction. A seat that never touches this gets the
+            palette by index and is never colourless, so the control is a
+            preference rather than a step -- which is what "some people have
+            favorite colors and would want to set it, others may not care"
+            asks for.
+
+            TAKEN COLOURS ARE DISABLED rather than hidden. A greyed swatch
+            with the holder's name in its tooltip says WHY it cannot be
+            chosen; removing it would make the palette a different size for
+            every player and look like a bug. */}
+        <div style={styles.colorRow} role="group" aria-label="Your colour">
+          <span style={styles.colorLabel}>Colour</span>
+          {SEAT_COLORS.map((color) => {
+            const holder = players.find(
+              (player) => player.color === color && player.id !== localPlayerId,
+            );
+            const mine = me?.color === color;
+            return (
+              <button
+                key={color}
+                type="button"
+                aria-pressed={mine}
+                aria-label={SEAT_COLOR_NAMES[color] ?? color}
+                disabled={busy || !me || holder !== undefined}
+                onClick={() => onSetColor(mine ? null : color)}
+                title={
+                  holder
+                    ? `${holder.nickname || "Another player"} has taken ${SEAT_COLOR_NAMES[color] ?? "this"}.`
+                    : mine
+                      ? `${SEAT_COLOR_NAMES[color] ?? "This colour"} — click again to let the game assign one.`
+                      : (SEAT_COLOR_NAMES[color] ?? color)
+                }
+                style={{
+                  ...styles.swatch,
+                  backgroundColor: color,
+                  ...(mine ? styles.swatchMine : {}),
+                  ...(holder ? styles.swatchTaken : {}),
+                }}
+              />
+            );
+          })}
+        </div>
+
         <div style={styles.roster} role="list" aria-label="Players in this room">
           {players.length === 0 ? (
             <span style={styles.note}>Nobody here yet.</span>
@@ -128,6 +179,17 @@ export function SandboxWaitingRoom({
             players.map((player) => (
               <span key={player.id} style={styles.rosterRow} role="listitem">
                 <span style={styles.rosterName}>
+                  {/* Design note #569: the seat's colour, where the seat is
+                      named -- so a player can see the assignment before the
+                      game starts rather than discovering it on the board. */}
+                  <span
+                    style={{
+                      ...styles.rosterDot,
+                      backgroundColor:
+                        player.color ?? SEAT_COLORS[players.indexOf(player) % SEAT_COLORS.length],
+                    }}
+                    aria-hidden="true"
+                  />
                   {player.nickname || "unnamed"}
                   {player.id === room?.hostId && <span style={styles.hostTag}>HOST</span>}
                   {player.id === localPlayerId && <span style={styles.youTag}>YOU</span>}
@@ -235,6 +297,26 @@ const styles: Record<string, React.CSSProperties> = {
   note: { fontSize: FONT_SIZE.small, color: "#8a90a0", lineHeight: LINE_HEIGHT.normal },
   figure: { color: "#e2e6ee", fontVariantNumeric: "tabular-nums" },
   nickRow: { display: "flex", flexDirection: "row", gap: "8px" },
+  colorRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "6px" },
+  colorLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    color: "#9aa0ac",
+    marginRight: "2px",
+  },
+  swatch: {
+    width: "26px",
+    height: "26px",
+    borderRadius: "50%",
+    border: "2px solid transparent",
+    cursor: "pointer",
+    padding: 0,
+  },
+  swatchMine: { borderColor: "#e2e6ee", boxShadow: "0 0 0 2px rgba(226,230,238,0.25)" },
+  swatchTaken: { opacity: 0.28, cursor: "not-allowed" },
+  rosterDot: { width: "10px", height: "10px", borderRadius: "50%", flex: "none" },
   input: {
     flex: 1,
     fontSize: FONT_SIZE.control,

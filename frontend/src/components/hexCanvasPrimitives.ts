@@ -3066,10 +3066,13 @@ export function drawStationTokenMarker(
    * SCALED, NOT SPECIAL-CASED. The threshold is a length rather than a list
    * of tickers, so a future corporation with a long acronym is handled by
    * the same rule rather than by someone remembering to add it. */
-  const longTicker = ticker.length > 3;
-  const textWidth = radius * (longTicker ? 1.45 : 1.7);
-  const floorPx = longTicker ? 7 : 9;
-  ctx.font = fitFontSize(ctx, ticker, 11, textWidth, floorPx, "bold");
+  /* Design note #564: measured against the disc's own geometry at each
+     candidate size, rather than against a flat fraction of the diameter.
+     The `longTicker` special case is gone with it -- ERIE and NNH are no
+     longer exceptions to a rule, they are just longer strings hitting the
+     same chord sooner, which is what design note #513 said it wanted
+     ("scaled, not special-cased") and could not achieve with one ratio. */
+  ctx.font = fitTokenFontSize(ctx, ticker, radius, ctx.lineWidth);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
@@ -3587,6 +3590,88 @@ export function drawLabelWithBackground(
   } else {
     ctx.fillText(text, point.x, point.y);
   }
+}
+
+
+/* ==================================================================
+ *  DESIGN NOTE 564: A DISC IS NOT A BOX
+ * ==================================================================
+ *
+ * REPORTED: every acronym except ERIE's runs into the token's ring and gets
+ * clipped or blends with it.
+ *
+ * Design note #513 fixed ERIE by narrowing the allowance for tickers longer
+ * than three characters, and left the common case on its original
+ * `radius * 1.7` -- 85% of the DIAMETER, as a flat ratio. That ratio is the
+ * bug, and #513 only moved it rather than replacing it, so the three-letter
+ * majority went on being measured against a width the disc does not have.
+ *
+ * TEXT IN A CIRCLE DOES NOT GET THE DIAMETER. The widest chord is the one
+ * through the centre, and a glyph occupies HEIGHT either side of it -- so
+ * the width actually available is the chord at the top of the letterforms,
+ * which is `2 * sqrt(r^2 - (h/2)^2)`, not `2r`. At the token's ordinary
+ * radius with a 9px bold face that is about 15.5px against the 15.7px the
+ * old ratio handed out: over by a hair, every time, on every three-letter
+ * ticker. Exactly the "touches the rim it is supposed to sit inside" the
+ * previous note described and then only applied to long strings.
+ *
+ * THE RING IS INSIDE THE BUDGET TOO. It is stroked ON the circle, so half
+ * its width eats into the interior -- and it is drawn in the corporation's
+ * own colour, which is why the symptom reads as "blending with the border"
+ * as often as "clipped".
+ *
+ * IT ITERATES, because the constraint is circular: the available width
+ * depends on the glyph height, which depends on the font size, which is what
+ * we are solving for. Measuring the chord per candidate size costs a few
+ * arithmetic operations inside a loop that was already measuring text, and
+ * removes the guess entirely.
+ *
+ * NO FLOOR THAT OVERFLOWS. `fitFontSize` returns its minimum unmeasured
+ * when nothing fits (its own loop exits and hands the floor back), which is
+ * the mechanism that made both this and #513's symptom visible. This asks
+ * for a size that FITS and reports honestly when the smallest legible one
+ * does not -- the caller then has a real decision to make rather than an
+ * overflowing label it was not told about. */
+export function tokenTextChordWidth(
+  radius: number,
+  ringWidth: number,
+  fontPx: number,
+): number {
+  /* Cap height, near enough, for a bold sans at this size -- the letters are
+     all capitals, so the ascender is the whole story and the descender never
+     appears. Half of it is the offset from the centre line at which the
+     chord has to be measured. */
+  const halfTextHeight = fontPx * 0.72 * 0.5;
+  // The ring is stroked ON the circle, so half of it is interior.
+  const inner = radius - ringWidth / 2;
+  if (inner <= halfTextHeight) return 0;
+  const chord = 2 * Math.sqrt(inner * inner - halfTextHeight * halfTextHeight);
+  /* A hair of air, so a glyph's side bearing does not sit flush against the
+     ring. Proportional rather than absolute -- an absolute pad is the same
+     class of mistake as an absolute width. */
+  return chord * 0.92;
+}
+
+/** The largest font size at which `text` fits inside a token disc, walking
+ *  down from `maxPx`. Returns `minPx` when nothing fits, same contract as
+ *  `fitFontSize` -- but every size above it has been measured against the
+ *  chord for THAT size rather than against one fixed width. */
+export function fitTokenFontSize(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  radius: number,
+  ringWidth: number,
+  maxPx = 11,
+  minPx = 6,
+): string {
+  for (let fontPx = maxPx; fontPx >= minPx; fontPx -= 1) {
+    const candidate = `bold ${fontPx}px ${FONT_FAMILY_STACK}`;
+    ctx.font = candidate;
+    if (ctx.measureText(text).width <= tokenTextChordWidth(radius, ringWidth, fontPx)) {
+      return candidate;
+    }
+  }
+  return `bold ${minPx}px ${FONT_FAMILY_STACK}`;
 }
 
 /** Measures `text` at `baseFontSizePx` and shrinks it (in 1px steps, down to

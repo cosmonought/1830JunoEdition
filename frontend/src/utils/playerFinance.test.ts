@@ -26,6 +26,8 @@ function board(options: {
   caiPrr?: number;
   adaNyc?: number;
   prrPresident?: string | null;
+  /** Design note #566: `null` is a corporation with NO price of any kind. */
+  prrPar?: string | null;
   privates?: Array<{ id: number; owner: string | null }>;
   cash?: string;
 }): GameStateResponse {
@@ -35,6 +37,7 @@ function board(options: {
     caiPrr = 0,
     adaNyc = 0,
     prrPresident = null,
+    prrPar = "100",
     privates = [],
     cash = "500",
   } = options;
@@ -55,7 +58,7 @@ function board(options: {
         company_id: 1,
         ticker: "PRR",
         president: prrPresident,
-        par_value: "100",
+        par_value: prrPar,
         is_floated: true,
         bank_pool_percentage: 0,
         player_holdings: [
@@ -133,17 +136,33 @@ describe("net worth against liquidity", () => {
     expect(f.liquidity).toBe(800);
   });
 
-  it("gives an unpriced company's shares no sale value", () => {
-    /* CORRECTED MID-WRITING, and worth recording. This first asserted that
-       an UNFLOATED company's shares cannot be sold, and it failed --
-       `sellableHoldings` keys on whether the corporation has a market PRICE,
-       not on whether it has floated, and it is right to. A started but
-       unfloated corporation sits at its par position and its shares are
-       perfectly saleable; what cannot be sold is a share of something with
-       nowhere on the chart to sell it.
-       So the premise moved to the code's, rather than the code to a premise
-       that was wrong about 1830. */
+  it("values shares at par when the chart has no position", () => {
+    /* CORRECTED TWICE, and both corrections are the same lesson from
+       opposite sides.
+
+       FIRST it asserted that an UNFLOATED company's shares cannot be sold.
+       That failed: `sellableHoldings` keys on whether there is a PRICE, not
+       on float, and it is right to -- a started-but-unfloated corporation
+       sits at its par position and its shares sell perfectly well.
+
+       THEN, rewritten to pass `{1: null}`, it failed again once design note
+       #566 landed -- because a corporation holding a par is no longer
+       unpriced. Which is exactly the intended change: par is the figure the
+       IPO is charging right now, and reading it is not estimating.
+
+       Both times the code was right about 1830 and the test was asserting a
+       tidier rule than the game has. */
     const f = playerFinances(ADA, board({ adaPrr: 30 }), { 1: null, 2: 50 })!;
+    expect(f.stockValue).toBe(300);
+    expect(f.liquidity).toBe(800);
+  });
+
+  it("gives a company with no price of any kind no sale value", () => {
+    /* The case the dash IS for: no chart position AND no par. Nobody can
+       value these shares, so the figure is withheld rather than guessed. */
+    const state = board({ adaPrr: 30, prrPar: null });
+    const f = playerFinances(ADA, state, { 1: null, 2: 50 })!;
+    expect(f.netWorth).toBeNull();
     expect(f.liquidity).toBe(500);
   });
 

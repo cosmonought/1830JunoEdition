@@ -396,10 +396,12 @@ export default function ContextualActionBar({
   activePlayerCash,
   activePlayerEscrow,
   playerRoster,
+  actingSeatColor = null,
   privateCompanies,
   privatePowerViewer,
   sandboxMode,
   usedPrivateAbilities,
+  privateAbilityError = null,
   onUsePrivateAbility,
   onRunTrains,
   onPayDividends,
@@ -514,6 +516,35 @@ export default function ContextualActionBar({
   activePlayerEscrow: number;
   /** Design note #342: every seat, in order, with its spendable cash.
    *  Empty falls back to the single acting-player badge. */
+  /* ==================================================================
+   *  DESIGN NOTE 570: THE BAR WEARS WHOSE TURN IT IS
+   * ==================================================================
+   *
+   * REPORTED: players do not find the Action panel especially visible during
+   * the Auction and Stock Rounds -- and, unprompted, that they DO find it
+   * easy to see during an Operating Round.
+   *
+   * That pairing is the answer. An Operating Round bar carries the acting
+   * corporation's livery as a full-height block of colour, and a block of
+   * colour is what makes a panel findable at a glance. The two seat-driven
+   * rounds have no corporation, so the bar falls back to the same dark
+   * chrome as everything around it and stops being a distinct object on the
+   * screen.
+   *
+   * They do have an acting PLAYER. Design note #569 gave every seat a
+   * colour; this spends it. Same mechanism, same meaning -- "this belongs to
+   * whoever is up" -- extended to the rounds that were missing it, rather
+   * than a new decoration invented for them.
+   *
+   * A STRIPE, NOT A FILL. The corporation's livery fills a card inside the
+   * bar because an Operating Round turn is ABOUT that corporation. A Stock
+   * Round turn is not about the player in the same way -- they are choosing
+   * among eight companies -- so the seat's colour runs as an edge rather
+   * than taking over the panel. Enough to locate, not enough to claim.
+   *
+   * `null` OUTSIDE THOSE ROUNDS, so an Operating Round is untouched and
+   * cannot end up wearing two identities at once. */
+  actingSeatColor?: string | null;
   playerRoster: ReadonlyArray<{
     address: string;
     label: string;
@@ -533,6 +564,8 @@ export default function ContextualActionBar({
   /** Design note #442: keyed by ACTION, not by private id -- the D&H's
    *  two powers are spent independently. */
   usedPrivateAbilities: ReadonlySet<string>;
+  /** Design note #573b: why the last exchange refused. */
+  privateAbilityError?: string | null;
   onUsePrivateAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
   onRunTrains: () => void;
   onPayDividends: () => void;
@@ -1160,6 +1193,12 @@ export default function ContextualActionBar({
         ...styles.actionBar,
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
+        /* Design note #570: the acting seat's colour as a left edge. LAST in
+           the spread so it wins over the base border, and only ever set for
+           the two rounds that have a seat on turn. */
+        ...(actingSeatColor
+          ? { borderLeft: `6px solid ${actingSeatColor}`, paddingLeft: "10px" }
+          : {}),
       }}
     >
       {/* The "Phase N of 6: Track" suffix is GONE, and its removal is the
@@ -1407,25 +1446,62 @@ export default function ContextualActionBar({
               borderColor: corporationBarInk.border,
             }}
           >
+            {/* ==================================================
+                 DESIGN NOTE 575: THE BAR IDENTIFIES A CORPORATION THE
+                 SAME WAY THE CARD DOES
+                ==================================================
+
+                 REPORTED: the herald and the full name are on the bar, but
+                 not the acronym.
+
+                 They were on one baseline-aligned row -- herald, then full
+                 name -- so the ACRONYM appeared only as `CorporateLogo`'s
+                 text fallback, which is to say only when the artwork failed
+                 to load. Design note #465 had already settled this argument
+                 for the Stock Card and its reasoning applies unchanged
+                 here: "a herald is unmistakable once you know it and
+                 unreadable until you do", and the full name "is what you
+                 read second". `PRR` is what a player says out loud.
+
+                 So this now mirrors `rosterIdentityRow` exactly -- herald
+                 and acronym sharing a row, full name on its own line
+                 beneath. Not a similar arrangement: the same one, because
+                 the bar and the card name the same object and a player
+                 should not have to learn two layouts for it. */}
             <span style={styles.orContextIdentity}>
-              {/* Design note #410: the same herald the Stock Card stripe
-                  shows, so a corporation is not a logo on one screen and an
-                  acronym on the other. `null` has no logo to draw -- there
-                  is no corporation, which is a sentence rather than a
-                  missing image. */}
-              {activeCorporation ? (
-                <CorporateLogo
-                  ticker={activeCorporation.ticker}
-                  size={24}
-                  color={corporationBarInk.ink}
-                  title={activeCorporation.fullName ?? activeCorporation.ticker}
-                  fallbackStyle={styles.orContextTicker}
-                />
-              ) : (
-                <span style={{ ...styles.orContextTicker, color: corporationBarInk.ink }}>
-                  No corporation
-                </span>
-              )}
+              <span style={styles.orContextIdentityRow}>
+                {/* Design note #410: the same herald the Stock Card stripe
+                    shows, so a corporation is not a logo on one screen and
+                    an acronym on the other. `null` has no logo to draw --
+                    there is no corporation, which is a sentence rather than
+                    a missing image. */}
+                {activeCorporation ? (
+                  <>
+                    <CorporateLogo
+                      ticker={activeCorporation.ticker}
+                      size={24}
+                      color={corporationBarInk.ink}
+                      title={activeCorporation.fullName ?? activeCorporation.ticker}
+                      fallbackStyle={styles.orContextTicker}
+                    />
+                    {/* Design note #465: BESIDE, not instead. The herald
+                        keeps its recognisability and the acronym rides next
+                        to it as the readable handle. The logo's own text
+                        fallback would double this when a file is missing --
+                        only in the failure case, and a doubled ticker is a
+                        better failure than a nameless bar. */}
+                    <span
+                      style={{ ...styles.orContextAcronym, color: corporationBarInk.ink }}
+                    >
+                      {activeCorporation.ticker}
+                    </span>
+                  </>
+                ) : (
+                  <span style={{ ...styles.orContextTicker, color: corporationBarInk.ink }}>
+                    No corporation
+                  </span>
+                )}
+              </span>
               {activeCorporation?.fullName && (
                 <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
                   {activeCorporation.fullName}
@@ -2608,6 +2684,7 @@ export default function ContextualActionBar({
         actingProtocolId={activeCorporation?.companyId ?? null}
         actingPresident={activeCorporation?.presidentAddress ?? null}
         usedAbilities={usedPrivateAbilities}
+        abilityError={privateAbilityError}
         onUseAbility={onUsePrivateAbility}
         controlsEnabled={sessionReady}
       />

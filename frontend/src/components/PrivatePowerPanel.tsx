@@ -227,7 +227,7 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     privateId: 4,
     actions: [{ key: "mh-exchange", label: "Exchange for NYC share" }],
     description:
-      "Mohawk & Hudson — the owner may exchange this private for a 10% share of the New York Central.",
+      "Mohawk & Hudson — the owner may exchange this private for a 10% share of the New York Central (NYC). The exchange closes this private permanently.",
     phase: "StockRound",
     // "A PLAYER owning the MH may exchange it" -- design note #441.
     scope: "player",
@@ -236,7 +236,7 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     privateId: 5,
     actions: [{ key: "ca-exchange", label: "Exchange for PRR share" }],
     description:
-      "Camden & Amboy — the owner may exchange this private for a 10% share of the Pennsylvania. The exchange closes this private permanently.",
+      "Camden & Amboy — the owner may exchange this private for a 10% share of the Pennsylvania Railroad (PRR). The exchange closes this private permanently.",
     phase: "StockRound",
     scope: "player",
   },
@@ -292,6 +292,24 @@ export interface PrivatePowerPanelProps {
   usedAbilities: ReadonlySet<string>;
   onUseAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
   controlsEnabled: boolean;
+  /* ==================================================================
+   *  DESIGN NOTE 573b: WHY IT REFUSED, IN WORDS
+   * ==================================================================
+   *
+   * REPORTED: "the Exchange button should return an error that they are at
+   * the limit and the power should be maintained for a subsequent round."
+   *
+   * A DISABLED BUTTON WOULD NOT DO. The exchange's legality depends on the
+   * player's holding in a corporation this panel does not otherwise read,
+   * and the interesting refusals ("you hold 60% of the PRR", "no NYC
+   * certificate is available") are facts about somewhere else on the board.
+   * A greyed control with a tooltip is right when the reason is local; this
+   * one has to be a sentence the player can act on.
+   *
+   * SHOWN AFTER THE ATTEMPT rather than pre-emptively, because the attempt
+   * costs nothing -- design note #573b keeps the power intact on a refusal,
+   * so clicking to find out is a legitimate way to ask. */
+  abilityError?: string | null;
 }
 
 export function PrivatePowerPanel({
@@ -305,6 +323,7 @@ export function PrivatePowerPanel({
   usedAbilities,
   onUseAbility,
   controlsEnabled,
+  abilityError = null,
 }: PrivatePowerPanelProps) {
   if (!sandbox) return null;
 
@@ -399,6 +418,11 @@ export function PrivatePowerPanel({
         </span>
       </div>
 
+      {/* Design note #573b: the last refusal, in full. Above the rows rather
+          than inside one, because the reason is usually about a DIFFERENT
+          company than the row that produced it. */}
+      {abilityError && <p style={styles.abilityError}>{abilityError}</p>}
+
       {owned.map(({ ability, priv }) => {
         const inPhase = roundType === ability.phase;
         /* Design note #349: the subphase gate, which only applies inside
@@ -480,6 +504,16 @@ export function PrivatePowerPanel({
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  abilityError: {
+    margin: "0 0 8px",
+    padding: "7px 9px",
+    borderRadius: "6px",
+    border: "1px solid #6b4a2f",
+    backgroundColor: "#2a1d13",
+    color: "#e6c08a",
+    fontSize: FONT_SIZE.small,
+    lineHeight: 1.45,
+  },
   panel: {
     display: "flex",
     flexDirection: "column",

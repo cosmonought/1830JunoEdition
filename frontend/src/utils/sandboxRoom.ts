@@ -347,6 +347,11 @@ export interface SandboxRoomPlayer {
   id: string;
   nickname: string;
   isReady: boolean;
+  /** Design note #569: this seat's chosen colour, or absent for "assign me
+   *  one". Absent rather than pre-filled so the roster can tell a deliberate
+   *  choice from a default -- only the former should block another player
+   *  from picking it. */
+  color?: string;
 }
 
 export interface SandboxRoomDoc {
@@ -370,6 +375,9 @@ function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc
         id: String(entry.id ?? ""),
         nickname: String(entry.nickname ?? ""),
         isReady: entry.isReady === true,
+        // Design note #569: absent stays absent -- "" would read as a
+        // deliberate choice of no colour and block nobody from anything.
+        ...(typeof entry.color === "string" && entry.color ? { color: entry.color } : {}),
       }))
       .filter((entry: SandboxRoomPlayer) => entry.id.length > 0),
   };
@@ -458,7 +466,13 @@ export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: num
 
 /** The waiting room's roster, as the setup payload wants it. */
 export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
-  return room.players.map((player) => ({ id: player.id, nickname: player.nickname }));
+  return room.players.map((player) => ({
+    id: player.id,
+    nickname: player.nickname,
+    // Design note #569: carried into the game, so every client paints the
+    // same seat the same colour.
+    color: player.color,
+  }));
 }
 
 /* ==================================================================

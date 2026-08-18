@@ -82,11 +82,31 @@ describe("action keys", () => {
     ]);
   });
 
-  it("gives every other ability exactly one action", () => {
+  it("gives every other actionable ability exactly one action", () => {
+    /* Design note #576: the Camden & Amboy now has ZERO. Its share arrives
+       on purchase, so there is nothing for its owner to trigger -- the row
+       keeps its description and loses its button.
+
+       The exception is written as an explicit id rather than as
+       `actions.length > 0`, because a self-satisfying assertion ("every
+       ability with actions has actions") would pass for an ability that had
+       silently lost its button too. Naming the two exceptions means a third
+       one has to be argued for here. */
     for (const ability of PRIVATE_ABILITIES) {
-      if (ability.privateId === 3) continue;
+      if (ability.privateId === 3) continue; // D&H: two independent powers
+      if (ability.privateId === 5) continue; // C&A: a purchase bonus, not an action
       expect(ability.actions).toHaveLength(1);
     }
+  });
+
+  it("leaves the Camden & Amboy describable but not clickable", () => {
+    const ca = PRIVATE_ABILITIES.find((a) => a.privateId === 5);
+    expect(ca).toBeDefined();
+    expect(ca?.actions).toHaveLength(0);
+    // The description still has to explain what the company did, or a player
+    // finding a buttonless row concludes it has no power at all.
+    expect(ca?.description).toMatch(/10%/);
+    expect(ca?.description).toMatch(/PRR/);
   });
 });
 

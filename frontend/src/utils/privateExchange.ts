@@ -1,6 +1,6 @@
 // frontend/src/utils/privateExchange.ts
 //
-// THE TWO PRIVATES THAT TURN INTO SHARES.
+// THE PRIVATE THAT TURNS INTO A SHARE, and the one that arrives as one.
 //
 // ==================================================================
 //  DESIGN NOTE 573: A BUTTON THAT SAYS "USED" HAS TO HAVE DONE SOMETHING
@@ -66,17 +66,50 @@ export const PLAYER_HOLDING_CAP_PERCENT = 60;
 /** One certificate. */
 export const EXCHANGE_SHARE_PERCENT = 10;
 
-/** The two exchanges, by private id, with the corporation each yields.
+/* ==================================================================
+ *  DESIGN NOTE 576: THE CAMDEN & AMBOY WAS NEVER AN EXCHANGE
+ * ==================================================================
  *
- *  A table rather than two branches, so the legality check and the effect
- *  are written once -- the only thing that differs between the Mohawk &
- *  Hudson and the Camden & Amboy is which ticker comes out. */
+ * REPORTED: "Private Company 5 is supposed to come with a 10% share of a
+ * corporation; however, the winner of that auction does not receive
+ * anything."
+ *
+ * Correct, and this table was mine and wrong. The previous pass built the
+ * exchange machinery for BOTH the Mohawk & Hudson and the Camden & Amboy,
+ * on the strength of `PrivatePowerPanel`'s design note #350 -- "the owner
+ * may exchange this private for a 10% share of the PRR. The exchange closes
+ * this private permanently."
+ *
+ * `privateCatalog.ts` said the opposite, in a line THIS SAME AUTHOR had
+ * rewritten two passes earlier (design note #548): "Whoever buys it out of
+ * the auction is handed a 10% PRR share at once and at no further cost.
+ * Nothing is triggered and the company stays open." That is 1830's actual
+ * rule, and design note #360 had recorded it explicitly as one of the four
+ * things an older paraphrase got wrong: "C&A was described as an ability
+ * the owner triggers. It is not: the share arrives on PURCHASE and the
+ * private stays open."
+ *
+ * So the fact existed in two places, the two disagreed, and the build
+ * followed the wrong one -- the TD-1 failure this codebase keeps recording,
+ * committed while writing a note about it. Two consequences worth naming:
+ * the share never arrived (the panel's button was in a round the auction
+ * had already left), and had it ever fired it would have CLOSED a company
+ * 1830 keeps open and paying $25 a round.
+ *
+ * ONE ENTRY NOW. The M&H genuinely is an exchange -- a player trades the
+ * company away for the certificate, and it closes. The C&A is a purchase
+ * bonus and is granted where the auction resolves, not from a button.
+ */
 export const PRIVATE_EXCHANGES: Readonly<
   Record<number, { ticker: string; corporationName: string }>
 > = {
   4: { ticker: "NYC", corporationName: "New York Central" },
-  5: { ticker: "PRR", corporationName: "Pennsylvania Railroad" },
 };
+
+/** Design note #576: the Camden & Amboy's purchase bonus. Not an exchange --
+ *  the company stays open and goes on paying, and the share is free. */
+export const CA_PRIVATE_ID = 5;
+export const CA_BONUS_TICKER = "PRR";
 
 export interface ExchangeRefusal {
   ok: false;
@@ -92,6 +125,9 @@ export interface ExchangeGrant {
   player: string;
   /** Where the certificate comes from -- the IPO first, then the pool. */
   source: "Ipo" | "Bank";
+  /** Design note #576: the C&A's bonus leaves the company open and paying.
+   *  Default (absent/false) closes it, which is the M&H's exchange. */
+  keepOpen?: boolean;
 }
 
 export type ExchangeOutcome = ExchangeRefusal | ExchangeGrant;
@@ -209,10 +245,16 @@ export function applyPrivateExchange(
     /* Design note #573a: CLOSED, and the owner released with it. Every
        reader already honours `closed`, so the company leaves the powers
        panel, the ledger and the certificate count in one write. */
-    private_companies: state.private_companies.map((entry) =>
-      entry.private_id === grant.privateId
-        ? { ...entry, closed: true, owner: null, owner_protocol_id: null }
-        : entry,
-    ),
+    /* Design note #576: `keepOpen` is the Camden & Amboy, whose share is a
+       purchase bonus rather than a trade -- closing it would cost its owner
+       $25 an Operating Round for the rest of the game. Everything else is
+       the Mohawk & Hudson's exchange, which does consume the company. */
+    private_companies: grant.keepOpen
+      ? state.private_companies
+      : state.private_companies.map((entry) =>
+          entry.private_id === grant.privateId
+            ? { ...entry, closed: true, owner: null, owner_protocol_id: null }
+            : entry,
+        ),
   };
 }

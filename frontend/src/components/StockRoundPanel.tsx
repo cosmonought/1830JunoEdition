@@ -1830,6 +1830,47 @@ function CompanyActions({
               {buyLabel}
             </button>
           )}
+          {/* ==================================================
+               DESIGN NOTE 577: WHAT IT LEAVES YOU WITH
+              ==================================================
+
+               REQUESTED: "when players are buying shares in the Stock
+               Round, would it be useful to somewhere display the effect on
+               their personal cash?"
+
+               The price is already on the button. What the button cannot
+               say is the thing a player actually decides on -- not "does
+               this cost $67" but "can I still start the C&O afterwards".
+               That is a subtraction, and making the player do it for eight
+               cards on every turn is the arithmetic this line removes.
+
+               BESIDE THE BUTTON, NOT INSIDE IT. The label already carries
+               the certificate, the quantity and the price; a fourth figure
+               in it would be a sentence rather than a label, and it would
+               move every time the quantity selector moved.
+
+               SILENT WITHOUT A PRICE OR A BALANCE. `priceKnown` is false
+               for a corporation nobody has parred, and `playerCash` is null
+               on a chain that has not answered yet -- in both cases there
+               is no subtraction to show, and inventing one ("$0 left") is
+               the failure this codebase keeps removing. */}
+          {priceKnown && typeof playerCash === "number" && totalCost !== null && (
+            <span
+              style={{
+                ...styles.cashAfter,
+                ...(cannotAfford ? styles.cashAfterShort : {}),
+              }}
+              title={
+                cannotAfford
+                  ? `You hold $${playerCash} and this costs $${totalCost}.`
+                  : `$${playerCash} now, $${playerCash - totalCost} after this purchase.`
+              }
+            >
+              {cannotAfford
+                ? `$${playerCash} — $${totalCost - playerCash} short`
+                : `$${playerCash} → $${playerCash - totalCost}`}
+            </span>
+          )}
         </div>
 
         {/* ---- Design note #33: the Brown zone's multi-buy ---------------
@@ -2034,6 +2075,23 @@ function CompanyActions({
         {sellingForbidden ? "Selling Opens in SR2" : `Sell ${sellPercentage}% Bundle`}
       </button>
       )}
+
+      {/* Design note #577, the other direction. A sale RAISES cash, and the
+          question it answers is the same one -- "does this get me to the
+          price of the thing I actually want". Shown only when the sale is
+          genuinely available: quoting proceeds beside a button banned in SR1
+          would price an action nobody can take. */}
+      {!sellingForbidden &&
+        selectedSellState.enabled &&
+        typeof playerCash === "number" &&
+        typeof unitPrice === "number" && (
+          <span
+            style={styles.cashAfter}
+            title={`$${playerCash} now, $${playerCash + unitPrice * (sellPercentage / 10)} after this sale.`}
+          >
+            {`$${playerCash} → $${playerCash + unitPrice * (sellPercentage / 10)}`}
+          </span>
+        )}
 
     </div>
   );
@@ -2732,6 +2790,18 @@ const styles: Record<string, React.CSSProperties> = {
      them would read as though the crown were still a glyph in a font.
      `color` stays and is now load-bearing: the crown fills with
      `currentColor`. */
+  /* Design note #577: the balance after the purchase. Tabular figures so
+     the two numbers line up either side of the arrow rather than jittering
+     as the quantity selector moves. */
+  cashAfter: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    color: CARD_INK_MUTED,
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+    alignSelf: "center",
+  },
+  cashAfterShort: { color: "#a4442f" },
   presidentTag: {
     color: CARD_HIGHLIGHT_BORDER,
     marginRight: "5px",

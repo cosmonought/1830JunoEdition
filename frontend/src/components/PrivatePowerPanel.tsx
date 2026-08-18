@@ -232,11 +232,34 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     // "A PLAYER owning the MH may exchange it" -- design note #441.
     scope: "player",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 576: THE C&A ROW HAS NO BUTTON, BECAUSE IT HAS NO ACTION
+   * ==================================================================
+   *
+   * Design note #350 added this row with an "Exchange for PRR share"
+   * button, on the reading that C&A "May be exchanged for a 10% share of
+   * the PRR. The exchange closes this private permanently."
+   *
+   * That is not the rule. The share arrives on PURCHASE, free, and the
+   * company STAYS OPEN and goes on paying $25 an Operating Round --
+   * `privateCatalog.ts` says so, design note #360 recorded it as a
+   * correction to an older paraphrase, and the auction now grants it where
+   * the win resolves (`App.tsx`, design note #576).
+   *
+   * So the row keeps its DESCRIPTION -- a player looking here should still
+   * learn what the company did for them -- and loses the control, because
+   * there is nothing left for the owner to trigger. `actions: []` renders
+   * the text without a button, which is the honest shape for a power that
+   * has already happened.
+   *
+   * NOT DELETED ENTIRELY, deliberately: a C&A owner who finds no row at all
+   * would reasonably conclude the company has no power, which is the
+   * confusion design note #350 was originally written to fix. */
   {
     privateId: 5,
-    actions: [{ key: "ca-exchange", label: "Exchange for PRR share" }],
+    actions: [],
     description:
-      "Camden & Amboy — the owner may exchange this private for a 10% share of the Pennsylvania Railroad (PRR). The exchange closes this private permanently.",
+      "Camden & Amboy — its purchaser received a 10% share of the Pennsylvania Railroad (PRR) free, at the moment they won it. Nothing further to trigger: the company stays open and keeps paying its revenue.",
     phase: "StockRound",
     scope: "player",
   },

@@ -86,6 +86,21 @@ export function clearRoomNicknames(): void {
  * is ugly and unmistakably NOT a claim about identity. Ugly and honest beats
  * tidy and wrong on a roster.
  */
+/* ==================================================================
+ *  DESIGN NOTE 578: THE FIXTURE FALLBACK IS NOW A NARROW WINDOW
+ * ==================================================================
+ *
+ * Design note #537b made this a fallthrough -- room roster first, fixture
+ * table second -- because solo sandbox needed Alice and Bob. There is no
+ * solo sandbox now, so the fixture branch is reachable only in the moments
+ * before a room's `SetupGame` replays, where every id is a `p-` string the
+ * fixture does not know and correctly returns `null` for.
+ *
+ * KEPT, not deleted, and the reason is the one #537b already gives: the
+ * fixture still seeds the BOARD a room boots from, so a corporation could
+ * momentarily carry a fixture president. Returning that name would be worse
+ * than returning nothing -- so the guard that makes the fixture unreachable
+ * once a roster exists is the part that matters, and it stays. */
 export function sandboxPlayerLabel(address: string): string | null {
   const fromRoom = ROOM_NICKNAMES[address];
   if (fromRoom) return fromRoom;

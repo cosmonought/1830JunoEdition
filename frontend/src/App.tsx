@@ -669,7 +669,6 @@ import {
   sandboxInitialMarketPrices,
   sandboxMarketPriceTable,
   type SandboxMarketPrices,
-  SANDBOX_PLAYERS,
   sandboxScenarioState,
   sandboxScenario,
   DEFAULT_SANDBOX_SCENARIO,
@@ -705,7 +704,6 @@ import {
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
-import SandboxToolbar from "./components/SandboxToolbar";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 import ReturnToTurnBar from "./panels/ReturnToTurnBar";
@@ -775,7 +773,12 @@ import { STATION_PLACEMENT_HIGHLIGHT_INK } from "./components/hexBoardData";
 import PlayerCards from "./components/PlayerCards";
 import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 import { playerFinances } from "./utils/playerFinance";
-import { applyPrivateExchange, resolvePrivateExchange } from "./utils/privateExchange";
+import {
+  applyPrivateExchange,
+  CA_BONUS_TICKER,
+  CA_PRIVATE_ID,
+  resolvePrivateExchange,
+} from "./utils/privateExchange";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -981,8 +984,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      pinned to Green, which made the yellow and brown tile catalogs
      unreachable. `sandboxPhase` is derived from it so every existing reader
      is unchanged. */
-  const [sandboxScenarioId, setSandboxScenarioId] =
-    useState<SandboxScenarioId>(DEFAULT_SANDBOX_SCENARIO);
+  /* Design note #578: the SETTER is gone with the toolbar that offered it.
+     The value stays: a room still has to boot from some board, and the
+     default scenario is the one it boots from. What is gone is a control
+     that let one player re-seed the fixture mid-session -- in a room that
+     would silently hand one client a different board from everyone else,
+     which is the whole failure class this consolidation removes. */
+  const [sandboxScenarioId] = useState<SandboxScenarioId>(DEFAULT_SANDBOX_SCENARIO);
   const sandboxPhase = sandboxScenario(sandboxScenarioId).phase;
   /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
   const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
@@ -1037,8 +1045,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      axis alongside the scenario, not a sixth scenario -- which era you are
      testing and who owns trains are independent questions. Seeded to the
      historic distribution so nothing changes until a tester asks. */
-  const [sandboxTrainFixture, setSandboxTrainFixture] =
-    useState<SandboxTrainFixture>("default");
+  // Design note #578: setter gone with the toolbar, for the reason above.
+  const [sandboxTrainFixture] = useState<SandboxTrainFixture>("default");
 
   /* ===================================================================
    *  DESIGN NOTE 178: UNDO IS A SNAPSHOT STACK, AND ONLY IN SANDBOX
@@ -1138,27 +1146,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  Deep enough that undo covers a whole corporation's turn. */
   const SANDBOX_HISTORY_LIMIT = 50;
 
-  /* ---------------- Sandbox hotseat seat switcher -------------------- */
-  //
-  // Which of the four sandbox seats the client is currently pretending to
-  // be, and whether that choice should track the game's own turn pointer.
-  // See `SandboxToolbar` for the interaction design and why auto-follow
-  // defaults on.
-  const [sandboxSeatIndex, setSandboxSeatIndex] = useState(0);
-  const [sandboxAutoFollow, setSandboxAutoFollow] = useState(true);
-
-  /** Picking a seat by hand turns auto-follow OFF. The two settings are in
-   *  direct conflict -- one says "show me whoever is up", the other says
-   *  "show me Carol" -- and a manual pick that got overwritten on the next
-   *  action would make the control useless for the only job it has. */
-  const handleSelectSandboxSeat = useCallback((index: number) => {
-    setSandboxSeatIndex(index);
-    setSandboxAutoFollow(false);
-  }, []);
-
-  const handleToggleSandboxAutoFollow = useCallback(() => {
-    setSandboxAutoFollow((previous) => !previous);
-  }, []);
+  /* Design note #578: THE HOTSEAT SEAT SWITCHER IS GONE, with the mode it
+     served. It let one browser act for four mock players, which is the whole
+     idea a room replaces -- and it was the source of design note #534's
+     confusion about who "you" are, because in a hotseat the answer changed
+     as the turn moved. Its two handlers and the auto-follow toggle went
+     with it. */
 
   /** Who the dashboard should think it is looking at.
    *
@@ -1245,11 +1238,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * decides who you are, and one player still controls everybody. That mode
    * is how the whole game gets exercised without a second human, and design
    * note #24 is explicit that it must keep working. */
-  const viewerAddress = sandbox
-    ? sandboxRoomCode
-      ? localId
-      : (SANDBOX_PLAYERS[sandboxSeatIndex] ?? SANDBOX_PLAYERS[0])
-    : wallet.address;
+  /* Design note #534, simplified by #578: in a sandbox you are the seat this
+     browser holds, full stop. The fork that resolved a hotseat's "current
+     seat" is gone with the hotseat. */
+  const viewerAddress = sandbox ? localId : wallet.address;
 
   /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
      must not name `viewerAddress` as a dependency -- it feeds
@@ -1936,26 +1928,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [mapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
 
   // Auto-Follow Turn. Moves the simulated seat to whoever may actually act,
-  // which is a PHASE-DEPENDENT question and not simply
-  // `active_player_index`:
-  //
-  //   - Waterfall Auction / Stock Round: seats act in order, so the turn
-  //     pointer is the answer.
-  //   - Operating Round: the queue names CORPORATIONS, and the human who may
-  //     act is whoever presides over the one currently up. The seat pointer
-  //     is not meaningful here and routinely points at a player with nothing
-  //     to do.
-  //
-  // `actingSeatIndex` owns that distinction. It returns `null` when the seat
-  // cannot be resolved -- an Operating Round whose current corporation has no
-  // president -- and the seat is then deliberately left where it is rather
-  // than reset to zero, which would yank the view away mid-inspection.
-  useEffect(() => {
-    if (!sandbox || !sandboxAutoFollow || !sandboxState) return;
-    const next = actingSeatIndex(sandboxState);
-    if (next === null) return;
-    setSandboxSeatIndex((current) => (current === next ? current : next));
-  }, [sandbox, sandboxAutoFollow, sandboxState]);
+  /* Design note #578: THE AUTO-FOLLOW EFFECT IS GONE. It moved a hotseat
+     cursor to whichever seat could act, so one browser could play everybody
+     in turn. In a room each browser is one player and the cursor never
+     moves -- the question "which seat am I looking at" has a constant
+     answer, which is the point.
+
+     `actingSeatIndex`'s phase-dependent reasoning survives in
+     `utils/gameState.ts`, where `isMyTurn` and the action bar still ask it.
+     Only this consumer is gone. */
 
   // Pre-Game Waterfall Auction (`waterfall.rs`): a second, independent poll
   // against `QueryMsg::GetWaterfallState`, only actually enabled while
@@ -2008,7 +1989,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(() => {
     if (!sandbox) return null;
     const base = sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState);
-    return sandboxRoomSeed ? waterfallForRoster(base, []) : base;
+    // Design note #578: always a room, so always an empty roster to start.
+    return waterfallForRoster(base, []);
   });
   useEffect(() => {
     /* Design note #537's guard, applied to this atom: a room's auction comes
@@ -2354,10 +2336,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      * ("a room is not a hotseat") and for the same reason -- a solo sandbox
      * keeps its shortcut, because there is still nobody there to be cheated
      * by it. */
-    const opening =
-      sandbox && !sandboxRoomCode
-        ? "Track"
-        : initialOrSubPhase(gameState?.current_global_era);
+    /* Design note #574, resolved by #578: the `sandbox ? "Track"` shortcut
+       is gone with solo mode. There is no longer a session where skipping
+       the opening step is a convenience rather than a rule not applied. */
+    const opening = initialOrSubPhase(gameState?.current_global_era);
     setOrSubPhase(steps.includes(opening) ? opening : steps[0]);
   }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, sandbox, sandboxRoomCode]);
 
@@ -4519,8 +4501,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            already happened, on its own author's turn. Re-checking it here
            would mean every client refusing every action but its own and
            the log applying to nobody. */
+        /* Design note #536, simplified by #578: the room check is gone --
+           every sandbox session is a room, so the gate simply applies. */
         if (
-          sandboxRoomRef.current &&
           options?.isRemoteReplay !== true &&
           options?.automatic !== true &&
           !isMyTurnRef.current
@@ -4529,7 +4512,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
-        if (sandboxRoomRef.current && options?.isRemoteReplay !== true) {
+        /* Design note #578: the room is guaranteed by the gate that refuses
+           a roomless sandbox a board -- but the REF is still typed nullable
+           and the compiler is right to insist. A guarantee held by a render
+           gate several thousand lines away is not one a type can see, and
+           narrowing it here is cheaper than asserting it. */
+        const roomCode = sandboxRoomRef.current;
+        if (roomCode && options?.isRemoteReplay !== true) {
           /* ==============================================================
            *  DESIGN NOTE 549a: THE ACTOR FIELD HELD A LABEL
            * ==============================================================
@@ -4551,7 +4540,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            * first would attribute a withhold to a spectator. */
           const authorId = localPlayerId();
           const ok = await appendSandboxAction(
-            sandboxRoomRef.current,
+            roomCode,
             appliedIndexRef.current,
             options?.automatic === true
               ? actingAddressRef.current ?? authorId
@@ -4590,7 +4579,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              before this was ever appended -- see `ExchangePrivateMsg`. */
           const base = sandboxStateRef.current;
           if (!base) return;
-          const { private_id, company_id, player, source } = msg.ExchangePrivate;
+          const { private_id, company_id, player, source, keep_open } = msg.ExchangePrivate;
           const priv = base.private_companies.find((e) => e.private_id === private_id);
           const exchanged = applyPrivateExchange(base, {
             ok: true,
@@ -4600,6 +4589,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               base.public_companies.find((c) => c.company_id === company_id)?.ticker ?? "",
             player,
             source,
+            keepOpen: keep_open === true, // design note #576
           });
           if (exchanged === base) return;
           sandboxStateRef.current = exchanged;
@@ -4609,9 +4599,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             `#${company_id}`;
           logInfo(
             "Private Power",
-            `${sandboxPlayerLabel(player) ?? truncateAddress(player)} exchanged the ` +
-              `${priv?.name ?? "private company"} for a 10% share of ${ticker}. ` +
-              `The private company closes.`,
+            keep_open
+              ? `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ` +
+                `share of ${ticker} with the ${priv?.name ?? "private company"}, which stays open.`
+              : `${sandboxPlayerLabel(player) ?? truncateAddress(player)} exchanged the ` +
+                `${priv?.name ?? "private company"} for a 10% share of ${ticker}. ` +
+                `The private company closes.`,
           );
           return;
         }
@@ -5027,6 +5020,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                no price, which design note #387 correctly refuses to draw. */
             if (privateId === BO_PRIVATE_ID) {
               setBoParPrompt({ player });
+            }
+
+            /* ==============================================================
+             *  DESIGN NOTE 576: THE C&A PAYS OUT THE MOMENT IT IS WON
+             * ==============================================================
+             *
+             * REPORTED: the winner of private 5 receives nothing.
+             *
+             * They received nothing because nothing granted it. The previous
+             * pass wired the C&A as an EXCHANGE with a Stock Round button --
+             * see `privateExchange.ts` for how that came to be wrong -- and
+             * a purchase bonus offered as a button in a later round is a
+             * bonus that never arrives.
+             *
+             * HERE, beside the B&O, because this is where a private WIN is
+             * resolved and the two are the same kind of event: a company
+             * whose value is partly a certificate hands it over on purchase.
+             *
+             * AND NOT LIKE THE B&O in the one way that matters: the B&O
+             * needs a par price, which is a decision, so it raises a prompt
+             * (design note #399). The C&A has no decision in it at all --
+             * the share is free, the price is not the owner's to pick, and
+             * the company does not close. Nothing to ask, so nothing is
+             * asked.
+             *
+             * Routed through the same `ExchangePrivate` event so every client
+             * applies it from the log (design note #550), with the private's
+             * own id carried so `applyPrivateExchange` can find it. */
+            if (privateId === CA_PRIVATE_ID) {
+              const prr = after?.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
+              if (prr) {
+                void runGameplayActionRef.current?.(
+                  `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ${CA_BONUS_TICKER} share with the Camden & Amboy.`,
+                  {
+                    ExchangePrivate: {
+                      private_id: privateId,
+                      company_id: prr.company_id,
+                      player,
+                      source:
+                        prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
+                      /* Design note #576: the company survives this one.
+                         Closing it would cost its owner $25 an Operating
+                         Round for the rest of the game. */
+                      keep_open: true,
+                    },
+                  },
+                  { automatic: true },
+                );
+              }
             }
           }
 
@@ -5824,46 +5866,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return owed;
   }, [gameState, homeHexToAxial, viewerAddress]);
 
-  /** Design note #455: the seat index of the outstanding prompt's
-   *  president, or `null` when there is no prompt or the right seat is
-   *  already selected. Derived rather than computed inside the effect so
-   *  the effect's dependency is a stable number and it cannot re-fire on
-   *  every unrelated state change. */
-  /** Design note #460: reads the RAW owed token, not `pendingHomeToken`.
-   *
-   *  `pendingHomeToken` is now gated on the viewer already being the
-   *  president, so deriving the seat fix from it would be circular -- the
-   *  seat would only move once it had already moved. This asks the board
-   *  the same question without the identity filter: is a token owed, and
-   *  whose president owes it.
-   *
-   *  `null` once the seat is right, which is what stops the effect below
-   *  fighting Auto-Follow for the cursor every render. */
-  const pendingHomeTokenSeatFix = useMemo(() => {
-    if (!sandbox || !gameState) return null;
-    const owed = pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
-    if (!owed?.president) return null;
-    const seat = gameState.player_addresses.indexOf(owed.president);
-    if (seat === -1 || seat === sandboxSeatIndex) return null;
-    return seat;
-  }, [sandbox, gameState, homeHexToAxial, sandboxSeatIndex]);
+  /* Design note #578: DESIGN NOTE #455's SEAT FIX IS GONE. It moved the
+     hotseat cursor to whichever president owed a home station, and fought
+     Auto-Follow for the cursor while it did. Both are hotseat mechanics.
 
-  /* Design note #455: seat the president the prompt is addressed to.
-   *
-   * Hotseat only -- online there is no seat pointer to move, and the prompt
-   * is already on the right client. Runs when a prompt is outstanding and
-   * the seated player is not its president, which is precisely the case the
-   * old gate silently swallowed.
-   *
-   * It also switches Auto-Follow OFF for the duration in effect: the
-   * follow effect would otherwise pull the seat straight back to the acting
-   * corporation on the next render, and the two would fight. Restoring it
-   * is not needed -- the follow effect re-runs on the next state change and
-   * takes the seat back once the prompt is answered. */
-  useEffect(() => {
-    if (!sandbox || !pendingHomeTokenSeatFix) return;
-    setSandboxSeatIndex(pendingHomeTokenSeatFix);
-  }, [sandbox, pendingHomeTokenSeatFix]);
+     In a room the prompt is already on the right client -- `pendingHomeToken`
+     gates on the viewer BEING the president (design note #440), and the
+     viewer is fixed. There is no cursor to move, so there is nothing to fix
+     and nothing to fight. */
 
   /* ==================================================================
    *  DESIGN NOTE 440: THE HOME STATION IS PLACED ON THE MAP
@@ -8143,8 +8153,71 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * before this component next renders, which is what makes the transition
    * look simultaneous rather than staged.
    *
-   * SOLO SANDBOX NEVER REACHES THIS: `sandboxRoom` is `null` without a room,
-   * and the guard requires one. */
+   * EVERY SANDBOX SESSION IS A ROOM (design note #578), so the room test is
+   * now belt-and-braces rather than a mode check -- the gate below has
+   * already refused a sandbox with no room. */
+  /* ==================================================================
+   *  DESIGN NOTE 578: ONE SANDBOX, NOT TWO
+   * ==================================================================
+   *
+   * INSTRUCTED: "I no longer need the solo sandboxes, the middleware one is
+   * sufficient."
+   *
+   * THIS EARLY RETURN IS THE WHOLE REFACTOR. Everything below it can now
+   * assume `sandboxRoomCode` is set, which is what lets 21 solo-vs-room
+   * branches collapse -- and those branches were the shape of most of the
+   * bugs this project has reported:
+   *
+   *   #538  a room must not load the fixture's four mock players
+   *   #542  ...and neither must the auction's separate atom
+   *   #534  who "you" are differs between a hotseat and a room
+   *   #536  a room is not a hotseat, so the turn gate applies
+   *   #574  an Operating Round shortcut written for solo, skipping a step
+   *         in a real game
+   *
+   * Every one is "the two paths disagree about something". One path cannot.
+   *
+   * SUBTRACTIVE ON PURPOSE, which is why it was safe to do without any test
+   * over this file: deleting a branch cannot invent a new arrangement, and
+   * `tsc` finds every reference left behind. A structural refactor of the
+   * same file would have had neither property.
+   *
+   * WHAT IS LOST, stated plainly: you can no longer poke at the board
+   * without Firestore. Two browser tabs are the replacement, and are a
+   * better check anyway -- they exercise the log, the replay and the
+   * identity gating, which a single tab never did. */
+  if (sandbox && !sandboxRoomCode) {
+    return (
+      <div style={styles.sandboxGateRoot}>
+        <div style={styles.sandboxGateCard}>
+          <h1 style={styles.sandboxGateTitle}>Sandbox</h1>
+          <p style={styles.sandboxGateBody}>
+            Every sandbox game runs in a room, so the board, the log and the turn order
+            are the same ones a real table uses. Open a room and share the code, or join
+            one you have been given.
+          </p>
+          <p style={styles.sandboxGateBody}>
+            Testing alone? Open a room here, then join it from a second browser tab —
+            each tab is its own player.
+          </p>
+          <SandboxRoomBar
+            roomCode={sandboxRoomCode}
+            available={isFirebaseConfigured()}
+            appliedCount={sandboxAppliedCount}
+            error={sandboxRoomError}
+            busy={sandboxRoomBusy}
+            onHost={handleHostSandboxRoom}
+            onJoin={handleJoinSandboxRoom}
+            onLeave={handleLeaveSandboxRoom}
+          />
+          <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>
+            Back to the lobby
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (sandbox && sandboxRoomCode && sandboxRoom?.status === "waiting") {
     return (
       <SandboxWaitingRoom
@@ -8202,21 +8275,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            `sandboxState` was already dynamic here -- the toolbar reads
            `player_addresses` and would have shown the right number of seats.
            It is the ACTIONS that do not belong. */}
-      {sandbox && !sandboxRoomCode && (
-        <SandboxToolbar
-          gameState={sandboxState}
-          seatIndex={sandboxSeatIndex}
-          onSelectSeat={handleSelectSandboxSeat}
-          autoFollow={sandboxAutoFollow}
-          onToggleAutoFollow={handleToggleSandboxAutoFollow}
-          scenario={sandboxScenarioId}
-          onSelectScenario={setSandboxScenarioId}
-          trainFixture={sandboxTrainFixture}
-          onToggleTrainFixture={() =>
-            setSandboxTrainFixture((current) => (current === "spread" ? "default" : "spread"))
-          }
-        />
-      )}
+      {/* Design note #578: THE SANDBOX TOOLBAR IS GONE. Seat switcher,
+          auto-follow, scenario picker and train fixture were all controls
+          for playing four people from one keyboard. The scenario and
+          fixture pickers went with them rather than being kept: they seed a
+          board, and a room's board comes from its log. */}
 
       {/* Design note #32: FTUE. Mounted at the shell level, not inside the
           phase panels, so a modal survives its panel unmounting on a tab
@@ -8293,10 +8356,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           resolved -- see the prop's own comment for why it is decided here
           and not in the modal. */}
       <AuctionPromptModal
+        /* Design note #543, simplified by #578: the room test is gone --
+           there is no hotseat left in which every prompt is yours. */
         parPending={
-          boParPrompt !== null &&
-          (!sandboxRoomCode || boParPrompt.player === viewerAddress) &&
-          !boParAlreadySet
+          boParPrompt !== null && boParPrompt.player === viewerAddress && !boParAlreadySet
         }
         parWinnerLabel={
           boParPrompt
@@ -8306,7 +8369,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onConfirmPar={handleConfirmBoPar}
         handoffPending={auctionHandoffPending}
         awaitingParFrom={
-          boParPrompt && !boParAlreadySet && sandboxRoomCode && boParPrompt.player !== viewerAddress
+          boParPrompt && !boParAlreadySet && boParPrompt.player !== viewerAddress
             ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
             : null
         }
@@ -8411,7 +8474,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
             {/* The phase switcher that stood here MOVED into
-                `SandboxToolbar`, which now owns every sandbox-only control.
+                the sandbox toolbar, deleted by design note #578 along with
+                the solo mode whose controls it held.
                 Two separate places to change sandbox settings -- one in the
                 room strip, one in a banner -- is worse than one, and the
                 seat switcher has to live in the banner because it needs the
@@ -8550,7 +8614,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                      click something the dispatch gate will refuse; solo
                      hotseat passes `controlsEnabled` unchanged and keeps
                      every seat playable. */
-                  sessionReady={controlsEnabled && (!sandboxRoomCode || isMyTurn)}
+                  // Design note #578: always a room, so always turn-gated.
+                  sessionReady={controlsEnabled && isMyTurn}
                   // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`
                   // and `PassTurn` are different contract messages, not one
                   // action with two names -- sending the wrong one would
@@ -8727,7 +8792,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 // Design note #30 in that file: pass-and-play has no wallet
                 // to compare a turn against, so the seat on turn is always
                 // the one this keyboard may act for.
-                hotseat={sandbox}
+                /* Design note #578: `hotseat` gone -- every seat is a browser. */
                 settledPrices={settledPrivatePrices}
                 // Design note #306 in that file: the auction is over and
                 // somebody has to open the Stock Round. Sandbox only --
@@ -8919,7 +8984,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     // card saying $76 beside a token sitting on $71.
                     marketPrices={sandbox ? sandboxMarketPrices : undefined}
                     playerLabel={sandbox ? sandboxPlayerLabel : undefined}
-                    hotseat={sandbox}
+                    /* Design note #578: `hotseat` gone -- every seat is a browser. */
                     // Design note #34 in that file: the header names the
                     // seat that is up rather than telling the player to
                     // wait for themselves.

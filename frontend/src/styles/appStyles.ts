@@ -1050,6 +1050,38 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.3px",
     color: "#c8cdd8",
   },
+  /* Design note #578: the room gate. Deliberately plain -- it is a doorway,
+     not a screen, and anything decorative here would be competing with the
+     board it exists to get out of the way of. */
+  sandboxGateRoot: { display: "flex", justifyContent: "center", padding: "48px 20px" },
+  sandboxGateCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "14px",
+    width: "100%",
+    maxWidth: "560px",
+    padding: "24px 26px",
+    borderRadius: "12px",
+    border: "1px solid #2b3242",
+    backgroundColor: "#161b27",
+  },
+  sandboxGateTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#e2e6ee" },
+  sandboxGateBody: {
+    margin: 0,
+    fontSize: FONT_SIZE.body,
+    lineHeight: 1.55,
+    color: "#9aa0ac",
+  },
+  sandboxGateQuiet: {
+    alignSelf: "flex-start",
+    fontSize: FONT_SIZE.small,
+    padding: "6px 12px",
+    borderRadius: "6px",
+    border: "1px solid #3a3f4b",
+    backgroundColor: "transparent",
+    color: "#8a90a0",
+    cursor: "pointer",
+  },
   rosterPill: {
     display: "inline-flex",
     alignItems: "baseline",

@@ -301,6 +301,11 @@ export interface ExchangePrivateMsg {
     company_id: number;
     player: string;
     source: "Ipo" | "Bank";
+    /** Design note #576: the Camden & Amboy's purchase bonus grants a share
+     *  WITHOUT consuming the company -- it stays open and keeps paying. The
+     *  Mohawk & Hudson's exchange does consume it. Absent means "close it",
+     *  which keeps every existing log entry meaning what it meant. */
+    keep_open?: boolean;
   };
 }
 

@@ -82,6 +82,9 @@ import {
   misplacedSurfaceTab,
   type MainTab,
 } from "../components/MainTabBar";
+// Design note #545: the mini-auction chaser, shared visual language with
+// the contested card in `WaterfallAuctionDashboard`.
+import { ROSTER_CONTEST_CHASE_CSS } from "../styles/animations";
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
@@ -517,6 +520,11 @@ export default function ContextualActionBar({
     available: number;
     escrowed: number;
     isActive: boolean;
+    /** Design note #545: a mini-auction is running. Changes what the whole
+     *  row MEANS -- these are contestants, not seats taking turns. */
+    contested: boolean;
+    /** Design note #545: at the table, but not in the contest. */
+    sidelined: boolean;
   }>;
   /** Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
@@ -2310,17 +2318,36 @@ export default function ContextualActionBar({
             first `GetGameState` resolves. */}
         {playerRoster.length > 0 ? (
           <span style={styles.actionBarRoster}>
+            <style>{ROSTER_CONTEST_CHASE_CSS}</style>
             {playerRoster.map((seat) => (
               <span
                 key={seat.address}
+                /* Design note #545: the chaser is a CLASS, not inline style --
+                   see `ROSTER_CONTEST_CHASE_CSS` for why it cannot be
+                   expressed inline. */
+                className={
+                  seat.isActive && seat.contested && !seat.sidelined
+                    ? "app-roster-pill-contested"
+                    : undefined
+                }
                 style={{
                   ...styles.rosterPill,
-                  ...(seat.isActive ? styles.rosterPillActive : styles.rosterPillIdle),
+                  ...(seat.sidelined
+                    ? styles.rosterPillSidelined
+                    : seat.isActive
+                      ? seat.contested
+                        ? styles.rosterPillContested
+                        : styles.rosterPillActive
+                      : styles.rosterPillIdle),
                 }}
                 title={
-                  seat.escrowed > 0
-                    ? `${seat.label} has $${seat.available} available to bid. $${seat.escrowed} more is escrowed in standing bids and comes back if those bids lose.`
-                    : `${seat.label} holds $${seat.available}.${seat.isActive ? " On turn." : ""}`
+                  seat.sidelined
+                    ? `${seat.label} is not bidding on this company. The auction is paused for everyone until the contest resolves.`
+                    : seat.escrowed > 0
+                      ? `${seat.label} has $${seat.available} available to bid. $${seat.escrowed} more is escrowed in standing bids and comes back if those bids lose.`
+                      : `${seat.label} holds $${seat.available}.${
+                          seat.isActive ? (seat.contested ? " Bidding now." : " On turn.") : ""
+                        }`
                 }
               >
                 <span style={styles.rosterPillName}>{seat.label}</span>

@@ -205,14 +205,56 @@ export interface SetupGameMsg {
   };
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 546: CLOSING THE AUCTION IS A TABLE DECISION
+ * ==================================================================
+ *
+ * `handleProceedToStockRound` used to write `current_round_type` straight
+ * into local state. In solo sandbox that is exactly right -- there is one
+ * client and it owns its own round cursor.
+ *
+ * In a room it advanced ONE BROWSER. The others stayed in the auction, and
+ * the divergence was not merely cosmetic: every later action replays into
+ * whatever round the receiving client believes it is in, so two clients
+ * holding different `current_round_type` values are two clients running two
+ * different reducers over one log. That is the deepest kind of desync
+ * available here, and it would surface later as unexplainable state rather
+ * than as a visible failure at the moment it happened.
+ *
+ * The fix follows `SetupGame` (design note #526b) exactly: the decision goes
+ * into the log, every client replays it, and the round turns over for the
+ * whole table at once.
+ *
+ * IDEMPOTENT ON PURPOSE, which is what lets every client offer the button
+ * rather than electing one owner. Applying it twice sets the same round type
+ * to the same value; a second copy in the log is noise, not a bug. The
+ * alternative -- nominating one player to close the auction -- strands the
+ * table whenever that player walks away, and the auction's end has no
+ * decision in it worth protecting.
+ */
+export interface OpenStockRoundMsg {
+  OpenStockRound: Record<string, never>;
+}
+
 /** Everything the sandbox log can carry -- the contract's own message set,
- *  plus this one sandbox-only setup event. A PRECISE union rather than an
+ *  plus the sandbox-only round events. A PRECISE union rather than an
  *  index signature: a loose type here would let any object into the replay
  *  and the pipeline would discover it was not a message at runtime. */
-export type SandboxLogMsg = GameplayExecuteMsg | SetupGameMsg;
+export type SandboxLogMsg = GameplayExecuteMsg | SetupGameMsg | OpenStockRoundMsg;
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
+}
+
+export function isOpenStockRoundMsg(msg: unknown): msg is OpenStockRoundMsg {
+  return typeof msg === "object" && msg !== null && "OpenStockRound" in msg;
+}
+
+/** Neither sandbox-only event may reach `execGameplay` -- the contract has
+ *  no such message. One predicate so a third event cannot be added to the
+ *  union and forgotten at the one call site that must refuse them. */
+export function isSandboxOnlyMsg(msg: unknown): msg is SetupGameMsg | OpenStockRoundMsg {
+  return isSetupGameMsg(msg) || isOpenStockRoundMsg(msg);
 }
 
 /* ==================================================================

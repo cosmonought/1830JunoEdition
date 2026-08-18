@@ -1026,6 +1026,26 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1b1f29",
     color: "#8a919e",
   },
+  /* Design note #545: the contestant answering right now. LAYOUT AND INK
+     ONLY -- the border and the fill come from `.app-roster-pill-contested`,
+     because an inline `borderColor`/`backgroundColor` beats a stylesheet and
+     would silently win over the gradient, leaving a pill that never chases.
+     Same trap `WaterfallAuctionDashboard.tsx` records for its card. */
+  rosterPillContested: {
+    color: "#f2f5fa",
+    fontWeight: 800,
+  },
+  /* Design note #545: at the table, not in the contest. Dimmer than idle --
+     idle means "your turn is coming", this means "this contest is not
+     yours", and the second is a stronger statement about being unable to
+     act. Kept above the 4.5:1 floor against the pill fill so a sidelined
+     player's balance stays readable; they still need it to plan. */
+  rosterPillSidelined: {
+    borderColor: "#262b36",
+    backgroundColor: "#15181f",
+    color: "#6b7280",
+    opacity: 0.7,
+  },
   /* Design note #406: TRUNCATED, because six seats have to fit.
      `rosterPill` is `nowrap`, so without a ceiling a table of long names
      pushes the pills off the bar rather than shrinking them -- and six is

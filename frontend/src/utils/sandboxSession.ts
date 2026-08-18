@@ -1349,6 +1349,69 @@ function nextSeat(players: readonly string[], current: string): string {
   return players[(at + 1) % players.length];
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 544: THE CONTEST HAS ITS OWN QUEUE, AND ITS OWN ORDER
+ * ==================================================================
+ *
+ * INSTRUCTED: "make sure the Mini-Auction turn order rotates only through
+ * eligible players in order of lowest bid."
+ *
+ * `openMiniAuction` used to build `bidders` in SEAT order, and defended it:
+ * "a queue sorted by bid size would rotate through the table in an order
+ * the room does not sit in." That is true and it is not the point. A
+ * mini-auction is not a lap of the table -- it is a contest among the two
+ * or three people who bid, and the question it asks each of them is "you
+ * are behind, will you go higher?". Asking the person who is furthest
+ * behind first is what makes that question meaningful, and it is the order
+ * the contest resolves in.
+ *
+ * FIXED AT OPENING, NOT RE-SORTED ON EVERY RAISE. Re-sorting would move
+ * every player's position in the queue each time anyone raised, so "next"
+ * would depend on an ordering that had just changed underneath it -- a
+ * player could be asked twice in a row, or skipped entirely, with no bad
+ * line of code anywhere. The queue is a running order established when the
+ * contest opens; the bids move within it.
+ *
+ * `nextSeat` COULD NOT DO THIS JOB, and the way it failed is worth keeping.
+ * On a drop-out the caller passed the SHRUNKEN list plus the player who had
+ * just left it, so `indexOf` returned -1, `(-1 + 1) % n` returned 0, and
+ * the cursor silently jumped to the front of the queue every time. With an
+ * ascending queue that lands on the lowest remaining bidder, which is very
+ * nearly right -- an accident agreeing with the rule is the kind of thing
+ * that survives review and then breaks when the ordering changes.
+ */
+function byAscendingBid(
+  bidders: readonly string[],
+  bids: readonly { bidder: string; bid_amount: string }[],
+): string[] {
+  const amountOf = (who: string) =>
+    Number(bids.find((bid) => bid.bidder === who)?.bid_amount ?? 0) || 0;
+  /* Ties are impossible -- every bid must beat the standing one by the $5
+     increment -- so this needs no tiebreak, and `sort` being stable means a
+     malformed fixture degrades to input order rather than to nondeterminism. */
+  return [...bidders].sort((a, b) => amountOf(a) - amountOf(b));
+}
+
+/** The next bidder to be asked, skipping `highBidder` -- nobody is invited
+ *  to outbid themselves (mirrors `waterfall::skip_leader_turns`). Pass
+ *  `after = null` to start the queue from its front.
+ *
+ *  Returns `highBidder` only when the queue holds nobody else, which is a
+ *  resolved contest the caller handles before reaching here. */
+function nextMiniTurn(
+  bidders: readonly string[],
+  highBidder: string,
+  after: string | null,
+): string {
+  if (bidders.length === 0) return highBidder;
+  const from = after === null ? -1 : bidders.indexOf(after);
+  for (let step = 1; step <= bidders.length; step += 1) {
+    const candidate = bidders[(from + step + bidders.length) % bidders.length];
+    if (candidate !== highBidder) return candidate;
+  }
+  return highBidder;
+}
+
 export function applySandboxWaterfallAction(
   waterfall: WaterfallStateResponse,
   msg: GameplayExecuteMsg,
@@ -1504,19 +1567,21 @@ export function applySandboxWaterfallAction(
     const highest = target.bids.reduce((best, bid) =>
       Number(bid.bid_amount) > Number(best.bid_amount) ? bid : best,
     );
-    // Seat order, not bid order: the dashboard renders `bidders` as a turn
-    // queue, and a queue sorted by bid size would rotate through the table
-    // in an order the room does not sit in.
-    const bidders = players.filter((player) =>
-      target.bids.some((bid) => bid.bidder === player),
+    /* Design note #544: bid order, lowest first. Seeded from the seated
+       roster so an unknown bidder cannot enter the queue, then sorted --
+       `players.filter` is the membership test, `byAscendingBid` is the
+       running order. */
+    const bidders = byAscendingBid(
+      players.filter((player) => target.bids.some((bid) => bid.bidder === player)),
+      target.bids,
     );
     const leader = highest.bidder;
     return {
       private_id: target.private_id,
       bidders,
-      // `skip_leader_turns`: the leader is never asked to bid against
-      // themselves, so the cursor opens on the next bidder who is not them.
-      current_turn: bidders.find((player) => player !== leader) ?? leader,
+      // The contest opens on the front of the queue -- the lowest bidder --
+      // skipping the leader, who is never asked to outbid themselves.
+      current_turn: nextMiniTurn(bidders, leader, null),
       high_bid: highest.bid_amount,
       high_bidder: leader,
     };
@@ -1738,9 +1803,10 @@ export function applySandboxWaterfallAction(
           ...mini,
           high_bid: String(amount),
           high_bidder: actor,
-          // The high bidder's own turns are auto-skipped, so the cursor
-          // moves to the next bidder who is not them.
-          current_turn: nextSeat(mini.bidders, actor),
+          // Design note #544: on down the queue from the raiser. They are
+          // the leader now, so the skip in `nextMiniTurn` is what stops the
+          // cursor coming back to them on the lap.
+          current_turn: nextMiniTurn(mini.bidders, actor, actor),
         },
       },
       charges: [],
@@ -1853,7 +1919,12 @@ export function applySandboxWaterfallAction(
         mini_auction: {
           ...mini,
           bidders: remaining,
-          current_turn: nextSeat(remaining, actor),
+          /* Design note #544: `after` is the player who just left, and they
+             are no longer IN `remaining` -- so the search starts from the
+             front of the shrunken queue, i.e. the lowest bidder still in.
+             That is now the stated intent rather than `nextSeat`'s
+             -1-index accident. */
+          current_turn: nextMiniTurn(remaining, mini.high_bidder, actor),
         },
       },
       charges: [],

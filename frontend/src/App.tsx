@@ -422,7 +422,7 @@
 //    computed once here now that Chatbox itself isn't rendered) drives two
 //    independent effects: `utils/turnAlert.ts`'s `useDocumentTitleFlash`
 //    hook alternates `document.title` every 1000ms between "🚨 YOUR TURN! -
-//    18Cosmos" and "18Cosmos - Juno Edition" while true, restoring the
+//    Project 18XX" and "Project 18XX" while true, restoring the
 //    normal title immediately once it goes false (see that file's own
 //    design notes for the exact interval/restore contract); and a subtle
 //    repeating CSS pulse glow (`app-turn-pulse-glow`, a `<style>`-tag
@@ -567,11 +567,13 @@ import {
   BANK_START,
   MIN_PLAYERS,
   dealSandboxGame,
+  isOpenStockRoundMsg,
+  isSandboxOnlyMsg,
   isSetupGameMsg,
   shuffleForTurnOrder,
   waterfallForRoster,
   withEmptyRoster,
-  type SetupGameMsg,
+  type SandboxLogMsg,
 } from "./utils/gameSetup";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
@@ -633,7 +635,9 @@ import {
   type RoundType,
   type GameStateResponse,
   type WaterfallStateResponse,
+  actingAddress,
   actingSeatIndex,
+  isSidelinedByMiniAuction,
 } from "./utils/gameState";
 // Design note #22: `truncateChatAddress` and the `ChatMessage` type are no
 // longer imported here. Both were only ever used to CONSTRUCT chat messages
@@ -700,7 +704,7 @@ import {
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
 import SandboxToolbar from "./components/SandboxToolbar";
-import BoParPrompt from "./components/BoParPrompt";
+import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 import ReturnToTurnBar from "./panels/ReturnToTurnBar";
 
@@ -2378,11 +2382,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // queue, or a floated-but-presidentless corporation. Nobody's turn, rather
   // than everybody's, which is what makes the fallback to the Stock Round
   // pointer deliberately absent.
+  /* Design note #544: `actingAddress`, not `actingSeatIndex`. A mini-auction
+     suspends the main rotation, and this is the gate `runGameplayAction`
+     reads -- so resolving it from the stale waterfall pointer is what let
+     the wrong player act and locked out the one actually on turn. */
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
-    const seat = actingSeatIndex(gameState);
-    return seat !== null && gameState.player_addresses[seat] === viewerAddress;
-  }, [viewerAddress, gameState]);
+    return actingAddress(gameState, waterfallState) === viewerAddress;
+  }, [viewerAddress, gameState, waterfallState]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -2408,9 +2415,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  `availableCash` returns the total and the badge is unchanged. */
   const activeSeatCash = useMemo(() => {
     if (!gameState) return null;
-    const seat = actingSeatIndex(gameState);
-    if (seat === null) return null;
-    const address = gameState.player_addresses[seat];
+    // Design note #544: during a contest this is the CONTESTANT's balance --
+    // the figure sits beside the Raise control that would spend it.
+    const address = actingAddress(gameState, waterfallState);
     if (!address) return null;
     return availableCash(gameState, waterfallState, address);
   }, [gameState, waterfallState]);
@@ -2451,14 +2458,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) {
       return [];
     }
-    const seat = actingSeatIndex(gameState);
-    const active = seat === null ? null : gameState.player_addresses[seat];
+    const active = actingAddress(gameState, waterfallState); // design note #544
+    /* Design note #545: a contest splits the table into who is in it and who
+       is merely watching, and the pills are where that shows. `contested`
+       is carried per-pill rather than as one flag on the bar because the
+       bar would then have to re-derive membership per row anyway. */
+    const contested = gameState.current_round_type === "WaterfallAuction"
+      && (waterfallState?.mini_auction ?? null) !== null;
     return gameState.player_addresses.map((address) => ({
       address,
       label: sandboxPlayerLabel(address) ?? truncateAddress(address),
       available: availableCash(gameState, waterfallState, address) ?? 0,
       escrowed: escrowedBids(waterfallState, address),
       isActive: address === active,
+      contested,
+      sidelined: isSidelinedByMiniAuction(gameState, waterfallState, address),
     }));
   }, [gameState, waterfallState]);
 
@@ -2466,23 +2480,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  tooltip. Zero outside the auction. */
   const activeSeatEscrow = useMemo(() => {
     if (!gameState) return 0;
-    const seat = actingSeatIndex(gameState);
-    if (seat === null) return 0;
-    const address = gameState.player_addresses[seat];
+    const address = actingAddress(gameState, waterfallState); // design note #544
     return address ? escrowedBids(waterfallState, address) : 0;
   }, [gameState, waterfallState]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 547: THE AUCTION IS OVER WHEN THERE IS NOTHING LEFT IN IT
+   * ==================================================================
+   *
+   * The same test the dashboard's banner used (`privates.length === 0`),
+   * moved up to where the modal is raised. `privates` is documented as
+   * "every still-unowned core private company", so empty means all six are
+   * allocated -- there is no separate "auction finished" flag to read, and
+   * inventing one would be a second opinion about a fact this list already
+   * states.
+   *
+   * SANDBOX ONLY, unchanged from design note #306's reasoning: on a live
+   * chain the contract closes the round itself, and a client-side button
+   * offering to do it would be a lie. */
+  const auctionHandoffPending =
+    sandbox &&
+    gameState?.current_round_type === "WaterfallAuction" &&
+    (waterfallState?.privates.length ?? -1) === 0;
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
    *  than an empty label. */
   const activeSeatLabel = useMemo(() => {
     if (!gameState) return null;
-    const seat = actingSeatIndex(gameState);
-    if (seat === null) return null;
-    const address = gameState.player_addresses[seat];
+    const address = actingAddress(gameState, waterfallState); // design note #544
     if (!address) return null;
     return sandboxPlayerLabel(address) ?? truncateAddress(address);
-  }, [gameState]);
+  }, [gameState, waterfallState]);
 
   /* Design note #398, the "and for all players" half. In hotseat the seats
      share one browser, so a par half-chosen by the outgoing player would
@@ -3904,19 +3933,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Design note #306 in `WaterfallAuctionDashboard.tsx`: close the auction
    *  and open Stock Round 1. Local, because the sandbox owns its own round
    *  cursor -- `PassTurn` is what advances a real room. */
+  /* Design note #546: through the dispatch path, so in a room it reaches the
+     log and turns the round over for the whole table. It used to write local
+     state directly, which advanced exactly one browser and left the others
+     replaying stock-round actions into an auction. */
   const handleProceedToStockRound = useCallback(() => {
-    setSandboxState((current) => {
-      if (!current) return current;
-      const next = { ...current, current_round_type: "StockRound" as const, consecutive_passes: 0 };
-      sandboxStateRef.current = next;
-      return next;
-    });
-    setSandboxWaterfall((current) =>
-      current === null ? current : { ...current, waterfall_auction_active: false },
-    );
-    logInfoRef.current?.(
-      "Round",
+    void runGameplayActionRef.current?.(
       "The Waterfall Auction is complete \u2014 Stock Round 1 begins.",
+      { OpenStockRound: {} },
+      /* `automatic`, which exempts it from the turn gate. Closing the auction
+         belongs to nobody's turn -- the rotation it would be checked against
+         is the one that just ended. */
+      { automatic: true },
     );
   }, []);
 
@@ -3990,6 +4018,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfoRef.current = logInfo;
   }, [logInfo]);
 
+  /* Design note #546: same ordering workaround, same reason -- and here a ref
+     is additionally the SAFE choice. `runGameplayAction` sits in the
+     dependency array of the two effects that dispatch (design note #439), so
+     naming it as a dependency of this handler would be one more identity to
+     keep still. */
+  const runGameplayActionRef = useRef<
+    | ((
+        fallbackLabel: string,
+        msg: SandboxLogMsg,
+        options?: { automatic?: boolean },
+      ) => Promise<void> | void)
+    | null
+  >(null);
+
   /* ===================================================================
    *  DESIGN NOTE 331 (cont.): PAYING THE PRIVATES
    * ===================================================================
@@ -4042,7 +4084,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          contract messages, and both are single-key objects. Widened here so
          the SAME pipeline handles both -- the alternative was a second
          dispatch path for one message, which is how the two would drift. */
-      msg: GameplayExecuteMsg | SetupGameMsg,
+      msg: SandboxLogMsg,
       /* Design note #439: set by the two effects that dispatch on the
          player's behalf (the sub-phase auto-skip and the forced withhold).
          Everything else is a click and defaults to `false`.
@@ -4145,7 +4187,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            setup event, the sandbox branch below gets its chance, and the
            refusal happens at the CHAIN DISPATCH -- the only place that
            actually must not see one. */
-      const chainMsg: GameplayExecuteMsg | null = isSetupGameMsg(msg) ? null : msg;
+      /* Design note #546: `isSandboxOnlyMsg`, not `isSetupGameMsg`. There
+         are now two events the contract has never heard of, and one
+         predicate for both means adding a third cannot leave this line
+         behind -- which is the exact failure design note #539 records. */
+      const chainMsg: GameplayExecuteMsg | null = isSandboxOnlyMsg(msg) ? null : msg;
 
       let label =
         (chainMsg ? describeGameplayAction(chainMsg, describeContext) : null) ?? fallbackLabel;
@@ -4279,6 +4325,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              The state is left ALONE in that case rather than half-applied:
              a board dealt for a count that does not exist is worse than one
              that visibly never started. */
+        if (isOpenStockRoundMsg(msg)) {
+          /* Design note #546: the round turns over for everyone, because
+             every client replays this. Idempotent -- a second copy sets the
+             same value, so the guard below is an optimisation and not a
+             correctness requirement. */
+          const base = sandboxStateRef.current;
+          if (!base || base.current_round_type !== "WaterfallAuction") return;
+          const opened: GameStateResponse = {
+            ...base,
+            current_round_type: "StockRound",
+            consecutive_passes: 0,
+          };
+          sandboxStateRef.current = opened;
+          setSandboxState(opened);
+          const closed = sandboxWaterfallRef.current
+            ? { ...sandboxWaterfallRef.current, waterfall_auction_active: false }
+            : null;
+          sandboxWaterfallRef.current = closed;
+          setSandboxWaterfall(closed);
+          logInfo("Round", "The Waterfall Auction is complete \u2014 Stock Round 1 begins.");
+          return;
+        }
+
         if (isSetupGameMsg(msg)) {
           const dealt = dealSandboxGame({ players: msg.SetupGame.players });
           if (!dealt) {
@@ -5017,6 +5086,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ],
   );
 
+  /* Design note #546: published for `handleProceedToStockRound`, which is
+     defined above this. Assigned in an effect rather than during render so
+     the ref never holds a callback from a render that was thrown away. */
+  useEffect(() => {
+    runGameplayActionRef.current = runGameplayAction;
+  }, [runGameplayAction]);
 
   const handlePassTurn = useCallback(
     () => runGameplayAction("PassTurn", { PassTurn: { game_id: gameId } }),
@@ -7778,17 +7853,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            the win; it SETS THE PAR PRICE, which is a real decision with a
            real consequence for the corporation. Two people answering it is
            two dispatches of one mandatory choice. */}
-      <BoParPrompt
-        open={
+      {/* Design note #547: the par decision and the round handover, in one
+          card. `parPending` carries design note #543's identity test already
+          resolved -- see the prop's own comment for why it is decided here
+          and not in the modal. */}
+      <AuctionPromptModal
+        parPending={
           boParPrompt !== null &&
           (!sandboxRoomCode || boParPrompt.player === viewerAddress)
         }
-        winnerLabel={
+        parWinnerLabel={
           boParPrompt
             ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
             : ""
         }
-        onConfirm={handleConfirmBoPar}
+        onConfirmPar={handleConfirmBoPar}
+        handoffPending={auctionHandoffPending}
+        awaitingParFrom={
+          boParPrompt && sandboxRoomCode && boParPrompt.player !== viewerAddress
+            ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
+            : null
+        }
+        onProceed={handleProceedToStockRound}
       />
 
       {/* Design note #416: blocking, for the same reason the B&O prompt is

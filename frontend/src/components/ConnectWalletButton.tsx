@@ -116,7 +116,7 @@ export function ConnectWalletButton({ buttonStyle, label, className }: ConnectWa
             </span>
             <p style={styles.body}>
               For the best gameplay experience and asset safety, we strongly recommend connecting a
-              dedicated burner wallet for 1830: Juno Edition. Do not connect your primary vault
+              dedicated burner wallet for Project 18XX. Do not connect your primary vault
               wallet.
             </p>
             <div style={styles.footer}>

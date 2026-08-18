@@ -677,7 +677,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     <div style={styles.root}>
       <header style={styles.brandHeader}>
         <div>
-          <h1 style={styles.brandTitle}>1830: Juno Edition</h1>
+          <h1 style={styles.brandTitle}>Project 18XX</h1>
           <p style={styles.brandSubtitle}>Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch</p>
         </div>
 

@@ -37,8 +37,8 @@ import { useEffect } from "react";
 // old name flashing back into the tab a moment after load -- which is worse
 // than not renaming at all, because it looks like a bug rather than an
 // oversight.
-export const TURN_ALERT_TITLE = "🚨 YOUR TURN! — 1830: Juno Edition";
-export const TURN_NORMAL_TITLE = "1830: Juno Edition";
+export const TURN_ALERT_TITLE = "🚨 YOUR TURN! — Project 18XX";
+export const TURN_NORMAL_TITLE = "Project 18XX";
 
 const TURN_ALERT_INTERVAL_MS = 1000;
 

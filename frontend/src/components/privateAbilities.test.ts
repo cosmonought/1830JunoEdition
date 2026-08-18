@@ -112,9 +112,44 @@ describe("the D&H caption", () => {
     expect(caption).toContain("AND/OR");
   });
 
-  it("agrees with the rulebook text the catalog quotes", () => {
-    expect(PRIVATE_COMPANY_CATALOG[3].ability).toContain("$120");
-    expect(PRIVATE_COMPANY_CATALOG[3].ability).toContain("laying the token is free");
+  it("agrees with the catalog about which half is free", () => {
+    /* ==============================================================
+     *  DESIGN NOTE 548 (harness): PIN THE FACT, NOT THE SENTENCE
+     * ==============================================================
+     *
+     * This asserted `toContain("laying the token is free")` -- the exact
+     * clause, because the catalog then held the publisher's own wording and
+     * a substring match was the cheapest way to prove the caption had not
+     * drifted from it.
+     *
+     * That made the test a second copy of the copied text, and it failed
+     * the moment the catalog was rewritten in this codebase's own words --
+     * correctly, in the sense that something did change, and uselessly, in
+     * the sense that nothing it was protecting was broken.
+     *
+     * What actually matters is the DISTINCTION, which is the thing an
+     * earlier caption got wrong in the direction that costs a player money:
+     * the mountain is charged as usual and only the token is free. Both
+     * strings have to say that; neither has to say it the same way. */
+    const ability = PRIVATE_COMPANY_CATALOG[3].ability;
+    expect(ability).toContain("$120");
+    expect(ability).toMatch(/token is free/i);
+    // And the inverse must not be claimable -- the tile is never free.
+    expect(ability).not.toMatch(/tile[^.]*(is free|at no cost|free of charge)/i);
+  });
+
+  it("no longer reproduces the publisher's phrasing", () => {
+    /* Design note #548: the rewrite is a copyright measure, so a future
+       pass that helpfully restores the "more accurate" original wording
+       should fail here rather than ship. These three clauses are
+       distinctive enough to be fingerprints and are not phrasings anyone
+       would arrive at independently. */
+    for (const id of [2, 3, 4, 5, 6]) {
+      const ability = PRIVATE_COMPANY_CATALOG[id].ability;
+      expect(ability).not.toMatch(/need not be connected to any track at all/i);
+      expect(ability).not.toMatch(/without further payment/i);
+      expect(ability).not.toMatch(/subject to the ordinary rules of the game/i);
+    }
   });
 });
 

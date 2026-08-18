@@ -221,7 +221,7 @@ export default function TopBar({
     <header style={styles.topBar}>
       {/* Inline styles cannot express `:hover`; see design note #46. */}
       <style>{NETA_CREDIT_CSS}</style>
-      <span style={styles.topBarBrand}>1830: Juno Edition</span>
+      <span style={styles.topBarBrand}>Project 18XX</span>
 
       {/* Design note #47: the Neta DAO credit.
           Sits with the BRAND, not with the wallet cluster. It is an

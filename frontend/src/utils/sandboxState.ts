@@ -897,7 +897,7 @@ const SPREAD_FIXTURE_COMPANIES = 2;
  *
  * NOTE ON THE FIGURE: $2,400 split four ways is $600 each. Canonical 1830
  * deals by headcount -- $400 each at four players, for $1,600 total -- so
- * this is the Juno Edition's own flat distribution rather than the printed
+ * this is this implementation's own flat distribution rather than the printed
  * rule. Recorded because the previous pass used the canonical $400 and a
  * future reader comparing against a rulebook will otherwise think this is
  * a bug. */

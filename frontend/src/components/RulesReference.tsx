@@ -43,12 +43,13 @@
 // 4. **President's certificate limit correction.** An earlier pass of this
 //    row stated the president's 20% certificate counts as 2 certificates
 //    against the certificate limit -- a common misconception, but wrong.
-//    Re-verified against three independent sources: the official Lookout
-//    Games "1830: Railways & Robber Barons" rulebook (Section 4.3/5.3, "the
-//    president's certificate ... is two shares (20%), but counts as a
-//    single certificate"), the classic 18xx.net rules text ("The limit is
-//    on certificates, some of which may be worth 20% of the stock"), and
-//    the open-source `tobymao/18xx` engine's own `num_certs`
+//    Re-verified against three independent sources, described rather than
+//    quoted (design note #548): the published rulebook's own certificate
+//    -limit section, which states that the president's holding is two
+//    shares but one certificate; the long-standing 18xx.net rules summary,
+//    which makes the same distinction between certificates and the
+//    percentage each represents; and the open-source `tobymao/18xx`
+//    engine's own `num_certs`
 //    implementation (`lib/engine/game/base.rb`), which sums each share's
 //    `cert_size` -- a field that defaults to `1` and is never overridden to
 //    `2` for a president's `Share` object (`lib/engine/share.rb`/
@@ -325,13 +326,13 @@ const CORE_LIMITS: RuleRow[] = [
     label: "Buying a train from another corporation",
     value: "Any price at or above $1, by mutual agreement",
     note:
-      "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling — moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary 1830 plays. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
+      "During its Buy Trains step a corporation may buy a train from another corporation instead of, or as well as, from the Bank. Any price of $1 or more is legal and there is no ceiling — moving a train for $1 to strand a rival, or for a company's entire treasury to shift money between two corporations the same player controls, are both ordinary plays here. If one player is president of both corporations the sale completes immediately. If the corporations have different presidents, the buyer makes an offer that the seller's president may accept or reject, and the buyer may rescind it at any time before it is answered. A train bought this way does NOT count as a new train entering play: it never advances the phase and never triggers a rusting sweep.",
   },
   {
     label: "Stock Round 1",
     value: "Selling is prohibited for the whole of SR1",
     note:
-      "In the first Stock Round of the game nobody may sell any certificate, of any corporation, for any reason. The round is buy-or-pass only. This exists so the opening share auction cannot be immediately unwound: without it, a player could buy a presidency, bank the price movement and dump it in the same round, which is not a strategy 1830 intends to offer. The restriction lifts completely at SR2 and never returns.",
+      "In the first Stock Round of the game nobody may sell any certificate, of any corporation, for any reason. The round is buy-or-pass only. This exists so the opening share auction cannot be immediately unwound: without it, a player could buy a presidency, bank the price movement and dump it in the same round, which is not a strategy this ruleset intends to offer. The restriction lifts completely at SR2 and never returns.",
   },
   {
     label: "Bank Pool cap (per corporation)",
@@ -342,7 +343,7 @@ const CORE_LIMITS: RuleRow[] = [
   {
     label: "Capitalization mode — Full Capitalization",
     value: "10x Par credited to treasury immediately upon floating at 60%",
-    note: "The moment a corporation crosses the 60% float threshold, its treasury is credited its full par price x 10 shares in one lump sum — not gradually, and not scaled down to however many shares had actually sold at that moment. This is confirmed directly against this contract's own `trading.rs` (`FLOAT_CAPITALIZATION_MULTIPLIER = 10`, applied as soon as `FLOAT_THRESHOLD_PERCENTAGE = 60` is crossed), not just the reference rulebook.",
+    note: "The moment a corporation crosses the 60% float threshold, its treasury is credited its full par price x 10 shares in one lump sum — not gradually, and not scaled down to however many shares had actually sold at that moment. This is confirmed directly against this contract's own `trading.rs` (`FLOAT_CAPITALIZATION_MULTIPLIER = 10`, applied as soon as `FLOAT_THRESHOLD_PERCENTAGE = 60` is crossed), not just the reference ruleset.",
   },
   {
     label: "Corporation float threshold",
@@ -807,9 +808,8 @@ function AboutSection() {
       <h3 style={styles.sectionTitle}>About This Game &amp; Your Goal</h3>
       <div style={styles.aboutProse}>
         <p style={styles.aboutParagraph}>
-          1830: Railways &amp; Robber Barons puts you in the seat of a 19th-century financier,
-          competing to build and profit from a rail network across the northeastern United States
-          and Canada. You play two roles at once: a private investor buying and selling stock in
+          Project 18XX puts you in the seat of a 19th-century financier, competing to build and
+          profit from a rail network across the northeastern United States and Canada. You play two roles at once: a private investor buying and selling stock in
           public railroad corporations, and — whenever you hold a corporation's President's
           certificate — that corporation's own operating officer, deciding where it lays track,
           which trains it buys, and whether it pays out or reinvests what it earns.
@@ -833,7 +833,7 @@ function AboutSection() {
         </p>
         <p style={styles.aboutParagraph}>
           A game reaches a natural end one of two ways: the Bank runs dry of cash — the classic
-          1830 rulebook's own primary end condition (see Bank Treasury on the Game Ledger tab) — or
+          genre's own primary end condition (see Bank Treasury on the Game Ledger tab) — or
           a corporation's President cannot cover a mandatory train purchase even after emptying both
           the company's treasury and their own personal cash, which bankrupts them and halts the
           game on the spot. In either case the final net-worth calculation above decides the payout,

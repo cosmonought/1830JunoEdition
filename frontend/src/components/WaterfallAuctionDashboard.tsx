@@ -509,24 +509,18 @@ export function WaterfallAuctionDashboard({
           )}
         </div>
 
-        {/* Design note #306: the auction is over -- say what is next, and
-            offer the step that gets there. */}
+        {/* Design note #547: the BUTTON moved to `AuctionPromptModal`. It sat
+            at the foot of a scrolling six-card grid -- the last place a
+            player who has finished reading is still looking -- which is the
+            visible form of the problem design note #306 named: the round was
+            waiting on an action nobody could see they had to take. The
+            banner stays, because the grid still needs to say why it is
+            empty. */}
         {privates.length === 0 && (
           <div style={styles.auctionOverBanner}>
             <span style={styles.auctionOverText}>
               The Waterfall Auction is complete. Up next is the Stock Round.
             </span>
-            {onProceedToStockRound && (
-              <button
-                type="button"
-                style={styles.proceedButton}
-                onClick={onProceedToStockRound}
-                disabled={!sessionReady}
-                title="Close the auction and open Stock Round 1."
-              >
-                Proceed to Stock Round 1 &#8250;
-              </button>
-            )}
           </div>
         )}
 

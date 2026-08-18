@@ -3,7 +3,7 @@
 // THE PRIVATE COMPANIES' REVENUE AND CANONICAL POWERS, in one place.
 //
 // ==================================================================
-//  DESIGN NOTE 391: ONE COPY OF A QUOTATION
+//  DESIGN NOTE 391: ONE COPY OF THE DESCRIPTIONS
 // ==================================================================
 //
 // This table lived inside `WaterfallAuctionDashboard.tsx`, which was the
@@ -12,13 +12,9 @@
 // corporation's privates and expands them to their rules text (design
 // note #394), and the Financial Ledger names them too.
 //
-// The text is a QUOTATION -- design note #360 below is explicit that it is
-// the rulebook's own words, verbatim including the typography, and that
-// normalising a curly apostrophe would be an edit. A quotation that exists
-// in two files is a quotation that will eventually differ between them,
-// and the failure is silent: both copies look plausible and only one
-// matches the book. So it moves rather than being duplicated, and both
-// consumers import it.
+// One copy, imported by both, because two copies of a rules description
+// will eventually differ and the failure is silent -- both read plausibly
+// and only one matches what the game actually does.
 //
 // DISPLAY SOURCE ONLY, unchanged from the original: nothing reads this to
 // make a decision, and it is a hand-kept mirror of
@@ -28,7 +24,8 @@
 /** One private company's display data -- revenue yield and canonical power. */
 export interface PrivateCatalogEntry {
   revenue: number;
-  /** The private's canonical 1830 special power, one line.
+  /** The private's special power, described in this codebase's own words
+   *  (design note #548), one line.
    *
    *  ENFORCEMENT BADGES REMOVED (design note #13). An earlier pass rendered
    *  an "⛓ ENFORCED" / "○ NOT IN THIS RULESET" badge beside each of these,
@@ -99,7 +96,7 @@ export function privateAcronym(privateId: number): string | null {
 }
 
 /** Hand-kept mirror of `auction.rs::CORE_PRIVATE_COMPANIES`'s revenue
- *  yields, plus each private's canonical 1830 special power.
+ *  yields, plus a plain-language description of each private's power.
  *
  *  DISPLAY SOURCE ONLY -- not derived from any schema, and nothing reads it
  *  to make a decision. Same convention as this codebase's other hand-kept
@@ -108,47 +105,52 @@ export function privateAcronym(privateId: number): string | null {
  *  table has to be updated by hand. See `PrivateCatalogEntry.ability` for
  *  the two powers this text currently describes ahead of the contract. */
 /* ==================================================================
- *  DESIGN NOTE 360: THE RULEBOOK'S OWN WORDS
+ *  DESIGN NOTE 548: DESCRIBED, NOT QUOTED
  * ==================================================================
  *
- * These five strings are the 1830 rulebook's canonical text for the
- * privates' special powers, supplied verbatim. They replace paraphrases
- * that were shorter and, in three places, wrong in ways that mattered:
+ * INSTRUCTED: remove the wording copied from the rules manual; rewrite and
+ * summarise it instead.
  *
- *   D&H  said the tile lay was free. It is not -- the mountain costs the
- *        usual $120 and only the TOKEN is free, which is most of the cost.
- *        It also omitted that the tile DOES consume the corporation's
- *        normal placement, the opposite of the C&SL's grant of a second.
- *   M&H  omitted both conditions on the exchange (the 60% cap, and NYC
- *        shares actually being available) and the fact that it can be done
- *        between other players' turns.
- *   C&A  was described as an ability the owner triggers. It is not: the
- *        share arrives on PURCHASE and the private stays open.
+ * These strings used to be the published rulebook's own sentences, carried
+ * verbatim down to the curly apostrophes, and the note they replace said so
+ * proudly: "normalising them to ASCII would be an edit, and once one edit is
+ * allowed the text stops being quotable." That was a sound argument about
+ * FIDELITY and it was answering the wrong question. Quoting a commercial
+ * rulebook at length in shipped software is a copyright exposure whatever
+ * its typography, and the accuracy it was protecting does not require the
+ * publisher's words -- only their meaning.
  *
- * VERBATIM, INCLUDING THE TYPOGRAPHY. The curly apostrophes and the em dash
- * are the source text's; normalising them to ASCII would be an edit, and
- * once one edit is allowed the text stops being quotable.
+ * SO THE RULES ARE STATED, NOT REPRODUCED. Game rules are not themselves
+ * copyrightable; the expression of them is. Each line below is written from
+ * scratch to say what the piece does.
  *
- * ONE CORRECTION, MADE ON REQUEST. The supplied D&H copy read "it need not
- * be connect to any track"; it now reads "connected". The first pass
- * reproduced that typo deliberately and flagged it rather than fixing it
- * quietly -- correcting a quotation without saying so is how a quotation
- * stops matching its source. Raised, confirmed, changed. It is the only
- * departure from the text as given, which is why it is written down here
- * rather than left for a future reader to notice as a discrepancy.
+ * ACCURACY WAS THE POINT OF THE QUOTATION AND IT IS STILL THE POINT. The
+ * paraphrases the verbatim text originally replaced were wrong in four
+ * specific ways, and every one of them is preserved here deliberately --
+ * this rewrite must not walk back into them:
  *
- * SCHUYLKILL VALLEY has no entry in the supplied set because it has no
- * power. Its line stays as the codebase's own, which says so outright
- * rather than leaving a blank that reads as missing data.
+ *   D&H  the tile is NOT free. The mountain costs the usual $120 and only
+ *        the TOKEN is free, which is most of the value. The tile also
+ *        CONSUMES the corporation's normal placement.
+ *   C&SL the opposite -- its lay is IN ADDITION to the normal placement,
+ *        so the corporation may play two tiles that turn.
+ *   M&H  the exchange has two conditions (under 60% held, and an NYC share
+ *        actually available) and may be taken BETWEEN other players' turns,
+ *        in either round type.
+ *   C&A  is not an ability the owner triggers. The share arrives on
+ *        PURCHASE and the private stays open.
+ *
+ * SCHUYLKILL VALLEY canonically has no power at all, and its line says so
+ * outright rather than leaving a blank that reads as missing data.
  *
  * ==================================================================
  *  DESIGN NOTE 312 (preserved): TWO PRIVATES CANNOT RESERVE ONE HEX
  * ==================================================================
  *
- * The paraphrases this replaces once had D&H naming B20 -- C&SL's hex --
- * and M&H claiming F16, which is D&H's. The canonical text above settles it
- * by construction: C&SL is B-20, D&H is F-16, and M&H reserves nothing at
- * all because its power is the NYC exchange.
+ * An older set of paraphrases had D&H naming B20 -- C&SL's hex -- and M&H
+ * claiming F16, which is D&H's. The descriptions below settle it by
+ * construction: C&SL is B-20, D&H is F-16, and M&H reserves nothing at all
+ * because its power is the NYC exchange.
  *
  * KEPT AS A NOTE because two other files cite #312 by number
  * (`utils/privateReservations.ts` and `utils/sandboxState.ts`), and because
@@ -159,7 +161,7 @@ export function privateAcronym(privateId: number): string | null {
  *     board F16 is Scranton and Scranton is the D&H's. Nothing in the
  *     frontend reads the reserved hex to make a decision, so the divergence
  *     is cosmetic until the contract starts enforcing it -- and fixing it
- *     properly means changing `auction.rs`, not editing this text back.
+ *     properly means changing `auction.rs`, not editing this text.
  */
 export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntry>> = {
   1: {
@@ -174,30 +176,30 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     acronym: "C&StL",
     revenue: 10,
     ability:
-      "A railroad owning the CL may lay a tile on the CL\u2019s hex (B-20). This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. This tile placement may be performed in addition to the railroad\u2019s normal tile placement\u2014on that turn only it may play two tiles.",
+      "Its owning corporation may tile hex B-20 even where nothing connects to it \u2014 no station of its own, no track at all. The lay is a bonus rather than a substitute: the corporation still gets its ordinary tile placement that turn, so it may lay two.",
   },
   3: {
     acronym: "D&H",
     revenue: 15,
     ability:
-      "A railroad owning the DH may lay a track tile and a station token on the DH\u2019s hex (F-16). The mountain costs $120 as usual, but laying the token is free. This hex need not be connected to one of the railroad\u2019s stations, and it need not be connected to any track at all. The tile laid does count as the owning railroad\u2019s one tile placement for his turn. If the DH does not lay a station token on the turn it lays the tile on its starting hex, it must follow the normal rules when placing a station (i.e., it must have a legal train route to the hex). Other railroads may lay a tile on the DH starting hex subject to the ordinary rules, after which the DH special effects are no longer available",
+      "Its owning corporation may tile hex F-16 and drop a station there in one go, connected to nothing. The token is free; the mountain still charges its usual $120 for the tile. Unlike the C&StL this uses up the corporation\u2019s tile placement for the turn. Decline the token then and it can only be placed later under the ordinary connection rules. The power lapses entirely once any other corporation tiles F-16 first.",
   },
   4: {
     acronym: "M&H",
     revenue: 20,
     ability:
-      "A player owning the MH may exchange it for a 10% share of NYC, provided he does not already hold 60% of the NYC shares and there is NYC shares available in the bank or the pool. The exchange may be made during the player\u2019s turn of a stock round or between the turns of other players or railroads in either stock or operating rounds. This action closes the MH.",
+      "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the bank or the pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
   },
   5: {
     acronym: "C&A",
     revenue: 25,
     ability:
-      "The initial purchaser of the CA immediately receives a 10% share of PRR shares without further payment. This action does not close the CA. The PRR railroad will not be running at this point, but the shares may be retained or sold subject to the ordinary rules of the game.",
+      "Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
   },
   6: {
     acronym: "B&O",
     revenue: 30,
     ability:
-      "The owner of the BO private company immediately receives the president\u2019s certificate of the B&O railroad without further payment and immediately sets a par share value. The BO private company may not be sold to any corporation, and does not change hands if the owning player loses the presidency of the B&O. When the B&O railroad purchases its first train this private company is closed down.",
+      "Its owner takes the B&O president\u2019s certificate free on purchase and sets the corporation\u2019s par price immediately. It can never be sold to a corporation, and it stays with its owner even if they later lose the B&O presidency. It closes the moment the B&O buys its first train.",
   },
 };

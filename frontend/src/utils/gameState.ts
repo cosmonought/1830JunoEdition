@@ -288,6 +288,75 @@ export function actingSeatIndex(state: GameStateResponse): number | null {
 }
 
 
+/* ==================================================================
+ *  DESIGN NOTE 544: A MINI-AUCTION SUSPENDS THE TURN ORDER
+ * ==================================================================
+ *
+ * REPORTED: a player bought a private, which opened a mini-auction they
+ * were the lowest bidder in. The mini-auction card named them as being on
+ * turn. The Turn Order named them. The Auction Round ACTION PANEL named
+ * somebody else -- and only that somebody else could do anything.
+ *
+ * `actingSeatIndex` above returns `active_player_index` during the auction,
+ * and that field is right about the WATERFALL and knows nothing about a
+ * contest running on top of it. The mini-auction's cursor lives on a
+ * different document (`WaterfallStateResponse.mini_auction.current_turn`),
+ * on a different atom, fetched by a different query. So the two halves of
+ * the screen were each reading a pointer that was correct about a different
+ * question, and neither was wrong on its own terms.
+ *
+ * THE SUSPENSION IS THE WHOLE RULE. While a contest is live the main
+ * rotation does not advance and nobody may take a waterfall action -- the
+ * reducer has preserved `waterfall.current_turn` across a contest since
+ * design note #338 precisely so it can be resumed untouched afterwards.
+ * That makes it a STALE pointer for the duration, not a live one, and
+ * anything asking "who may act" has to prefer the contest's cursor.
+ *
+ * WHY AN ADDRESS AND NOT A SEAT INDEX. A mini-auction bidder is identified
+ * by address; mapping back to a seat only to have callers map forward again
+ * would add a lookup that can fail (a bidder missing from
+ * `player_addresses`) to a path that currently cannot.
+ *
+ * `actingSeatIndex` IS LEFT ALONE. It answers a narrower question -- which
+ * SEAT the phase points at -- and the sandbox seat-switcher and the
+ * Operating Round president lookup both still want exactly that. Widening
+ * it would have meant threading the waterfall document through every
+ * caller, including several that have no business knowing an auction
+ * exists.
+ */
+export function actingAddress(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+): string | null {
+  const contest =
+    state.current_round_type === "WaterfallAuction" ? waterfall?.mini_auction : null;
+  if (contest) return contest.current_turn || null;
+
+  const seat = actingSeatIndex(state);
+  if (seat === null) return null;
+  return state.player_addresses[seat] ?? null;
+}
+
+/** Whether `address` is shut out of the contest currently running -- i.e. a
+ *  seat at the table who is not one of its bidders. `false` whenever no
+ *  mini-auction is live, because there is then nothing to be excluded from.
+ *
+ *  Design note #545 (`ContextualActionBar`): drives the greyed-out roster
+ *  pills, and states a real fact about the game rather than a visual one --
+ *  these players cannot act, and cannot be acted for, until the contest
+ *  resolves. */
+export function isSidelinedByMiniAuction(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+  address: string,
+): boolean {
+  const contest =
+    state.current_round_type === "WaterfallAuction" ? waterfall?.mini_auction : null;
+  if (!contest) return false;
+  return !contest.bidders.includes(address);
+}
+
+
 /** `QueryMsg::PlayerNetWorth`'s response -- mirrors
  *  `msg.rs::PlayerNetWorthResponse` exactly. See design note #6. */
 export interface PlayerNetWorthResponse {
@@ -835,7 +904,11 @@ export interface WaterfallPrivateStatus {
  *  mini-auction is active. */
 export interface WaterfallMiniAuctionStatus {
   private_id: number;
-  /** The competing bidders, in the room's seating (turn) order. */
+  /** The competing bidders, in the order they will be asked to act:
+   *  ascending by the bid each held when the contest opened, so the lowest
+   *  bidder is always first to answer. See `sandboxSession.ts` design note
+   *  #544 for why the queue is fixed at that moment rather than re-sorted
+   *  after every raise. */
   bidders: string[];
   /** Whose turn it currently is within `bidders` -- always someone other
    *  than `high_bidder`, whose own turns are auto-skipped. */

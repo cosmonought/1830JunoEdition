@@ -819,6 +819,22 @@ interface AppShellProps {
   /** The FIRESTORE room id -- addresses off-chain chat and presence only.
    *  A different identifier for a different system; see design note #22. */
   roomId: string;
+  /* ==================================================================
+   *  DESIGN NOTE 524: THE ROOM IS CHOSEN BEFORE THE BOARD EXISTS
+   * ==================================================================
+   *
+   * Design note #522 mounted the room strip inside this shell, which put
+   * "host or join" behind "enter the sandbox" -- so two playtesters had to
+   * agree to open the board separately, find the strip, and only then
+   * discover each other. The decision belongs where the other lobby
+   * decisions are.
+   *
+   * So the Lobby hosts or joins, and hands the code through `GameRouter` to
+   * here as the STARTING value. Everything after that is unchanged: this
+   * shell still owns the listener, the cursor and the dispatch intercept.
+   * `null` is an ordinary solo sandbox, which is what every non-sandbox
+   * mode passes. */
+  sandboxRoomSeed?: string | null;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
   /** Which of the three ways of looking at a board this is -- design note
@@ -827,7 +843,7 @@ interface AppShellProps {
   mode: BoardMode;
 }
 
-function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
+function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
 
@@ -3003,7 +3019,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode }: AppShellProps) {
    * cursor the listener takes its tail from AND the index the next append
    * claims, which is what keeps a client's own writes in sequence with what
    * it has already applied. */
-  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(null);
+  /* Design note #524: seeded from the Lobby's choice. `useState`'s initial
+     value rather than an effect, so the listener's very first run already
+     has the room -- an effect would open a solo session for one render and
+     then swap it, replaying the log into a board that had already begun. */
+  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(sandboxRoomSeed);
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
@@ -8404,7 +8424,13 @@ function GameRouter() {
   /** Design note #24: the escape hatch. Needs no wallet, no contract, no
    *  Firestore room -- which is the entire point, since the absence of all
    *  three is what made the lobby inescapable. */
-  const handleEnterSandbox = useCallback(() => {
+  /* Design note #524: the sandbox room code, chosen in the Lobby. Held here
+     rather than inside `AppShell` because the shell is keyed on the game and
+     remounts; this survives that, and it is what the Lobby has to write to
+     before the shell exists at all. */
+  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(null);
+  const handleEnterSandbox = useCallback((roomCode?: string | null) => {
+    setSandboxRoomCode(roomCode ?? null);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
   }, []);
 
@@ -8435,6 +8461,8 @@ function GameRouter() {
       gameId={activeGame.gameId}
       roomId={activeGame.roomId}
       mode={activeGame.mode}
+      // Design note #524: `null` for every mode but a joined sandbox room.
+      sandboxRoomSeed={activeGame.mode === "sandbox" ? sandboxRoomCode : null}
       onLeaveGame={handleLeaveGame}
     />
   );

@@ -93,6 +93,9 @@ import {
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
+// Design note #524: the Firebase sandbox lobby lives on this screen now.
+import SandboxRoomBar from "./SandboxRoomBar";
+import { hostSandboxRoom, parseRoomCode, readSandboxLog } from "../utils/sandboxRoom";
 import {
   CONTROL_PADDING,
   FONT_FAMILY,
@@ -227,7 +230,9 @@ export interface LobbyProps {
    *  and with a fresh Firebase there is nothing to spectate, so without
    *  this the lobby has no exit at all and `HexGridRenderer` is
    *  unreachable. */
-  onEnterSandbox: () => void;
+  /** Design note #524: carries the Firebase sandbox room code, or `null`
+   *  for an ordinary solo sandbox. */
+  onEnterSandbox: (sandboxRoomCode?: string | null) => void;
 }
 
 /** Which half of the room browser is showing.
@@ -292,7 +297,69 @@ export function parseGameIdFromExecuteResult(result: ExecuteResult): number | nu
 /* Lobby                                                               */
 /* ------------------------------------------------------------------ */
 
+/* Design note #525: the Web3 lobby's on-switch. `false` parks the room
+   browser and the staging room together for sandbox playtesting; `true`
+   restores the screen exactly as it was. One flag, one place, no other
+   edits -- so turning it back on is a one-character change rather than a
+   revert somebody has to reconstruct. */
+const WEB3_LOBBY_ENABLED = false;
+
 export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProps) {
+  /* Design note #524: the sandbox room handlers. Local to this screen -- the
+     code is handed straight to `onEnterSandbox` and this component unmounts,
+     so there is nothing to keep. */
+  const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
+  const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
+
+  const handleHostSandboxRoom = useCallback(async () => {
+    setSandboxRoomBusy(true);
+    setSandboxRoomError(null);
+    try {
+      const code = await hostSandboxRoom("host");
+      if (!code) {
+        setSandboxRoomError("Firestore is not configured in this build.");
+        return;
+      }
+      onEnterSandbox(code);
+    } catch (error) {
+      setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
+    } finally {
+      setSandboxRoomBusy(false);
+    }
+  }, [onEnterSandbox]);
+
+  const handleJoinSandboxRoom = useCallback(
+    async (raw: string) => {
+      const code = parseRoomCode(raw);
+      if (!code) {
+        setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
+        return;
+      }
+      setSandboxRoomBusy(true);
+      setSandboxRoomError(null);
+      try {
+        /* Read the log once purely to TELL THE PLAYER whether the room is
+           real before the board opens. An empty log and a wrong code are
+           indistinguishable once you are inside, and the second is a much
+           more common mistake than the first. The replay itself belongs to
+           the shell's listener; doing it here would apply the history
+           twice. */
+        const existing = await readSandboxLog(code);
+        if (existing.length === 0) {
+          setSandboxRoomError(
+            `${code} has no actions yet — joining anyway. If nobody appears, check the code.`,
+          );
+        }
+        onEnterSandbox(code);
+      } catch (error) {
+        setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
+      } finally {
+        setSandboxRoomBusy(false);
+      }
+    },
+    [onEnterSandbox],
+  );
+
   const wallet = useWallet();
   const address = wallet.address;
 
@@ -677,12 +744,92 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             way in when the chain is unconfigured.
           </span>
         </div>
-        <button type="button" style={styles.sandboxButton} onClick={onEnterSandbox}>
+        <button type="button" style={styles.sandboxButton} onClick={() => onEnterSandbox(null)}>
           Enter Offline Sandbox →
         </button>
       </section>
 
-      {activeRoomId && room ? (
+      {/* ==================================================================
+           DESIGN NOTE 524: THE MULTIPLAYER DECISION IS A LOBBY DECISION
+          ==================================================================
+
+           Design note #522 mounted this strip inside the game shell, which
+           put "host or join" BEHIND "enter the sandbox". Two playtesters
+           therefore had to open the board separately, find a strip neither
+           knew was there, and only then discover each other -- a
+           multiplayer feature whose first step was for everyone to go and
+           play alone.
+
+           It sits with the other lobby decisions now, directly under the
+           sandbox entry it modifies. The plain "Enter Offline Sandbox"
+           button above is untouched and still opens a solo session, so the
+           escape hatch that note #24 built keeps its own promise: it has no
+           `disabled` condition and does not depend on Firestore.
+
+           HOSTING ENTERS IMMEDIATELY. The alternative -- show the code, wait
+           for a "start" -- is a staging room, and the Web3 lobby already has
+           one of those for a flow that genuinely needs it (an ante, a
+           contract call, a launch). A sandbox room needs none of that: the
+           code is visible on the board's own strip, and a joiner can arrive
+           at any point because the log replays. */}
+      <section style={styles.sandboxStrip}>
+        <div style={styles.sandboxCopy}>
+          <span style={styles.sandboxTitle}>👥 Sandbox Multiplayer</span>
+          <span style={styles.sandboxNote}>
+            Play the sandbox with other people in real time, over Firestore — still no wallet
+            and no contract. Host a room and read the code out, or join one somebody gives you.
+          </span>
+        </div>
+        <SandboxRoomBar
+          roomCode={null}
+          available={isFirebaseConfigured()}
+          appliedCount={0}
+          error={sandboxRoomError}
+          busy={sandboxRoomBusy}
+          onHost={handleHostSandboxRoom}
+          onJoin={handleJoinSandboxRoom}
+          onLeave={() => undefined}
+        />
+      </section>
+
+      {/* ==================================================================
+           DESIGN NOTE 525: THE WEB3 LOBBY IS PARKED, NOT DELETED
+          ==================================================================
+
+           REPORTED: hide the Web3 "Create Room" lobby while the Firebase
+           middleware is being playtested, so testers do not click it and hit
+           a "No wallet connected" wall.
+
+           It is gated behind ONE flag rather than removed, and the constant
+           is at the top of this file where it can be found. Deleting a
+           working staging room -- seats, ready checks, the ante, the
+           contract launch -- to run a playtest would cost far more to
+           rebuild than it costs to switch off, and this file's own design
+           note #24 already records what happens when the lobby becomes
+           unreachable by accident.
+
+           WHAT IS HIDDEN IS THE WHOLE BRANCH, browser and staging room
+           alike. Hiding only the create button would leave a room list that
+           cannot be joined, which is a worse trap than the one being
+           removed: a control that looks live and refuses is harder to
+           dismiss than one that is absent.
+
+           THE SANDBOX PATHS ARE OUTSIDE IT and unaffected -- both strips sit
+           above this branch, so the escape hatch and the new multiplayer
+           entry keep working exactly as they did. That is the same placement
+           argument note #24 made for putting the hatch outside the branch in
+           the first place. */}
+      {!WEB3_LOBBY_ENABLED ? (
+        <section style={styles.sandboxStrip}>
+          <div style={styles.sandboxCopy}>
+            <span style={styles.sandboxTitle}>⛓ On-chain rooms — paused</span>
+            <span style={styles.sandboxNote}>
+              The Juno wallet lobby is switched off while sandbox multiplayer is being tested.
+              Flip <code>WEB3_LOBBY_ENABLED</code> in <code>Lobby.tsx</code> to bring it back.
+            </span>
+          </div>
+        </section>
+      ) : activeRoomId && room ? (
         <StagingRoom
           room={room}
           seats={seats}

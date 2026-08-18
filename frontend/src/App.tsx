@@ -1444,12 +1444,41 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * The state remains the RENDERING source of truth -- the ref exists so the
    * dispatch path has something to read, not so components can bypass
    * React. Both are written together, always. */
-  const sandboxStateRef = useRef<GameStateResponse | null>(null);
+  /* Design note #537a: SEEDED, not left null until an effect runs. The
+     dispatch path reads this ref, and the replay drain is async -- so a
+     setup event arriving before the sync effect had ever fired found it
+     null. Giving it the same initial value `sandboxState` itself gets closes
+     that window at the source, which is better than a fallback chain in the
+     reader: there is now no moment at which the ref has no state. */
+  const sandboxStateRef = useRef<GameStateResponse | null>(
+    sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
+  );
   const sandboxWaterfallRef = useRef<WaterfallStateResponse | null>(null);
   useEffect(() => {
     sandboxStateRef.current = sandboxState;
   }, [sandboxState]);
   useEffect(() => {
+    /* ==================================================================
+     *  DESIGN NOTE 537: A ROOM'S STATE COMES FROM THE LOG, NOT A FIXTURE
+     * ==================================================================
+     *
+     * REPORTED: a multiplayer game boots and then still shows the four
+     * offline mock players.
+     *
+     * This effect re-seeds `sandboxState` from `sandboxScenarioState(...)` --
+     * the four-player Alice/Bob/Carol/Dave fixture -- and it fires on
+     * `sandboxScenarioId` and `sandboxTrainFixture`, which are the debug
+     * toolbar's own controls. In solo sandbox that is exactly right: picking
+     * a scenario means "give me that board".
+     *
+     * In a room it is destructive. The state there is derived by replaying
+     * the log, and re-seeding throws that away and substitutes a fixture --
+     * so the roster reverts to four mocks, and every client that touched a
+     * toolbar control would be playing a different game from everyone else.
+     *
+     * So the seeding stops at the room boundary. `SetupGame` is what
+     * populates a room's roster, and the log is what maintains it. */
+    if (sandboxRoomCode) return;
     setSandboxState(
       sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
     );
@@ -1497,7 +1526,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // who owns what, which is board state rather than a view setting, so
     // applying it to a board mid-hotseat would leave trains appearing in
     // rosters with no action having created them.
-  }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId]);
+  }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode]);
 
   const gameState = sandboxState ?? liveGameState;
 
@@ -4188,6 +4217,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              corporations, privates and board are what a room plays WITH.
              Only the seats, the cash and the bank are replaced, because
              those are the only things the player count decides. */
+          /* ==============================================================
+           *  DESIGN NOTE 537a: SETUP MUST NOT BE SKIPPABLE
+           * ==============================================================
+           *
+           * This read `sandboxStateRef.current` and RETURNED if it was null.
+           * That ref is synced by an effect, and the replay drain is async --
+           * so on a fresh join the setup event could arrive before the ref
+           * had ever been written, and the one action that deals the game
+           * would be silently dropped. The board would then keep the
+           * fixture's four mock players for the rest of the session, with
+           * nothing in the log or the UI to say why.
+           *
+           * A silent early return on a timing condition is the worst
+           * available failure here: the log is intact, every later action
+           * applies, and the game is simply wrong. So the base falls back
+           * through the ref, the rendered state, and finally a freshly
+           * computed fixture -- the last of which always exists, so there is
+           * no path where setup does not run. */
           const base = sandboxStateRef.current;
           if (!base) return;
           /* ==============================================================
@@ -7229,6 +7276,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  wiping a game they can still look at would be a surprising amount of
    *  destruction for a button labelled "Leave". */
   const handleLeaveSandboxRoom = useCallback(() => {
+    // Design note #537b: release the roster, so a solo session afterwards
+    // resolves the fixture's own names again rather than staying blank.
+    clearRoomNicknames();
     setSandboxRoomCode(null);
     setSandboxRoomError(null);
     appliedIndexRef.current = 0;
@@ -7527,7 +7577,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           containment the phase switcher it absorbed already relied on. Sits
           above every other chrome element because it changes what the whole
           screen means: which player you are looking at. */}
-      {sandbox && (
+      {/* ==================================================================
+           DESIGN NOTE 537c: THE HOTSEAT TOOLBAR IS A SOLO TOOL
+          ==================================================================
+
+           Hidden in a room, and both of its controls are the reason.
+
+           THE SEAT PICKER exists so one person can play everybody (design
+           note #24's hotseat). In a room that is precisely what identity
+           gating forbids -- design note #534 makes the local id the viewer,
+           so a seat picker would offer a switch the dispatch gate refuses.
+
+           THE SCENARIO SWITCHER re-seeds the board from a fixture, which
+           design note #537 has just stopped doing in a room. Leaving a
+           visible control that now does nothing is worse than removing it:
+           a player clicks it, nothing changes, and the natural conclusion is
+           that the game is broken rather than that the control does not
+           apply.
+
+           `sandboxState` was already dynamic here -- the toolbar reads
+           `player_addresses` and would have shown the right number of seats.
+           It is the ACTIONS that do not belong. */}
+      {sandbox && !sandboxRoomCode && (
         <SandboxToolbar
           gameState={sandboxState}
           seatIndex={sandboxSeatIndex}
@@ -8788,13 +8859,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
  * fixture's own Alice/Bob table answers, exactly as it did before.
  */
 let ROOM_NICKNAMES: Record<string, string> = {};
+/* Design note #537b: whether a room has dealt. Distinct from "the map is
+   empty" -- a room whose players all left blank nicknames would have an
+   empty MAP and still must not borrow the fixture's names. */
+let ROOM_ROSTER_ACTIVE = false;
 
 function setRoomNicknames(next: Record<string, string>): void {
   ROOM_NICKNAMES = next;
+  ROOM_ROSTER_ACTIVE = true;
 }
 
+function clearRoomNicknames(): void {
+  ROOM_NICKNAMES = {};
+  ROOM_ROSTER_ACTIVE = false;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 537b: NO MOCK NAMES IN A REAL ROOM
+ * ==================================================================
+ *
+ * Design note #535 made this a fallthrough -- room roster first, fixture
+ * table second -- so solo sandbox kept Alice and Bob. That is right for the
+ * solo case and wrong for a room, and the failure mode is the one worth
+ * guarding against: if a real id ever failed to resolve, it would fall
+ * through and be labelled with SOMEBODY ELSE'S NAME. A player mislabelled as
+ * "Alice" is far worse than one labelled with a raw id, because it looks
+ * correct. It would also be a name belonging to a person who is not in the
+ * game, on a screen whose whole job is to say who is.
+ *
+ * So once a room has dealt, the fixture table is unreachable: an unknown id
+ * returns `null` and every caller falls through to `truncateAddress`, which
+ * is ugly and unmistakably NOT a claim about identity. Ugly and honest beats
+ * tidy and wrong on a roster.
+ */
 function sandboxPlayerLabel(address: string): string | null {
-  return ROOM_NICKNAMES[address] ?? fixturePlayerLabel(address);
+  const fromRoom = ROOM_NICKNAMES[address];
+  if (fromRoom) return fromRoom;
+  if (ROOM_ROSTER_ACTIVE) return null;
+  return fixturePlayerLabel(address);
 }
 
 function GameRouter() {

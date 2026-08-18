@@ -109,7 +109,11 @@ import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
 // Design note #170 (ContextualSubPanel): a name beats a truncated hash, and
 // this returns `null` for a real wallet so live rooms are unchanged.
-import { sandboxPlayerLabel } from "../utils/sandboxState";
+// Design note #559: the ROOM-AWARE resolver. Importing it from
+// `sandboxState` got the fixture's Alice/Bob table, which returns null
+// for a real room id -- so presidents rendered as raw `p-` ids here
+// while every other surface showed names.
+import { sandboxPlayerLabel } from "../utils/playerLabels";
 import {
   CARD_HIGHLIGHT_BORDER,
   CHIP_INERT_BG,
@@ -461,13 +465,39 @@ export function PlayerAssetsSection({
    *  does have nothing behind it. */
   const pendingLabel = !netWorthsEnabled ? "not connected" : netWorthsLoading ? "loading..." : "--";
 
-  /** Design note #497a: what the `~` means. Every estimated cell carries it,
-   *  so the mark is explained wherever it appears rather than in a footnote
-   *  the reader has to go and find. */
+  /* ==================================================================
+   *  DESIGN NOTE 555: THIS IS ARITHMETIC, NOT AN ESTIMATE
+   * ==================================================================
+   *
+   * REPORTED: Stock Value and Net Worth are both prefixed with `~`, as
+   * though they were guesses. There is no guessing these values.
+   *
+   * Correct, and the `~` was answering a real question with the wrong
+   * symbol. Design note #497a added it to mark the locally-computed figure
+   * as distinct from the contract's `PlayerNetWorth` answer, so an unmarked
+   * client total could not pass for the chain's -- a sound concern.
+   *
+   * But the two are not an approximation and an authority. They are the SAME
+   * SUM over the same inputs: cash on hand, plus each holding multiplied by
+   * its live market price. Nothing is rounded down, sampled or inferred. The
+   * distinction that matters is PROVENANCE -- who did the addition -- and
+   * `~` does not mean "computed here", it means "roughly", which is a claim
+   * about accuracy that was never true.
+   *
+   * `estimateCertificateCount` was renamed for exactly this reason (see
+   * `gameState.ts`), and its own `~N` presentation went with it. This is the
+   * same correction, one column over and overdue.
+   *
+   * THE TOOLTIP STAYS AND DOES THE JOB PROPERLY. Provenance belongs in
+   * words, where it can say which arithmetic ran and where -- and it is
+   * still attached to precisely the cells the client computed, so nothing
+   * about the disclosure is weakened by dropping the squiggle.
+   */
   const ESTIMATE_TOOLTIP =
-    "Calculated from this board's own holdings and live market prices. " +
-    "The contract's PlayerNetWorth query is the authority when a chain is connected; " +
-    "offline and in sandbox this is the same arithmetic run locally.";
+    "Calculated in this browser from the board's own holdings and live market " +
+    "prices — exact, not approximate. The contract's PlayerNetWorth query answers " +
+    "this when a chain is connected; offline and in sandbox it is the same " +
+    "arithmetic, run here.";
 
   return (
     <section style={{ ...styles.section, ...styles.sectionPlayers }}>
@@ -599,25 +629,25 @@ export function PlayerAssetsSection({
                              instead of "not connected".
                           3. `pendingLabel` -- neither is available.
 
-                        THE ESTIMATE IS MARKED, with a `~` and a tooltip. An
-                        unmarked client-side total presented beside a
-                        chain-authoritative one in the same column would be
-                        the "silently substituting" failure design note #4
-                        warned about -- the point of that warning was never
-                        that the number is unobtainable, it was that a guess
-                        must not pass for the contract's answer. */}
+                        THE PROVENANCE IS MARKED, by the tooltip. Design
+                        note #555: the `~` that used to sit here is gone --
+                        it claimed the figure was approximate, which it never
+                        was. What design note #4 actually warned against was
+                        a client total silently PASSING FOR the contract's,
+                        and the tooltip says which arithmetic ran and where,
+                        on exactly the cells the client computed. */}
                     <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
                       {netWorth
                         ? `$${netWorth.stock_portfolio_value}`
                         : estimated
-                          ? `~$${Math.round(estimated.stockValue)}`
+                          ? `$${Math.round(estimated.stockValue)}`
                           : pendingLabel}
                     </td>
                     <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
                       {netWorth
                         ? `$${netWorth.net_worth}`
                         : estimated
-                          ? `~$${Math.round(estimated.netWorth)}`
+                          ? `$${Math.round(estimated.netWorth)}`
                           : pendingLabel}
                     </td>
                     <td style={hasCompanies ? styles.tdB : styles.td}>

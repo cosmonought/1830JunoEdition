@@ -1002,6 +1002,23 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     flexWrap: "wrap",
   },
+  /* Design note #563: the player card grid's own section. Spaced from the
+     corporation cards above rather than merged into their grid -- they are a
+     different kind of object and a shared grid would imply they were
+     comparable cells. */
+  playerCardsSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    marginTop: "14px",
+  },
+  playerCardsTitle: {
+    margin: 0,
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    letterSpacing: "0.3px",
+    color: "#c8cdd8",
+  },
   rosterPill: {
     display: "inline-flex",
     alignItems: "baseline",

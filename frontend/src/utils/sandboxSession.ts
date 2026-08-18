@@ -2493,13 +2493,33 @@ export function applySandboxAction(
   }
 
   if ("PlaceStationToken" in msg) {
-    // Tokens are drawn from `station_token_hexes`, so appending here is what
-    // makes one appear on the canvas. The per-CITY registry
-    // (`station_tokens`) is deliberately left alone: which city slot a token
-    // occupies is resolved by `hexmap::execute_place_station_token` against
-    // real slot counts, and guessing it here would be exactly the kind of
-    // rule-shaped invention design note 0 rules out.
+    /* Tokens are drawn from `station_token_hexes`, so appending there is what
+       makes one appear on the canvas.
+       ==================================================================
+        DESIGN NOTE 560: RECORDING A CHOICE IS NOT INVENTING A RULE
+       ==================================================================
+
+       This used to leave `station_tokens` alone on purpose, and said why:
+       "which city slot a token occupies is resolved by
+       `hexmap::execute_place_station_token` against real slot counts, and
+       guessing it here would be exactly the kind of rule-shaped invention
+       design note 0 rules out."
+
+       That is right about GUESSING and it was applied to a case where
+       nothing had to be guessed. `city_index` is already in the message --
+       the player clicked a specific city and design note #453 resolved which
+       one. Declining to write it down is not restraint; it discards
+       information the app was given and then falls back to a heuristic that
+       picks the first slot on every multi-city tile.
+
+       So the slot is recorded ONLY when the message carries one. Absent, the
+       old behaviour stands exactly as before, which is the case design note
+       0 was actually protecting. */
     const { protocol_id, q, r } = msg.PlaceStationToken;
+    const placedCityIndex =
+      typeof msg.PlaceStationToken.city_index === "number"
+        ? msg.PlaceStationToken.city_index
+        : null;
     // Idempotent per hex. Not a rules claim -- the contract decides whether a
     // second token there is legal. This is so a double-click cannot stack two
     // markers on one hex and charge for both, which would be a rendering bug
@@ -2534,6 +2554,14 @@ export function applySandboxAction(
           ? {
               ...company,
               station_token_hexes: [...company.station_token_hexes, [q, r] as [number, number]],
+              // Design note #560: together, always.
+              station_tokens:
+                placedCityIndex === null
+                  ? company.station_tokens ?? null
+                  : [
+                      ...(company.station_tokens ?? []),
+                      [q, r, placedCityIndex] as [number, number, number],
+                    ],
             }
           : company,
       ),
@@ -2965,6 +2993,10 @@ export function placeHomeStationToken(
   companyId: number,
   q: number,
   r: number,
+  /** Design note #560: WHICH city on the hex. `null` leaves the renderer's
+   *  heuristic in charge, which is right for a single-city hex and is the
+   *  only honest answer when the click could not be resolved. */
+  cityIndex: number | null = null,
 ): GameStateResponse {
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company || !company.is_floated) return state;
@@ -2979,6 +3011,18 @@ export function placeHomeStationToken(
             // Home token first, matching `grant_home_station_token`'s own
             // ordering -- several readers take `[0]` as "the home station".
             station_token_hexes: [[q, r] as [number, number], ...entry.station_token_hexes],
+            /* Design note #560: the slot registry, written in the SAME
+               order and in the same breath. Two arrays describing one set of
+               tokens have to move together or the second becomes a partial,
+               stale index of the first -- and a partial index is worse than
+               none, because the renderer trusts it. */
+            station_tokens:
+              cityIndex === null
+                ? entry.station_tokens ?? null
+                : [
+                    [q, r, cityIndex] as [number, number, number],
+                    ...(entry.station_tokens ?? []),
+                  ],
           }
         : entry,
     ),

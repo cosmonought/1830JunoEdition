@@ -68,7 +68,11 @@ import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
 import type { MarketGridResponse } from "./StockMarketRenderer";
 import { FONT_SIZE } from "../styles/typography";
-import { sandboxPlayerLabel } from "../utils/sandboxState";
+// Design note #559: the ROOM-AWARE resolver. Importing it from
+// `sandboxState` got the fixture's Alice/Bob table, which returns null
+// for a real room id -- so presidents rendered as raw `p-` ids here
+// while every other surface showed names.
+import { sandboxPlayerLabel } from "../utils/playerLabels";
 import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
 
 /* ===================================================================

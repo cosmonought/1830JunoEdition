@@ -164,6 +164,31 @@ export interface PublicCompanyState {
    *  at float) -- mirrors `msg.rs::PublicCompanyState.station_token_hexes`
    *  exactly. Empty before this company floats. */
   station_token_hexes: Array<[number, number]>;
+  /* ==================================================================
+   *  DESIGN NOTE 560: A HEX IS NOT A CITY
+   * ==================================================================
+   *
+   * REPORTED: placing ERIE's home station, the player clicked the TOP-RIGHT
+   * city and the token landed on the bottom-left one.
+   *
+   * `station_token_hexes` above is `(q, r)` and cannot express the
+   * difference. ERIE's home hex carries two separate cities; so does New
+   * York, and so does every OO tile. With only a hex to go on, the renderer
+   * falls back to a heuristic, and the heuristic picks the first slot --
+   * which is the bottom-left one, every time, for every corporation.
+   *
+   * So the answer the player gave is recorded. `hexContractTypes.ts` has
+   * declared this field since design note #134 (backend Audit G-12) and the
+   * renderer already PREFERS it over the heuristic; nothing on this side
+   * ever wrote it, so the preference never had anything to prefer.
+   *
+   * OPTIONAL, and the three states stay distinguishable: absent means "this
+   * chain predates G-12, fall back to the heuristic"; an entry means "this
+   * slot, definitively"; and a hex present in `station_token_hexes` with no
+   * entry here means the same as absent for that token specifically. What it
+   * must never mean is "no token", which is why the two arrays are written
+   * together and never one without the other. */
+  station_tokens?: Array<[number, number, number]> | null;
   /** This company's total Station Token limit, home token included -- see
    *  `hexmap::station_token_limit`. Mirrors `msg.rs::PublicCompanyState.
    *  station_token_limit` exactly. */
@@ -1077,4 +1102,51 @@ export function useWaterfallStatePolling(
   }, [client, enabled, refresh, intervalMs]);
 
   return { waterfallState, loading, error, refresh };
+}
+
+
+/* ==================================================================
+ *  DESIGN NOTE 553: A CORPORATION'S PAR IS THE CORPORATION'S, NOT YOURS
+ * ==================================================================
+ *
+ * REPORTED: the president founds a corporation at $67 and their Buy button
+ * goes on saying $67. Every other player is shown $100 and pays $100 -- and
+ * the two clients then place the corporation's market token in different
+ * boxes.
+ *
+ * `parValueFor` read the local par LADDER (`srParValues`), falling back to a
+ * hardcoded "100" when this browser had never touched it. The ladder is a UI
+ * selection: it exists so the founding buyer can choose a price. It is
+ * per-browser by design and it is empty on every client but the one that
+ * made the choice, so everybody else fell through to the default -- which
+ * happens to be the top rung, which is why the wrong number looked like a
+ * plausible one.
+ *
+ * SO THE LADDER IS AN INPUT, AND THE PAR IS A FACT. Once the founding
+ * purchase lands, `PublicCompanyState.par_value` holds the answer, it came
+ * off the shared state, and every client has it. The ladder is consulted
+ * only while that field is still empty -- which is exactly what design note
+ * #351 already said the rule was ("once `par_value` is set the company has a
+ * price and the ladder is locked"); the reducer honoured it and the price
+ * the UI quoted and dispatched did not.
+ *
+ * THE SAME BUG AS DESIGN NOTE #549, one layer up. There the reducer resolved
+ * WHO from local state; here the UI resolved HOW MUCH from local state. Both
+ * are the same mistake -- deriving a shared fact from a per-browser value --
+ * and both produce the same shape of failure: no error, two clients that
+ * disagree, and a symptom that surfaces somewhere else entirely (here, the
+ * stock market chart).
+ */
+export function parPriceFor(
+  state: GameStateResponse | null,
+  companyId: number,
+  ladderSelection?: string,
+  fallback = "100",
+): string {
+  const set = state?.public_companies.find((c) => c.company_id === companyId)?.par_value;
+  /* A par of 0 is not a price -- treat it as unset. The contract sends the
+     field as a string or null, and "0" is what an uninitialised numeric
+     column looks like on the way through. */
+  if (set !== null && set !== undefined && Number(set) > 0) return String(set);
+  return ladderSelection ?? fallback;
 }

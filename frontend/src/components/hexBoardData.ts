@@ -680,6 +680,34 @@ export const LAY_TRACK_DIM_INK = "#070b14";
  *  across the board and the ring that appears when you click it. */
 export const LAY_TRACK_HIGHLIGHT_INK = "#4ade80";
 
+/* ==================================================================
+ *  DESIGN NOTE 561: A LEGALITY CUE IS NOT A LIVERY
+ * ==================================================================
+ *
+ * REPORTED: placing ERIE's home station, both slots glow correctly -- but
+ * it is hard to tell, because it is yellow on yellow.
+ *
+ * The glow was derived from the placing corporation's own colour, on the
+ * reasoning that the highlight should say WHOSE token is coming. It does say
+ * that, and it says it against a board that also uses colour to mean
+ * something: tiles are yellow, green and brown by era. ERIE is yellow and
+ * lays on a yellow tile; the CNJ is a pale peach; the B&O green sits on
+ * green track. Roughly a third of the roster has a livery that collides with
+ * some tile tier, and each collision hides the one cue the player needs at
+ * the moment they need it.
+ *
+ * WHITE, because the question the ring answers is "may I click here", which
+ * has nothing to do with which corporation is asking -- and identity is
+ * already carried twice over by the cursor (design note #496) and by the
+ * confirmation ring's own livery swatch (#462). A third channel for identity
+ * that costs legibility is a bad trade; the same information for free is not
+ * information.
+ *
+ * It is also the highest-contrast ink available against all three tile
+ * tiers at once, which is the property that actually matters for a cue
+ * drawn over artwork the app does not control. */
+export const STATION_PLACEMENT_HIGHLIGHT_INK = "#ffffff";
+
 export const RIVER_BUILD_FEE = 80;
 
 /** Real 1830's printed mountain build fee, in.

@@ -291,6 +291,10 @@ export interface PlaceHomeStationMsg {
     /** `home` places a corporation's free starting token; `dh` spends the
      *  Delaware & Hudson's power. Two different rules, one placement. */
     kind: "home" | "dh";
+    /** Design note #560: WHICH city on the hex the player clicked. `null`
+     *  when the geometry could not say, which leaves the renderer's
+     *  heuristic in charge exactly as before. */
+    city_index: number | null;
     /** The hex's printed label, carried rather than re-derived on each
      *  client. Purely for the log line -- and carrying it means every
      *  client's Activity Log quotes the same sentence the acting player

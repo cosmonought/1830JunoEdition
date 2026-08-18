@@ -3513,7 +3513,34 @@ export function HexGridRenderer({
          same the pulse ring draws on, so the confirmation lands exactly
          where the glow promised and where the token will sit. */
       const nodes = cityNodePoints(mapGrid, q, r, hexSize);
-      const chosenNode = cityIndex === null ? undefined : nodes[cityIndex];
+      /* ==================================================================
+       *  DESIGN NOTE 557: ONE CITY IS NOT AN AMBIGUOUS CITY
+       * ==================================================================
+       *
+       * REPORTED: on a single-city hex the placement ring lands in the
+       * middle of the hex even when the city marker plainly is not there
+       * (the B&O's I15, whose city sits off-centre).
+       *
+       * `cityIndexAtPoint` answers "which slot did the pointer land ON",
+       * hit-testing against each city circle -- so a click anywhere else on
+       * the hex returns `null`, and the anchor fell back to the centroid.
+       * That fallback is right when it means "the geometry cannot say":
+       * design note #516 added it for hexes with no resolvable node at all.
+       *
+       * It is wrong when there is exactly ONE node, because then nothing was
+       * ambiguous. The player did not fail to indicate which city they
+       * meant; there is only one, and they are about to place a token in it
+       * whatever part of the hex they clicked. Drawing the ring at the
+       * centroid there promises a position the token will not occupy.
+       *
+       * THE ANCHOR ONLY. `cityIndex` itself is deliberately left as it was
+       * and still travels as `null`: it answers a different question -- "was
+       * this a click ON a city" -- which other board modes use to decide
+       * between opening the tile picker and targeting a slot. Widening it
+       * here would change what a click MEANS on every single-city hex in
+       * the app, to fix where a ring is drawn. */
+      const soleNode = nodes.length === 1 ? nodes[0] : undefined;
+      const chosenNode = (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
       const nodeX = chosenNode ? chosenNode.x * view.zoom + view.panX : centroidX;
       const nodeY = chosenNode ? chosenNode.y * view.zoom + view.panY : centroidY;
 

@@ -404,10 +404,41 @@ export function describeGameplayAction(
   /* ---- Stock Round and the auction: the player acts. ---- */
 
   if ("BuyStock" in msg) {
-    const { protocol_id, source } = msg.BuyStock;
+    /* ==================================================================
+     *  DESIGN NOTE 554: A PURCHASE IS A PRICE
+     * ==================================================================
+     *
+     * REPORTED: the line should say what the share cost.
+     *
+     * It is the one figure a reader of the log actually wants. "P1 bought a
+     * 10% share of ERIE from the IPO" tells you a thing you probably
+     * watched happen; what you cannot reconstruct afterwards is what it
+     * cost, and in a game where the same share sells at par from the IPO
+     * and at market from the pool, the price is what distinguishes two
+     * otherwise identical lines.
+     *
+     * FROM THE MESSAGE FIRST. `par_value` travels IN the purchase (it is
+     * what founds the corporation), so an IPO buy can be priced from the
+     * action itself rather than from any client's view of the board -- the
+     * property design note #553 is about. A pool buy has no such field and
+     * falls back to the chart, which is the right source for a market
+     * price.
+     *
+     * SILENT WHEN UNKNOWN, rather than "$0" or "$?". A live chain computes
+     * the price server-side and this client may genuinely not know it; a
+     * sentence that omits the cost is honest, and one that invents a figure
+     * for the log is worse than the omission it replaces. */
+    const { protocol_id, source, par_value: parValue } = msg.BuyStock;
+    const fromIpo = source === "Ipo";
+    const priced = Number(parValue);
+    const price =
+      fromIpo && Number.isFinite(priced) && priced > 0
+        ? priced
+        : context.marketPrices?.[protocol_id];
+    const cost = typeof price === "number" && price > 0 ? ` for $${price}` : "";
     return (
       `${actingPlayer(context)} bought a 10% share of ${corp(gameState, protocol_id)} ` +
-      `from the ${source === "Ipo" ? "IPO" : "bank pool"}.`
+      `from the ${fromIpo ? "IPO" : "bank pool"}${cost}.`
     );
   }
 

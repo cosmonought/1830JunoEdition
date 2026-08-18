@@ -538,7 +538,6 @@ import { actingActor, countPhrase, describeGameplayAction } from "./utils/action
 import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
 import {
   bestContrastTextColor,
-  glowColorFor,
   stationTickerColor,
   // Design note #496: the fallback ticker for a corporation the live
   // response has not named, so the cursor still carries a herald.
@@ -638,6 +637,7 @@ import {
   type GameStateResponse,
   type WaterfallStateResponse,
   actingAddress,
+  parPriceFor,
   actingSeatIndex,
   isSidelinedByMiniAuction,
 } from "./utils/gameState";
@@ -675,7 +675,6 @@ import {
   type SandboxTrainFixture,
   type SandboxScenarioId,
   sandboxMarketPositions,
-  sandboxPlayerLabel as fixturePlayerLabel,
   sandboxWaterfallState,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
@@ -771,7 +770,19 @@ import {
   type ActiveGame,
   type BoardMode,
 } from "./utils/activeGame";
+import { STATION_PLACEMENT_HIGHLIGHT_INK } from "./components/hexBoardData";
+import PlayerCards, { seatStripeColor } from "./components/PlayerCards";
+import { playerFinances } from "./utils/playerFinance";
 import { truncateAddress } from "./utils/address";
+/* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
+   its own room-aware copy at module scope while two components imported the
+   fixture-only one of the same name -- so most of the app showed names and
+   the Ledger showed raw ids. */
+import {
+  clearRoomNicknames,
+  sandboxPlayerLabel,
+  setRoomNicknames,
+} from "./utils/playerLabels";
 
 /* ==================================================================
  *  DESIGN NOTE 382: WHAT THIS FILE STOPPED BEING
@@ -1379,8 +1390,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      because the certificate must not be granted without one. */
   const [boParPrompt, setBoParPrompt] = useState<{ player: string } | null>(null);
   const [srParValues, setSrParValues] = useState<Readonly<Record<number, string>>>({});
+  /* Design note #553: the corporation's own par wins over this browser's
+     ladder. The ladder is only consulted while the company has no price. */
   const parValueFor = useCallback(
-    (companyId: number): string => srParValues[companyId] ?? MOCK_BUY_STOCK_PAR_VALUE,
+    (companyId: number): string =>
+      parPriceFor(
+        gameStateRef.current,
+        companyId,
+        srParValues[companyId],
+        MOCK_BUY_STOCK_PAR_VALUE,
+      ),
     [srParValues],
   );
   const handleSelectParValue = useCallback((companyId: number, value: string) => {
@@ -1394,8 +1413,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     srParValuesRef.current = srParValues;
   }, [srParValues]);
+  /* Design note #553: likewise, and this one is what places the market
+     token -- so a client reading its own empty ladder here is how two
+     players ended up looking at the same corporation in two different boxes
+     on the chart. */
   const parValueNumberFor = useCallback((companyId: number): number | null => {
-    const parsed = Number(srParValuesRef.current[companyId] ?? MOCK_BUY_STOCK_PAR_VALUE);
+    const parsed = Number(
+      parPriceFor(
+        gameStateRef.current,
+        companyId,
+        srParValuesRef.current[companyId],
+        MOCK_BUY_STOCK_PAR_VALUE,
+      ),
+    );
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }, []);
 
@@ -1576,6 +1606,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode, seedSandboxState]);
 
   const gameState = sandboxState ?? liveGameState;
+
+  /* Design note #553: the merged state, synchronously, for the two par
+     resolvers declared above it. `sandboxStateRef` alone would have been
+     right in the sandbox and blind on a live chain, where the corporation's
+     par arrives from the poll -- and a par resolver that works in one mode
+     and silently falls back to a hardcoded $100 in the other is the exact
+     failure this note is about, reintroduced in a narrower place.
+
+     A ref rather than a dependency for design note #536's reason: these
+     resolvers are read inside `runGameplayAction`'s context, whose identity
+     two DISPATCHING effects key on.
+
+     WRITTEN DURING RENDER, and deliberately not in an effect -- which is the
+     opposite of what design note #546 does one screen away, so the
+     difference is worth stating. That ref holds a CALLBACK and is only ever
+     read later, from an event; an effect keeps it from ever holding one
+     belonging to a render React discarded. This one is read DURING the same
+     render, by `parValueFor`, to price a button. Deferring it to an effect
+     would make the button show the previous par for one render -- and since
+     `parValueFor`'s identity would not have changed, nothing would schedule
+     the re-render that corrected it. The assignment is idempotent, so a
+     double render in StrictMode writes the same value twice. */
+  const gameStateRef = useRef<GameStateResponse | null>(null);
+  gameStateRef.current = gameState;
 
   // Design note #36: derived, not queried -- see `utils/gamePhase.ts`
   // design note #1 for why `current_global_era` cannot answer this.
@@ -2796,7 +2850,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ports: reach.ports,
       // Design note #252/#253: the acting corporation's colour, lifted if it
       // is too dark to read as light against the veiled board.
-      glowColor: glowColorFor(stationTickerColor(actingProtocolId)),
+      // Design note #561: white, not the livery -- legibility over identity.
+      glowColor: STATION_PLACEMENT_HIGHLIGHT_INK,
     };
   }, [tileLayStepActive, gameState, actingProtocolId, mapGrid]);
 
@@ -2976,6 +3031,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     q: number;
     r: number;
     hexLabel: string;
+    /* ==================================================================
+     *  DESIGN NOTE 556: THE RING BELONGS TO THE CORPORATION PLACING
+     * ==================================================================
+     *
+     * REPORTED: placing a home station in a Stock Round shows the right
+     * corporation on the CURSOR and the wrong one -- the B&O -- on the
+     * previewed marker.
+     *
+     * Two different questions were being answered by two different values,
+     * and only the cursor asked the right one. `stationCursorCorporation`
+     * resolves the company from `homeStationPlacement` (the corporation the
+     * player was prompted for); the confirmation ring read
+     * `actingProtocolId`, which is the OPERATING ROUND's current
+     * corporation. In an Operating Round those coincide, which is why the
+     * ring has always looked right -- a home station is placed the instant a
+     * corporation floats, and that can happen in a STOCK round, where the
+     * operating cursor is pointing at whatever was last there or at the head
+     * of a queue that has not started.
+     *
+     * So the company travels with the staged placement. `null` means "the
+     * corporation on turn", which is what a paid Tokens-step placement is
+     * and the only case `actingProtocolId` was ever right for. */
+    companyId: number | null;
     /** Design note #453: which city on the hex, or `null` when the geometry
      *  cannot say. Travels to `PlaceStationToken.city_index`. */
     cityIndex: number | null;
@@ -3064,7 +3142,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        * ordinary Operating Round turn, which is why the wrong colour only
        * appeared when they came apart -- a home-station placement raised
        * before the queue exists being the case reported. */
-      glowColor: glowColorFor(stationTickerColor(activeStationCompany.company_id)),
+      glowColor: STATION_PLACEMENT_HIGHLIGHT_INK, // design note #561
     };
   }, [tokenTargetMode, activeStationCompany, gameState, mapGrid]);
 
@@ -3943,6 +4021,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [sandbox, gameId, sandboxMarket],
   );
 
+  /* Design note #563: one `PlayerFinances` per seat, in seating order.
+     Recomputed when the board or the chart moves, which is exactly when a
+     player's position can have changed -- and memoised because
+     `sellableHoldings` walks every corporation for every player, so a naive
+     recompute on each render is six passes over the roster per keystroke in
+     the chat box. */
+  const stockRoundPlayerFinances = useMemo(() => {
+    if (!gameState || gameState.current_round_type !== "StockRound") return [];
+    const prices = Object.fromEntries(
+      (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
+    ) as Readonly<Record<number, number | null>>;
+    return gameState.player_addresses
+      .map((address) => playerFinances(address, gameState, prices, settledPrivatePrices))
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  }, [gameState, marketGrid, settledPrivatePrices]);
+
   /** Design note #306 in `WaterfallAuctionDashboard.tsx`: close the auction
    *  and open Stock Round 1. Local, because the sandbox owns its own round
    *  cursor -- `PassTurn` is what advances a real room. */
@@ -4404,10 +4498,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
         if (isPlaceHomeStationMsg(msg)) {
           // Design note #550: a placement is a choice about a shared board.
-          const { company_id: companyId, q, r, kind, hex_label: hexLabel } = msg.PlaceHomeStation;
+          const {
+            company_id: companyId,
+            q,
+            r,
+            kind,
+            city_index: cityIndex,
+            hex_label: hexLabel,
+          } = msg.PlaceHomeStation;
           const base = sandboxStateRef.current;
           if (!base) return;
-          const placed = placeHomeStationToken(base, companyId, q, r);
+          const placed = placeHomeStationToken(base, companyId, q, r, cityIndex);
           if (placed === base) return;
           sandboxStateRef.current = placed;
           setSandboxState(placed);
@@ -5376,10 +5477,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * atomic state change, and is worth raising in the contract audit. Until
    * then this is the honest shape of the operation, not a workaround
    * pretending to be atomic. */
+  /* ==================================================================
+   *  DESIGN NOTE 558: THE SOURCE DECIDES THE PRICE, NOT THE FLOAT
+   * ==================================================================
+   *
+   * This read the corporation's `is_floated` and, once true, sent
+   * `par_value: null` -- "price this at market". The comment defended it as
+   * matching `BuyStock`'s real semantics, and it does not match 1830's.
+   *
+   * In 1830 the IPO always sells at PAR, for the whole life of the
+   * corporation, until the IPO is empty. The stock market price governs the
+   * BANK POOL. The two are different piles of shares at different prices and
+   * a player chooses between them every turn -- which is most of what makes
+   * a Stock Round interesting, and it collapses entirely if floating
+   * silently repoints the IPO at the market.
+   *
+   * The consequence is not cosmetic. A corporation whose price has run up
+   * would sell its remaining IPO shares at the higher figure, so the
+   * treasury it never receives and the player's cash both move by the wrong
+   * amount, and the error compounds for the rest of the game.
+   *
+   * FLOATING STILL MATTERS, just not here: it is what releases the treasury
+   * (design note #134) and puts the corporation into the operating order.
+   * What it does not do is change where a share bought from the IPO gets its
+   * price. */
   const buyOneShare = useCallback(
     (protocolId: number, source: "Ipo" | "Bank") => {
-      const isFloated =
-        gameState?.public_companies.find((c) => c.company_id === protocolId)?.is_floated ?? false;
       return runGameplayAction(
         "BuyStock",
         {
@@ -5390,18 +5513,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // per-card state now, so it arrives as an argument rather than
             // being read from a shared value that every card could flip.
             source,
-            // A floated company's price comes from the Stock Market Matrix,
-            // not a fresh par choice -- matches `BuyStock`'s real semantics.
-            // Resolved from the company being BOUGHT, not from a selection.
-            // Design note #398: resolved from the company being BOUGHT,
-            // which is now genuinely possible -- it used to say that and
-            // then read a single shared value.
-            par_value: isFloated ? null : parValueFor(protocolId),
+            /* Design note #558: the IPO is priced at par, always. The bank
+               pool takes `null` and is priced from the Stock Market Matrix,
+               which is the one case that field was ever meant to signal.
+
+               Design note #398: resolved from the company being BOUGHT,
+               which is now genuinely possible -- it used to say that and
+               then read a single shared value. Design note #553: and from
+               the corporation's own par rather than this browser's ladder. */
+            par_value: source === "Ipo" ? parValueFor(protocolId) : null,
           },
         },
       );
     },
-    [runGameplayAction, gameId, gameState, parValueFor],
+    // Design note #558: `gameState` went with the `is_floated` lookup.
+    [runGameplayAction, gameId, parValueFor],
   );
 
   /* ==================================================================
@@ -5635,7 +5761,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // the whole point: everything else on the board goes dark.
       visible: only,
       highlighted: only,
-      glowColor: glowColorFor(stationTickerColor(homeStationPlacement.companyId)),
+      glowColor: STATION_PLACEMENT_HIGHLIGHT_INK, // design note #561
     };
   }, [homeStationPlacement]);
 
@@ -5730,6 +5856,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         r,
         hexLabel,
         cityIndex,
+        // Design note #556: the corporation the player was prompted for.
+        companyId: placement.companyId,
         kind: "free",
         /* Design note #516: the NODE, not the hex centre. On a dual-city
            home hex (ERIE's) or any OO tile the two are different points,
@@ -5749,7 +5877,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  costs nothing, and routing it through the paid message would bill a
    *  corporation for the one token 1830 gives it. */
   const commitFreeStationPlacement = useCallback(
-    ({ q, r }: { q: number; r: number }) => {
+    ({ q, r, cityIndex }: { q: number; r: number; cityIndex: number | null }) => {
       const placement = homeStationPlacement;
       if (!placement) return;
 
@@ -5767,6 +5895,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             q,
             r,
             kind: placement.kind === "home-station" ? "home" : "dh",
+            city_index: cityIndex, // design note #560
             hex_label: placement.hexLabel,
           },
         },
@@ -6393,6 +6522,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         r,
         hexLabel,
         cityIndex,
+        /* Design note #556: `null` -- a paid Tokens-step placement really is
+           the corporation on turn, and this is the one case where the
+           operating cursor was the right answer all along. Written out
+           rather than left optional so a third staging site has to decide. */
+        companyId: null,
         kind: "paid",
         // Design note #516: the node's own point -- see the free placement.
         offsetX: nodeX,
@@ -6415,7 +6549,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        #239): routing it there would bill a corporation for a token 1830
        gives it. */
     if (kind === "free") {
-      commitFreeStationPlacement({ q, r });
+      // Design note #560: the slot travels with the placement.
+      commitFreeStationPlacement({ q, r, cityIndex });
       return;
     }
 
@@ -8590,6 +8725,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   />
                 )}
 
+                {/* ==================================================
+                     DESIGN NOTE 563: THE PLAYERS, AS CARDS
+                    ==================================================
+
+                    Below the corporation cards, in the same grid language.
+                    STOCK ROUND ONLY: an Operating Round's turn belongs to a
+                    corporation, and a row of player portfolios there would
+                    answer a question nobody on that screen is asking --
+                    the same reasoning design note #406 records for the
+                    action bar's roster pills.
+
+                    The Ledger's Player Assets TABLE is untouched. Two views
+                    of one dataset, each shaped for its own screen. */}
+                {gameState?.current_round_type === "StockRound" && (
+                  <section style={styles.playerCardsSection}>
+                    <h3 style={styles.playerCardsTitle}>Players</h3>
+                    <PlayerCards
+                      players={stockRoundPlayerFinances}
+                      label={(address) =>
+                        sandboxPlayerLabel(address) ?? truncateAddress(address)
+                      }
+                      activeAddress={
+                        gameState ? actingAddress(gameState, waterfallState) : null
+                      }
+                      priorityAddress={
+                        gameState?.player_addresses[gameState.priority_deal_index] ?? null
+                      }
+                      viewerAddress={viewerAddress ?? null}
+                      colorForCompany={stationTickerColor}
+                      colorForSeat={seatStripeColor}
+                    />
+                  </section>
+                )}
+
                 {/* Design note #28: the phase tab renders NO reference
                     board. Its content is the phase panel above -- the
                     auction dashboard or the Stock Round cards -- and the
@@ -9088,14 +9257,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              be the ring describing a charge that never happens -- the same
              mismatch design note #239 removed from the button. */
           cost={pendingToken.kind === "free" ? 0 : stationTokenCost}
+          /* Design note #556: the staged placement's own corporation, and
+             only then the operating cursor. */
           ticker={
-            gameState?.public_companies.find((c) => c.company_id === actingProtocolId)?.ticker ??
-            "this corporation"
+            gameState?.public_companies.find(
+              (c) => c.company_id === (pendingToken.companyId ?? actingProtocolId),
+            )?.ticker ?? "this corporation"
           }
           /* Design note #462: the actual token, in the ring. Same livery
              and the same computed ink the map draws it with. */
-          liveryColor={stationTickerColor(actingProtocolId)}
-          liveryInk={bestContrastTextColor(stationTickerColor(actingProtocolId))}
+          liveryColor={stationTickerColor(pendingToken.companyId ?? actingProtocolId)}
+          liveryInk={bestContrastTextColor(
+            stationTickerColor(pendingToken.companyId ?? actingProtocolId),
+          )}
           canConfirm={controlsEnabled}
           confirmDisabledReason="Initialize the session key to place a token."
           onConfirm={handleConfirmTokenPlacement}
@@ -9149,66 +9323,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
  *  two different systems and neither can be derived from the other: the
  *  `u64` the contract assigned, and the Firestore room id chat/presence
  *  live under. */
-/* ==================================================================
- *  DESIGN NOTE 535b: MODULE SCOPE, SO NO HOOK DEPENDS ON IT
- * ==================================================================
- *
- * The first cut of this resolver was a `useCallback` inside `AppShell`, and
- * the linter immediately named the cost: twelve hooks read it, so it became
- * a dependency of all twelve. A stable `[]` callback would have been
- * harmless in practice and would still have meant editing a dozen dependency
- * arrays to say so -- churn in exactly the hooks (the dispatch, the
- * auto-skip, the forced withhold) where an accidental rebuild re-arms an
- * effect that dispatches.
- *
- * A module-level map avoids the question rather than answering it. Its
- * lifetime is the tab, which is the same lifetime as the player id it keys
- * on (design note #528) and as the room itself -- and `AppShell` remounts on
- * any game change, so there is no stale-between-games case for it to carry.
- *
- * IT IS A FALLTHROUGH, not a replacement: no room means an empty map and the
- * fixture's own Alice/Bob table answers, exactly as it did before.
- */
-let ROOM_NICKNAMES: Record<string, string> = {};
-/* Design note #537b: whether a room has dealt. Distinct from "the map is
-   empty" -- a room whose players all left blank nicknames would have an
-   empty MAP and still must not borrow the fixture's names. */
-let ROOM_ROSTER_ACTIVE = false;
-
-function setRoomNicknames(next: Record<string, string>): void {
-  ROOM_NICKNAMES = next;
-  ROOM_ROSTER_ACTIVE = true;
-}
-
-function clearRoomNicknames(): void {
-  ROOM_NICKNAMES = {};
-  ROOM_ROSTER_ACTIVE = false;
-}
-
-/* ==================================================================
- *  DESIGN NOTE 537b: NO MOCK NAMES IN A REAL ROOM
- * ==================================================================
- *
- * Design note #535 made this a fallthrough -- room roster first, fixture
- * table second -- so solo sandbox kept Alice and Bob. That is right for the
- * solo case and wrong for a room, and the failure mode is the one worth
- * guarding against: if a real id ever failed to resolve, it would fall
- * through and be labelled with SOMEBODY ELSE'S NAME. A player mislabelled as
- * "Alice" is far worse than one labelled with a raw id, because it looks
- * correct. It would also be a name belonging to a person who is not in the
- * game, on a screen whose whole job is to say who is.
- *
- * So once a room has dealt, the fixture table is unreachable: an unknown id
- * returns `null` and every caller falls through to `truncateAddress`, which
- * is ugly and unmistakably NOT a claim about identity. Ugly and honest beats
- * tidy and wrong on a roster.
- */
-function sandboxPlayerLabel(address: string): string | null {
-  const fromRoom = ROOM_NICKNAMES[address];
-  if (fromRoom) return fromRoom;
-  if (ROOM_ROSTER_ACTIVE) return null;
-  return fixturePlayerLabel(address);
-}
 
 function GameRouter() {
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(readActiveGame);

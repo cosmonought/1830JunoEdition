@@ -569,6 +569,7 @@ import {
   dealSandboxGame,
   isSetupGameMsg,
   shuffleForTurnOrder,
+  withEmptyRoster,
   type SetupGameMsg,
 } from "./utils/gameSetup";
 // Design note #522: the Sandbox multiplayer bridge.
@@ -1428,8 +1429,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // whatever the hotseat loop had accumulated and starts that phase clean.
   // Preserving mutations across a phase jump would produce states the real
   // game can never reach.
+  /* ==================================================================
+   *  DESIGN NOTE 538 (App side): ONE SEEDING RULE, THREE READERS
+   * ==================================================================
+   *
+   * The state, its synchronous ref and the scenario re-seed effect all
+   * derive their board from here. They seeded independently before, which is
+   * how two of them ended up with the fixture's roster while the third had
+   * been corrected -- and the resulting mismatch is exactly the "still four
+   * players" the last two passes chased.
+   *
+   * IN A ROOM THE ROSTER IS EMPTY (design note #538): the board loads, the
+   * players do not, and `SetupGame` is the only thing that ever adds one.
+   * Solo sandbox is untouched and gets the fixture exactly as before. */
+  const seedSandboxState = useCallback(
+    (roomCode: string | null): GameStateResponse | null => {
+      if (!sandbox) return null;
+      const board = sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture);
+      return roomCode ? withEmptyRoster(board) : board;
+    },
+    [sandbox, sandboxScenarioId, gameId, sandboxTrainFixture],
+  );
+
   const [sandboxState, setSandboxState] = useState<GameStateResponse | null>(() =>
-    sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
+    sandbox
+      ? sandboxRoomSeed
+        ? withEmptyRoster(sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture))
+        : sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture)
+      : null,
   );
 
   /* Design note #265: a synchronous mirror of the two sandbox atoms.
@@ -1451,7 +1478,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      that window at the source, which is better than a fallback chain in the
      reader: there is now no moment at which the ref has no state. */
   const sandboxStateRef = useRef<GameStateResponse | null>(
-    sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
+    sandbox
+      ? sandboxRoomSeed
+        ? withEmptyRoster(sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture))
+        : sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture)
+      : null,
   );
   const sandboxWaterfallRef = useRef<WaterfallStateResponse | null>(null);
   useEffect(() => {
@@ -1479,9 +1510,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      * So the seeding stops at the room boundary. `SetupGame` is what
      * populates a room's roster, and the log is what maintains it. */
     if (sandboxRoomCode) return;
-    setSandboxState(
-      sandbox ? sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture) : null,
-    );
+    setSandboxState(seedSandboxState(null));
     // Switching scenario is a fresh testbed: drop any in-flight preview,
     // selector or undo history rather than carrying state from a board that
     // no longer exists.
@@ -1526,7 +1555,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // who owns what, which is board state rather than a view setting, so
     // applying it to a board mid-hotseat would leave trains appearing in
     // rosters with no action having created them.
-  }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode]);
+  }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode, seedSandboxState]);
 
   const gameState = sandboxState ?? liveGameState;
 

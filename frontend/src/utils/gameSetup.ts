@@ -47,6 +47,13 @@
 // puts the result in the payload, and this function honours it.
 
 import type { GameplayExecuteMsg } from "./sessionKey";
+/* TYPE-ONLY, and deliberately: `gameState.ts` imports `certLimitForPlayers`
+   from here, so a value import would be a real cycle. A type import is
+   erased at compile time, so this direction costs nothing at runtime and
+   keeps `withEmptyRoster` exact about the shape it returns -- a structural
+   generic was the first attempt and it widened the corporation and private
+   arrays to `Record<string, unknown>`, which no caller could then use. */
+import type { GameStateResponse } from "./gameState";
 
 /** The printed 1830 tables. Sourced from the physical rulebook's own setup
  *  chart; `RulesReference.tsx`'s Core Limits section renders these. */
@@ -206,4 +213,57 @@ export type SandboxLogMsg = GameplayExecuteMsg | SetupGameMsg;
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 538: A ROOM NEVER BOOTS THE FIXTURE'S ROSTER
+ * ==================================================================
+ *
+ * Two passes tried to make `SetupGame` OVERWRITE the four mock players, and
+ * both failed in the same way: the fixture is the initial value, so any path
+ * where the setup event does not land -- dropped, late, replayed against a
+ * re-seed, mis-ordered -- leaves four strangers on the board, and leaves
+ * them silently. The game looks dealt. It is just dealt for people who are
+ * not in the room.
+ *
+ * Overwriting was the wrong shape of fix. A room's roster is not "the
+ * fixture, corrected"; it is "nothing, until the log says otherwise". So the
+ * fixture roster is never loaded in the first place, and this strips it.
+ *
+ * THE FAILURE MODE IS NOW VISIBLE. If setup does not arrive, the room shows
+ * ZERO players -- obviously broken, in the direction that gets reported --
+ * rather than four plausible ones nobody notices are wrong. That asymmetry
+ * is the whole point: this codebase has hit the "wrong but plausible" class
+ * repeatedly (design notes #492, #514, #537a), and an empty table cannot be
+ * mistaken for a correct one.
+ *
+ * THE BOARD SURVIVES. Corporations, privates, the map and the market are
+ * what a room plays WITH -- only the links to players are cut. The same cuts
+ * the setup handler makes, applied earlier so there is no window in which
+ * they have not been.
+ */
+export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
+  return {
+    ...state,
+    /* NEW ARRAYS, not filtered copies of the old ones. React compares by
+       identity, and a reducer that hands back the same array reference is a
+       re-render that never happens -- which is the other half of what the
+       previous passes were fighting. */
+    player_addresses: [],
+    player_cash: [],
+    max_players: 0,
+    active_player_index: 0,
+    priority_deal_index: 0,
+    public_companies: state.public_companies.map((company) => ({
+      ...company,
+      president: null,
+      player_holdings: [],
+      is_floated: false,
+    })),
+    private_companies: state.private_companies.map((entry) => ({
+      ...entry,
+      owner: null,
+      owner_protocol_id: null,
+    })),
+  };
 }

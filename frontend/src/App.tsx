@@ -562,15 +562,32 @@ import { corporationFullName } from "./utils/corporationNames";
 // tellable apart. Shared with `RoutePlannerPanel`'s chips -- the same pure
 // function on both surfaces rather than two tables.
 import { routeEmphasisFor, routeTrainColor } from "./styles/routeLivery";
+// Design note #530/#531: the setup event and the 1830 setup tables.
+import {
+  BANK_START,
+  MIN_PLAYERS,
+  dealSandboxGame,
+  isSetupGameMsg,
+  shuffleForTurnOrder,
+  type SetupGameMsg,
+} from "./utils/gameSetup";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
+import SandboxWaitingRoom from "./components/SandboxWaitingRoom";
 import {
   appendSandboxAction,
+  canStartSandboxGame,
   decodeAction,
   hostSandboxRoom,
+  localPlayerId,
+  markSandboxRoomPlaying,
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxLog,
+  subscribeSandboxRoom,
+  toSetupPlayers,
+  upsertSandboxPlayer,
+  type SandboxRoomDoc,
 } from "./utils/sandboxRoom";
 import { isFirebaseConfigured } from "./config/firebase";
 import StockMarketRenderer, {
@@ -3027,6 +3044,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
+  /* Design note #527: the anteroom's own state, from the room DOCUMENT
+     rather than the log. `null` while it loads or when there is no room. */
+  const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
+  const localId = localPlayerId();
   const sandboxRoomRef = useRef<string | null>(null);
   const appliedIndexRef = useRef(0);
   const sandboxSeatRef = useRef<string>("");
@@ -3870,7 +3891,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const runGameplayAction = useCallback(
     async (
       fallbackLabel: string,
-      msg: GameplayExecuteMsg,
+      /* Design note #530: the sandbox log carries a setup event as well as
+         contract messages, and both are single-key objects. Widened here so
+         the SAME pipeline handles both -- the alternative was a second
+         dispatch path for one message, which is how the two would drift. */
+      msg: GameplayExecuteMsg | SetupGameMsg,
       /* Design note #439: set by the two effects that dispatch on the
          player's behalf (the sub-phase auto-skip and the forced withhold).
          Everything else is a click and defaults to `false`.
@@ -3935,7 +3960,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          no resolved state to offer at dispatch time, so this is what it
          keeps -- which is why `afterState` is optional in the context rather
          than required. */
-      let label = describeGameplayAction(msg, describeContext) ?? fallbackLabel;
+      /* ==================================================================
+           DESIGN NOTE 531a: THE SETUP EVENT NEVER LEAVES THE SANDBOX
+          ==================================================================
+
+           `SetupGame` is not a `GameplayExecuteMsg` and must not become one
+           -- `sessionKey.ts` maintains that type as the authz allow-list,
+           and a variant the chain has never heard of appearing in it would
+           be a lie about what the wallet may sign (design note #530).
+
+           The sandbox branch above handles it and returns, so this line is
+           unreachable for a setup event. This guard makes that invariant
+           something the compiler enforces rather than something the reader
+           has to trace: if a future path ever reaches here with one, it
+           stops instead of being handed to `execGameplay`. */
+      if (isSetupGameMsg(msg)) return;
+      const chainMsg: GameplayExecuteMsg = msg;
+
+      let label = describeGameplayAction(chainMsg, describeContext) ?? fallbackLabel;
 
       const id = nextLogEntryId++;
       const timestamp = new Date().toLocaleTimeString();
@@ -4008,6 +4050,57 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
           }
+          return;
+        }
+
+        /* ==================================================================
+             DESIGN NOTE 531: SETUP BUILDS THE TABLE, THEN GETS OUT OF THE WAY
+            ==================================================================
+
+             The setup event is handled FIRST and returns, because it is not
+             a move in a game -- it is what makes the game exist. Nothing
+             below it applies: there is no market move to project, no
+             corporation to charge, and `applySandboxAction` would be handed
+             a message it has never heard of.
+
+             IT IS IDEMPOTENT BY POSITION, not by a guard. The log holds
+             exactly one setup entry because only the host may write one
+             (design note #529a), and every client applies it at the same
+             index -- so a replay from zero rebuilds the same table rather
+             than dealing a second one over the first.
+
+             `dealSandboxGame` returning `null` is a roster 1830 cannot deal.
+             The state is left ALONE in that case rather than half-applied:
+             a board dealt for a count that does not exist is worse than one
+             that visibly never started. */
+        if (isSetupGameMsg(msg)) {
+          const dealt = dealSandboxGame({ players: msg.SetupGame.players });
+          if (!dealt) {
+            logInfo("Room", "That roster cannot be dealt — 1830 seats two to six players.");
+            return;
+          }
+          /* Seeded from the sandbox's own current state -- the fixture's
+             corporations, privates and board are what a room plays WITH.
+             Only the seats, the cash and the bank are replaced, because
+             those are the only things the player count decides. */
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const seated: GameStateResponse = {
+            ...base,
+            player_addresses: dealt.playerAddresses,
+            player_cash: dealt.playerCash,
+            virtual_bank_vgp: String(dealt.bankRemaining),
+            virtual_bank_start: String(BANK_START),
+            max_players: dealt.playerAddresses.length,
+            active_player_index: 0,
+            priority_deal_index: 0,
+          };
+          sandboxStateRef.current = seated;
+          setSandboxState(seated);
+          logInfo(
+            "Room",
+            `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.`,
+          );
           return;
         }
 
@@ -4571,7 +4664,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ]);
 
       try {
-        const result = await session.execGameplay(msg);
+        const result = await session.execGameplay(chainMsg);
         setActionLog((log) =>
           log.map((entry) =>
             entry.id === id
@@ -6874,6 +6967,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * note #475). Undo is a LOCAL affordance over a shared log: popping a
    * snapshot cannot unsend somebody else's action, and letting it try would
    * put this browser behind a log it still believes it has applied. */
+  /* Design note #527: the room document, which owns the lobby. Separate
+     from the log subscription below, which owns the game -- two systems with
+     one handover (`status`). */
+  useEffect(() => {
+    if (!sandbox || !sandboxRoomCode) {
+      setSandboxRoom(null);
+      return undefined;
+    }
+    return subscribeSandboxRoom(
+      sandboxRoomCode,
+      (room) => setSandboxRoom(room),
+      (message) => setSandboxRoomError(message),
+    );
+  }, [sandbox, sandboxRoomCode]);
+
   const replayingRef = useRef(false);
   useEffect(() => {
     if (!sandbox || !sandboxRoomCode) return undefined;
@@ -6922,7 +7030,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      const code = await hostSandboxRoom(sandboxSeatRef.current || "host");
+      const code = await hostSandboxRoom(localPlayerId(), sandboxSeatRef.current || "Host");
       if (!code) {
         setSandboxRoomError("Firestore is not configured in this build.");
         return;
@@ -6979,6 +7087,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
   }, []);
+
+  /* ==================================================================
+   *  DESIGN NOTE 532: THE HOST DEALS, ONCE
+   * ==================================================================
+   *
+   * Two writes, in this order, and the order is the whole safety property:
+   *
+   *   1. APPEND the setup event to the log.
+   *   2. LATCH the room document to `status: "playing"`.
+   *
+   * The log first, because the status flag is what every client uses to
+   * leave the waiting room -- flipping it before the setup entry exists
+   * would send them all to a board whose state has not been dealt. Doing it
+   * afterwards means the worst case is a client sitting in the anteroom a
+   * moment longer than necessary, which resolves on the next snapshot.
+   *
+   * THE SHUFFLE HAPPENS HERE, on the host, once (design note #526b) -- and
+   * `toSetupPlayers` reads the roster from the room document rather than
+   * from anything local, so the table dealt is the table the waiting room
+   * was showing everybody. */
+  const handleStartSandboxGame = useCallback(async () => {
+    if (!sandboxRoomCode || !sandboxRoom) return;
+    if (!canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
+    setSandboxRoomBusy(true);
+    setSandboxRoomError(null);
+    try {
+      const seated = shuffleForTurnOrder(toSetupPlayers(sandboxRoom));
+      const ok = await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
+        SetupGame: { players: seated },
+      });
+      if (!ok) {
+        setSandboxRoomError("Could not reach the room — the game was not started.");
+        return;
+      }
+      await markSandboxRoomPlaying(sandboxRoomCode);
+    } catch (error) {
+      setSandboxRoomError(error instanceof Error ? error.message : "Could not start the game.");
+    } finally {
+      setSandboxRoomBusy(false);
+    }
+  }, [sandboxRoomCode, sandboxRoom, localId]);
+
+  /** Design note #527: nickname and ready are document writes, not log
+   *  entries -- they toggle, and a toggle in an append-only log is two
+   *  entries the replay would have to reconcile. */
+  const handleSetSandboxNickname = useCallback(
+    (nickname: string) => {
+      if (!sandboxRoomCode) return;
+      const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      void upsertSandboxPlayer(sandboxRoomCode, {
+        id: localId,
+        nickname: nickname.trim() || "Player",
+        isReady: mine?.isReady ?? false,
+      });
+    },
+    [sandboxRoomCode, sandboxRoom, localId],
+  );
+
+  const handleToggleSandboxReady = useCallback(
+    (isReady: boolean) => {
+      if (!sandboxRoomCode) return;
+      const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      void upsertSandboxPlayer(sandboxRoomCode, {
+        id: localId,
+        nickname: mine?.nickname || "Player",
+        isReady,
+      });
+    },
+    [sandboxRoomCode, sandboxRoom, localId],
+  );
 
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
 
@@ -7146,6 +7324,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     activeMainTab === "corps" ||
     activeMainTab === "map" ||
     activeMainTab === "stock";
+
+  /* ==================================================================
+   *  DESIGN NOTE 533: NO BOARD UNTIL THERE IS A GAME
+   * ==================================================================
+   *
+   * The gate, and it returns EARLY rather than conditionally rendering the
+   * board underneath. Design note #529 has the reasoning: before the setup
+   * event lands, the player count is undecided, so starting cash and the
+   * certificate limit are undecided -- and those are what the ledger, the
+   * stock cards and the certificate counter all render from. A board shown
+   * here would be a plausible, correctly-drawn game that nobody is playing.
+   *
+   * `status === "waiting"` IS THE ONLY TEST. It is a latch the host flips
+   * once (design note #532), and it flips only AFTER the setup entry is in
+   * the log -- so by the time any client leaves this screen, the action that
+   * deals the table is already there to be replayed. The listener applies it
+   * before this component next renders, which is what makes the transition
+   * look simultaneous rather than staged.
+   *
+   * SOLO SANDBOX NEVER REACHES THIS: `sandboxRoom` is `null` without a room,
+   * and the guard requires one. */
+  if (sandbox && sandboxRoomCode && sandboxRoom?.status === "waiting") {
+    return (
+      <SandboxWaitingRoom
+        roomCode={sandboxRoomCode}
+        room={sandboxRoom}
+        localPlayerId={localId}
+        error={sandboxRoomError}
+        busy={sandboxRoomBusy}
+        onSetNickname={handleSetSandboxNickname}
+        onToggleReady={handleToggleSandboxReady}
+        onStart={handleStartSandboxGame}
+        onLeave={handleLeaveSandboxRoom}
+      />
+    );
+  }
 
   return (
     <div style={styles.appRoot}>

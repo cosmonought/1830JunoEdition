@@ -80,15 +80,20 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
+  updateDoc,
   type DocumentData,
   type FirestoreError,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 
 import { getFirestoreDb } from "../config/firebase";
-import type { GameplayExecuteMsg } from "./sessionKey";
+/* Design note #530: `GameplayExecuteMsg` is no longer imported here --
+   `SandboxLogMsg` is the union of it and the setup event, and this module
+   only ever handles the union. */
+import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
 
 /** Design note #519: a NEW top-level collection, beside `games` rather than
  *  inside it. A sandbox room has no chain game, no contract address and no
@@ -180,9 +185,9 @@ export interface SandboxAction {
 
 /** `payload` decoded, or `null` when it cannot be. A single unparseable
  *  entry must not take down a whole room's replay. */
-export function decodeAction(action: SandboxAction): GameplayExecuteMsg | null {
+export function decodeAction(action: SandboxAction): SandboxLogMsg | null {
   try {
-    return JSON.parse(action.payload) as GameplayExecuteMsg;
+    return JSON.parse(action.payload) as SandboxLogMsg;
   } catch {
     return null;
   }
@@ -212,13 +217,19 @@ function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction 
  *  not configured -- which is a legitimate state (design note #1 in
  *  `config/firebase.ts`: the sandbox runs with no backend at all), so the
  *  caller reports it rather than this throwing. */
-export async function hostSandboxRoom(hostLabel: string): Promise<string | null> {
+export async function hostSandboxRoom(hostId: string, nickname: string): Promise<string | null> {
   const db = getFirestoreDb();
   if (!db) return null;
   const code = generateRoomCode();
   await setDoc(doc(db, SANDBOX_ROOMS_COLLECTION, code), {
     code,
-    host: hostLabel,
+    hostId,
+    /* Design note #527: every room opens in the anteroom. The host is
+       seeded as its first player rather than joining afterwards, so the
+       roster is never briefly empty in a room that plainly has somebody in
+       it. */
+    status: "waiting" as SandboxRoomStatus,
+    players: [{ id: hostId, nickname, isReady: false }],
     createdAt: serverTimestamp(),
   });
   return code;
@@ -236,7 +247,10 @@ export async function appendSandboxAction(
   roomCode: string,
   nextIndex: number,
   actor: string,
-  msg: GameplayExecuteMsg,
+  /* Design note #530: the log carries the setup event as well as gameplay
+     messages. Both are single-key objects and both round-trip as JSON, so
+     widening this changes nothing about how an entry is written. */
+  msg: SandboxLogMsg,
 ): Promise<boolean> {
   const db = getFirestoreDb();
   if (!db) return false;
@@ -305,3 +319,157 @@ export function subscribeSandboxLog(
     (error: FirestoreError) => onError?.(error.message),
   );
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 527: THE ROOM DOCUMENT IS THE ANTEROOM, NOT THE GAME
+ * ==================================================================
+ *
+ * Design note #0 argues at length that game STATE must not be mirrored into
+ * Firestore -- it must be derived from the action log. The waiting room is
+ * the one thing that is legitimately document state, and the distinction is
+ * worth being precise about because it looks like an exception.
+ *
+ * WHAT LIVES IN THE DOCUMENT is everything true BEFORE the game exists:
+ * who is here, what they are called, whether they have said they are ready.
+ * None of it is derived from anything, none of it is ordered, and a late
+ * write simply wins -- which is exactly the shape `onSnapshot` on a document
+ * handles well and an append-only log handles badly (a "ready" that toggles
+ * twice would otherwise be two entries the replay has to reconcile).
+ *
+ * THE MOMENT THE GAME STARTS, that stops being true and the document stops
+ * being authoritative. `status: "playing"` is a latch, and everything after
+ * it comes from the log. So the two systems never overlap: the document
+ * owns the lobby, the log owns the game, and `status` is the handover.
+ */
+export type SandboxRoomStatus = "waiting" | "playing";
+
+export interface SandboxRoomPlayer {
+  id: string;
+  nickname: string;
+  isReady: boolean;
+}
+
+export interface SandboxRoomDoc {
+  code: string;
+  /** The `id` of whoever opened the room -- the only seat that may start. */
+  hostId: string;
+  status: SandboxRoomStatus;
+  players: SandboxRoomPlayer[];
+}
+
+function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc | null {
+  if (!data) return null;
+  const players = Array.isArray(data.players) ? data.players : [];
+  return {
+    code,
+    hostId: typeof data.hostId === "string" ? data.hostId : "",
+    status: data.status === "playing" ? "playing" : "waiting",
+    players: players
+      .filter((entry: unknown): entry is DocumentData => typeof entry === "object" && entry !== null)
+      .map((entry: DocumentData) => ({
+        id: String(entry.id ?? ""),
+        nickname: String(entry.nickname ?? ""),
+        isReady: entry.isReady === true,
+      }))
+      .filter((entry: SandboxRoomPlayer) => entry.id.length > 0),
+  };
+}
+
+/** Subscribes to the room document -- the waiting room's own state. */
+export function subscribeSandboxRoom(
+  roomCode: string,
+  onRoom: (room: SandboxRoomDoc | null) => void,
+  onError?: (message: string) => void,
+): () => void {
+  const db = getFirestoreDb();
+  if (!db) return () => undefined;
+  return onSnapshot(
+    doc(db, SANDBOX_ROOMS_COLLECTION, roomCode),
+    (snapshot) => onRoom(snapshot.exists() ? toRoomDoc(roomCode, snapshot.data()) : null),
+    (error: FirestoreError) => onError?.(error.message),
+  );
+}
+
+/** Adds this player to the room, or updates their nickname/ready flag.
+ *
+ *  A TRANSACTION, unlike `appendSandboxAction`. The players array is a
+ *  read-modify-write on ONE field that several clients touch at once, so a
+ *  plain update would drop whoever wrote a millisecond earlier -- the
+ *  classic lost join. The action log needs no transaction because appends
+ *  never touch the same document; this does because they all touch this one. */
+export async function upsertSandboxPlayer(
+  roomCode: string,
+  player: SandboxRoomPlayer,
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db) return false;
+  const ref = doc(db, SANDBOX_ROOMS_COLLECTION, roomCode);
+  await runTransaction(db, async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists()) return;
+    const room = toRoomDoc(roomCode, snapshot.data());
+    const others = (room?.players ?? []).filter((entry) => entry.id !== player.id);
+    tx.update(ref, { players: [...others, player] });
+  });
+  return true;
+}
+
+/** Latches the room into play. Design note #527: the handover. */
+export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
+  const db = getFirestoreDb();
+  if (!db) return;
+  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { status: "playing" });
+}
+
+/** Every player marked ready, and enough of them to deal a legal game.
+ *
+ *  BOTH CONDITIONS, and the second is the one a "ready check" usually
+ *  forgets: one person alone in a room can tick ready and satisfy "all
+ *  ready" trivially. 1830 needs at least two. */
+export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: number): boolean {
+  if (!room || room.status !== "waiting") return false;
+  if (room.players.length < minPlayers) return false;
+  return room.players.every((player) => player.isReady);
+}
+
+/** The waiting room's roster, as the setup payload wants it. */
+export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
+  return room.players.map((player) => ({ id: player.id, nickname: player.nickname }));
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 528: WHO THIS BROWSER IS
+ * ==================================================================
+ *
+ * The waiting room needs to tell one player from another, and the sandbox
+ * has no wallet and no authentication. So each browser mints an id once and
+ * keeps it in `sessionStorage`.
+ *
+ * SESSION, NOT LOCAL, storage. Two tabs of the same browser must be two
+ * players -- that is how a single developer playtests this at all -- and
+ * `localStorage` is shared across tabs, so both would claim the same seat
+ * and the second join would overwrite the first. `sessionStorage` is
+ * per-tab, which is exactly the granularity wanted.
+ *
+ * IT SURVIVES A REFRESH, which is the other half: a player who reloads
+ * mid-game must reclaim their own seat rather than appear as a new one and
+ * find the game has more players than it dealt for.
+ */
+const PLAYER_ID_STORAGE_KEY = "juno.sandbox.playerId";
+
+export function localPlayerId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(PLAYER_ID_STORAGE_KEY);
+    if (existing) return existing;
+    const minted = `p-${Math.random().toString(36).slice(2, 10)}`;
+    window.sessionStorage.setItem(PLAYER_ID_STORAGE_KEY, minted);
+    return minted;
+  } catch {
+    /* Private browsing. A per-render id would make this player a new seat on
+       every render, so it is minted once per module load instead -- the
+       session lasts as long as the tab, which is the same guarantee. */
+    return FALLBACK_PLAYER_ID;
+  }
+}
+
+const FALLBACK_PLAYER_ID = `p-${Math.random().toString(36).slice(2, 10)}`;

@@ -94,6 +94,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// Design note #526: the one printed-limits table.
+import { certLimitForPlayers } from "./gameSetup";
+
 /* ------------------------------------------------------------------ */
 /* Contract data mirror -- see design note #1                         */
 /* ------------------------------------------------------------------ */
@@ -351,21 +354,18 @@ export function certificateCount(playerAddress: string, state: GameStateResponse
   return count;
 }
 
-/** The printed 1830 certificate limit, by player count. Mirrors
- *  `RulesReference.tsx`'s `CERT_LIMIT_BY_PLAYERS`. */
-const CERT_LIMIT_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
-  2: 28,
-  3: 20,
-  4: 16,
-  5: 13,
-  6: 11,
-};
+/* Design note #526: the local copy is GONE. It carried its own doc comment
+   saying "Mirrors `RulesReference.tsx`'s `CERT_LIMIT_BY_PLAYERS`" -- a
+   correctness requirement enforced by a sentence, which is the arrangement
+   TD-1 catalogued and design note #507 hit again. `utils/gameSetup.ts` is
+   the one table now; multiplayer initialisation needed it too, and a third
+   copy is what this delegation exists to avoid. */
 
 /** How many certificates a player may hold, given the room's size.
  *  `null` for a player count the printed table does not cover, so a caller
  *  renders "--" rather than inventing a ceiling. */
 export function certificateLimit(state: GameStateResponse): number | null {
-  return CERT_LIMIT_BY_PLAYER_COUNT[state.player_addresses.length] ?? null;
+  return certLimitForPlayers(state.player_addresses.length);
 }
 
 export interface CertificateBreakdown {

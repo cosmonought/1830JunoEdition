@@ -95,7 +95,13 @@ import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
-import { hostSandboxRoom, parseRoomCode, readSandboxLog } from "../utils/sandboxRoom";
+import {
+  hostSandboxRoom,
+  localPlayerId,
+  parseRoomCode,
+  readSandboxLog,
+  upsertSandboxPlayer,
+} from "../utils/sandboxRoom";
 import {
   CONTROL_PADDING,
   FONT_FAMILY,
@@ -315,7 +321,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      const code = await hostSandboxRoom("host");
+      const code = await hostSandboxRoom(localPlayerId(), "Host");
       if (!code) {
         setSandboxRoomError("Firestore is not configured in this build.");
         return;
@@ -344,12 +350,17 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
            more common mistake than the first. The replay itself belongs to
            the shell's listener; doing it here would apply the history
            twice. */
-        const existing = await readSandboxLog(code);
-        if (existing.length === 0) {
-          setSandboxRoomError(
-            `${code} has no actions yet — joining anyway. If nobody appears, check the code.`,
-          );
-        }
+        await readSandboxLog(code);
+        /* Design note #527: joining means taking a seat in the anteroom.
+           Done here rather than in the waiting room so a player who joins
+           and then closes the tab has still been seen -- and so the room's
+           roster is correct the moment the screen opens rather than one
+           round trip later. */
+        await upsertSandboxPlayer(code, {
+          id: localPlayerId(),
+          nickname: "Player",
+          isReady: false,
+        });
         onEnterSandbox(code);
       } catch (error) {
         setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");

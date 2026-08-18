@@ -99,6 +99,7 @@
 //    reconciliation check that reads 100% on every row of every game is not
 //    actually checking anything.
 
+import PresidentCrown from "./PresidentCrown";
 import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
@@ -109,7 +110,12 @@ import { FONT_SIZE } from "../styles/typography";
 // Design note #170 (ContextualSubPanel): a name beats a truncated hash, and
 // this returns `null` for a real wallet so live rooms are unchanged.
 import { sandboxPlayerLabel } from "../utils/sandboxState";
-import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
+import {
+  CARD_HIGHLIGHT_BORDER,
+  CHIP_INERT_BG,
+  CHIP_INERT_BORDER,
+  CHIP_INERT_INK,
+} from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
@@ -661,10 +667,11 @@ export function PlayerAssetsSection({
                               on the ragged side and leaves the digits
                               flush, which is the entire point of a
                               right-aligned numeric column. */}
+                          {/* Design note #552: our own crown, not U+1F451 --
+                              same drawing on every device, and it takes this
+                              cell's ink instead of a vendor's. */}
                           {isPresident && (
-                            <span style={styles.presidentTag} title="President">
-                              &#128081;
-                            </span>
+                            <PresidentCrown style={styles.presidentTag} scale={1.15} />
                           )}
                           {percentage}%
                         </td>
@@ -1064,19 +1071,18 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "help",
   },
   presidentTag: {
-    // Design note #15: margin follows the glyph to the left side.
+    // Design note #15: margin follows the glyph to the left side, so the
+    // variable-width element sits on the ragged side of a right-aligned
+    // numeric column and the digits stay flush.
     marginRight: "5px",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    // The pill is GONE. The crown emoji already carries its own colour and
-    // silhouette, so wrapping it in a gold pill was two badges stacked --
-    // the container read as the indicator and the glyph inside it as
-    // decoration, which is backwards. Bare, it reads as one mark.
+    // The pill stays GONE -- the crown carries its own silhouette, and
+    // wrapping it in a gold box was two badges stacked, the container
+    // reading as the indicator and the mark inside it as decoration.
     //
-    // `padding`/`borderRadius`/`backgroundColor`/`color` were removed rather
-    // than zeroed: an emoji renders in its own colour font regardless, so a
-    // `color` here only ever affected the fallback glyph, and leaving dead
-    // declarations behind invites someone to "restore" the box later.
+    // Design note #552: `color` is BACK, and unlike before it does something.
+    // It was removed when this styled an emoji, which renders in its own
+    // colour font and ignored it; the SVG fills with `currentColor`.
+    color: CARD_HIGHLIGHT_BORDER,
   },
   /* ---- Holdings chips. Design note #423: `holdingChipPrivate` and
      `holdingsCell` are GONE too -- the private column renders

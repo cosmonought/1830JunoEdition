@@ -43,6 +43,7 @@
 //    `MOCK_TRAIN_CATALOG`/`TERRAIN_BUILD_COST_LABEL` elsewhere in this
 //    codebase) so a given company reads as the same color everywhere.
 
+import PresidentCrown from "./PresidentCrown";
 import React, { useEffect, useRef, useState } from "react";
 import type {
   PrivateCompanyState,
@@ -1126,18 +1127,20 @@ function CorporationRoster({
                         }}
                       >
                         <span style={styles.ownershipName} role="cell">
-                          {/* Design note #490: the crown glyph is gone with
-                              the rest of the card's emoji. Presidency is
-                              still marked twice -- the bold gold row style
-                              and the word below -- which is what design note
-                              #378's redundancy argument was actually about:
-                              colour alone fails a colourblind player, so the
-                              WORD has to be there, and once it is, a
-                              pictogram that renders in a platform colour
-                              font at a platform weight is decoration rather
-                              than a third channel. */}
+                          {/* Design note #552: the WORD is gone and the crown
+                              is back, as our own drawing. Design note #490
+                              removed the emoji because a platform pictogram
+                              in a platform colour font could not be relied
+                              on to mean anything, and put the word in its
+                              place; the word is nine characters wide in a
+                              column that has to fit a name beside it, which
+                              is the collision reported here. An inline SVG
+                              is the same shape everywhere, takes the row's
+                              own ink, and announces "President" to a screen
+                              reader -- so the redundancy #490 was defending
+                              survives intact. */}
                           {holding.isPresident && (
-                            <span style={styles.presidentTag}>President</span>
+                            <PresidentCrown style={styles.presidentTag} scale={0.95} />
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                         </span>
@@ -2723,12 +2726,15 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #490: the crown's replacement. A tag rather than running
      text, so it is skimmable in a dense table -- which is the job the glyph
      was doing and the only part of it worth keeping. */
+  /* Design note #552: this styled a WORD and now sizes a drawing, so the
+     type properties went with the text -- `textTransform` and
+     `letterSpacing` have nothing to act on inside an `<svg>`, and leaving
+     them would read as though the crown were still a glyph in a font.
+     `color` stays and is now load-bearing: the crown fills with
+     `currentColor`. */
   presidentTag: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    textTransform: "uppercase",
-    letterSpacing: "0.4px",
-    color: CARD_INK_MUTED,
+    color: CARD_HIGHLIGHT_BORDER,
+    marginRight: "5px",
     flexShrink: 0,
   },
   rosterTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800, letterSpacing: "0.5px" },

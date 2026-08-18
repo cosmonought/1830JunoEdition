@@ -236,11 +236,79 @@ export interface OpenStockRoundMsg {
   OpenStockRound: Record<string, never>;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 550: EVERY DECISION GOES IN THE LOG, OR IT IS NOT SHARED
+ * ==================================================================
+ *
+ * REPORTED: Player 1 won the B&O and set its par. Player 1 could see
+ * themselves as president. Player 2 could not -- and then tried to buy the
+ * same president's certificate.
+ *
+ * `handleConfirmBoPar` wrote the presidency, the par and the market mark
+ * straight into local state. Its own design note (#461/#468) said so plainly
+ * and treated it as a curiosity: "a par set here does not pass through
+ * `runGameplayAction`, so the diff that normally creates a market mark never
+ * sees it". True, and in a solo sandbox harmless. In a room it means the one
+ * client that answered the prompt is the only client that ever learns the
+ * answer.
+ *
+ * `commitFreeStationPlacement` had the identical shape, and would have been
+ * reported next: a home station is a genuine choice about a shared board.
+ *
+ * THIS IS THE THIRD TIME. `handleProceedToStockRound` was the same bug
+ * (design note #546) and was fixed one pass earlier without anyone checking
+ * for siblings -- so the rule is worth stating as a rule rather than as
+ * three fixes: IN A ROOM, ANY WRITE TO SANDBOX STATE THAT DOES NOT GO
+ * THROUGH `runGameplayAction` IS A WRITE ONLY ONE PLAYER SEES. There is no
+ * warning, no error and no visible failure at the moment it happens; the
+ * clients simply stop being the same game, and design note #549 explains why
+ * the damage then compounds silently rather than staying local to the thing
+ * that was skipped.
+ *
+ * (`payPrivateRevenue` is deliberately NOT in this list. It is not a
+ * decision -- it is a derived payout fired by the round transition on every
+ * client from state they all share, so each computes the same result
+ * independently. It stays local, and the distinction is the test to apply to
+ * the next one of these: a CHOICE must be logged, a CONSEQUENCE need not
+ * be.)
+ */
+export interface SetBoParMsg {
+  SetBoPar: {
+    /** The winning player, carried explicitly rather than inferred from the
+     *  turn cursor -- the auction's cursor has already moved on by the time
+     *  the prompt is answered, and design note #549 is about exactly this
+     *  class of inference. */
+    player: string;
+    par_value: string;
+  };
+}
+
+export interface PlaceHomeStationMsg {
+  PlaceHomeStation: {
+    company_id: number;
+    q: number;
+    r: number;
+    /** `home` places a corporation's free starting token; `dh` spends the
+     *  Delaware & Hudson's power. Two different rules, one placement. */
+    kind: "home" | "dh";
+    /** The hex's printed label, carried rather than re-derived on each
+     *  client. Purely for the log line -- and carrying it means every
+     *  client's Activity Log quotes the same sentence the acting player
+     *  read, which is the point of a shared log. */
+    hex_label: string;
+  };
+}
+
 /** Everything the sandbox log can carry -- the contract's own message set,
  *  plus the sandbox-only round events. A PRECISE union rather than an
  *  index signature: a loose type here would let any object into the replay
  *  and the pipeline would discover it was not a message at runtime. */
-export type SandboxLogMsg = GameplayExecuteMsg | SetupGameMsg | OpenStockRoundMsg;
+export type SandboxLogMsg =
+  | GameplayExecuteMsg
+  | SetupGameMsg
+  | OpenStockRoundMsg
+  | SetBoParMsg
+  | PlaceHomeStationMsg;
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
@@ -250,11 +318,26 @@ export function isOpenStockRoundMsg(msg: unknown): msg is OpenStockRoundMsg {
   return typeof msg === "object" && msg !== null && "OpenStockRound" in msg;
 }
 
+export function isSetBoParMsg(msg: unknown): msg is SetBoParMsg {
+  return typeof msg === "object" && msg !== null && "SetBoPar" in msg;
+}
+
+export function isPlaceHomeStationMsg(msg: unknown): msg is PlaceHomeStationMsg {
+  return typeof msg === "object" && msg !== null && "PlaceHomeStation" in msg;
+}
+
 /** Neither sandbox-only event may reach `execGameplay` -- the contract has
  *  no such message. One predicate so a third event cannot be added to the
  *  union and forgotten at the one call site that must refuse them. */
-export function isSandboxOnlyMsg(msg: unknown): msg is SetupGameMsg | OpenStockRoundMsg {
-  return isSetupGameMsg(msg) || isOpenStockRoundMsg(msg);
+export function isSandboxOnlyMsg(
+  msg: unknown,
+): msg is SetupGameMsg | OpenStockRoundMsg | SetBoParMsg | PlaceHomeStationMsg {
+  return (
+    isSetupGameMsg(msg) ||
+    isOpenStockRoundMsg(msg) ||
+    isSetBoParMsg(msg) ||
+    isPlaceHomeStationMsg(msg)
+  );
 }
 
 /* ==================================================================

@@ -49,6 +49,7 @@
 //    the active-player/active-corporation row highlight) reads clearly at
 //    a glance instead of as fine print. No behavior change.
 
+import PresidentCrown from "./PresidentCrown";
 import React from "react";
 
 import type {
@@ -480,7 +481,11 @@ function OperatingRoundCorporationPanel({
                 <td style={styles.tdB}>
                   {company.president ? (
                     <span style={styles.presidentCell}>
-                      <span aria-hidden="true">&#128081;</span>
+                      {/* Design note #552. Decorative here: the name sits
+                          right beside it and the column header already says
+                          President, so an accessible name would make a
+                          screen reader announce the word twice per row. */}
+                      <PresidentCrown label={null} scale={1.05} style={{ color: "#c9a94c" }} />
                       <span>{playerLabel(company.president)}</span>
                     </span>
                   ) : (
@@ -741,7 +746,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     borderColor: "rgba(255,255,255,0.35)",
   },
-  presidentCell: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  // Design note #552: `color` on the row would tint the NAME too, so the
+  // crown's gold is set on the crown and the name keeps the cell's ink.
+  presidentCell: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    color: "inherit",
+  },
   emptyCell: { color: "#5a5f6b" },
   priceUp: { color: "#5fd38f", fontWeight: 700 },
   priceDown: { color: "#e08585", fontWeight: 700 },

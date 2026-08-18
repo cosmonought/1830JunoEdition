@@ -568,6 +568,8 @@ import {
   MIN_PLAYERS,
   dealSandboxGame,
   isOpenStockRoundMsg,
+  isPlaceHomeStationMsg,
+  isSetBoParMsg,
   isSandboxOnlyMsg,
   isSetupGameMsg,
   shuffleForTurnOrder,
@@ -762,6 +764,8 @@ import {
 import {
   ACTIVE_GAME_STORAGE_KEY,
   readActiveGame,
+  readActiveSandboxRoom,
+  writeActiveSandboxRoom,
   SANDBOX_GAME_ID,
   SANDBOX_ROOM_ID,
   type ActiveGame,
@@ -2402,6 +2406,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     isMyTurnRef.current = isMyTurn;
   }, [isMyTurn]);
+
+  /* Design note #549a: the seat on turn, for stamping automatic dispatches.
+     A ref for design note #536's reason -- naming it as a dependency of
+     `runGameplayAction` would rebuild the callback every turn, and two
+     effects that DISPATCH key on that callback's identity. */
+  const actingAddressRef = useRef<string | null>(null);
+  useEffect(() => {
+    actingAddressRef.current = gameState ? actingAddress(gameState, waterfallState) : null;
+  }, [gameState, waterfallState]);
 
   /** Design note #300: the acting seat's personal cash. `null` when there
    *  is no seat on turn or the chain does not report it -- a missing wallet
@@ -4098,7 +4111,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          everything else about the dispatch is identical -- which is the
          point: a replayed action must take exactly the path a local one
          takes, or the two clients run different code and diverge. */
-      options?: { automatic?: boolean; resetRouteRevenue?: boolean; isRemoteReplay?: boolean },
+      /* Design note #549: WHO the action is for. Set only by the replay
+         drain, from the log entry's own author -- a local dispatch leaves it
+         undefined and the reducer falls back to the turn cursor, which for a
+         local dispatch is the same seat by construction. */
+      options?: {
+        automatic?: boolean;
+        resetRouteRevenue?: boolean;
+        isRemoteReplay?: boolean;
+        actor?: string | null;
+      },
     ) => {
       /* ==================================================================
        *  DESIGN NOTE 262: THE LOG DESCRIBES THE EVENT, NOT THE MESSAGE
@@ -4293,10 +4315,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
 
         if (sandboxRoomRef.current && options?.isRemoteReplay !== true) {
+          /* ==============================================================
+           *  DESIGN NOTE 549a: THE ACTOR FIELD HELD A LABEL
+           * ==============================================================
+           *
+           * This wrote `sandboxSeatRef.current` -- the player's NICKNAME. A
+           * nickname is not an identity: two people may pick the same one,
+           * anybody may change theirs mid-game, and nothing in
+           * `player_addresses` will ever equal one. So the field named
+           * `actor` could not be used to attribute an action even in
+           * principle, which is part of why the reducer was reading the
+           * local cursor instead.
+           *
+           * THE SEAT THE ACTION ACTS FOR, not the browser that sent it. For
+           * an ordinary click those are the same thing -- the turn gate
+           * above has already refused anything else. For an `automatic`
+           * dispatch (design note #439's auto-skip and forced withhold) they
+           * are not: the game is acting on a rule, on behalf of whoever is
+           * on turn, and crediting that to whichever client's effect fired
+           * first would attribute a withhold to a spectator. */
+          const authorId = localPlayerId();
           const ok = await appendSandboxAction(
             sandboxRoomRef.current,
             appliedIndexRef.current,
-            sandboxSeatRef.current,
+            options?.automatic === true
+              ? actingAddressRef.current ?? authorId
+              : authorId,
             msg,
           ).catch(() => false);
           if (!ok) {
@@ -4325,6 +4369,60 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              The state is left ALONE in that case rather than half-applied:
              a board dealt for a count that does not exist is worse than one
              that visibly never started. */
+        if (isSetBoParMsg(msg)) {
+          /* Design note #550: applied on every client, from the log. The
+             winner travels IN the message -- see `SetBoParMsg.player` for
+             why it is not inferred from the turn cursor. */
+          const { player, par_value: parValue } = msg.SetBoPar;
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const granted = grantBOPresidency(base, player, parValue, BO_TICKER);
+          if (granted === base) return;
+          sandboxStateRef.current = granted;
+          setSandboxState(granted);
+
+          /* Design note #461/#468: the mark, written here too. A par set
+             this way never passes through the market diff, and the Par Tray
+             shows the token from the moment the price is set -- the matrix
+             disagreeing with the tray for a whole Stock Round is the bug
+             that note was originally reported as. */
+          const par = Number(parValue);
+          const bo = granted.public_companies.find((c) => c.ticker === BO_TICKER);
+          if (bo && Number.isFinite(par) && par > 0) {
+            const marked = placeParMark(sandboxMarketRef.current, bo.company_id, par, parBoxCellFor);
+            if (marked !== sandboxMarketRef.current) {
+              sandboxMarketRef.current = marked;
+              setSandboxMarket(marked);
+            }
+          }
+          logInfo(
+            "B&O Presidency",
+            `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives the B&O President's Certificate and pars it at $${parValue}.`,
+          );
+          return;
+        }
+
+        if (isPlaceHomeStationMsg(msg)) {
+          // Design note #550: a placement is a choice about a shared board.
+          const { company_id: companyId, q, r, kind, hex_label: hexLabel } = msg.PlaceHomeStation;
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const placed = placeHomeStationToken(base, companyId, q, r);
+          if (placed === base) return;
+          sandboxStateRef.current = placed;
+          setSandboxState(placed);
+          const ticker =
+            base.public_companies.find((e) => e.company_id === companyId)?.ticker ??
+            `#${companyId}`;
+          logInfo(
+            "Station Token",
+            kind === "home"
+              ? `${ticker} places its home station token on ${hexLabel}.`
+              : `${ticker} places a free station token on ${hexLabel} using the Delaware & Hudson.`,
+          );
+          return;
+        }
+
         if (isOpenStockRoundMsg(msg)) {
           /* Design note #546: the round turns over for everyone, because
              every client replays this. Idempotent -- a second copy sets the
@@ -4733,6 +4831,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
         if (after) {
           after = applySandboxAction(after, msg, {
+            // Design note #549: the log's author, so a replayed purchase is
+            // credited to the player who made it rather than to whoever this
+            // browser's cursor happens to point at.
+            actor: options?.actor,
             // Only `RunManualRoute` reads this, to total the printed value of
             // the stops the player picked instead of paying a flat nominal
             // for every route regardless of length.
@@ -5654,18 +5756,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       const ticker =
         gameState?.public_companies.find((e) => e.company_id === placement.companyId)?.ticker ??
         `#${placement.companyId}`;
-      setSandboxState((current) => {
-        if (!current) return current;
-        const placed = placeHomeStationToken(current, placement.companyId, q, r);
-        if (placed === current) return current;
-        sandboxStateRef.current = placed;
-        return placed;
-      });
-      logInfo(
-        "Station Token",
+      // Design note #550: through the log, so the token lands on every board.
+      void runGameplayActionRef.current?.(
         placement.kind === "home-station"
           ? `${ticker} places its home station token on ${placement.hexLabel}.`
           : `${ticker} places a free station token on ${placement.hexLabel} using the Delaware & Hudson.`,
+        {
+          PlaceHomeStation: {
+            company_id: placement.companyId,
+            q,
+            r,
+            kind: placement.kind === "home-station" ? "home" : "dh",
+            hex_label: placement.hexLabel,
+          },
+        },
+        { automatic: true },
       );
       if (placement.abilityKey) {
         setUsedPrivateAbilities((prev) => new Set(prev).add(placement.abilityKey as string));
@@ -5675,7 +5780,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // is captured rather than hardcoded to the Stocks tab.
       setActiveMainTab(placement.returnTab);
     },
-    [homeStationPlacement, gameState, logInfo],
+    // Design note #550: `logInfo` went with the local write. The log line is
+    // written by the replay handler now, on every client rather than only on
+    // the one that clicked.
+    [homeStationPlacement, gameState],
   );
 
   /* Design note #399: the prompt's answer. Grants the certificate AND sets
@@ -5717,27 +5825,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        * when the par is SET -- the Par Tray shows it from that moment, and
        * the matrix disagreeing with the tray for a whole Stock Round is the
        * bug this was reported as. */
-      const current = sandboxStateRef.current;
-      if (!current) return;
-      const granted = grantBOPresidency(current, winner, parValue, BO_TICKER);
-      if (granted === current) return;
-
-      sandboxStateRef.current = granted;
-      setSandboxState(granted);
-
-      const par = Number(parValue);
-      const bo = granted.public_companies.find((c) => c.ticker === BO_TICKER);
-      if (bo && Number.isFinite(par) && par > 0) {
-        const marked = placeParMark(sandboxMarketRef.current, bo.company_id, par, parBoxCellFor);
-        if (marked !== sandboxMarketRef.current) {
-          sandboxMarketRef.current = marked;
-          setSandboxMarket(marked);
-        }
-      }
-
-      logInfoRef.current?.(
-        "B&O Presidency",
-        `${sandboxPlayerLabel(winner) ?? truncateAddress(winner)} receives the B&O President's Certificate and pars it at $${parValue}.`,
+      /* Design note #550: through the log. The grant, the par and the market
+         mark all happen in the replay handler now, so every client performs
+         them -- including this one, which sees its own action come back
+         round. */
+      void runGameplayActionRef.current?.(
+        `${sandboxPlayerLabel(winner) ?? truncateAddress(winner)} pars the B&O at $${parValue}.`,
+        { SetBoPar: { player: winner, par_value: parValue } },
+        /* `automatic`, because the auction's turn cursor has moved past the
+           winner by the time the prompt is answered -- the turn gate would
+           refuse the one player entitled to answer it. The prompt's own
+           identity check (design note #543) is what guards this. */
+        { automatic: true },
       );
     },
     [boParPrompt],
@@ -7367,6 +7466,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           await runGameplayAction("Sandbox room", msg, {
             isRemoteReplay: true,
             automatic: true,
+            // Design note #549: WHO, straight off the log entry.
+            actor: action.actor || null,
           });
         }
         if (live) setSandboxAppliedCount(appliedIndexRef.current);
@@ -7449,6 +7550,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // resolves the fixture's own names again rather than staying blank.
     clearRoomNicknames();
     setSandboxRoomCode(null);
+    /* Design note #551: and forget it, so the next refresh does not silently
+       rejoin a room this player has deliberately left. Written directly
+       rather than routed up through the router's state, because the shell
+       owns the leaving and a prop drilled two levels for one string would be
+       a longer path with the same effect. */
+    writeActiveSandboxRoom(null);
     setSandboxRoomError(null);
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
@@ -9130,7 +9237,13 @@ function GameRouter() {
      rather than inside `AppShell` because the shell is keyed on the game and
      remounts; this survives that, and it is what the Lobby has to write to
      before the shell exists at all. */
-  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(null);
+  /* Design note #551: seeded from the session, so a refresh comes back into
+     the room rather than into solo Sandbox. */
+  const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(readActiveSandboxRoom);
+  useEffect(() => {
+    writeActiveSandboxRoom(sandboxRoomCode);
+  }, [sandboxRoomCode]);
+
   const handleEnterSandbox = useCallback((roomCode?: string | null) => {
     setSandboxRoomCode(roomCode ?? null);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });

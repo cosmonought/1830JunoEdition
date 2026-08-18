@@ -128,3 +128,53 @@ export function readActiveGame(): ActiveGame | null {
  * nesting requirement `GameSessionContext.tsx`'s own design note #2 records
  * for itself.
  */
+
+/* ==================================================================
+ *  DESIGN NOTE 551: A REFRESH MUST NOT COST YOU THE ROOM
+ * ==================================================================
+ *
+ * REPORTED: refreshing the page in Sandbox multiplayer drops you into solo
+ * Sandbox, with no clear way back into the game you were playing.
+ *
+ * `activeGame` was already persisted, which is why the refresh landed on the
+ * Sandbox board at all rather than in the Lobby -- but the ROOM CODE was
+ * ordinary React state and went with the reload. So the shell came back in
+ * exactly the shape that says "solo sandbox", and the fixture's board came
+ * with it. The game was still there, in Firestore, addressed by a code that
+ * no longer existed anywhere in the browser.
+ *
+ * IT IS RESUMABLE BECAUSE THE LOG IS THE GAME. Nothing about the position
+ * needs saving: the room's action log is the complete history, replayed from
+ * index 0 on every join (design note #522), and a rejoin is therefore
+ * identical to a first join. This stores one short string, not a snapshot --
+ * a serialised board would be a second source of truth about the position,
+ * and the one that goes stale silently.
+ *
+ * `sessionStorage`, MATCHING `localPlayerId`. That pairing is the point and
+ * the two must not diverge: the id is what the room knows this browser as,
+ * and both are scoped to the tab. In `localStorage` the code would outlive
+ * the identity, so a new tab weeks later would rejoin a finished game as a
+ * stranger. Closing the tab ends the session -- for both -- which is the
+ * honest boundary. `Lobby.tsx` records the same reasoning for its own
+ * active-room key.
+ */
+export const ACTIVE_SANDBOX_ROOM_STORAGE_KEY = "juno.activeSandboxRoom";
+
+export function readActiveSandboxRoom(): string | null {
+  try {
+    return window.sessionStorage.getItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+  } catch {
+    /* Private browsing. The game runs; it just is not resumable, which is
+       the same bargain `readActiveGame` above already makes. */
+    return null;
+  }
+}
+
+export function writeActiveSandboxRoom(code: string | null): void {
+  try {
+    if (code) window.sessionStorage.setItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY, code);
+    else window.sessionStorage.removeItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+  } catch {
+    /* as above */
+  }
+}

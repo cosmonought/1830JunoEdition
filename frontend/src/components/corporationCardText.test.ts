@@ -88,8 +88,30 @@ describe("the labels are words", () => {
     expect(SOURCE).toContain(">Stations<");
   });
 
-  it("names the president in a word rather than a glyph", () => {
-    expect(SOURCE).toContain(">President<");
+  it("marks the president with the shipped crown, not a font glyph", () => {
+    /* ==============================================================
+     *  DESIGN NOTE 552 (harness): THE RULE SURVIVED, THE ANSWER CHANGED
+     * ==============================================================
+     *
+     * This asserted `toContain(">President<")` -- design note #490 had
+     * replaced the crown emoji with the word, because a pictogram rendered
+     * in a platform colour font at a platform weight is a different picture
+     * on every device and therefore cannot be relied on to mean anything.
+     *
+     * REPORTED since: the word is nine characters wide in a column that
+     * must also fit a player's name, and long names collide with the
+     * column beside them.
+     *
+     * Both observations are right, and an inline SVG satisfies both -- so
+     * what this test protects is unchanged and only its subject moved. The
+     * constraint was never "use a word". It was "do not depend on a glyph
+     * whose appearance somebody else chooses", and the sibling test above
+     * ("has no pictographic HTML entities either") still enforces exactly
+     * that. This one now pins the positive half: the mark is OURS. */
+    expect(SOURCE).toContain("<PresidentCrown");
+    // And the word it replaced is gone from the ownership rows, which is
+    // the space the report was actually about.
+    expect(SOURCE).not.toContain(">President<");
   });
 
   it("captions treasury on the figures row", () => {

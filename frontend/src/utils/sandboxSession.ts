@@ -922,6 +922,41 @@ export function sandboxRouteRevenue(
  *  every other message is unaffected, and so the reducer keeps working with
  *  no board at all (falling back to the flat nominal). */
 export interface SandboxActionContext {
+  /* ==================================================================
+   *  DESIGN NOTE 549: THE LOG SAYS WHO DID IT, SO THE REDUCER MUST ASK
+   * ==================================================================
+   *
+   * REPORTED: Player 2 bought a president's certificate and it never
+   * appeared on Player 1's screen.
+   *
+   * `applySandboxAction` resolved the acting player as
+   * `state.player_addresses[state.active_player_index]` -- the turn cursor
+   * ON THE MACHINE DOING THE APPLYING. In a hotseat that is exactly right:
+   * one client, one cursor, and whoever is on turn is by definition whoever
+   * just clicked.
+   *
+   * In an event-sourced room it is a determinism bug of the worst kind. The
+   * whole design (design note #522) is that every client replays the same
+   * ordered log and therefore reaches the same state -- but a reducer that
+   * reads identity out of LOCAL state is not a function of the log alone.
+   * Let two clients disagree about the cursor by one seat, for any reason,
+   * and from then on every replayed purchase is credited to a different
+   * player on each of them. Nothing errors. The two games simply stop being
+   * the same game, and the first visible symptom arrives several actions
+   * later, somewhere unrelated.
+   *
+   * That divergence is not hypothetical here -- three handlers were writing
+   * state without going through the log at all (design note #550), which is
+   * exactly how the cursors came apart in the reported game.
+   *
+   * SO THE AUTHOR TRAVELS WITH THE ACTION. The log already records who
+   * appended each entry; this is that value, handed back in on replay. The
+   * reducer becomes a pure function of (state, message, author) and the
+   * local cursor stops being an input.
+   *
+   * OMITTED FALLS BACK, deliberately: solo sandbox has no log and no author,
+   * and the turn cursor is the right answer there. */
+  actor?: string | null;
   mapGrid?: MapGridResponse;
   /** Design note #492a: this is the FIRST `RunManualRoute` of a turn's
    *  batch, so `last_route_revenue` starts from zero rather than adding to
@@ -2079,7 +2114,39 @@ export function applySandboxAction(
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
-  const actor = state.player_addresses[state.active_player_index] ?? null;
+  /* ==================================================================
+   *  DESIGN NOTE 549b: AN UNKNOWN AUTHOR IS NOBODY, NOT WHOEVER IS HANDY
+   * ==================================================================
+   *
+   * The first cut of this was `ctx?.actor ?? cursor`, and a test written
+   * against it failed for a reason worth keeping: `??` makes an author the
+   * reducer cannot place fall THROUGH to the local cursor -- which is
+   * precisely the nondeterminism design note #549 exists to remove, quietly
+   * reinstated as a fallback.
+   *
+   * It matters concretely, not just in principle. Log entries written before
+   * design note #549a recorded the author's NICKNAME rather than their id,
+   * so any room already in Firestore replays with authors that match no seat
+   * at all. Falling back to the cursor would make those entries resolve
+   * differently on every client -- the original bug, from data.
+   *
+   * So the three cases are separated and each says one thing:
+   *
+   *   undefined  no author was offered. Solo sandbox, where the cursor IS
+   *              the actor and there is only one client to disagree.
+   *   seated     the author, used.
+   *   anything   null. The action applies to nobody and visibly does
+   *   else       nothing, identically on every client. A no-op is a bad
+   *              outcome; an outcome that differs per browser is a worse
+   *              one, and only one of the two can be noticed and reported.
+   */
+  const logged = ctx?.actor;
+  const actor =
+    logged === undefined
+      ? state.player_addresses[state.active_player_index] ?? null
+      : logged !== null && state.player_addresses.includes(logged)
+        ? logged
+        : null;
 
   // ---- Passing means two different things, and the phase decides which.
   //

@@ -4097,15 +4097,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            and a variant the chain has never heard of appearing in it would
            be a lie about what the wallet may sign (design note #530).
 
-           The sandbox branch above handles it and returns, so this line is
-           unreachable for a setup event. This guard makes that invariant
-           something the compiler enforces rather than something the reader
-           has to trace: if a future path ever reaches here with one, it
-           stops instead of being handed to `execGameplay`. */
-      if (isSetupGameMsg(msg)) return;
-      const chainMsg: GameplayExecuteMsg = msg;
+           ==================================================================
+            DESIGN NOTE 539: THIS GUARD USED TO `return` HERE, AND THAT WAS
+            THE BUG
+           ==================================================================
 
-      let label = describeGameplayAction(chainMsg, describeContext) ?? fallbackLabel;
+           The first version read `if (isSetupGameMsg(msg)) return;` at this
+           line, with a comment asserting "the sandbox branch ABOVE handles
+           it and returns, so this line is unreachable for a setup event".
+
+           The sandbox branch is BELOW. It starts some forty lines further
+           down, so this guard ran FIRST and every `SetupGame` returned here
+           -- on every client, every time. The setup action reached the log,
+           replayed correctly, entered this function, and was discarded one
+           step before the handler that deals the game.
+
+           That is why the roster was empty and why nobody could act: with
+           `player_addresses` still `[]` from `withEmptyRoster`, no seat
+           matches anyone, so `isMyTurn` is false for all and the turn gate
+           refuses every action. Two symptoms, one dropped message.
+
+           The comment is the lesson. It stated an ordering confidently and
+           the ordering was wrong -- a claim about control flow that would
+           have taken one `grep -n` to check, asserted instead from memory
+           while satisfying a type error.
+
+           SO IT NARROWS RATHER THAN RETURNING. `chainMsg` is `null` for a
+           setup event, the sandbox branch below gets its chance, and the
+           refusal happens at the CHAIN DISPATCH -- the only place that
+           actually must not see one. */
+      const chainMsg: GameplayExecuteMsg | null = isSetupGameMsg(msg) ? null : msg;
+
+      let label =
+        (chainMsg ? describeGameplayAction(chainMsg, describeContext) : null) ?? fallbackLabel;
 
       const id = nextLogEntryId++;
       const timestamp = new Date().toLocaleTimeString();
@@ -4887,6 +4911,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ]);
 
       try {
+        /* Design note #539: the guarantee, at the one call that needs it.
+           Unreachable in practice -- the sandbox branch above returns for
+           every setup event -- and enforced here rather than trusted. */
+        if (!chainMsg) return;
         const result = await session.execGameplay(chainMsg);
         setActionLog((log) =>
           log.map((entry) =>

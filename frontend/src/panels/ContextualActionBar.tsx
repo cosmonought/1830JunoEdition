@@ -2374,7 +2374,24 @@ export default function ContextualActionBar({
         >
           Pass Turn
         </button>
-        <span style={styles.actionBarDivider} />
+        {/* ==================================================================
+             DESIGN NOTE 540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES
+            ==================================================================
+
+             REPORTED: two bars appear between Pass Turn and Undo Last Action.
+
+             They are these two, with nothing between them. The pair frames
+             `contextualButtons`, and that array is EMPTY in several real
+             states -- an auction round, a Stock Round with no corporation
+             selected, and (the case that surfaced it) a room whose game has
+             not been dealt. Two separators with no content between them read
+             as a rendering fault, which is exactly what they are: a rule
+             divides things, and there was nothing to divide.
+
+             Gated on the group they frame rather than on any particular
+             round, so every empty case is covered by the condition that
+             actually describes the problem. */}
+        {contextualButtons.length > 0 && <span style={styles.actionBarDivider} />}
         {contextualButtons.map((btn) => (
           <button
             key={btn.key}

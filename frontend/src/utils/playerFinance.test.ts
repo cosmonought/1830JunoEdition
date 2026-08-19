@@ -176,7 +176,18 @@ describe("net worth against liquidity", () => {
 describe("holdings and privates", () => {
   it("lists one row per corporation held, and none for the rest", () => {
     const f = finances(board({ adaPrr: 30, adaNyc: 10 }))!;
-    expect(f.holdings.map((h) => h.ticker)).toEqual(["PRR", "NYC"]);
+    expect(f.holdings.map((h) => h.ticker).sort()).toEqual(["NYC", "PRR"]);
+    expect(f.holdings).toHaveLength(2);
+  });
+
+  it("lists them in the canonical order, not the board's", () => {
+    /* Design note #582: the fixture holds PRR first because that is how
+       `public_companies` happens to be ordered -- which is exactly the
+       "order" the card used to show, and therefore no order at all from the
+       reader's side. Alphabetical by ticker puts NYC ahead of PRR, so this
+       fails if the sort is ever dropped. */
+    const f = finances(board({ adaPrr: 30, adaNyc: 10 }))!;
+    expect(f.holdings.map((h) => h.ticker)).toEqual(["NYC", "PRR"]);
   });
 
   it("marks the presidency on the row it belongs to", () => {

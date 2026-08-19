@@ -67,7 +67,13 @@ import {
 } from "../components/hexGeometry";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
+import {
+  NEW_YORK_PRINTED_ARTWORK,
+  printedArtwork,
+  tileCitySlotCounts,
+  tileCitySlotPoints,
+} from "../components/TileGraphics";
+import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
 import { hexKey, reachableNetwork } from "./trackReach";
 
 /** The home token, granted at float rather than bought. */
@@ -508,6 +514,66 @@ export function cityNodePoints(
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
 
   if (!laid) {
+    /* ==================================================================
+     *  DESIGN NOTE 580: THE OTHER HALF OF DESIGN NOTE #221
+     * ==================================================================
+     *
+     * REPORTED: the placement ring sits in the middle of Baltimore's hex
+     * rather than on its city circle, and is slightly off both of New
+     * York's.
+     *
+     * Design note #221 fixed exactly this, for `stationMarkerPoint`, and
+     * described the cause precisely: preprinted hexes used to draw their
+     * city at the hex CENTRE, then began rendering from authored artwork --
+     * "Cleveland's circle is half a hex radius south of centre, ...
+     * Baltimore's south-east" -- and any function still returning `center`
+     * went on pointing at empty tile fill beside the circle.
+     *
+     * THIS FUNCTION WAS NEVER TOLD. It is the other answer to "where are
+     * this hex's cities", used by the pulsing placement rings and by the
+     * click hit-test, and it kept both of the guesses #221 removed: `center`
+     * for a single city, and `twoNodePositions`' fixed NE/SW diagonal for
+     * two. That diagonal is why New York's rings are close but wrong --
+     * `hexCanvasPrimitives` already records that its stubs "come off edges 1
+     * and 4, so the authored endpoints and the diagonal happen to agree in
+     * DIRECTION while disagreeing in DISTANCE."
+     *
+     * So it reads the artwork, from the same tables `stationMarkerPoint`
+     * reads. Two functions answering one question, one of them fixed --
+     * the pattern this codebase keeps finding, and the reason the fix is
+     * to consult the same source rather than to copy the same maths.
+     *
+     * THE FALLBACKS SURVIVE for a hex with no authored artwork at all,
+     * which is the only case the old guesses were ever right about. */
+    const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+    const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+    const label = hex?.label ?? landmark?.label;
+
+    // New York prints TWO stations and has its own catalog entry, because
+    // `PrintedArtwork.marker` is singular and cannot express a pair.
+    if (label === "G19") {
+      return NEW_YORK_PRINTED_ARTWORK.markers.map((marker) => ({
+        x: center.x + hexSize * marker.at.x,
+        y: center.y + hexSize * marker.at.y,
+      }));
+    }
+
+    // The yellow OO hexes are blank until tiled: no artwork to read, and
+    // `twoNodePositions` is the tuple `drawOOCityMarkers` actually draws.
+    if (hex && YELLOW_OO_HEXES.has(hex.label)) {
+      return [...twoNodePositions(center, hexSize)];
+    }
+
+    const printed = label === undefined ? undefined : printedArtwork(label);
+    if (printed?.marker) {
+      return [
+        {
+          x: center.x + hexSize * printed.marker.at.x,
+          y: center.y + hexSize * printed.marker.at.y,
+        },
+      ];
+    }
+
     const archetype = archetypeForHex(mapGrid, q, r);
     if (archetype === "DoubleCity") return [...twoNodePositions(center, hexSize)];
     if (archetype === "SingleCity") return [center];

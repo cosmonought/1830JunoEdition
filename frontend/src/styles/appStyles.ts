@@ -306,6 +306,13 @@ export const styles: Record<string, React.CSSProperties> = {
     // pane's.
     minHeight: "100vh",
     width: "100%",
+    /* Design note #581: room for the fixed status line at the foot of the
+       window. Without it the last row of any tab sits underneath the dock --
+       and the row most likely to be hidden is the one a player just scrolled
+       down to reach. Generous rather than exact: the dock is the ticker plus
+       the chat strip, and a wrapped chat row is taller than an unwrapped
+       one. */
+    paddingBottom: "96px",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     backgroundColor: "#12141a",
     color: "#e6e8ef",
@@ -860,6 +867,18 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "1px",
     minWidth: 0,
   },
+  /* Design note #589: the full name and the president share line two --
+     identity detail, read second, one thought. `flexWrap` because a long
+     name plus a long player name genuinely can exceed a narrow bar, and
+     wrapping is a better failure than clipping a president's name. */
+  orContextSubRow: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: "8px",
+    flexWrap: "wrap",
+    minWidth: 0,
+  },
   orContextIdentityRow: {
     display: "flex",
     flexDirection: "row",
@@ -1053,6 +1072,27 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #578: the room gate. Deliberately plain -- it is a doorway,
      not a screen, and anything decorative here would be competing with the
      board it exists to get out of the way of. */
+  /* Design note #581: the status line dock. Anchored to the bottom EDGE
+     rather than given a height, so the expanded history grows upward from
+     the line and never off the screen.
+
+     `maxHeight` with `overflowY` is the ceiling: a long history must not
+     become the whole window. 60vh leaves the board visible above it, which
+     is the point of a peripheral surface. */
+  statusLineDock: {
+    position: "fixed",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 3000,
+    display: "flex",
+    flexDirection: "column",
+    maxHeight: "60vh",
+    overflowY: "auto",
+    borderTop: "1px solid #2b3242",
+    backgroundColor: "#11151d",
+    boxShadow: "0 -6px 18px rgba(0,0,0,0.35)",
+  },
   sandboxGateRoot: { display: "flex", justifyContent: "center", padding: "48px 20px" },
   sandboxGateCard: {
     display: "flex",

@@ -746,19 +746,20 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           one control on this screen that must work when everything else is
           broken, which is exactly why it must never be gated on any of the
           things that might be broken. */}
-      <section style={styles.sandboxStrip}>
-        <div style={styles.sandboxCopy}>
-          <span style={styles.sandboxTitle}>🧪 Offline Sandbox</span>
-          <span style={styles.sandboxNote}>
-            Open the board with local mock state — no wallet, no contract and no room needed.
-            The rail map, tile picker and panels all render; nothing is dispatched. This is the
-            way in when the chain is unconfigured.
-          </span>
-        </div>
-        <button type="button" style={styles.sandboxButton} onClick={() => onEnterSandbox(null)}>
-          Enter Offline Sandbox →
-        </button>
-      </section>
+      {/* ==================================================================
+           DESIGN NOTE 586: THE OFFLINE STRIP IS GONE
+          ==================================================================
+
+           Design note #578 removed solo sandbox, and this button outlived it
+           by one pass -- so the Lobby went on offering an "Offline Sandbox"
+           that landed on a screen asking the player to host a room. A door
+           labelled for a room that no longer exists.
+
+           NOTHING TO MERGE. Both strips called the same `onEnterSandbox`,
+           the offline one passing `null` and the multiplayer one passing a
+           code, and that single handler is the only path into the shell.
+           There was never a second branch behind the second button -- which
+           is why deleting the button is the whole change. */}
 
       {/* ==================================================================
            DESIGN NOTE 524: THE MULTIPLAYER DECISION IS A LOBBY DECISION

@@ -148,6 +148,7 @@ import {
   drawValueBadge,
   fitFontSize,
   offboardNameplateLines,
+  homeCityIndexAt,
   stationMarkerPoint,
   withHexClip,
   type RouteOverlay,
@@ -378,6 +379,30 @@ export interface HexGridRendererProps {
      *  the board, the toolbar and the route line agree about whose turn it
      *  is. Omitted falls back to the neutral highlight ink. */
     glowColor?: string;
+    /* ==================================================================
+     *  DESIGN NOTE 585: THE SLOT RINGS ARE FOR HOME STATIONS ONLY
+     * ==================================================================
+     *
+     * INSTRUCTED: "let's restrict the token station glow to the home station
+     * placements."
+     *
+     * The reasoning in the request is the part worth keeping. A home station
+     * is ONE hex with one or two nodes -- a bounded problem, and the moment a
+     * new player has least idea what is being asked of them. A built-up
+     * corporation's Tokens step is the opposite: many legal tiles, each a
+     * fresh chance for the geometry to be wrong (it has been wrong three
+     * times: design notes #515, #557, #580), and by then the player placing
+     * their fourth token does not need the hint.
+     *
+     * So the rings are earned where they help and dropped where they were
+     * mostly a maintenance liability. `undefined` draws none, which is now
+     * every case except the one flag below.
+     *
+     * ONE SLOT, NOT ALL OF THEM. When set, only the node the corporation's
+     * home token actually belongs in glows -- resolved by asking
+     * `stationMarkerPoint` (design note #584) rather than by a second table
+     * of home cities. */
+    homeSlotGlow?: boolean;
     /* ==================================================================
      *  DESIGN NOTE 377: THE VEIL IS BACK, FOR ONE PLAYER
      * ==================================================================
@@ -2696,8 +2721,31 @@ export function HexGridRenderer({
     }
 
 
-    // Design note #222: tokens go on last, above every badge and nameplate.
-    drawStationTokenPass();
+    /* ==================================================================
+     *  DESIGN NOTE 588: THE VEIL WAS PAINTING OVER THE TOKENS
+     * ==================================================================
+     *
+     * REPORTED: during a Place Home Station action the preprinted home
+     * station reservation markers disappear.
+     *
+     * They were drawn -- and then buried. `drawStationTokenPass()` ran HERE,
+     * and the focus veil runs in the loop BELOW it, so the veil's fill
+     * landed on top of every token on the board. A reservation badge is
+     * already drawn at 0.45 alpha by design (note #116: a ghost, not a
+     * piece); under the deep focus veil the product of the two is
+     * effectively nothing.
+     *
+     * SO THE PASS MOVED AFTER THE VEIL, which is what design note #222 was
+     * already arguing for and stopped one pass short of: "a badge covering a
+     * token is worse than a badge covering track -- a token is the one
+     * marker that says WHOSE network this is, and a route's legality turns
+     * on it." A veil is a badge over the whole hex.
+     *
+     * THE VEIL STILL DOES ITS JOB. It pushes back the track, the cities and
+     * the labels, which is what makes the one open hex findable. What it no
+     * longer does is hide the piece a player is being asked to reason about
+     * -- and during a home placement the reservation markers are exactly
+     * that: they say which hexes are already spoken for. */
 
     /* ==================================================================
      *  DESIGN NOTE 367: THE VEIL IS GONE
@@ -2835,8 +2883,12 @@ export function HexGridRenderer({
            set has collapsed to one hex -- pulsing rings on the veiled
            remainder would be inviting clicks the player has just moved
            past. */
+        /* Design note #585: home placements only, and only the home slot.
+           `cursorMode === "token"` alone lit every legal node of every
+           highlighted hex, which is the Tokens step this no longer serves. */
         if (
           cursorMode === "token" &&
+          layFocus.homeSlotGlow === true &&
           layFocus.soleFocusKey === undefined &&
           layFocus.highlighted.has(key)
         ) {
@@ -2875,7 +2927,17 @@ export function HexGridRenderer({
           // A thin band just outside the token: enough to read as a frame,
           // not enough to read as an orbit.
           const ringRadius = slotRadius * (1.28 + swell * 0.14);
-          for (const node of cityNodePoints(mapGrid, hex.q, hex.r, hexSize)) {
+          /* Design note #584: the slot the reservation marker is already
+             drawn in -- so the ring and the badge cannot point at different
+             circles on a two-station hex like New York. */
+          const slotNodes = cityNodePoints(mapGrid, hex.q, hex.r, hexSize);
+          const homeSlot = homeCityIndexAt(
+            slotNodes,
+            stationMarkerPoint(hex.q, hex.r, hexSize, laidHere),
+          );
+          const litNodes = homeSlot === null ? slotNodes : [slotNodes[homeSlot]];
+          for (const node of litNodes) {
+            if (!node) continue;
             ctx.save();
             ctx.globalAlpha = 0.45 + swell * 0.5;
             ctx.strokeStyle = glow;
@@ -2919,6 +2981,10 @@ export function HexGridRenderer({
         }
       }
     }
+
+    /* Design note #222/#588: tokens go on last -- above every badge, every
+       nameplate AND the focus veil. */
+    drawStationTokenPass();
 
     // ---- Live preview tile, drawn last so it sits on top of everything.
     //

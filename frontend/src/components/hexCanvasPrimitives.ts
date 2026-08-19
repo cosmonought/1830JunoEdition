@@ -2766,6 +2766,54 @@ export function drawOOCityMarkers(
   drawStationCircle(ctx, node1, size * 0.75); // index 1: bottom-left
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 584: ASK THE MARKER WHERE THE HOME SLOT IS
+ * ==================================================================
+ *
+ * REPORTED: on New York (G19) both city circles glowed during the NNH's home
+ * station placement, and only the top-right one is legal -- followed by the
+ * observation that settles it: "you have 'preprinted' NNH's home station
+ * reservation marker on the correct city/station slot -- can you not check
+ * it against that?"
+ *
+ * Yes, and that is a better fix than the one I was about to write. The
+ * alternative was a new table of home city indices per corporation, which
+ * would have been a SECOND statement of a fact `stationMarkerPoint` already
+ * decides -- and this codebase's recurring bug is exactly that (design notes
+ * #559, #576, #580: one fact, two places, one updated).
+ *
+ * SO IT DERIVES THE INDEX FROM THE POINT. Whatever `stationMarkerPoint`
+ * chooses -- G19's authored marker 0, an OO hex's bottom-left node, a laid
+ * tile's anchor -- the nearest city node to it is the slot the token will
+ * occupy. The glow cannot disagree with the marker, because it is reading
+ * the marker's own answer.
+ *
+ * NEAREST rather than an index handed across, deliberately: the two
+ * functions compute in the same space but by different routes (artwork
+ * offsets against slot-point averages), so they can land a pixel or two
+ * apart on the same circle. "Closest" is robust to that; equality would not
+ * be.
+ *
+ * `null` when the hex has no city nodes at all, which is a caller's cue to
+ * glow nothing rather than to glow everything.
+ */
+export function homeCityIndexAt(
+  nodes: ReadonlyArray<{ x: number; y: number }>,
+  markerPoint: { x: number; y: number },
+): number | null {
+  if (nodes.length === 0) return null;
+  let best = 0;
+  let bestDistance = Infinity;
+  nodes.forEach((node, index) => {
+    const distance = Math.hypot(node.x - markerPoint.x, node.y - markerPoint.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  });
+  return best;
+}
+
 /** Station Tokens (design note #36; extended by design note #44; geometry
  *  updated by design note #49; REWRITTEN by design note #55's Universal
  *  Canvas Layout Engine; NODE-INDEX INVERSION FIXED by design note #56):

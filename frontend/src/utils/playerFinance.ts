@@ -61,6 +61,7 @@ import {
 import { sellableHoldings, SHARE_BLOCK_PERCENT } from "./endgame";
 import { PRIVATE_COMPANY_CATALOG } from "./privateCatalog";
 import { certLimitForPlayers } from "./gameSetup";
+import { corporationDisplayRank } from "./corporationNames";
 
 /** One corporation this player holds a stake in. */
 export interface PlayerHoldingRow {
@@ -166,6 +167,12 @@ export function playerFinances(
     });
     shares += held / SHARE_BLOCK_PERCENT;
   }
+
+  /* Design note #582: a standing order, so a row is in the same place on
+     every card and in the same place next round. Sorted here rather than in
+     the component because it is a property of the DATA the card renders --
+     and two cards sorting independently is how they would come to differ. */
+  holdings.sort((a, b) => corporationDisplayRank(a.ticker) - corporationDisplayRank(b.ticker));
 
   /* Design note #562a: what could actually be raised. `sellableHoldings`
      owns the presidency and pool-cap rules, so this only has to add up its

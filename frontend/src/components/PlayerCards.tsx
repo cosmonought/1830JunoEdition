@@ -90,6 +90,28 @@ export interface PlayerCardsProps {
   viewerAddress: string | null;
   /** A player's own stripe colour. Distinct per seat. */
   colorForSeat: (index: number) => string;
+  /* ==================================================================
+   *  DESIGN NOTE 593: THE CARDS STATE THE TURN ORDER, THEY DO NOT IMPLY IT
+   * ==================================================================
+   *
+   * INSTRUCTED: replace the Auction's Seating Order table with these cards --
+   * "The only 'problem' is that the tables make it easy to see turn order,
+   * whereas the cards are less direct about that. Is there a solution?"
+   *
+   * There is, and it is not "rely on the order they are laid out in". The
+   * grid reflows -- six players wrap to a second row on any window narrower
+   * than about 1600px -- and the moment it wraps, left-to-right stops meaning
+   * anything and the seat after the last card on row one is the FIRST card on
+   * row two. A reader would have to know the wrap point to read the order.
+   *
+   * So the position is written down. "1st", "2nd" in the stripe is true at
+   * any width, survives the wrap, and answers the question the table answered
+   * without needing the table's shape.
+   *
+   * ONLY WHERE SEATS TAKE TURNS. Omitted during an Operating Round, where the
+   * queue names corporations and a seat ordinal would be answering a question
+   * nobody is asking -- the same distinction `actingSeatIndex` draws. */
+  showSeatOrder?: boolean;
   /** Design note #568: the private's rules text, for the expandable rows.
    *  `null` renders the name as plain text rather than a control. */
   privateDescription?: (privateId: number) => string | null;
@@ -99,6 +121,17 @@ export interface PlayerCardsProps {
    room registry that can override it. A component that owned the colours
    would have been the only place that knew them, and the action bar needs
    the same answer. */
+
+/** 1st, 2nd, 3rd, 4th... 1830 seats at most six, so the teens the general
+ *  rule exists for are unreachable -- but the general rule costs one line and
+ *  a special-cased table would be wrong the moment somebody tries a variant
+ *  with more seats. */
+function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  const suffix = { 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
 
 function money(value: number | null): string {
   /* Design note #562: an em dash, never "$0". A missing figure and a figure
@@ -115,6 +148,7 @@ export function PlayerCards({
   viewerAddress,
   colorForSeat,
   privateDescription,
+  showSeatOrder = false,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
      the whole grid rather than state per card -- a player may want the
@@ -149,7 +183,16 @@ export function PlayerCards({
           >
             {/* ---- Name stripe, and the Priority Deal marker in it ---- */}
             <header style={{ ...styles.stripe, backgroundColor: stripe, color: ink }}>
-              <span style={styles.stripeName}>{label(player.address)}</span>
+              <span style={styles.stripeIdentity}>
+                {showSeatOrder && (
+                  /* Design note #593: the seat's position, stated. `1st`
+                     rather than `#1` because a player says "I'm second", and
+                     because `#1` reads as an identifier rather than an
+                     order. */
+                  <span style={styles.stripeOrdinal}>{ordinal(seatIndex + 1)}</span>
+                )}
+                <span style={styles.stripeName}>{label(player.address)}</span>
+              </span>
               <span style={styles.stripeMarks}>
                 {player.address === viewerAddress &&
                   (nameCounts.get(label(player.address)) ?? 0) > 1 && (
@@ -174,6 +217,28 @@ export function PlayerCards({
             <div style={styles.body}>
               {/* ---- Left: the figures ---- */}
               <table style={styles.figures}>
+                {/* ==================================================
+                     DESIGN NOTE 583: THE TWO TABLES SHARE A TOP LINE
+                    ==================================================
+
+                     REPORTED: the Corp. and % headers read "off", floating
+                     in the middle, because the right-hand table had a header
+                     row and the left-hand one did not -- so five figure rows
+                     were distributed against six, and nothing lined up.
+
+                     An EMPTY header row rather than removing the right-hand
+                     one: the % column needs its label (a bare `30` beside a
+                     ticker could be a count, a price or a percentage), and
+                     the left-hand rows label themselves. So the left table
+                     gains a spacer whose only job is to start both bodies on
+                     the same line. `aria-hidden` because it says nothing a
+                     screen reader should hear. */}
+                <thead aria-hidden="true">
+                  <tr>
+                    <th style={styles.figureHeadSpacer} />
+                    <th style={styles.figureHeadSpacer} />
+                  </tr>
+                </thead>
                 <tbody>
                   <tr>
                     <th scope="row" style={styles.figureKey}>Cash</th>
@@ -215,7 +280,7 @@ export function PlayerCards({
               <table style={styles.holdings}>
                 <thead>
                   <tr>
-                    <th style={styles.holdingHead}>Co.</th>
+                    <th style={styles.holdingHead}>Corp.</th>
                     <th style={styles.holdingHeadNum}>%</th>
                   </tr>
                 </thead>
@@ -350,6 +415,21 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "6px 10px",
     minWidth: 0,
   },
+  stripeIdentity: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "6px",
+    minWidth: 0,
+  },
+  /* Design note #593: quieter than the name -- it is a fact ABOUT the seat,
+     not the seat's label, and a reader looking for a player scans names. */
+  stripeOrdinal: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    opacity: 0.75,
+    flex: "none",
+    fontVariantNumeric: "tabular-nums",
+  },
   stripeName: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,
@@ -369,13 +449,24 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
   },
+  /* Design note #583: the gap widened from 8px. The % column is fixed at
+     three characters, so the right-hand table needs far less width than an
+     even split gives it -- and the reported symptom was the Corp. column
+     sitting "barely separated" from the figures on its left. The columns are
+     no longer equal for the same reason: the left table carries five labelled
+     figures and the right carries a three-character number. */
   body: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-    gap: "8px",
+    gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)",
+    columnGap: "18px",
     padding: "8px 10px",
   },
   figures: { borderCollapse: "collapse", width: "100%", fontVariantNumeric: "tabular-nums" },
+  /* Design note #583: matches the right-hand header's line box exactly, so
+     the two bodies start level. Sized off the same font token rather than a
+     pixel guess -- a header height typed as `14px` would drift the moment
+     the micro size changed. */
+  figureHeadSpacer: { fontSize: FONT_SIZE.micro, fontWeight: 700, padding: 0 },
   figureKey: {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,

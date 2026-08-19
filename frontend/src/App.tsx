@@ -534,7 +534,8 @@ import { liveEdgesForHex } from "./components/hexGeometry";
 import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork } from "./utils/trackReach";
 import { dividendDeclaration } from "./utils/dividendStep";
-import { actingActor, countPhrase, describeGameplayAction } from "./utils/actionLog";
+// Design note #591f: `actingActor` went with the snapshot stack it stamped.
+import { countPhrase, describeGameplayAction } from "./utils/actionLog";
 import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
 import {
   bestContrastTextColor,
@@ -569,6 +570,7 @@ import {
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
   isExchangePrivateMsg,
+  isRevertToMsg,
   isSetBoParMsg,
   isSandboxOnlyMsg,
   isSetupGameMsg,
@@ -678,7 +680,6 @@ import {
   sandboxWaterfallState,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
-import { undoSkippedCount, undoTargetIndex } from "./utils/undoTarget";
 import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
@@ -741,7 +742,6 @@ import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animat
 import {
   BO_PRIVATE_ID,
   BO_TICKER,
-  buyStockProtocolId,
   ERA_FOR_PHASE_TINT,
   NO_TRAIN_ROUTE_REASON,
   SMALLEST_TRAIN_CAPACITY,
@@ -779,6 +779,7 @@ import {
   CA_PRIVATE_ID,
   resolvePrivateExchange,
 } from "./utils/privateExchange";
+import { effectiveActions, undoReachFor, undoToRoundStart } from "./utils/logRevert";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -1099,52 +1100,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * piece of state the dispatch path writes. The rule to keep: if
    * `runGameplayAction` can change it, this record holds it.
    */
-  const [, setSandboxHistory] = useState<
-    Array<{
-      state: GameStateResponse;
-      mapGrid: MapGridResponse;
-      subPhase: OperatingSubPhase;
-      /** Design note #310: the auction's own atom, including both turn
-       *  cursors and the mini-auction's bidder list. */
-      waterfall: WaterfallStateResponse | null;
-      market: SandboxMarketPrices;
-      settledPrices: Readonly<Record<number, number>>;
-      /** Design note #439: whether the action this snapshot precedes was
-       *  dispatched BY THE GAME rather than by the player. Undo walks past
-       *  these -- see `handleUndoLastAction`. */
-      automatic: boolean;
-      /* ==============================================================
-       *  DESIGN NOTE 479: THE STACK REMEMBERS WHAT IT IS UNDOING
-       * ==============================================================
-       *
-       * REPORTED: Undo logs "Reverted the last action" -- it should say
-       * what was reverted.
-       *
-       * It could not, and the reason is worth stating because it is the
-       * whole fix: a snapshot is a state, and a state does not know what
-       * was done to it next. Reconstructing the action by DIFFING the
-       * restored state against the discarded one would work for a tile lay
-       * and fail for everything subtler, and would be a second, weaker
-       * description of an event this app already writes one good sentence
-       * about.
-       *
-       * So the sentence is captured at dispatch time and carried. The
-       * snapshot is taken immediately before `msg` applies, which makes
-       * `label` exactly the action Undo will reverse -- the same string
-       * that went into the Activity Log when it happened, so the undo line
-       * and the line it cancels quote each other.
-       *
-       * `actor` is stored separately rather than parsed back out of
-       * `label`, because "PRR laid a yellow tile on B12" and "Carol bought
-       * 10% of PRR" both begin with a name and only one of them begins
-       * with the actor's. */
-      label: string;
-      actor: string;
-    }>
-  >([]);
-  /** Bounded so a long hotseat session cannot grow the stack without limit.
-   *  Deep enough that undo covers a whole corporation's turn. */
-  const SANDBOX_HISTORY_LIMIT = 50;
+  /* ==================================================================
+   *  DESIGN NOTE 591f: THE SNAPSHOT STACK IS DELETED
+   * ==================================================================
+   *
+   * Design note #178 built it and design notes #310/#439/#475/#479 refined
+   * it over five passes, and every one of those refinements was correct for a
+   * single client. None of it survives contact with a room: the stack holds
+   * only what THIS browser dispatched, so it can neither undo somebody
+   * else's action nor be trusted to agree with anybody about what happened.
+   *
+   * DELETED, not left switchable. A second undo mechanism that works in a
+   * mode that no longer exists is a trap for whoever next reads the file --
+   * and its per-atom restore list (#310) is genuinely useful, so it moved
+   * intact into `rebuildSandbox`, where the replay needs exactly the same
+   * list for the same reason. */
 
   /* Design note #578: THE HOTSEAT SEAT SWITCHER IS GONE, with the mode it
      served. It let one browser act for four mock players, which is the whole
@@ -1422,21 +1392,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     srParValuesRef.current = srParValues;
   }, [srParValues]);
-  /* Design note #553: likewise, and this one is what places the market
-     token -- so a client reading its own empty ladder here is how two
-     players ended up looking at the same corporation in two different boxes
-     on the chart. */
-  const parValueNumberFor = useCallback((companyId: number): number | null => {
-    const parsed = Number(
-      parPriceFor(
-        gameStateRef.current,
-        companyId,
-        srParValuesRef.current[companyId],
-        MOCK_BUY_STOCK_PAR_VALUE,
-      ),
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }, []);
+  /* Design note #579: `parValueNumberFor` IS GONE. It read this browser's
+     par ladder and fell through to a hardcoded "100", and the reducer
+     preferred it over the message -- which is how a corporation parred at
+     $67 came to be recorded at $100 by every client but its founder.
+     Deleted rather than left unused: a helper that returns a plausible par
+     from local state is exactly what someone reaches for next time. */
+
 
   // Automatic Phase-Based Tab Navigation (design note below near its own
   // `useEffect`): holds the last-seen `current_round_type` so the
@@ -1571,7 +1533,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Switching scenario is a fresh testbed: drop any in-flight preview,
     // selector or undo history rather than carrying state from a board that
     // no longer exists.
-    setSandboxHistory([]);
     /* ===================================================================
      *  DESIGN NOTE 330: A NEW BOARD GETS A NEW LOG
      * ===================================================================
@@ -3375,7 +3336,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
 
   const sandboxRoomRef = useRef<string | null>(null);
+  /** The next LOG index to append at -- the log's own length, which never
+   *  shrinks even when the game is rewound. */
   const appliedIndexRef = useRef(0);
+  /* ==================================================================
+   *  DESIGN NOTE 591b: TWO COUNTERS, BECAUSE THEY COUNT DIFFERENT THINGS
+   * ==================================================================
+   *
+   * One number used to serve both jobs, and undo is what separates them. The
+   * log is append-only, so "how long is the log" only ever grows; the list of
+   * actions that still COUNT shrinks the moment somebody reverts.
+   *
+   *   `appliedIndexRef` answers "where does the next append go" -- the log's
+   *   length, so an undone action still occupies its index and nothing is
+   *   ever written over it.
+   *
+   *   `appliedCountRef` answers "how much of the live history have I run" --
+   *   a position in the effective list, which is what the drain compares
+   *   against to notice a rewind.
+   *
+   * Conflating them would make an undo look like a gap in the log. */
+  const appliedCountRef = useRef(0);
+  /** Design note #591b: resets every atom to the room's boot state, so the
+   *  drain can replay from the fixture. Published by an effect below,
+   *  because the setters it needs are declared after this. */
+  const rebuildRef = useRef<(() => void) | null>(null);
+  /** Design note #591d: the log as last seen, for the undo controls. They ask
+   *  it what still counts and who authored it -- a ref rather than state
+   *  because the answer is only needed at the moment a button is pressed, and
+   *  making it a dependency would rebuild the handlers on every action. */
+  const sandboxLogRef = useRef<Array<{ index: number; payload: string; actor: string }>>([]);
+  /* ==================================================================
+   *  DESIGN NOTE 592a: WHERE THE ROUND STARTED
+   * ==================================================================
+   *
+   * The log index of the last action that OPENED a round -- `SetupGame` or
+   * `OpenStockRound` -- so the host's deeper undo knows how far "the start of
+   * the round" is.
+   *
+   * Derived from the log rather than counted as rounds pass, for design note
+   * #565's reason: a value derived from the log cannot be stale, cannot drift
+   * after a refresh, and cannot survive an undo that took the round boundary
+   * itself back. A counter would need correcting in all three cases. */
+  const roundBoundaryIndexRef = useRef<number | null>(null);
   const sandboxSeatRef = useRef<string>("");
   useEffect(() => {
     sandboxRoomRef.current = sandboxRoomCode;
@@ -4087,7 +4090,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      recompute on each render is six passes over the roster per keystroke in
      the chat box. */
   const stockRoundPlayerFinances = useMemo(() => {
-    if (!gameState || gameState.current_round_type !== "StockRound") return [];
+    /* Design note #593: both seat-driven rounds. The Operating Round is
+       excluded for the reason `actingSeatIndex` draws the same line -- its
+       turn belongs to a corporation. */
+    if (
+      !gameState ||
+      (gameState.current_round_type !== "StockRound" &&
+        gameState.current_round_type !== "WaterfallAuction")
+    ) {
+      return [];
+    }
     const prices = Object.fromEntries(
       (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
     ) as Readonly<Record<number, number | null>>;
@@ -4573,6 +4585,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              The state is left ALONE in that case rather than half-applied:
              a board dealt for a count that does not exist is worse than one
              that visibly never started. */
+        if (isRevertToMsg(msg)) {
+          /* Design note #591: a revert is an instruction ABOUT the log, and
+             `effectiveActions` strips it before the drain ever gets here. If
+             one arrives anyway the honest response is to do nothing -- it has
+             already been honoured by the history arithmetic, and applying it
+             a second time as if it were a move would be inventing a rule. */
+          return;
+        }
+
         if (isExchangePrivateMsg(msg)) {
           /* Design note #573: the resolved grant, applied everywhere. The
              legality question was answered once, by the acting client,
@@ -4902,34 +4923,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          * `UndoLastAction` still excludes itself, for design note #178's
          * original reason: it would otherwise push the state it is about to
          * discard and make the button a no-op that consumes a stack slot. */
-        if (!("UndoLastAction" in msg) && before && options?.automatic !== true) {
-          setSandboxHistory((stack) =>
-            [
-              ...stack,
-              {
-                state: before,
-                mapGrid,
-                subPhase: orSubPhase,
-                waterfall: sandboxWaterfallRef.current,
-                market: sandboxMarketRef.current,
-                settledPrices: settledPrivatePricesRef.current,
-                /* Always `false` now -- design note #475 declines to push an
-                   automatic entry at all. Kept on the record so
-                   `undoTargetIndex`'s safety net has a field to read and the
-                   invariant is expressible rather than implied. */
-                automatic: false,
-                /* Design note #479: the BEFORE-state sentence, which is the
-                   one that exists at this point in the function. The
-                   resolved re-description happens further down and differs
-                   only in figures it can now report exactly (a treasury
-                   balance, a depot count) -- never in who acted or what
-                   they did, which is all an undo line quotes. */
-                label,
-                actor: actingActor(describeContext),
-              },
-            ].slice(-SANDBOX_HISTORY_LIMIT),
-          );
-        }
+        /* Design note #591d: THE SNAPSHOT PUSH IS GONE with the stack it
+           fed. Undo replays the log now, so there is nothing to remember --
+           and remembering it per-client was the thing that made undo
+           incoherent in a room. */
 
         /* Design note #261: the auction's own atom, advanced alongside the
            game state. `applySandboxWaterfallAction` returns the cash it
@@ -5176,7 +5173,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                `msg` rather than from any ambient selection, because the
                message is the only thing that knows which company this
                particular dispatch is about. */
-            parValue: parValueNumberFor(buyStockProtocolId(msg)) ?? undefined,
+            /* ==============================================================
+             *  DESIGN NOTE 579: THE LADDER STOPS HERE
+             * ==============================================================
+             *
+             * This was `parValueNumberFor(...)`, which reads this browser's
+             * own par ladder and falls through to a hardcoded "100" on every
+             * client that did not make the choice. The reducer preferred it
+             * over the message, so a corporation parred at $67 was recorded
+             * at $100 by everybody except its founder.
+             *
+             * The message's own `par_value` is now what the reducer reads
+             * (see `sandboxSession.ts`), and this is left only as the shape
+             * the context still declares. Passing the MESSAGE's figure keeps
+             * the two agreeing rather than leaving a second, quieter source
+             * of the same number sitting in the context for someone to reach
+             * for later. */
+            parValue: (() => {
+              if (!("BuyStock" in msg)) return undefined;
+              const fromMsg = Number(msg.BuyStock.par_value ?? NaN);
+              return Number.isFinite(fromMsg) && fromMsg > 0 ? fromMsg : undefined;
+            })(),
             /* Design note #363: the board's own label -> (q, r) table, so a
                corporation that floats gets its home token on the hex the
                map actually draws rather than on a coordinate this reducer
@@ -5488,7 +5505,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          dependency is still a dependency, and the moment it stops being
          stable a silent staleness bug is exactly the kind this file has
          collected notes about. */
-      parValueNumberFor,
       /* Design note #411: the market-price lookup for the Operating Round
          queue. Stable for the same reason and listed on the same principle
          as `parValueNumberFor` above -- both are `useCallback`s over a ref,
@@ -5507,140 +5523,200 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     runGameplayActionRef.current = runGameplayAction;
   }, [runGameplayAction]);
 
+  /* ==================================================================
+   *  DESIGN NOTE 591c: THE REBUILD RESETS EVERY ATOM, THROUGH BOTH DOORS
+   * ==================================================================
+   *
+   * Undo replays from the fixture, so every piece of state the dispatch path
+   * writes has to go back to its boot value first -- and design note #310
+   * already learned this list the hard way: restoring some atoms and not
+   * others leaves two pointers one seat apart and every later action widens
+   * the gap.
+   *
+   * REFS AND STATE TOGETHER, always. The very next thing that happens is a
+   * replay, and the replay reads the refs synchronously (design note #265) --
+   * so writing only the React state would have the reducer rebuild the game
+   * on top of the state it was supposed to have discarded.
+   *
+   * THE AUTOMATIC GUARDS GO TOO, for design note #475's reason: they exist to
+   * stop repeat firing within a turn, not to record history, and a replay
+   * has to be free to re-derive the consequences it derived the first time. */
+  const rebuildSandbox = useCallback(() => {
+    const board = seedSandboxState(sandboxRoomRef.current);
+    sandboxStateRef.current = board;
+    setSandboxState(board);
+
+    const waterfall = waterfallForRoster(
+      sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState),
+      [],
+    );
+    sandboxWaterfallRef.current = waterfall;
+    setSandboxWaterfall(waterfall);
+
+    /* The same seed the chart booted with -- design note #387: the Zero
+       State starts EMPTY, because nothing is parred at turn one. */
+    const market = sandboxInitialMarketPrices(
+      marketCellForPrice,
+      parBoxCellFor,
+      sandboxScenario(sandboxScenarioId).zeroState,
+    );
+    sandboxMarketRef.current = market;
+    setSandboxMarket(market);
+
+    settledPrivatePricesRef.current = {};
+    setSettledPrivatePrices({});
+
+    setMapGrid(MOCK_MAP_GRID);
+    setOrSubPhase("Track");
+
+    // Any in-flight gesture belonged to the history just discarded.
+    setPreviewTile(null);
+    setRadialSelector(null);
+    setPendingToken(null);
+    setHomeStationPlacement(null);
+    setBoParPrompt(null);
+    setUsedPrivateAbilities(new Set());
+
+    autoSkippedRef.current = new Set();
+    forcedWithholdRef.current = new Set();
+  }, [seedSandboxState, sandboxPhase, gameId, sandboxIsZeroState, sandboxScenarioId]);
+
+  useEffect(() => {
+    rebuildRef.current = rebuildSandbox;
+  }, [rebuildSandbox]);
+
   const handlePassTurn = useCallback(
     () => runGameplayAction("PassTurn", { PassTurn: { game_id: gameId } }),
     [runGameplayAction, gameId],
   );
 
+  /* ==================================================================
+   *  DESIGN NOTE 591d: UNDO APPENDS, IT DOES NOT POP
+   * ==================================================================
+   *
+   * REPORTED: "Undo in the stock round does not seem to do anything: the
+   * Activity Log prints 'Nothing to undo'. This is bad because if a player
+   * accidentally buys a share and needs to undo their turn, there's no way
+   * to do it."
+   *
+   * THE SNAPSHOT STACK IS GONE. Design note #178 built it, and its reasoning
+   * was right for a solo sandbox: the owner of the state can keep the
+   * outgoing copy, which gives exact single-step undo with no inverse
+   * operation per message type. What it cannot do is undo somebody ELSE's
+   * action, or reach an action this browser never dispatched -- and in a room
+   * most of the log is somebody else's. Every client held a different stack,
+   * which is why the button reported an empty one.
+   *
+   * So Undo appends `RevertTo` to the log, every client drops the reverted
+   * range and replays from the fixture, and the table undoes together. See
+   * `utils/logRevert.ts` for the history arithmetic and design note #592 for
+   * who may reach how far.
+   *
+   * IT IS NOT `automatic`, deliberately, and not turn-gated either: undoing
+   * is not a move in the round, and the player who needs it most is the one
+   * whose turn has just passed to somebody else. `undoReachFor` is the gate,
+   * and it gates on AUTHORSHIP rather than on whose turn it is. */
+  /* ==================================================================
+   *  DESIGN NOTE 591e: THE UNDO BUTTON NAMES THE KIND, NOT THE SENTENCE
+   * ==================================================================
+   *
+   * The first attempt here re-ran `describeGameplayAction` to quote the log's
+   * own sentence -- "Ada bought a 10% share of ERIE from the IPO for $67".
+   * That reads beautifully and cannot be built at this moment: the describer
+   * needs the map, the era and the board AS THEY WERE when the action was
+   * dispatched, and by the time Undo is pressed the board has moved on. The
+   * available options were to reconstruct a stale context (a sentence that
+   * looks authoritative and is subtly wrong about the price) or to say less
+   * and mean it.
+   *
+   * SO IT NAMES THE KIND OF ACTION. "the last share purchase" is short,
+   * always true, and enough for a player who is undoing something they did
+   * ten seconds ago. The Activity Log still carries the full sentence for
+   * anyone who wants the detail, and now carries the undo beside it.
+   *
+   * A TABLE RATHER THAN THE RAW KEY, because `RunManualRoute` and
+   * `AdvanceOperatingSubPhase` are message names, not English. An unmapped
+   * message falls back to the key -- ugly and unmistakably a fallback, which
+   * beats an empty string that would read as "undo nothing". */
+  const describeLoggedAction = useCallback((action: { payload: string }): string => {
+    const FRIENDLY: Readonly<Record<string, string>> = {
+      BuyStock: "the last share purchase",
+      SellStock: "the last share sale",
+      PassTurn: "the last pass",
+      LayTile: "the last tile lay",
+      PlaceStationToken: "the last station placement",
+      PlaceHomeStation: "the last home station placement",
+      RunManualRoute: "the last route",
+      DeclareDividends: "the last dividend decision",
+      BuyHardwareFromPool: "the last train purchase",
+      BuyTrainFromCorporation: "the last train trade",
+      BuyPrivateCompany: "the last private company purchase",
+      WaterfallBuyLowest: "the last private company purchase",
+      WaterfallBidHigher: "the last bid",
+      WaterfallPass: "the last pass",
+      WaterfallMiniAuctionRaise: "the last raise",
+      WaterfallMiniAuctionPass: "the last drop-out",
+      SetBoPar: "the B&O's par price",
+      ExchangePrivate: "the last private company exchange",
+      OpenStockRound: "opening the Stock Round",
+      AdvanceOperatingSubPhase: "the last skipped step",
+    };
+    try {
+      const decoded: unknown = JSON.parse(action.payload);
+      if (typeof decoded !== "object" || decoded === null) return "the last action";
+      const key = Object.keys(decoded)[0] ?? "";
+      return FRIENDLY[key] ?? key ?? "the last action";
+    } catch {
+      return "the last action";
+    }
+  }, []);
+
   const handleUndoLastAction = useCallback(() => {
-    // Design note #178: in sandbox, pop the snapshot stack. Online, dispatch
-    // the real message and let the contract decide what undo means -- a
-    // local restore there would put the UI out of step with the chain.
-    if (sandbox) {
-      setSandboxHistory((stack) => {
-        /* ==============================================================
-         *  DESIGN NOTE 439: UNDO REWINDS TO A DECISION, NOT TO A STEP
-         * ==============================================================
-         *
-         * REPORTED: Undo after the game has auto-skipped a sub-phase drops
-         * the player into the sub-phase that was skipped.
-         *
-         * It did, and the mechanism was faithful rather than broken: every
-         * dispatch pushes a snapshot, and the auto-skip and forced-withhold
-         * effects dispatch real messages. A turn that ran Track -> (skip
-         * Tokens) -> (skip Routes) -> (withhold $0) left four snapshots on
-         * the stack, three of them recording moves the player never made.
-         * One Undo therefore landed on the Dividends step -- and landed
-         * there STUCK, because `autoSkippedRef` had already recorded that
-         * step as handled and would not skip it a second time.
-         *
-         * So Undo now rewinds to the last snapshot the PLAYER created and
-         * discards the automatic ones stacked above it. One press returns
-         * to the last thing they actually chose, which is what the button
-         * has always claimed to do.
-         *
-         * THE AUTOMATIC STEPS RE-RUN, and that is the point rather than a
-         * side effect. Restoring the pre-Track state also restores the
-         * sub-phase cursor, and `autoSkippedRef`/`forcedWithholdRef` are
-         * keyed by `(corporation, step)` -- so the guards still hold within
-         * the turn and the skips reapply from whatever the player does
-         * next. Undo puts the player back at the decision; the consequences
-         * of that decision are recomputed rather than replayed.
-         *
-         * ALL-AUTOMATIC IS A REAL CASE. A corporation whose whole turn was
-         * skipped has no player snapshot to return to, so the oldest entry
-         * is used -- the start of what this stack remembers, which is the
-         * furthest back Undo can honestly go. */
-        const target = undoTargetIndex(stack);
-        const previous = target === null ? undefined : stack[target];
-        if (target === null || !previous) {
-          logInfo("Undo", "Nothing to undo — this is the start of the scenario.");
-          return stack;
-        }
-        const skipped = undoSkippedCount(stack);
-        sandboxStateRef.current = previous.state;
-        setSandboxState(previous.state);
-        setMapGrid(previous.mapGrid);
-        setOrSubPhase(previous.subPhase);
-        /* Design note #310: the other three atoms, restored through their
-           refs as well as their state so the very next dispatch reads the
-           reverted values rather than the ones it just undid. Writing only
-           the state would leave the refs holding the future. */
-        sandboxWaterfallRef.current = previous.waterfall;
-        setSandboxWaterfall(previous.waterfall);
-        sandboxMarketRef.current = previous.market;
-        setSandboxMarket(previous.market);
-        settledPrivatePricesRef.current = previous.settledPrices;
-        setSettledPrivatePrices(previous.settledPrices);
-        // Any in-flight preview belonged to the state just discarded.
-        setPreviewTile(null);
-        setRadialSelector(null);
-        /* ==============================================================
-         *  DESIGN NOTE 475: THE AUTOMATIC CONSEQUENCES MUST BE FREE TO
-         *  HAPPEN AGAIN
-         * ==============================================================
-         *
-         * The auto-skip and forced-withhold effects each guard themselves
-         * with a once-per-(corporation, step) key, so they fire once and
-         * not on every render while a poll is in flight. Undo restores a
-         * state those effects have already reacted to -- so without
-         * clearing the guards, a player who undoes back past a skipped step
-         * and then redoes their action arrives at a step that will not skip
-         * itself a second time, and sits there with no control to advance.
-         *
-         * Clearing both is the completion of "Undo returns the player to
-         * the decision; the game re-derives what followed". The guards exist
-         * to stop repeat firing WITHIN a turn, not to record history, so
-         * resetting them costs nothing and is what makes not-recording the
-         * automatic actions safe. */
-        autoSkippedRef.current = new Set();
-        forcedWithholdRef.current = new Set();
-        /* ==============================================================
-         *  DESIGN NOTE 479 (cont.): NAME IT
-         * ==============================================================
-         *
-         * "Reverted the last action" told a player nothing they did not
-         * already know -- they had just pressed the button. What they need
-         * confirmed is WHICH action, because by the time Undo is reached
-         * for, the reason it was reached for is usually that the last
-         * action was not the one they thought.
-         *
-         * The stored sentence is quoted with its subject removed when the
-         * subject is the actor being named, so "PRR" and "PRR laid a
-         * yellow tile on B12" collapse to "PRR reverted: laid a yellow tile
-         * on B12" rather than saying PRR twice.
-         *
-         * A COLON RATHER THAN A RE-CONJUGATION. `[Actor] reverted [Action]`
-         * cannot be built by concatenation -- the stored clause is past
-         * tense ("laid a tile") and reads as a grammatical error directly
-         * after another past-tense verb. The colon presents it as the thing
-         * being quoted, which is what it is, and keeps one sentence in one
-         * tense instead of rewriting every verb in `actionLog.ts` to have a
-         * second form. */
-        const revertedActor = previous.actor;
-        const revertedClause = previous.label.startsWith(`${revertedActor} `)
-          ? previous.label.slice(revertedActor.length + 1)
-          : previous.label;
-        const reverted = previous.label
-          ? `${revertedActor} reverted: ${revertedClause}`
-          : "Reverted the last action.";
-        logInfo(
-          "Undo",
-          /* Design note #475: `skipped` should always be 0 now -- automatic
-             actions do not enter the stack. A non-zero value means the
-             safety net in `undoTargetIndex` caught an entry the dispatch
-             path should not have pushed, and saying so beats reverting
-             several steps silently. */
-          skipped > 0
-            ? `${reverted} (${skipped} automatic step${skipped === 1 ? "" : "s"} recorded in error were discarded too.)`
-            : reverted,
-        );
-        return stack.slice(0, target);
-      });
+    if (!sandbox) {
+      // Online the contract owns history; `UndoLastAction` is a real message
+      // and a local rewind would put this browser out of step with the chain.
+      void runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } });
       return;
     }
-    runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } });
-  }, [sandbox, runGameplayAction, gameId, logInfo]);
+    const reach = undoReachFor(
+      sandboxLogRef.current,
+      localId,
+      sandboxRoom?.hostId === localId,
+      (action) => describeLoggedAction(action),
+    );
+    if (reach.index === null) {
+      logInfo("Undo", reach.blockedReason ?? "There is nothing to undo.");
+      return;
+    }
+    void runGameplayActionRef.current?.(
+      `Undo — ${reach.summary}`,
+      {
+        RevertTo: {
+          index: reach.index,
+          player: localId,
+          summary: reach.summary,
+        },
+      },
+      { automatic: true },
+    );
+  }, [sandbox, runGameplayAction, gameId, logInfo, localId, sandboxRoom, describeLoggedAction]);
+
+  /** Design note #592: the host's deeper reach. A separate control because it
+   *  is a separate decision -- taking back one action is routine, taking back
+   *  a whole round is not, and one button that silently did either depending
+   *  on who pressed it would hide that. */
+  const handleUndoToRoundStart = useCallback(() => {
+    const reach = undoToRoundStart(sandboxLogRef.current, roundBoundaryIndexRef.current);
+    if (reach.index === null) {
+      logInfo("Undo", reach.blockedReason ?? "There is nothing to undo.");
+      return;
+    }
+    void runGameplayActionRef.current?.(
+      `Undo — ${reach.summary}`,
+      { RevertTo: { index: reach.index, player: localId, summary: reach.summary } },
+      { automatic: true },
+    );
+  }, [logInfo, localId]);
 
   // Design note (Stock & Auction pass): reads real UI-driven selection state
   // from `StockRoundPanel` (`srSelectedProtocolId`/`srSource`/`srParValue`)
@@ -5941,6 +6017,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       visible: only,
       highlighted: only,
       glowColor: STATION_PLACEMENT_HIGHLIGHT_INK, // design note #561
+      /* Design note #585: the ONLY focus that asks for slot rings. The
+         ordinary Tokens step no longer draws them -- see the prop for why
+         the trade favours the one placement a new player cannot guess at. */
+      homeSlotGlow: true,
     };
   }, [homeStationPlacement]);
 
@@ -7767,14 +7847,67 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (replayingRef.current) return;
       replayingRef.current = true;
       try {
-        for (const action of actions) {
+        /* ==============================================================
+         *  DESIGN NOTE 591b: A SHORTER HISTORY MEANS START AGAIN
+         * ==============================================================
+         *
+         * The log is append-only, so it never shrinks -- but the list of
+         * actions that still COUNT does, the moment somebody undoes. That is
+         * the one thing an incremental cursor cannot follow: it knows how far
+         * it has read, not whether what it read is still true.
+         *
+         * So the drain asks `effectiveActions` for the live history and
+         * compares its LENGTH against how many actions it has applied. Fewer
+         * than applied means an undo landed, and the only honest response is
+         * to throw the state away and replay from the fixture. More means
+         * ordinary play and the tail is applied as before.
+         *
+         * A FULL REPLAY IS THE CHEAP OPTION, which is worth stating because
+         * it looks like the expensive one. A few hundred reducer calls over a
+         * plain object is milliseconds, and it reaches exactly the state the
+         * log describes. Inverting each message would need one correct
+         * inverse per message type, and the ones touching the market, the era
+         * or a waterfall cascade would be wrong in ways no test would
+         * obviously catch.
+         *
+         * `rebuildRef` is what the reseed hangs off -- see its declaration
+         * for why the atoms are reset through refs as well as state. */
+        sandboxLogRef.current = actions;
+        /* NAMED `history`, NOT `live`. The first version called this `live`
+           and shadowed the effect's own `let live = true` cleanup flag -- so
+           `if (!live) return` inside the loop was testing a non-empty array
+           instead of whether this subscription had been torn down. A replay
+           would have gone on writing state after unmount. ESLint caught the
+           now-unused outer binding; the shadow itself would have been
+           silent. */
+        const history = effectiveActions(actions);
+        /* Design note #592a: the newest round-opening action still standing.
+           `SetupGame` counts as one -- it opens the auction -- so a host can
+           always reach back to the top of the current round even in the
+           first one. */
+        roundBoundaryIndexRef.current =
+          [...history].reverse().find((entry) => {
+            const decoded = decodeAction(entry);
+            return isSetupGameMsg(decoded) || isOpenStockRoundMsg(decoded);
+          })?.index ?? null;
+        const rewound = history.length < appliedCountRef.current;
+        if (rewound) {
+          rebuildRef.current?.();
+          appliedCountRef.current = 0;
+        }
+        // The next log index to append at is the LOG's length, never the
+        // effective count -- an undone action still occupies its index.
+        appliedIndexRef.current =
+          actions.length > 0 ? actions[actions.length - 1].index + 1 : 0;
+
+        for (let at = appliedCountRef.current; at < history.length; at += 1) {
           if (!live) return;
-          if (action.index < appliedIndexRef.current) continue;
+          const action = history[at];
           const msg = decodeAction(action);
           /* A corrupt entry is SKIPPED PAST, cursor and all. Stopping would
              wedge the room on one bad document; re-reading it every
              snapshot would wedge it in a loop. */
-          appliedIndexRef.current = action.index + 1;
+          appliedCountRef.current = at + 1;
           if (!msg) continue;
           // eslint-disable-next-line no-await-in-loop
           await runGameplayAction("Sandbox room", msg, {
@@ -7784,7 +7917,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             actor: action.actor || null,
           });
         }
-        if (live) setSandboxAppliedCount(appliedIndexRef.current);
+        if (live) setSandboxAppliedCount(appliedCountRef.current);
       } finally {
         replayingRef.current = false;
       }
@@ -8525,20 +8658,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           mounted regardless of `isTickerExpanded`, sharing the same
           `chatDraft`/`setChatDraft`/`feedFilter`/`setFeedFilter` state the
           ticker's preview and expanded history both read from. */}
-      <TopTicker
-        latestItem={latestFeedItem}
-        items={filteredFeedItems}
-        unreadCount={unreadFeedCount}
-        isExpanded={isTickerExpanded}
-        onToggleExpand={handleToggleTickerExpand}
-      />
-      <InlineQuickChat
-        draft={chatDraft}
-        onDraftChange={setChatDraft}
-        onSend={handleSendChatMessage}
-        filter={feedFilter}
-        onFilterChange={setFeedFilter}
-      />
+      {/* ==================================================================
+           DESIGN NOTE 581: THE LOG IS A STATUS LINE, NOT A HEADLINE
+          ==================================================================
+
+           REPORTED: "I don't see the Activity Log ticker at the bottom of my
+           screen?" -- expecting a recommendation I made twice and then did
+           not build. It was at the top, in flow, where it has always been.
+
+           WHY THE BOTTOM EDGE. The ticker and the action bar want opposite
+           things from the reader. The action bar is what you MUST DO and
+           should be the most findable object on the screen; the log is what
+           HAS HAPPENED and should be readable without ever demanding
+           attention. Stacked at the top they compete, and the report two
+           passes ago was that the action bar was losing -- which is why
+           putting the ticker inside it (tried, reverted, design note #490)
+           made things worse rather than better.
+
+           A status line at the bottom edge is the arrangement every IDE and
+           most games converge on for exactly this content: peripheral,
+           always present, never modal. Unlike a toast it needs no
+           dismissing, which matters at 1830's event volume -- the reporter's
+           own objection to toasts, and a correct one.
+
+           FIXED, so it survives scrolling the board. The app root carries
+           matching bottom padding so the last row of content cannot hide
+           underneath it, and the box is anchored at the bottom rather than
+           sized -- so the expanded history grows UPWARD from the line
+           instead of off the screen. */}
+      <div style={styles.statusLineDock}>
+        <TopTicker
+          latestItem={latestFeedItem}
+          items={filteredFeedItems}
+          unreadCount={unreadFeedCount}
+          isExpanded={isTickerExpanded}
+          onToggleExpand={handleToggleTickerExpand}
+        />
+        <InlineQuickChat
+          draft={chatDraft}
+          onDraftChange={setChatDraft}
+          onSend={handleSendChatMessage}
+          filter={feedFilter}
+          onFilterChange={setFeedFilter}
+        />
+      </div>
 
       {isWorkspaceTab && (
         <>
@@ -8739,6 +8902,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   selectedHardwareModel={selectedHardwareModel}
                   onEndOperatingTurn={handleEndOperatingTurn}
                   onUndoLastAction={handleUndoLastAction}
+                  /* Design note #592: the host alone may reach past somebody
+                     else's turn -- and the log names who asked. */
+                  onUndoToRoundStart={
+                    sandbox && sandboxRoom?.hostId === localId ? handleUndoToRoundStart : null
+                  }
                   phase={currentPhase}
                   // Design note #493: an action, not a mode.
                   onAutoRoute={handleAutoRouteAgain}
@@ -9019,7 +9187,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     player. `activeMainTab === "corps"` is the same condition
                     the corporation cards above use -- they are two halves of
                     one screen and only one of them was scoped to it. */}
-                {activeMainTab === "corps" && gameState?.current_round_type === "StockRound" && (
+                {activeMainTab === "corps" &&
+                  (gameState?.current_round_type === "StockRound" ||
+                    gameState?.current_round_type === "WaterfallAuction") && (
                   <section style={styles.playerCardsSection}>
                     <h3 style={styles.playerCardsTitle}>Players</h3>
                     <PlayerCards
@@ -9042,6 +9212,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       privateDescription={(privateId) =>
                         PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
                       }
+                      // Design note #593: seats take turns in both rounds.
+                      showSeatOrder
                     />
                   </section>
                 )}

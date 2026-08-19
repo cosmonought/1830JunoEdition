@@ -87,6 +87,8 @@ import {
 import { ROSTER_CONTEST_CHASE_CSS } from "../styles/animations";
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
+// Design note #552: the shipped crown, not a platform emoji.
+import { PresidentCrown } from "../components/PresidentCrown";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { shouldCondenseSticky, stickyTopOffset } from "../utils/stickyCollapse";
 import type { DepotTier } from "../utils/gamePhase";
@@ -417,6 +419,7 @@ export default function ContextualActionBar({
   selectedHardwareModel,
   onEndOperatingTurn,
   onUndoLastAction,
+  onUndoToRoundStart = null,
   onAutoRoute,
   onSelectRouteTrain,
   highlightedRouteIndex,
@@ -624,6 +627,16 @@ export default function ContextualActionBar({
   selectedHardwareModel: string;
   onEndOperatingTurn: () => void;
   onUndoLastAction: () => void;
+  /* ==================================================================
+   *  DESIGN NOTE 592b: THE HOST'S DEEPER REACH IS ITS OWN BUTTON
+   * ==================================================================
+   *
+   * Taking back one action is routine; taking back a whole round is not. One
+   * control that quietly did either depending on who pressed it would hide
+   * the difference from the person most able to cause harm with it.
+   *
+   * `undefined` renders nothing, which is every player but the host. */
+  onUndoToRoundStart?: (() => void) | null;
   /** Design note #266: which drafting tool built the path on screen. The
    *  old `routeSelectMode` boolean plus a separate Auto Route ACTION became
    *  one two-position mode -- see `RoutePlannerPanel`'s design note #1. */
@@ -1502,18 +1515,36 @@ export default function ContextualActionBar({
                   </span>
                 )}
               </span>
-              {activeCorporation?.fullName && (
-                <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
-                  {activeCorporation.fullName}
-                </span>
-              )}
-              {activeCorporation?.presidentLabel && (
+              {/* ==================================================
+                   DESIGN NOTE 589: TWO LINES, NOT THREE
+                  ==================================================
+
+                   REPORTED: the president became a third row under the
+                   herald/acronym and the full name, making the card taller
+                   than it needs to be.
+
+                   That was a side effect of design note #575 turning this
+                   from a baseline-aligned ROW into a column: the president
+                   had been sitting on the same line as everything else, and
+                   a column gave it a line of its own.
+
+                   It belongs beside the full NAME. Both are identity detail
+                   read second -- "the Pennsylvania Railroad, Ada presiding"
+                   is one thought -- while the herald and acronym above are
+                   the label you read first. Two lines, same information,
+                   and the card is back to the height it was. */}
+              {(activeCorporation?.fullName || activeCorporation?.presidentLabel) && (
+                <span style={styles.orContextSubRow}>
+                  {activeCorporation?.fullName && (
+                    <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
+                      {activeCorporation.fullName}
+                    </span>
+                  )}
+                  {activeCorporation?.presidentLabel && (
                 <span
                   style={{
                     ...styles.orContextPresident,
                     color: corporationBarInk.inkMuted,
-                    // Design note #298: identity detail, dropped when pinned.
-                    ...(condensed ? { display: "none" } : {}),
                     ...(activeCorporation.presidentCash !== null
                       ? { cursor: "help", textDecoration: "underline dotted 1px" }
                       : {}),
@@ -1542,8 +1573,12 @@ export default function ContextualActionBar({
                       : undefined
                   }
                 >
-                  {"\u{1F451} "}
+                  {/* Design note #552: our own crown, not U+1F451 -- the
+                      same drawing every other surface uses. */}
+                  <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
                   {activeCorporation.presidentLabel}
+                </span>
+                  )}
                 </span>
               )}
             </span>
@@ -1701,13 +1736,35 @@ export default function ContextualActionBar({
                     DROPPED WHEN PINNED, like the president line: design
                     note #372 keeps the pieces a president acts on, and a
                     private is a standing asset rather than a move. */}
+                {/* ==================================================
+                     DESIGN NOTE 590: NOTHING IS DROPPED WHEN PINNED
+                    ==================================================
+
+                     REPORTED: "I am not sure any of the information from the
+                     fully expanded version needs to disappear... removing
+                     items for the sake of removing them makes the
+                     information that disappears (presidency, train limit)
+                     seem less important than the other items, but since
+                     there's room players might as well see it all."
+
+                     Design notes #298 and #372 dropped the president line
+                     and the privates row when the bar pinned, on the
+                     reasoning that a pinned bar should carry "the pieces a
+                     president acts on" and not standing reference.
+
+                     The premise was that space was scarce. It is not, at the
+                     widths this is actually played at -- and the cost of the
+                     rule is worse than the space it saved: a player who
+                     learns that presidency and train limit vanish under
+                     pressure reasonably concludes they matter less, which is
+                     the opposite of true for the train limit especially.
+
+                     So the pinned bar shows the same facts as the expanded
+                     one. If a narrow window ever makes this genuinely tight,
+                     the answer is wrapping or a smaller type scale, not
+                     deciding for the player which facts they may keep. */}
                 {activeCorporation.privates.length > 0 && (
-                  <span
-                    style={{
-                      ...styles.orContextFact,
-                      ...(condensed ? { display: "none" } : {}),
-                    }}
-                  >
+                  <span style={styles.orContextFact}>
                     <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                       Privates
                     </span>
@@ -2515,6 +2572,16 @@ export default function ContextualActionBar({
         >
           Undo Last Action
         </button>
+        {onUndoToRoundStart && (
+          <button
+            style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+            onClick={onUndoToRoundStart}
+            disabled={!sessionReady}
+            title="Host only — rewinds every player's actions back to the start of this round. The log records who asked."
+          >
+            Undo Round
+          </button>
+        )}
         {/* The route mode toggle used to render here too. It is
             `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
             in this NON-Operating-Round branch it was unreachable markup.

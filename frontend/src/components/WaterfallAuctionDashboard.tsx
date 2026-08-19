@@ -83,7 +83,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
-import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
@@ -342,19 +341,9 @@ export function WaterfallAuctionDashboard({
      that is whoever is on turn (there is no wallet to compare against);
      online it is the connected player, whose funds stay on screen even
      while somebody else acts. */
-  /* Design note #341: who owns which privates, for the seating table's new
-     column. Reads `gameState.private_companies` -- the same list the sold
-     cards come from (design note #303 writes the owner there), so the two
-     surfaces cannot disagree about who won what.
-
-     CLOSED PRIVATES ARE EXCLUDED. A closed company is off the board and
-     pays nothing; listing it would show a player holding an asset they no
-     longer have. Irrelevant during the auction, where nothing has closed
-     yet, and correct later if this table is ever reused. */
-  const ownedPrivatesFor = (player: string) =>
-    (gameState?.private_companies ?? []).filter(
-      (priv) => !priv.closed && priv.owner === player,
-    );
+  /* Design note #593: `ownedPrivatesFor` went with the seating table it fed.
+   The player cards list a seat's privates from `playerFinances`, which reads
+   the same state -- and is now the only place computing it. */
 
   const fundsSeat =
     (miniAuctionSeat(waterfallState, hotseat) ?? connectedWalletAddress) ?? null;
@@ -599,155 +588,34 @@ export function WaterfallAuctionDashboard({
                     belongs: in each cash cell's own tooltip, which already
                     spelled out the total, the escrow and the available
                     figure separately. */}
-                <div style={styles.seatingHeaderRow}>
-                  <span style={styles.actionCardTitle}>Seating Order</span>
-                </div>
-                <div style={styles.seatingColumnHeader} aria-hidden="true">
-                  <span style={styles.seatingColumnHeadPlayer}>Player Information</span>
-                  <span style={styles.seatingColumnHeadCash}>Cash</span>
-                  <span style={styles.seatingColumnHeadPrivates}>Privates</span>
-                </div>
-                {gameState.player_addresses.map((player, index) => {
-                  const isTurnHolder =
-                    player === (miniAuction ? miniAuction.current_turn : waterfallState.current_turn);
-                  /* ==================================================
-                       DESIGN NOTE 33: AN AUCTION IS ABOUT WHO CAN PAY
-                      ==================================================
+                {/* ==================================================
+                     DESIGN NOTE 593: THE SEATING TABLE IS GONE
+                    ==================================================
 
-                      The seating list showed the order and the names and
-                      not the one number that decides every bid in the
-                      round. A player judging whether to raise needs to
-                      know what the others can still afford -- that is not
-                      incidental context, it is the whole strategic content
-                      of a private auction.
+                     INSTRUCTED: "the Player cards that we've created for the
+                     Stock Round should replace the Seating Order panel during
+                     the Auction round -- the Player cards are receiving
+                     positive feedback compared to the table for quick
+                     reference by testers."
 
-                      It was available all along: `player_cash` is on the
-                      game state this component already receives. Nothing
-                      had to be plumbed, only rendered. */
-                  /* ==================================================
-                       DESIGN NOTE 316: AVAILABLE, NOT TOTAL
-                      ==================================================
+                     THE CARDS CARRY MORE, not less: the same cash and escrow,
+                     plus each seat's certificate count, liquidity and
+                     private companies with their rules text -- and they are
+                     the same object a player has already learned to read in
+                     the Stock Round, rather than a second layout for the same
+                     eight facts.
 
-                      Design note #33 put each player's cash here because an
-                      auction is about who can pay. The figure it showed was
-                      the TOTAL, which during a live auction is the one
-                      number that cannot be spent: money standing on a bid
-                      is committed until that contest resolves.
+                     WHAT THE TABLE DID BETTER was turn order, which a column
+                     of rows states by construction. That is now written into
+                     each card's stripe as an ordinal (design note #593 in
+                     `PlayerCards.tsx`) rather than left to the grid's layout,
+                     which reflows and therefore cannot be trusted to mean
+                     anything at a given width.
 
-                      So the headline is AVAILABLE, with the escrow named
-                      beside it only when there is one -- a player with
-                      nothing bid sees a single unqualified figure, exactly
-                      as before, and a player with $400 on the D&H sees why
-                      their $600 has become $200. */
-                  const funds = auctionFunds(gameState, waterfallState, player);
-                  return (
-                    <div key={player} style={isTurnHolder ? styles.seatingRowActive : styles.seatingRow}>
-                      <span style={styles.seatingIndex}>{index + 1}.</span>
-                      <span style={styles.seatingAddress}>{nameFor(player, playerLabel)}</span>
-                      {/* ==================================================
-                           DESIGN NOTE 422: "YOUR TURN", BESIDE THE NAME
-                          ==================================================
+                     REMOVED RATHER THAN HIDDEN. Two views of one roster on
+                     one screen is the duplication design note #572 has
+                     already deleted once this month. */}
 
-                          REPORTED: replace "on turn" with a prominent
-                          "Your turn" badge next to the active player's
-                          name.
-
-                          `ON TURN` sat in a reserved slot at the far RIGHT
-                          of the row, past the cash and the privates --
-                          design note #323 put it there to stop the badge
-                          shoving the numeric columns around, and that fix
-                          was correct about the jitter and wrong about the
-                          reading order. "Whose turn is it" is a fact about
-                          a PERSON, and it was landing an entire row away
-                          from the person's name.
-
-                          Beside the name it reads as one phrase. The slot
-                          keeps design note #323's whole mechanism -- fixed
-                          basis, rendered on every row, empty when it does
-                          not apply -- so nothing moves as the turn passes;
-                          it is simply a reserved column in a different
-                          place.
-
-                          THE WORDING IS SECOND PERSON AND THAT IS A REAL
-                          CHANGE, not a restyle. `ON TURN` describes a seat
-                          from the outside and is true of somebody on every
-                          row of every render. "Your turn" addresses the
-                          reader, so it is only honest on the row the reader
-                          controls -- which is the fact worth making
-                          prominent, and the one a player scanning four
-                          seats is actually looking for. */}
-                      <span style={styles.seatingTurnSlot}>
-                        {isTurnHolder && <span style={styles.turnBadge}>Your turn</span>}
-                      </span>
-                      {funds && (
-                        <span
-                          style={styles.seatingCash}
-                          title={
-                            funds.escrowed > 0
-                              ? `${nameFor(player, playerLabel)} holds $${funds.total}, of which $${funds.escrowed} is escrowed in standing bids — $${funds.available} available to bid.`
-                              : `${nameFor(player, playerLabel)} holds $${funds.total}, none of it committed to a bid.`
-                          }
-                        >
-                          ${funds.available}
-                          {funds.escrowed > 0 && (
-                            <span style={styles.seatingEscrow}>+${funds.escrowed} held</span>
-                          )}
-                        </span>
-                      )}
-                      {/* Design note #423: NAMED PILLS. Design note #341 put
-                          numbers here on the grounds that "six chips fit
-                          where six names never would" -- true of names and
-                          false of acronyms, which is what the pills carry.
-                          The full name, the revenue and now the rules text
-                          are a click away rather than hover-only. */}
-                      <span style={styles.seatingPrivates}>
-                        <PrivateCompanyPills
-                          privates={ownedPrivatesFor(player)}
-                          surface="card"
-                        />
-                      </span>
-                      {/* ==================================================
-                           DESIGN NOTE 32: IN HOTSEAT THERE IS NO "YOU"
-                          ==================================================
-
-                          The badge marks which seat the connected wallet
-                          owns, which is the useful fact online and a
-                          meaningless one at a shared keyboard -- every seat
-                          is yours in turn. Worse, it followed the auto-
-                          follow cursor around the table, so "YOU" moved
-                          from Alice to Bob to Carol and marked nothing.
-
-                          What a pass-and-play player needs instead is who
-                          is UP, which is what `ON TURN` says. Online both
-                          appear, and they answer different questions. */}
-                      {!hotseat && player === connectedWalletAddress && (
-                        <span style={styles.youBadge}>YOU</span>
-                      )}
-                      {/* ==================================================
-                           DESIGN NOTE 323: THE SLOT IS ALWAYS THERE
-                          ==================================================
-
-                          REPORTED: turn changes shift the cash values and
-                          player names horizontally.
-
-                          They did. `ON TURN` was rendered only on the
-                          active row, and the cash cell is pushed right by
-                          `marginLeft: auto` -- so the badge appearing
-                          squeezed that row's name and figure leftward by
-                          its own width, and every pass jolted one row in
-                          and the previous row out. A column of numbers
-                          that moves when nothing about it changed is the
-                          hardest kind to read down.
-
-                          The slot is now rendered on EVERY row and holds
-                          its width empty. Reserving space for a thing that
-                          is usually absent looks wasteful in a static
-                          mock-up and is the entire fix in a live one. */}
-                      {/* Design note #422: the trailing turn slot is gone --
-                          the badge moved up beside the name. */}
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}

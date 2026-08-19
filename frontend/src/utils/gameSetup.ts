@@ -295,6 +295,54 @@ export interface SetBoParMsg {
  *  rather than re-deciding it means every client applies the same result
  *  even if their view of the IPO differs by a share -- the property design
  *  note #549 is about. */
+/* ==================================================================
+ *  DESIGN NOTE 591: UNDO IS AN EVENT, NOT A REWIND
+ * ==================================================================
+ *
+ * REPORTED: Undo in the Stock Round does nothing -- "Nothing to undo, this
+ * is the start of the round" -- and "if a player accidentally buys a share
+ * and needs to undo their turn, there's no way to do it."
+ *
+ * It could not have worked, and the reason is structural rather than a bug.
+ * Undo was a per-client SNAPSHOT STACK (design note #178): every dispatch
+ * pushed the outgoing state, and Undo popped it. In a solo sandbox that is
+ * exact and free. In a room it is incoherent -- each browser has its own
+ * stack, holding only the actions IT dispatched, so popping would rewind one
+ * screen and leave the others playing a game that had not been undone. The
+ * stack also bypasses the log entirely, and the log is the game (design note
+ * #522).
+ *
+ * SO UNDO APPENDS. `RevertTo { index }` means "every action from `index`
+ * onward did not happen". Every client replays it, drops those actions, and
+ * rebuilds from the seed -- so the table undoes together, a player who
+ * rejoins later sees the corrected history, and the reverted actions are
+ * still ON the log as a record of what was taken back.
+ *
+ * NOTHING IS DELETED, which is the property that makes this safe. Firestore
+ * documents are never removed; the log grows forward even when the game goes
+ * backward. A revert that was itself a mistake can therefore be reverted --
+ * and, more importantly, two clients cannot disagree about what was undone,
+ * because the undo is as much a logged fact as the buy it cancels.
+ *
+ * REBUILDING IS CHEAP AND IS THE POINT. Replaying a few hundred actions from
+ * the fixture costs milliseconds and reaches EXACTLY the state the log
+ * describes. The alternative -- inverting each message -- needs one correct
+ * inverse per message type and gets subtly wrong for anything that touched
+ * the market, the era or a cascade. A replay has no inverses to get wrong.
+ */
+export interface RevertToMsg {
+  RevertTo: {
+    /** The first log index that no longer counts. Everything from here
+     *  onward is dropped, including any earlier `RevertTo` in that range. */
+    index: number;
+    /** Who asked, for the log line. */
+    player: string;
+    /** What the player was told they were undoing, so the sentence the
+     *  Activity Log prints matches the one they clicked. */
+    summary: string;
+  };
+}
+
 export interface ExchangePrivateMsg {
   ExchangePrivate: {
     private_id: number;
@@ -339,7 +387,8 @@ export type SandboxLogMsg =
   | OpenStockRoundMsg
   | SetBoParMsg
   | PlaceHomeStationMsg
-  | ExchangePrivateMsg;
+  | ExchangePrivateMsg
+  | RevertToMsg;
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
@@ -361,6 +410,10 @@ export function isExchangePrivateMsg(msg: unknown): msg is ExchangePrivateMsg {
   return typeof msg === "object" && msg !== null && "ExchangePrivate" in msg;
 }
 
+export function isRevertToMsg(msg: unknown): msg is RevertToMsg {
+  return typeof msg === "object" && msg !== null && "RevertTo" in msg;
+}
+
 /** Neither sandbox-only event may reach `execGameplay` -- the contract has
  *  no such message. One predicate so a third event cannot be added to the
  *  union and forgotten at the one call site that must refuse them. */
@@ -372,13 +425,15 @@ export function isSandboxOnlyMsg(
     | OpenStockRoundMsg
     | SetBoParMsg
     | PlaceHomeStationMsg
-    | ExchangePrivateMsg {
+    | ExchangePrivateMsg
+    | RevertToMsg {
   return (
     isSetupGameMsg(msg) ||
     isOpenStockRoundMsg(msg) ||
     isSetBoParMsg(msg) ||
     isPlaceHomeStationMsg(msg) ||
-    isExchangePrivateMsg(msg)
+    isExchangePrivateMsg(msg) ||
+    isRevertToMsg(msg)
   );
 }
 

@@ -2189,11 +2189,48 @@ export function applySandboxAction(
     // messages instead (its own design note #33). Reading a field the UI
     // does not send would model a purchase shape that cannot occur here.
     const { protocol_id, source } = msg.BuyStock;
-    /* Design note #273: the CHART's price, not a flat $67 for everything.
-       `ctx.sharePrice` is the same figure `applySandboxMarketAction`
-       reports, handed in rather than recomputed so the money that leaves
-       the wallet and the money the log quotes are one number. */
-    const price = ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE;
+    /* ==================================================================
+     *  DESIGN NOTE 579: THE PRICE IS IN THE MESSAGE
+     * ==================================================================
+     *
+     * REPORTED: a corporation parred at $67 charged $67 to its founder and
+     * $100 to everybody, in the log and in the wallet -- and the same game
+     * showed the two players different cash totals for each other.
+     *
+     * `ctx.parValue` and `ctx.sharePrice` are both assembled by the CALLER,
+     * in `App.tsx`, from that browser's own par ladder and market atom. On
+     * the acting client the ladder holds the rung the player just picked; on
+     * every replaying client it is empty and falls through to
+     * `MOCK_BUY_STOCK_PAR_VALUE` -- the string "100". So the founding buy
+     * wrote `par_value: "67"` on one machine and `"100"` on the other, and
+     * every later price, every cash total and eventually the corporation's
+     * float capitalisation ($820 against $1000) followed from that.
+     *
+     * THE TELL WAS IN THE REPORT: the NNH "tracks correctly for both
+     * players". The NNH was parred at $100 -- the fallback. It was not
+     * working; it was agreeing with the wrong answer by coincidence.
+     *
+     * THIS IS THE THIRD TIME (design notes #549 the actor, #553 the ladder,
+     * now the price). Same shape every time: a shared fact derived from a
+     * per-browser value. The rule that follows, and it is now a rule rather
+     * than three fixes: IF THE REDUCER NEEDS IT TO DECIDE, IT TRAVELS IN THE
+     * MESSAGE. `ctx` is for things that are the same on every client by
+     * construction -- the map, the era -- and for nothing else.
+     *
+     * `par_value` HAS BEEN IN THE MESSAGE ALL ALONG. `BuyStock` carries it
+     * because that is how a founding purchase names its price; the reducer
+     * simply was not reading it. */
+    const messagePar = Number(msg.BuyStock.par_value ?? NaN);
+    const parFromMessage = Number.isFinite(messagePar) && messagePar > 0 ? messagePar : null;
+
+    /* IPO buys are priced at par (design note #558), and par is on the
+       message -- so this needs no local state at all. A POOL buy is priced
+       by the chart, which is a genuinely shared atom, and keeps
+       `ctx.sharePrice`. */
+    const price =
+      source === "Ipo" && parFromMessage !== null
+        ? parFromMessage
+        : (ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE);
 
     /* ==================================================================
      *  DESIGN NOTE 351: THE FIRST IPO SHARE IS TWO SHARES
@@ -2222,15 +2259,46 @@ export function applySandboxAction(
      * what makes it worth writing down: a UI quoting a transaction the
      * state does not perform is the shape this codebase keeps removing.
      *
-     * BOTH CONDITIONS, per `StockRoundPanel`'s own design note #36: no
-     * president AND nobody holding anything. A malformed fixture with
-     * holders but no president degrades to an ordinary 10% share rather
-     * than handing out a second President's Certificate.
+     * ==================================================================
+     *  DESIGN NOTE 587: SHARES WITHOUT A PRESIDENT IS NOW A LEGAL STATE
+     * ==================================================================
+     *
+     * REPORTED: a player holding the PRR share the Camden & Amboy grants
+     * tried to buy the PRR's president's certificate. They were asked to set
+     * a par and charged twice it -- and received a 10% share, no presidency
+     * and no recorded par.
+     *
+     * The old test was `president === null && !anyHeld`, and design note #36
+     * defended the second clause: "a malformed fixture with holders but no
+     * president degrades to an ordinary 10% share rather than handing out a
+     * second President's Certificate."
+     *
+     * That was sound when the only way to hold shares was to buy them, so
+     * holders-without-a-president really did mean malformed. The C&A's
+     * purchase bonus (design note #576) makes it a NORMAL opening position:
+     * a corporation nobody has started, with one certificate already in a
+     * player's hand. The conservative guard then refuses the founding
+     * purchase to the one player most likely to make it.
+     *
+     * SO THE TEST IS "HAS THIS CORPORATION BEEN STARTED", which is what the
+     * rule is actually about -- and `par_value` is the field that answers
+     * it. An unstarted company has no price; a started one does, and its
+     * president's certificate is already gone. Two fields that move together
+     * at the moment of founding, so requiring both is a genuine safety net
+     * rather than a second opinion about stray holdings.
+     *
+     * THE UI AGREED WITH THE OLD TEST, which is why the prompt appeared and
+     * the charge was doubled while the grant was not -- `StockRoundPanel`
+     * offered a president's purchase the reducer then declined to make. Both
+     * now ask the same question.
      */
     const target = state.public_companies.find((c) => c.company_id === protocol_id);
-    const anyHeld = (target?.player_holdings ?? []).some((h) => h.percentage > 0);
     const isPresidentBuy =
-      source !== "Bank" && !!target && target.president === null && !anyHeld && !!actor;
+      source !== "Bank" &&
+      !!target &&
+      target.president === null &&
+      (target.par_value === null || target.par_value === undefined) &&
+      !!actor;
 
     const percentage = isPresidentBuy
       ? SANDBOX_PRESIDENT_PERCENTAGE
@@ -2260,7 +2328,10 @@ export function applySandboxAction(
               ? {
                   ...company,
                   president: actor,
-                  par_value: company.par_value ?? String(ctx?.parValue ?? price),
+                  /* Design note #579: from the MESSAGE first. `ctx.parValue`
+                     is the caller's ladder and is empty on every client but
+                     the one that clicked -- which is the reported bug. */
+                  par_value: company.par_value ?? String(parFromMessage ?? ctx?.parValue ?? price),
                 }
               : company,
           ),

@@ -1508,8 +1508,13 @@ function CompanyActions({
    * Requiring BOTH means a malformed state degrades to the conservative
    * answer -- an ordinary 10% share -- instead of advertising a
    * certificate that cannot exist. */
-  const anySharesHeld = company.player_holdings.some((holding) => holding.percentage > 0);
-  const isPresidentPurchase = company.president === null && !anySharesHeld;
+  /* Design note #587: "has this corporation been STARTED", not "does anybody
+     hold a share of it". The Camden & Amboy hands out a certificate before
+     anyone founds the company, so holders-without-a-president is an ordinary
+     opening position now -- and the old test refused the founding purchase
+     to exactly the player holding that certificate. `par_value` is the field
+     that says whether the company has been started. */
+  const isPresidentPurchase = company.president === null && company.par_value === null;
   const buyLabel = (() => {
     if (!priceKnown) {
       // No market position and no par yet -- nothing honest to quote.

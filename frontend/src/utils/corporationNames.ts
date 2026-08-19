@@ -78,3 +78,48 @@ export function corporationLabel(ticker: string | null | undefined): string {
 export function corporationTitle(ticker: string | null | undefined): string | undefined {
   return corporationFullName(ticker) ? corporationLabel(ticker) : undefined;
 }
+
+
+/* ==================================================================
+ *  DESIGN NOTE 582: A STANDING ORDER FOR THE EIGHT
+ * ==================================================================
+ *
+ * REPORTED: "There should be a standard/canonical order to list the
+ * Corporations in on the player cards/tiles, and simply skip the ones the
+ * player doesn't have any shares in."
+ *
+ * The player card listed them in `public_companies` order, which is the
+ * order the state happens to hold and therefore not an order at all from the
+ * reader's side: two cards side by side could list the same two
+ * corporations the other way round, and a player checking who holds what has
+ * to re-find each row on every card.
+ *
+ * ALPHABETICAL BY TICKER, deliberately, over the two alternatives:
+ *
+ *   NOT market price -- that reorders the rows every time a token moves,
+ *   which is the one thing a reference column must not do.
+ *   NOT the board's own numbering, which no player can see and which
+ *   `company_id` only implies.
+ *
+ * A player memorises a stable order after two rounds and stops reading the
+ * labels. That only works if it never changes, so the order is a printed
+ * table rather than a sort over live data.
+ */
+export const CORPORATION_DISPLAY_ORDER: readonly string[] = [
+  "B&M",
+  "B&O",
+  "C&O",
+  "CPR",
+  "ERIE",
+  "NYC",
+  "NYNH",
+  "PRR",
+];
+
+/** Sort position for a ticker, or a number past the end for one this table
+ *  does not know -- an unrecognised corporation sorts last rather than
+ *  first, so a typo cannot silently head the list. */
+export function corporationDisplayRank(ticker: string): number {
+  const at = CORPORATION_DISPLAY_ORDER.indexOf(ticker.toUpperCase());
+  return at === -1 ? CORPORATION_DISPLAY_ORDER.length : at;
+}

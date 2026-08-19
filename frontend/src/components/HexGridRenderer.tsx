@@ -1734,7 +1734,37 @@ export function HexGridRenderer({
 
       for (const home of STATION_HOME_HEXES) {
         const company = companiesById.get(home.companyId);
-        if (company && company.is_floated) continue; // drawn by the floated pass below instead
+        /* ==================================================================
+         *  DESIGN NOTE 608: FLOATING IS NOT PLACING
+         * ==================================================================
+         *
+         * REPORTED: "the corporation actually placing its home station token
+         * does not see its preprinted home station reservation marker" --
+         * while every other corporation's marker renders normally.
+         *
+         * This line said `is_floated`, on the reasoning in the old comment:
+         * once a company has floated, the real token pass below draws it, so
+         * drawing the reserved badge too would double up. True -- but only
+         * AFTER the token exists, and in 1830 those are two separate moments.
+         * A corporation floats, and then its president is prompted to place
+         * the home station. In the window between, `is_floated` is already
+         * true and there is no token yet, so this skipped the badge and the
+         * pass below had nothing to draw: the hex went blank.
+         *
+         * WHICH IS THE WORST POSSIBLE HEX TO BLANK. That window is exactly
+         * when the Place Home Station prompt is open, so the one player who
+         * needs to see where their home is reserved is the only player on the
+         * table who cannot -- and the marker is visibly there for everyone
+         * else, which makes it read as "this corporation has no reservation"
+         * rather than as a rendering gap.
+         *
+         * SO THE TEST IS THE TOKEN, which is the fact the old comment
+         * actually meant. `station_tokens` carries the placed ones; if this
+         * home hex is among them the pass below draws the real marker and
+         * this one stands down. Floating no longer comes into it. */
+        const homePlaced =
+          company?.station_tokens?.some(([tq, tr]) => tq === home.q && tr === home.r) ?? false;
+        if (homePlaced) continue; // the real token is drawn by the pass below instead
         // Station Token Badges (design note #43): a RESERVED (not-yet-
         // floated) marker on a `YELLOW_OO_HEXES` home hex (today, only
         // ERIE/E11) is drawn in neutral hex-margin space below both station

@@ -701,7 +701,13 @@ export default function ContextualActionBar({
      same -1 case `OperatingSubPhaseStepper` guards, and the same answer:
      say nothing rather than render "0 of 5". */
   const orSubPhaseProgress = React.useMemo(() => {
-    const steps = visibleSubPhases(currentGlobalEra, privateCompanies);
+    // Design note #613: `Buy Private` shows in Phases 3 and 4 only. The
+    // era is the fallback while the phase is not yet knowable.
+    const steps = visibleSubPhases(
+      currentGlobalEra,
+      privateCompanies,
+      phase?.known ? phase.tier : null,
+    );
     const index = steps.indexOf(orSubPhase);
     if (index < 0) return null;
     return {
@@ -715,7 +721,7 @@ export default function ContextualActionBar({
          the note above the round label records. */
       steps,
     };
-  }, [currentGlobalEra, privateCompanies, orSubPhase]);
+  }, [currentGlobalEra, privateCompanies, orSubPhase, phase]);
 
   /* Design note #236: the acting corporation's own colours, resolved once.
    *

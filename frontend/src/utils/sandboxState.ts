@@ -67,6 +67,7 @@
 // guarantee rather than relying on it accidentally.
 
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type {
   GameStateResponse,
@@ -75,6 +76,16 @@ import type {
   RoundType,
   WaterfallStateResponse,
 } from "./gameState";
+
+/** Design note #607: the board's own preprinted reservation table, by
+ *  `company_id`. Throws rather than returning `null` for an unknown id --
+ *  every core corporation has a home, so a miss here is a typo in the
+ *  fixture and not a state the game can be in. */
+function homeHexFor(companyId: number): string {
+  const home = STATION_HOME_HEXES.find((entry) => entry.companyId === companyId);
+  if (!home) throw new Error(`No preprinted home hex for company_id ${companyId}`);
+  return home.label;
+}
 
 /** The sandbox's four seats. Deliberately readable names rather than
  *  `juno1...` addresses: these appear in every roster, holdings table and
@@ -151,7 +162,10 @@ const SANDBOX_PRIVATES: ReadonlyArray<{
  * drop the token otherwise, which is how the original error stayed
  * invisible.
  */
-const SANDBOX_CORPORATIONS: ReadonlyArray<{
+/* Design note #607: EXPORTED, so `sandboxHomeHex.test.ts` can assert this
+   table against the board's own reservation constant. Exported for the test
+   and for nothing else -- every runtime consumer is in this file. */
+export const SANDBOX_CORPORATIONS: ReadonlyArray<{
   id: number;
   ticker: string;
   floated: boolean;
@@ -176,6 +190,35 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
   ipo: number;
   bank: number;
   treasury: number;
+  /* ==================================================================
+   *  DESIGN NOTE 607: THE HOME HEX IS NOT THE FIXTURE'S TO INVENT
+   * ==================================================================
+   *
+   * REPORTED: "C&O's home station/hex is on the Cleveland hex (F6), and
+   * that's where the home station marker is preprinted on the board, but
+   * when C&O floats the 'Place Home Station' prompt takes you to the
+   * Richmond hex (K15) and then places the station there."
+   *
+   * It did, and the two facts came from two different tables. The board
+   * draws its preprinted reservation markers from `STATION_HOME_HEXES`,
+   * which is the mirror of the contract's `hexmap::CORPORATION_HOME_HEX` and
+   * correctly says F6. This fixture typed its own copy by hand, and C&O's
+   * copy said `"K15"` -- Richmond, a dead-end stub on the far side of the
+   * map that is nobody's home. Everything downstream (the prompt's target,
+   * the placement, the corporation card's label) read the fixture, so all
+   * three agreed with each other and all three were wrong.
+   *
+   * AUDITED, AS ASKED: the other seven matched. PRR/H12, NYC/E19, CPR/A19,
+   * B&O/I15, ERIE/E11, NNH/G19, B&M/E23 were identical in both tables. C&O
+   * was the only drift, which is exactly what makes it the dangerous kind --
+   * a single wrong entry in a column of seven right ones reads as verified.
+   *
+   * SO IT IS DERIVED NOW, not corrected. Fixing the string would have left
+   * two hand-maintained lists of the same eight facts and a 1-in-8 chance
+   * the next edit reintroduced this. `homeHexFor` reads the same constant
+   * the board draws from, so the fixture cannot disagree with the map about
+   * where a corporation lives -- and `sandboxHomeHex.test.ts` fails loudly
+   * if anyone types a literal back in. */
   homeHex: string | null;
   /** Design note #5: mock `owned_trains`, so the derived phase badge and the
    *  Operating Round train chips have something real to read in the sandbox.
@@ -184,7 +227,7 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
    *  DEPOT, chosen specifically because that is the state in which every
    *  branch of the UI is visible at once:
    *
-   *    - highest tier owned is a 3        -> "Phase: Green (3-Train)"
+   *    - highest tier owned is a 3        -> "Phase: 3 (Green)"
    *    - four of the printed five 3-trains are held -> depot 1, so the
    *      "Phase Shift Imminent" tag renders with its Phase 4 tooltip
    *    - Phase 4's arrival rusts 2-TRAINS, and several are still owned ->
@@ -202,25 +245,25 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
   {
     id: 1, ticker: "PRR", floated: true, par: 100, market: 112, president: 0,
     holdings: [{ player: 0, percentage: 60 }, { player: 1, percentage: 20 }, { player: 2, percentage: 10 }],
-    ipo: 10, bank: 0, treasury: 640, homeHex: "H12",
+    ipo: 10, bank: 0, treasury: 640, homeHex: homeHexFor(1),
     trains: ["3", "3", "2", "2"],
   },
   {
     id: 2, ticker: "NYC", floated: true, par: 90, market: 82, president: 1,
     holdings: [{ player: 1, percentage: 40 }, { player: 0, percentage: 30 }, { player: 3, percentage: 10 }],
-    ipo: 10, bank: 10, treasury: 900, homeHex: "E19",
+    ipo: 10, bank: 10, treasury: 900, homeHex: homeHexFor(2),
     trains: ["3", "2"],
   },
   {
     id: 3, ticker: "CPR", floated: true, par: 76, market: 76, president: 2,
     holdings: [{ player: 2, percentage: 30 }, { player: 3, percentage: 20 }, { player: 0, percentage: 10 }],
-    ipo: 30, bank: 10, treasury: 760, homeHex: "A19",
+    ipo: 30, bank: 10, treasury: 760, homeHex: homeHexFor(3),
     trains: ["3"],
   },
   {
     id: 4, ticker: "B&O", floated: false, par: 67, market: null, president: 3,
     holdings: [{ player: 3, percentage: 20 }],
-    ipo: 80, bank: 0, treasury: 0, homeHex: "I15",
+    ipo: 80, bank: 0, treasury: 0, homeHex: homeHexFor(4),
     trains: [],
   },
   {
@@ -241,7 +284,7 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
     // 30% sold -> 70% still in the IPO. The pools must always total 100%
     // with the holdings; raising a holding without lowering a pool is how
     // this fixture briefly summed to 110%.
-    ipo: 70, bank: 0, treasury: 0, homeHex: "K15",
+    ipo: 70, bank: 0, treasury: 0, homeHex: homeHexFor(5),
     trains: [],
   },
   {
@@ -251,13 +294,13 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
     // parred-but-unfloated case the Par/IPO track exists to show.
     id: 6, ticker: "ERIE", floated: true, par: 71, market: 76, president: 2,
     holdings: [{ player: 2, percentage: 30 }, { player: 3, percentage: 30 }],
-    ipo: 40, bank: 0, treasury: 710, homeHex: "E11",
+    ipo: 40, bank: 0, treasury: 710, homeHex: homeHexFor(6),
     trains: ["2", "2"],
   },
   {
     id: 7, ticker: "NNH", floated: true, par: 71, market: 67, president: 0,
     holdings: [{ player: 0, percentage: 30 }, { player: 1, percentage: 30 }, { player: 2, percentage: 20 }],
-    ipo: 20, bank: 0, treasury: 710, homeHex: "G19",
+    ipo: 20, bank: 0, treasury: 710, homeHex: homeHexFor(7),
     trains: ["2"],
   },
   {
@@ -266,7 +309,7 @@ const SANDBOX_CORPORATIONS: ReadonlyArray<{
       { player: 1, percentage: 30 }, { player: 0, percentage: 20 },
       { player: 2, percentage: 20 }, { player: 3, percentage: 20 },
     ],
-    ipo: 10, bank: 0, treasury: 820, homeHex: "E23",
+    ipo: 10, bank: 0, treasury: 820, homeHex: homeHexFor(8),
     trains: [],
   },
 ];

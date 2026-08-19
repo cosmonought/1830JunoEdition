@@ -1111,12 +1111,30 @@ export const styles: Record<string, React.CSSProperties> = {
     zIndex: 3000,
     display: "flex",
     flexDirection: "column",
-    /* Design note #599: still capped -- a long history must not become the
-       whole window -- but the app root now reserves whatever height this
-       actually takes, so growing pushes the page down instead of covering
-       it. */
+    /* ==================================================================
+     *  DESIGN NOTE 614: THE DOCK MUST NOT BE THE THING THAT SCROLLS
+     * ==================================================================
+     *
+     * REPORTED: "the only way to collapse it is to scroll all the way to the
+     * top of the log."
+     *
+     * Exactly what `overflowY: auto` here buys. The dock is a column whose
+     * FIRST child is the header carrying the Collapse control, so a dock that
+     * scrolls is a dock that can carry its own escape hatch off-screen -- and
+     * with the history list scrolling too, a reader's wheel gesture landed on
+     * whichever of the two nested scrollers happened to be under the pointer.
+     *
+     * ONE SCROLLER, AND IT IS THE LIST. `overflow: hidden` here, `flex` and
+     * `minHeight: 0` down the chain (design note #614 in `TopTicker.tsx`), so
+     * a capped dock shortens the HISTORY and never the header. The collapse
+     * control is then unconditionally reachable, which is the property a
+     * control that undoes an expansion has to have.
+     *
+     * The cap stays for the reason design note #599 gives -- a long history
+     * must not become the whole window -- and design note #605's scroll
+     * compensation still pushes the page down by whatever the dock takes. */
     maxHeight: "60vh",
-    overflowY: "auto",
+    overflow: "hidden",
     borderTop: "1px solid #2b3242",
     backgroundColor: "#11151d",
     boxShadow: "0 -6px 18px rgba(0,0,0,0.35)",

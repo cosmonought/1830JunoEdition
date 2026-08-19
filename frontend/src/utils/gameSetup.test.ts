@@ -32,6 +32,10 @@ import {
   startingCashForPlayers,
   type SetupPlayer,
 } from "./gameSetup";
+// Design note #611: the two readers that turned a stale era into the
+// reported bug, asserted here so the fix is pinned end to end.
+import { initialOrSubPhase } from "../components/OperatingSubPhaseStepper";
+import { derivePhase } from "./gamePhase";
 
 function players(count: number): SetupPlayer[] {
   return Array.from({ length: count }, (_, i) => ({ id: `p${i}`, nickname: `Player ${i}` }));
@@ -179,9 +183,14 @@ function boardWithFourMocks(): GameStateResponse {
     max_players: 4,
     active_player_index: 2,
     priority_deal_index: 3,
+    /* Design note #611: the fixture is a GREEN MID-GAME board whose
+       corporations already hold 3-trains. That is exactly the state a room
+       used to boot into, so it is the state these tests have to start from
+       for the reset assertions below to mean anything. */
+    current_global_era: "Green",
     public_companies: [
-      { company_id: 1, ticker: "PRR", president: "a", player_holdings: [{ player: "a", percentage: 20 }], is_floated: true },
-      { company_id: 2, ticker: "NYC", president: "b", player_holdings: [], is_floated: false },
+      { company_id: 1, ticker: "PRR", president: "a", player_holdings: [{ player: "a", percentage: 20 }], is_floated: true, owned_trains: ["3", "3"] },
+      { company_id: 2, ticker: "NYC", president: "b", player_holdings: [], is_floated: false, owned_trains: ["3"] },
     ],
     private_companies: [{ private_id: 1, owner: "c", owner_protocol_id: null }],
   } as unknown as GameStateResponse;
@@ -209,6 +218,41 @@ describe("withEmptyRoster", () => {
     for (const entry of empty.private_companies) {
       expect(entry.owner).toBeNull();
     }
+  });
+
+  it("boots into Phase 2 with no trains bought", () => {
+    /* ==================================================================
+     *  DESIGN NOTE 611: THE REGRESSION THIS PINS
+     * ==================================================================
+     *
+     * REPORTED: the first Operating Round opened on "Buy Private", a step
+     * the rules do not offer until Phase 3.
+     *
+     * The sub-phase logic was never wrong -- it was correctly answering for
+     * Phase 3, because the board it read said Phase 3. The fixture is a
+     * Green mid-game testbed and `withEmptyRoster` cleaned every trace of a
+     * played game EXCEPT the two fields that record which phase that game
+     * had reached.
+     *
+     * Both assertions matter and for different reasons. The era is what
+     * `initialOrSubPhase` reads directly; `owned_trains` is what
+     * `derivePhase` reads, so leaving it would put the phase badge and the
+     * sub-phase strip on different phases of the same game. */
+    const empty = withEmptyRoster(boardWithFourMocks());
+    expect(empty.current_global_era).toBe("Yellow");
+    for (const company of empty.public_companies) {
+      expect(company.owned_trains).toEqual([]);
+    }
+  });
+
+  it("opens a corporation's turn on Lay Track, not Buy Private", () => {
+    /* The reported symptom itself, one step downstream. `initialOrSubPhase`
+       is the contract-cursor mirror the Operating Round seeds from, so this
+       is the assertion that fails if anyone reintroduces a mid-game era at
+       boot -- whatever field they do it through. */
+    const empty = withEmptyRoster(boardWithFourMocks());
+    expect(initialOrSubPhase(empty.current_global_era)).toBe("Track");
+    expect(derivePhase(empty)?.tier).toBe("2");
   });
 
   it("keeps the board itself", () => {

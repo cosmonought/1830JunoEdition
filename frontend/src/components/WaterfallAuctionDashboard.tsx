@@ -469,14 +469,28 @@ export function WaterfallAuctionDashboard({
           A player reads a header once. Everything above the pass count was
           telling them where they already knew they were, and it cost three
           lines at the top of the screen the map is trying to use. */}
+      {/* ==================================================================
+           DESIGN NOTE 610: THE PASS COUNTER MOVED TO THE SEATS IT COUNTED
+          ==================================================================
+
+           INSTRUCTED, alongside the PASSED stamps on the action bar: "this
+           would allow us to remove the odd counter in the string after the
+           PRIVATE COMPANY WATERFALL AUCTION header: 'no passes yet.' It
+           would give players a visual cue as to how many people have passed
+           before them."
+
+           Deleted here: `\u2014 3 consecutive pass(es) so far` / `\u2014 no passes
+           yet`. It was a number describing a roster that was elsewhere on
+           the screen, so reading it meant counting backwards round the table
+           yourself to work out whether it had reached you. The stamps ARE
+           that count, drawn on the seats it is about -- and "no passes yet"
+           was a whole clause spent saying that nothing had happened.
+
+           `consecutive_waterfall_passes` is still read, by `App.tsx`'s
+           `passedSeats` (design note #610). The figure did not stop
+           mattering; it stopped being prose. */}
       <div style={styles.header}>
         <span style={styles.headerTitle}>Private Company Waterfall Auction</span>
-        <span style={styles.headerHint}>
-          {"\u2014 "}
-          {waterfallState.consecutive_waterfall_passes > 0
-            ? `${waterfallState.consecutive_waterfall_passes} consecutive pass(es) so far`
-            : "no passes yet"}
-        </span>
         {error && (
           <span style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</span>
         )}

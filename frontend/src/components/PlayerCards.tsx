@@ -281,27 +281,29 @@ export function PlayerCards({
               {/* ---- Left: the figures ---- */}
               <table style={styles.figures}>
                 {/* ==================================================
-                     DESIGN NOTE 583: THE TWO TABLES SHARE A TOP LINE
+                     DESIGN NOTE 609: THE SPACER ROW GOES
                     ==================================================
 
-                     REPORTED: the Corp. and % headers read "off", floating
-                     in the middle, because the right-hand table had a header
-                     row and the left-hand one did not -- so five figure rows
-                     were distributed against six, and nothing lined up.
+                     INSTRUCTED: "can we fix the header line for 'Corp' and
+                     '%' at the same row as the 'Cash' row? This would keep
+                     the cards visually balanced."
 
-                     An EMPTY header row rather than removing the right-hand
-                     one: the % column needs its label (a bare `30` beside a
-                     ticker could be a count, a price or a percentage), and
-                     the left-hand rows label themselves. So the left table
-                     gains a spacer whose only job is to start both bodies on
-                     the same line. `aria-hidden` because it says nothing a
-                     screen reader should hear. */}
-                <thead aria-hidden="true">
-                  <tr>
-                    <th style={styles.figureHeadSpacer} />
-                    <th style={styles.figureHeadSpacer} />
-                  </tr>
-                </thead>
+                     Design note #583 put an empty header row here so the two
+                     tables' BODIES started level. That worked, and bought it
+                     by opening the left column with a blank line -- so the
+                     card's top-left corner, where a reader's eye lands
+                     first, was whitespace, and the first thing either column
+                     actually said sat one row down.
+
+                     Levelling the LABEL with the first figure is the better
+                     trade. "Corp." and "%" are captions, not data; setting
+                     them against `Cash` starts both columns saying something
+                     on the same line, and the holdings rows below simply run
+                     against the figures rather than being registered to
+                     them. There was never a row-for-row correspondence to
+                     preserve -- five fixed figures against a variable-length
+                     holdings list -- so aligning the bodies was aligning two
+                     things that do not correspond. */}
                 <tbody>
                   <tr>
                     <th scope="row" style={styles.figureKey}>Cash</th>
@@ -588,18 +590,32 @@ const styles: Record<string, React.CSSProperties> = {
      sitting "barely separated" from the figures on its left. The columns are
      no longer equal for the same reason: the left table carries five labelled
      figures and the right carries a three-character number. */
+  /* ==================================================================
+   *  DESIGN NOTE 609: THE HOLDINGS COLUMN TAKES WHAT IT NEEDS
+   * ==================================================================
+   *
+   * REPORTED: "it seems like the 'Corp %' column is stretching to take up
+   * the same space as the left column next to it. This is unnecessary."
+   *
+   * It was, and `0.85fr` is why -- a fractional track claims its share of the
+   * row whether or not it has anything to put there. The holdings table's
+   * content is a four-character ticker and a two-digit percentage; the
+   * figures table has "Net Worth" and "Liquidity" against six-figure sums.
+   * Splitting the card 58/42 gave the narrow column room it could not use
+   * and squeezed the wide one, which is what makes the right side read as
+   * padded-out empty space.
+   *
+   * `auto` SIZES TO CONTENT and hands the remainder to the figures. The card
+   * then divides itself by what is actually in it, and does so per card --
+   * a player holding one corporation is not held to the width of a player
+   * holding five. */
   body: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
     columnGap: "18px",
     padding: "8px 10px",
   },
   figures: { borderCollapse: "collapse", width: "100%", fontVariantNumeric: "tabular-nums" },
-  /* Design note #583: matches the right-hand header's line box exactly, so
-     the two bodies start level. Sized off the same font token rather than a
-     pixel guess -- a header height typed as `14px` would drift the moment
-     the micro size changed. */
-  figureHeadSpacer: { fontSize: FONT_SIZE.micro, fontWeight: 700, padding: 0 },
   figureKey: {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
@@ -615,7 +631,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1px 0",
     whiteSpace: "nowrap",
   },
-  holdings: { borderCollapse: "collapse", width: "100%", fontVariantNumeric: "tabular-nums" },
+  /* Design note #609: `auto`, not `100%`. A table told to fill 100% of an
+     `auto` track measures itself against a width that is being derived from
+     its own content, and settles wider than it needs -- the grid track and
+     the table have to agree about who is deciding, and it is the content. */
+  holdings: { borderCollapse: "collapse", width: "auto", fontVariantNumeric: "tabular-nums" },
   holdingHead: {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,

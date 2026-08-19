@@ -72,6 +72,27 @@ export interface SeatOrderTrailProps {
     /** Design note #317: what is locked in standing bids. Zero or omitted
      *  outside the auction, where there is no escrow to report. */
     escrowed?: number | null;
+    /* ==================================================================
+     *  DESIGN NOTE 610: THIS SEAT HAS PASSED SINCE ANYONE LAST ACTED
+     * ==================================================================
+     *
+     * INSTRUCTED: stamp "PASSED" over a player's name when they pass, with
+     * the worry that "this might make some new people think that that player
+     * has permanently passed" -- and the answer to it, "if we remove the
+     * stamp on the player's next turn that might mitigate it."
+     *
+     * The mitigation is structural rather than a rule this component
+     * enforces: `passedSeatIndices` derives the set from `consecutive_passes`,
+     * which the reducer zeroes the instant anybody buys or sells. So the
+     * stamps cannot outlive the round of passing that produced them, and no
+     * timer, no local state and no cleanup pass is involved.
+     *
+     * WHAT IT COSTS IS ONE READING, AND IT IS WORTH IT. "PASSED" beside four
+     * names is a picture of how far round the table the passing has got --
+     * which is what the auction header's "3 consecutive pass(es) so far" was
+     * trying to say in prose, against a roster the reader then had to map it
+     * onto themselves. */
+    passed?: boolean;
   }>;
   /** Whose turn it is now. `null` renders the trail with nobody marked,
    *  which is honest during the moment a round is turning over. */
@@ -145,9 +166,17 @@ export function SeatOrderTrail({
                 title={
                   isCurrent
                     ? `${seat.label} is acting now.`
-                    : isDone
-                      ? `${seat.label} has acted.`
-                      : `${seat.label} acts later this round.`
+                    : seat.passed
+                      ? /* Design note #610: the tooltip carries the
+                           reassurance the stamp is too small to give. "Passed
+                           this time round" is the whole distinction a new
+                           player might otherwise get wrong -- and it says
+                           what un-does it, so nobody has to discover that by
+                           waiting. */
+                        `${seat.label} passed this time round. They act again on their next turn, and the mark clears as soon as anyone buys or sells.`
+                      : isDone
+                        ? `${seat.label} has acted.`
+                        : `${seat.label} acts later this round.`
                 }
               >
                 {/* Design note #599: the seat's colour DOT is gone. It was
@@ -156,7 +185,22 @@ export function SeatOrderTrail({
                     a third token in a segment the request asks to hold two.
                     The player CARD still carries the colour, which is where a
                     reader goes to ask "which one am I". */}
-                <span style={styles.seatName}>{seat.label}</span>
+                <span
+                  style={{
+                    ...styles.seatName,
+                    /* Design note #610: struck through, so the stamp is
+                       legible even at a glance too quick to read the tag --
+                       and so the two cues agree. A strike alone would be
+                       ambiguous (eliminated? bankrupt?); the tag alone is
+                       four small capitals in a crowded row. */
+                    ...(seat.passed && !isCurrent ? styles.seatNamePassed : {}),
+                  }}
+                >
+                  {seat.label}
+                </span>
+                {seat.passed && !isCurrent && (
+                  <span style={styles.passedTag}>PASSED</span>
+                )}
                 {typeof seat.available === "number" && (
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
@@ -349,6 +393,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     whiteSpace: "nowrap",
+    /* Design note #610: shrinkable, so the name inside can ellipsize. A flex
+       item defaults to a `min-width: auto` floor sized to its content, which
+       silently refuses to shrink and pushes the overflow onto the frame
+       instead. */
+    minWidth: 0,
     /* Design note #599: the figures are the thing a reader compares across
        segments, so the digits have to sit on a common grid. */
     fontVariantNumeric: "tabular-nums",
@@ -367,7 +416,46 @@ const styles: Record<string, React.CSSProperties> = {
      `alignItems: baseline` need to act on. Deliberately NO `overflow:
      hidden` -- on an inline-level box that moves the baseline to the bottom
      margin edge, and the figure beside it would stop lining up. */
-  seatName: {},
+  /* Design note #610: the names now clip rather than push. The trail is
+     `nowrap` (#603) inside a frame with `overflow: hidden`, so before the
+     PASSED tags existed an over-wide row would have silently lost a whole
+     end segment. Truncating a long nickname is a far better failure than
+     dropping a player off the queue, and the full name is in the `title`. */
+  seatName: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  seatNamePassed: { textDecoration: "line-through", textDecorationThickness: "1.5px" },
+  /* ==================================================================
+   *  DESIGN NOTE 610: THE STAMP, AND WHY IT IS NOT A STAMP
+   * ==================================================================
+   *
+   * The request says "stamped over their player name", which in a card game
+   * means the rotated, distressed overprint. That is the right IDEA and the
+   * wrong artefact for a 24px-tall segment in a bar the eye reads
+   * left-to-right at speed: rotated text in a row this dense costs
+   * legibility on the name underneath it, which is the thing being marked.
+   *
+   * So it reads as a stamp without being one -- small caps, wide tracking, a
+   * warning tint, sitting immediately after the struck-through name. It says
+   * the same thing at the same glance and takes about 34px to do it.
+   *
+   * AMBER, NOT RED. Passing is an ordinary move in both these rounds -- in
+   * the Stock Round it is very often the correct one -- and red would grade
+   * it. Amber marks a state without judging it, and stays clear of the
+   * green this app spends on positive figures. */
+  passedTag: {
+    flex: "none",
+    fontSize: "9px",
+    fontWeight: 900,
+    letterSpacing: "0.08em",
+    color: "#e0b050",
+    border: "1px solid #6b5a2a",
+    borderRadius: "3px",
+    padding: "0 3px",
+    lineHeight: 1.5,
+  },
   cash: { fontWeight: 800 },
   /* ==================================================================
    *  DESIGN NOTE 599a: THE ESCROW STAYS, AND STAYS QUIET

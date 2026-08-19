@@ -28,7 +28,7 @@
 //    `onFilterChange` drive the same `feedFilter` state App.tsx already
 //    threads into both `TopTicker`'s `items`/`latestItem` props -- clicking
 //    a pill here updates that one shared filter, which is why it
-//    "instantly filters both the single-line preview and the 7-line
+//    "instantly filters both the single-line preview and the expanded
 //    expanded history view" with no extra plumbing needed in this
 //    component beyond calling `onFilterChange`.
 // 5. **Streamlined layout (Mandatory Turn Alerts pass, design note #21 in

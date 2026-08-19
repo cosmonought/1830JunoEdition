@@ -12,8 +12,9 @@
 // `Yellow | Green | Brown` -- three values for six phases. It cannot tell
 // Phase 3 from Phase 4 (both Green), Phase 5 from Phase 6 (both Brown), or
 // describe Diesel at all. A badge built on `current_global_era` alone would
-// have to print "Phase: Green (3-Train)" during Phase 4, which is a wrong
-// number in the most prominent chrome in the app.
+// have to print "Phase: 3 (Green)" during Phase 4, which is a wrong number in
+// the most prominent chrome in the app -- and, since design note #612 put the
+// phase number first, a wrong number in the position a player reads first.
 //
 // So the phase is derived from `owned_trains`, and this is exact rather
 // than approximate. In 1830 the phase advances the moment the first train
@@ -157,7 +158,7 @@ const RUSTS_WHEN_NEXT_TIER_ARRIVES: Readonly<Partial<Record<TrainTier, TrainTier
 export interface GamePhase {
   /** The highest train tier in play -- the phase, see design note #1. */
   tier: TrainTier;
-  /** `"Phase: Green (4-Train)"`, ready to render. */
+  /** `"Phase: 4 (Green)"`, ready to render -- design note #612. */
   label: string;
   tint: PhaseTint;
   /** Trains of `tier` still in the Bank Depot, or `null` for Diesel (no
@@ -474,9 +475,36 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
 
   return {
     tier,
+    /* ==================================================================
+     *  DESIGN NOTE 612: 18XX PLAYERS SAY "PHASE 3", NOT "PHASE GREEN"
+     * ==================================================================
+     *
+     * REPORTED: "our Phase marker probably is unhelpfully labeled. It's
+     * currently 'Phase: [available tile color] ([current train])' but 18xx
+     * players generally refer not to 'Phase Yellow' but 'Phase 2,' 'Phase
+     * 3,' etc., based on which trains have been last sold."
+     *
+     * Correct, and the old order had the two facts exactly backwards. The
+     * PHASE NUMBER is the name of the thing -- it is what the rulebook
+     * indexes, what a player says out loud, and what every other 18xx tool
+     * displays. The tile colour is a CONSEQUENCE of the phase, and a useful
+     * reminder, but it is not what the phase is called.
+     *
+     * `Phase: 3 (Green)` reads as a name with a gloss. `Phase: Green
+     * (3-Train)` read as a gloss with a name buried in it, and the "-Train"
+     * suffix made the number look like a train count rather than the phase
+     * -- which is the same collision `TrainBadges.tsx` already avoided by
+     * writing `Phase ${phase.tier}` in its own tooltip. Two surfaces now
+     * agree instead of one contradicting the other.
+     *
+     * THE UNKNOWN BRANCH STILL DROPS THE NUMBER, per design note #3. When no
+     * corporation has reported `owned_trains`, `tier` falls back to the
+     * bottom of the order rather than being measured -- printing "Phase: 2"
+     * from that would state a fact this function does not have. The colour
+     * survives because the board's tile colour is separately known. */
     label: known
-      ? `Phase: ${presentation.era} (${tier}-Train)`
-      : // Design note #3: no train number we cannot stand behind.
+      ? `Phase: ${tier} (${presentation.era})`
+      : // Design note #3: no phase number we cannot stand behind.
         `Phase: ${presentation.era}`,
     tint: presentation.tint,
     depotRemaining,

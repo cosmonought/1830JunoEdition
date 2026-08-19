@@ -504,6 +504,43 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
      * with every trace of a played game removed. Anything a game WROTE has
      * to be reset here, and `par_value` was a written thing that looked like
      * a printed one. */
+    /* ==================================================================
+     *  DESIGN NOTE 611: THE PHASE WAS A WRITTEN THING TOO
+     * ==================================================================
+     *
+     * REPORTED: "the Operating Round now begins in 'Buy Private', but this
+     * action is unavailable until Phase 3. The first Operating Round always
+     * begins in Phase 2."
+     *
+     * Both true, and the cause is design note #594's own paragraph above,
+     * two fields over. `current_global_era` and `owned_trains` are written
+     * by a game being played -- the era advances when a train tier is first
+     * bought, and the trains are bought -- and neither was reset. The
+     * fixture is a GREEN MID-GAME TESTBED whose corporations already hold
+     * 3-trains, so every room booted straight into it: `current_global_era`
+     * said `"Green"`, `initialOrSubPhase` correctly answered `"BuyPrivate"`
+     * for Phase 3, and the first Operating Round of a brand-new game opened
+     * on a step the rules do not offer until two phases later.
+     *
+     * NOTHING WAS WRONG WITH THE SUB-PHASE LOGIC, which is why this took a
+     * report to find. `initialOrSubPhase`, `visibleSubPhases` and the
+     * contract cursor all behaved correctly for the phase they were told
+     * they were in. They were told the wrong phase.
+     *
+     * BOTH FIELDS, NOT JUST THE ERA. Resetting the era alone would fix the
+     * reported symptom and leave a room whose corporations own trains they
+     * never bought -- which sets the train limit, the rust outlook, the
+     * depot count and the phase badge from a game that did not happen.
+     * `derivePhase` reads `owned_trains`, so the two have to agree or the
+     * badge and the sub-phase strip would disagree about the phase.
+     *
+     * `[]`, NOT DELETED. Design note #3 in `gamePhase.ts` distinguishes "no
+     * corporation reported trains" (unknown -- omit the number) from "this
+     * corporation owns none" (a real answer). A fresh board is the second,
+     * and clearing to `undefined` would make the badge disclaim a phase it
+     * knows perfectly well. */
+    // Design note #611: 1830 opens in Phase 2, which is Yellow tiles.
+    current_global_era: "Yellow",
     public_companies: state.public_companies.map((company) => ({
       ...company,
       president: null,
@@ -512,6 +549,8 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
       par_value: null,
       ipo_pool_percentage: 100,
       bank_pool_percentage: 0,
+      // Design note #611: nobody has bought a train yet.
+      owned_trains: [],
       /* `treasury`, NOT `treasury_vgp`. The first version of this line
          invented the second name -- a spread accepts any extra key, so
          nothing complained and the real treasury went on carrying the

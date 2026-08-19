@@ -6,7 +6,8 @@
 // imported or rendered -- see App.tsx design note #20 for the removal).
 // Still previews the single most recent Feed item when collapsed; clicking
 // the chevron now expands THIS SAME container in place to show a
-// scrollable ~7-line history, rather than opening a floating panel.
+// scrollable five-line history (design note #615), rather than opening a
+// floating panel.
 //
 // Design notes:
 // 1. **Presentational only.** This component owns no state of its own --
@@ -37,7 +38,7 @@
 //    prop and its `items` prop come from the same filtered source in
 //    App.tsx. (It USED to slice the last `HISTORY_LINE_COUNT` entries here;
 //    design note #476 removed that -- the panel now holds the whole game.)
-//    `maxHeight` on the scroll body is sized for ~7 compact rows
+//    `maxHeight` on the scroll body is sized for five compact rows
 //    (`HISTORY_LINE_COUNT * HISTORY_LINE_HEIGHT_PX`), auto-scrolled to the
 //    bottom (most recent) whenever it's open or a new filtered item
 //    arrives while it's open -- the same scroll-to-bottom convention
@@ -63,18 +64,48 @@ import type { FeedItem } from "../utils/feed";
 import { colorForAuthor } from "../utils/feed";
 import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 
-/** How many rows the scroll body is TALL. Design note #476: not how many it
- *  holds -- it holds the whole game. */
-const HISTORY_LINE_COUNT = 7;
-// Bumped 36 -> 46 alongside the typography scale: this constant sizes the
-// scroll body to ~7 rows, so leaving it while row TEXT grew would have shown
-// about five rows and clipped the sixth mid-glyph.
+/* ==================================================================
+ *  DESIGN NOTE 615: FIVE ROWS, NOW THAT FIVE ROWS IS NOT A LIMIT
+ * ==================================================================
+ *
+ * INSTRUCTED: "now that the log scrolls, I wonder if it would be okay to
+ * trim the expansion to 5 lines/entries?"
+ *
+ * Yes, and the question contains the reason it is safe. Seven was never
+ * chosen as a good reading height -- design note #476 found this constant
+ * being used to TRUNCATE the history and left it at seven while converting
+ * it into a viewport. At the time the number decided what existed, so
+ * shrinking it would have thrown entries away.
+ *
+ * It decides nothing now. The list holds the whole game and scrolls, so this
+ * is purely how much screen the panel borrows while open -- and the report
+ * beside this one is that it borrows too much ("the expansion of the log
+ * takes up half my screen"). Five rows is roughly 230px against seven's 320,
+ * which takes the open dock from about half a laptop viewport to under a
+ * third.
+ *
+ * NOT LOWER THAN FIVE. Three or four rows would fit more comfortably and
+ * would stop the panel being a place you can read a stretch of the round in
+ * -- a log you have to scroll every second entry is a log you stop opening.
+ * Five holds a full turn's worth of actions on one screen, which is the unit
+ * a player actually wants to read back.
+ */
+const HISTORY_LINE_COUNT = 5;
+// Bumped 36 -> 46 alongside the typography scale. This is the per-row
+// figure `HISTORY_LINE_COUNT` multiplies: leaving it while row TEXT grew
+// would have shown fewer rows than asked for and clipped the last one
+// mid-glyph.
 const HISTORY_LINE_HEIGHT_PX = 46;
 
 export interface TopTickerProps {
   latestItem: FeedItem | null;
   /** Already filtered by the active feed filter -- see design note #5. */
   items: readonly FeedItem[];
+  /** Design note #616: unread CHAT MESSAGES, not unread feed items. Log
+   *  entries are a record to consult rather than a queue to clear, and
+   *  counting them gave a badge that read four digits and meant nothing.
+   *  Counted off the UNFILTERED feed by the caller, so a player filtered to
+   *  "log" is still told a message arrived. */
   unreadCount: number;
   isExpanded: boolean;
   onToggleExpand: () => void;
@@ -258,38 +289,66 @@ export function TopTicker({
 
   return (
     <div style={styles.root}>
-      <button
-        type="button"
-        style={{ ...styles.headerRow, ...(isExpanded ? styles.headerRowOpen : {}) }}
-        onClick={onToggleExpand}
-        aria-expanded={isExpanded}
-        aria-label="Expand or collapse the chat and activity history"
-      >
-        <span style={styles.previewText}>
-          {latestItem ? feedItemText(latestItem) : "No activity yet — click to expand the history."}
-        </span>
-        {!isExpanded && unreadCount > 0 && (
-          <span style={styles.unreadBadge}>{unreadCount > 99 ? "99+" : unreadCount}</span>
-        )}
-        {/* Design note #600: the hole the Chat button sits in. See the styles
-            block -- this is the half that keeps the two controls apart. */}
-        {onToggleChat && <span style={styles.chatToggleSlot} aria-hidden="true" />}
-        <span style={styles.expandHint}>{isExpanded ? "▲ Collapse" : "▼ Expand"}</span>
-      </button>
-      {/* Design note #598: OUTSIDE the header button, not inside it -- a
-          button nested in a button is invalid markup and the click would
-          toggle both. Absolutely positioned so it costs the row no height. */}
-      {onToggleChat && (
+      {/* ==================================================================
+           DESIGN NOTE 614: THE HEADER IS ITS OWN POSITIONING CONTEXT
+          ==================================================================
+
+           REPORTED: "there is a stray 'Chat' button in the expanded window".
+
+           There was, and it was the same button. Design note #598 could not
+           nest it inside the header (a button in a button is invalid markup),
+           so it went `position: absolute` against `root` -- correct while
+           `root` WAS the header row and nothing else. Expanding the log makes
+           `root` the header plus a 300px scrolling body, and an element
+           centred on that box lands halfway down the history.
+
+           So the header and its satellite get their own relatively-positioned
+           wrapper. The Chat button is then centred on the ROW it belongs to,
+           whatever the panel below it is doing -- which is what "beside
+           Collapse" meant all along. */}
+      <div style={styles.headerBand}>
         <button
           type="button"
-          style={{ ...styles.chatToggle, ...(chatOpen ? styles.chatToggleOpen : {}) }}
-          onClick={onToggleChat}
-          aria-expanded={chatOpen}
-          title={chatOpen ? "Hide the message box." : "Send a message to the table."}
+          style={{ ...styles.headerRow, ...(isExpanded ? styles.headerRowOpen : {}) }}
+          onClick={onToggleExpand}
+          aria-expanded={isExpanded}
+          aria-label="Expand or collapse the chat and activity history"
         >
-          Chat
+          <span style={styles.previewText}>
+            {latestItem ? feedItemText(latestItem) : "No activity yet — click to expand the history."}
+          </span>
+          {/* Design note #616: unread CHAT, which is why the count can be
+              trusted to stay small and why the title says "message". The
+              `99+` cap stays anyway -- a cap that only fires in a pathological
+              case is the one worth keeping. */}
+          {!isExpanded && unreadCount > 0 && (
+            <span
+              style={styles.unreadBadge}
+              title={`${unreadCount} unread message${unreadCount === 1 ? "" : "s"} from the table.`}
+            >
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          )}
+          {/* Design note #600: the hole the Chat button sits in. See the styles
+              block -- this is the half that keeps the two controls apart. */}
+          {onToggleChat && <span style={styles.chatToggleSlot} aria-hidden="true" />}
+          <span style={styles.expandHint}>{isExpanded ? "▲ Collapse" : "▼ Expand"}</span>
         </button>
-      )}
+        {/* Design note #598: OUTSIDE the header button, not inside it -- a
+            button nested in a button is invalid markup and the click would
+            toggle both. Absolutely positioned so it costs the row no height. */}
+        {onToggleChat && (
+          <button
+            type="button"
+            style={{ ...styles.chatToggle, ...(chatOpen ? styles.chatToggleOpen : {}) }}
+            onClick={onToggleChat}
+            aria-expanded={chatOpen}
+            title={chatOpen ? "Hide the message box." : "Send a message to the table."}
+          >
+            Chat
+          </button>
+        )}
+      </div>
 
       {/* Design note #5: in-place accordion body, no modal/backdrop.
           Design note #21: JUST the scrollable history list now -- no
@@ -487,14 +546,31 @@ const styles: Record<string, React.CSSProperties> = {
    * from the tabs without shouting, and it is the same device the chat
    * entries already use to mark an author. */
   root: {
-    // Design note #598: `relative`, so the Chat toggle can pin to this
-    // strip's right edge without leaving the dock.
-    position: "relative",
+    /* Design note #614: NOT `relative` any more. It was, so the Chat toggle
+       could anchor here -- and that is precisely how the toggle ended up in
+       the middle of the expanded log. The anchor moved to `headerBand`; this
+       element is once again just the dock's column. */
     width: "100%",
+    /* Design note #614: a column, and one that can be SHORTER than its
+       content wants. The header band is `flex: none` and the body is the
+       flexible one, so on a short viewport the history list gives up rows
+       and the collapse control stays exactly where it is. */
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
     backgroundColor: "#131a27",
     borderTop: "1px solid #0b1119",
     borderLeft: "3px solid #2f6f6a",
     boxSizing: "border-box",
+  },
+  /* Design note #614: the header row and the Chat button that overlays it,
+     as one positioning context. `flex: none` so the band keeps its height
+     when the body beside it is being squeezed -- the collapse control must
+     never be the thing that gets shortened. */
+  headerBand: {
+    position: "relative",
+    width: "100%",
+    flex: "none",
   },
   /* Design note #598: 52px/16px was a HEADER's proportions on a strip that
      is a status line. A third of the height, and the padding with it -- the
@@ -594,13 +670,22 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop: "1px solid #2a3a52",
     display: "flex",
     flexDirection: "column",
+    // Design note #614: the part that yields when the dock is capped.
+    flex: "1 1 auto",
+    minHeight: 0,
   },
-  // ---- Scrollable ~7-line history -- design note #5. ----
+  // ---- Scrollable ~5-line history -- design notes #5 and #615. ----
   historyList: {
-    /* Design note #476: the VIEWPORT, not the retention. Seven lines of
+    /* Design note #476: the VIEWPORT, not the retention. A few lines of
        box, scrolling over however many entries the game has produced. */
     maxHeight: `${HISTORY_LINE_COUNT * HISTORY_LINE_HEIGHT_PX}px`,
     overflowY: "auto",
+    /* Design note #614: `minHeight: 0` is what lets this shrink below its
+       content on a short viewport. Without it a flex child refuses to go
+       under its content height and pushes the overflow up the chain -- onto
+       the dock, which used to answer by scrolling the header out of sight. */
+    flex: "1 1 auto",
+    minHeight: 0,
     display: "flex",
     flexDirection: "column",
     gap: "8px",

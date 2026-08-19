@@ -187,13 +187,53 @@ export function hasBuyablePrivate(
   return privates.some((entry) => !entry.closed && entry.owner_protocol_id === null);
 }
 
-/** Design note #2: the steps that apply in this era.
- *  Design note #385: and in this state of the private roster. */
+/* ==================================================================
+ *  DESIGN NOTE 613: THE RULE IS A PHASE NUMBER, SO SAY THE PHASE NUMBER
+ * ==================================================================
+ *
+ * INSTRUCTED: "the Buy Private subphase could be linked to only display when
+ * 'Phase: 3' 'Phase: 4' are valid, since Phase: 5 closes private companies."
+ *
+ * That is the actual 1830 rule, stated exactly: corporations may buy private
+ * companies from the first 3-train until the first 5-train closes them. The
+ * old test approximated it in two hops -- `initialOrSubPhase(era) !== "Track"`
+ * for the lower bound, and design note #385's "is anything still buyable" for
+ * the upper -- and the approximation was correct only because the second hop
+ * happens to be true whenever the first is wrong.
+ *
+ * WHY THAT WAS WORTH TIGHTENING even though it behaved. The upper bound was
+ * being enforced by a CONSEQUENCE of Phase 5 (every private reports `closed`)
+ * rather than by Phase 5. That is a correct reading of a state the contract
+ * has to have written first -- so during any window where the phase has
+ * advanced and the closures have not yet arrived in a client's `gameState`,
+ * the step would offer itself. Testing the phase closes that window and, more
+ * usefully, makes the rule legible: a reader of this function now sees "3 or
+ * 4" rather than inferring it from a tile colour.
+ *
+ * THE ERA STAYS AS THE FALLBACK, NOT AS THE RULE. `tier` comes from
+ * `derivePhase`, which reports `known: false` when no corporation has
+ * reported `owned_trains` at all (design note #3 there). In that case there
+ * is no phase number to test and the era is the best evidence available, so
+ * the old path runs. Absent evidence is not evidence of absence -- the same
+ * reasoning design note #385 applies to an unresolved private roster.
+ *
+ * `initialOrSubPhase` IS DELIBERATELY UNCHANGED. It mirrors the contract's
+ * `or_phase::initial_sub_phase`, which decides where the CURSOR starts, and a
+ * mirror that stops matching its original is worse than an imprecise one.
+ * This function decides what is DISPLAYED, which is the frontend's own call
+ * and the thing the request is about. */
 export function visibleSubPhases(
   era: string | null | undefined,
   privates?: readonly PrivateAvailability[] | null,
+  /** The phase number from `derivePhase`. Omitted or `null` falls back to
+   *  the era test -- see the note above. */
+  tier?: string | null,
 ): readonly OperatingSubPhase[] {
-  const showBuyPrivate = initialOrSubPhase(era) !== "Track" && hasBuyablePrivate(privates);
+  const phaseAllowsBuying =
+    tier === null || tier === undefined
+      ? initialOrSubPhase(era) !== "Track"
+      : tier === "3" || tier === "4";
+  const showBuyPrivate = phaseAllowsBuying && hasBuyablePrivate(privates);
   return showBuyPrivate
     ? OPERATING_SUB_PHASE_ORDER
     : OPERATING_SUB_PHASE_ORDER.filter((phase) => phase !== "BuyPrivate");

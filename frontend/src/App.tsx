@@ -483,7 +483,7 @@
 //    by the pills `InlineQuickChat.tsx` renders instead of the old modal).
 //    `latestFeedItem` and `unreadFeedCount` are now derived from this
 //    FILTERED array rather than the unfiltered one, so switching filters
-//    "instantly filters both the single-line preview and the 7-line
+//    "instantly filters both the single-line preview and the expanded
 //    expanded history view" (this pass's own requirement) -- both
 //    `TopTicker`'s `latestItem` and `items` props come from this one
 //    filtered source, and `InlineQuickChat`'s pills are what drive it.
@@ -779,6 +779,8 @@ import {
 import { STATION_PLACEMENT_HIGHLIGHT_INK } from "./components/hexBoardData";
 import PlayerCards from "./components/PlayerCards";
 import SeatOrderTrail from "./components/SeatOrderTrail";
+// Design note #610: who has passed, derived rather than tracked.
+import { passedSeatIndices } from "./utils/passedSeats";
 import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 import { playerFinances } from "./utils/playerFinance";
 import {
@@ -2278,6 +2280,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const steps = visibleSubPhases(
       gameState?.current_global_era,
       gameState?.private_companies,
+      // Design note #613: the phase number is the rule; the era is the
+      // fallback when no corporation has reported a train yet.
+      currentPhase?.known ? currentPhase.tier : null,
     );
     /* ==================================================================
      *  DESIGN NOTE 574: THE TESTING SHORTCUT OUTLIVED THE TESTING
@@ -2310,7 +2315,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        the opening step is a convenience rather than a rule not applied. */
     const opening = initialOrSubPhase(gameState?.current_global_era);
     setOrSubPhase(steps.includes(opening) ? opening : steps[0]);
-  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, sandbox, sandboxRoomCode]);
+  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, currentPhase?.known, currentPhase?.tier, sandbox, sandboxRoomCode]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -2745,9 +2750,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [statusDockHeight]);
   const [isTickerExpanded, setIsTickerExpanded] = useState(false);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
-  // Tracks how many (filtered) items had already been seen the last time
-  // the accordion was expanded, so `unreadFeedCount` below only counts
-  // items that arrived while it was collapsed.
+  // Tracks how many CHAT items had already been seen the last time the
+  // accordion was expanded, so `unreadFeedCount` below only counts messages
+  // that arrived while it was collapsed. Design note #616: chat items, not
+  // feed items -- the two figures are subtracted, so they have to be counted
+  // in the same units.
   const [lastSeenFeedCount, setLastSeenFeedCount] = useState(0);
 
   const feedItems = useMemo(() => mergeFeedItems(chatMessages, actionLog), [chatMessages, actionLog]);
@@ -2755,13 +2762,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // `InlineQuickChat.tsx` now drive. `latestFeedItem`/`unreadFeedCount`
   // below both derive from THIS filtered array (not the raw `feedItems`),
   // so switching filters instantly updates both the ticker's single-line
-  // preview and its 7-line expanded history at once.
+  // preview and its expanded history at once. (Design note #615: the
+  // history viewport is five rows now, not seven -- and design note #616
+  // takes the unread BADGE off this filtered array entirely.)
   const filteredFeedItems = useMemo(
     () => (feedFilter === "all" ? feedItems : feedItems.filter((item) => item.kind === feedFilter)),
     [feedItems, feedFilter],
   );
   const latestFeedItem = filteredFeedItems.length > 0 ? filteredFeedItems[filteredFeedItems.length - 1] : null;
-  const unreadFeedCount = isTickerExpanded ? 0 : Math.max(0, filteredFeedItems.length - lastSeenFeedCount);
+  /* ==================================================================
+   *  DESIGN NOTE 616: THE BADGE COUNTS CHAT, NOT HISTORY
+   * ==================================================================
+   *
+   * REPORTED: "there is a red badge that tracks how many messages have
+   * occurred since a player last opened the log, but in an 18xx game that is
+   * going to reach thousands of messages if a player never clicks it."
+   *
+   * It would, and the deeper problem is that the number stops meaning
+   * anything long before it stops being true. A red badge is a QUEUE
+   * indicator -- it promises that something is waiting for you and that
+   * opening it will clear a debt. Game log entries are not that: they are a
+   * record you consult, and nobody is owed a reading of "PRR laid tile #57 on
+   * H10". Counting them produced a permanently angry number that a player
+   * learns within one game to ignore, which costs the badge its use for the
+   * one case that IS a queue.
+   *
+   * CHAT IS THAT CASE. A message from another player is a person waiting for
+   * an answer, the count is naturally small, and clearing it by reading is
+   * exactly what the badge is claiming.
+   *
+   * COUNTED OFF `feedItems`, NOT `filteredFeedItems`. The filter pills change
+   * what the panel SHOWS; they do not change what has arrived. A player
+   * filtered to "log" who then receives three messages is precisely the
+   * player the badge exists for, and reading it off the filtered array would
+   * hide them at exactly that moment.
+   *
+   * THE SEEN MARK MOVES WITH IT. `lastSeenFeedCount` now counts chat items,
+   * so the two figures are subtracted in the same units -- mixing them was
+   * how an earlier version of this could go negative when a filter changed
+   * under it, which `Math.max` was quietly absorbing. */
+  const chatItemCount = useMemo(
+    () => feedItems.reduce((total, item) => (item.kind === "chat" ? total + 1 : total), 0),
+    [feedItems],
+  );
+  const unreadFeedCount = isTickerExpanded ? 0 : Math.max(0, chatItemCount - lastSeenFeedCount);
 
   // Marks everything as "seen" the moment the accordion is expanded (and
   // keeps it marked as items keep arriving while it stays expanded), so
@@ -2769,9 +2813,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // starts counting again once it's collapsed.
   useEffect(() => {
     if (isTickerExpanded) {
-      setLastSeenFeedCount(filteredFeedItems.length);
+      setLastSeenFeedCount(chatItemCount);
     }
-  }, [isTickerExpanded, filteredFeedItems.length]);
+  }, [isTickerExpanded, chatItemCount]);
 
   const handleToggleTickerExpand = useCallback(() => setIsTickerExpanded((prev) => !prev), []);
 
@@ -4208,6 +4252,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       .map((address) => playerFinances(address, gameState, prices, settledPrivatePrices))
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   }, [gameState, marketGrid, settledPrivatePrices]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 610: WHICH SEATS HAVE PASSED, FOR THE TRAIL'S STAMPS
+   * ==================================================================
+   *
+   * Two counters, one shape. The Stock Round's rotation is counted by
+   * `consecutive_passes` and the auction's by `consecutive_waterfall_passes`,
+   * and both reset to zero on the first action that is not a pass -- which
+   * is what makes the stamp self-clearing rather than something this file
+   * has to remember to wipe.
+   *
+   * SUPPRESSED DURING A MINI-AUCTION. `passedSeatIndices` walks backwards
+   * through the FULL seating order, which is only the running rotation while
+   * the main auction is turning over. A mini-auction rotates over its
+   * contestants alone, so the same walk would step across seats that were
+   * never asked to act and stamp them for a pass they were never offered.
+   * `WaterfallStateResponse.current_turn` is documented as not meaningfully
+   * moving in that window either, so there is no cursor worth walking from.
+   *
+   * The Operating Round returns an empty set by falling through: its turn
+   * belongs to a corporation, and the trail is not rendered there at all. */
+  const passedSeats = useMemo(() => {
+    if (!gameState) return new Set<number>();
+    const acting = actingAddress(gameState, waterfallState);
+    const activeIndex = acting ? gameState.player_addresses.indexOf(acting) : -1;
+    if (gameState.current_round_type === "StockRound") {
+      return passedSeatIndices({
+        seatCount: gameState.player_addresses.length,
+        activeIndex,
+        consecutivePasses: gameState.consecutive_passes,
+      });
+    }
+    if (gameState.current_round_type === "WaterfallAuction") {
+      return passedSeatIndices({
+        seatCount: gameState.player_addresses.length,
+        activeIndex,
+        consecutivePasses: waterfallState?.consecutive_waterfall_passes ?? 0,
+        enabled: (waterfallState?.mini_auction ?? null) === null,
+      });
+    }
+    return new Set<number>();
+  }, [gameState, waterfallState]);
 
   /** Design note #306 in `WaterfallAuctionDashboard.tsx`: close the auction
    *  and open Stock Round 1. Local, because the sandbox owns its own round
@@ -7046,6 +7132,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       const steps = visibleSubPhases(
         gameState?.current_global_era,
         gameState?.private_companies,
+        // Design note #613: same three inputs the strip renders from.
+        currentPhase?.known ? currentPhase.tier : null,
       );
       const at = steps.indexOf(current);
       // Past the last step the turn is over, so hold rather than wrapping
@@ -7053,7 +7141,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (at < 0 || at >= steps.length - 1) return current;
       return steps[at + 1];
     });
-  }, [runGameplayAction, gameId, actingProtocolId, sandbox, gameState, orSubPhase]);
+  }, [runGameplayAction, gameId, actingProtocolId, sandbox, gameState, orSubPhase, currentPhase?.known, currentPhase?.tier]);
 
   /** The Skip button. Safe to pass straight to `onClick` -- it takes no
    *  arguments, so an event object cannot be mistaken for a flag. */
@@ -9126,6 +9214,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           color: seatColor(address, index),
                           available: playerRoster.find((s) => s.address === address)?.available,
                           escrowed: playerRoster.find((s) => s.address === address)?.escrowed,
+                          // Design note #610: derived from the pass counter,
+                          // so it clears itself the moment anybody trades.
+                          passed: passedSeats.has(index),
                         }))}
                         activeAddress={actingAddress(gameState, waterfallState)}
                         priorityAddress={

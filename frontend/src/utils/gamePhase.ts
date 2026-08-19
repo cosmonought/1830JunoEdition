@@ -107,6 +107,33 @@ const TIER_PRESENTATION: Readonly<Record<TrainTier, TierPresentation>> = {
 };
 
 /* ==================================================================
+ *  DESIGN NOTE 632: WHICH ERA A TRAIN BELONGS TO
+ * ==================================================================
+ *
+ * INSTRUCTED: "what do you think of color-coding the trains to their color
+ * phase (2-train icon is yellow, 3 and 4-trains are green, etc)?"
+ *
+ * Worth doing, and the mapping already exists -- `TIER_PRESENTATION` above
+ * has carried a `tint` per tier since the phase badge needed one. This
+ * exports the lookup rather than letting `TrainPurchasePanel` write a second
+ * 2/3/4/5/6/D switch, which is how the depot would come to disagree with the
+ * badge about what colour Phase 4 is.
+ *
+ * THE VALUE OF THE CODING IS THAT IT IS NOT A NEW LANGUAGE. Yellow, green
+ * and brown already mean tile eras on the map, on the phase badge and on the
+ * hexes themselves; a green 3-train says "this is the train that unlocks the
+ * tiles you have been looking at" without teaching anybody anything. That is
+ * why it is worth more than a decorative palette would be.
+ *
+ * IT IS DELIBERATELY A SEPARATE CHANNEL FROM AVAILABILITY. The depot marks
+ * the purchasable tier with fill and border; era rides on the glyph. Folding
+ * the two together -- colouring only the buyable train -- would make the
+ * scheme mean two things and answer neither reliably. */
+export function tierTint(tier: TrainTier): PhaseTint {
+  return TIER_PRESENTATION[tier].tint;
+}
+
+/* ==================================================================
  *  DESIGN NOTE 5: ONE COUNTDOWN, NOT TWO
  * ==================================================================
  *

@@ -156,6 +156,21 @@ export interface RadialTileSelectorProps {
    *
    * OPTIONAL. Omitted, every thumbnail draws exactly what it drew before. */
   stationMarkersFor?: (tileId: number) => readonly StationPreviewMarker[];
+  /* ==================================================================
+   *  DESIGN NOTE 628: THE TRAY COUNT, ASKED PER CANDIDATE
+   * ==================================================================
+   *
+   * A lookup rather than a table, for the same reason `stationMarkersFor`
+   * above is one: the ring shows a handful of tiles out of forty-six, and
+   * handing it the whole manifest to use six entries of would make this
+   * component a consumer of the catalog rather than of its caller.
+   *
+   * `undefined` -- the prop omitted -- renders no counts at all, which is
+   * what a caller with no board to count against should be able to say
+   * without a second flag. `null` from the lookup means the catalog does not
+   * carry that tile, and is likewise silent: a mirror gap must not be
+   * displayed as a supply problem. */
+  stockFor?: (tileId: number) => { printed: number; remaining: number } | null;
   onSelectCandidate: (tileId: number, orientation: number) => void;
   onConfirm: () => void;
   /** Step back one stage -- design note #2. */
@@ -667,6 +682,7 @@ export function RadialTileSelector({
   legalRotationCount,
   tokenNote = null,
   stationMarkersFor,
+  stockFor,
   onSelectCandidate,
   onConfirm,
   onCancel,
@@ -746,6 +762,38 @@ export function RadialTileSelector({
         {!previewing &&
           tiles.map((tile, index) => {
             const position = ringPosition(index, tiles.length, hexRadiusPx);
+            /* ==================================================
+                 DESIGN NOTE 629: AN EXHAUSTED TILE IS NOT AN OPTION
+                ==================================================
+
+                 INSTRUCTED: "when a tile is exhausted from the supply, it
+                 show up in the radial menu as grayed out."
+
+                 Design note #628 labelled the count and left the candidate
+                 live, on the reasoning that the placement rules -- which do
+                 not consult the tray -- are what offer it, and the contract
+                 is what refuses it. That is true and it is not a good
+                 experience: a control that looks available, accepts the
+                 click, and produces a rejected transaction is the failure
+                 shape this codebase has removed repeatedly. The tray count
+                 is knowable BEFORE the click, so the refusal belongs before
+                 it too.
+
+                 GREYED AND DISABLED, NOT HIDDEN. Removing the thumbnail
+                 would leave a player wondering whether the tile was ever
+                 legal here -- and "there are no more #57s" is a fact worth
+                 seeing, especially as it is often the reason a plan has to
+                 change. A dimmed candidate carrying "none left" says both
+                 halves.
+
+                 THE DERIVATION IS NOT THE AUTHORITY. `tileStock` counts the
+                 board rather than reading `REMAINING_TILES`, so this gate is
+                 the frontend's best answer and not the contract's. It can
+                 only ever refuse a tile the contract would also refuse --
+                 both read the same arithmetic -- and the contract still has
+                 the last word either way. */
+            const stock = stockFor?.(tile.tileId) ?? null;
+            const exhausted = stock !== null && stock.remaining === 0;
             /* Design note #471: the catalog lookup went with the tooltip.
                It existed only to name the tier in that string; the tier is
                visible as the thumbnail's own colour. */
@@ -754,6 +802,7 @@ export function RadialTileSelector({
                 key={tile.tileId}
                 type="button"
                 onClick={() => onSelectCandidate(tile.tileId, tile.firstOrientation)}
+                disabled={exhausted}
                 /* Design note #471: NO `title`. A native tooltip on every
                    thumbnail in a ring of eight means one follows the cursor
                    continuously as the player sweeps the options, covering
@@ -761,9 +810,14 @@ export function RadialTileSelector({
                    already printed on it (`candidateNumber`) and its tier is
                    its colour -- both readable without hovering, which is
                    what a chooser wants. */
-                aria-label={`Preview tile ${tile.tileId} on ${hexLabel}`}
+                aria-label={
+                  exhausted
+                    ? `Tile ${tile.tileId} — none left in the supply`
+                    : `Preview tile ${tile.tileId} on ${hexLabel}`
+                }
                 style={{
                   ...styles.candidate,
+                  ...(exhausted ? styles.candidateExhausted : {}),
                   transform: `translate(-50%, -50%) translate(${position.x}px, ${position.y}px)`,
                 }}
               >
@@ -776,6 +830,51 @@ export function RadialTileSelector({
                   stationMarkers={stationMarkersFor?.(tile.tileId)}
                 />
                 <span style={styles.candidateNumber}>{tile.tileId}</span>
+                {/* ==================================================
+                     DESIGN NOTE 628: SCARCITY, WHERE THE CHOICE IS MADE
+                    ==================================================
+
+                     The tray count for this artwork, on the candidate
+                     itself. `contract.rs` has always seeded a per-game tray
+                     from the printed 1830 quantities and decremented
+                     `REMAINING_TILES` as tiles are laid, so this was
+                     enforced state the UI had never shown -- a player could
+                     be refused a lay for a reason nothing on screen
+                     predicted.
+
+                     ON THE CANDIDATE RATHER THAN IN A REFERENCE TABLE,
+                     because scarcity is only actionable at the moment of
+                     choosing. "There are four #57s in the game" is trivia; "1
+                     left" while you are picking between two tiles is the
+                     whole decision. A manifest tab would put the fact
+                     somewhere a player has to already suspect it to go
+                     looking.
+
+                     ONLY WHEN IT IS WORTH SAYING. A tile with most of its
+                     tray still in the box adds a number to every thumbnail
+                     in the ring and tells the player nothing -- eight
+                     candidates each captioned with a comfortable count is
+                     noise that hides the one that matters. The badge appears
+                     from two copies down, which is where the answer starts
+                     changing what you pick. */}
+                {(() => {
+                  if (!stock || stock.remaining > 2) return null;
+                  return (
+                    <span
+                      style={{
+                        ...styles.candidateStock,
+                        ...(stock.remaining === 0
+                          ? styles.candidateStockNone
+                          : stock.remaining === 1
+                            ? styles.candidateStockLast
+                            : {}),
+                      }}
+                      aria-label={`${stock.remaining} of ${stock.printed} copies of tile ${tile.tileId} remain`}
+                    >
+                      {stock.remaining === 0 ? "none left" : `${stock.remaining} left`}
+                    </span>
+                  );
+                })()}
               </button>
             );
           })}
@@ -1050,4 +1149,39 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "center",
   },
+  /* Design note #629: the exhausted candidate. Dimmed rather than removed,
+     and the drop-shadow goes with the opacity -- a shadow at full strength
+     under a faded thumbnail keeps it looking raised and clickable, which is
+     the one impression this state has to undo.
+
+     `grayscale` ON TOP OF THE FADE, because tier colour is how a player
+     reads the ring at speed: a merely faint green tile still reads as an
+     available green tile out of the corner of the eye. Draining the hue is
+     what says "not one of your choices" without hiding which tile it is. */
+  candidateExhausted: {
+    opacity: 0.38,
+    filter: "grayscale(0.85) drop-shadow(0 1px 3px rgba(0,0,0,0.4))",
+    cursor: "not-allowed",
+  },
+  /* Design note #628: quieter than the tile id above it by default -- a
+     comfortable count is context, not a warning. The two states that ARE
+     warnings take colour, and only those. */
+  candidateStock: {
+    display: "block",
+    fontSize: "9px",
+    lineHeight: 1.3,
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    color: "#8a919e",
+    textAlign: "center",
+    whiteSpace: "nowrap",
+  },
+  /* The last copy in the game. Amber rather than red: taking it is a
+     legitimate and often correct move, and red would read as a refusal. */
+  candidateStockLast: { color: "#e0b050" },
+  /* Exhausted. Still SHOWN rather than hidden -- the candidate is offered by
+     the placement rules, which do not consult the tray, and a player who
+     picks it will be refused by the contract. Saying so on the thumbnail is
+     better than letting them find out from a rejected transaction. */
+  candidateStockNone: { color: "#e08a8a" },
 };

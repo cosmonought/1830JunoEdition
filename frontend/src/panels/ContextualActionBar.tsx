@@ -741,6 +741,18 @@ export default function ContextualActionBar({
    * reachable before the first `GetGameState` resolves, and colouring it
    * from `stationTickerColor(0)`'s fallback grey would dress an empty bar as
    * though a company were acting. */
+  /* Design note #631: the same secondary-ink rule `corporationBarInk` below
+     applies, factored out because the seat card needs it too. Alpha over the
+     real background rather than a fixed grey -- a grey that reads as
+     "quieter" on slate blue is nearly invisible on ochre. */
+  const seatInkMuted = React.useCallback(
+    (background: string) =>
+      bestContrastTextColor(background) === "#FFFFFF"
+        ? "rgba(255, 255, 255, 0.74)"
+        : "rgba(0, 0, 0, 0.66)",
+    [],
+  );
+
   const corporationBarInk = React.useMemo(() => {
     if (!activeCorporation) {
       return {
@@ -1400,6 +1412,34 @@ export default function ContextualActionBar({
           </span>
         )
       )}
+      {/* ==================================================================
+           DESIGN NOTE 630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE
+          ==================================================================
+
+           INSTRUCTED: "let's make sure the player order track moves to the
+           same place as the subphase tracker in the Operating Round."
+
+           It was in the BUTTON row, beside Pass and Buy, because that is
+           where the roster pills it replaced had sat (design note #342) --
+           and a pill carrying a player's spendable cash genuinely did belong
+           next to the controls that spend it. `SeatOrderTrail` is not that.
+           It answers "where are we in the rotation", which is the same
+           question the sub-phase trail answers for a corporation's turn, and
+           the two were being answered in different halves of the same panel.
+
+           SO IT MOVES UP, into the slot immediately above, directly under
+           the round label. A player learns one place to look for "how far
+           through are we" and it holds whichever track this round has --
+           steps in an Operating Round, seats in the other two. The two are
+           mutually exclusive by round type, so this costs no height: the row
+           is occupied either way.
+
+           AND THE MONEY IS NO LONGER WHY IT IS THERE. Design note #631's
+           seat card carries the acting player's figures beside the controls,
+           which is the part of #342's argument that was about proximity to
+           the buttons. The trail keeps every seat's cash for comparison,
+           which is the part that was about the table. */}
+      {roundType !== "OperatingRound" && seatOrderTrail}
       {/* Operating Round turn stepper. Renders directly under the round
           label it elaborates: the label says WHICH step, the strip says
           where that step sits in the turn. Operating Round only -- there is
@@ -2572,27 +2612,105 @@ export default function ContextualActionBar({
             fallback. It covers the Operating Round -- whose turn belongs to
             a corporation, so it has no seat queue to draw -- and every
             non-sandbox room until the first `GetGameState` resolves. */}
-        {seatOrderTrail ?? (
-          activePlayerCash !== null && (
+        {/* ==================================================================
+             DESIGN NOTE 631: THE SEAT CARD, BUILT LIKE THE CORPORATION CARD
+            ==================================================================
+
+             REPORTED: "the Action bar during stock and auction rounds now
+             have a long player color-ed stripe along the top, but users are
+             still not seeing it or finding it very intuitive what it does.
+             Compared to the corporate card/tile in the Operating round
+             action bar, it is indeed quite subtle."
+
+             Both halves are right and the second explains the first. A
+             3px stripe can only signal that SOMETHING is the case; it cannot
+             say what. The Operating Round bar does not have that problem
+             because it does not use a stripe -- `orContextCard` is a
+             fully-saturated block carrying the corporation's acronym, name
+             and figures, and a player reads WHO from it without being taught
+             that colour means anything.
+
+             SO THIS IS THAT CARD, WITH A SEAT IN IT. Same construction:
+             the identity's own colour at full strength, ink chosen by
+             `bestContrastTextColor` rather than asserted, a translucent black
+             border so one rule darkens any hue. Nothing here is a new idea;
+             it is the existing idea applied to the round that was left out.
+
+             THE FIGURES ARE LABELLED, WHICH IS THE OTHER HALF OF THE REPORT:
+             'the compressed "P1 $500 (+$200)" made some players think they
+             were earning $200'. That reading is entirely fair -- a bare
+             "+$200" beside a balance is the notation a game uses for income.
+             Escrowed money is the opposite: it is the player's own cash,
+             already committed, and unavailable until the bid resolves. A
+             plus sign cannot carry that and no amount of tooltip fixes a
+             glyph people do not hover. So the card spends the width on words
+             -- "Cash" and "In bids" -- and the ambiguity has nowhere to
+             live.
+
+             THE STRIPE STAYS. It is the HANDOFF animation (design note
+             #597), which is about the moment of change rather than the
+             state, and the card cannot do that job -- a card that is always
+             there cannot sweep. */}
+        {actingSeatColor && activePlayerCash !== null && (
+          <span
+            style={{
+              ...styles.seatContextCard,
+              backgroundColor: actingSeatColor,
+              borderColor: "rgba(0, 0, 0, 0.35)",
+            }}
+          >
             <span
-              style={styles.playerCashBadge}
-              /* Design note #317: when money is escrowed the badge says so,
-                 because the figure beside the name has stopped being the
-                 player's balance and become their SPENDING POWER -- two
-                 different numbers that only coincide when nothing is bid. */
-              title={
-                activePlayerEscrow > 0
-                  ? `${activePlayerName ?? "The acting player"} has $${activePlayerCash} available to bid. $${activePlayerEscrow} more is escrowed in standing bids and comes back if those bids lose.`
-                  : `${activePlayerName ?? "The acting player"} holds $${activePlayerCash}. In the auction this is the only money in play \u2014 privates are bought from a player's own cash, not a corporation's treasury.`
-              }
+              style={{
+                ...styles.seatContextName,
+                color: bestContrastTextColor(actingSeatColor),
+              }}
             >
-              <span style={styles.playerCashName}>{activePlayerName ?? "Player"}</span>
-              <span style={styles.playerCashValue}>${activePlayerCash}</span>
+              {activePlayerName ?? "Player"}
+            </span>
+            <span style={styles.seatContextFigures}>
+              <span style={styles.seatContextFact}>
+                <span
+                  style={{
+                    ...styles.seatContextFactLabel,
+                    color: seatInkMuted(actingSeatColor),
+                  }}
+                >
+                  Cash
+                </span>
+                <span
+                  style={{
+                    ...styles.seatContextFactValue,
+                    color: bestContrastTextColor(actingSeatColor),
+                  }}
+                >
+                  ${activePlayerCash}
+                </span>
+              </span>
               {activePlayerEscrow > 0 && (
-                <span style={styles.playerCashEscrow}>${activePlayerEscrow} held</span>
+                <span
+                  style={styles.seatContextFact}
+                  title={`$${activePlayerEscrow} of ${activePlayerName ?? "this player"}'s money is committed to standing bids. It is not spendable now, and it comes back if those bids lose.`}
+                >
+                  <span
+                    style={{
+                      ...styles.seatContextFactLabel,
+                      color: seatInkMuted(actingSeatColor),
+                    }}
+                  >
+                    In bids
+                  </span>
+                  <span
+                    style={{
+                      ...styles.seatContextFactValue,
+                      color: bestContrastTextColor(actingSeatColor),
+                    }}
+                  >
+                    ${activePlayerEscrow}
+                  </span>
+                </span>
               )}
             </span>
-          )
+          </span>
         )}
         {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
             The leading `actionBarSpacer` that used to sit here is gone --

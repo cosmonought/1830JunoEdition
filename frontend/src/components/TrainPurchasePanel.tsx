@@ -75,9 +75,12 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
+
 import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
-import type { DepotTier } from "../utils/gamePhase";
+import type { DepotTier, PhaseTint } from "../utils/gamePhase";
+// Design note #632: one tier-to-era lookup, shared with the phase badge.
+import { tierTint } from "../utils/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
 
 /** The subset of a corporation both sections need. */
@@ -201,6 +204,10 @@ export function TrainPurchasePanel({
 
   /* ---- Corporate section state ---- */
   const [corporateOpen, setCorporateOpen] = useState(defaultCorporateOpen);
+  /* Design note #633: CLOSED by default. The five tiers behind it are
+     reference, and a reference list that opens itself is the vertical space
+     this pass exists to give back. */
+  const [laterTrainsOpen, setLaterTrainsOpen] = useState(false);
   /* Design note #282: `position` indexes into the seller's `owned_trains`,
      which is what tells two identical models apart. The dispatch still
      names only the model -- `BuyTrainFromCorporation` has no notion of
@@ -223,6 +230,29 @@ export function TrainPurchasePanel({
   );
 
   const depotSupply = nextTier === null ? 0 : (nextTier.remaining ?? 99);
+
+  /* ==================================================================
+   *  DESIGN NOTE 633: THE ONE YOU CAN BUY, AND EVERYTHING ELSE
+   * ==================================================================
+   *
+   * `nextTier` is the split. Rusted tiers go with the later ones rather than
+   * being dropped: a 2-train that has left play is still the reason the
+   * board looks the way it does, and design note #283's "sold out is the
+   * middle of a tier's story, not the end" applies just as much to a tier
+   * behind a caret as to one on screen.
+   *
+   * NO AVAILABLE TIER IS A REAL STATE -- every tier sold out, which in 1830
+   * means the game is at Diesels or over. The available list is then empty
+   * and the accordion holds the whole depot, which is honest: there is
+   * nothing to buy and the panel says so by having nothing in the top slot. */
+  const availableTiers = useMemo(
+    () => (nextTier === null ? [] : depot.filter((row) => row.tier === nextTier.tier)),
+    [depot, nextTier],
+  );
+  const laterTiers = useMemo(
+    () => (nextTier === null ? depot : depot.filter((row) => row.tier !== nextTier.tier)),
+    [depot, nextTier],
+  );
 
   /* ==================================================================
    *  DESIGN NOTE 230: THE TRAIN LIMIT IS A SECOND, TIGHTER CEILING
@@ -516,94 +546,82 @@ export function TrainPurchasePanel({
              ever interact with one of them". The other five are reference,
              and reference wants a table. Only the purchasable tier keeps a
              raised treatment, because that one IS the control. */}
+        {/* ==================================================================
+             DESIGN NOTE 633: ONE ROW BY DEFAULT, FIVE BEHIND A CARET
+            ==================================================================
+
+             REPORTED: "the new Buy Trains from the Bank action panel has
+             condensed the horizontal space the previous version occupied, but
+             it is taking up the same (or more) vertical space as before. The
+             intention however was to cut down how much vertical space the
+             buying from the bank took up."
+
+             Fair, and design note #618 only did half the job. Turning six
+             five-line cards into six one-line rows made each row shorter and
+             kept all six on screen -- so the panel got tidier and barely got
+             shorter. The height was never in the row's design; it was in the
+             row COUNT.
+
+             AND FIVE OF THE SIX ARE REFERENCE. 1830's depot sells
+             cheapest-first, so exactly one tier is ever purchasable. The
+             other five answer "what is coming and what will it cost me",
+             which is a question a player asks a few times a game and not
+             every time this panel opens.
+
+             SO THE PURCHASABLE TIER STANDS ALONE and the rest fold into a
+             caret -- the same accordion this file already uses for corporate
+             trades, and for the same reason recorded there: the ordinary case
+             is the open one. The collapsed summary still names what is next
+             and what it costs, so the commonest reference question is
+             answered without expanding anything.
+
+             THIS IS ALSO WHAT RETIRES THE "FOR SALE" BADGE (design note
+             #634): a lone row under a heading that says Available cannot be
+             mistaken for one of six. */}
         <div style={styles.depotGrid}>
-          {depot.map((tier) => {
-            const isNext = nextTier !== null && tier.tier === nextTier.tier;
-            return (
-              <div
-                key={tier.tier}
-                style={{
-                  ...styles.depotCard,
-                  ...(isNext ? styles.depotCardActive : {}),
-                  ...(tier.rusted ? styles.depotCardRusted : {}),
-                }}
-                title={
-                  tier.rusted
-                    ? `${tier.tier}-trains have rusted and left play entirely.`
-                    : isNext
-                      ? `1830's depot sells cheapest-first, so the ${tier.tier}-train is the only one purchasable right now.`
-                      : tier.soldOut
-                        ? `The depot holds no ${tier.tier}-trains.`
-                        : `Not purchasable until every cheaper tier is sold out.`
-                }
-              >
-                {/* Design note #617: the glyph leads, so the row opens with a
-                    picture of what is being bought rather than a bare digit.
-                    Green on the purchasable row, muted elsewhere -- it takes
-                    the same ink as the tier label beside it. */}
-                <TrainGlyph
-                  tier={tier.tier}
-                  color={isNext ? "#7ee0a1" : tier.rusted ? "#6b7280" : "#8a919e"}
-                />
-                <span style={styles.depotTier}>{tier.tier}</span>
-                <span style={styles.depotCost}>${tier.cost}</span>
-                <span
-                  style={{
-                    ...styles.depotSupply,
-                    ...(tier.remaining === 0 ? styles.depotSupplyEmpty : {}),
-                  }}
-                >
-                  {tier.total === null
-                    ? "unlimited"
-                    : `${tier.remaining ?? tier.total} / ${tier.total} left`}
-                </span>
-                {/* Design note #618: the flags share one right-hand column, so
-                    a row always has the same four slots whatever it is
-                    saying. */}
-                <span style={styles.depotFate}>
-                {tier.rusted && <span style={styles.depotFlag}>rusted</span>}
-                {!tier.rusted && isNext && <span style={styles.depotFlagNext}>For Sale</span>}
-                {/* ==================================================
-                     DESIGN NOTE 283: WHAT HAPPENS TO THIS TIER, NEXT
-                    ==================================================
-
-                    A depot card said how many were left and, once they
-                    were gone, nothing. Sold out is not the end of a tier's
-                    story -- it is the middle. The 3-trains leaving the
-                    depot is the moment every 3-train ON THE BOARD becomes
-                    a liability, and the card went quiet exactly then.
-
-                    So the fate rides on every card that has one, sold out
-                    or not, and the tiers that have none say so. "Permanent"
-                    is worth its own badge rather than an absence: a player
-                    weighing $630 for a 6-train against $300 for a 4 is
-                    weighing precisely the fact that one of them never dies,
-                    and an empty space does not state it.
-
-                    NOT SHOWN ONCE IT HAS ALREADY HAPPENED -- the `rusted`
-                    flag above says that, in the past tense, and a countdown
-                    to something that has occurred is noise. */}
-                {!tier.rusted &&
-                  (tier.rustPhaseLabel !== null ? (
-                    <span
-                      style={styles.depotFlagRustSoon}
-                      title={`Every ${tier.tier}-train in play is destroyed when the first ${tier.rustedBy}-train is bought, which is also what starts ${tier.rustPhaseLabel}.`}
-                    >
-                      Rusts on {tier.rustPhaseLabel}
-                    </span>
-                  ) : (
-                    <span
-                      style={styles.depotFlagPermanent}
-                      title={`${tier.tier}-trains never rust — nothing in 1830 removes them from play.`}
-                    >
-                      Permanent
-                    </span>
-                  ))}
-                </span>
-              </div>
-            );
-          })}
+          {availableTiers.map((tier) => (
+            <DepotRow
+              key={tier.tier}
+              tier={tier}
+              isNext={nextTier !== null && tier.tier === nextTier.tier}
+            />
+          ))}
         </div>
+
+        {laterTiers.length > 0 && (
+          <>
+            <button
+              type="button"
+              style={styles.laterTrainsHeader}
+              onClick={() => setLaterTrainsOpen((open) => !open)}
+              aria-expanded={laterTrainsOpen}
+            >
+              <span style={styles.accordionCaret} aria-hidden="true">
+                {laterTrainsOpen ? "\u25bc" : "\u25b6"}
+              </span>
+              <span style={styles.laterTrainsTitle}>
+                Later trains ({laterTiers.length})
+              </span>
+              {/* Design note #633: the collapsed summary answers the
+                  commonest reference question -- what is next and what does
+                  it cost -- so opening this is for the rarer ones. */}
+              <span style={styles.sectionMeta}>
+                {laterTrainsOpen
+                  ? "hide"
+                  : laterTiers[0]
+                    ? `next: ${laterTiers[0].tier}-train $${laterTiers[0].cost}`
+                    : ""}
+              </span>
+            </button>
+            {laterTrainsOpen && (
+              <div style={styles.depotGrid}>
+                {laterTiers.map((tier) => (
+                  <DepotRow key={tier.tier} tier={tier} isNext={false} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
         {nextTier ? (
           <>
@@ -1137,6 +1155,115 @@ function TrainGlyph({ tier, color }: { tier: string; color: string }) {
   );
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 632: THE ERA PALETTE, LIGHTENED FOR A DARK PANEL
+ * ==================================================================
+ *
+ * The tile colours a player already knows, adjusted to be legible as INK on
+ * this panel's near-black rather than as fills on a map. Brown is the case
+ * that forces the adjustment: the tile brown is a fill colour and reads as
+ * mud at 12px on `#12141b`, so the ink is a warm tan that still says "brown
+ * era" beside a yellow and a green.
+ *
+ * NOT PULLED FROM `hexTileCatalog`, deliberately. Those values are chosen to
+ * be correct as large filled hexes on a light board; reusing them here would
+ * be sharing a number that happens to match rather than a decision. What is
+ * shared is the tier-to-era MAPPING (`tierTint`), which is the part that
+ * would actually be wrong if it drifted. */
+const ERA_INK: Readonly<Record<PhaseTint, string>> = {
+  yellow: "#d9c05a",
+  green: "#6fbf7f",
+  brown: "#c08a5a",
+};
+
+/* Design note #633: one depot line, rendered identically whether it is the
+   purchasable tier standing alone or one of the five behind the caret. A
+   second copy for the collapsed list is how the two would come to disagree
+   about what a rusted tier looks like. */
+function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
+  return (
+      <div
+        style={{
+          ...styles.depotCard,
+          ...(isNext ? styles.depotCardActive : {}),
+          ...(tier.rusted ? styles.depotCardRusted : {}),
+        }}
+        title={
+          tier.rusted
+            ? `${tier.tier}-trains have rusted and left play entirely.`
+            : isNext
+              ? `1830's depot sells cheapest-first, so the ${tier.tier}-train is the only one purchasable right now.`
+              : tier.soldOut
+                ? `The depot holds no ${tier.tier}-trains.`
+                : `Not purchasable until every cheaper tier is sold out.`
+        }
+      >
+        {/* Design note #617: the glyph leads, so the row opens with a
+            picture of what is being bought rather than a bare digit.
+            Green on the purchasable row, muted elsewhere -- it takes
+            the same ink as the tier label beside it. */}
+        <TrainGlyph
+          tier={tier.tier}
+          color={tier.rusted ? "#5a6070" : ERA_INK[tierTint(tier.tier)]}
+        />
+        <span style={styles.depotTier}>{tier.tier}</span>
+        <span style={styles.depotCost}>${tier.cost}</span>
+        <span
+          style={{
+            ...styles.depotSupply,
+            ...(tier.remaining === 0 ? styles.depotSupplyEmpty : {}),
+          }}
+        >
+          {tier.total === null
+            ? "unlimited"
+            : `${tier.remaining ?? tier.total} / ${tier.total} left`}
+        </span>
+        {/* Design note #618: the flags share one right-hand column, so
+            a row always has the same four slots whatever it is
+            saying. */}
+        <span style={styles.depotFate}>
+        {tier.rusted && <span style={styles.depotFlag}>rusted</span>}
+        {/* ==================================================
+             DESIGN NOTE 283: WHAT HAPPENS TO THIS TIER, NEXT
+            ==================================================
+
+            A depot card said how many were left and, once they
+            were gone, nothing. Sold out is not the end of a tier's
+            story -- it is the middle. The 3-trains leaving the
+            depot is the moment every 3-train ON THE BOARD becomes
+            a liability, and the card went quiet exactly then.
+
+            So the fate rides on every card that has one, sold out
+            or not, and the tiers that have none say so. "Permanent"
+            is worth its own badge rather than an absence: a player
+            weighing $630 for a 6-train against $300 for a 4 is
+            weighing precisely the fact that one of them never dies,
+            and an empty space does not state it.
+
+            NOT SHOWN ONCE IT HAS ALREADY HAPPENED -- the `rusted`
+            flag above says that, in the past tense, and a countdown
+            to something that has occurred is noise. */}
+        {!tier.rusted &&
+          (tier.rustPhaseLabel !== null ? (
+            <span
+              style={styles.depotFlagRustSoon}
+              title={`Every ${tier.tier}-train in play is destroyed when the first ${tier.rustedBy}-train is bought, which is also what starts ${tier.rustPhaseLabel}.`}
+            >
+              Rusts on {tier.rustPhaseLabel}
+            </span>
+          ) : (
+            <span
+              style={styles.depotFlagPermanent}
+              title={`${tier.tier}-trains never rust — nothing in 1830 removes them from play.`}
+            >
+              Permanent
+            </span>
+          ))}
+        </span>
+      </div>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
@@ -1195,7 +1322,26 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "5px",
     border: "1px solid transparent",
     backgroundColor: "transparent",
-    cursor: "help",
+    /* ==================================================================
+     *  DESIGN NOTE 635: A ROW THAT DOES NOTHING SHOULD NOT OFFER TO
+     * ==================================================================
+     *
+     * REPORTED: "when my mouse is over the train list, it gains a ? icon at
+     * the bottom of the cursor as though clicking them would do something,
+     * but nothing happens."
+     *
+     * `cursor: help` -- inherited from the card layout, where it was
+     * arguably right: a card with five lines of detail and a tooltip
+     * explaining the queue rule is a thing you interrogate. A one-line row
+     * whose four columns are already on screen has nothing left to reveal,
+     * so the cursor was promising an interaction that had been designed
+     * away.
+     *
+     * THE TOOLTIPS STAY. `title` still explains why a tier is or is not
+     * purchasable, which is worth having on hover -- it just should not
+     * change the pointer. A default cursor over a tooltip is the ordinary
+     * arrangement everywhere else in this app. */
+    cursor: "default",
   },
   /* Design note #618: only the purchasable row keeps a raised treatment --
      it is the one that is a control rather than a reference line. */
@@ -1237,7 +1383,18 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.03em",
   },
   depotFlag: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", fontStyle: "italic" },
-  depotFlagNext: { fontSize: FONT_SIZE.micro, color: "#7ee0a1", fontWeight: 700 },
+  /* ==================================================================
+   *  DESIGN NOTE 634: THE "FOR SALE" BADGE IS RETIRED
+   * ==================================================================
+   *
+   * INSTRUCTED, once the depot collapsed: "I'm not sure the 'For sale' badge
+   * is any longer necessary and would remove it."
+   *
+   * Agreed, and the badge was always a workaround for the layout rather than
+   * a fact worth stating. Six near-identical rows needed one of them marked;
+   * a single row standing above a caret labelled "Later trains" is marked by
+   * position, which is the stronger signal and costs no width. `depotFlagNext`
+   * is deleted with it rather than left unused. */
 
   /* ---- Buy row ---- */
   buyRow: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" },
@@ -1314,6 +1471,30 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   accordionCaret: { fontSize: FONT_SIZE.micro, color: "#8a919e" },
+  /* Design note #633: quieter than `accordionHeader`. That one opens a
+     section with controls in it; this opens a reference list, and a header
+     as loud as the panel's own would make the collapsed state look like the
+     thing the panel is for. */
+  laterTrainsHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    width: "100%",
+    textAlign: "left",
+    padding: "5px 8px",
+    borderRadius: "6px",
+    border: "1px solid #2b2f3a",
+    backgroundColor: "transparent",
+    color: "#c8cdd8",
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  laterTrainsTitle: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#c8cdd8",
+    flex: 1,
+  },
   accordionBody: {
     display: "flex",
     flexDirection: "column",

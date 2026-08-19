@@ -785,6 +785,8 @@ import PlayerCards from "./components/PlayerCards";
 import SeatOrderTrail from "./components/SeatOrderTrail";
 // Design note #610: who has passed, derived rather than tracked.
 import { passedSeatIndices } from "./utils/passedSeats";
+// Design note #628: how many copies of a tile are still in the tray.
+import { tileStock } from "./utils/tileSupply";
 import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 import { playerFinances } from "./utils/playerFinance";
 import {
@@ -8192,6 +8194,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
      `stationTickerColor` for the fill, so a preview token wears the same
      livery as the real one (design note #428's single palette). */
+  /* Design note #628: how many copies of a candidate are still in the tray.
+     Reads the live board, so it moves as tiles are laid and as upgrades
+     return the tile underneath -- `utils/tileSupply.ts` has the argument for
+     why counting the CURRENT map is exact rather than approximate. */
+  const radialStockFor = useCallback(
+    (tileId: number) => tileStock(mapGrid, tileId),
+    [mapGrid],
+  );
+
   const radialStationMarkersFor = useCallback(
     (tileId: number): readonly StationPreviewMarker[] => {
       if (!radialSelector) return [];
@@ -10283,6 +10294,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // Design note #488b: the caption's picture -- the same migration,
           // drawn on each candidate instead of described.
           stationMarkersFor={radialStationMarkersFor}
+          /* Design note #628: the tray count for each candidate. Derived
+             from the board rather than queried -- see `utils/tileSupply.ts`
+             for why that arithmetic is exact and what would replace it. */
+          stockFor={radialStockFor}
           onConfirm={handleConfirmRadialLay}
           onCancel={() => setPreviewTile(null)}
           onDismiss={handleDismissRadial}

@@ -1094,27 +1094,75 @@ export const styles: Record<string, React.CSSProperties> = {
     minHeight: "48px",
     maxHeight: "60px",
   },
-  /* Design note #300: the player's own wallet. Deliberately styled unlike
-     the corporation strip's treasury -- they are different money, and two
-     figures that look alike on one bar will be read as one. */
-  playerCashBadge: {
+  /* ==================================================================
+   *  DESIGN NOTE 631: THE SEAT CARD
+   * ==================================================================
+   *
+   * Built to `orContextCard`'s proportions rather than to a badge's: this is
+   * the Stock/Auction bar's answer to the corporation card, and two identity
+   * blocks of different sizes on two rounds of the same bar would read as two
+   * different kinds of thing.
+   *
+   * NO `borderRadius: 999px`. The pill shape is what made the old badge read
+   * as a tag ABOUT something rather than as the thing itself -- the same
+   * distinction design note #603 worked through on the turn-order bar. A card
+   * is a rectangle.
+   *
+   * `backgroundColor` AND `borderColor` COME FROM THE CALL SITE, because only
+   * it knows the seat. Everything that can be fixed is fixed here so the two
+   * cards cannot drift in shape while differing in colour. */
+  seatContextCard: {
     display: "inline-flex",
-    alignItems: "baseline",
-    gap: "5px",
-    padding: "2px 7px",
-    borderRadius: "999px",
-    border: "1px solid #2f6f55",
-    backgroundColor: "#16241d",
-    cursor: "help",
+    flexDirection: "column",
+    gap: "2px",
+    padding: "5px 12px",
+    borderRadius: "8px",
+    borderWidth: "1px",
+    borderStyle: "solid",
     whiteSpace: "nowrap",
+    flex: "none",
   },
-  playerCashName: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#8fb6a1" },
-  playerCashValue: {
+  seatContextName: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    letterSpacing: "0.02em",
+    lineHeight: 1.15,
+  },
+  seatContextFigures: { display: "inline-flex", alignItems: "baseline", gap: "12px" },
+  /* Design note #631: label above value, not "$500 (+$200)". The label is
+     what stops a second figure being read as a delta on the first. */
+  seatContextFact: { display: "inline-flex", alignItems: "baseline", gap: "4px" },
+  seatContextFactLabel: {
+    fontSize: "10px",
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+  },
+  seatContextFactValue: {
     fontSize: FONT_SIZE.body,
     fontWeight: 800,
-    color: "#7ee0a1",
     fontVariantNumeric: "tabular-nums",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 631: THE ACTING-PLAYER BADGE WAS ALREADY UNREACHABLE
+   * ==================================================================
+   *
+   * Deleted here: `playerCashBadge`, its name/value parts, and
+   * `playerCashEscrow` further down. The seat card above replaces what it did
+   * -- and, checked before deleting, it had not been doing it for some time.
+   *
+   * It was the `seatOrderTrail ?? ...` fallback, in the NON-Operating-Round
+   * branch of the bar. Design note #601 worked out that the trail is non-null
+   * for exactly the two rounds that branch renders, so the fallback could
+   * never be taken; and the one state that might have slipped past -- no
+   * `gameState` yet -- fails the `activePlayerCash !== null` guard as well,
+   * because that figure is derived from the same absent state.
+   *
+   * THAT IS THE SECOND DEAD FALLBACK IN THIS ONE `??`. The roster pills were
+   * the first (#601). Both were kept "for the case the trail does not cover",
+   * both described an empty set, and both compiled and linted perfectly for
+   * months. The shape to distrust is a fallback whose condition is the
+   * negation of a condition maintained in a different file. */
   /* Design note #317: escrow qualifies the figure beside it rather than
      competing with it -- muted, and absent entirely when nothing is bid. */
   /* Design note #563: the player card grid's own section. Spaced from the
@@ -1217,12 +1265,6 @@ export const styles: Record<string, React.CSSProperties> = {
      the trail rather than truncating. Six-seat games are supported, so if
      that ever overflows the bar, a max-width on `seatName` is the fix and
      this is the note that predicted it. */
-  playerCashEscrow: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 600,
-    color: "#8a919e",
-    fontVariantNumeric: "tabular-nums",
-  },
   orPanelRailLeft: {
     display: "flex",
     flexDirection: "row",

@@ -73,6 +73,29 @@ export interface TileCatalogEntry {
    *  into one shared hub, which is wrong for a tile that actually has two
    *  independent city nodes. Omitted (`undefined`) for every single-city
    *  tile, which keeps the existing fan-to-center rendering unchanged. */
+  /* ==================================================================
+   *  DESIGN NOTE 626: THE COLUMN THE MIRROR LEFT BEHIND
+   * ==================================================================
+   *
+   * How many physical copies of this artwork a room starts with -- the SIXTH
+   * field of `hexmap::TILE_CATALOG`, taken from `tobymao/18xx`'s
+   * `g_1830/map.rb` TILES hash exactly as `connections`, `paths` and
+   * `revenue` above were.
+   *
+   * IT WAS ALWAYS ENFORCED AND NEVER SHOWN. `contract.rs` seeds a per-game
+   * tray at these counts and `state::REMAINING_TILES` decrements as tiles are
+   * laid, so scarcity is live state rather than trivia. This mirror simply
+   * dropped the column, which left the UI unable to say why a lay was about
+   * to be refused -- or that #57 is the ONLY yellow city tile in this
+   * catalog, four copies against eight corporations needing a home.
+   *
+   * THE `UNLIMITED_TILE_SUPPLY` SENTINEL IS NOT MODELLED. `hexmap.rs`
+   * defines `u32::MAX` for a tile exempt from tray limits and no current
+   * entry uses it -- all 46 carry a real printed count, which
+   * `tileSupply.test.ts` asserts. Representing an unlimited case nothing
+   * produces would be a branch with no way to test it; if the backend ever
+   * uses the sentinel, that test fails first and this is the note to read. */
+  quantity: number;
   cityGroups?: readonly (readonly number[])[];
   /** Design note #119: this tile's DISCRETE track segments as BASE
    *  (pre-rotation) edge pairs, mirroring `hexmap::TILE_CATALOG`'s SEVENTH
@@ -199,6 +222,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "DoubleTown",
     color: "Yellow",
+    quantity: 1,
     paths: [[0, 4], [1, 3]],
     revenue: 10,
   },
@@ -207,6 +231,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "DoubleTown",
     color: "Yellow",
+    quantity: 1,
     paths: [[0, 3], [1, 2]],
     revenue: 10,
   },
@@ -215,6 +240,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_011,
     terrain: "SmallTown",
     color: "Yellow",
+    quantity: 2,
     paths: [[0, 1]],
     revenue: 10,
   },
@@ -223,6 +249,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_001,
     terrain: "SmallTown",
     color: "Yellow",
+    quantity: 2,
     paths: [[0, 3]],
     revenue: 10,
   },
@@ -231,6 +258,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_011,
     terrain: "Plain",
     color: "Yellow",
+    quantity: 4,
     paths: [[0, 1]],
   },
   {
@@ -238,6 +266,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_101,
     terrain: "Plain",
     color: "Yellow",
+    quantity: 8,
     paths: [[0, 2]],
   },
   {
@@ -245,6 +274,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_001,
     terrain: "Plain",
     color: "Yellow",
+    quantity: 7,
     paths: [[0, 3]],
   },
   {
@@ -252,6 +282,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "DoubleTown",
     color: "Yellow",
+    quantity: 1,
     paths: [[0, 3], [1, 4]],
     revenue: 10,
   },
@@ -260,6 +291,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "DoubleTown",
     color: "Yellow",
+    quantity: 1,
     paths: [[0, 2], [1, 3]],
     revenue: 10,
   },
@@ -268,6 +300,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_001,
     terrain: "MajorCityHub",
     color: "Yellow",
+    quantity: 4,
     paths: [[0, 3]],
     revenue: 20,
   },
@@ -276,6 +309,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_101,
     terrain: "SmallTown",
     color: "Yellow",
+    quantity: 2,
     paths: [[0, 2]],
     revenue: 10,
   },
@@ -284,6 +318,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "DoubleTown",
     color: "Yellow",
+    quantity: 1,
     paths: [[0, 3], [2, 4]],
     revenue: 10,
   },
@@ -294,6 +329,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "MajorCityHub",
     color: "Green",
+    quantity: 3,
     paths: [[0, 1], [0, 3], [0, 4], [1, 3], [1, 4], [3, 4]],
     revenue: 30,
   },
@@ -302,6 +338,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "MajorCityHub",
     color: "Green",
+    quantity: 2,
     paths: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
     revenue: 30,
   },
@@ -310,6 +347,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 2], [1, 3]],
   },
   {
@@ -317,6 +355,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 3], [1, 2]],
   },
   {
@@ -324,6 +363,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 3], [2, 4]],
   },
   {
@@ -331,6 +371,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 3], [1, 4]],
   },
   {
@@ -338,6 +379,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_001,
     terrain: "Plain",
     color: "Green",
+    quantity: 3,
     paths: [[0, 3], [0, 4]],
   },
   {
@@ -345,6 +387,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_101,
     terrain: "Plain",
     color: "Green",
+    quantity: 3,
     paths: [[0, 2], [0, 3]],
   },
   {
@@ -352,6 +395,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b010_101,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 2], [0, 4]],
   },
   {
@@ -359,6 +403,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b101_001,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 3], [0, 5]],
   },
   {
@@ -366,6 +411,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_011,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 1], [0, 3]],
   },
   {
@@ -373,6 +419,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b110_001,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 4], [0, 5]],
   },
   {
@@ -380,6 +427,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_111,
     terrain: "Plain",
     color: "Green",
+    quantity: 1,
     paths: [[0, 1], [0, 2]],
   },
   {
@@ -387,6 +435,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b010_101,
     terrain: "BostonHub",
     color: "Green",
+    quantity: 2,
     paths: [[0, 2], [0, 4], [2, 4]],
     revenue: 50,
   },
@@ -395,6 +444,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "NewYorkHub",
     color: "Green",
+    quantity: 1,
     cityGroups: [[0, 1], [2, 3]],
     paths: [[0, 1], [2, 3]],
     revenue: 60,
@@ -404,6 +454,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_101,
     terrain: "DoubleCityHub",
     color: "Green",
+    quantity: 2,
     cityGroups: [[0], [2]],
     paths: [[0, 0], [2, 2]],
     revenue: 40,
@@ -415,6 +466,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b000_111,
     terrain: "Plain",
     color: "Brown",
+    quantity: 1,
     paths: [[0, 1], [0, 2], [1, 2]],
   },
   {
@@ -422,6 +474,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b010_101,
     terrain: "Plain",
     color: "Brown",
+    quantity: 1,
     paths: [[0, 2], [0, 4], [2, 4]],
   },
   {
@@ -429,6 +482,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_011,
     terrain: "Plain",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 1], [0, 3], [1, 3]],
   },
   {
@@ -436,6 +490,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b101_001,
     terrain: "Plain",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 3], [0, 5], [3, 5]],
   },
   {
@@ -443,6 +498,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "Plain",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 2], [0, 3], [1, 2], [1, 3]],
   },
   {
@@ -450,6 +506,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "Plain",
     color: "Brown",
+    quantity: 1,
     paths: [[0, 1], [0, 3], [1, 4], [3, 4]],
   },
   {
@@ -457,6 +514,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "Plain",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 3], [0, 4], [2, 3], [2, 4]],
   },
   {
@@ -464,6 +522,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "Plain",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 2], [0, 3], [2, 4], [3, 4]],
   },
   {
@@ -471,6 +530,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "Plain",
     color: "Brown",
+    quantity: 1,
     paths: [[0, 3], [0, 4], [1, 3], [1, 4]],
   },
   {
@@ -478,6 +538,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "BostonHub",
     color: "Brown",
+    quantity: 2,
     paths: [[0, 2], [0, 3], [0, 4], [2, 3], [2, 4], [3, 4]],
     revenue: 60,
   },
@@ -486,6 +547,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "NewYorkHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 1], [2, 3]],
     paths: [[0, 1], [2, 3]],
     revenue: 90,
@@ -495,6 +557,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b111_111,
     terrain: "MajorCityHub",
     color: "Brown",
+    quantity: 3,
     paths: [[0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 3], [1, 4], [1, 5], [2, 3], [2, 4], [2, 5], [3, 4], [3, 5], [4, 5]],
     revenue: 40,
   },
@@ -503,6 +566,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "DoubleCityHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 2], [3, 4]],
     paths: [[0, 2], [3, 4]],
     revenue: 50,
@@ -512,6 +576,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "DoubleCityHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 4], [2, 3]],
     paths: [[0, 4], [2, 3]],
     revenue: 50,
@@ -521,6 +586,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "DoubleCityHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 3], [1, 2]],
     paths: [[0, 3], [1, 2]],
     revenue: 50,
@@ -530,6 +596,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_101,
     terrain: "DoubleCityHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 3], [2, 4]],
     paths: [[0, 3], [2, 4]],
     revenue: 50,
@@ -539,6 +606,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b011_011,
     terrain: "DoubleCityHub",
     color: "Brown",
+    quantity: 1,
     cityGroups: [[0, 3], [1, 4]],
     paths: [[0, 3], [1, 4]],
     revenue: 50,
@@ -548,6 +616,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     connections: 0b001_111,
     terrain: "Plain",
     color: "Brown",
+    quantity: 1,
     paths: [[0, 1], [0, 2], [1, 3], [2, 3]],
   },
 ];

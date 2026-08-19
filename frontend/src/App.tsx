@@ -8935,10 +8935,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     (gameState.current_round_type === "StockRound" ||
                       gameState.current_round_type === "WaterfallAuction") ? (
                       <SeatOrderTrail
+                        /* Design note #595a: the same figures the roster
+                           pills carried, on the same chips as the order --
+                           `playerRoster` is the single computation both used
+                           to read, so the trail cannot quote a different
+                           number from the badge it replaced. */
                         seats={gameState.player_addresses.map((address, index) => ({
                           address,
                           label: sandboxPlayerLabel(address) ?? truncateAddress(address),
                           color: seatColor(address, index),
+                          available: playerRoster.find((s) => s.address === address)?.available,
+                          escrowed: playerRoster.find((s) => s.address === address)?.escrowed,
                         }))}
                         activeAddress={actingAddress(gameState, waterfallState)}
                         priorityAddress={

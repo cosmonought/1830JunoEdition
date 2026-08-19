@@ -41,7 +41,33 @@ import { bestContrastTextColor } from "../styles/corporationLivery";
 
 export interface SeatOrderTrailProps {
   /** Every seat, in turn order. */
-  seats: ReadonlyArray<{ address: string; label: string; color: string }>;
+  seats: ReadonlyArray<{
+    address: string;
+    label: string;
+    color: string;
+    /* ==================================================================
+     *  DESIGN NOTE 595a: ONE ROW, NOT TWO
+     * ==================================================================
+     *
+     * REPORTED: the trail rendered ABOVE the existing roster pills, so the
+     * bar carried two rows of the same players -- one with the order and no
+     * money, one with the money and no order -- and the extra row shoved the
+     * phase badge out of place.
+     *
+     * That was mine, and the fix is the one the report points at: they are
+     * two answers to one question. Design note #342 put every seat's
+     * spendable cash on the bar because "in an auction the question that
+     * decides a bid is what can THEY spend"; design note #595 put the order
+     * there because the pills could only imply it. Both belong on the same
+     * chip.
+     *
+     * `undefined` renders the name alone, which is what a round with no
+     * money question wants. */
+    available?: number | null;
+    /** Design note #317: what is locked in standing bids. Zero or omitted
+     *  outside the auction, where there is no escrow to report. */
+    escrowed?: number | null;
+  }>;
   /** Whose turn it is now. `null` renders the trail with nobody marked,
    *  which is honest during the moment a round is turning over. */
   activeAddress: string | null;
@@ -116,6 +142,20 @@ export function SeatOrderTrail({
                 )}
                 {seat.label}
                 {isViewer && <span style={styles.you}>(you)</span>}
+                {typeof seat.available === "number" && (
+                  /* Design note #342: AVAILABLE cash, not the total -- during
+                     an auction the total is the one figure that cannot be
+                     spent. */
+                  <span style={styles.cash}>${seat.available}</span>
+                )}
+                {typeof seat.escrowed === "number" && seat.escrowed > 0 && (
+                  <span
+                    style={styles.escrow}
+                    title={`$${seat.escrowed} is escrowed in standing bids and comes back if those bids lose.`}
+                  >
+                    +${seat.escrowed}
+                  </span>
+                )}
                 {seat.address === priorityAddress && (
                   <span style={styles.priority} title="Opens the next Stock Round.">
                     PD
@@ -169,6 +209,8 @@ const styles: Record<string, React.CSSProperties> = {
   seatCurrent: { fontWeight: 800 },
   dot: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" },
   you: { opacity: 0.7, fontWeight: 600 },
+  cash: { fontWeight: 800, fontVariantNumeric: "tabular-nums" },
+  escrow: { fontSize: FONT_SIZE.micro, opacity: 0.7, fontVariantNumeric: "tabular-nums" },
   priority: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 900,

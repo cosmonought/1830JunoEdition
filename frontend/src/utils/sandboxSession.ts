@@ -79,6 +79,8 @@ import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCat
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
 import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
 import { stationTokenPrice } from "./stationTokens";
+// Design note #596: the president's certificate changes hands.
+import { settlePresidencies } from "./presidencyTransfer";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
 import {
   HEX_START_VALUE_OVERRIDE,
@@ -2347,7 +2349,11 @@ export function applySandboxAction(
       ? applyFloatThreshold(crowned, ctx.homeHexToAxial)
       : crowned;
 
-    return advanceSeat(markTrader(floated, actor));
+    /* Design note #596: a purchase can take the presidency off somebody. Run
+       AFTER the float check, because a buy that both floats a company and
+       crowns a new president must resolve the float against the holdings that
+       caused it, not against a board mid-transfer. */
+    return advanceSeat(markTrader(settlePresidencies(floated).state, actor));
   }
 
   if ("SellStock" in msg) {
@@ -2377,8 +2383,15 @@ export function applySandboxAction(
       "Bank",
       -sold,
     );
+    /* Design note #596: a SALE moves the crown too, and this direction is the
+       one players forget -- selling down below another holder hands them the
+       presidency whether or not that was the intention. Settled by the same
+       function as the buy, so the two cannot disagree about who leads. */
     // Design note #352: selling counts as trading for the Priority Deal.
-    return markTrader({ ...returned, consecutive_passes: 0 }, actor);
+    return markTrader(
+      { ...settlePresidencies(returned).state, consecutive_passes: 0 },
+      actor,
+    );
   }
 
   if (

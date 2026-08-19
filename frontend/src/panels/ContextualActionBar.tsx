@@ -2473,12 +2473,12 @@ export default function ContextualActionBar({
             Falls back to the single acting-player badge whenever the roster
             is not available, which is every non-sandbox room until the
             first `GetGameState` resolves. */}
-        {/* Design note #595: the ORDER, said out loud, above the pills that
-            show what each seat can spend. The pills answer "how much has
-            Ada got"; this answers "who is up and who is next", which they
-            could only ever imply through layout. */}
-        {seatOrderTrail}
-        {playerRoster.length > 0 ? (
+        {/* Design note #595a: the trail REPLACES the pills where it applies,
+            rather than sitting above them. It carries the same cash and
+            escrow the pills carried, plus the order they could only imply --
+            so two rows of the same players collapse back into one. The pills
+            remain for every case the trail does not cover. */}
+        {seatOrderTrail ?? (playerRoster.length > 0 ? (
           <span style={styles.actionBarRoster}>
             <style>{ROSTER_CONTEST_CHASE_CSS}</style>
             {playerRoster.map((seat) => (
@@ -2541,7 +2541,7 @@ export default function ContextualActionBar({
               )}
             </span>
           )
-        )}
+        ))}
         {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
             The leading `actionBarSpacer` that used to sit here is gone --
             see `appStyles.ts` for why two equal spacers centred the group

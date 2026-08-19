@@ -84,7 +84,7 @@ import {
 } from "../components/MainTabBar";
 // Design note #545: the mini-auction chaser, shared visual language with
 // the contested card in `WaterfallAuctionDashboard`.
-import { ROSTER_CONTEST_CHASE_CSS } from "../styles/animations";
+import { ROSTER_CONTEST_CHASE_CSS, TURN_HANDOFF_SWEEP_CSS } from "../styles/animations";
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
@@ -1219,16 +1219,48 @@ export default function ContextualActionBar({
       ref={actionBarRef}
       style={{
         ...styles.actionBar,
+        /* Design note #597: the CONTINUOUS pulse stays and is now the
+           quieter of two cues. It says "it is still your turn" -- a sustained
+           state, correctly rendered by a sustained animation. The band's
+           sweep says "your turn just began", which is the arrival the report
+           is about and the thing a continuous animation can never carry. */
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
-        /* Design note #570: the acting seat's colour as a left edge. LAST in
-           the spread so it wins over the base border, and only ever set for
-           the two rounds that have a seat on turn. */
-        ...(actingSeatColor
-          ? { borderLeft: `6px solid ${actingSeatColor}`, paddingLeft: "10px" }
-          : {}),
+        /* Design note #597: the left border is GONE -- see the band below.
+           `position: relative` so the band can pin itself to the top edge
+           without the bar's own sticky positioning being disturbed. */
+        ...(actingSeatColor ? { position: "relative" as const } : {}),
       }}
     >
+      {/* ==================================================================
+           DESIGN NOTE 597: THE HANDOFF BAND
+          ==================================================================
+
+           `key` IS THE MECHANISM, not a React formality. Changing it on every
+           new acting seat makes React replace this element, which restarts
+           the CSS animation -- so the sweep fires once per handoff and then
+           stops. Without the key the element would persist and the animation
+           would run exactly once, on mount, for the whole game.
+
+           `aria-hidden`: it is a decoration of a fact the bar already states
+           in words. A screen reader announcing a colour change on every turn
+           would be noise. */}
+      {actingSeatColor && (
+        <>
+          <style>{TURN_HANDOFF_SWEEP_CSS}</style>
+          <span
+            /* Keyed on the SEAT, not just the colour. Colour is unique per
+               seat today and would work -- but it is a proxy for identity,
+               and a proxy that silently stops being one (a seventh player, a
+               duplicate pick) would leave the sweep never firing with no
+               visible cause. The name is what actually changed. */
+            key={`${activePlayerName ?? ""}:${actingSeatColor}:${isMyTurn ? "mine" : "theirs"}`}
+            className={`app-turn-band${isMyTurn ? " app-turn-band-mine" : ""}`}
+            style={{ backgroundColor: actingSeatColor }}
+            aria-hidden="true"
+          />
+        </>
+      )}
       {/* The "Phase N of 6: Track" suffix is GONE, and its removal is the
           point rather than a simplification.
 

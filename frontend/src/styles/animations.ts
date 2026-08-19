@@ -166,6 +166,117 @@ export const ROSTER_CONTEST_CHASE_CSS = `
 }
 `;
 
+/* ==================================================================
+ *  DESIGN NOTE 597: A TRANSITION IS NOTICED; A STATE IS NOT
+ * ==================================================================
+ *
+ * REPORTED: the acting seat's colour "is still too subtle for most people
+ * since it currently sits as a very slim border on the left edge... If it
+ * were a little more dynamic somehow, players would notice 'for sure' when
+ * their turn has come back around."
+ *
+ * TWO SEPARATE PROBLEMS, and the report names both without separating them.
+ *
+ *   THE BAND IS TOO SMALL. A 6px vertical sliver on the left edge is the
+ *   least visible place a colour can be put on a wide panel -- it is in
+ *   peripheral vision only if you happen to be looking at the left margin.
+ *   It becomes a full-width bar along the top edge, which is the widest
+ *   dimension the panel has.
+ *
+ *   THE CUE NEVER CHANGES. This is the deeper half. Design note #570 made
+ *   the colour a STATE -- "this bar belongs to whoever is up" -- and a state,
+ *   however bold, stops being seen within a few minutes. Habituation is not
+ *   a matter of contrast; it is a matter of nothing happening. The existing
+ *   my-turn pulse has the same flaw for the same reason: it is a CONTINUOUS
+ *   animation, so it is running when you look away and still running when
+ *   you look back, and carries no arrival.
+ *
+ * SO THE SIGNAL IS THE CHANGE ITSELF. A one-shot sweep runs across the band
+ * whenever the acting seat changes, and stops. Motion that starts is caught
+ * peripherally in a way that motion which has always been running is not --
+ * and because it ends, it costs nothing for the rest of the turn.
+ *
+ * TWO INTENSITIES, because "somebody's turn began" and "YOUR turn began" are
+ * different news. Everyone gets the sweep; the seat holder gets a brighter,
+ * longer one with a soft bloom under the bar. The stronger version is the
+ * one the report is actually asking for.
+ *
+ * REPLAYED BY REMOUNTING, not by a timer. The band carries `key={acting
+ * seat}`, so React replaces the element on every change and the browser
+ * starts the animation fresh. A JS-driven restart would need a class toggle,
+ * a reflow read and a cleanup, all to reproduce what a changed key does for
+ * free.
+ *
+ * REDUCED MOTION keeps the band and drops the sweep, the same bargain every
+ * other animation here makes: the colour still says whose turn it is, which
+ * is the information. Only the arrival cue is lost, and an arrival cue that
+ * cannot be switched off is an accessibility problem. */
+export const TURN_HANDOFF_SWEEP_CSS = `
+@keyframes app-turn-band-sweep {
+  0%   { background-position: -140% 0; }
+  100% { background-position: 240% 0; }
+}
+@keyframes app-turn-band-bloom {
+  0%   { opacity: 0; transform: scaleY(0.4); }
+  22%  { opacity: 1; transform: scaleY(1); }
+  100% { opacity: 0; transform: scaleY(1); }
+}
+/* The band itself: the seat colour, full width, with a travelling highlight
+   laid over it. 'background-size: 60%' on the sheen keeps the moving band
+   narrow relative to the bar, so it reads as a sweep rather than as the
+   whole strip changing brightness. */
+.app-turn-band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.app-turn-band::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: app-turn-band-sweep 900ms ease-out 1;
+}
+/* Your own turn: a slower, wider sweep and a bloom below the bar, so the one
+   handoff that requires you to DO something is louder than the three that do
+   not. */
+.app-turn-band-mine::after {
+  background-size: 85% 100%;
+  animation-duration: 1300ms;
+}
+.app-turn-band-mine::before {
+  content: "";
+  position: absolute;
+  inset: -2px -8px -14px;
+  background: radial-gradient(
+    ellipse at top,
+    rgba(255, 255, 255, 0.35),
+    rgba(255, 255, 255, 0) 70%
+  );
+  animation: app-turn-band-bloom 1300ms ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-turn-band::after,
+  .app-turn-band-mine::before {
+    animation: none;
+    opacity: 0;
+  }
+}
+`;
+
 /* ------------------------------------------------------------------ */
 /* App shell -- everything below here renders inside both providers   */
 /* ------------------------------------------------------------------ */

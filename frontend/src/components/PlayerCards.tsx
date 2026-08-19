@@ -122,16 +122,9 @@ export interface PlayerCardsProps {
    would have been the only place that knew them, and the action bar needs
    the same answer. */
 
-/** 1st, 2nd, 3rd, 4th... 1830 seats at most six, so the teens the general
- *  rule exists for are unreachable -- but the general rule costs one line and
- *  a special-cased table would be wrong the moment somebody tries a variant
- *  with more seats. */
-function ordinal(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 13) return `${n}th`;
-  const suffix = { 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th";
-  return `${n}${suffix}`;
-}
+/* Design note #595: the `ordinal` helper went with the ordinals it made.
+   Turn order is a chevron trail now (`SeatOrderTrail`), which cannot be
+   mistaken for a ranking. */
 
 function money(value: number | null): string {
   /* Design note #562: an em dash, never "$0". A missing figure and a figure
@@ -184,12 +177,23 @@ export function PlayerCards({
             {/* ---- Name stripe, and the Priority Deal marker in it ---- */}
             <header style={{ ...styles.stripe, backgroundColor: stripe, color: ink }}>
               <span style={styles.stripeIdentity}>
-                {showSeatOrder && (
-                  /* Design note #593: the seat's position, stated. `1st`
-                     rather than `#1` because a player says "I'm second", and
-                     because `#1` reads as an identifier rather than an
-                     order. */
-                  <span style={styles.stripeOrdinal}>{ordinal(seatIndex + 1)}</span>
+                {showSeatOrder && isActive && (
+                  /* ==================================================
+                       DESIGN NOTE 595: "ON TURN", NOT "1st"
+                      ==================================================
+
+                       REPORTED: the ordinals "may be confusing to players if
+                       they think the Player cards are referencing final
+                       score" -- which is a fair reading, because 1830 DOES
+                       rank players and net worth is on the same card. "1st
+                       Ada $2,400" invites exactly the wrong sentence.
+
+                       Turn ORDER moved to `SeatOrderTrail`, where a chevron
+                       says "queue" in a way no number can. What stays here is
+                       the other half of the request -- emphasising whose turn
+                       it is -- and it says so in words rather than in a
+                       position that has to be decoded. */
+                  <span style={styles.stripeOnTurn}>ON TURN</span>
                 )}
                 <span style={styles.stripeName}>{label(player.address)}</span>
               </span>
@@ -405,7 +409,17 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* The seat on turn, marked the same way the roster pills are -- green,
      which means exactly this everywhere else in the app. */
-  cardActive: { borderColor: "#3f7a55", boxShadow: "0 0 0 2px rgba(63,122,85,0.35)" },
+  /* Design note #595: emphasised, not merely outlined. The previous ring was
+     a 2px halo in the turn-green, which reads at a glance only if you already
+     know to look for it -- and the report is that players could not tell whose
+     turn it was from these cards. A lifted card with a heavier ring is
+     findable peripherally, which is what "emphasise" has to mean on a grid of
+     four to six identical objects. */
+  cardActive: {
+    borderColor: "#7ee0a1",
+    boxShadow: "0 0 0 3px rgba(126,224,161,0.45), 0 6px 18px rgba(0,0,0,0.4)",
+    transform: "translateY(-2px)",
+  },
   stripe: {
     display: "flex",
     flexDirection: "row",
@@ -421,14 +435,15 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     minWidth: 0,
   },
-  /* Design note #593: quieter than the name -- it is a fact ABOUT the seat,
-     not the seat's label, and a reader looking for a player scans names. */
-  stripeOrdinal: {
+  /* Design note #595: on the stripe, where the seat is named -- "whose turn"
+     is a fact about a PERSON, and it was the one thing the cards could not
+     say without the reader counting positions. */
+  stripeOnTurn: {
     fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    opacity: 0.75,
+    fontWeight: 900,
+    letterSpacing: "0.06em",
+    opacity: 0.85,
     flex: "none",
-    fontVariantNumeric: "tabular-nums",
   },
   stripeName: {
     fontSize: FONT_SIZE.strong,

@@ -771,6 +771,7 @@ import {
 } from "./utils/activeGame";
 import { STATION_PLACEMENT_HIGHLIGHT_INK } from "./components/hexBoardData";
 import PlayerCards from "./components/PlayerCards";
+import SeatOrderTrail from "./components/SeatOrderTrail";
 import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 import { playerFinances } from "./utils/playerFinance";
 import {
@@ -779,7 +780,7 @@ import {
   CA_PRIVATE_ID,
   resolvePrivateExchange,
 } from "./utils/privateExchange";
-import { effectiveActions, undoReachFor, undoToRoundStart } from "./utils/logRevert";
+import { effectiveActions, undoReachFor } from "./utils/logRevert";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -5020,51 +5021,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             }
 
             /* ==============================================================
-             *  DESIGN NOTE 576: THE C&A PAYS OUT THE MOMENT IT IS WON
+             *  DESIGN NOTE 576a: A CONSEQUENCE IS NOT APPENDED, IT IS DERIVED
              * ==============================================================
              *
-             * REPORTED: the winner of private 5 receives nothing.
+             * REPORTED: the Camden & Amboy issued TWICE the share it should
+             * have, and the certificate count jumped accordingly.
              *
-             * They received nothing because nothing granted it. The previous
-             * pass wired the C&A as an EXCHANGE with a Stock Round button --
-             * see `privateExchange.ts` for how that came to be wrong -- and
-             * a purchase bonus offered as a button in a later round is a
-             * bonus that never arrives.
+             * The previous pass appended an `ExchangePrivate` event from
+             * here -- and this code runs inside the REPLAY of the winning
+             * action, on every client. So every client appended its own
+             * copy, the log grew two grants for one win, and every client
+             * then replayed both. Two players, two certificates.
              *
-             * HERE, beside the B&O, because this is where a private WIN is
-             * resolved and the two are the same kind of event: a company
-             * whose value is partly a certificate hands it over on purchase.
+             * THE TEST WAS ALREADY WRITTEN DOWN and I applied it backwards.
+             * Design note #550: "a CHOICE must be logged, a CONSEQUENCE need
+             * not be." The B&O's par is a choice and is logged. The C&A's
+             * share is a pure consequence of a win that is ALREADY in the
+             * log -- so every client can derive it from the same action, at
+             * the same moment, without anybody announcing it.
              *
-             * AND NOT LIKE THE B&O in the one way that matters: the B&O
-             * needs a par price, which is a decision, so it raises a prompt
-             * (design note #399). The C&A has no decision in it at all --
-             * the share is free, the price is not the owner's to pick, and
-             * the company does not close. Nothing to ask, so nothing is
-             * asked.
-             *
-             * Routed through the same `ExchangePrivate` event so every client
-             * applies it from the log (design note #550), with the private's
-             * own id carried so `applyPrivateExchange` can find it. */
-            if (privateId === CA_PRIVATE_ID) {
-              const prr = after?.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
+             * DERIVED HERE, THEN, and applied to the resolved state directly.
+             * No append, no second event, and nothing that can double
+             * because two browsers both noticed the same thing. */
+            if (privateId === CA_PRIVATE_ID && after) {
+              const prr = after.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
               if (prr) {
-                void runGameplayActionRef.current?.(
-                  `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ${CA_BONUS_TICKER} share with the Camden & Amboy.`,
-                  {
-                    ExchangePrivate: {
-                      private_id: privateId,
-                      company_id: prr.company_id,
-                      player,
-                      source:
-                        prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
-                      /* Design note #576: the company survives this one.
-                         Closing it would cost its owner $25 an Operating
-                         Round for the rest of the game. */
-                      keep_open: true,
-                    },
-                  },
-                  { automatic: true },
-                );
+                const granted = applyPrivateExchange(after, {
+                  ok: true,
+                  privateId,
+                  companyId: prr.company_id,
+                  ticker: CA_BONUS_TICKER,
+                  player,
+                  source: prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
+                  /* Design note #576: the company survives. Closing it would
+                     cost its owner $25 an Operating Round for the rest of
+                     the game. */
+                  keepOpen: true,
+                });
+                if (granted !== after) {
+                  after = granted;
+                  logInfo(
+                    "Private Power",
+                    `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ` +
+                      `${CA_BONUS_TICKER} share with the Camden & Amboy, which stays open.`,
+                  );
+                }
               }
             }
           }
@@ -5671,6 +5672,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
   }, []);
 
+  /* ==================================================================
+   *  DESIGN NOTE 592d: THE BUTTON AND THE DISPATCH ASK ONE FUNCTION
+   * ==================================================================
+   *
+   * `undoReachFor` decides both whether the button is live and what happens
+   * when it is pressed. A separate `canUndo` boolean beside it would be a
+   * second opinion about the same question -- and this codebase's recurring
+   * bug is exactly that (design notes #559, #576, #580, #587).
+   *
+   * READ-ONLY IS FOLDED IN HERE rather than left as a second condition on the
+   * button, so the control has one reason to be disabled and it is always the
+   * true one. NOT the turn, deliberately: undo is not a move, and the player
+   * who needs it most has just watched their turn pass. */
+  const undoBlockedReason = useMemo(() => {
+    if (!sandbox) return controlsEnabled ? null : "Initialize the session key to act.";
+    if (!controlsEnabled) return "Initialize the session key to act.";
+    const reach = undoReachFor(
+      sandboxLogRef.current,
+      localId,
+      sandboxRoom?.hostId === localId,
+      describeLoggedAction,
+    );
+    return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : null;
+    /* `sandboxAppliedCount` IS the dependency that matters and the linter
+       cannot see it: the reach is read out of `sandboxLogRef`, a ref, so
+       nothing here changes when the log grows. The count does, on every
+       applied action, which is exactly when the answer can change. Omitting
+       it would leave the button stuck on its first verdict for the game. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox, controlsEnabled, localId, sandboxRoom, describeLoggedAction, sandboxAppliedCount]);
+
   const handleUndoLastAction = useCallback(() => {
     if (!sandbox) {
       // Online the contract owns history; `UndoLastAction` is a real message
@@ -5701,22 +5733,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, [sandbox, runGameplayAction, gameId, logInfo, localId, sandboxRoom, describeLoggedAction]);
 
-  /** Design note #592: the host's deeper reach. A separate control because it
-   *  is a separate decision -- taking back one action is routine, taking back
-   *  a whole round is not, and one button that silently did either depending
-   *  on who pressed it would hide that. */
-  const handleUndoToRoundStart = useCallback(() => {
-    const reach = undoToRoundStart(sandboxLogRef.current, roundBoundaryIndexRef.current);
-    if (reach.index === null) {
-      logInfo("Undo", reach.blockedReason ?? "There is nothing to undo.");
-      return;
-    }
-    void runGameplayActionRef.current?.(
-      `Undo — ${reach.summary}`,
-      { RevertTo: { index: reach.index, player: localId, summary: reach.summary } },
-      { automatic: true },
-    );
-  }, [logInfo, localId]);
+  /* Design note #592c: `handleUndoToRoundStart` IS GONE with the second
+     button. One Undo, pressed as many times as needed -- `undoToRoundStart`
+     stays exported and tested, because "how far back is the round boundary"
+     is a real question this may want again, but nothing calls it today and a
+     handler wired to no control is a control somebody will assume exists. */
+
 
   // Design note (Stock & Auction pass): reads real UI-driven selection state
   // from `StockRoundPanel` (`srSelectedProtocolId`/`srSource`/`srParValue`)
@@ -8902,10 +8924,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   selectedHardwareModel={selectedHardwareModel}
                   onEndOperatingTurn={handleEndOperatingTurn}
                   onUndoLastAction={handleUndoLastAction}
-                  /* Design note #592: the host alone may reach past somebody
-                     else's turn -- and the log names who asked. */
-                  onUndoToRoundStart={
-                    sandbox && sandboxRoom?.hostId === localId ? handleUndoToRoundStart : null
+                  /* Design note #592c/#592d: one reason string, and it does
+                     NOT include "it is not your turn" -- see the prop. */
+                  undoBlockedReason={undoBlockedReason}
+                  /* Design note #595: seats take turns in the auction and the
+                     Stock Round; an Operating Round's queue names
+                     corporations and has its own step trail. */
+                  seatOrderTrail={
+                    gameState &&
+                    (gameState.current_round_type === "StockRound" ||
+                      gameState.current_round_type === "WaterfallAuction") ? (
+                      <SeatOrderTrail
+                        seats={gameState.player_addresses.map((address, index) => ({
+                          address,
+                          label: sandboxPlayerLabel(address) ?? truncateAddress(address),
+                          color: seatColor(address, index),
+                        }))}
+                        activeAddress={actingAddress(gameState, waterfallState)}
+                        priorityAddress={
+                          gameState.player_addresses[gameState.priority_deal_index] ?? null
+                        }
+                        viewerAddress={viewerAddress ?? null}
+                      />
+                    ) : null
                   }
                   phase={currentPhase}
                   // Design note #493: an action, not a mode.

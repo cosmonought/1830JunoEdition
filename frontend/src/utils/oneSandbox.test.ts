@@ -58,6 +58,10 @@ describe("the fixture roster never reaches a player", () => {
           ticker: "PRR",
           president: SANDBOX_PLAYERS[0],
           is_floated: true,
+          par_value: "100",
+          ipo_pool_percentage: 40,
+          bank_pool_percentage: 30,
+          treasury: "820",
           player_holdings: [{ player: SANDBOX_PLAYERS[0], percentage: 60 }],
         },
       ],
@@ -66,6 +70,14 @@ describe("the fixture roster never reaches a player", () => {
 
     const booted = withEmptyRoster(fixture);
     expect(booted.player_addresses).toEqual([]);
+    /* Design note #594: and everything a PLAYED GAME wrote. `par_value` was
+       the one that got away -- it looks like a printed property and is not,
+       so a room booted with eight already-started corporations and the first
+       founding purchase silently became an ordinary buy. */
+    expect(booted.public_companies[0].par_value).toBeNull();
+    expect(booted.public_companies[0].ipo_pool_percentage).toBe(100);
+    expect(booted.public_companies[0].bank_pool_percentage).toBe(0);
+    expect(booted.public_companies[0].treasury).toBe("0");
     expect(booted.player_cash).toEqual([]);
     expect(booted.max_players).toBe(0);
     expect(booted.public_companies[0].president).toBeNull();

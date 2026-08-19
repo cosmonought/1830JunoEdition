@@ -476,11 +476,49 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
     max_players: 0,
     active_player_index: 0,
     priority_deal_index: 0,
+    /* ==================================================================
+     *  DESIGN NOTE 594: AN UNSTARTED CORPORATION HAS NO PRICE EITHER
+     * ==================================================================
+     *
+     * REPORTED: "The par for PRR was not correctly recorded: $82 became
+     * $100" -- and the player who founded it received neither the crown nor
+     * the right to set the price.
+     *
+     * This stripped the roster and stopped: president, holdings, float. It
+     * left `par_value` alone, and the fixture is a MID-GAME testbed whose
+     * corporations are already parred. So a room booted with eight companies
+     * that had a price nobody had set -- and design note #587 had just made
+     * `par_value === null` the test for "may this purchase found the
+     * company". Every corporation therefore read as already started: the
+     * founding buy granted no presidency, set no par, and `company.par_value
+     * ?? ...` kept the fixture's figure instead of the player's.
+     *
+     * THE SHARE POOLS GO TOO, for the same reason and before it is reported
+     * separately: a fixture corporation has already sold shares, so an
+     * untouched `ipo_pool_percentage` would let a room's first buyer draw
+     * from a pile that a game which never happened had already emptied.
+     *
+     * THE RULE THIS KEEPS ARRIVING AT (design notes #538, #542, now this):
+     * a room does not start from "the fixture, corrected". It starts from
+     * the fixture's BOARD -- the map, the tiles, the printed companies --
+     * with every trace of a played game removed. Anything a game WROTE has
+     * to be reset here, and `par_value` was a written thing that looked like
+     * a printed one. */
     public_companies: state.public_companies.map((company) => ({
       ...company,
       president: null,
       player_holdings: [],
       is_floated: false,
+      par_value: null,
+      ipo_pool_percentage: 100,
+      bank_pool_percentage: 0,
+      /* `treasury`, NOT `treasury_vgp`. The first version of this line
+         invented the second name -- a spread accepts any extra key, so
+         nothing complained and the real treasury went on carrying the
+         fixture's balance. Only a TEST reading the field caught it, which is
+         the argument for asserting the reset rather than trusting the
+         write. */
+      treasury: "0",
     })),
     private_companies: state.private_companies.map((entry) => ({
       ...entry,

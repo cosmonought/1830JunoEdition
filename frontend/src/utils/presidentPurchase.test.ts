@@ -130,6 +130,33 @@ describe("founding a corporation", () => {
     expect(prr(next).par_value).toBe("82");
   });
 
+  it("founds it for the C&A holder at the price THEY set", () => {
+    /* ==============================================================
+     *  DESIGN NOTE 594 (harness): THE FIXTURE'S PAR WAS STILL THERE
+     * ==============================================================
+     *
+     * REPORTED: "The par for PRR was not correctly recorded: $82 became
+     * $100", and the founder got no crown.
+     *
+     * `withEmptyRoster` stripped the roster and left `par_value` alone --
+     * and design note #587 had just made `par_value === null` the test for
+     * "may this purchase found the company". The fixture is a MID-GAME
+     * board, so every corporation arrived already parred, every founding
+     * buy read as an ordinary one, and `company.par_value ?? ...` kept the
+     * fixture's figure over the player's.
+     *
+     * This is the end-to-end version: a player holding the C&A's share
+     * founds an unstarted company and the price is theirs. */
+    const next = applySandboxAction(
+      board({ adaHolds: 10 }),
+      { BuyStock: { game_id: 1, protocol_id: 1, source: "Ipo", par_value: "82" } } as never,
+      ctx,
+    );
+    expect(prr(next).par_value).toBe("82");
+    expect(prr(next).president).toBe(ADA);
+    expect(cash(next, ADA)).toBe(600 - 164);
+  });
+
   it("never founds a corporation from a bank-pool purchase", () => {
     // The pool sells ordinary shares; the president's certificate starts in
     // the IPO and is never in the pool to be bought.

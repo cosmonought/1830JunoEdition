@@ -419,7 +419,8 @@ export default function ContextualActionBar({
   selectedHardwareModel,
   onEndOperatingTurn,
   onUndoLastAction,
-  onUndoToRoundStart = null,
+  undoBlockedReason = null,
+  seatOrderTrail = null,
   onAutoRoute,
   onSelectRouteTrain,
   highlightedRouteIndex,
@@ -628,15 +629,29 @@ export default function ContextualActionBar({
   onEndOperatingTurn: () => void;
   onUndoLastAction: () => void;
   /* ==================================================================
-   *  DESIGN NOTE 592b: THE HOST'S DEEPER REACH IS ITS OWN BUTTON
+   *  DESIGN NOTE 592c: ONE UNDO BUTTON, NOT TWO
    * ==================================================================
    *
-   * Taking back one action is routine; taking back a whole round is not. One
-   * control that quietly did either depending on who pressed it would hide
-   * the difference from the person most able to cause harm with it.
+   * The previous pass gave the host a second "Undo Round" control, arguing
+   * that taking back a whole round is a different decision from taking back
+   * one action and should not hide behind the same button.
    *
-   * `undefined` renders nothing, which is every player but the host. */
-  onUndoToRoundStart?: (() => void) | null;
+   * INSTRUCTED otherwise, and the instruction is better: "Can the Host's Undo
+   * button simply reverse through every player's actions? We can include a
+   * note in the tutorial." A host who presses Undo four times has taken back
+   * four actions and knows it -- the button says what it will take back each
+   * time. A second control asked them to decide, before pressing anything,
+   * how far they intended to go, which is not how anybody uses undo.
+   *
+   * So there is one button. It steps back one action at a time, and for the
+   * host that step may land in somebody else's turn. */
+  /** Design note #592c: the reason the single Undo cannot fire, or `null`
+   *  when it can. Shown on the button rather than left to a dead click. */
+  undoBlockedReason?: string | null;
+  /** Design note #595: the seat-order trail, for the two seat-driven rounds.
+   *  `null` in an Operating Round, whose turn belongs to a corporation and
+   *  which has its own step trail. */
+  seatOrderTrail?: React.ReactNode;
   /** Design note #266: which drafting tool built the path on screen. The
    *  old `routeSelectMode` boolean plus a separate Auto Route ACTION became
    *  one two-position mode -- see `RoutePlannerPanel`'s design note #1. */
@@ -2165,12 +2180,21 @@ export default function ContextualActionBar({
               <span style={styles.undoStepLabel}>
                 {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel}
               </span>
+              {/* Design note #592d: `undoBlockedReason`, not `sessionReady` --
+                  Undo is not a move and must not wait for your turn. */}
               <button
                 type="button"
-                style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+                style={{
+                  ...styles.actionBarButton,
+                  ...styles.actionBarUtilityButton,
+                  ...(undoBlockedReason ? styles.actionButtonDisabled : {}),
+                }}
                 onClick={onUndoLastAction}
-                disabled={!sessionReady}
-                title={`Undo the last action you took. Rewinds to your last real decision, skipping any steps the game advanced for you.`}
+                disabled={undoBlockedReason !== null}
+                title={
+                  undoBlockedReason ??
+                  "Takes back the last action. Available on anyone's turn."
+                }
               >
                 &#8630; Undo
               </button>
@@ -2449,6 +2473,11 @@ export default function ContextualActionBar({
             Falls back to the single acting-player badge whenever the roster
             is not available, which is every non-sandbox room until the
             first `GetGameState` resolves. */}
+        {/* Design note #595: the ORDER, said out loud, above the pills that
+            show what each seat can spend. The pills answer "how much has
+            Ada got"; this answers "who is up and who is next", which they
+            could only ever imply through layout. */}
+        {seatOrderTrail}
         {playerRoster.length > 0 ? (
           <span style={styles.actionBarRoster}>
             <style>{ROSTER_CONTEST_CHASE_CSS}</style>
@@ -2564,24 +2593,38 @@ export default function ContextualActionBar({
           </button>
         ))}
         <span style={styles.actionBarDivider} />
+        {/* ==================================================
+             DESIGN NOTE 592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED
+            ==================================================
+
+             REPORTED: "the Host's Undo power needs to be effective at all
+             times: currently it only works on their turn."
+
+             `sessionReady` is `controlsEnabled && isMyTurn`, so Undo wore the
+             same gate as Buy and Pass. That is exactly backwards for this
+             control: the player who most needs it is the one whose turn has
+             just passed to somebody else, and the host's whole reason for
+             having a longer reach is to fix a mistake that is no longer
+             theirs to fix on their own turn.
+
+             ONE REASON STRING IS THE WHOLE GATE. `undoBlockedReason` is
+             non-null whenever Undo cannot fire -- read-only mode, nothing to
+             undo, or somebody else has acted since your last move -- and the
+             button shows it. A boolean plus a separate message would be two
+             things to keep in step, and the failure would be a disabled
+             control explaining why a different control is disabled. */}
         <button
-          style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+          style={{
+            ...styles.actionBarButton,
+            ...styles.actionBarUtilityButton,
+            ...(undoBlockedReason ? styles.actionButtonDisabled : {}),
+          }}
           onClick={onUndoLastAction}
-          disabled={!sessionReady}
-          title="Always available, independent of round type."
+          disabled={undoBlockedReason !== null}
+          title={undoBlockedReason ?? "Takes back the last action. Available on anyone's turn."}
         >
           Undo Last Action
         </button>
-        {onUndoToRoundStart && (
-          <button
-            style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
-            onClick={onUndoToRoundStart}
-            disabled={!sessionReady}
-            title="Host only — rewinds every player's actions back to the start of this round. The log records who asked."
-          >
-            Undo Round
-          </button>
-        )}
         {/* The route mode toggle used to render here too. It is
             `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
             in this NON-Operating-Round branch it was unreachable markup.

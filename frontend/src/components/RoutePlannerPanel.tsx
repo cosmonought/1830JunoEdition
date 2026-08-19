@@ -309,12 +309,128 @@ export function AutoRouteButton({
       onClick={onAutoRoute}
       disabled={!controlsEnabled || !ownsAnyTrain}
       style={{
+        /* Design note #623: the greying tracks `disabled`, both halves of it.
+           This read `ownsAnyTrain` alone, so off-turn the button refused the
+           click and looked live -- the same split `appStyles.ts` design note
+           #619 records for the action bar's own buttons. */
         ...styles.modeButton,
-        ...(ownsAnyTrain ? {} : styles.modeButtonDisabled),
+        ...(controlsEnabled && ownsAnyTrain ? {} : styles.modeButtonDisabled),
       }}
       title={ownsAnyTrain ? AUTO_ROUTE_TITLE : noTrainReason}
     >
       &#8635; Auto-Route
+    </button>
+  );
+}
+
+/** A draft the contract could actually be asked to run. */
+function isRunnableDraft(draft: TrainRouteDraft): boolean {
+  return (
+    draft.value !== null &&
+    draft.value > 0 &&
+    !draft.exceedsMaxDistance &&
+    !draft.endsOffTerminus
+  );
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 623: ONE ANSWER TO "WHAT WOULD RUN, AND FOR HOW MUCH"
+ * ==================================================================
+ *
+ * Exported because the Run button now exists twice -- once at the bottom of
+ * this panel and once on the action bar (design note #623 in
+ * `ContextualActionBar.tsx`) -- and the two must not be able to disagree
+ * about whether there is anything to run or what it pays.
+ *
+ * That is a real risk and not a theoretical one: this file's design note #5
+ * settles a genuinely non-obvious rule -- invalid drafts contribute nothing
+ * rather than blocking the rest, so a player with two good routes and one
+ * broken one runs the two. A second implementation would have to rediscover
+ * that, and the failure mode is a bar button that offers a total the panel
+ * refuses to run.
+ */
+export function runnableRouteSummary(drafts: readonly TrainRouteDraft[]): {
+  runnable: number;
+  drafted: number;
+  totalRevenue: number;
+} {
+  const runnable = drafts.filter(isRunnableDraft);
+  return {
+    runnable: runnable.length,
+    drafted: drafts.filter((draft) => draft.hexLabels.length > 0).length,
+    totalRevenue: runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0),
+  };
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 623: THE STEP'S PRIMARY ACTION, ON THE STEP'S TOOLBAR
+ * ==================================================================
+ *
+ * REPORTED: "on the sticky/trailing Action panel there is a grayed out
+ * 'Auto-Route' button next to a 'Skip Run Routes' button, but there is no
+ * actual 'Run Routes' button to move to the next phase. Players have to
+ * scroll up to see that."
+ *
+ * Design note #266 moved Run out of the toolbar deliberately, and its
+ * reasoning was sound: the button belongs "directly under the path it runs
+ * and carrying the amount it pays", and a copy in the bar would be "a second
+ * control for one action -- and the vaguer of the two, since only the panel's
+ * copy knows the figure".
+ *
+ * WHAT THAT ARGUMENT MISSED IS THE STICKY BAR. The action bar follows the
+ * player down the page; the panel does not. So on the one step whose primary
+ * action lives in the panel, scrolling to look at the map takes the Run
+ * button off screen and leaves a toolbar showing only Auto-Route and Skip --
+ * two ways to not finish the step. Every other sub-phase keeps its finishing
+ * action on that bar.
+ *
+ * THE "VAGUER OF THE TWO" OBJECTION IS ANSWERED RATHER THAN IGNORED. This
+ * button carries the same total, from `runnableRouteSummary`, which is the
+ * function the panel's own copy reads. Neither is the authority; the drafts
+ * are, and both render the same derivation of them.
+ *
+ * AUTO-ROUTE STAYS. The report suggests replacing it -- "since auto-route is
+ * the default/automatic option" -- but it is not automatic: entering the step
+ * engages the builder (design note #266) and drafts nothing. Removing the
+ * button would leave clicking hexes as the only way to draft a route, which
+ * is the opposite of what the request wants. What it should be is
+ * SUBORDINATE to Run, which is what putting Run beside it achieves. */
+export interface RunRoutesButtonProps {
+  onRunRoute: () => void;
+  drafts: readonly TrainRouteDraft[];
+  controlsEnabled: boolean;
+  ownsAnyTrain: boolean;
+  noTrainReason: string;
+}
+
+export function RunRoutesButton({
+  onRunRoute,
+  drafts,
+  controlsEnabled,
+  ownsAnyTrain,
+  noTrainReason,
+}: RunRoutesButtonProps) {
+  const { runnable, totalRevenue } = runnableRouteSummary(drafts);
+  const live = runnable > 0 && controlsEnabled;
+  return (
+    <button
+      type="button"
+      onClick={onRunRoute}
+      disabled={!live}
+      style={{ ...styles.runButton, ...(live ? {} : styles.runButtonDisabled) }}
+      title={
+        !ownsAnyTrain
+          ? noTrainReason
+          : runnable > 0
+            ? `Declares ${runnable === 1 ? "this route" : `all ${runnable} routes`} for $${totalRevenue}. Revenue is withheld into the treasury; pay it out in the Dividends step that follows.`
+            : "Draw a route worth more than $0 to run it — use Auto-Route, or click hexes on the Rail Map."
+      }
+    >
+      {/* Design note #623: the figure is on the button when there is one, so
+          the bar's copy is never the vaguer control. `Run Routes` alone while
+          nothing is runnable, because "$0" reads as a route that pays
+          nothing rather than as no route at all. */}
+      {runnable > 0 ? `Run Routes for $${totalRevenue}` : "Run Routes"}
     </button>
   );
 }
@@ -346,21 +462,21 @@ export function RoutePlannerPanel({
       return next;
     });
 
-  /** A draft the contract could actually be asked to run. */
-  const isRunnable = (draft: TrainRouteDraft) =>
-    draft.value !== null &&
-    draft.value > 0 &&
-    !draft.exceedsMaxDistance &&
-    !draft.endsOffTerminus;
-
   /* Design note #5: THE BUTTON SUMS EVERY VALID ROUTE. A corporation's
      dividend is what all its trains earned together, so a per-train figure
      on the run button would be the wrong number however it was chosen.
      Invalid drafts contribute nothing rather than blocking the rest -- a
      player who has drawn two good routes and one broken one can still run
-     the two, which is also what the contract would let them do. */
-  const runnableDrafts = drafts.filter(isRunnable);
-  const totalRevenue = runnableDrafts.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
+     the two, which is also what the contract would let them do.
+
+     Design note #623: lifted into `runnableRouteSummary`, which the action
+     bar's copy of the Run button also reads. The rule above is exactly the
+     kind a second implementation would get subtly wrong. */
+  const {
+    runnable: runnableCount,
+    drafted: draftedCount,
+    totalRevenue,
+  } = runnableRouteSummary(drafts);
   const drafted = drafts.filter((draft) => draft.hexLabels.length > 0);
 
   const active = drafts.find((draft) => draft.trainIndex === activeTrainIndex) ?? null;
@@ -369,7 +485,7 @@ export function RoutePlannerPanel({
     ? noTrainReason
     : drafted.length === 0
       ? "Draw a route first — pick Auto-Route above, or click hexes on the Rail Map."
-      : runnableDrafts.length === 0
+      : runnableCount === 0
         ? firstProblem(drafted)
         : null;
 
@@ -377,8 +493,8 @@ export function RoutePlannerPanel({
      the total on the button would otherwise be quietly missing a train the
      player believes they drew. */
   const partialNote =
-    runnableDrafts.length > 0 && runnableDrafts.length < drafted.length
-      ? `${drafted.length - runnableDrafts.length} of ${drafted.length} drafted routes cannot run yet and are not in this total.`
+    runnableCount > 0 && runnableCount < draftedCount
+      ? `${draftedCount - runnableCount} of ${draftedCount} drafted routes cannot run yet and are not in this total.`
       : null;
 
   return (
@@ -532,7 +648,10 @@ export function RoutePlannerPanel({
                     <span
                       style={{
                         ...styles.revenue,
-                        ...(isRunnable(draft) ? {} : styles.revenueMuted),
+                        // Design note #623: the module-level predicate the
+                        // summary uses, so a row cannot look runnable while
+                        // the total leaves it out.
+                        ...(isRunnableDraft(draft) ? {} : styles.revenueMuted),
                       }}
                     >
                       {draft.value === null || draft.value === 0 ? "--" : `$${draft.value}`}
@@ -615,13 +734,13 @@ export function RoutePlannerPanel({
           type="button"
           style={{
             ...styles.runButton,
-            ...(runnableDrafts.length > 0 && controlsEnabled ? {} : styles.runButtonDisabled),
+            ...(runnableCount > 0 && controlsEnabled ? {} : styles.runButtonDisabled),
           }}
           onClick={onRunRoute}
-          disabled={runnableDrafts.length === 0 || !controlsEnabled}
+          disabled={runnableCount === 0 || !controlsEnabled}
           title={
-            runnableDrafts.length > 0
-              ? `Declares ${runnableDrafts.length === 1 ? "this route" : `all ${runnableDrafts.length} routes`}. Revenue is withheld into the treasury; pay it out in the Dividends step that follows.`
+            runnableCount > 0
+              ? `Declares ${runnableCount === 1 ? "this route" : `all ${runnableCount} routes`}. Revenue is withheld into the treasury; pay it out in the Dividends step that follows.`
               : (blockedReason ?? "Draw a route worth more than $0 to run it.")
           }
         >

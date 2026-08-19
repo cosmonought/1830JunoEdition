@@ -487,6 +487,35 @@ export function TrainPurchasePanel({
             whether to buy the last 3-train needs to see that a 4-train costs
             $300 and that six 2-trains are about to rust -- which is a fact
             about the tiers they CANNOT buy. */}
+        {/* ==================================================================
+             DESIGN NOTE 618: SIX ROWS, NOT SIX CARDS
+            ==================================================================
+
+             REPORTED: "the Buy Trains action panel is quite large for what it
+             shows. Each train has a large card/tile, but you can only ever
+             interact with one of them. The information they display is quite
+             useful, so I don't want to lose that, but I wonder if there is a
+             way to compress things so that when this action panel pops up it
+             does not devour 60% of the screen?"
+
+             Nothing is dropped -- every figure and flag below is the one that
+             was on the card. What changes is the AXIS. Each tier was a
+             five-line vertical stack about 100px tall, and six of them
+             wrapped into two or three rows of cards; the same six tiers as
+             single lines are one column about a third the height.
+
+             AND IT READS BETTER, WHICH IS THE ARGUMENT FOR DOING IT THIS WAY
+             RATHER THAN JUST SHRINKING THE CARDS. The question a player asks
+             here is comparative -- "how many 4-trains are left, and what does
+             the 5 cost?" -- and a wrapping grid of cards puts those two
+             figures in different places on different screen widths. Columns
+             put every cost under every other cost. The card layout was
+             spending its height to make comparison harder.
+
+             THE REPORT'S OWN OBSERVATION IS WHY THIS IS SAFE: "you can only
+             ever interact with one of them". The other five are reference,
+             and reference wants a table. Only the purchasable tier keeps a
+             raised treatment, because that one IS the control. */}
         <div style={styles.depotGrid}>
           {depot.map((tier) => {
             const isNext = nextTier !== null && tier.tier === nextTier.tier;
@@ -508,6 +537,14 @@ export function TrainPurchasePanel({
                         : `Not purchasable until every cheaper tier is sold out.`
                 }
               >
+                {/* Design note #617: the glyph leads, so the row opens with a
+                    picture of what is being bought rather than a bare digit.
+                    Green on the purchasable row, muted elsewhere -- it takes
+                    the same ink as the tier label beside it. */}
+                <TrainGlyph
+                  tier={tier.tier}
+                  color={isNext ? "#7ee0a1" : tier.rusted ? "#6b7280" : "#8a919e"}
+                />
                 <span style={styles.depotTier}>{tier.tier}</span>
                 <span style={styles.depotCost}>${tier.cost}</span>
                 <span
@@ -520,6 +557,10 @@ export function TrainPurchasePanel({
                     ? "unlimited"
                     : `${tier.remaining ?? tier.total} / ${tier.total} left`}
                 </span>
+                {/* Design note #618: the flags share one right-hand column, so
+                    a row always has the same four slots whatever it is
+                    saying. */}
+                <span style={styles.depotFate}>
                 {tier.rusted && <span style={styles.depotFlag}>rusted</span>}
                 {!tier.rusted && isNext && <span style={styles.depotFlagNext}>For Sale</span>}
                 {/* ==================================================
@@ -558,6 +599,7 @@ export function TrainPurchasePanel({
                       Permanent
                     </span>
                   ))}
+                </span>
               </div>
             );
           })}
@@ -1026,6 +1068,75 @@ export function TrainTradePrompt({
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
 
+/* ==================================================================
+ *  DESIGN NOTE 617: A TRAIN THAT LOOKS LIKE A TRAIN, AND COUNTS
+ * ==================================================================
+ *
+ * REPORTED: "I know we ruled out emojis for their variant renderings across
+ * devices and operating systems, but is there some way to have train icons
+ * for each type? I think it may be very abstract for new players to buy '2'
+ * when they're buying a train."
+ *
+ * INLINE SVG IS THE ANSWER TO THE EMOJI PROBLEM. It is drawn by this file,
+ * from these coordinates, on every device -- there is no font to substitute,
+ * no vendor glyph set, and no colour-emoji fallback. The objection that ruled
+ * emojis out does not apply to a path we ship ourselves.
+ *
+ * THE CARRIAGES ARE THE TIER, WHICH IS THE PART WORTH HAVING. A generic
+ * locomotive would say "train" and stop; what a new player actually needs to
+ * learn is that the NUMBER IS A CAPACITY -- a 3-train runs three revenue
+ * centres. So the glyph is a locomotive plus one carriage per centre, and
+ * "buy a 3" becomes a picture of the thing it buys. That teaches the rule the
+ * abstraction was hiding, rather than merely decorating it.
+ *
+ * DIESEL IS DRAWN, NOT COUNTED. A D-train has no fixed length -- it runs as
+ * far as the track allows -- so a carriage count would be a lie in the one
+ * case where the number is not a number. It gets the locomotive and a trailing
+ * ellipsis of dots instead: visibly "and onward", visibly not a count.
+ *
+ * PURELY DECORATIVE TO ASSISTIVE TECH. Every glyph sits beside the tier it
+ * depicts, already written as text, so `aria-hidden` keeps a screen reader
+ * from hearing the same fact twice. */
+function TrainGlyph({ tier, color }: { tier: string; color: string }) {
+  const carriages = tier === "D" ? 3 : Math.min(6, Number(tier) || 0);
+  const isDiesel = tier === "D";
+  // Locomotive is 13 wide; each carriage is 5 wide on a 6px pitch.
+  const width = 15 + carriages * 6;
+  return (
+    <svg
+      width={width}
+      height={12}
+      viewBox={`0 0 ${width} 12`}
+      aria-hidden="true"
+      focusable="false"
+      style={{ flex: "none", display: "block" }}
+    >
+      {/* Locomotive: cab, boiler, and two wheels. */}
+      <rect x={0} y={2} width={6} height={6} rx={1} fill={color} />
+      <rect x={6} y={4} width={7} height={4} rx={1} fill={color} />
+      <circle cx={3} cy={10} r={1.6} fill={color} />
+      <circle cx={10} cy={10} r={1.6} fill={color} />
+      {isDiesel
+        ? /* Design note #617: "and onward", not a count. */
+          [0, 1, 2].map((index) => (
+            <circle key={index} cx={18 + index * 6} cy={6} r={1.4} fill={color} opacity={0.75} />
+          ))
+        : Array.from({ length: carriages }, (_, index) => (
+            <rect
+              key={index}
+              x={16 + index * 6}
+              y={3.5}
+              width={5}
+              height={5}
+              rx={1}
+              fill={color}
+              opacity={0.8}
+            />
+          ))}
+    </svg>
+  );
+}
+
 const styles: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
@@ -1063,24 +1174,35 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
 
-  /* ---- Depot ---- */
-  depotGrid: { display: "flex", flexWrap: "wrap", gap: "8px" },
-  depotCard: {
+  /* ---- Depot (design note #618: a column of rows, not a grid of cards) ---- */
+  depotGrid: {
     display: "flex",
     flexDirection: "column",
+    /* 1px, so consecutive rows read as a table rather than as six objects.
+       The row's own border does the separating. */
+    gap: "1px",
+  },
+  /* Design note #618: ONE ROW. The column widths are fixed rather than
+     content-sized, because the point of the change is that every cost sits
+     under every other cost -- `flex` on the cells would let a wide supply
+     string in one row shove that row's fate flag out of the column. */
+  depotCard: {
+    display: "grid",
+    gridTemplateColumns: "58px 26px 56px 84px 1fr",
     alignItems: "center",
-    gap: "2px",
-    minWidth: "84px",
-    padding: "8px 10px",
-    borderRadius: "8px",
-    border: "1px solid #2b2f3a",
-    backgroundColor: "#171a22",
+    gap: "10px",
+    padding: "3px 8px",
+    borderRadius: "5px",
+    border: "1px solid transparent",
+    backgroundColor: "transparent",
     cursor: "help",
   },
-  depotCardActive: { borderColor: "#4ade80", backgroundColor: "#152317" },
-  depotCardRusted: { opacity: 0.5 },
+  /* Design note #618: only the purchasable row keeps a raised treatment --
+     it is the one that is a control rather than a reference line. */
+  depotCardActive: { borderColor: "#3f7a55", backgroundColor: "#152317" },
+  depotCardRusted: { opacity: 0.45 },
   depotTier: {
-    fontSize: FONT_SIZE.heading,
+    fontSize: FONT_SIZE.body,
     fontWeight: 800,
     color: "#e6e8ef",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -1089,8 +1211,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: "#c8cdd8",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    textAlign: "right",
   },
   depotSupply: { fontSize: FONT_SIZE.micro, color: "#8a919e", whiteSpace: "nowrap" },
+  /* Design note #618: the shared right-hand column the fate flags live in,
+     so "rusted" / "For Sale" / "Rusts on Phase 5" / "Permanent" all start on
+     the same x whatever the row above said. */
+  depotFate: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 },
   depotSupplyEmpty: { color: "#c8a24a" },
   /* Design note #283: amber for a coming loss, slate for a permanence.
      Deliberately quieter than `depotFlag`'s rusted red -- one is a warning

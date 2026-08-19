@@ -799,9 +799,50 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#e6e8ef",
     cursor: "pointer",
   },
-  // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
-  // every disabled control computes its own look.
+  /* ==================================================================
+   *  DESIGN NOTE 619: THE STYLE EXISTED; THE NAME AT THE CALL SITE DID NOT
+   * ==================================================================
+   *
+   * REPORTED, of the Buy Trains step: "if a corporation MUST buy a train
+   * because it has a valid route and no trains, the 'End Turn' button needs
+   * to be grayed out."
+   *
+   * It already refused the click -- design note #293 disabled it three passes
+   * ago and wrote the tooltip explaining the obligation. What it did not do
+   * was LOOK refused, and the reason is worth recording because the class of
+   * bug is not confined to this button.
+   *
+   * `ContextualActionBar` reached for `styles.actionButtonDisabled`. The key
+   * here is `actionBarButtonDisabled`. `styles` is typed
+   * `Record<string, React.CSSProperties>`, so a missing key is `undefined`
+   * rather than a compile error, and spreading `undefined` into a style
+   * object is a silent no-op. Two call sites -- Undo, in both the pinned and
+   * expanded bars -- had therefore been styling nothing at all since they
+   * were written, and `tsc` and ESLint were both perfectly happy.
+   *
+   * The contextual buttons (End Turn among them) were a plainer miss: they
+   * passed `disabled` and never spread a disabled style at all. So the bar
+   * had three ways of drawing an unavailable control and only one of them
+   * worked.
+   *
+   * A `Record<string, T>` STYLE SHEET CANNOT CATCH THIS, which is the real
+   * lesson. An audit across every file importing this module found exactly
+   * one phantom key, so the sweep is done -- but nothing stops the next one,
+   * and the failure is invisible by construction. */
   actionBarButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  /* Design note #619: the standing "you must buy a train" notice. Amber, not
+     red -- an obligation the rules impose is not an error the player has
+     made, and this appears the moment the step opens rather than in response
+     to anything they did. */
+  mustBuyTrainNotice: {
+    fontSize: FONT_SIZE.small,
+    lineHeight: 1.45,
+    color: "#e0c07a",
+    backgroundColor: "#241f12",
+    border: "1px solid #6b5a2a",
+    borderRadius: "6px",
+    padding: "7px 10px",
+  },
   actionBarUtilityButton: {
     color: "#c7cbd4",
     borderStyle: "dashed",

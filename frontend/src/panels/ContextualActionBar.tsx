@@ -37,7 +37,9 @@ import PrivatePowerPanel, {
   type PrivateAbility,
   type PrivateAbilityAction,
 } from "../components/PrivatePowerPanel";
-import { RoutePlannerPanel, AutoRouteButton } from "../components/RoutePlannerPanel";
+// Design note #623: `RunRoutesButton` joins them -- the step's finishing
+// action belongs on the bar that follows the player down the page.
+import { RoutePlannerPanel, AutoRouteButton, RunRoutesButton } from "../components/RoutePlannerPanel";
 import TrainPurchasePanel, {
   type TrainPurchaseCompany,
   type TrainTradeProposal,
@@ -2052,7 +2054,12 @@ export default function ContextualActionBar({
                 <button
                   key={btn.key}
                   type="button"
-                  style={styles.actionBarButton}
+                  /* Design note #619: a disabled button has to LOOK
+                     disabled. */
+                  style={{
+                    ...styles.actionBarButton,
+                    ...(btn.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+                  }}
                   onClick={btn.onClick}
                   disabled={btn.disabled || !sessionReady}
                   title={btn.title}
@@ -2084,6 +2091,19 @@ export default function ContextualActionBar({
                   onAutoRoute={onAutoRoute}
                   ownsAnyTrain={ownsAnyTrain}
                   controlsEnabled={sessionReady}
+                  noTrainReason={NO_TRAIN_ROUTE_REASON}
+                />
+              )}
+              {/* Design note #623: the step's finishing action, on the bar
+                  that follows the player down the page. See
+                  `RoutePlannerPanel.tsx` for why a second copy is right here
+                  and was not before the bar became sticky. */}
+              {showRouteToggle && (
+                <RunRoutesButton
+                  onRunRoute={onRunTrains}
+                  drafts={trainDrafts}
+                  controlsEnabled={sessionReady}
+                  ownsAnyTrain={ownsAnyTrain}
                   noTrainReason={NO_TRAIN_ROUTE_REASON}
                 />
               )}
@@ -2229,7 +2249,7 @@ export default function ContextualActionBar({
                 style={{
                   ...styles.actionBarButton,
                   ...styles.actionBarUtilityButton,
-                  ...(undoBlockedReason ? styles.actionButtonDisabled : {}),
+                  ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
                 }}
                 onClick={onUndoLastAction}
                 disabled={undoBlockedReason !== null}
@@ -2445,6 +2465,35 @@ export default function ContextualActionBar({
                simply changed address. `condensed` is the panel's own pinned
                form (design note #508 there), not a second cut-down copy of
                it. */}
+          {/* ==================================================================
+               DESIGN NOTE 619: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT
+              ==================================================================
+
+               The other half of the report: "the 'End Turn' button needs to be
+               grayed out AND/OR prompt errant clicks that they must buy a
+               train."
+
+               A `disabled` button cannot answer a click -- the browser
+               swallows the event before any handler runs -- so "prompt errant
+               clicks" is not available without un-disabling the control and
+               refusing the action ourselves, which would put a button on
+               screen that dispatches nothing. The honest substitute is to stop
+               the click being errant in the first place: state the obligation
+               where the player is already looking, in the step that owns it.
+
+               So the notice is PERSISTENT rather than a response. It appears
+               with the panel, above the depot the player is about to buy from,
+               and it names the emergency purchase -- which is the part that
+               makes the greyed button feel like a rule rather than a
+               malfunction, because the poverty case is exactly when a player
+               reaches for the exit. */}
+          {orSubPhase === "Hardware" && mustBuyTrain && (
+            <div style={styles.mustBuyTrainNotice} role="status">
+              This corporation owns no train and has a route to run — it must buy one before the
+              turn can end. If the treasury cannot cover the cheapest train, the president pays
+              the difference personally.
+            </div>
+          )}
           {orSubPhase === "Hardware" && trainPurchase && (
             <TrainPurchasePanel
               depot={trainPurchase.depot}
@@ -2587,7 +2636,13 @@ export default function ContextualActionBar({
         {contextualButtons.map((btn) => (
           <button
             key={btn.key}
-            style={styles.actionBarButton}
+            /* Design note #619: same treatment as the expanded copy above --
+               the two forms of this bar must not disagree about whether a
+               control is available. */
+            style={{
+              ...styles.actionBarButton,
+              ...(btn.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+            }}
             onClick={btn.onClick}
             disabled={btn.disabled || !sessionReady}
             title={btn.title}
@@ -2620,7 +2675,7 @@ export default function ContextualActionBar({
           style={{
             ...styles.actionBarButton,
             ...styles.actionBarUtilityButton,
-            ...(undoBlockedReason ? styles.actionButtonDisabled : {}),
+            ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
           }}
           onClick={onUndoLastAction}
           disabled={undoBlockedReason !== null}

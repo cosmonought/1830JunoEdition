@@ -432,6 +432,42 @@ export function beginOperatingRound(
     operating_round_sequence_length: continuingSequence
       ? operatingRoundSequenceLength(state)
       : operatingRoundsForPhase(derivePhase(state)),
+    /* ==================================================================
+     *  DESIGN NOTE 621: THE COUNTER WAS THE ONE FIELD NOBODY STAMPED
+     * ==================================================================
+     *
+     * REPORTED: three corporations floated, all three took their turn in
+     * Operating Round 1, "the Operating Round then looped back to B&O" --
+     * in Phase 2, which runs exactly one Operating Round.
+     *
+     * `advanceCorporation` decides with `sub_round_index < sequenceLength`,
+     * and design notes #431 and #511 got the RIGHT-HAND side exactly right:
+     * the count is the phase's, it is stamped here when the cycle opens, and
+     * a mid-cycle phase change cannot lengthen it. Nobody ever set the
+     * LEFT-hand side. The Stock Round's close zeroes `sub_round_index`, this
+     * function did not touch it, so a cycle opened at 0 and the very first
+     * completed queue asked `0 < 1` -- true -- and ran the whole thing again.
+     *
+     * EVERY PHASE GOT EXACTLY ONE EXTRA ROUND, which is what made it hard to
+     * spot: Yellow ran 2, Green 3, Brown 4. The rule looked implemented and
+     * was off by one everywhere at once, and the fixtures hid it by shipping
+     * `sub_round_index: 1` on any scenario that OPENS in an Operating Round
+     * -- the only states anybody had tested from.
+     *
+     * THIS IS THE THIRD FIELD IN THIS FUNCTION WITH THE SAME STORY.
+     * `active_operating_order` (#411) and `operating_round_sequence_length`
+     * (#431) were both values that had to be correct, read from a field that
+     * nothing wrote. The lesson each time was "stamp it where the round
+     * begins", and each time one more field was left out of the stamping. So
+     * the round now opens with all three of its bookkeeping values written
+     * together, and a reader can see the whole opening position in one
+     * object rather than inferring which parts survive from the last round.
+     *
+     * A CONTINUATION DOES NOT TOUCH IT. `advanceCorporation` owns the
+     * increment for the second and third rounds of a cycle -- it is the
+     * caller that knows a round just finished -- and writing it here as well
+     * would be two hands on one counter. */
+    ...(continuingSequence ? {} : { sub_round_index: 1 }),
   });
 }
 

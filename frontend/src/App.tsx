@@ -708,6 +708,10 @@ import {
   applySandboxLayTile,
   describeFloat,
   isRouteTerminusHex,
+  // Design note #624: counts a drafted route's paying STOPS against the
+  // train's capacity. `isRouteTerminusHex` answers a different question --
+  // towns pay but cannot end a route -- so the two are not interchangeable.
+  isRevenueCentreHex,
   grantBOPresidency,
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
@@ -3032,6 +3036,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setPreviewTile(null);
   }, [tileInspectorArmed]);
 
+  /* ==================================================================
+   *  DESIGN NOTE 622: A CLICK AWAY IS A DISMISSAL, NOT A SELECTION
+   * ==================================================================
+   *
+   * REPORTED: "when I have the tile selector open and I click away from the
+   * options / hex that prompted the radial menu, it should just close the
+   * tile selector tool. Right now, when I click another hex, it is
+   * immediately selecting that hex when I only meant to close the tile
+   * selector tool, not immediately open it elsewhere."
+   *
+   * The ring's own outside-click handler says so explicitly and then carves
+   * the board out: "a click on the board is never a dismissal -- it is
+   * either a rotation, a new selection or a new target" (design note #168).
+   * That is true of a click on the board when NOTHING is open. It stops
+   * being true the moment a popover is covering part of that board, because
+   * the gesture people use to close a popover is to click somewhere else --
+   * and on this screen "somewhere else" is almost always another hex.
+   *
+   * So the board gets the same two-stage behaviour every other dismissible
+   * surface has: the first click outside closes, the second selects. Design
+   * note #172 already established the principle here, for water -- "clicking
+   * open water is the most natural 'never mind' gesture there is" -- and the
+   * only reason a hex behaved differently is that a hex had a more
+   * interesting thing to do.
+   *
+   * THE COST IS ONE EXTRA CLICK when a player really did mean to jump
+   * straight from one hex to another, and it is worth paying. Opening the
+   * wrong ring is not merely slower to undo: it throws away a previewed tile
+   * and rotation the player may have been part-way through choosing, and it
+   * fires a `GetLegalTilePlacements` for a hex nobody asked about.
+   *
+   * A CLICK ON THE HEX ALREADY OPEN IS A NO-OP rather than a re-open. The
+   * ring covers most of its own hex, so this mostly happens on the rim --
+   * and reopening would reset `previewTile`, discarding a selection in
+   * response to a click that landed on the thing already selected.
+   *
+   * READ THROUGH A REF, not a dependency. `handleHexClickQuery`'s identity is
+   * load-bearing -- the renderer takes it as an interceptor prop -- and
+   * rebuilding it every time the ring opens or closes would re-arm the click
+   * path on every selection. */
+  const openRingHexRef = useRef<{ q: number; r: number } | null>(null);
+
   const handleHexClickQuery = useCallback((state: HexClickQueryState) => {
     setHexClickQuery(state);
 
@@ -3085,6 +3131,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // an open ring just sat there. It now falls into the same `else` as
     // every other non-opening status, which closes.
     if (state.status === "success" || state.status === "offline") {
+      /* Design note #622: a ring is already open. This click is a dismissal
+         if it landed on a different hex, and nothing at all if it landed on
+         the one already open. Either way it does not open a new ring. */
+      const openOn = openRingHexRef.current;
+      if (openOn) {
+        if (openOn.q !== state.q || openOn.r !== state.r) {
+          setRadialSelector(null);
+          setPreviewTile(null);
+        }
+        return;
+      }
       setPreviewTile(null);
       // Converted to a board-relative offset at capture time -- the raw
       // client point is only correct until something scrolls.
@@ -3397,6 +3454,74 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /** Verbatim `GetLegalTilePlacements`, when a chain answered. */
     placements: readonly LegalTilePlacement[];
   } | null>(null);
+
+  /* Design note #622: the open ring's hex, mirrored for `handleHexClickQuery`
+     to read without taking a dependency on it. Only the coordinates -- the
+     click path asks "is this the same hex" and nothing else, and mirroring
+     the whole object would re-run this effect on every candidate list. */
+  useEffect(() => {
+    openRingHexRef.current = radialSelector ? { q: radialSelector.q, r: radialSelector.r } : null;
+  }, [radialSelector]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 625: THE TURN ARRIVING IS AN EVENT, NOT A NOTIFICATION
+   * ==================================================================
+   *
+   * REPORTED: "when it passes from one corporation to another, if a player is
+   * already using the tile selector looking at the map (or whatever else), we
+   * need to disable that and force them to the view with the veil and their
+   * corporation's legal placements. When I was looking at map tiles and it
+   * became my corporation's turn, I had to click around several times to get
+   * to the correct display for the Lay Track phase."
+   *
+   * WHAT WAS ALREADY HANDLED, AND WHY IT WAS NOT ENOUGH. Design note #213's
+   * tab effect fires on a `current_round_type` transition -- and a corporation
+   * handover inside an Operating Round is not one. The sub-phase reset above
+   * fires correctly on `active_corporation_index`, so the STEP was right;
+   * what nothing touched was the screen the player was looking at and the
+   * picker they had open on it. So the state machine advanced properly and
+   * the view stayed exactly where browsing had left it, which is the worst
+   * combination: every control is correct and none of them is on screen.
+   *
+   * THE BROWSING STATE IS THE PART THAT HAS TO GO. An open ring belongs to
+   * whatever the player was studying a moment ago -- very likely a hex their
+   * corporation cannot reach, and, since design note #620, a ring whose
+   * candidate list is about to narrow under them as `canLayTileNow` flips
+   * true. Closing it is not tidying up; leaving it open would show a filtered
+   * carousel over a hex nobody chose.
+   *
+   * ONLY FOR THE PLAYER WHOSE TURN IT NOW IS. Everyone else is browsing on
+   * purpose and the handover is not about them -- yanking a spectator's map
+   * to a corporation they do not run would be the same interruption this note
+   * exists to remove, aimed at the wrong person.
+   *
+   * ONCE PER HANDOVER, tracked against the previous acting corporation rather
+   * than keyed on it. A player who deliberately clicks over to the Ledger
+   * mid-turn must be able to stay there: this fires on the edge, not on the
+   * condition, which is the same discipline design note #213 applies with
+   * `prevRoundTypeRef` and for the same reason.
+   *
+   * NO SUB-PHASE WRITE HERE. The effect above owns `orSubPhase` and already
+   * reseats it on this exact change. Two effects writing one cursor on one
+   * event is how they end up disagreeing about which of them ran last. */
+  const prevActingCorporationRef = useRef<number | null>(null);
+  useEffect(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") {
+      prevActingCorporationRef.current = null;
+      return;
+    }
+    const acting = actingProtocolId;
+    if (prevActingCorporationRef.current === acting) return;
+    prevActingCorporationRef.current = acting;
+
+    const seat = gameState ? actingSeatIndex(gameState) : null;
+    const actingPresident = seat === null ? null : (gameState?.player_addresses[seat] ?? null);
+    if (!actingPresident || actingPresident !== viewerAddress) return;
+
+    setRadialSelector(null);
+    setPreviewTile(null);
+    setActiveMainTab(surfaceTabFor("OperatingRound"));
+  }, [gameState, actingProtocolId, viewerAddress]);
   const [routeSelectMode, setRouteSelectMode] = useState(false);
   /* ==================================================================
    *  DESIGN NOTE 275: ONE ROUTE PER TRAIN, KEYED BY TRAIN
@@ -3609,6 +3734,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     activeTrainIndexRef.current = activeTrainIndex;
   }, [activeTrainIndex]);
+  /* Design note #624: the roster, mirrored for the same reason and read for
+     one thing -- how many revenue centres the ACTIVE train may run. Kept off
+     the click handler's dependency list so a train purchase mid-step cannot
+     rebuild the canvas's click prop while a route is being drawn. */
+  const ownedTrainRosterRef = useRef(ownedTrainRoster);
+  useEffect(() => {
+    ownedTrainRosterRef.current = ownedTrainRoster;
+  }, [ownedTrainRoster]);
   /* Design note #266: WHICH TOOL DREW WHAT IS ON SCREEN.
      `routeSelectMode` stays as the CANVAS flag -- whether map clicks are
      being routed to the builder -- and this says which of the two drafting
@@ -3924,6 +4057,63 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setRouteDrafts((all) => {
         const trainIndex = activeTrainIndexRef.current;
         const prev = all[trainIndex] ?? [];
+        /* ==================================================================
+         *  DESIGN NOTE 624: A ROUTE CANNOT BE LONGER THAN ITS TRAIN
+         * ==================================================================
+         *
+         * REPORTED: "the manual route selector lets me (visually) exceed the
+         * actual length my trains can run. We should not let this happen to
+         * prevent player confusion."
+         *
+         * Every other rule about a waypoint was enforced on the click -- it
+         * needs track (#186), it cannot repeat a hex, the first one has to be
+         * a terminus (#256/#264) -- and the train's own capacity was not,
+         * even though it is the most basic of them. A player could draw a
+         * seven-stop path with a 3-train, watch it price, and only learn it
+         * was illegal from a readout below the map.
+         *
+         * WHY IT IS A REFUSAL AND NOT A WARNING. `exceedsMaxDistance` already
+         * exists on the draft and already greys the row, so the state was
+         * being REPORTED. The report is that reporting is too late: by then
+         * the player has drawn a route they now have to unpick, and the
+         * drawing is the part that took the effort. Refusing the click that
+         * would break the rule costs one click and leaves a legal route on
+         * screen.
+         *
+         * REVENUE CENTRES, NOT HEXES. A 3-train runs three STOPS and may
+         * cross any amount of plain track between them, so the count has to
+         * ask each hex whether it pays -- which is what `autoTraceRoute` and
+         * the contract both measure, and what `maxDistance` is expressed in.
+         * Counting hexes would refuse perfectly legal long runs across empty
+         * track, which is the opposite failure.
+         *
+         * THE BRIDGE IS COUNTED TOO. `bridgeWaypoints` can fill a gap through
+         * a town or a third city (its own design note #5), so a single click
+         * may add several paying stops. Checking the RESULT rather than the
+         * click is what catches that -- and it is why this is applied at
+         * `commit` rather than at either append site. */
+        const cap =
+          ownedTrainRosterRef.current.find((train) => train.trainIndex === trainIndex)
+            ?.maxDistance ?? null;
+        const centresIn = (points: readonly RoutePoint[]) =>
+          points.reduce(
+            (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel) ? total + 1 : total),
+            0,
+          );
+        /** Appends, unless doing so would overrun the train. */
+        const commit = (next: RoutePoint[]) => {
+          if (cap !== null) {
+            const centres = centresIn(next);
+            if (centres > cap) {
+              setRouteFeedback(
+                `That would give this train ${centres} stops and it can only run ${cap}. Click ${prev[prev.length - 1]?.hexLabel ?? "a hex on the route"} to step back, or select a longer train.`,
+              );
+              return all;
+            }
+          }
+          setRouteFeedback(null);
+          return { ...all, [trainIndex]: next };
+        };
         const write = (next: RoutePoint[]) => ({ ...all, [trainIndex]: next });
         const last = prev[prev.length - 1];
         // Clicking the most recently added point again is a quick one-step
@@ -3933,8 +4123,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return write(prev.slice(0, -1));
         }
         if (prev.length === 0) {
-          setRouteFeedback(null);
-          return write([point]);
+          // Design note #624: even the first stop is capped -- a 1-stop cap
+          // is not a state 1830 has, but the check is uniform rather than
+          // special-cased, which is what keeps it honest for the Diesel.
+          return commit([point]);
         }
 
         // Clicking a hex the route already passes through, other than the
@@ -3953,8 +4145,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            keeps hex-by-hex drawing available for disambiguating a branch --
            the bridge below only fills gaps the player chose to leave. */
         if (axialHexDistance(last, point) === 1) {
-          setRouteFeedback(null);
-          return write([...prev, point]);
+          return commit([...prev, point]);
         }
 
         /* ==================================================================
@@ -3994,8 +4185,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           );
           return all;
         }
-        setRouteFeedback(null);
-        return write([...prev, ...bridge]);
+        // Design note #624: the bridge may add several paying stops at once.
+        return commit([...prev, ...bridge]);
       });
     },
     // `mapGrid` joins for design note #186's track check -- a stale closure
@@ -7837,9 +8028,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [spectator, gameState, orSubPhase, viewerAddress]);
   const canLayTileNow = tileLayDisabledReason === null;
 
-  /** What the ring offers. A chain answer is used verbatim; a local one is
-      narrowed by `filterSandboxPlacements`, which is the only opinion
-      available on that path (that module's design note #0). */
+  /* ==================================================================
+   *  DESIGN NOTE 620: THE NETWORK FILTER BELONGS TO WHOEVER MAY LAY
+   * ==================================================================
+   *
+   * REPORTED: "inactive players are currently restricted from using the tile
+   * selector outside of the active player's legal placement options.
+   * Inactive players should be able to use the tile selector anywhere on the
+   * board so that they can look at possibilities and think about their
+   * strategies; only the active corporation player should be restricted to
+   * making a choice about their network."
+   *
+   * TWO EARLIER PASSES HAD ALREADY OPENED THE DOOR AND LEFT THIS SHUT.
+   * Design note #469 removed the click gate, so any viewer can open the ring
+   * on any hex; design note #437 narrowed the veil to the acting player, so
+   * the board no longer dims for a spectator. What neither touched was what
+   * the ring CONTAINS -- and this filter was still narrowing it by
+   * `layTrackFocus`, which describes ONE corporation's reach. So a player
+   * planning their own next turn opened the selector successfully and was
+   * shown only the orientations that happen to join somebody else's track,
+   * which is a stranger failure than being refused outright: the tool works,
+   * and quietly answers a question they did not ask.
+   *
+   * `canLayTileNow` IS THE RIGHT PREDICATE, and deliberately the same one the
+   * confirm button uses. The constraint exists because design note #6 in
+   * `sandboxTileLegality.ts` found the rotate gesture cycling through angles
+   * that looked legal and were not -- a real problem, and one that only
+   * exists for the player who might actually commit. For everyone else there
+   * is nothing to commit and therefore nothing to be wrong about; the honest
+   * answer to "what can this hex take" is every era-legal tile.
+   *
+   * SHARING THE PREDICATE IS THE POINT. The ring's contents and its confirm
+   * button now agree by construction about whose turn this is: a player who
+   * sees a narrowed carousel is exactly the player whose Lay Track button is
+   * live, and a player browsing sees the full set with a disabled button
+   * carrying the reason (`tileLayDisabledReason`). Two separate opinions
+   * about "is this my turn" is how the two halves drifted apart here in the
+   * first place.
+   *
+   * NOTE THIS IS THE SANDBOX/OFFLINE PATH ONLY. A chain answer is used
+   * verbatim (`provisional === false`) because `GetLegalTilePlacements` is
+   * asked about a hex, not about a corporation -- the contract already
+   * returns the same list to every viewer. */
   const radialCandidates = useMemo<readonly LegalTilePlacement[]>(() => {
     if (!radialSelector) return [];
     if (!radialSelector.provisional) return radialSelector.placements;
@@ -7852,14 +8082,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // rotate gesture cycles through angles that look legal and are not.
       // `undefined` when the reach is unknown, which leaves the previous
       // behaviour rather than emptying the carousel.
-      networkHexes: layTrackFocus?.network,
-      networkPorts: layTrackFocus?.ports,
+      //
+      // Design note #620: and `undefined` for anyone who may not lay, which
+      // is what lets them browse the whole hex rather than one corporation's
+      // slice of it.
+      networkHexes: canLayTileNow ? layTrackFocus?.network : undefined,
+      networkPorts: canLayTileNow ? layTrackFocus?.ports : undefined,
       // The era comes from `currentPhase.tint`, the SAME derivation the
       // phase badge displays, rather than a second reading of
       // `current_global_era`.
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
     });
-  }, [radialSelector, mapGrid, currentPhase, layTrackFocus?.network, layTrackFocus?.ports]);
+  }, [
+    radialSelector,
+    mapGrid,
+    currentPhase,
+    canLayTileNow,
+    layTrackFocus?.network,
+    layTrackFocus?.ports,
+  ]);
 
   /* ===================================================================
    *  DESIGN NOTE 173: ROTATE THROUGH LEGAL ANGLES ONLY
@@ -9590,24 +9831,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
-                        /* Design note #440/#444: a TOKEN placement owns the
-                           board and the picker must not open over it. The
-                           tile errand is the opposite -- it needs the picker,
-                           so it deliberately does not disarm here. */
-                        (homeStationPlacement !== null &&
-                          homeStationPlacement.kind !== "private-tile") ||
-                        /* Design note #440/#444: a TOKEN placement owns the
-                           board and the picker must not open over it. The
-                           tile errand is the opposite -- it needs the picker,
-                           so it deliberately does not disarm here. */
-                        (homeStationPlacement !== null &&
-                          homeStationPlacement.kind !== "private-tile") ||
-                        /* Design note #440/#444: a TOKEN placement owns the
-                           board and the picker must not open over it. The
-                           tile errand is the opposite -- it needs the picker,
-                           so it deliberately does not disarm here. */
-                        (homeStationPlacement !== null &&
-                          homeStationPlacement.kind !== "private-tile") ||
                         /* Design note #440/#444: a TOKEN placement owns the
                            board and the picker must not open over it. The
                            tile errand is the opposite -- it needs the picker,

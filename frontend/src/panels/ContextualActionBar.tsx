@@ -1226,10 +1226,24 @@ export default function ContextualActionBar({
            is about and the thing a continuous animation can never carry. */
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
-        /* Design note #597: the left border is GONE -- see the band below.
-           `position: relative` so the band can pin itself to the top edge
-           without the bar's own sticky positioning being disturbed. */
-        ...(actingSeatColor ? { position: "relative" as const } : {}),
+        /* ==================================================================
+         *  DESIGN NOTE 597a: `sticky` IS ALREADY A POSITIONED ELEMENT
+         * ==================================================================
+         *
+         * REPORTED: "the Action bar no longer travels down the screen as the
+         * player scrolls."
+         *
+         * That was this line. The previous pass added `position: relative`
+         * so the band could pin itself to the top edge -- and the comment
+         * even claimed it did so "without the bar's own sticky positioning
+         * being disturbed", which is exactly what it disturbed. `relative`
+         * replaced `sticky` outright, so the bar stopped following the
+         * scroll on every round that has an acting seat.
+         *
+         * IT WAS NEVER NEEDED. `position: sticky` already establishes a
+         * containing block for absolutely positioned children, so the band
+         * pins to the bar with no help. The override bought nothing and cost
+         * the one behaviour the bar exists to have. */
       }}
     >
       {/* ==================================================================

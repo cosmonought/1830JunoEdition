@@ -78,6 +78,30 @@ export interface TopTickerProps {
   unreadCount: number;
   isExpanded: boolean;
   onToggleExpand: () => void;
+  /* ==================================================================
+   *  DESIGN NOTE 598: THE DOCK IS A STATUS LINE, SO IT IS ONE LINE
+   * ==================================================================
+   *
+   * REPORTED: "the Chat/Activity log at the bottom needs to be slimmed down:
+   * it's bigger than the traveling Action bar and ostensibly less useful."
+   *
+   * Both halves of that are true and the second explains the first. Design
+   * note #581 docked this to the bottom edge precisely BECAUSE it is
+   * peripheral -- "readable without ever demanding attention" -- and then
+   * left it three rows tall: a 52px ticker, a permanent chat input, and a
+   * row of filter pills. A peripheral surface taller than the primary one is
+   * not peripheral.
+   *
+   * OPTION (b) FROM THE REPORT, taken as offered: "only show the ticker,
+   * remove the log filters, and leave a 'Chat' button that opens the text
+   * box below the ticker." The filters go with the input -- filtering is a
+   * thing you do while READING the log, so they belong in the expanded view
+   * and are noise on a one-line status strip.
+   *
+   * The toggle lives INSIDE the ticker's own header row rather than beside
+   * it, because a second row for one button would be the problem again. */
+  chatOpen?: boolean;
+  onToggleChat?: () => void;
 }
 
 /* ==================================================================
@@ -180,7 +204,15 @@ export function clockPrefix(item: FeedItem): string {
   return `[${trimmed}] `;
 }
 
-export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggleExpand }: TopTickerProps) {
+export function TopTicker({
+  latestItem,
+  items,
+  unreadCount,
+  isExpanded,
+  onToggleExpand,
+  chatOpen = false,
+  onToggleChat,
+}: TopTickerProps) {
   // Design note #5: the already-filtered items, oldest-to-newest so the most
   // recent entry reads at the bottom (the scroll body auto-scrolls there
   // below).
@@ -241,6 +273,20 @@ export function TopTicker({ latestItem, items, unreadCount, isExpanded, onToggle
         )}
         <span style={styles.expandHint}>{isExpanded ? "▲ Collapse" : "▼ Expand"}</span>
       </button>
+      {/* Design note #598: OUTSIDE the header button, not inside it -- a
+          button nested in a button is invalid markup and the click would
+          toggle both. Absolutely positioned so it costs the row no height. */}
+      {onToggleChat && (
+        <button
+          type="button"
+          style={{ ...styles.chatToggle, ...(chatOpen ? styles.chatToggleOpen : {}) }}
+          onClick={onToggleChat}
+          aria-expanded={chatOpen}
+          title={chatOpen ? "Hide the message box." : "Send a message to the table."}
+        >
+          Chat
+        </button>
+      )}
 
       {/* Design note #5: in-place accordion body, no modal/backdrop.
           Design note #21: JUST the scrollable history list now -- no
@@ -393,19 +439,25 @@ const styles: Record<string, React.CSSProperties> = {
    * from the tabs without shouting, and it is the same device the chat
    * entries already use to mark an author. */
   root: {
+    // Design note #598: `relative`, so the Chat toggle can pin to this
+    // strip's right edge without leaving the dock.
+    position: "relative",
     width: "100%",
     backgroundColor: "#131a27",
     borderTop: "1px solid #0b1119",
     borderLeft: "3px solid #2f6f6a",
     boxSizing: "border-box",
   },
+  /* Design note #598: 52px/16px was a HEADER's proportions on a strip that
+     is a status line. A third of the height, and the padding with it -- the
+     text is the same size, it simply is not swimming any more. */
   headerRow: {
     display: "flex",
     alignItems: "center",
-    gap: "14px",
+    gap: "10px",
     width: "100%",
-    minHeight: "52px",
-    padding: "16px 28px",
+    minHeight: "30px",
+    padding: "4px 14px",
     // Design note #457: transparent, so the row takes the root's own
     // surface rather than reasserting the tab bar's.
     backgroundColor: "transparent",
@@ -427,6 +479,23 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  /* Design note #598: pinned to the right edge of the row it sits over, so
+     the full-width header button keeps its whole hit area up to this point. */
+  chatToggle: {
+    position: "absolute",
+    right: "10px",
+    top: "3px",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: "6px",
+    border: "1px solid #2f3646",
+    backgroundColor: "#1b2130",
+    color: "#9aa0ac",
+    cursor: "pointer",
+    zIndex: 1,
+  },
+  chatToggleOpen: { borderColor: "#4d8ee0", color: "#cfe2ff", backgroundColor: "#1d3a55" },
   unreadBadge: {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,

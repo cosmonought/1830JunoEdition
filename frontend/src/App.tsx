@@ -2643,6 +2643,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // Renamed from `feedOpen` -- design note #20/item 1. Same boolean role,
   // now gates `TopTicker.tsx`'s in-place accordion body instead of a
   // modal's mount state.
+  /* Design note #598: the message box, hidden until asked for. */
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  /* ==================================================================
+   *  DESIGN NOTE 599: THE DOCK RESERVES ITS OWN HEIGHT
+   * ==================================================================
+   *
+   * REPORTED: "When Expanding the chat/activity log, it simply covers the
+   * viewport rather than pushing the viewport up."
+   *
+   * Design note #581 fixed the dock to the bottom edge so it survives
+   * scrolling the board, and paid for that with a constant 96px of padding
+   * on the app root -- a guess at its height, correct while the dock had one
+   * height and wrong the moment it could grow.
+   *
+   * MEASURED, NOT GUESSED. A `ResizeObserver` reports the dock's real height
+   * on every change -- expanding the log, opening the chat, a wrapped row on
+   * a narrow window -- and that becomes the root's bottom padding. So the
+   * page is always exactly as long as it needs to be, and the last row of
+   * content is never underneath the strip.
+   *
+   * NOT `position: sticky`, which would put the dock in flow and solve this
+   * for free. It cannot be: the app root is a column whose content is
+   * frequently shorter than the viewport, and a sticky footer in a short
+   * column sits directly under the content rather than at the bottom of the
+   * window -- which is where a status line has to be to be peripheral.
+   *
+   * THE OBSERVER IS THE CHEAP OPTION here despite looking like the expensive
+   * one. The alternative is a table of expected heights per state, which is
+   * a second description of a layout CSS already decides -- and the kind
+   * that drifts silently the first time a font or a padding changes. */
+  const statusDockRef = useRef<HTMLDivElement | null>(null);
+  const [statusDockHeight, setStatusDockHeight] = useState(96);
+  useEffect(() => {
+    const node = statusDockRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setStatusDockHeight(entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
   const [isTickerExpanded, setIsTickerExpanded] = useState(false);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   // Tracks how many (filtered) items had already been seen the last time
@@ -8391,7 +8433,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }
 
   return (
-    <div style={styles.appRoot}>
+    <div style={{ ...styles.appRoot, paddingBottom: `${statusDockHeight + 12}px` }}>
       {/* Active Player Turn Notifications -- design note #18/item 4, now
           MANDATORY per design note #21 (no opt-out anywhere). The keyframes
           are injected unconditionally (matching Chatbox.tsx's own
@@ -8708,21 +8750,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            underneath it, and the box is anchored at the bottom rather than
            sized -- so the expanded history grows UPWARD from the line
            instead of off the screen. */}
-      <div style={styles.statusLineDock}>
+      <div ref={statusDockRef} style={styles.statusLineDock}>
         <TopTicker
           latestItem={latestFeedItem}
           items={filteredFeedItems}
           unreadCount={unreadFeedCount}
           isExpanded={isTickerExpanded}
           onToggleExpand={handleToggleTickerExpand}
+          chatOpen={isChatOpen}
+          onToggleChat={() => setIsChatOpen((open) => !open)}
         />
-        <InlineQuickChat
-          draft={chatDraft}
-          onDraftChange={setChatDraft}
-          onSend={handleSendChatMessage}
-          filter={feedFilter}
-          onFilterChange={setFeedFilter}
-        />
+        {/* Design note #598: the input and its filter pills are the two rows
+            that made the dock taller than the action bar. They appear on
+            request and while the log is open -- reading the history is when
+            filtering it means anything. */}
+        {(isChatOpen || isTickerExpanded) && (
+          <InlineQuickChat
+            draft={chatDraft}
+            onDraftChange={setChatDraft}
+            onSend={handleSendChatMessage}
+            filter={feedFilter}
+            onFilterChange={setFeedFilter}
+          />
+        )}
       </div>
 
       {isWorkspaceTab && (
@@ -9235,9 +9285,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     player. `activeMainTab === "corps"` is the same condition
                     the corporation cards above use -- they are two halves of
                     one screen and only one of them was scoped to it. */}
-                {activeMainTab === "corps" &&
-                  (gameState?.current_round_type === "StockRound" ||
-                    gameState?.current_round_type === "WaterfallAuction") && (
+                {/* ==================================================
+                     DESIGN NOTE 597d: THE CARDS FOLLOW THE ROUND'S OWN TAB
+                    ==================================================
+
+                     REPORTED: "the Auction round is missing the Player cards
+                     at the bottom panel."
+
+                     The guard read `activeMainTab === "corps"` -- the Stock
+                     Round's surface, hardcoded when the cards served only
+                     that round. The auction lives on `phase`
+                     (`surfaceTabFor`), so widening the ROUND test last pass
+                     without widening the TAB test left the cards mounted on
+                     a tab the auction never opens.
+
+                     `surfaceTabFor` is asked rather than a second literal
+                     added: it already owns "which tab does this round live
+                     on", and two statements of that would be one more thing
+                     to keep in step. */}
+                {gameState &&
+                  (gameState.current_round_type === "StockRound" ||
+                    gameState.current_round_type === "WaterfallAuction") &&
+                  activeMainTab === surfaceTabFor(gameState.current_round_type) && (
                   <section style={styles.playerCardsSection}>
                     <h3 style={styles.playerCardsTitle}>Players</h3>
                     <PlayerCards

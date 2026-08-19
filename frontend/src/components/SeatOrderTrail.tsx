@@ -74,7 +74,24 @@ export interface SeatOrderTrailProps {
   /** Who opens the next Stock Round, marked in place rather than in a
    *  separate legend — it is a fact about a seat's position in this queue. */
   priorityAddress?: string | null;
-  /** This browser's seat, so "you" can be pointed out once. */
+  /* ==================================================================
+   *  DESIGN NOTE 597c: THE CHIPS CARRY NO BADGES
+   * ==================================================================
+   *
+   * INSTRUCTED: "the Action bar player pills do not need 'PD' or '(you)' in
+   * them, these are just making the pills larger."
+   *
+   * Both were mine and both were paying for themselves in width on the one
+   * row that has least of it. And neither was needed here: the player CARD
+   * already marks the Priority Deal in its stripe, and a player does not
+   * need telling which seat is theirs on a screen they are looking at --
+   * design note #567 reached that same conclusion about the YOU badge on the
+   * cards two passes ago and I put it back on the trail without noticing.
+   *
+   * `viewerAddress` STAYS ON THE INTERFACE, unused by the render, because a
+   * caller passing it is stating something true and a future variant of this
+   * row may want it. Removing the prop would make re-adding the distinction
+   * a plumbing job rather than a styling one. */
   viewerAddress?: string | null;
 }
 
@@ -96,7 +113,6 @@ export function SeatOrderTrail({
              time round, which is only knowable relative to the cursor. `-1`
              (nobody on turn) marks nothing done rather than everything. */
           const isDone = activeIndex >= 0 && index < activeIndex;
-          const isViewer = seat.address === viewerAddress;
           return (
             <li key={seat.address} style={styles.item}>
               {index > 0 && (
@@ -141,7 +157,6 @@ export function SeatOrderTrail({
                   />
                 )}
                 {seat.label}
-                {isViewer && <span style={styles.you}>(you)</span>}
                 {typeof seat.available === "number" && (
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
@@ -154,11 +169,6 @@ export function SeatOrderTrail({
                     title={`$${seat.escrowed} is escrowed in standing bids and comes back if those bids lose.`}
                   >
                     +${seat.escrowed}
-                  </span>
-                )}
-                {seat.address === priorityAddress && (
-                  <span style={styles.priority} title="Opens the next Stock Round.">
-                    PD
                   </span>
                 )}
               </span>
@@ -186,17 +196,44 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   item: { display: "inline-flex", alignItems: "center", minWidth: 0 },
-  chevron: { color: "#5a6070", padding: "0 4px", fontSize: FONT_SIZE.small },
+  /* Design note #597b: the `>` the request asks for, in the ladder's own
+     separator weight -- faint, so it joins the segments rather than
+     competing with them. */
+  chevron: { color: "#5a6070", padding: "0 1px", fontSize: FONT_SIZE.small, opacity: 0.6 },
+  /* ==================================================================
+   *  DESIGN NOTE 597b: THE PAR LADDER'S SHAPE, NOT A PILL
+   * ==================================================================
+   *
+   * INSTRUCTED: "Rather than each player having a pill, what if we used the
+   * rectangle from the Par selector and instead of / between players we used
+   * a >, then have the relevant segment light up on that player's turn?"
+   *
+   * Taken as written, and it is better than the pills for a reason the
+   * request implies rather than states: the par ladder is a row of
+   * INTERCHANGEABLE options of which exactly one is lit, which is precisely
+   * the shape of a turn queue. A pill is a self-contained badge -- five of
+   * them read as five separate objects that happen to be adjacent, and the
+   * rounded ends fight the chevron's attempt to join them into a sequence.
+   *
+   * SO THE GEOMETRY IS `sellSlashOption`'s: a flat rectangle, no border, a
+   * small radius, transparent until it is the one that matters. The unlit
+   * segments recede to text and the lit one is a solid block, which is what
+   * "light up" has to mean if the reader is to catch it peripherally.
+   *
+   * PADDING IS THIS FILE'S OWN, slightly larger than the ladder's 2px/3px --
+   * that value is defended in `StockRoundPanel` by a specific width budget
+   * ("across five options and four separators that is 30px reclaimed"), and
+   * a name is longer than a par value. Copying the number rather than the
+   * intent would make the ladder's constraint govern a row it knows nothing
+   * about. */
   seat: {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
-    padding: "3px 9px",
-    borderRadius: "999px",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    borderColor: "#2f3543",
-    backgroundColor: "#1b1f29",
+    gap: "6px",
+    padding: "3px 8px",
+    borderRadius: "5px",
+    border: "none",
+    backgroundColor: "transparent",
     color: "#8a919e",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
@@ -206,15 +243,11 @@ const styles: Record<string, React.CSSProperties> = {
      They are still in the round -- the auction can come back to them -- so
      "finished" would be a stronger claim than the game supports. */
   seatDone: { opacity: 0.55 },
+  /* Design note #597b: a SOLID block in the seat's own colour. The lit
+     segment is the whole point of the shape -- an outline would read as
+     "selected", a fill reads as "this one is live". */
   seatCurrent: { fontWeight: 800 },
   dot: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" },
-  you: { opacity: 0.7, fontWeight: 600 },
   cash: { fontWeight: 800, fontVariantNumeric: "tabular-nums" },
   escrow: { fontSize: FONT_SIZE.micro, opacity: 0.7, fontVariantNumeric: "tabular-nums" },
-  priority: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 900,
-    letterSpacing: "0.04em",
-    opacity: 0.8,
-  },
 };

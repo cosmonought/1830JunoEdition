@@ -121,7 +121,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "10px",
     width: "100%",
-    padding: "10px 28px",
+    padding: "6px 14px",
     /* Design note #457: the same surface and the same left accent the
        ticker above now carries, so the two read as one block -- the log and
        the chat are one conversation, and the boundary that matters is the

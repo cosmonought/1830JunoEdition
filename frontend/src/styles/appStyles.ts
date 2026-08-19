@@ -306,12 +306,11 @@ export const styles: Record<string, React.CSSProperties> = {
     // pane's.
     minHeight: "100vh",
     width: "100%",
-    /* Design note #581: room for the fixed status line at the foot of the
-       window. Without it the last row of any tab sits underneath the dock --
-       and the row most likely to be hidden is the one a player just scrolled
-       down to reach. Generous rather than exact: the dock is the ticker plus
-       the chat strip, and a wrapped chat row is taller than an unwrapped
-       one. */
+    /* Design note #599: the SEED only. The real value is measured from the
+       dock and applied inline -- a constant here was right while the dock had
+       one height, and became "the log covers the page" the moment it could
+       grow. Kept as the pre-measurement default so the first paint does not
+       start with the footer over the content. */
     paddingBottom: "96px",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     backgroundColor: "#12141a",
@@ -504,7 +503,42 @@ export const styles: Record<string, React.CSSProperties> = {
     margin: "0 0 4px",
   },
   canvasPane: {
-    flex: 1,
+    /* ==================================================================
+     *  DESIGN NOTE 600: `flex: 1` MEANS `flex-basis: 0`, AND THAT IS THE BUG
+     * ==================================================================
+     *
+     * REPORTED, twice: "the Action bar no longer travels down the screen as
+     * the player scrolls." The first fix -- removing a `position: relative`
+     * that had overridden `sticky` -- was a real bug and not this one.
+     *
+     * A sticky element travels only within its PARENT'S BOX. This pane is
+     * the action bar's parent, and `flex: 1` expands to `1 1 0%` -- a
+     * flex-basis of ZERO, grown to fill the flex line. In a column whose
+     * container is `min-height: 100vh`, that line is one viewport tall. So
+     * this pane computed to roughly the viewport height while its CONTENT --
+     * the bar, the auction dashboard, the player cards -- ran far past it and
+     * simply overflowed.
+     *
+     * The bar was sticking perfectly. It had a few pixels of parent to stick
+     * within, reached the bottom of that box, and scrolled away with it.
+     *
+     * WHY THE AUCTION SHOWED IT FIRST: the effect scales with how far the
+     * content overruns the pane, and the auction stacks six private-company
+     * cards, the action bar and a row of player cards on one tab. The same
+     * fault was present everywhere and simply had less to give it away.
+     *
+     * `1 0 auto`: still grows to fill a short page (which is what `flex: 1`
+     * was here for -- design note #13 wanted the pane to claim the full
+     * height rather than sit in a box), but its basis is now its CONTENT, so
+     * it is never shorter than what it holds. `flex-shrink: 0` because a
+     * pane that shrinks below its content is the state this note is about.
+     *
+     * NOT VERIFIED IN A BROWSER, and worth saying: this is reasoned from the
+     * flex spec rather than watched. Three earlier CSS causes were checked
+     * and ruled out first (no `overflow` on any ancestor, no `position`
+     * override, no competing stacking context) -- but if the bar still fails
+     * to travel, this note is the next thing to disbelieve. */
+    flex: "1 0 auto",
     display: "flex",
     flexDirection: "column",
     gap: "16px",
@@ -1087,6 +1121,10 @@ export const styles: Record<string, React.CSSProperties> = {
     zIndex: 3000,
     display: "flex",
     flexDirection: "column",
+    /* Design note #599: still capped -- a long history must not become the
+       whole window -- but the app root now reserves whatever height this
+       actually takes, so growing pushes the page down instead of covering
+       it. */
     maxHeight: "60vh",
     overflowY: "auto",
     borderTop: "1px solid #2b3242",

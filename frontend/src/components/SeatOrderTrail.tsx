@@ -210,38 +210,100 @@ const styles: Record<string, React.CSSProperties> = {
    * the whitespace that made them read as separate chips, and it is the one
    * value that cannot be tuned by taste -- any non-zero gap undoes the
    * border. The chevron is the separator; it needs no help. */
+  /* ==================================================================
+   *  DESIGN NOTE 603: THE FILL HAS TO REACH THE EDGES
+   * ==================================================================
+   *
+   * REPORTED: "each player is still given their own pill in the rectangle:
+   * if the current turn's player instead filled in their whole segment, the
+   * chevron shape would be clearly visible and pointing from one player to
+   * the next."
+   *
+   * Design note #599 drew the border and set `gap: 0`, and stopped one step
+   * short AGAIN -- for the same reason, one level in. The container had 2px
+   * of padding and the segments had a 4px radius, so the lit fill floated
+   * clear of the rectangle's own edges on all four sides. A shape that does
+   * not touch its container is a shape sitting INSIDE its container, which
+   * is the definition of the pill this was supposed to stop being. Two
+   * pixels of padding were doing all the damage.
+   *
+   * SO: NO PADDING ON THE CONTAINER, NO RADIUS ON THE SEGMENTS, and
+   * `alignItems: stretch` so each segment is as tall as the bar. The lit
+   * segment now runs border to border -- a slice of the object rather than
+   * an object on a tray -- and that is what makes the chevrons beside it
+   * read as pointing OUT of the filled block and into the next name.
+   *
+   * `overflow: hidden` ON THE CONTAINER is what lets both be true at once:
+   * the segments stay square, and the first and last are clipped by the
+   * container's own 6px radius. Without it a lit end seat would poke square
+   * corners through the rounded frame. */
   root: {
     display: "inline-flex",
-    alignItems: "center",
+    alignItems: "stretch",
     minWidth: 0,
-    padding: "2px",
+    padding: 0,
     borderRadius: "6px",
     border: "1px solid #2f3543",
     backgroundColor: "#1b1f29",
+    overflow: "hidden",
     boxSizing: "border-box",
   },
   strip: {
     display: "flex",
     flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
+    /* Design note #603: `stretch`, not `center`. This is the line that makes
+       a segment full-height; centring shrink-wraps it to its text and the
+       fill stops short of the rule above and below it. */
+    alignItems: "stretch",
+    /* Design note #603: NO WRAP. A wrapped row would leave a half-width
+       second line inside the frame, and the segments-of-one-bar reading dies
+       the moment the bar has two rows. Six seats of short labels is the
+       designed case; longer ones are handled by the container scrolling
+       rather than by breaking the shape. */
+    flexWrap: "nowrap",
     gap: 0,
     margin: 0,
     padding: 0,
     listStyle: "none",
     minWidth: 0,
   },
-  item: { display: "inline-flex", alignItems: "center", minWidth: 0 },
+  item: { display: "inline-flex", alignItems: "stretch", minWidth: 0 },
   /* Design note #597b: the `>` the request asks for, in the ladder's own
      separator weight -- faint, so it joins the segments rather than
      competing with them. */
+  /* ==================================================================
+   *  DESIGN NOTE 603a: THE CHEVRON IS THE POINT, SO IT GETS TO BE SEEN
+   * ==================================================================
+   *
+   * REPORTED: "the chevron indicating turn order in the Action bar is both
+   * small and indistinct as a color."
+   *
+   * Both true, and both were deliberate in a way that turned out to be
+   * wrong. Design note #597b set it at `FONT_SIZE.small` and 60% opacity of
+   * `#5a6070` so it would "join the segments rather than compete with them"
+   * -- treating it as punctuation. But this glyph is not punctuation here:
+   * it is the ONLY thing on the bar that says the row is a sequence rather
+   * than a list. Design note #595 is explicit that the separator carries the
+   * meaning position alone could not, and then #597b styled it like it
+   * carried none.
+   *
+   * SO IT MOVES UP THE SCALE, not just in colour -- `small` (12px) reads as
+   * a comma at this weight no matter what colour it is. `heading` (16px) at
+   * weight 700 gives it a stroke thick enough to have a direction.
+   *
+   * STILL DIMMER THAN THE LIT SEGMENT, which is the one hierarchy worth
+   * keeping: full-strength white chevrons would compete with the name the
+   * reader is actually looking for. `#8d97a8` at full opacity is legible
+   * against both the unlit bar and an arbitrary seat colour, which the old
+   * 60%-of-#5a6070 was against neither. */
   chevron: {
-    color: "#5a6070",
-    padding: "0 3px",
-    fontSize: FONT_SIZE.small,
-    opacity: 0.6,
-    /* Design note #599: the segments are flush now, so this glyph IS the gap
-       between them. 1px of padding left the two names all but touching. */
+    display: "flex",
+    alignItems: "center",
+    color: "#8d97a8",
+    padding: "0 2px",
+    fontSize: FONT_SIZE.heading,
+    fontWeight: 700,
+    lineHeight: 1,
     flex: "none",
   },
   /* ==================================================================
@@ -272,13 +334,15 @@ const styles: Record<string, React.CSSProperties> = {
    * about. */
   seat: {
     display: "inline-flex",
-    alignItems: "baseline",
+    alignItems: "center",
     gap: "5px",
-    padding: "3px 8px",
-    /* Design note #599: 4px, INSIDE the container's 6px and 2px of padding.
-       A segment radius at or above the container's reads as a chip sitting on
-       a tray rather than a division of it. */
-    borderRadius: "4px",
+    /* Design note #603: vertical padding is what gives the BAR its height,
+       so it belongs on the segment rather than the frame -- that is the
+       whole trick that lets a fill reach the top and bottom rules. */
+    padding: "5px 10px",
+    /* Design note #603: SQUARE. Any radius here re-creates the pill; the
+       container's `overflow: hidden` rounds the two outer ends for free. */
+    borderRadius: 0,
     border: "none",
     backgroundColor: "transparent",
     color: "#8a919e",

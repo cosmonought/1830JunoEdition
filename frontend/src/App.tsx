@@ -517,7 +517,10 @@
 //    no settings/checkbox/toggle UI survives anywhere in the ticker
 //    module.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Design note #605: `useLayoutEffect` for the status dock's scroll
+// compensation -- it has to run after React commits the new bottom padding
+// and before the browser paints, or the correction is visible as a jump.
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
@@ -2672,17 +2675,74 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * one. The alternative is a table of expected heights per state, which is
    * a second description of a layout CSS already decides -- and the kind
    * that drifts silently the first time a font or a padding changes. */
+  /* ==================================================================
+   *  DESIGN NOTE 605: RESERVING THE HEIGHT IS ONLY HALF OF IT
+   * ==================================================================
+   *
+   * REPORTED, after #599: "expanding the chat/activity log permanently
+   * obscures whatever is at the bottom of the screen: the expansion should
+   * grow the size of the screen."
+   *
+   * Design note #599 measured the dock and reserved its height as bottom
+   * padding, which makes the content REACHABLE. It does not make it VISIBLE,
+   * and those are different promises. The dock is `position: fixed`, so
+   * growing it paints over whatever occupied the bottom of the viewport;
+   * the extra padding lengthens the document underneath but does not move
+   * the scroll position, so the covered rows stay covered until the reader
+   * scrolls. "Permanently" is the fair description -- nothing ever brings
+   * them back on its own.
+   *
+   * THE MISSING HALF IS THE SCROLL. When the dock grows by N, the page must
+   * scroll down by N: the document just got N longer at the bottom, so
+   * scrolling N keeps every pixel of content exactly where it was on screen
+   * and the dock expands into space that was empty. Shrinking runs the same
+   * arithmetic backwards. That is what "grow the size of the screen" means
+   * in a fixed-footer layout -- you cannot push the viewport, so you move
+   * the page under it by the same amount.
+   *
+   * IN A LAYOUT EFFECT, NOT IN THE OBSERVER. Scrolling straight from the
+   * ResizeObserver callback races React: the padding that makes the document
+   * longer has not been committed yet, so `scrollBy` clamps against the OLD
+   * document height and under-scrolls by exactly the amount that matters.
+   * The delta is parked on a ref and spent after the commit, which is the
+   * one moment both facts are true.
+   *
+   * THE FIRST MEASUREMENT IS SKIPPED. `96` is a seed, not an observation, so
+   * the mount-time delta is the error in that guess -- compensating for it
+   * would scroll the page on load for no reason a reader could explain.
+   *
+   * BORDER BOX, NOT `contentRect`. The dock has a 1px top rule and
+   * `contentRect` excludes it, so #599 reserved one pixel less than the dock
+   * occupies. Invisible on its own, and wrong in the same direction every
+   * time this recomputes. */
   const statusDockRef = useRef<HTMLDivElement | null>(null);
   const [statusDockHeight, setStatusDockHeight] = useState(96);
+  const measuredDockHeightRef = useRef<number | null>(null);
+  const pendingDockScrollRef = useRef(0);
   useEffect(() => {
     const node = statusDockRef.current;
     if (!node || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setStatusDockHeight(entry.contentRect.height);
+    const observer = new ResizeObserver(() => {
+      const next = node.getBoundingClientRect().height;
+      const previous = measuredDockHeightRef.current;
+      // Sub-pixel churn from fractional layout is not a resize anyone asked
+      // about, and compensating for it would fight the scroller.
+      if (previous !== null && Math.abs(next - previous) < 1) return;
+      if (previous !== null) pendingDockScrollRef.current += next - previous;
+      measuredDockHeightRef.current = next;
+      setStatusDockHeight(next);
     });
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    const delta = pendingDockScrollRef.current;
+    if (delta === 0) return;
+    pendingDockScrollRef.current = 0;
+    // `scrollBy` clamps itself at both ends, so a collapse at the top of the
+    // page is a no-op rather than a negative scroll.
+    window.scrollBy(0, delta);
+  }, [statusDockHeight]);
   const [isTickerExpanded, setIsTickerExpanded] = useState(false);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   // Tracks how many (filtered) items had already been seen the last time
@@ -8468,13 +8528,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * like it AGREES with the branch it is in when it in fact contradicts it.
    * Reading either one alone tells you the cards should render.
    *
-   * SO THE PANEL IS HOISTED HERE, out of both arms, and each arm renders it
-   * where that round wants it: after the dashboard in an auction, between
-   * the corporation cards and the board in a Stock Round. One definition,
-   * one guard, two mount points -- rather than a copy per branch that would
-   * drift the first time somebody edited only the one they were looking at.
+   * SO THE PANEL IS HOISTED HERE, out of both arms, and each arm places it
+   * where that round wants it. The Stock Round renders it directly, between
+   * the corporation cards and the board pane. The auction HANDS IT TO THE
+   * DASHBOARD as a prop (design note #604), because the slot it belongs in
+   * -- the one the seating table used to fill -- is inside that component
+   * and not reachable from here.
    *
-   * `null` when the guard fails, so an arm can render it unconditionally. */
+   * One definition, one guard, two mount points. A copy per branch would
+   * have been fewer moving parts today and would drift the first time
+   * somebody edited only the one they happened to be looking at.
+   *
+   * `null` when the guard fails, so a caller can place it unconditionally. */
   const playersPanel =
     gameState &&
     (gameState.current_round_type === "StockRound" ||
@@ -8494,8 +8559,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           privateDescription={(privateId) =>
             PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
           }
-          // Design note #593: seats take turns in both rounds.
-          showSeatOrder
         />
       </section>
     ) : null;
@@ -9115,47 +9178,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  the whole of the private auction -- during which players
                  have every reason to study the board they are about to
                  compete over. */
-              <>
-                <WaterfallAuctionDashboard
-                  waterfallState={waterfallState}
-                  loading={waterfallStateLoading}
-                  error={waterfallStateError}
-                  gameState={gameState}
-                  connectedWalletAddress={viewerAddress}
-                  playerLabel={sandbox ? sandboxPlayerLabel : undefined}
-                  // Design note #30 in that file: pass-and-play has no wallet
-                  // to compare a turn against, so the seat on turn is always
-                  // the one this keyboard may act for.
-                  /* Design note #578: `hotseat` gone -- every seat is a browser. */
-                  settledPrices={settledPrivatePrices}
-                  // Design note #306 in that file: the auction is over and
-                  // somebody has to open the Stock Round. Sandbox only --
-                  // a live chain advances its own round, and a client button
-                  // there would be a lie.
-                  onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
-                  sessionReady={controlsEnabled}
-                  onBuyLowest={handleWaterfallBuyLowest}
-                  onBidHigher={handleWaterfallBidHigher}
-                  onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
-                  onMiniAuctionPass={handleWaterfallMiniAuctionPass}
-                />
-                {/* ==================================================
-                     DESIGN NOTE 602: THE AUCTION'S MOUNT POINT
+              <WaterfallAuctionDashboard
+                waterfallState={waterfallState}
+                loading={waterfallStateLoading}
+                error={waterfallStateError}
+                gameState={gameState}
+                connectedWalletAddress={viewerAddress}
+                playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                // Design note #30 in that file: pass-and-play has no wallet
+                // to compare a turn against, so the seat on turn is always
+                // the one this keyboard may act for.
+                /* Design note #578: `hotseat` gone -- every seat is a browser. */
+                settledPrices={settledPrivatePrices}
+                // Design note #306 in that file: the auction is over and
+                // somebody has to open the Stock Round. Sandbox only --
+                // a live chain advances its own round, and a client button
+                // there would be a lie.
+                onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
+                sessionReady={controlsEnabled}
+                onBuyLowest={handleWaterfallBuyLowest}
+                onBidHigher={handleWaterfallBidHigher}
+                onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
+                onMiniAuctionPass={handleWaterfallMiniAuctionPass}
+                /* ==================================================
+                     DESIGN NOTE 604: HANDED IN, NOT HUNG UNDERNEATH
                     ==================================================
 
-                     Under the dashboard, which is where the Stock Round
-                     puts them relative to ITS main surface -- so the
-                     cards sit in the same place on screen across the two
-                     rounds rather than moving when the round turns over.
+                     Design note #602 mounted the cards as a SIBLING of the
+                     dashboard, which put them below it and left the empty
+                     seating panel sitting between the private company
+                     cards and them. Both problems are the same problem:
+                     from out here the only position available is "after
+                     the whole dashboard", and the place the cards belong
+                     is inside it.
 
-                     The fragment is the whole fix. This arm used to be a
-                     bare `<WaterfallAuctionDashboard />`, and anything
-                     the auction needed alongside it had no place to go
-                     except the other arm -- which is exactly where the
-                     cards ended up, and why two passes at the guard
-                     changed nothing. */}
-                {playersPanel}
-              </>
+                     So the dashboard takes the node and places it, in the
+                     slot the seating table used to occupy. Same conduit
+                     pattern as `seatOrderTrail` on the action bar -- the
+                     child owns the layout, this file owns the content, and
+                     neither has to learn the other's job. */
+                playersPanel={playersPanel}
+              />
             ) : (
               <>
                 {/* Audit G-15: train trading, shown only during the Buy

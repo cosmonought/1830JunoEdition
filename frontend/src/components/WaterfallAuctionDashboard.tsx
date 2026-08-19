@@ -207,6 +207,25 @@ export interface WaterfallAuctionDashboardProps {
   onMiniAuctionRaise: (bidAmountVgp: number) => void;
   /** Dispatches `ExecuteMsg::WaterfallMiniAuctionPass`. */
   onMiniAuctionPass: () => void;
+  /* ==================================================================
+   *  DESIGN NOTE 604: THE PLAYER CARDS ARRIVE AS A NODE
+   * ==================================================================
+   *
+   * The same conduit shape `ContextualActionBar` uses for `seatOrderTrail`,
+   * and for the same reason: this dashboard has no business knowing how a
+   * player card is built, what finances feed it, or which round it belongs
+   * to. It knows only WHERE on the auction screen the players go, which is
+   * the one fact `App.tsx` cannot state from outside.
+   *
+   * Passing the built element rather than the data also keeps the Stock
+   * Round and the auction rendering one component instance shape -- design
+   * note #602 hoisted it to a single definition precisely so the two
+   * surfaces could not drift, and re-deriving it from props here would hand
+   * that back.
+   *
+   * `undefined` renders nothing, which is what a caller with no cards to
+   * show should be able to say without a second flag. */
+  playersPanel?: React.ReactNode;
 }
 
 /** Design note #32: injected keyframes. Inline `React.CSSProperties` cannot
@@ -335,6 +354,7 @@ export function WaterfallAuctionDashboard({
   onBidHigher,
   onMiniAuctionRaise,
   onMiniAuctionPass,
+  playersPanel = null,
 }: WaterfallAuctionDashboardProps) {
   const privates = waterfallState?.privates ?? [];
   /* Design note #314: the seat whose money the controls spend. In hotseat
@@ -561,65 +581,35 @@ export function WaterfallAuctionDashboard({
             they are drawing -- and until now the only way to see another
             player's holdings was to read the sold cards and remember four
             names. */}
-        <div style={styles.actionRail}>
-          {gameState && gameState.player_addresses.length > 0 && (
-            <div style={styles.actionRailFull}>
-              <div style={styles.seatingCard}>
-                {/* ==================================================
-                     DESIGN NOTE 422: THREE COLUMNS, THREE HEADINGS
-                    ==================================================
+        {/* ==================================================
+             DESIGN NOTE 604: THE PANEL THE SEATING TABLE LEFT BEHIND
+            ==================================================
 
-                    REPORTED: head these columns "Player Information",
-                    "Cash" and "Privates".
+             REPORTED: "the player cards HAVE moved to the bottom of the
+             Auction tab screen, but there is an empty panel above them /
+             below the Private Company cards, which is where they should
+             actually be."
 
-                    They had one heading between them -- a right-aligned
-                    hint reading "Available / held · Privates owned", which
-                    described two of the three columns in a single string
-                    parked over neither of them. A reader had to map a
-                    slash-separated phrase onto a flex row by position.
+             Exactly right, and the empty panel was mine. Design note #593
+             deleted the seating TABLE and left its container standing: an
+             `actionRail` wrapping an `actionRailFull` wrapping a
+             `seatingCard` whose entire contents had become the comment
+             explaining why there were no contents. Three nested bordered
+             divs rendering a 12px-padded void on every auction screen.
 
-                    The labels now sit ON their columns, using the same
-                    basis values the rows do (`0 0 128px` for privates, the
-                    cash cell's `marginLeft: auto`), so heading and data
-                    line up at every window width rather than approximately.
+             "REMOVED RATHER THAN HIDDEN" is what that note claimed. It
+             removed the rows and hid nothing -- the chrome stayed, and a
+             bordered empty box is not less confusing than a table. It is
+             more: a table at least says what it is.
 
-                    "Available / held" is not lost -- it was the more
-                    precise of the two phrases, and it survives where it
-                    belongs: in each cash cell's own tooltip, which already
-                    spelled out the total, the escrow and the available
-                    figure separately. */}
-                {/* ==================================================
-                     DESIGN NOTE 593: THE SEATING TABLE IS GONE
-                    ==================================================
-
-                     INSTRUCTED: "the Player cards that we've created for the
-                     Stock Round should replace the Seating Order panel during
-                     the Auction round -- the Player cards are receiving
-                     positive feedback compared to the table for quick
-                     reference by testers."
-
-                     THE CARDS CARRY MORE, not less: the same cash and escrow,
-                     plus each seat's certificate count, liquidity and
-                     private companies with their rules text -- and they are
-                     the same object a player has already learned to read in
-                     the Stock Round, rather than a second layout for the same
-                     eight facts.
-
-                     WHAT THE TABLE DID BETTER was turn order, which a column
-                     of rows states by construction. That is now written into
-                     each card's stripe as an ordinal (design note #593 in
-                     `PlayerCards.tsx`) rather than left to the grid's layout,
-                     which reflows and therefore cannot be trusted to mean
-                     anything at a given width.
-
-                     REMOVED RATHER THAN HIDDEN. Two views of one roster on
-                     one screen is the duplication design note #572 has
-                     already deleted once this month. */}
-
-              </div>
-            </div>
-          )}
-        </div>
+             THE CARDS GO WHERE THE TABLE WAS, which is what #593 intended
+             all along ("the Player cards should REPLACE the Seating Order
+             panel"). Not inside the old card chrome, though -- the player
+             cards bring their own borders, and nesting them in
+             `seatingCard` would double-frame every one of them. The rail
+             and its two wrappers go with the table they were built to
+             hold. */}
+        {playersPanel}
       </div>
     </div>
   );
@@ -1783,44 +1773,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK_FAINT,
     lineHeight: 1.4,
   },
-  actionRail: {
-    display: "flex",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "stretch",
-    gap: "12px",
-    padding: "16px",
-    backgroundColor: "#12151c",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    borderColor: "#2a2e3a",
-    borderTopWidth: "3px",
-    borderTopColor: "#3a4055",
-    borderRadius: "10px",
-  },
-  /** Section caption for the interaction band. */
-  /* Design note #341: the seating table is the whole footer now, so it
-     takes the whole width. The two styles it replaces -- a 280px side
-     column and a 420px main column -- were both sized to share the band
-     with the hint block, and are deleted rather than left unused: a style
-     nothing renders is an invitation to put something back beside the
-     table and undo the widening. */
-  actionRailFull: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-    flex: "1 1 100%",
-    minWidth: 0,
-  },
-  actionCard: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "12px",
-    backgroundColor: "#1b1f29",
-    border: "1px solid #2a2e3a",
-    borderRadius: "8px",
-  },
+  /* Design note #604: eighteen `actionRail*` / `actionCard*` / `seating*`
+     styles deleted here, with the seating table (design note #593) and the
+     empty rail left standing after it. `playersPanel` brings its own card
+     chrome, so nothing in this file dresses a player row any more. */
   miniAuctionCard: {
     display: "flex",
     flexDirection: "column",
@@ -1829,12 +1785,6 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#211c0f",
     border: "1px solid #6b5a1f",
     borderRadius: "8px",
-  },
-  actionCardTitle: {
-    fontSize: FONT_SIZE.body,
-    fontWeight: 700,
-    letterSpacing: "0.03em",
-    color: "#c8cbd6",
   },
   // The Buy button on the lowest-offered private -- the panel's only
   // outright purchase, and its only green control. See `CARD_BUY_GREEN`.
@@ -1897,124 +1847,6 @@ const styles: Record<string, React.CSSProperties> = {
   hintText: {
     fontSize: FONT_SIZE.micro,
     color: "#8a90a0",
-  },
-  seatingCard: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    padding: "12px",
-    backgroundColor: "#1b1f29",
-    border: "1px solid #2a2e3a",
-    borderRadius: "8px",
-  },
-  seatingRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    fontSize: FONT_SIZE.small,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#c8cbd6",
-    padding: "3px 6px",
-    borderRadius: "4px",
-  },
-  seatingRowActive: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    fontSize: FONT_SIZE.small,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#eafff0",
-    backgroundColor: "#1f2a1f",
-    padding: "3px 6px",
-    borderRadius: "4px",
-  },
-  seatingIndex: {
-    color: "#6f7480",
-  },
-  seatingAddress: {
-    flex: "1 1 auto",
-  },
-  /* Design note #32: the seat that must act now. Reads as a state rather
-     than an identity, which is what distinguishes it from `youBadge`. */
-  /* Design note #33: the figure every bid is measured against. Tabular
-     numerals so a column of them is comparable at a glance, which is the
-     only reason to show four of them at once. */
-  seatingHeaderRow: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "10px",
-    marginBottom: "2px",
-  },
-  /* `seatingColumnHint` DELETED by design note #422 -- one right-aligned
-     string describing two columns it sat over neither of. Replaced by the
-     three real headings below, each on its own column. */
-  /* Design note #422: mirrors `seatingRow`'s flex geometry exactly -- same
-     gap, same padding, same basis values -- so a heading sits over its
-     column at every width instead of near it. `alignItems: baseline`
-     rather than `center` because these are words above words. */
-  seatingColumnHeader: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "8px",
-    padding: "0 6px 3px",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    color: "#6f7480",
-    borderBottom: "1px solid #2a3142",
-    marginBottom: "3px",
-  },
-  /* Spans the index, the name and the turn slot -- everything the heading
-     "Player Information" actually covers. */
-  seatingColumnHeadPlayer: { flex: "1 1 auto" },
-  seatingColumnHeadCash: { marginLeft: "auto" },
-  seatingColumnHeadPrivates: { flex: "0 0 128px" },
-  /* `seatingPrivateChip` and `seatingPrivatesEmpty` DELETED by design note
-     #423 -- the numbered chip and its "none" label both moved into
-     `PrivateCompanyPills`, which the Ledger renders too. Deleted rather
-     than left behind: a chip style sitting in the file that used to draw
-     numbered chips is how the numbers come back. */
-  /* Design note #341: fixed basis for the same reason the turn slot has one
-     (design note #323) -- a player winning their first private must not
-     shove every other column sideways. */
-  seatingPrivates: {
-    flex: "0 0 128px",
-    display: "flex",
-    flexDirection: "row",
-    gap: "3px",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  seatingCash: {
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    color: "#7ee0a1",
-    fontVariantNumeric: "tabular-nums",
-    marginLeft: "auto",
-    display: "inline-flex",
-    alignItems: "baseline",
-    gap: "5px",
-  },
-  /* Design note #316: escrow is context for the number beside it, so it is
-     muted and smaller rather than a second figure of equal weight. */
-  seatingEscrow: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 600,
-    color: "#8a919e",
-  },
-  /* Design note #323, still: fixed basis, never grows or shrinks, rendered
-     on every row so the columns cannot jitter as the turn passes.
-     Design note #422 moved it beside the name and widened it -- "Your turn"
-     is four characters longer than "ON TURN" -- and flipped the alignment
-     to `flex-start`, because it now trails a name rather than closing a
-     row. */
-  seatingTurnSlot: {
-    flex: "0 0 76px",
-    display: "flex",
-    justifyContent: "flex-start",
-    alignItems: "center",
   },
   /* Design note #422: prominent, and no longer shouting. `ON TURN` was
      tracked-out uppercase because it was a status tag at the end of a row;

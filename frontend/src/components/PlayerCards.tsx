@@ -110,8 +110,18 @@ export interface PlayerCardsProps {
    *
    * ONLY WHERE SEATS TAKE TURNS. Omitted during an Operating Round, where the
    * queue names corporations and a seat ordinal would be answering a question
-   * nobody is asking -- the same distinction `actingSeatIndex` draws. */
-  showSeatOrder?: boolean;
+   * nobody is asking -- the same distinction `actingSeatIndex` draws.
+   *
+   * ==================================================================
+   *  DESIGN NOTE 606: `showSeatOrder` IS GONE, AND SO IS THE FLAG'S JOB
+   * ==================================================================
+   *
+   * The ordinals became "ON TURN" (#595) and "ON TURN" has now become the
+   * lift (#606 in the styles block), so the last thing this boolean gated no
+   * longer exists. It is not replaced by another flag, because `activeAddress`
+   * already carries the same fact: a round with no seat on turn passes `null`,
+   * every card compares unequal, and nothing is marked. A second prop saying
+   * "and mean it this time" was always redundant with that. */
   /** Design note #568: the private's rules text, for the expandable rows.
    *  `null` renders the name as plain text rather than a control. */
   privateDescription?: (privateId: number) => string | null;
@@ -133,6 +143,33 @@ function money(value: number | null): string {
   return value === null ? "—" : `$${Math.round(value)}`;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 606: THE LIFT NEEDS A TRANSITION, AND AN OFF SWITCH
+ * ==================================================================
+ *
+ * The raise only reads as a CARD BEING PICKED UP if it takes time. Snapped
+ * instantly it is just a card drawn 10px higher than its neighbours, which
+ * a reader interprets as a layout bug before they interpret it as a state.
+ * The movement is the message.
+ *
+ * `transform` and `box-shadow` only -- never `all`. The stripe's saturation
+ * is on a different element and wants no transition (a fading colour during
+ * a turn handover reads as loading, not as handover), and `all` would sweep
+ * up every future property anyone adds to this card.
+ *
+ * REDUCED MOTION KEEPS THE ANSWER, LOSES THE MOVEMENT: the card still sits
+ * raised with its ring and its shadow, it simply arrives there. Same bargain
+ * every animation in `styles/animations.ts` makes -- switching motion off
+ * must never cost the reader the fact the motion was carrying. */
+const PLAYER_CARD_MOTION_CSS = `
+.app-player-card {
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 180ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-player-card { transition: none; }
+}
+`;
+
 export function PlayerCards({
   players,
   label,
@@ -141,7 +178,6 @@ export function PlayerCards({
   viewerAddress,
   colorForSeat,
   privateDescription,
-  showSeatOrder = false,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
      the whole grid rather than state per card -- a player may want the
@@ -164,6 +200,11 @@ export function PlayerCards({
 
   return (
     <div style={styles.grid}>
+      {/* Design note #606: injected, not inline. `React.CSSProperties` cannot
+          express `@media (prefers-reduced-motion)`, and a lift that cannot be
+          switched off is the kind of motion this app turns off everywhere
+          else (see `styles/animations.ts`). */}
+      <style>{PLAYER_CARD_MOTION_CSS}</style>
       {players.map((player, seatIndex) => {
         const stripe = colorForSeat(seatIndex);
         const ink = bestContrastTextColor(stripe);
@@ -171,30 +212,48 @@ export function PlayerCards({
         return (
           <section
             key={player.address}
-            style={{ ...styles.card, ...(isActive ? styles.cardActive : {}) }}
-            aria-label={`${label(player.address)}'s assets`}
+            className="app-player-card"
+            style={{
+              ...styles.card,
+              /* Design note #606: the ring is the SEAT's colour, computed
+                 here because only this scope knows it. The 1px border moves
+                 with it so the card has one edge colour, not two. */
+              ...(isActive
+                ? {
+                    ...styles.cardActive,
+                    borderColor: stripe,
+                    boxShadow: `0 0 0 3px ${stripe}, 0 14px 26px rgba(0,0,0,0.45)`,
+                  }
+                : {}),
+            }}
+            /* ==================================================
+                 DESIGN NOTE 606a: THE TURN STILL HAS TO BE SPOKEN
+                ==================================================
+
+                 Deleting the "ON TURN" tag deletes it for screen readers
+                 too, and a lift, a ring and a saturation step are all
+                 invisible to one. Colour and elevation are never the sole
+                 carrier of a fact -- the label says it in words, and
+                 `aria-current` marks it in the one attribute assistive
+                 technology already looks for on "which of these is the
+                 current item". */
+            aria-current={isActive ? "true" : undefined}
+            aria-label={
+              isActive
+                ? `${label(player.address)}'s assets — on turn`
+                : `${label(player.address)}'s assets`
+            }
           >
             {/* ---- Name stripe, and the Priority Deal marker in it ---- */}
-            <header style={{ ...styles.stripe, backgroundColor: stripe, color: ink }}>
+            <header
+              style={{
+                ...styles.stripe,
+                backgroundColor: stripe,
+                color: ink,
+                ...(isActive ? {} : styles.stripeIdle),
+              }}
+            >
               <span style={styles.stripeIdentity}>
-                {showSeatOrder && isActive && (
-                  /* ==================================================
-                       DESIGN NOTE 595: "ON TURN", NOT "1st"
-                      ==================================================
-
-                       REPORTED: the ordinals "may be confusing to players if
-                       they think the Player cards are referencing final
-                       score" -- which is a fair reading, because 1830 DOES
-                       rank players and net worth is on the same card. "1st
-                       Ada $2,400" invites exactly the wrong sentence.
-
-                       Turn ORDER moved to `SeatOrderTrail`, where a chevron
-                       says "queue" in a way no number can. What stays here is
-                       the other half of the request -- emphasising whose turn
-                       it is -- and it says so in words rather than in a
-                       position that has to be decoded. */
-                  <span style={styles.stripeOnTurn}>ON TURN</span>
-                )}
                 <span style={styles.stripeName}>{label(player.address)}</span>
               </span>
               <span style={styles.stripeMarks}>
@@ -392,10 +451,24 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #563: the same reflow the corporation grid uses -- as many
      across as fit, never fewer than one, so six seats on a narrow window
      stack rather than clipping. */
+  /* Design note #606: the lift needs somewhere to go. A card rising 10px out
+     of a row with a 10px gap lands exactly on the edge of the row above, and
+     its ring and shadow then overlap the card behind it -- which reads as
+     collision rather than elevation.
+
+     `rowGap` ONLY, not `gap`: the clearance wanted is vertical, and widening
+     the columns to buy it would push a six-player grid to a second row
+     sooner on the narrow windows this layout already wraps on.
+
+     `paddingTop` is the same clearance for the FIRST row, which has no row
+     above it to borrow from -- without it the top card lifts into the
+     "Players" heading. */
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-    gap: "10px",
+    columnGap: "10px",
+    rowGap: "22px",
+    paddingTop: "12px",
     alignItems: "start",
   },
   card: {
@@ -407,18 +480,44 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#23252b",
     overflow: "hidden",
   },
-  /* The seat on turn, marked the same way the roster pills are -- green,
-     which means exactly this everywhere else in the app. */
-  /* Design note #595: emphasised, not merely outlined. The previous ring was
-     a 2px halo in the turn-green, which reads at a glance only if you already
-     know to look for it -- and the report is that players could not tell whose
-     turn it was from these cards. A lifted card with a heavier ring is
-     findable peripherally, which is what "emphasise" has to mean on a grid of
-     four to six identical objects. */
+  /* ==================================================================
+   *  DESIGN NOTE 606: LIFTED OUT OF THE ROW, IN THE SEAT'S OWN COLOUR
+   * ==================================================================
+   *
+   * INSTRUCTED: "rather than an 'on turn' tag on the current player card,
+   * would it make more sense to desaturate the inactive player's cards and
+   * to slightly 'lift'/raise the active player's card during their turn?" --
+   * and, on the ring: "the green border is maybe a little weird because it
+   * doesn't coordinate to the player color or anything else."
+   *
+   * THE GREEN WAS INHERITED, NOT CHOSEN. It came from the roster pills, where
+   * green was the only colour available because pills had no seat identity of
+   * their own. These cards do: the stripe two pixels above the ring is the
+   * player's colour, and the action bar's trail lights the acting seat in
+   * that same colour. So the green was a third colour system on a surface
+   * that already had one, asserting "on turn" in a hue that means "positive"
+   * everywhere else in this app and nothing about WHO.
+   *
+   * THE RING IS THE SEAT'S COLOUR NOW, set per card at the call site. Card
+   * and trail mark the same seat the same way, which is the coordination the
+   * report is asking for.
+   *
+   * THE LIFT IS A REAL LIFT. `-2px` was a nudge that no reader would name;
+   * the request describes the card-game gesture, where a chosen card rises
+   * clear of the row. `-10px` against a 10px grid gap clears roughly a card's
+   * own edge, which is enough for the shadow to open up underneath and read
+   * as elevation rather than as misalignment.
+   *
+   * THE SHADOW IS DOING HALF THE WORK. A translate alone reads as a card that
+   * has drifted; a translate plus a deeper, softer shadow reads as one that
+   * has been picked up. `0 14px 26px` is cast at the call site with the ring,
+   * because the two are one `box-shadow` declaration and cannot be split. */
   cardActive: {
-    borderColor: "#7ee0a1",
-    boxShadow: "0 0 0 3px rgba(126,224,161,0.45), 0 6px 18px rgba(0,0,0,0.4)",
-    transform: "translateY(-2px)",
+    transform: "translateY(-10px)",
+    position: "relative",
+    // Above its neighbours, so the shadow falls ON the cards beside it
+    // rather than under them -- which is the cue that says "in front".
+    zIndex: 1,
   },
   stripe: {
     display: "flex",
@@ -438,13 +537,32 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #595: on the stripe, where the seat is named -- "whose turn"
      is a fact about a PERSON, and it was the one thing the cards could not
      say without the reader counting positions. */
-  stripeOnTurn: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 900,
-    letterSpacing: "0.06em",
-    opacity: 0.85,
-    flex: "none",
-  },
+  /* ==================================================================
+   *  DESIGN NOTE 606: THE IDLE STRIPES STEP BACK
+   * ==================================================================
+   *
+   * INSTRUCTED: "just to desaturate the color stripes, not to the point that
+   * they can't be distinguished, just enough to show they're inactive."
+   *
+   * Taken literally, and the literal reading is the correct one: this is on
+   * the STRIPE, not on the card. Everything below the stripe -- cash,
+   * certificate count, holdings, private companies -- is what a player is
+   * comparing across seats while deciding a bid, and dimming a rival's
+   * balance to advertise that it is not their turn would trade a fact for a
+   * decoration.
+   *
+   * `saturate`, NOT `opacity`. Opacity would wash the stripe toward the
+   * card's cream and pull the label's contrast down with it; `saturate`
+   * leaves lightness and hue in place and only drains the intensity, so
+   * `bestContrastTextColor`'s black-or-white choice stays valid.
+   *
+   * 0.55 IS THE WHOLE BRIEF: "not to the point that they can't be
+   * distinguished". `SEAT_COLORS` are already mid-saturation (roughly 45%),
+   * so this lands them near 25% -- muted, but slate blue, brick, moss, plum,
+   * ochre and teal all still read as themselves side by side. It is the one
+   * number to move if the effect is too strong or too weak, and moving it
+   * far in either direction breaks a different half of the request. */
+  stripeIdle: { filter: "saturate(0.55)" },
   stripeName: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,

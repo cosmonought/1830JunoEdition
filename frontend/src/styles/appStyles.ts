@@ -1076,16 +1076,6 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #317: escrow qualifies the figure beside it rather than
      competing with it -- muted, and absent entirely when nothing is bid. */
-  /* Design note #342: the roster row. `flexWrap` because four pills plus
-     the buttons genuinely overflow a narrow window, and wrapping is a
-     better failure than clipping a player's balance. */
-  actionBarRoster: {
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: "6px",
-    flexWrap: "wrap",
-  },
   /* Design note #563: the player card grid's own section. Spaced from the
      corporation cards above rather than merged into their grid -- they are a
      different kind of object and a shared grid would imply they were
@@ -1160,67 +1150,14 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#8a90a0",
     cursor: "pointer",
   },
-  rosterPill: {
-    display: "inline-flex",
-    alignItems: "baseline",
-    gap: "6px",
-    padding: "3px 9px",
-    borderRadius: "999px",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    whiteSpace: "nowrap",
-    fontVariantNumeric: "tabular-nums",
-  },
-  /* Green for the seat on turn -- the same `#7ee0a1` family the seating
-     table's ON TURN badge uses, so the two surfaces mark the turn in one
-     colour rather than each picking their own. */
-  rosterPillActive: {
-    borderColor: "#3f7a55",
-    backgroundColor: "#17301f",
-    color: "#9fe9bb",
-  },
-  rosterPillIdle: {
-    borderColor: "#2f3543",
-    backgroundColor: "#1b1f29",
-    color: "#8a919e",
-  },
-  /* Design note #545: the contestant answering right now. LAYOUT AND INK
-     ONLY -- the border and the fill come from `.app-roster-pill-contested`,
-     because an inline `borderColor`/`backgroundColor` beats a stylesheet and
-     would silently win over the gradient, leaving a pill that never chases.
-     Same trap `WaterfallAuctionDashboard.tsx` records for its card. */
-  rosterPillContested: {
-    color: "#f2f5fa",
-    fontWeight: 800,
-  },
-  /* Design note #545: at the table, not in the contest. Dimmer than idle --
-     idle means "your turn is coming", this means "this contest is not
-     yours", and the second is a stronger statement about being unable to
-     act. Kept above the 4.5:1 floor against the pill fill so a sidelined
-     player's balance stays readable; they still need it to plan. */
-  rosterPillSidelined: {
-    borderColor: "#262b36",
-    backgroundColor: "#15181f",
-    color: "#6b7280",
-    opacity: 0.7,
-  },
-  /* Design note #406: TRUNCATED, because six seats have to fit.
-     `rosterPill` is `nowrap`, so without a ceiling a table of long names
-     pushes the pills off the bar rather than shrinking them -- and six is
-     the maximum 1830 seats, so the crowded case is a supported one rather
-     than an edge. 8em holds roughly twelve characters at this size, which
-     covers every sandbox name outright and clips only genuinely long ones.
-     The full name stays in the pill's `title`. */
-  rosterPillName: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    maxWidth: "8em",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  rosterPillValue: { fontSize: FONT_SIZE.small, fontWeight: 800 },
-  rosterPillEscrow: { fontSize: FONT_SIZE.micro, opacity: 0.75 },
+  /* Design note #601: eight `rosterPill*` styles deleted here, with the
+     unreachable pill branch in `ContextualActionBar.tsx` that was their
+     only consumer. Design note #406's 8em name ceiling ('six seats have to
+     fit') is the one constraint worth carrying forward -- `SeatOrderTrail`
+     does not clamp its names, so a table of long sandbox nicknames widens
+     the trail rather than truncating. Six-seat games are supported, so if
+     that ever overflows the bar, a max-width on `seatName` is the fix and
+     this is the note that predicted it. */
   playerCashEscrow: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,

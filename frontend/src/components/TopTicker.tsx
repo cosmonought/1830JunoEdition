@@ -271,6 +271,9 @@ export function TopTicker({
         {!isExpanded && unreadCount > 0 && (
           <span style={styles.unreadBadge}>{unreadCount > 99 ? "99+" : unreadCount}</span>
         )}
+        {/* Design note #600: the hole the Chat button sits in. See the styles
+            block -- this is the half that keeps the two controls apart. */}
+        {onToggleChat && <span style={styles.chatToggleSlot} aria-hidden="true" />}
         <span style={styles.expandHint}>{isExpanded ? "▲ Collapse" : "▼ Expand"}</span>
       </button>
       {/* Design note #598: OUTSIDE the header button, not inside it -- a
@@ -412,6 +415,51 @@ function LogEntry({ item }: { item: FeedItem }) {
 // out of the active nav tab above it, which now shares this exact color --
 // see App.tsx design note #20/item 3), #0F172A for the recessed expanded
 // body beneath it.
+/* ==================================================================
+ *  DESIGN NOTE 600: THE CHAT BUTTON WAS SITTING ON "EXPAND"
+ * ==================================================================
+ *
+ * REPORTED: 'the "Chat" button sits on top of the Expand/Collapse words and
+ * should be bumped left of that.'
+ *
+ * Correct, and the cause is design note #598's own fix. The Chat toggle HAS
+ * to live outside the header element, because that element is a `<button>`
+ * and a button cannot contain a button. #598 solved the nesting by taking
+ * the toggle out of the flow entirely -- `position: absolute; right: 10px`.
+ * But `expandHint` is the last flex child of that same full-width header
+ * button, so it renders at the row's right edge too, 14px in. Two controls,
+ * one corner, neither aware of the other. The overlap was not a near-miss;
+ * it was guaranteed by construction.
+ *
+ * ABSOLUTE POSITIONING CANNOT BE UNDONE HERE -- the nesting rule is real, so
+ * the toggle stays out of flow. What was missing is that nothing in the flow
+ * KNEW about it. So the row now reserves the space: `chatToggleSlot` is an
+ * empty, aria-hidden flex item of exactly the toggle's width, and the toggle
+ * is positioned into it.
+ *
+ * WHICH MEANS THE THREE NUMBERS BELOW MUST AGREE, and that is the whole
+ * reason they are named constants rather than literals at four call sites.
+ * The toggle's offset from the right edge is the row's padding, plus the
+ * hint's width, plus the flex gap between them -- change any one of those in
+ * `headerRow` and this arithmetic has to move with it.
+ *
+ * `EXPAND_HINT_WIDTH` IS FIXED FOR A SECOND REASON. The label flips between
+ * "▼ Expand" and "▲ Collapse", which are different widths -- so a hint sized
+ * by its content would shift the reserved slot every time the panel opened,
+ * dragging the Chat button sideways under the cursor mid-click. Pinning the
+ * width to the longer of the two labels also stops the row twitching on
+ * every toggle, which it did before and nobody had named.
+ *
+ * A SLOT ALSO FIXES A QUIETER BUG: `previewText` is `flex: 1` and was
+ * measuring the full row, so a long activity line ellipsised UNDER the Chat
+ * button rather than before it. The reserved item shortens the flex basis,
+ * so the ellipsis now lands where the text actually stops being visible. */
+const ROW_PAD_X_PX = 14;
+const ROW_GAP_PX = 10;
+/** Sized to "▲ Collapse", the longer of the two labels, at 13px/600. */
+const EXPAND_HINT_WIDTH_PX = 78;
+const CHAT_TOGGLE_WIDTH_PX = 54;
+
 const styles: Record<string, React.CSSProperties> = {
   /* ==================================================================
    *  DESIGN NOTE 457: THE LOG BELONGS TO THE CHAT, NOT TO THE TABS
@@ -454,10 +502,11 @@ const styles: Record<string, React.CSSProperties> = {
   headerRow: {
     display: "flex",
     alignItems: "center",
-    gap: "10px",
+    // Design note #600: these two feed the Chat toggle's offset. Not literals.
+    gap: `${ROW_GAP_PX}px`,
     width: "100%",
     minHeight: "30px",
-    padding: "4px 14px",
+    padding: `4px ${ROW_PAD_X_PX}px`,
     // Design note #457: transparent, so the row takes the root's own
     // surface rather than reasserting the tab bar's.
     backgroundColor: "transparent",
@@ -479,20 +528,38 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  /* Design note #598: pinned to the right edge of the row it sits over, so
-     the full-width header button keeps its whole hit area up to this point. */
+  /* Design note #600: the empty flex item the toggle is positioned into. It
+     draws nothing and is `aria-hidden` -- its entire job is to be the width
+     the toggle occupies, so the flow accounts for a control it cannot
+     contain. `flexShrink: 0` because a slot that can be squeezed is not a
+     reservation. */
+  chatToggleSlot: {
+    width: `${CHAT_TOGGLE_WIDTH_PX}px`,
+    flexShrink: 0,
+  },
+  /* Design note #600: parked in `chatToggleSlot`, LEFT of the expand hint --
+     `right` is the row's padding, plus the hint, plus the gap between them.
+     Design note #598's original `right: 10px` put it on top of the hint.
+
+     Vertically centred by transform rather than a magic `top: 3px`, so the
+     control stays centred if `headerRow`'s min-height or the toggle's own
+     padding ever moves. */
   chatToggle: {
     position: "absolute",
-    right: "10px",
-    top: "3px",
+    right: `${ROW_PAD_X_PX + EXPAND_HINT_WIDTH_PX + ROW_GAP_PX}px`,
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: `${CHAT_TOGGLE_WIDTH_PX}px`,
+    boxSizing: "border-box",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    padding: "3px 10px",
+    padding: "3px 0",
     borderRadius: "6px",
     border: "1px solid #2f3646",
     backgroundColor: "#1b2130",
     color: "#9aa0ac",
     cursor: "pointer",
+    textAlign: "center",
     zIndex: 1,
   },
   chatToggleOpen: { borderColor: "#4d8ee0", color: "#cfe2ff", backgroundColor: "#1d3a55" },
@@ -510,7 +577,12 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     flexShrink: 0,
   },
+  /* Design note #600: a FIXED width, right-aligned. Sizing to content would
+     move the reserved slot -- and with it the Chat button -- every time the
+     label flipped between "Expand" and "Collapse". */
   expandHint: {
+    width: `${EXPAND_HINT_WIDTH_PX}px`,
+    textAlign: "right",
     fontSize: FONT_SIZE.body,
     fontWeight: 600,
     color: "#9aa0ac",

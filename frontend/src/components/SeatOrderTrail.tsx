@@ -33,6 +33,11 @@
 // about eras, private companies and which steps exist this phase; none of
 // that is true of seats, and inheriting it to reuse a chevron would drag a
 // rules engine into a list of names.
+//
+// SEE DESIGN NOTE 599 IN THE STYLES BLOCK for why the trail is drawn inside
+// one bordered rectangle with flush segments, rather than as a row of
+// separately-bounded chips -- that is the difference between a reader seeing
+// a sequence and a reader seeing five badges in a row.
 
 import React from "react";
 
@@ -134,7 +139,6 @@ export function SeatOrderTrail({
                         ...styles.seatCurrent,
                         backgroundColor: seat.color,
                         color: bestContrastTextColor(seat.color),
-                        borderColor: seat.color,
                       }
                     : {}),
                 }}
@@ -146,17 +150,13 @@ export function SeatOrderTrail({
                       : `${seat.label} acts later this round.`
                 }
               >
-                {/* The seat's colour, so the trail and the player card agree
-                    about who is who without repeating the name twice. On the
-                    CURRENT seat the colour has become the fill, so the dot
-                    would be invisible against it. */}
-                {!isCurrent && (
-                  <span
-                    style={{ ...styles.dot, backgroundColor: seat.color }}
-                    aria-hidden="true"
-                  />
-                )}
-                {seat.label}
+                {/* Design note #599: the seat's colour DOT is gone. It was
+                    doing identity work the fill now does for the one seat
+                    that matters, and on the four seats it survived on it was
+                    a third token in a segment the request asks to hold two.
+                    The player CARD still carries the colour, which is where a
+                    reader goes to ask "which one am I". */}
+                <span style={styles.seatName}>{seat.label}</span>
                 {typeof seat.available === "number" && (
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
@@ -183,13 +183,49 @@ export function SeatOrderTrail({
 export default SeatOrderTrail;
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { display: "flex", alignItems: "center", minWidth: 0 },
+  /* ==================================================================
+   *  DESIGN NOTE 599: ONE RECTANGLE, NOT FIVE OBJECTS
+   * ==================================================================
+   *
+   * INSTRUCTED: "what we want is a rectangle that lists only [player name]
+   * [treasury] > [player name][treasury] > ..., and each player
+   * name/treasury segment lights up during that player's turn."
+   *
+   * Design note #597b already reached for the par ladder's flat segment and
+   * stopped one step short: it restyled the SEGMENTS and left the container
+   * a bare flex row with a 2px gap. That is the half that matters least. A
+   * row of transparent segments floating on the action bar's own surface has
+   * no edge to belong to, so the eye still groups by the only boundary it
+   * can find -- the lit fill -- and reads five loose objects that happen to
+   * sit near each other. The chevrons were already there and were not enough,
+   * which is exactly what the report says.
+   *
+   * A DRAWN BORDER IS THE THING THAT WAS MISSING. Once the row has one
+   * outline the segments stop being candidates for grouping: they are
+   * subdivisions of a single object, and a subdivision that fills with colour
+   * is unmistakably "the live one". This is why the par ladder works and why
+   * copying only its segment padding did not.
+   *
+   * SO: `gap: 0`. The segments must be FLUSH. A gap between them reintroduces
+   * the whitespace that made them read as separate chips, and it is the one
+   * value that cannot be tuned by taste -- any non-zero gap undoes the
+   * border. The chevron is the separator; it needs no help. */
+  root: {
+    display: "inline-flex",
+    alignItems: "center",
+    minWidth: 0,
+    padding: "2px",
+    borderRadius: "6px",
+    border: "1px solid #2f3543",
+    backgroundColor: "#1b1f29",
+    boxSizing: "border-box",
+  },
   strip: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: "2px",
+    gap: 0,
     margin: 0,
     padding: 0,
     listStyle: "none",
@@ -199,7 +235,15 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #597b: the `>` the request asks for, in the ladder's own
      separator weight -- faint, so it joins the segments rather than
      competing with them. */
-  chevron: { color: "#5a6070", padding: "0 1px", fontSize: FONT_SIZE.small, opacity: 0.6 },
+  chevron: {
+    color: "#5a6070",
+    padding: "0 3px",
+    fontSize: FONT_SIZE.small,
+    opacity: 0.6,
+    /* Design note #599: the segments are flush now, so this glyph IS the gap
+       between them. 1px of padding left the two names all but touching. */
+    flex: "none",
+  },
   /* ==================================================================
    *  DESIGN NOTE 597b: THE PAR LADDER'S SHAPE, NOT A PILL
    * ==================================================================
@@ -228,16 +272,22 @@ const styles: Record<string, React.CSSProperties> = {
    * about. */
   seat: {
     display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
+    alignItems: "baseline",
+    gap: "5px",
     padding: "3px 8px",
-    borderRadius: "5px",
+    /* Design note #599: 4px, INSIDE the container's 6px and 2px of padding.
+       A segment radius at or above the container's reads as a chip sitting on
+       a tray rather than a division of it. */
+    borderRadius: "4px",
     border: "none",
     backgroundColor: "transparent",
     color: "#8a919e",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     whiteSpace: "nowrap",
+    /* Design note #599: the figures are the thing a reader compares across
+       segments, so the digits have to sit on a common grid. */
+    fontVariantNumeric: "tabular-nums",
   },
   /* Design note #595: a seat that has acted is dimmer, not struck through.
      They are still in the round -- the auction can come back to them -- so
@@ -247,7 +297,32 @@ const styles: Record<string, React.CSSProperties> = {
      segment is the whole point of the shape -- an outline would read as
      "selected", a fill reads as "this one is live". */
   seatCurrent: { fontWeight: 800 },
-  dot: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" },
-  cash: { fontWeight: 800, fontVariantNumeric: "tabular-nums" },
-  escrow: { fontSize: FONT_SIZE.micro, opacity: 0.7, fontVariantNumeric: "tabular-nums" },
+  /* Design note #599: an explicit span, carrying no styling of its own. It
+     exists so the name and the treasury are two flex items on one baseline
+     rather than a bare text node and a span, which is what `gap` and
+     `alignItems: baseline` need to act on. Deliberately NO `overflow:
+     hidden` -- on an inline-level box that moves the baseline to the bottom
+     margin edge, and the figure beside it would stop lining up. */
+  seatName: {},
+  cash: { fontWeight: 800 },
+  /* ==================================================================
+   *  DESIGN NOTE 599a: THE ESCROW STAYS, AND STAYS QUIET
+   * ==================================================================
+   *
+   * The request says the rectangle lists "only [player name] [treasury]",
+   * and a third figure per segment is exactly the clutter that reading is
+   * guarding against. But escrowed money is not decoration: during the
+   * waterfall auction it is the difference between what a rival HOLDS and
+   * what a rival can still RAISE WITH, which is the one number a bid is
+   * actually judged against (design notes #317 and #342 both land here).
+   *
+   * So it is subordinated rather than removed -- lighter weight, dimmer, a
+   * step down in size -- and it renders only when it is non-zero, which is
+   * only ever during the auction. Outside that round every segment does read
+   * as strictly name + treasury, which is the shape the request describes.
+   *
+   * `opacity` deliberately, not a fixed colour: the lit segment's text is
+   * `bestContrastTextColor` against an arbitrary seat colour, and a hardcoded
+   * grey would be unreadable on roughly half of those fills. */
+  escrow: { fontSize: "10px", fontWeight: 600, opacity: 0.65 },
 };

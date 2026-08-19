@@ -104,67 +104,27 @@ export const PHASE_SHIFT_PULSE_CSS = `
 
 
 /* ==================================================================
- *  DESIGN NOTE 545: THE CONTEST'S COLOUR, ON THE ROSTER
+ *  DESIGN NOTE 601: THE MINI-AUCTION CHASER IS GONE
  * ==================================================================
  *
- * INSTRUCTED: "maybe just the Action panel player tags should get the
- * rainbow chaser treatment during a Mini-Auction and leave the green for
- * the regular Waterfall Auctions."
+ * `ROSTER_CONTEST_CHASE_CSS` lived here and dressed the action bar's
+ * roster pills, which turned out to be unreachable -- design note #601 in
+ * `ContextualActionBar.tsx` has the why. Deleting the pills left this with
+ * no consumer, so it goes with them rather than sitting here looking like
+ * a shared animation.
  *
- * ONE MEANING, ONE TREATMENT. The multicolour chaser already exists and
- * already means exactly this -- `WaterfallAuctionDashboard.tsx` puts it
- * round the contested card (design notes #320/#344), chosen specifically
- * because it is none of the status colours this UI has assigned meaning to.
- * Reusing it on the pill makes the bar and the card say the same thing in
- * the same voice; inventing a second animation for the same event would
- * have the player learning two cues for one fact.
+ * WHAT IT MEANT IS WORTH KEEPING FINDABLE. Design note #545 chose the
+ * multicolour chaser for a running mini-auction because green is reserved
+ * for "on turn in the ordinary rotation", and a mini-auction SUSPENDS that
+ * rotation -- so painting a contestant green would assert the one thing
+ * that is not true. The chaser itself is not lost: it still rings the
+ * contested card in `WaterfallAuctionDashboard.tsx` (design notes
+ * #320/#344), which is where it came from and where it is still read.
  *
- * WHY THE PILL AND NOT A NEW PANEL. A mini-auction is not a second table,
- * it is the same table with most of it stood down, so the honest rendering
- * is the existing roster with its rows re-marked -- greyed for the seats
- * shut out, chased for whoever is answering. A separate contest table would
- * put two lists of the same people on screen and make "who is up" a
- * question about which list you happened to read, which is the class of bug
- * design note #544 exists to fix.
- *
- * GREEN IS RESERVED, deliberately. It means "on turn in the ordinary
- * rotation" here and on the seating table, and the whole point of design
- * note #544 is that the ordinary rotation is SUSPENDED for the duration --
- * so painting a contestant green would assert the very thing that is not
- * true.
- *
- * THE GEOMETRY IS COPIED, not re-derived, from design note #344: the fill
- * must not repeat and the gradient must, and the `200%` in `background-size`
- * is the same one number as the `200%` in the keyframe -- one cycle
- * translates exactly one tile, or the loop stutters once per lap. Border is
- * 1px rather than the card's 3px because this is a pill in a crowded bar.
- *
- * REDUCED MOTION keeps the same bargain as every other animation here: the
- * ring stays, static, because switching the movement off must not cost the
- * player the answer to "who is bidding". */
-export const ROSTER_CONTEST_CHASE_CSS = `
-@keyframes app-roster-contest-chase {
-  from { background-position: 0 0, 0 0; }
-  to   { background-position: 0 0, 200% 0; }
-}
-.app-roster-pill-contested {
-  border: 1px solid transparent !important;
-  background:
-    linear-gradient(#17202f, #17202f) padding-box,
-    linear-gradient(
-      90deg,
-      #ff4d4d, #ff9f1c, #ffd400, #4ade80, #22d3ee,
-      #4f7cff, #a855f7, #ff4dc4, #ff4d4d
-    ) border-box;
-  background-size: 100% 100%, 200% 100%;
-  background-position: 0 0, 0 0;
-  background-repeat: no-repeat, repeat;
-  animation: app-roster-contest-chase 3.2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .app-roster-pill-contested { animation: none; }
-}
-`;
+ * SO THE BAR NO LONGER MARKS A CONTEST. `SeatOrderTrail` draws the seat
+ * queue and says nothing about mini-auction membership. If that turns out
+ * to matter, this note and #545 are the two to read before reinventing
+ * it. */
 
 /* ==================================================================
  *  DESIGN NOTE 597: A TRANSITION IS NOTICED; A STATE IS NOT

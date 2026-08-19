@@ -82,9 +82,8 @@ import {
   misplacedSurfaceTab,
   type MainTab,
 } from "../components/MainTabBar";
-// Design note #545: the mini-auction chaser, shared visual language with
-// the contested card in `WaterfallAuctionDashboard`.
-import { ROSTER_CONTEST_CHASE_CSS, TURN_HANDOFF_SWEEP_CSS } from "../styles/animations";
+// Design note #601: `ROSTER_CONTEST_CHASE_CSS` gone with the pills it chased.
+import { TURN_HANDOFF_SWEEP_CSS } from "../styles/animations";
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
@@ -397,7 +396,6 @@ export default function ContextualActionBar({
   activePlayerName,
   activePlayerCash,
   activePlayerEscrow,
-  playerRoster,
   actingSeatColor = null,
   privateCompanies,
   privatePowerViewer,
@@ -549,18 +547,10 @@ export default function ContextualActionBar({
    * `null` OUTSIDE THOSE ROUNDS, so an Operating Round is untouched and
    * cannot end up wearing two identities at once. */
   actingSeatColor?: string | null;
-  playerRoster: ReadonlyArray<{
-    address: string;
-    label: string;
-    available: number;
-    escrowed: number;
-    isActive: boolean;
-    /** Design note #545: a mini-auction is running. Changes what the whole
-     *  row MEANS -- these are contestants, not seats taking turns. */
-    contested: boolean;
-    /** Design note #545: at the table, but not in the contest. */
-    sidelined: boolean;
-  }>;
+  /* Design note #601: `playerRoster` gone. The bar never read it except in
+     the unreachable pill branch -- `App.tsx` still computes the figures, but
+     hands them straight to `SeatOrderTrail`, which is the only thing that
+     ever rendered them. */
   /** Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
@@ -2493,80 +2483,41 @@ export default function ContextualActionBar({
             which centres the group between them without either rail having
             to know what the other holds. */}
         {/* ==================================================================
-             DESIGN NOTE 342: THE WHOLE TABLE, NOT JUST WHOEVER IS UP
+             DESIGN NOTE 601: THE ROSTER PILLS WERE UNREACHABLE
             ==================================================================
 
-            REPORTED: display every player's name and treasury persistently
-            in the Action Bar, with the active player highlighted green and
-            the rest slate.
+            Deleted here: a `playerRoster.length > 0` branch rendering one
+            pill per seat, plus its eight `rosterPill*` styles and the
+            `ROSTER_CONTEST_CHASE_CSS` keyframes. Roughly forty lines of
+            render that could not execute.
 
-            Design note #308 put the ACTING seat's name and cash here, which
-            answered "what can I spend" and nothing else. In an auction the
-            question that decides a bid is "what can THEY spend" -- whether
-            the player who keeps raising is about to run out, and whether
-            the $220 B&O is reachable by anyone but you. That was on the
-            seating table at the bottom of the auction tab and nowhere else,
-            so judging a raise meant scrolling away from the raise button.
+            WHY IT COULD NOT. Design note #595a left the pills in place "for
+            every case the trail does not cover", which sounded careful and
+            described an empty set. `playerRoster` is computed in `App.tsx`
+            behind `current_round_type === "WaterfallAuction" || ===
+            "StockRound"` (design note #406) and returns `[]` otherwise --
+            and that is the SAME test that decides whether `seatOrderTrail`
+            is passed at all. So the two conditions are one condition: any
+            time the roster is non-empty the trail is non-null, wins the
+            `??`, and the pills never render. There was no third case.
 
-            A ROW OF PILLS, one per seat, in seating order. The active seat
-            is green and the rest are slate, which makes the turn readable
-            at a glance without a separate badge -- and because every seat
-            is always present, the row does not reflow when the turn moves
-            (the same fixed-layout reasoning as design note #323).
+            The lesson is about the shape of the guard, not the pills. Two
+            conditions written in two files, each true exactly when the other
+            is, read like a fallback and behave like dead code -- and nothing
+            flags it, because it compiles and lints perfectly.
 
-            AVAILABLE cash, not total, for design note #317's reason: during
-            the auction the total is the one figure that cannot be spent.
-            Falls back to the single acting-player badge whenever the roster
-            is not available, which is every non-sandbox room until the
-            first `GetGameState` resolves. */}
-        {/* Design note #595a: the trail REPLACES the pills where it applies,
-            rather than sitting above them. It carries the same cash and
-            escrow the pills carried, plus the order they could only imply --
-            so two rows of the same players collapse back into one. The pills
-            remain for every case the trail does not cover. */}
-        {seatOrderTrail ?? (playerRoster.length > 0 ? (
-          <span style={styles.actionBarRoster}>
-            <style>{ROSTER_CONTEST_CHASE_CSS}</style>
-            {playerRoster.map((seat) => (
-              <span
-                key={seat.address}
-                /* Design note #545: the chaser is a CLASS, not inline style --
-                   see `ROSTER_CONTEST_CHASE_CSS` for why it cannot be
-                   expressed inline. */
-                className={
-                  seat.isActive && seat.contested && !seat.sidelined
-                    ? "app-roster-pill-contested"
-                    : undefined
-                }
-                style={{
-                  ...styles.rosterPill,
-                  ...(seat.sidelined
-                    ? styles.rosterPillSidelined
-                    : seat.isActive
-                      ? seat.contested
-                        ? styles.rosterPillContested
-                        : styles.rosterPillActive
-                      : styles.rosterPillIdle),
-                }}
-                title={
-                  seat.sidelined
-                    ? `${seat.label} is not bidding on this company. The auction is paused for everyone until the contest resolves.`
-                    : seat.escrowed > 0
-                      ? `${seat.label} has $${seat.available} available to bid. $${seat.escrowed} more is escrowed in standing bids and comes back if those bids lose.`
-                      : `${seat.label} holds $${seat.available}.${
-                          seat.isActive ? (seat.contested ? " Bidding now." : " On turn.") : ""
-                        }`
-                }
-              >
-                <span style={styles.rosterPillName}>{seat.label}</span>
-                <span style={styles.rosterPillValue}>${seat.available}</span>
-                {seat.escrowed > 0 && (
-                  <span style={styles.rosterPillEscrow}>+${seat.escrowed}</span>
-                )}
-              </span>
-            ))}
-          </span>
-        ) : (
+            WHAT THE PILLS KNEW LIVES ON. Design note #342's "the whole
+            table, not just whoever is up" and #317's "AVAILABLE cash, not
+            the total" are both carried by `SeatOrderTrail`, which cites them
+            by number. Design note #545's mini-auction chase animation is the
+            one thing genuinely gone: the trail does not distinguish a
+            contested seat, and nobody has asked it to.
+
+            THE ACTING-PLAYER BADGE BELOW IS STILL LIVE, and is now the only
+            fallback. It covers the Operating Round -- whose turn belongs to
+            a corporation, so it has no seat queue to draw -- and every
+            non-sandbox room until the first `GetGameState` resolves. */}
+        {seatOrderTrail ?? (
           activePlayerCash !== null && (
             <span
               style={styles.playerCashBadge}
@@ -2587,7 +2538,7 @@ export default function ContextualActionBar({
               )}
             </span>
           )
-        ))}
+        )}
         {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
             The leading `actionBarSpacer` that used to sit here is gone --
             see `appStyles.ts` for why two equal spacers centred the group

@@ -642,7 +642,11 @@ import {
   actingAddress,
   parPriceFor,
   actingSeatIndex,
-  isSidelinedByMiniAuction,
+  /* Design note #601: `isSidelinedByMiniAuction` no longer imported. Its one
+     caller here was `playerRoster`'s `sidelined` field, which existed for the
+     deleted roster pills. The function itself stays exported and tested in
+     `utils/gameState.ts` -- `WaterfallAuctionDashboard` is the surface that
+     still cares who is shut out of a contest. */
 } from "./utils/gameState";
 // Design note #22: `truncateChatAddress` and the `ChatMessage` type are no
 // longer imported here. Both were only ever used to CONSTRUCT chat messages
@@ -2479,34 +2483,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return availableCash(gameState, waterfallState, address);
   }, [gameState, waterfallState]);
 
-  /* Design note #342: every seat's spendable cash, in seating order.
-     Only during the AUCTION -- a Stock Round bar showing four balances
-     would be four numbers none of which gates the acting player's buy, and
-     an Operating Round spends a treasury rather than a wallet. The empty
-     array is what makes the bar fall back to the single acting badge. */
   /* ==================================================================
-   *  DESIGN NOTE 406: THE ROSTER IS NOT ONLY THE AUCTION'S
+   *  DESIGN NOTE 406: EVERY SEAT'S SPENDABLE CASH, IN SEATING ORDER
    * ==================================================================
    *
-   * REPORTED: add a player roster to the Stock Round action panel, matching
-   * the auction's style, with the active player in green.
+   * BOTH SEAT-DRIVEN ROUNDS. The auction wants it because the question that
+   * decides a bid is what the OTHER seats can spend (design note #342); a
+   * Stock Round wants it for the same reason one step removed.
    *
-   * The roster already existed and already highlighted the acting seat in
-   * green -- it was simply refused to every round but one by the guard on
-   * this line. Nothing about the pills is auction-specific: they show who is
-   * at the table, whose turn it is, and what each seat can spend, all of
-   * which a Stock Round player wants at least as much.
+   * OPERATING ROUNDS ARE EXCLUDED. An OR turn belongs to a CORPORATION, not
+   * a seat -- the bar already names the acting corporation and its president
+   * -- so a seat roster there would answer a question nobody is asking.
    *
    * ESCROW IS AUCTION-ONLY and stays correct by construction: `escrowedBids`
    * reads the waterfall document, which is absent outside the auction, so it
-   * returns zero and `rosterPillEscrow` renders nothing. The pill simply has
-   * one fewer figure in it during a Stock Round, which is the truth.
+   * returns zero and the trail renders one fewer figure in a Stock Round.
    *
-   * OPERATING ROUNDS ARE STILL EXCLUDED. An OR turn belongs to a
-   * CORPORATION, not a seat -- the bar already names the acting corporation
-   * and its president -- so a seat roster there would be answering a
-   * question nobody is asking, and `actingSeatIndex` has no meaningful
-   * answer to give. */
+   * ==================================================================
+   *  DESIGN NOTE 601: WHAT THIS IS NOW, AND THE TRAP IN THE GUARD
+   * ==================================================================
+   *
+   * This used to feed the action bar's roster pills and carried the fields
+   * they needed -- `label`, `isActive`, `contested`, `sidelined`. The pills
+   * turned out to be unreachable and are gone (design note #601 in
+   * `ContextualActionBar.tsx`), so those four fields went with them. What
+   * remains is a lookup table: `SeatOrderTrail` reads `available` and
+   * `escrowed` per seat and derives everything else itself.
+   *
+   * WORTH FLAGGING FOR THE NEXT READER: the round test below is the THIRD
+   * statement of one condition. `stockRoundPlayerFinances` has it, and so
+   * does the `seatOrderTrail` prop at the render site. Two of those agreeing
+   * by coincidence is exactly what made the pills dead code and hid it --
+   * a guard that reads like a fallback but can never be reached. If a fourth
+   * copy is ever wanted, hoist the boolean instead. */
   const playerRoster = useMemo(() => {
     if (!gameState) return [];
     if (
@@ -2515,21 +2524,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) {
       return [];
     }
-    const active = actingAddress(gameState, waterfallState); // design note #544
-    /* Design note #545: a contest splits the table into who is in it and who
-       is merely watching, and the pills are where that shows. `contested`
-       is carried per-pill rather than as one flag on the bar because the
-       bar would then have to re-derive membership per row anyway. */
-    const contested = gameState.current_round_type === "WaterfallAuction"
-      && (waterfallState?.mini_auction ?? null) !== null;
     return gameState.player_addresses.map((address) => ({
       address,
-      label: sandboxPlayerLabel(address) ?? truncateAddress(address),
       available: availableCash(gameState, waterfallState, address) ?? 0,
       escrowed: escrowedBids(waterfallState, address),
-      isActive: address === active,
-      contested,
-      sidelined: isSidelinedByMiniAuction(gameState, waterfallState, address),
     }));
   }, [gameState, waterfallState]);
 
@@ -8432,6 +8430,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }
 
+  /* ==================================================================
+   *  DESIGN NOTE 563: THE PLAYERS, AS CARDS
+   * ==================================================================
+   *
+   * Below the corporation cards, in the same grid language. The Ledger's
+   * Player Assets TABLE is untouched -- two views of one dataset, each
+   * shaped for its own screen.
+   *
+   * SEAT-DRIVEN ROUNDS ONLY. An Operating Round's turn belongs to a
+   * corporation, and a row of player portfolios there would answer a
+   * question nobody on that screen is asking.
+   *
+   * ==================================================================
+   *  DESIGN NOTE 602: THE THIRD ATTEMPT AT "THE AUCTION HAS NO CARDS"
+   * ==================================================================
+   *
+   * REPORTED, again: "make sure that the Player cards from the Stock Round
+   * are showing up in the bottom panel of the Auction round as well."
+   *
+   * Twice before, the guard was widened and the cards still did not appear.
+   * Design note #571 added the tab test; #597d corrected that test to
+   * `surfaceTabFor` so it would resolve to `phase` in an auction. Both were
+   * right about the condition and both changed nothing, because the
+   * condition was never what was failing.
+   *
+   * THE SECTION WAS INSIDE THE WRONG HALF OF A TERNARY. The workspace
+   * renders `isWaterfallPhase && activeMainTab === "phase" ? <auction
+   * dashboard> : <everything else>`, and the cards sat in the ELSE arm. So
+   * during an auction on the phase tab -- the exact case the guard was being
+   * tuned for -- the whole arm was skipped and the guard was never evaluated
+   * at all. A correct condition on an unmounted subtree.
+   *
+   * WHY THIS IS EASY TO MISS AND WORTH THE NOTE: the two guards read as
+   * though they compose. `surfaceTabFor("WaterfallAuction") === "phase"` and
+   * the ternary tests `activeMainTab === "phase"`, so the inner guard looks
+   * like it AGREES with the branch it is in when it in fact contradicts it.
+   * Reading either one alone tells you the cards should render.
+   *
+   * SO THE PANEL IS HOISTED HERE, out of both arms, and each arm renders it
+   * where that round wants it: after the dashboard in an auction, between
+   * the corporation cards and the board in a Stock Round. One definition,
+   * one guard, two mount points -- rather than a copy per branch that would
+   * drift the first time somebody edited only the one they were looking at.
+   *
+   * `null` when the guard fails, so an arm can render it unconditionally. */
+  const playersPanel =
+    gameState &&
+    (gameState.current_round_type === "StockRound" ||
+      gameState.current_round_type === "WaterfallAuction") &&
+    activeMainTab === surfaceTabFor(gameState.current_round_type) ? (
+      <section style={styles.playerCardsSection}>
+        <h3 style={styles.playerCardsTitle}>Players</h3>
+        <PlayerCards
+          players={stockRoundPlayerFinances}
+          label={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+          activeAddress={actingAddress(gameState, waterfallState)}
+          priorityAddress={gameState.player_addresses[gameState.priority_deal_index] ?? null}
+          viewerAddress={viewerAddress ?? null}
+          // Design note #569: their own choice, else the palette.
+          colorForSeat={(index) => seatColor(gameState.player_addresses[index] ?? "", index)}
+          // Design note #568: the auction's own text, same catalog.
+          privateDescription={(privateId) =>
+            PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
+          }
+          // Design note #593: seats take turns in both rounds.
+          showSeatOrder
+        />
+      </section>
+    ) : null;
+
   return (
     <div style={{ ...styles.appRoot, paddingBottom: `${statusDockHeight + 12}px` }}>
       {/* Active Player Turn Notifications -- design note #18/item 4, now
@@ -8922,7 +8990,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   activePlayerName={activeSeatLabel}
                   activePlayerCash={activeSeatCash}
                   activePlayerEscrow={activeSeatEscrow}
-                  playerRoster={playerRoster}
                   privateCompanies={gameState?.private_companies ?? []}
                   privatePowerViewer={viewerAddress}
                   sandboxMode={sandbox}
@@ -9048,29 +9115,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  the whole of the private auction -- during which players
                  have every reason to study the board they are about to
                  compete over. */
-              <WaterfallAuctionDashboard
-                waterfallState={waterfallState}
-                loading={waterfallStateLoading}
-                error={waterfallStateError}
-                gameState={gameState}
-                connectedWalletAddress={viewerAddress}
-                playerLabel={sandbox ? sandboxPlayerLabel : undefined}
-                // Design note #30 in that file: pass-and-play has no wallet
-                // to compare a turn against, so the seat on turn is always
-                // the one this keyboard may act for.
-                /* Design note #578: `hotseat` gone -- every seat is a browser. */
-                settledPrices={settledPrivatePrices}
-                // Design note #306 in that file: the auction is over and
-                // somebody has to open the Stock Round. Sandbox only --
-                // a live chain advances its own round, and a client button
-                // there would be a lie.
-                onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
-                sessionReady={controlsEnabled}
-                onBuyLowest={handleWaterfallBuyLowest}
-                onBidHigher={handleWaterfallBidHigher}
-                onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
-                onMiniAuctionPass={handleWaterfallMiniAuctionPass}
-              />
+              <>
+                <WaterfallAuctionDashboard
+                  waterfallState={waterfallState}
+                  loading={waterfallStateLoading}
+                  error={waterfallStateError}
+                  gameState={gameState}
+                  connectedWalletAddress={viewerAddress}
+                  playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                  // Design note #30 in that file: pass-and-play has no wallet
+                  // to compare a turn against, so the seat on turn is always
+                  // the one this keyboard may act for.
+                  /* Design note #578: `hotseat` gone -- every seat is a browser. */
+                  settledPrices={settledPrivatePrices}
+                  // Design note #306 in that file: the auction is over and
+                  // somebody has to open the Stock Round. Sandbox only --
+                  // a live chain advances its own round, and a client button
+                  // there would be a lie.
+                  onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
+                  sessionReady={controlsEnabled}
+                  onBuyLowest={handleWaterfallBuyLowest}
+                  onBidHigher={handleWaterfallBidHigher}
+                  onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
+                  onMiniAuctionPass={handleWaterfallMiniAuctionPass}
+                />
+                {/* ==================================================
+                     DESIGN NOTE 602: THE AUCTION'S MOUNT POINT
+                    ==================================================
+
+                     Under the dashboard, which is where the Stock Round
+                     puts them relative to ITS main surface -- so the
+                     cards sit in the same place on screen across the two
+                     rounds rather than moving when the round turns over.
+
+                     The fragment is the whole fix. This arm used to be a
+                     bare `<WaterfallAuctionDashboard />`, and anything
+                     the auction needed alongside it had no place to go
+                     except the other arm -- which is exactly where the
+                     cards ended up, and why two passes at the guard
+                     changed nothing. */}
+                {playersPanel}
+              </>
             ) : (
               <>
                 {/* Audit G-15: train trading, shown only during the Buy
@@ -9267,73 +9352,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   />
                 )}
 
-                {/* ==================================================
-                     DESIGN NOTE 563: THE PLAYERS, AS CARDS
-                    ==================================================
-
-                    Below the corporation cards, in the same grid language.
-                    STOCK ROUND ONLY: an Operating Round's turn belongs to a
-                    corporation, and a row of player portfolios there would
-                    answer a question nobody on that screen is asking --
-                    the same reasoning design note #406 records for the
-                    action bar's roster pills.
-
-                    The Ledger's Player Assets TABLE is untouched. Two views
-                    of one dataset, each shaped for its own screen. */}
-                {/* Design note #571: the tab guard was MISSING, so the cards
-                    travelled to the Rail Map and Stock Market tabs with the
-                    player. `activeMainTab === "corps"` is the same condition
-                    the corporation cards above use -- they are two halves of
-                    one screen and only one of them was scoped to it. */}
-                {/* ==================================================
-                     DESIGN NOTE 597d: THE CARDS FOLLOW THE ROUND'S OWN TAB
-                    ==================================================
-
-                     REPORTED: "the Auction round is missing the Player cards
-                     at the bottom panel."
-
-                     The guard read `activeMainTab === "corps"` -- the Stock
-                     Round's surface, hardcoded when the cards served only
-                     that round. The auction lives on `phase`
-                     (`surfaceTabFor`), so widening the ROUND test last pass
-                     without widening the TAB test left the cards mounted on
-                     a tab the auction never opens.
-
-                     `surfaceTabFor` is asked rather than a second literal
-                     added: it already owns "which tab does this round live
-                     on", and two statements of that would be one more thing
-                     to keep in step. */}
-                {gameState &&
-                  (gameState.current_round_type === "StockRound" ||
-                    gameState.current_round_type === "WaterfallAuction") &&
-                  activeMainTab === surfaceTabFor(gameState.current_round_type) && (
-                  <section style={styles.playerCardsSection}>
-                    <h3 style={styles.playerCardsTitle}>Players</h3>
-                    <PlayerCards
-                      players={stockRoundPlayerFinances}
-                      label={(address) =>
-                        sandboxPlayerLabel(address) ?? truncateAddress(address)
-                      }
-                      activeAddress={
-                        gameState ? actingAddress(gameState, waterfallState) : null
-                      }
-                      priorityAddress={
-                        gameState?.player_addresses[gameState.priority_deal_index] ?? null
-                      }
-                      viewerAddress={viewerAddress ?? null}
-                      // Design note #569: their own choice, else the palette.
-                      colorForSeat={(index) =>
-                        seatColor(gameState?.player_addresses[index] ?? "", index)
-                      }
-                      // Design note #568: the auction's own text, same catalog.
-                      privateDescription={(privateId) =>
-                        PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
-                      }
-                      // Design note #593: seats take turns in both rounds.
-                      showSeatOrder
-                    />
-                  </section>
-                )}
+                {/* Design note #602: the Stock Round's mount point. Between
+                    the corporation cards above and the board pane below --
+                    they are two halves of one screen, and the players belong
+                    under the companies they hold. Defined once near the top
+                    of this render; see #563/#602 there for the guard and for
+                    why the auction could not reach this line. */}
+                {playersPanel}
 
                 {/* Design note #28: the phase tab renders NO reference
                     board. Its content is the phase panel above -- the

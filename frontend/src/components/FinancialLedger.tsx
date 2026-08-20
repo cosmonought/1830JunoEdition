@@ -1,103 +1,20 @@
 // frontend/src/components/FinancialLedger.tsx
 //
-// The "Financial Ledger" top-level tab (see App.tsx's restructure, item 6
-// of this pass): global player certificate trees, remaining Bank cash, and
-// a Hardware Shop inventory section.
+// The "Game Ledger" top-level tab: bank treasury, player assets and certificates, corporation assets,
+// and the bank depot inventory.
 //
-// Design notes:
-// 1. **Bank cash is real, queryable data.** `GameStateResponse.virtual_bank_
-//    vgp`/`virtual_bank_start` (VGP, the in-game virtual currency) and
-//    `total_juno_pool` (real JUNO ante pool, a separate figure) are both
-//    genuine fields on `src/msg.rs`'s `GameStateResponse` -- see
-//    `utils/gameState.ts` design note #1. This section renders them
-//    directly, no estimation needed.
-// 2. **Certificate trees are the SAME estimate `ContextualSubPanel.tsx`
-//    uses**, just laid out per-player as a tree (private companies owned,
-//    then each public company holding) rather than a single summary number
-//    -- see `utils/gameState.ts`'s `certificateCount`/
-//    `playerCompanyHoldings`/`playerPrivateCompanies` design note #3 for
-//    exactly what "estimate" means here and why a precise count isn't
-//    possible against the current contract.
-// 3. **Hardware Shop inventory: an honest DESIGN GAP, not a fabricated
-//    shop.** Same underlying gap as `ContextualSubPanel.tsx`'s "Routes &
-//    Train Sheets" section (see that file's design note #3 and
-//    `utils/gameState.ts` design note #2): `src/state.rs` has a real
-//    `HARDWARE_POOL`/`COMPANY_HARDWARE` map and `src/hardware.rs` has a
-//    real `TRAIN_CATALOG`, but zero `QueryMsg` variant reads either back.
-//    This section names exactly what backend state exists and exactly
-//    what's missing to query it, rather than inventing plausible-looking
-//    train inventory counts.
-// 4. **Player Net Worth is a SEPARATE live query, not a client-side
-//    estimate.** Unlike the certificate trees above (design note #2, an
-//    honest client-side approximation), net worth is the real,
-//    authoritative `QueryMsg::PlayerNetWorth` figure -- cash plus every
-//    held share certificate priced at its LIVE `MARKET_GRID` value, summed
-//    entirely on-chain (`query::query_player_net_worth`). This panel can't
-//    compute it itself from `gameState` alone: `GameStateResponse` carries
-//    each company's `par_value` but not its live market price (that's a
-//    separate `GetMarketGrid` query), so reproducing the real figure
-//    client-side would mean either a second query plus duplicating the
-//    backend's own valuation math, or silently substituting par value for
-//    market price -- both worse than just calling the dedicated endpoint.
-//    `queryClient`/`contractAddress`/`gameId` are optional (mirroring
-//    `HexGridRenderer.tsx`'s own click-interceptor props, design note #7
-//    there): omit any of them to keep this panel query-free, in which case
-//    the new Net Worth row simply reads "not connected" instead of
-//    blocking the rest of the ledger.
-// 5. **"Game Ledger" rename -- display text only, not the source module.**
-//    Direct request to rename this tab from "Financial Ledger" to "Game
-//    Ledger". Changed here (`styles.pageTitle`'s rendered string) and in
-//    `App.tsx`'s `MainTabBar` tab label -- the two places a player actually
-//    sees the name. The component/export/file name (`FinancialLedger`,
-//    this file) is deliberately left alone: a UI copy request scoped to
-//    "tab renaming, ledger tables" is read as changing what a player reads,
-//    not as a mandate to rename a source module and touch every file that
-//    imports it, which would be a much larger and riskier diff for a
-//    request that never asked for it. If the source identifiers should
-//    also be renamed later, that is a distinct, deliberate housekeeping
-//    pass.
-// 6. **Four comprehensive tables (Game Ledger overhaul).** Replaces the
-//    prior card/tree-only layout with real `<table>` elements -- direct
-//    request, and tables are also just the right shape for this data
-//    (aligned columns of numbers), each wrapped in a horizontally-scrolling
-//    container (`styles.tableScroll`) so a dense table degrades to a
-//    scrollbar rather than an unreadable reflow on a narrow pane:
-//    (1) **Bank Treasury** (`BankTreasurySection`) -- starting/baseline
-//    cash (`virtual_bank_start`, which reads $12,000 on a freshly created
-//    room -- 1830's real fixed bank size, also documented in the Rules
-//    Reference tab's Core Limits table), remaining cash
-//    (`virtual_bank_vgp`), percent paid out, and the separate real-JUNO
-//    ante pool -- all fields already on `GameStateResponse`, unchanged from
-//    the prior `BankCashSection` cards, just reshaped into a table.
-//    (2) **Player Assets** (`PlayerAssetsSection`) -- NEW summary table:
-//    Liquid Cash, Stock Portfolio Value, Total Net Worth per player. Liquid
-//    cash is read straight from `gameState.player_cash` -- a real field on
-//    every `GetGameState` response, needing no extra query -- while stock
-//    portfolio value/net worth still come from the live `PlayerNetWorth`
-//    query (design note #4, unchanged) since that valuation genuinely can't
-//    be reconstructed client-side. The existing per-player certificate
-//    trees (design note #2) are kept as their own section directly below
-//    this table -- this new table is the aggregate dollar summary, the
-//    trees are the "which specific certificates" drill-down; the two are
-//    complementary, not a replacement of one by the other.
-//    (3) **Corporation Assets** (`CorporationAssetsSection`) -- treasury
-//    cash per corporation is real (`PublicCompanyState.treasury`). Active
-//    train inventory is NOT: this is the exact same honest DESIGN GAP
-//    described in design note #3 (`state.rs`'s `HARDWARE_POOL`/
-//    `COMPANY_HARDWARE` and `hardware.rs`'s `TRAIN_CATALOG` are real, but no
-//    `QueryMsg` variant reads either back) -- that gap now surfaces as an
-//    explicit "Not yet exposed by contract" table cell per corporation plus
-//    ONE shared footnote explaining why, replacing the old standalone
-//    `HardwareShopSection` box (removed -- its one piece of real content,
-//    the design-gap explanation, is preserved as this table's footnote
-//    instead of a whole separate section for it).
-//    (4) **Corporate Stock Distribution -- MERGED AWAY (design note #14).**
-//    Its three real per-company fields (`player_holdings[].percentage`
-//    summed, `ipo_pool_percentage`, `bank_pool_percentage`) are now the last
-//    three columns of Corporation Assets rather than a second table over the
-//    same rows. Its Total column is deleted -- see design note #14 for why a
-//    reconciliation check that reads 100% on every row of every game is not
-//    actually checking anything.
+// Design note #1: bank cash is real, queryable data -- `virtual_bank_vgp`/`virtual_bank_start` (VGP) and
+// `total_juno_pool` (real JUNO) are genuine `GameStateResponse` fields, rendered directly.
+// Design note #3: the Hardware Shop is an honest DESIGN GAP, not a fabricated shop. `state.rs` has a real
+// hardware pool and `hardware.rs` a real train catalog, but no `QueryMsg` reads either back -- so that gap
+// surfaces as an explicit "not yet exposed by contract" cell plus one shared footnote.
+// Design note #4: net worth is the real on-chain `QueryMsg::PlayerNetWorth` figure (superseded in part by
+// #497, which derives the same sum locally when there is no chain to ask).
+// Design note #5: "Game Ledger" is a DISPLAY-TEXT rename only -- the module keeps its name deliberately.
+// Design note #6: four real `<table>` elements, each in a horizontally-scrolling container so a dense
+// table degrades to a scrollbar rather than an unreadable reflow.
+//
+// Design history: see `docs/ai_architecture/contract_economy.md`.
 
 import PresidentCrown from "./PresidentCrown";
 import React from "react";
@@ -107,12 +24,11 @@ import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } fr
 import { estimatePlayerNetWorth } from "../utils/gameState";
 import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
-// Design note #170 (ContextualSubPanel): a name beats a truncated hash, and
-// this returns `null` for a real wallet so live rooms are unchanged.
-// Design note #559: the ROOM-AWARE resolver. Importing it from
-// `sandboxState` got the fixture's Alice/Bob table, which returns null
-// for a real room id -- so presidents rendered as raw `p-` ids here
-// while every other surface showed names.
+// `ContextualSubPanel` design note #170: a name beats a truncated hash, and this returns `null` for a real
+// wallet so live rooms are unchanged.
+// Design note #559: the ROOM-AWARE resolver. Importing it from `sandboxState` got the fixture's Alice/Bob
+// table, which returns null for a real room id -- so presidents rendered as raw `p-` ids here while every
+// other surface showed names.
 import { sandboxPlayerLabel } from "../utils/playerLabels";
 import {
   CARD_HIGHLIGHT_BORDER,
@@ -168,12 +84,9 @@ export function FinancialLedger({
   marketGrid,
   playerLabel,
 }: FinancialLedgerProps) {
-  // Called unconditionally (React hook rules) even before `gameState`
-  // resolves -- `usePlayerNetWorths` itself no-ops cleanly on an empty
-  // address list. `gameState?.player_addresses ?? []` is a fresh array
-  // every render, but the hook only actually depends on its JOINED
-  // CONTENT (`playersKey`, see `utils/gameState.ts` design note #6), so
-  // this is safe.
+  // Called unconditionally (React hook rules) even before `gameState` resolves -- the hook no-ops cleanly on
+  // an empty address list, and the fresh-array-every-render is safe because it depends only on the JOINED
+  // content (`gameState.ts` design note #6).
   const {
     netWorths,
     loading: netWorthsLoading,
@@ -254,14 +167,10 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
               <td style={styles.tdNum}>{spentPercent !== null ? `${spentPercent}%` : "--"}</td>
             </tr>
             <tr>
-              {/* Design note #12: the pool arrives as `ujuno` -- micro-JUNO,
-                  the Cosmos base unit -- so a 40 JUNO pool reads as
-                  40000000 raw. Converted through `formatNativeAmountCompact`
-                  rather than by dividing here: that helper does the six
-                  decimal places with integer string math, because a
-                  `Uint128` above 2^53 loses precision the moment it becomes
-                  a double, and a pool of real money is the last place to be
-                  quietly wrong. */}
+              {/* Design note #12: the pool arrives as `ujuno` -- micro-JUNO, the Cosmos base unit -- so a 40 JUNO pool
+                 reads as 40000000 raw. Converted through `formatNativeAmountCompact` rather than by dividing here: that
+                 helper does the six decimal places with integer string math, because a `Uint128` above 2^53 loses
+                 precision the moment it becomes a double, and a pool of real money is the last place to be quietly wrong. */}
               <td style={styles.tdB}>Real JUNO Ante Pool</td>
               <td style={styles.tdNum}>
                 {formatNativeAmountCompact(gameState.total_juno_pool)} {NATIVE_DENOM_DISPLAY}
@@ -276,30 +185,16 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 16: THE BANK DEPOT INVENTORY
- * ==================================================================
- *
- * Which trains are left, what they cost, and what buying one sets off, in
- * one place. Every one of those was previously discoverable only by
- * counting other corporations' holdings by hand, which is a lot of work to
- * answer "can I afford to wait a turn".
- *
- * It lives in the BANK section rather than with the corporations because
- * the depot belongs to the bank -- it is stock nobody owns yet. The
- * Corporation Assets table answers "who has what"; this answers "what is
- * still for sale".
- *
- * `depotInventory` (see `utils/gamePhase.ts` design note #4) supplies exact
- * per-tier counts via the queue rule, not by subtracting owned trains from
- * printed totals -- that shortcut is unsound for obsolete tiers and would
- * report rusted trains as though they were still on the shelf.
- *
- * TWO DIMMED STATES, NOT ONE. Sold out and rusted are different facts and
- * the table says so: a tier can be unbuyable while its trains still run
- * (every 3-train keeps earning through Phase 4 and 5), and only a genuinely
- * rusted tier gets the strikethrough, because only then is it gone.
- */
+/* Design note #16: THE BANK DEPOT INVENTORY -- which trains are left, what they cost, and what buying one
+   sets off, each previously discoverable only by counting other corporations' holdings by hand.
+   It lives in the BANK section rather than with the corporations because the depot belongs to the bank: it
+   is stock nobody owns yet. The Corporation Assets table answers "who has what"; this answers "what is
+   still for sale".
+   `depotInventory` (`gamePhase.ts #4`) supplies exact per-tier counts via the queue rule, not by subtracting
+   owned trains from printed totals -- that shortcut is unsound for obsolete tiers and would report rusted
+   trains as though they were still on the shelf.
+   TWO DIMMED STATES, NOT ONE: a tier can be unbuyable while its trains still run, and only a genuinely
+   rusted tier gets the strikethrough, because only then is it gone. */
 function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
   const phase = derivePhase(gameState);
   const outlook = rustOutlook(gameState);
@@ -331,12 +226,9 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                   }}
                 >
                   <td style={styles.tdCenterB}>
-                    {/* Design note #16: the same chip the corporation rows
-                        use, so a tier looks identical wherever it appears.
-                        `phase={null}` deliberately -- the rust TINT means
-                        "a corporation's train is about to die", and this is
-                        a price list, not a holding. The `rusted` column
-                        below carries that story instead. */}
+                    {/* Design note #16: the same chip the corporation rows use, so a tier looks identical wherever it appears.
+                       `phase={null}` deliberately -- the rust TINT means "a corporation's train is about to die", and this is a
+                       price list, not a holding. The `rusted` column carries that story instead. */}
                     <TrainChips
                       trains={[row.tier]}
                       phase={null}
@@ -408,30 +300,14 @@ interface PlayerAssetsSectionProps {
   playerLabel?: (address: string) => string | null;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 405: ONE PLAYER ASSETS TABLE, TWO PLACES
- * ==================================================================
- *
- * REPORTED: the Stock Round footer prints raw `juno1san...` addresses;
- * replace it with a replication of this table so portfolio and net worth
- * are trackable during the round.
- *
- * "A replication of" is the phrase that decides the implementation.
- * Building a second table in `ContextualSubPanel.tsx` would replicate the
- * LOOK and then drift on everything else -- the certificate-limit exemption
- * (design note #7 in `utils/gameState.ts`) needs live market prices, the
- * money columns need the net-worth query and its three distinct pending
- * states, and none of that survives being copied by eye. The footer renders
- * THIS component instead.
- *
- * THE RAW-ADDRESS PROBLEM IS NOT FIXED BY THE MOVE, and an earlier draft of
- * this note claimed it was. It was wrong: this table calls `truncate(player)`
- * and prints `juno1san...0000` exactly as the footer did, only shorter. So
- * the fix is a real one -- an optional `playerLabel`, resolved the way every
- * other roster in the app resolves a seat, falling back to truncation for an
- * address with no name. Recorded rather than quietly corrected, because a
- * note asserting a fix that does not exist is worse than no note.
- */
+/* Design note #405: ONE PLAYER ASSETS TABLE, TWO PLACES. "A replication of" is the phrase that decided the
+   implementation -- building a second table in `ContextualSubPanel` would replicate the LOOK and drift on
+   everything else, since the certificate-limit exemption needs live market prices and the money columns
+   need the net-worth query and its three pending states. The footer renders THIS component instead.
+   THE RAW-ADDRESS PROBLEM IS NOT FIXED BY THE MOVE, and an earlier draft of this note claimed it was: this
+   table truncated exactly as the footer did, only shorter. The fix is an optional `playerLabel`, resolved
+   the way every other roster resolves a seat. Recorded rather than quietly corrected, because a note
+   asserting a fix that does not exist is worse than no note. */
 export function PlayerAssetsSection({
   gameState,
   netWorths,
@@ -455,44 +331,20 @@ export function PlayerAssetsSection({
   const companies = gameState.public_companies;
   const hasCompanies = companies.length > 0;
 
-  /** Placeholder shared by the two money columns when NEITHER the chain nor
-   *  the local estimate can answer, so a blank cell says WHY instead of
-   *  showing a bare dash that looks like "this player owns nothing".
-   *
-   *  Design note #497: "not connected" is now the last resort rather than
-   *  the offline default. It is reached only when there is no query AND no
-   *  market grid to value holdings against -- at which point the cell really
-   *  does have nothing behind it. */
+  /** Placeholder shared by the two money columns when NEITHER the chain nor the local estimate can answer, so
+   *  a blank cell says WHY instead of showing a bare dash that looks like "this player owns nothing".
+   *  Design note #497: "not connected" is the LAST RESORT now rather than the offline default -- reached only
+   *  when there is no query AND no market grid to value holdings against, at which point the cell really does
+   *  have nothing behind it. */
   const pendingLabel = !netWorthsEnabled ? "not connected" : netWorthsLoading ? "loading..." : "--";
 
-  /* ==================================================================
-   *  DESIGN NOTE 555: THIS IS ARITHMETIC, NOT AN ESTIMATE
-   * ==================================================================
-   *
-   * REPORTED: Stock Value and Net Worth are both prefixed with `~`, as
-   * though they were guesses. There is no guessing these values.
-   *
-   * Correct, and the `~` was answering a real question with the wrong
-   * symbol. Design note #497a added it to mark the locally-computed figure
-   * as distinct from the contract's `PlayerNetWorth` answer, so an unmarked
-   * client total could not pass for the chain's -- a sound concern.
-   *
-   * But the two are not an approximation and an authority. They are the SAME
-   * SUM over the same inputs: cash on hand, plus each holding multiplied by
-   * its live market price. Nothing is rounded down, sampled or inferred. The
-   * distinction that matters is PROVENANCE -- who did the addition -- and
-   * `~` does not mean "computed here", it means "roughly", which is a claim
-   * about accuracy that was never true.
-   *
-   * `estimateCertificateCount` was renamed for exactly this reason (see
-   * `gameState.ts`), and its own `~N` presentation went with it. This is the
-   * same correction, one column over and overdue.
-   *
-   * THE TOOLTIP STAYS AND DOES THE JOB PROPERLY. Provenance belongs in
-   * words, where it can say which arithmetic ran and where -- and it is
-   * still attached to precisely the cells the client computed, so nothing
-   * about the disclosure is weakened by dropping the squiggle.
-   */
+  /* Design note #555: THIS IS ARITHMETIC, NOT AN ESTIMATE. The `~` was answering a real question with the
+     wrong symbol: #497a added it so a client total could not pass for the chain's, which is a sound concern.
+     But the two are not an approximation and an authority -- they are the SAME SUM over the same inputs, with
+     nothing rounded, sampled or inferred. The distinction that matters is PROVENANCE, and `~` does not mean
+     "computed here", it means "roughly", which is a claim about accuracy that was never true.
+     THE TOOLTIP STAYS AND DOES THE JOB PROPERLY -- provenance belongs in words, attached to precisely the
+     cells the client computed. (`estimateCertificateCount` was renamed for the same reason.) */
   const ESTIMATE_TOOLTIP =
     "Calculated in this browser from the board's own holdings and live market " +
     "prices — exact, not approximate. The contract's PlayerNetWorth query answers " +
@@ -542,14 +394,10 @@ export function PlayerAssetsSection({
                     key={company.company_id}
                     style={{
                       ...(index === companies.length - 1 ? styles.thTicker : styles.thTickerB),
-                      // Design note #13: each corporation's own brand colour,
-                      // from the SAME table the map tokens and the Operating
-                      // Round rows use (`stationTickerColor`). Applied to the
-                      // ink and a hairline underline rather than as a filled
-                      // background: eight saturated fills across a header row
-                      // would out-shout the percentages underneath, which are
-                      // the data. The colour is a wayfinding aid for tracking
-                      // one column down a tall table, not a highlight.
+                      // Design note #13: each corporation's own brand colour, from the SAME table the map tokens and the
+                      // Operating Round rows use. Applied to the ink and a hairline underline rather than as a filled background:
+                      // eight saturated fills across a header row would out-shout the percentages underneath, which are the data.
+                      // The colour is a wayfinding aid for tracking one column down a tall table, not a highlight.
                       color: stationTickerColor(company.company_id),
                       borderBottomWidth: "2px",
                       borderBottomStyle: "solid",
@@ -614,28 +462,13 @@ export function PlayerAssetsSection({
                       {formatCertificateCount(certs)}
                     </td>
                     <td style={styles.tdNumB}>{cashEntry ? `$${cashEntry.cash_vgp}` : "--"}</td>
-                    {/* ==================================================
-                         DESIGN NOTE 497: THE CHAIN FIRST, THEN THE BOARD
-                        ==================================================
-
-                        Precedence, most authoritative first:
-
-                          1. `netWorth` -- `QueryMsg::PlayerNetWorth`, summed
-                             on-chain. Unchanged, and still preferred
-                             wherever there is a chain to ask.
-                          2. `estimated` -- the same arithmetic over the
-                             holdings and live prices this table already has
-                             in hand. This is what a sandbox now shows
-                             instead of "not connected".
-                          3. `pendingLabel` -- neither is available.
-
-                        THE PROVENANCE IS MARKED, by the tooltip. Design
-                        note #555: the `~` that used to sit here is gone --
-                        it claimed the figure was approximate, which it never
-                        was. What design note #4 actually warned against was
-                        a client total silently PASSING FOR the contract's,
-                        and the tooltip says which arithmetic ran and where,
-                        on exactly the cells the client computed. */}
+                    {/* Design note #497: THE CHAIN FIRST, THEN THE BOARD. Precedence, most authoritative first: the on-chain
+                       `PlayerNetWorth`, still preferred wherever there is a chain to ask; then the same arithmetic over the
+                       holdings and live prices this table already has in hand, which is what a sandbox shows instead of "not
+                       connected"; then the placeholder.
+                       THE PROVENANCE IS MARKED, by the tooltip. Design note #555: the `~` is gone -- it claimed the figure was
+                       approximate, which it never was. What #4 warned against was a client total silently PASSING FOR the
+                       contract's, and the tooltip says which arithmetic ran and where, on exactly the cells the client computed. */}
                     <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
                       {netWorth
                         ? `$${netWorth.stock_portfolio_value}`
@@ -651,27 +484,13 @@ export function PlayerAssetsSection({
                           : pendingLabel}
                     </td>
                     <td style={hasCompanies ? styles.tdB : styles.td}>
-                      {/* ==================================================
-                           DESIGN NOTE 423: THE SAME PILLS THE AUCTION USES
-                          ==================================================
-
-                          This cell and the auction's seating table were two
-                          hand-rolled renderers for one thing, and they had
-                          already drifted into disagreeing about what a
-                          private looks like: the auction showed a bare
-                          numeral, this showed the full name with its
-                          revenue appended. Neither could be clicked.
-
-                          `PrivateCompanyPills` is now both. The full name
-                          and the revenue that design note #407 wanted on
-                          screen are not lost -- they lead the panel the
-                          pill opens, alongside the rules text that was
-                          previously not reachable from this table at all.
-
-                          IT ALSO FIXES THIS COLUMN'S HEIGHT. Full names
-                          wrapped, so a player holding three privates got a
-                          three-line row and the whole table went ragged.
-                          Acronyms on one non-wrapping line do not. */}
+                      {/* Design note #423: THE SAME PILLS THE AUCTION USES. This cell and the auction's seating table were two
+                         hand-rolled renderers for one thing, and they had already drifted into disagreeing about what a private
+                         looks like -- a bare numeral there, the full name with revenue appended here, and neither clickable.
+                         The full name and the revenue #407 wanted on screen are not lost: they lead the panel the pill opens,
+                         alongside rules text that was previously not reachable from this table at all.
+                         IT ALSO FIXES THIS COLUMN'S HEIGHT -- full names wrapped, so a player holding three privates got a
+                         three-line row and the whole table went ragged. Acronyms on one non-wrapping line do not. */}
                       <PrivateCompanyPills
                         privates={privates}
                         surface="table"
@@ -688,15 +507,10 @@ export function PlayerAssetsSection({
                           key={company.company_id}
                           style={percentage === 0 ? { ...base, ...styles.tdShareZero } : base}
                         >
-                          {/* Design note #15: crown LEFT of the number.
-                              On the right it sat inside the right-aligned
-                              edge, so a president's row was pushed left by
-                              the glyph's width and its percentage no longer
-                              lined up with the plain rows above and below.
-                              Moving it left puts the variable-width element
-                              on the ragged side and leaves the digits
-                              flush, which is the entire point of a
-                              right-aligned numeric column. */}
+                          {/* Design note #15: crown LEFT of the number. On the right it sat inside the right-aligned edge, so a
+                             president's row was pushed left by the glyph's width and its percentage no longer lined up with the plain
+                             rows above and below. Moving it left puts the variable-width element on the ragged side and leaves the
+                             digits flush, which is the entire point of a right-aligned numeric column. */}
                           {/* Design note #552: our own crown, not U+1F451 --
                               same drawing on every device, and it takes this
                               cell's ink instead of a vendor's. */}
@@ -721,52 +535,26 @@ export function PlayerAssetsSection({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* DESIGN NOTE 7: ONE PLAYER TABLE, NOT A TABLE PLUS A TREE            */
-/* ------------------------------------------------------------------ */
-//
-// "Player Assets" and "Player Certificate Trees" were two views of one
-// thing: the table had cash and net worth, the trees had certificate counts
-// and the actual holdings. Answering "does Alice have the certificates AND
-// the cash to take this company?" meant reading a table, scrolling to a
-// grid of cards, finding the same player again, and holding both halves in
-// your head.
-//
-// They are one table now, with Certs and the holdings themselves as columns
-// (design note #8 later split those holdings into a Private Companies column
-// and a per-corporation Shares group). The tree's
-// per-card net-worth row is dropped as duplicative -- the table already had
-// that column -- and its footnote is gone entirely: it explained that the
-// certificate count was a client-side estimate, which is no longer true
-// (see `certificateCount`) and was a development note in a player-facing
-// UI regardless.
+// Design note #7: ONE PLAYER TABLE, NOT A TABLE PLUS A TREE. They were two views of one thing -- the table
+// had cash and net worth, the trees had certificate counts and the actual holdings -- so answering "does
+// Alice have the certificates AND the cash to take this company?" meant reading a table, scrolling to a
+// grid of cards, finding the same player again, and holding both halves in your head.
+// They are one table now, with certs and the holdings as columns. The tree's per-card net-worth row is
+// dropped as duplicative, and its footnote is gone entirely: it explained that the certificate count was a
+// client-side estimate, which is no longer true and was a development note in a player-facing UI anyway.
 
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================
- *  DESIGN NOTE 14: ONE CORPORATION TABLE, NOT TWO
- * ==================================================================
- *
- * "Corporation Assets" and "Corporate Stock Distribution" were two tables
- * with the same rows in the same order, stacked. Answering the only
- * question the ledger exists for -- is this company worth buying into --
- * meant reading treasury and trains in one, scrolling, finding the same
- * ticker again, and reading IPO and pool split in the other.
- *
- * They are one table. The column order follows how the question is
- * actually asked: WHO it is (corporation, president), WHAT IT IS WORTH
- * (market price, treasury), WHAT IT CAN DO (trains, limit, last payout),
- * and WHO HOLDS IT (IPO, bank pool, player hands).
- *
- * THE TOTAL COLUMN IS DELETED. It summed the three ownership columns as a
- * visible reconciliation check, on the reasoning that a mismatch would
- * indicate a contract bug and should not be hidden. That reasoning was
- * sound and the column still had to go: it printed "100%" on every row of
- * every game, so the one time it mattered it would be a single digit
- * changing in a column nobody had read in months. The three columns are
- * adjacent and add up in your head; a checker that cries wolf by never
- * crying is not a checker.
- */
+/* Design note #14: ONE CORPORATION TABLE, NOT TWO. "Corporation Assets" and "Corporate Stock Distribution"
+   had the same rows in the same order, stacked -- so answering the only question the ledger exists for
+   meant reading treasury and trains in one, scrolling, finding the same ticker, and reading IPO and pool
+   split in the other.
+   The column order follows how the question is asked: WHO it is, WHAT IT IS WORTH, WHAT IT CAN DO, and WHO
+   HOLDS IT.
+   THE TOTAL COLUMN IS DELETED. It summed the three ownership columns as a visible reconciliation check, on
+   sound reasoning -- and it still had to go: it printed "100%" on every row of every game, so the one time
+   it mattered it would be a single digit changing in a column nobody had read in months. A checker that
+   cries wolf by never crying is not a checker. */
 function CorporationAssetsSection({
   gameState,
   marketGrid,
@@ -895,23 +683,11 @@ function CorporationAssetsSection({
                               style={styles.corpPrivateChip}
                               title={`${priv.name} — $${priv.revenue_per_or} per Operating Round, paid to ${company.ticker}'s treasury.`}
                             >
-                              {/* ==================================================
-                                   DESIGN NOTE 407: THE REVENUE IS ON THE CHIP
-                                  ==================================================
-                              
-                                  REPORTED: privates must display their per-OR revenue wherever they are
-                                  listed outside the auction -- it is what certificate-exchange timing is
-                                  judged on.
-                              
-                                  Every one of these lists already KNEW the figure and spent it on a
-                                  `title` attribute. A tooltip is not a display: it needs a pointer, it
-                                  needs a pause, and it shows one private at a time -- so comparing "which
-                                  of these three is worth holding through Phase 5" meant hovering three
-                                  chips in sequence and remembering two numbers.
-                              
-                                  The auction is exempt because there the revenue is already the headline
-                                  of every card. Outside it, the privates are a list of names and the one
-                                  number that makes them different was the one being hidden. */}
+                              {/* Design note #407: THE REVENUE IS ON THE CHIP. Privates must display their per-OR revenue wherever they
+                                 are listed outside the auction -- it is what certificate-exchange timing is judged on. Every one of these
+                                 lists already KNEW the figure and spent it on a `title`: a tooltip is not a display, it needs a pointer
+                                 and a pause and shows one private at a time, so comparing three meant hovering three chips in sequence
+                                 and remembering two numbers. The auction is exempt because there the revenue is already the headline. */}
                               {priv.private_id}. {priv.name}
                               <span style={styles.corpPrivateRevenue}>
                                 +${priv.revenue_per_or}
@@ -1076,15 +852,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9aa0ac",
     margin: 0,
   },
-  /** The inline Priority Deal marker. Bare text on purpose -- no pill, no
-   *  border, no background. This sits immediately beside a player's name in
-   *  a dense table that already carries a crown glyph and an ACTIVE badge
-   *  elsewhere; a third boxed element would turn the name column into a row
-   *  of competing containers. Colour and the monospace `#1` do the whole job.
-   *
-   *  `cursor: help` is what signals the `title` tooltip is there at all --
-   *  without it the mark looks like decoration rather than something to
-   *  hover. */
+  /** The inline Priority Deal marker. Bare text on purpose -- no pill, no border, no background: this sits
+   *  beside a player's name in a dense table that already carries a crown and an ACTIVE badge elsewhere, and a
+   *  third boxed element would turn the name column into a row of competing containers.
+   *  `cursor: help` is what signals the tooltip is there at all -- without it the mark looks like decoration. */
   priorityDealMark: {
     marginLeft: "6px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -1105,25 +876,16 @@ const styles: Record<string, React.CSSProperties> = {
     // variable-width element sits on the ragged side of a right-aligned
     // numeric column and the digits stay flush.
     marginRight: "5px",
-    // The pill stays GONE -- the crown carries its own silhouette, and
-    // wrapping it in a gold box was two badges stacked, the container
-    // reading as the indicator and the mark inside it as decoration.
-    //
-    // Design note #552: `color` is BACK, and unlike before it does something.
-    // It was removed when this styled an emoji, which renders in its own
-    // colour font and ignored it; the SVG fills with `currentColor`.
+    // The pill stays GONE -- the crown carries its own silhouette, and wrapping it in a gold box was two badges
+    // stacked, the container reading as the indicator and the mark inside it as decoration.
+    // Design note #552: `color` is BACK, and unlike before it does something. It was removed when this styled
+    // an emoji, which renders in its own colour font and ignored it; the SVG fills with `currentColor`.
     color: CARD_HIGHLIGHT_BORDER,
   },
-  /* ---- Holdings chips. Design note #423: `holdingChipPrivate` and
-     `holdingsCell` are GONE too -- the private column renders
-     `PrivateCompanyPills` now, which brings its own layout and its own
-     pill. What remains here is `holdingsEmpty`, still used by the
-     corporation tables below. Same reasoning as the `tree*`/`netWorth*`
-     styles this comment already records: deleted with their markup rather
-     than left to rot. ---- */
-  /* Design note #379: chips rather than a comma list -- a corporation holds
-     at most a couple of privates, and each is a discrete asset with its own
-     revenue, so they read as objects rather than as prose. */
+  /* Design note #423: the private-column styles are GONE with their markup -- that column renders
+     `PrivateCompanyPills` now, which brings its own layout and its own pill. Deleted rather than left to rot.
+     Design note #379: chips rather than a comma list -- a corporation holds at most a couple of privates, and
+     each is a discrete asset with its own revenue, so they read as objects rather than as prose. */
   corpPrivateList: { display: "inline-flex", flexWrap: "wrap", gap: "4px" },
   /** Design note #407: the per-OR figure, in the money green the rest of
    *  the ledger uses for income. Kept as its own span so it stays legible
@@ -1184,13 +946,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "right",
   },
-  // ---- Justification and column rules -- design note #8.
-  //
-  // `*Num` right-justifies; the `*B` suffix adds the vertical column rule.
-  // The rule lives on borderRIGHT rather than borderLeft so the LAST column
-  // of a table can simply use the plain variant and not draw an edge -- with
-  // borderLeft the same trick would have to be applied to the first column,
-  // which reads worse at a glance when scanning the style names. ----
+  // Justification and column rules -- design note #8. `*Num` right-justifies; the `*B` suffix adds the
+  // vertical rule. The rule lives on `borderRight` rather than `borderLeft` so the LAST column can use the
+  // plain variant and not draw an edge -- with `borderLeft` the same trick would have to be applied to the
+  // first column, which reads worse at a glance when scanning the style names.
   thNum: {
     textAlign: "right",
     padding: "8px 14px",
@@ -1250,15 +1009,10 @@ const styles: Record<string, React.CSSProperties> = {
   corpFullName: { fontSize: FONT_SIZE.micro, color: "#8a90a0", whiteSpace: "nowrap" },
   presidentCell: { display: "inline-flex", alignItems: "center", gap: "6px" },
   // Same "badge only on the exception" rule the Operating Round tray uses.
-  //
-  // Slate, not amber -- see `palette.ts`'s CHIP_INERT_* note. This badge sat
-  // a few hundred pixels from the Bank Depot's amber CURRENT pill and the
-  // two read as one inconsistent style rather than two unrelated states.
-  //
-  // `FONT_SIZE.micro` rather than a literal 12px: `typography.ts` scaled the
-  // whole app's ramp up on purpose (micro is 15px, "originally 10-11px"), so
-  // a hardcoded size here would render this one chip visibly smaller than
-  // every badge beside it and silently opt out of that decision.
+  // Slate, not amber: it sat a few hundred pixels from the Bank Depot's amber CURRENT pill and the two read
+  // as one inconsistent style rather than two unrelated states.
+  // `FONT_SIZE.micro` rather than a literal 12px -- `typography.ts` scaled the whole ramp up on purpose, so a
+  // hardcoded size would render this chip visibly smaller than every badge beside it and silently opt out.
   unfloatedBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 500,

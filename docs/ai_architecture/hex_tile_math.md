@@ -1481,3 +1481,199 @@ it read as a piece.**
   dimension **without hardcoding an absolute pixel value disconnected from `hexSize`.** Both call sites
   derive the identical value, **or labels get clipped (camera reserves too little) or render on top of the
   outermost hex (reserves less than the corner-to-label distance).**
+
+---
+
+# Contract mirrors and the livery — `hexContractTypes.ts`
+
+Phase 3a of the `HexGridRenderer.tsx` monolith extraction: the frontend's mirrors of the contract's query
+response shapes, the pure helpers that read them, and the click-query state machine the renderer reports
+through. Shares the rail-map `#N` namespace — anchored `HexGridRenderer.tsx #N`.
+
+### HexGridRenderer.tsx (hexContractTypes header) — Why the types had to move first
+Phase 3 extracts the hex geometry and slot engine, **and much of that engine is not pure coordinate math** —
+`archetypeForHex`, `liveEdgesForHex`, `hexBlockedSlots`, `claimHexSlot*`, `hexRouteValue` and
+`describeHexWithValue` all take a `MapGridResponse` or a `StationTokenCompany[]`. Those types lived in
+`HexGridRenderer.tsx`, **so moving the geometry without them would have made the new module import from the
+file that imports it: a cycle.**
+Leaving those functions behind was the alternative and it was worse — **it would have split the slot engine
+down the middle, with half its call graph in each file.** So the types move first, as their own leaf,
+depending on nothing but the already-extracted tile catalog. **Import direction is one-way: never import from
+`HexGridRenderer.tsx`.**
+
+### HexGridRenderer.tsx #119 — `paths` is optional, and the optionality is not decorative
+Each `[a, b]` is one continuous run of track between edges `a` and `b`; **`a === b` is a terminal spur that
+enters at `a` and dead-ends.** Apply `orientation` yourself, the same as for a catalog entry's connections.
+**A contract built before this field existed simply omits the key**, and the reader treats `undefined` and
+`[]` identically and falls back to the local catalog mirror — **so an older chain renders exactly as it did
+before rather than throwing.**
+
+### HexGridRenderer.tsx #132 — The printed revenue, and the `Uint128` trap
+The tile's printed revenue comes straight off the chain (`hexmap::tile_base_value`, Audit G-11) and is the
+single authority for what a stop on this hex pays.
+**Typed `string | number` because the backend field is `Uint128`, and cosmwasm-std serialises `Uint128` as a
+JSON *string* — it has to, since a `u128` overflows an IEEE-754 double past 2⁵³.** Reading it and expecting
+arithmetic to work is the trap; **one parser, in one place.** `number` is accepted too so a hand-built fixture
+needs no change.
+**`undefined` and `0` are DIFFERENT answers and callers must not conflate them:** `0` is a real figure (plain
+connector track earns nothing, and the badge should be suppressed), `undefined` means "this chain never told
+us" and the caller falls back to the terrain bucket rather than printing `NaN` or `$0`.
+**Not to be re-derived from `terrain`.** That is what this replaces, **and it was wrong for most city tiles:**
+the terrain lookup is a flat per-bucket value, but real 1830 prints revenue on the TILE — #62 and #64 are both
+two-city brown artwork and print different figures, and the whole Green/Brown city ladder collapsed to one
+bucket value under the old model.
+
+### HexGridRenderer.tsx #134 / #560 — A hex is not a city
+`station_token_hexes` is `(q, r)` and **cannot express which of a two-city hex holds a token.** New York
+(#54/#62) and every OO tile (#59, #64–#68) carry two cities on one hex, **so the renderer fell back to a
+heuristic — and the heuristic picks the first slot, which is the bottom-left one, every time, for every
+corporation.** (`#560`, reported: placing ERIE's home station, the player clicked the top-right city and the
+token landed on the bottom-left.)
+`station_tokens` is the same tokens as `(q, r, city_index)`, mirroring Audit G-12. **The renderer has PREFERRED
+it since `#134`; nothing on the frontend side ever wrote it, so the preference never had anything to prefer.**
+**Three states stay distinguishable:** absent means "this chain predates G-12, fall back to the heuristic"; an
+entry means "this slot, definitively"; **an empty array alongside a non-empty `station_token_hexes` means "this
+chain doesn't know", never "no tokens"** — which is why the two arrays are written together and never one
+without the other. The reader returns `undefined` rather than `0` **so the caller falls back to the heuristic
+rather than asserting city 0 and confidently drawing a token in the wrong station.**
+
+### HexGridRenderer.tsx #36 / #44 / #45 — The home-hex table and the ticker fallback
+A hand-kept SUBSET mirror of `PublicCompanyState` — only the fields the station-token pass needs, re-declared
+locally rather than imported. The home-hex table mirrors `hexmap::CORPORATION_HOME_HEX`, **derived from this
+file's own landmark/gray/OO hex entries exactly the way the backend constant's doc comment describes.**
+**#44 is a deliberate departure from real 1830, requested three times explicitly by the owner of this custom
+board:** NYC (company_id 2) is reassigned to Albany (E19), and NNH (company_id 7) — previously omitted for
+having no assigned home — takes over the New York (G19) hex NYC vacated. Mirrors `hexmap.rs` module doc #25.
+**#45 — the acronym overlay guarantee.** A small duplicated copy of `public_company.rs`'s real on-chain tickers
+exists so **a RESERVED/unfloated home-station badge can always draw its acronym before `publicCompanies` has
+loaded, or ever loads.** The drawing pass prefers a live `company.ticker` and falls back to this table rather
+than an empty string. **Company 7's real ticker is `NNH`, not `NYNH`** — the contract constant is the single
+source of truth, and "NYNH" is this project's colloquial name for the railroad. Using `NNH` here **keeps the
+placeholder identical to what will actually show once the corporation floats, so the badge never visibly
+flickers at that moment.**
+
+### HexGridRenderer.tsx #234 — A near-white ring around white lettering
+**Reported:** PRR and CPR tokens are very hard to read.
+A placed token is a small disc of brand colour with its acronym on top, ringed in the board's cream. **Two
+things go wrong at once and they compound:**
+
+- **The ring does not separate.** A token sits inside a WHITE city circle, so a cream ring is near-white on
+  near-white. **The one job of an outline is to say where the token ends, and it could not.**
+- **The ring crowds the glyphs.** The disc is small and a size-scaled stroke centred on that radius eats
+  inward. On the dark-filled corporations the acronym is WHITE, **so the lettering ran into a near-white band
+  with only a sliver of fill between them** — three-letter tickers on the smallest discs in the game, with the
+  contrast removed exactly where it was needed.
+
+**Charcoal fixes both without touching the brand palette.** Applied to every floated token rather than only the
+white-lettered ones: the light-filled corporations had the same separation problem against the white circle,
+**and one ring colour is one fewer thing to keep in step with `bestContrastTextColor`.**
+**The unfloated reservation marker keeps its brand-coloured ring:** that ring is an affordance rather than an
+outline (`#48`'s "which colour it'll turn once floated") and at 45% alpha it competes with nothing.
+**B&M is a deliberate edge case, recorded because it looks like an oversight.** Its `#34495e` is barely a shade
+off this charcoal, so its ring merges into its own fill and the token reads as one solid dark disc with white
+lettering — **which is the SECOND outcome this fix was allowed to reach ("remove the border entirely so the
+corporate colour fills the whole token"), reached without a special case**, because the property that matters
+survives either way: **charcoal-on-white separates at roughly 10:1 whether or not it also contrasts with the
+fill inside it.** Tinting B&M's ring lighter would put a pale band back around white lettering — **the exact
+bug being fixed — so the merge is the better of the two outcomes rather than a compromise.**
+
+### HexGridRenderer.tsx #487 — The ring is a fraction of the token, not of the hex
+**Reported:** subsequent station tokens render with a strange ring that makes them look non-uniform next to
+home tokens.
+**They do, and the two are drawn by the SAME function with the same colours — which is why this took finding.
+The difference is the radius, and the ring did not follow it.** The stroke was `max(2, size · 0.05)` where
+`size` is the HEX size — constant for every token on the board — **while the radius is not constant:** a token
+docked into a laid tile's city slot shrinks by a chain of factors, and again by 15% on a multi-city tile, while
+a home token on an untiled preprinted city keeps the legacy radius.
+**So a docked token is roughly two thirds the radius of a preprinted one and wears exactly the same absolute
+ring: proportionally half again as heavy** — a small disc with a fat collar beside a large disc with a thin one.
+The ratio used is the CURRENT appearance of the legacy path preserved exactly (`0.05 / 0.22`), **so tokens at
+the old radius are pixel-identical and every smaller token now wears a ring in proportion to itself.**
+
+### HexGridRenderer.tsx #253 — A brand colour that can act as light
+The board veil, the legal-placement glow and the manual route line are all drawn in the acting corporation's
+colour, **so one hue says whose turn it is everywhere at once. Two of those three are LIGHT effects over a
+darkened board, and light needs luminance:** B&M's slate and PRR's deep red are perfectly good fills and make
+almost no glow at all against a veiled map.
+**So a colour used as light is measured first, and a too-dark one is BRIGHTENED toward white rather than
+replaced by it.** Replacing would throw the identity away exactly when the board is trying to communicate it;
+lifting keeps the hue recognisably PRR-red or B&M-navy. The threshold is relative luminance — **the same
+quantity `bestContrastTextColor` uses, so this file has one idea of "dark".**
+
+### HexGridRenderer.tsx #403 / #408 — Measure the separation, do not judge it
+**#403 — reported:** adjust PRR or NNH so the two are distinguishable. They were `#c0392b` and `#b03a2e` —
+**CIELAB ΔE 8.4 apart. Below about 15 two colours read as the same colour under normal viewing**, so on the map,
+the chart and eight stock cards the New Haven and the Pennsylvania were effectively one livery. **The
+measurement stands and the fix was real; the specific colour it chose does not survive `#408`. The note is kept
+because the METHOD is what carried forward.**
+**#408 — the colours the board actually uses.** *Reported:* the corporate colours do not match the physical
+board game. **This palette was never canonical** — eight plausible, well-spaced hues, tuned for legibility
+without anyone asking what colour the pieces actually are. **For a player who knows 1830 that is worse than an
+arbitrary palette: the Erie is yellow on the board, and reaching for the yellow token to find it is the B&O
+costs more than having no expectation at all.**
+Two properties were **re-checked rather than assumed** against the canonical hues:
+
+- **Contrast.** Every entry clears 4.5:1 against whichever of black or white the contrast helper returns — **the
+  WCAG threshold for normal text, which is the right bar because the stripe's ticker is 16px bold and 16px bold
+  is NOT "large text" by WCAG (that starts at 18.66px bold).** Lowest is B&M green at 5.35:1; **the shade of each
+  hue was chosen to clear the bar rather than the bar being lowered to fit a shade.**
+- **Separation.** Minimum pairwise ΔE across all 28 combinations is **44.4** (ERIE yellow against NNH orange),
+  against the 8.4 that started `#403`. **Canonical and distinguishable turned out not to be in tension — the
+  physical game already had to solve this problem with ink on cardboard.**
+- **The contrast ink flips where it should:** C&O's cyan, ERIE's yellow and NNH's orange take BLACK; the other
+  five take white. **That is the helper doing its job on new inputs, and it is asserted per colour rather than
+  trusted.**
+
+**NYC is `#1a1a1a`, not `#000000`.** The requirement allows "a very dark gray to ensure UI legibility": **pure
+black would be indistinguishable from the card borders and the chart's gridlines, and a corporation whose livery
+is the same colour as the furniture reads as a rendering failure rather than as the New York Central.**
+
+### HexGridRenderer.tsx #428 — Re-exported, not defined
+The livery table now lives in `styles/corporationLivery.ts` (see that module for `#408`'s audit and why three
+copies became one). `relativeLuminance` and `bestContrastTextColor` moved with it — **generic colour maths that
+lived here only because the map's station tokens were the first surface needing to put an acronym on an
+arbitrary corporate fill; four other surfaces call them now, and all four are about that palette.**
+**The old names survive as aliases, deliberately.** They have eight-plus call sites across the app plus notes
+that reference them by name, **and renaming all of that in the same pass that moves the data would make one
+behavioural change indistinguishable from forty mechanical ones in review.** The aliases are not
+deprecated-and-abandoned: **they are this file's station-token vocabulary, and a hex-map module asking for "the
+station ticker colour" reads better here than the generic name would.**
+
+### HexGridRenderer.tsx #141 / #172 / #257 — Why a hex refused a click
+A discriminated union, **defined here rather than beside the logic in `hexGeometry.ts` purely to respect the
+one-way import rule** — that module imports from this one, so it cannot import back. **The type is data, the
+function is behaviour, and the data has to sit at the bottom.**
+
+| reason | meaning |
+|---|---|
+| `not-a-hex` | not one of the 93 real board hexes |
+| `offboard` | a red off-board revenue terminal |
+| `gray-immutable` | a preprinted gray hex, permanently fixed |
+| `max-tier` | the tile there is already the top colour tier |
+
+**`out-of-reach` is GONE (`#257`).** It was the one reason that depended on whose turn it was rather than on the
+board, **and it existed to explain a refusal the Lay Track veil now makes visually. A click on a dimmed hex is
+ignored outright, so there is no status left to carry.**
+**#172 — `"no-hex"` is distinct from `"blocked"`.** Blocked means "a real hex, but you may not lay here"; this
+one carries no reason and no message, **because there is nothing to explain: the player clicked nothing.** It
+exists so an already-open in-situ UI can close — **returning silently left a radial menu anchored to an earlier
+hex sitting there while the player clicked empty sea to dismiss it.**
+**#141 — the static-gate failure is its own variant rather than "report nothing",** for the same reason
+`"offline"` is: **the consumer has to make a decision, and the exhaustiveness checker should be the thing that
+reminds it.** Reporting nothing was the original behaviour and **is indistinguishable from the click handler
+being broken — which is exactly the failure mode this codebase has already hit twice (`#120` and `#139`, both
+silent-click bugs).** Consumers MUST NOT open the picker on this status.
+**#120 — `"offline"` is a separate status, not a flag on `"success"`.** These placements are **era-gated and
+nothing more** — no connectivity check, no terrain reservation, no tray depletion, no upgrade-colour step.
+**Folding them into `"success"` would let any consumer treat unvalidated data as authoritative simply by not
+knowing to check a flag, whereas a distinct variant makes the exhaustiveness checker point at every site that
+has to decide.**
+
+### HexGridRenderer.tsx #71 — G19 is a River hex
+New York (G19) is **reclassified River**, matching real 1830's own printed hex definition
+(`upgrade=cost:80,terrain:water`). The terrain type drives the build cost, so classifying it by appearance
+rather than by the printed rule would have made the crossing free.
+
+> *Not a design note:* `#40` inside `TileGraphics.ts` is a **tile tray number** (the symmetric brown
+> triangle), not a note reference. Tile ids and note numbers share the `#N` shape — the surrounding text
+> disambiguates.

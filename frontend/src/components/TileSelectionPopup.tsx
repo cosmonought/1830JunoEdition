@@ -1,178 +1,32 @@
 // frontend/src/components/TileSelectionPopup.tsx
 //
-// The Interactive Floating Tile-Selection Popup Overlay -- the floating
-// modal panel half of the click-to-lay-a-tile flow. `HexGridRenderer.tsx`'s
-// click interceptor (see that file's design note #7) owns converting a
-// canvas click to `(q, r)` and firing the read-only `GetLegalTilePlacements`
-// query; this file owns everything that happens once that query resolves:
-// showing the legal `tile_id`s as a scrollable carousel, letting the player
-// preview a selected tile's legal rotations, and dispatching the real
-// `LayTile` transaction through the session-key pipeline.
+// The floating tile-selection overlay -- the modal-panel half of the click-to-lay-a-tile flow.
+// `HexGridRenderer.tsx`'s click interceptor (#7 there) owns converting a canvas click to `(q, r)` and
+// firing `GetLegalTilePlacements`; this file owns everything after that query resolves.
 //
-// Design notes:
-// 1. **Self-contained dispatch, observer-only callback out.** This
-//    component calls `useGameSession().execGameplay` itself (matching the
-//    feature request's framing that the popup's OWN "Confirm Placement"
-//    button routes through the session-key pipeline) rather than asking
-//    `App.tsx` to do the dispatch on its behalf. `onDispatched` is an
-//    optional observer callback so `App.tsx` can still fold the result into
-//    its existing centralized Action Log (see `App.tsx`'s
-//    `runGameplayAction`) for UI consistency with the sidebar's other
-//    actions, without this component needing to know that log exists.
-// 2. **Orientation cycling is informational, not a binding choice --
-//    IMPORTANT LIMITATION.** `ExecuteMsg::LayTile` (see `msg.rs`) and this
-//    codebase's `GameplayExecuteMsg`'s `LayTile` variant (see
-//    `utils/sessionKey.ts`) both take `{ game_id, protocol_id, q, r,
-//    tile_id }` -- there is NO `orientation` field anywhere in that
-//    message. `hexmap::execute_lay_tile` always auto-picks the LOWEST legal
-//    orientation for the given `tile_id` at that hex, using the exact same
-//    "iterate orientation 0..6, take the first legal one" logic that
-//    `legal_tile_placements` (the query backing `GetLegalTilePlacements`)
-//    uses to build its response in the first place. STRUCTURAL FIX: a
-//    prior pass of this component was built against a contract that had no
-//    `orientation` input on `LayTile` at all -- the contract auto-picked
-//    the lowest legal rotation server-side, so this popup could only ever
-//    preview rotations, never actually choose one, and said so explicitly
-//    in the UI. That auto-pick has since been removed from the contract
-//    (see `src/hexmap.rs` module doc comment #4 / `src/msg.rs`'s
-//    `ExecuteMsg::LayTile`): `orientation` is now a required message field,
-//    and the contract commits *exactly* whichever rotation is submitted,
-//    rejecting it if that specific angle isn't legal. This component's
-//    rotation cycle is therefore a REAL, binding choice now, not a preview:
-//    the rotation gesture changes which of `placements`' legal orientations
-//    is currently selected, and "Confirm Placement" submits exactly that
-//    one. (Design note #7 changed WHAT that gesture is -- double-clicking
-//    the tile in the row, not clicking a separate preview panel -- but not
-//    that it is binding.)
-// 3. **Floating position, not a fixed layout.** `anchorClientX`/
-//    `anchorClientY` (the raw `event.clientX`/`clientY` from
-//    `HexGridRenderer`'s `onHexClick`) position this card via `position:
-//    fixed` with a small offset, clamped so it can't render off the right/
-//    bottom edge of the viewport. This deliberately does NOT try to
-//    project the hex's on-canvas position through the canvas's own pan/
-//    zoom transform a second time -- the click's own screen coordinates are
-//    already exactly where the player just clicked, which is the more
-//    honest anchor point for a floating popup than re-deriving it.
-//    UPDATED by design note #7: still anchored to the click, for exactly
-//    the reason above, but the plain clamp became flip-aware once the card
-//    grew to ~900px. A docked bottom bar and a centred modal were both
-//    considered and rejected -- the bar costs too much mouse travel on a
-//    large scrollable map, and the modal hides the very board you need to
-//    see while judging a rotation.
-// 4. **No client-side re-validation of legality.** The carousel only ever
-//    offers `tile_id`s the contract's own `GetLegalTilePlacements` query
-//    already returned, and "Confirm Placement" sends exactly that
-//    `tile_id` -- this component does not attempt to re-implement
-//    `hexmap::legal_tile_placements`'s connectivity/terrain rules
-//    client-side (that logic is nontrivial and already lives correctly on
-//    the contract; duplicating it here would just be a second place for it
-//    to drift out of sync, per this codebase's established "hand-kept
-//    mirror" caution -- see `HexGridRenderer.tsx` design note #2).
-// 5. **Real 1830 tray numbers, and why this file needed almost no change
-//    for them** (backend Audit G-5; see `HexGridRenderer.tsx` design note
-//    #118). The backend catalog now keys every tile on its REAL physical
-//    1830 tray number across a full 46-tile roster, replacing this engine's
-//    old synthetic internal ids -- so `GetLegalTilePlacements` returns e.g.
-//    #54 where it used to return 17, #53 where it used to return 16, #59
-//    where it used to return 15, #57 where it used to return 10. Design
-//    note #4 above is exactly why that overhaul cost this component almost
-//    nothing: it has never held a tile-id table, a label map, an artwork
-//    switch, or any id literal at all. Every id it touches arrives from the
-//    query and is handed straight to `TilePreviewThumbnail`, which resolves
-//    artwork through the ONE mirror in `HexGridRenderer.tsx`. What this
-//    pass did add is presentational only, and driven by that same single
-//    mirror rather than a second copy: the carousel now groups by colour
-//    tier before tray number (see `groupPlacementsByTile`) and labels each
-//    thumbnail with its tier. Both matter more than they used to -- 46 real
-//    tray numbers are not contiguous and not tier-ordered (a hex can offer
-//    #8 next to #57, or #16 next to #53), so a bare ascending numeric list
-//    gave the player no signal about which era's artwork they were picking.
-// 6. **`offline` -- the picker without a chain.** Set when these
-//    `placements` came from `HexGridRenderer`'s local `TILE_CATALOG` mirror
-//    instead of from `GetLegalTilePlacements` (that file's design note #120
-//    and its `HexClickQueryState` `"offline"` variant). It exists so the
-//    picker still opens while developing against no backend, which it
-//    previously did not: with no chain client the click handler bailed
-//    before ever reporting a state, so this popup never mounted at all.
+// UNRENDERED since `App.tsx` design note #162 -- `RadialTileSelector` replaced it. Retained, unmounted,
+// until the radial path has been exercised against a live chain.
 //
-//    Design note #4 above says the carousel offers only what the contract
-//    returned. That invariant is NOT relaxed here, it is made visible. An
-//    offline tray is filtered by NOTHING AT ALL as of design note #8 -- not
-//    even by era: no connectivity, no landmark/OO/"B"/"NY" reservation, no
-//    upgrade colour step, no tray depletion -- so most of what it shows
-//    would be rejected outright by
-//    `hexmap::execute_lay_tile`. Presenting that silently, in a UI otherwise
-//    identical to the authoritative one, would be the worst outcome
-//    available: it looks exactly like a legality answer while being nothing
-//    of the kind.
+// Design note #1: self-contained dispatch -- this calls `execGameplay` itself rather than asking `App.tsx`
+// to dispatch on its behalf, which is why `App.tsx #23` must not MOUNT it for a spectator.
+// Design note #2: the rotation is a BINDING choice now. `orientation` is a required message field and the
+// contract commits exactly what is submitted; a prior pass was built against a contract that auto-picked.
+// Design note #4: no client-side re-validation -- the carousel only offers ids the contract returned.
+// Design note #6: `offline` means these came from the local catalog mirror, filtered by NOTHING at all.
 //
-//    So the mode is stated three times over, and dispatch is blocked twice.
-//    A banner above the carousel says plainly what was and wasn't checked;
-//    the heading reads "Catalog tiles" rather than "Legal tiles"; the
-//    rotation caption drops the word "legal", since all six are offered
-//    precisely because nothing filtered them. `handleConfirmPlacement`
-//    returns immediately AND the button is disabled and relabelled -- belt
-//    and braces, because the disabled attribute alone is a presentational
-//    guarantee and this needs a behavioural one.
-// 8. **Era tabs, offline only.** Reported: offline, the player was trapped
-//    looking at the Yellow tray with no way to see the rest of the catalog.
-//    Two things caused that together. `HexGridRenderer`'s offline fallback
-//    filtered the catalog to the room's `currentEra`, which at game start is
-//    Yellow -- twelve tiles of forty-six; and this popup had no way to ask
-//    for anything else. Both are fixed, in the places they belong: the
-//    fallback now returns the whole catalog (see that file's design note
-//    #125 for why that weakens no rule -- it was never enforcing one), and
-//    the browsing lives HERE as a view control the player can change, rather
-//    than as a filter upstream they cannot see or reach.
-//
-//    Strictly gated on `offline`. Online, `placements` is the contract's own
-//    answer about ONE hex and every entry in it is genuinely legal there --
-//    an era tab would only let a player hide legal moves from themselves,
-//    and worse, a hex mid-upgrade legitimately offers two eras at once, so
-//    hiding one would look like the picker was broken. The strip is also
-//    hidden when only one era is present, which is the common case for a
-//    real hex, so it costs nothing when it has nothing to offer.
-//
-//    Switching tabs can hide the current selection, so an effect pulls it
-//    back to the first visible tile -- otherwise the footer readout blanks
-//    and a ghost preview strands itself on a board hex whose tile is no
-//    longer on screen.
+// Design history: see `docs/ai_architecture/canvas_rendering.md`.
 
-// 7. **Flattened single-row layout, double-click to rotate.** Direct user
-//    feedback: "the font is very small and split into two parts... it would
-//    be better to have just the legal tiles all in one row/panel, and double
-//    clicking them rotates them."
-//
-//    The split was the substantive complaint. The card used to be a 280px
-//    column: a cramped strip of 56px thumbnails on top, and beneath it a
-//    second panel holding ONE enlarged copy of whichever tile was selected,
-//    which was also the only surface that rotated. So the tile you were
-//    turning was never the tile you had just clicked, and comparing two
-//    candidates meant selecting one, reading the bottom panel, selecting the
-//    other, reading it again. The bottom panel is now deleted outright and
-//    its job folded into the row: the selected tile renders at its live
-//    orientation IN PLACE, so rotation happens exactly where you are
-//    looking.
-//
-//    Interaction: single click selects, double click rotates. The one real
-//    trap is documented at `handleSelectTile` -- a double click fires
-//    `click`, `click`, `dblclick`, so selecting must not reset the rotation
-//    or every double click would appear stuck one step from home. Because
-//    double-click is undiscoverable on its own it is also stated in the
-//    header legend, in each tile's `title`, and as a live `↻ n/m` readout on
-//    the selected tile; and because it is unreachable by keyboard, `r` and
-//    `ArrowRight` do the same thing (Enter/Space are left alone -- the
-//    browser already turns those into a `click`, which selects).
-//
-//    Readability: base font 13 -> 15, tile numbers 11 -> 17 bold, thumbnails
-//    56 -> 104px. The artwork is the actual content here, so its size was
-//    the biggest single win -- at 56px a #57 city and a #9 straight were
-//    genuinely hard to tell apart.
-//
-//    The row scrolls horizontally rather than wrapping, which keeps design
-//    note #5's tier ordering legible as one left-to-right Yellow -> Green ->
-//    Brown progression. That matters most in offline mode, where a Brown-era
-//    tray is all 46 catalog tiles.
+// Design note #7: FLATTENED SINGLE-ROW LAYOUT, DOUBLE-CLICK TO ROTATE. The split was the substantive
+// complaint: a cramped strip of thumbnails on top and a second panel below holding ONE enlarged copy of the
+// selection, which was also the only surface that rotated -- so the tile you were turning was never the
+// tile you had just clicked, and comparing two candidates meant selecting each in turn and reading the
+// bottom panel twice. That panel is deleted and its job folded into the row.
+// Single click selects, double click rotates; the one real trap is documented at `handleSelectTile`.
+// Because double-click is undiscoverable it is also stated in the header legend, in each tile's `title` and
+// as a live rotation readout, and because it is unreachable by keyboard, `r` and `ArrowRight` do the same
+// (Enter/Space are left alone -- the browser already turns those into a `click`, which selects).
+// The row scrolls horizontally rather than wrapping, which keeps #5's tier ordering legible as one
+// left-to-right progression -- most important offline, where a Brown-era tray is all 46 catalog tiles.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeliverTxResponse } from "@cosmjs/stargate";
@@ -230,45 +84,27 @@ export interface TileSelectionPopupProps {
   /** Called when the player closes the popup (the "x" button, or after a
    *  successful dispatch). */
   onClose: () => void;
-  /** Design note #6: these `placements` did NOT come from the contract.
-   *  No chain client was available, so `HexGridRenderer` fell back to its
-   *  local `TILE_CATALOG` mirror filtered by era alone -- see that file's
-   *  `localCatalogPlacements` and its `HexClickQueryState`'s `"offline"`
-   *  variant. Makes the popup label itself provisional and hard-refuse to
-   *  dispatch. Defaults to `false`, so the ordinary contract-backed path is
-   *  entirely unaffected. */
+  /** Design note #6: these placements did NOT come from the contract. No chain client was available, so the
+   *  renderer fell back to its local catalog mirror. Makes the popup label itself provisional and hard-refuse
+   *  to dispatch. Defaults to `false`, so the contract-backed path is entirely unaffected. */
   offline?: boolean;
-  /** Offline Sandbox hotseat mode.
-   *
-   *  **This is a NARROWER claim than `offline`, and the difference is the
-   *  whole point.** `offline` means "no chain answered, so these tiles are
-   *  unvalidated" -- true here too, and the provisional labelling stays on.
-   *  What `offline` ALSO meant, until this prop existed, was "there is
-   *  nowhere for a placement to go", and that is no longer true: the sandbox
-   *  has a local reducer that accepts the lay and repaints the board.
-   *
-   *  So `sandbox` re-enables Confirm and routes it to `onSandboxLay` instead
-   *  of `execGameplay`. A plain `offline` popup -- a spectator, or a dev
-   *  whose RPC dropped mid-session -- still hard-refuses, because for those
-   *  two there genuinely is no destination and a placement would be a lie.
-   *
-   *  Ignored unless `offline` is also set; a chain-backed popup has no use
-   *  for it. */
+  /** Offline sandbox hotseat mode -- a NARROWER claim than `offline`, and the difference is the whole point.
+   *  `offline` means "no chain answered, so these tiles are unvalidated", which is true here too and keeps the
+   *  provisional labelling on. What `offline` ALSO meant, until this prop existed, was "there is nowhere for a
+   *  placement to go" -- and that is no longer true: the sandbox has a local reducer that accepts the lay.
+   *  So `sandbox` re-enables Confirm and routes it locally. A plain `offline` popup -- a spectator, or a dev
+   *  whose RPC dropped -- still hard-refuses, because for those two there genuinely is no destination and a
+   *  placement would be a lie. Ignored unless `offline` is also set. */
   sandbox?: boolean;
   /** Where a sandbox placement goes instead of the chain. Called with the
    *  confirmed tile and rotation; the host applies it to the local board. */
   onSandboxLay?: (placement: { tileId: number; orientation: number }) => void;
 }
 
-/** Live viewport size, for design note #7's flip-aware positioning.
- *
- *  The old 280px card read `window.innerWidth`/`innerHeight` straight
- *  through during render and never subscribed to `resize`. That was
- *  survivable when the card was narrow -- being a little mispositioned
- *  after a resize is cosmetic. At up to 900px it is not: `cardWidth` itself
- *  is derived from the viewport, so a stale reading can leave the card
- *  wider than the window and hang its right-hand tiles off-screen with no
- *  way to scroll to them. SSR-safe defaults, since this component is
+/** Live viewport size, for design note #7's flip-aware positioning. The old 280px card read `window.inner*`
+ *  during render and never subscribed to `resize` -- survivable when the card is narrow, and not when
+ *  `cardWidth` itself is derived from the viewport: a stale reading can leave the card wider than the window
+ *  and hang its right-hand tiles off-screen with no way to scroll to them. SSR-safe defaults, since this is
  *  rendered from a `position: fixed` overlay that may mount before layout. */
 function useViewportSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
@@ -285,38 +121,18 @@ function useViewportSize(): { width: number; height: number } {
   return size;
 }
 
-/* ==================================================================== */
-/*  DESIGN NOTE 10: DRAGGING                                            */
-/* ==================================================================== */
-//
-// The card is anchored next to the hex you clicked (design note #3) and
-// flips sides to avoid the viewport edge (design note #7), but on a dense
-// board there is no side that is guaranteed clear -- the card is up to
-// 1040px wide and the interesting hex is often surrounded by the very hexes
-// you are comparing it against. Auto-placement cannot solve that, because
-// only the player knows which neighbours they are currently looking at. So
-// they get to move it.
-//
-// Implementation notes, each of which is a bug avoided:
-//
-//   - POINTER EVENTS, not mouse events. One code path covers mouse, touch
-//     and pen, and `setPointerCapture` means the drag keeps tracking even
-//     when the cursor outruns the card (easy to do on a fast drag) or
-//     crosses the canvas underneath.
-//   - OFFSET-BASED, not delta-accumulating. The drag records where in the
-//     card you grabbed it and positions from that, so the card never
-//     "slides" relative to the cursor over a long drag the way accumulated
-//     deltas do once a single frame is dropped.
-//   - The offset RESETS when the popup re-anchors to a different hex. A
-//     dragged position is a statement about one hex's surroundings; keeping
-//     it for the next hex would mean the card opens somewhere arbitrary
-//     with no relationship to the click that opened it. Keyed on
-//     `anchorClientX`/`Y` rather than on `q`/`r` so it also resets when the
-//     board is panned under a re-opened popup.
-//   - Clamped so the card can never be dragged fully off-screen, which
-//     would strand its close button somewhere unreachable. The clamp keeps
-//     the whole card inside the viewport rather than merely a corner of it,
-//     since a card that is 90% off-screen is not meaningfully recoverable.
+// Design note #10: DRAGGING. The card is anchored next to the clicked hex (#3) and flips to avoid the
+// viewport edge (#7), but on a dense board no side is guaranteed clear -- and auto-placement cannot solve
+// that, because only the player knows which neighbours they are comparing against.
+// Four implementation notes, each a bug avoided:
+//   - POINTER EVENTS, not mouse events. One path covers mouse, touch and pen, and `setPointerCapture` keeps
+//     tracking when the cursor outruns the card or crosses the canvas underneath.
+//   - OFFSET-BASED, not delta-accumulating, so the card never slides relative to the cursor over a long drag
+//     the way accumulated deltas do once a frame is dropped.
+//   - THE OFFSET RESETS on re-anchor -- a dragged position is a statement about one hex's surroundings.
+//     Keyed on the anchor coordinates rather than `(q, r)`, so it also resets when the board is panned.
+//   - CLAMPED so the card can never be dragged fully off-screen, which would strand its close button. The
+//     clamp keeps the WHOLE card inside the viewport -- one that is 90% off-screen is not recoverable.
 
 interface DragOffset {
   dx: number;
@@ -398,32 +214,19 @@ interface TileGroup {
   tileId: number;
   orientations: number[];
   tier: TileColorTier | null;
-  /** The tile's own PRINTED revenue, from the shared catalog mirror's
-   *  `TileCatalogEntry.revenue` -- design note #9.
-   *
-   *  `null` for plain track (most Yellow tiles have no revenue at all), and
-   *  also `null` for an id the mirror has not caught up to. Those two cases
-   *  are deliberately NOT distinguished in the UI: rendering "0" for a
-   *  track tile would be wrong, and rendering "?" for a catalog gap would
-   *  be noise, so both simply show no badge. */
+  /** The tile's own PRINTED revenue, from the shared catalog mirror -- design note #9. `null` for plain track
+   *  and also `null` for an id the mirror has not caught up to, and the two are deliberately NOT distinguished
+   *  in the UI: rendering "0" for a track tile would be wrong and "?" for a catalog gap would be noise, so
+   *  both simply show no badge. */
   revenue: number | null;
 }
 
-/** Groups `placements` by `tile_id`, sorting each tile's legal orientations
- *  ascending purely for a stable, predictable initial selection (index 0)
- *  when a tile is first chosen from the carousel -- see design note #2:
- *  every orientation in the group is an equally real, submittable choice
- *  now, not just index 0.
- *
- *  Design note #5: groups are ordered by COLOUR TIER first (Yellow, then
- *  Green, then Brown -- the order a hex is really upgraded through), and
- *  only then by tray number within a tier. Under the old synthetic ids a
- *  plain ascending numeric sort happened to produce roughly that order for
- *  free, because the ids were allocated tier by tier. Real 1830 tray
- *  numbers carry no such guarantee -- Yellow #55-#58 and #69 sort above
- *  Green #14-#29, and Brown #39-#47 sort below both -- so an ascending sort
- *  now interleaves the eras arbitrarily. The tier is read from the single
- *  shared catalog mirror; this file keeps no tile table of its own. */
+/** Groups placements by `tile_id`, sorting each tile's orientations ascending purely for a stable initial
+ *  selection -- design note #2: every orientation is an equally real, submittable choice now.
+ *  Design note #5: groups are ordered by COLOUR TIER first, then tray number within a tier. Under the old
+ *  synthetic ids an ascending numeric sort happened to produce that order for free; real 1830 tray numbers
+ *  carry no such guarantee -- Yellow #55-#58 sort above Green #14-#29 and Brown #39-#47 below both -- so an
+ *  ascending sort now interleaves the eras arbitrarily. The tier is read from the single shared mirror. */
 function groupPlacementsByTile(
   placements: readonly LegalTilePlacement[],
 ): ReadonlyArray<TileGroup> {
@@ -477,13 +280,9 @@ export function TileSelectionPopup({
 }: TileSelectionPopupProps) {
   const { execGameplay, sessionStatus } = useGameSession();
 
-  // Design note #162: the sandbox legality narrowing and the empty-tray
-  // explanation that used to sit here are GONE, along with this component's
-  // rendering. `RadialTileSelector` owns both now, and this file is retained
-  // unrendered only until the radial path has been exercised against a live
-  // chain. Keeping a second, diverging copy of the filter wired up to a
-  // component nothing mounts would be the drift hazard, not insurance
-  // against it.
+  // Design note #162: the sandbox legality narrowing and the empty-tray explanation that sat here are GONE,
+  // along with this component's rendering. `RadialTileSelector` owns both now. Keeping a second, diverging
+  // copy of the filter wired up to a component nothing mounts would be the drift hazard, not insurance.
   const allGroups = useMemo(() => groupPlacementsByTile(placements), [placements]);
 
   // The era tab strip's filter (design note #8), unchanged. `groups` is what
@@ -519,10 +318,8 @@ export function TileSelectionPopup({
     } else {
       onPreviewChange(null);
     }
-    // Intentionally omitting `onPreviewChange` from deps -- App.tsx passes
-    // a fresh inline setter each render, and depending on it would refire
-    // this effect (and thus re-set the same preview) every render for no
-    // reason.
+    // Intentionally omitting `onPreviewChange` from deps -- `App.tsx` passes a fresh inline setter each render,
+    // and depending on it would refire this effect every render for no reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTileId, selectedOrientation, q, r]);
 
@@ -533,12 +330,9 @@ export function TileSelectionPopup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Design note #7: keep the selected tile scrolled into view in the single
-  // row. Matters most in offline Brown era, where the row holds all 46
-  // catalog tiles and the initial selection (#1, a Yellow tile) is at the
-  // far left while a keyboard user arrowing through can easily walk the
-  // selection off the right-hand edge. `block: "nearest"` so this never
-  // scrolls the PAGE, only the row's own overflow container.
+  // Design note #7: keep the selected tile scrolled into view in the single row. Matters most offline in the
+  // Brown era, where the row holds all 46 catalog tiles and a keyboard user can walk the selection off the
+  // right-hand edge. `block: "nearest"` so this never scrolls the PAGE, only the row's own container.
   const tileButtonRefs = useRef(new Map<number, HTMLButtonElement>());
   useEffect(() => {
     if (selectedTileId === null) return;
@@ -547,26 +341,17 @@ export function TileSelectionPopup({
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [selectedTileId]);
 
-  // Design note #7: single click selects. The `tileId === selectedTileId`
-  // early return is what makes double-click-to-rotate work at all, and is
-  // easy to delete by accident, so: a double click dispatches `click`,
-  // `click`, THEN `dblclick`. If selecting always reset `orientationIndex`
-  // to 0, those two leading clicks would zero the rotation a beat before
-  // `dblclick` advanced it, so every double click would land on index 1 and
-  // the tile would appear stuck one step from home no matter how many times
-  // it was rotated. Resetting only on a genuine tile CHANGE fixes that.
-  //
-  // Note what this does NOT do: `orientationIndex` is one shared value, not
-  // a per-tile map, so switching to a different tile and back restarts that
-  // tile at its first legal orientation rather than restoring where you left
-  // it. That is deliberate for now -- predictable, and it keeps the rotation
-  // state a single number -- but it is the obvious next step if players ask
-  // to compare two part-rotated tiles side by side.
-  // Design note #8: switching era tabs can hide whatever was selected. Pull
-  // the selection back to the first visible tile rather than leaving it
-  // dangling -- a stale `selectedTileId` would blank the footer readout and
-  // strand a ghost preview on a board hex the player can no longer see the
-  // tile for.
+  // Design note #7: single click selects. The `tileId === selectedTileId` early return is what makes
+  // double-click-to-rotate work at all, and is easy to delete by accident: a double click dispatches `click`,
+  // `click`, THEN `dblclick`, so if selecting always reset the rotation those two leading clicks would zero
+  // it a beat before `dblclick` advanced it -- every double click would land on index 1 and the tile would
+  // appear stuck one step from home. Resetting only on a genuine tile CHANGE fixes that.
+  // What this does NOT do: the orientation index is one shared value, not a per-tile map, so switching tiles
+  // and back restarts at the first legal orientation. Deliberate for now, and the obvious next step if
+  // players ask to compare two part-rotated tiles side by side.
+  // Design note #8: switching era tabs can hide the selection, so it is pulled back to the first visible tile
+  // -- a stale id would blank the footer readout and strand a ghost preview on a hex the player can no longer
+  // see the tile for.
   useEffect(() => {
     if (groups.length === 0) return;
     if (groups.some((group) => group.tileId === selectedTileId)) return;
@@ -590,11 +375,9 @@ export function TileSelectionPopup({
     if (!group) return;
     setDispatchState({ status: "idle" });
     if (tileId !== selectedTileId) {
-      // A double click that landed on a tile which wasn't selected. In
-      // practice React has already processed the two leading `click`s and
-      // re-rendered by now, so this is a rare-but-real ordering guard
-      // rather than the usual path: select it AND take the first rotation
-      // step, so the gesture always visibly does something.
+      // A double click that landed on a tile which was not selected. In practice React has already processed the
+      // two leading clicks and re-rendered, so this is a rare-but-real ordering guard rather than the usual path:
+      // select it AND take the first rotation step, so the gesture always visibly does something.
       setSelectedTileId(tileId);
       setOrientationIndex(1 % group.orientations.length);
       return;
@@ -604,14 +387,9 @@ export function TileSelectionPopup({
   };
 
   const handleConfirmPlacement = async () => {
-    // ---- Sandbox: apply locally and stop. Deliberately BEFORE the offline
-    // hard stop below, and deliberately never touching `execGameplay`.
-    //
-    // Requirement: a sandbox confirm must not await a wallet promise that
-    // can only reject. There is no session, no signer and no chain, so
-    // calling the dispatch path would hang on a request nobody can answer
-    // and then surface a Keplr error for a game that is not on a chain. The
-    // local callback is synchronous and the popup closes on the spot.
+    // Sandbox: apply locally and stop. Deliberately BEFORE the offline hard stop below, and deliberately never
+    // touching `execGameplay` -- there is no session, no signer and no chain, so calling the dispatch path would
+    // hang on a request nobody can answer and then surface a wallet error for a game that is not on a chain.
     if (sandbox) {
       if (selectedTileId === null || selectedOrientation === null) return;
       onSandboxLay?.({ tileId: selectedTileId, orientation: selectedOrientation });
@@ -619,15 +397,10 @@ export function TileSelectionPopup({
       return;
     }
 
-    // Design note #6: a hard stop, not merely a disabled button. The button
-    // below is already disabled in offline mode, but this path is what
-    // actually guarantees an unvalidated, locally-invented placement can
-    // never reach `execGameplay` -- there is no contract behind these tiles
-    // to have approved them, and `hexmap::execute_lay_tile` would reject
-    // most of them outright.
-    //
-    // Still reached by a NON-sandbox offline popup (a spectator, or a
-    // dropped RPC), which is exactly who it was written for.
+    // Design note #6: a hard stop, not merely a disabled button. The button below is already disabled offline,
+    // but this path is what guarantees an unvalidated, locally-invented placement can never reach
+    // `execGameplay` -- there is no contract behind these tiles to have approved them.
+    // Still reached by a NON-sandbox offline popup (a spectator, or a dropped RPC), which is who it is for.
     if (offline) return;
     if (selectedTileId === null || selectedOrientation === null || sessionStatus !== "ready") {
       return;
@@ -669,17 +442,11 @@ export function TileSelectionPopup({
     }
   };
 
-  // Design note #7: smart positioning for a card that is now ~3x wider than
-  // the one the original clamp was written for.
-  //
-  // The old version clamped `anchorClient* + 16` against a hardcoded 280x420
-  // and read `window.inner*` during render, which was fine for a small card
-  // and is not for a wide one: at 900px a card anchored right of a click
-  // past mid-screen would previously have been shoved hard against the right
-  // edge, sliding it far from the hex it belongs to. So instead of only
-  // clamping, this FLIPS to the other side of the cursor when the preferred
-  // side doesn't fit, and only clamps as a last resort -- which keeps the
-  // card near the click, the whole reason design note #3 anchors it there.
+  // Design note #7: smart positioning for a card ~3x wider than the one the original clamp was written for.
+  // The old version clamped against a hardcoded size and read `window.inner*` during render, which was fine
+  // for a small card and is not for a wide one: at 900px a card anchored right of a click past mid-screen
+  // would be shoved against the right edge, sliding it far from the hex it belongs to. So it FLIPS to the
+  // other side of the cursor when the preferred side does not fit, and only clamps as a last resort.
   const viewport = useViewportSize();
   // Design note #9: 900 -> 1040. The tiles inside grew from 104px to 150px
   // and each gained a revenue badge, so the row needs more width to still
@@ -690,14 +457,11 @@ export function TileSelectionPopup({
   // Never wider than the viewport allows; on a narrow window this collapses
   // gracefully to "almost full width" without any breakpoint logic.
   const cardWidth = Math.min(CARD_MAX_WIDTH, viewport.width - VIEWPORT_MARGIN * 2);
-  // Height is content-driven (one row, not a scrolling list), so this is
-  // only the reservation used for flip decisions -- the card itself is
-  // capped by `maxHeight` below and will usually be shorter.
-  // Design note #9: raised alongside the tile upscale (104 -> 150px artwork
-  // plus a larger type scale throughout). This drives the flip-above/below
-  // decision, so leaving it at the old value would have had the card decide
-  // it fits below the cursor when it no longer does, and open with its
-  // footer -- and therefore its Confirm button -- past the bottom edge.
+  // Height is content-driven, so this is only the reservation used for flip decisions -- the card itself is
+  // capped by `maxHeight` and will usually be shorter.
+  // Design note #9: raised alongside the tile upscale. This drives the flip-above/below decision, so leaving
+  // it at the old value would have had the card decide it fits below the cursor when it no longer does, and
+  // open with its Confirm button past the bottom edge.
   const CARD_HEIGHT_ESTIMATE = offline ? 470 : 410;
 
   const fitsRight = anchorClientX + CURSOR_GAP + cardWidth <= viewport.width - VIEWPORT_MARGIN;
@@ -721,13 +485,9 @@ export function TileSelectionPopup({
     Math.max(VIEWPORT_MARGIN, viewport.height - CARD_HEIGHT_ESTIMATE - VIEWPORT_MARGIN),
   );
 
-  /* ---- Drag -- design note #10 ---------------------------------------- */
-  //
-  // Applied ON TOP of the auto-placement above rather than replacing it:
-  // the card still opens next to the hex you clicked, and dragging moves it
-  // from there. Re-anchoring resets the offset (see the hook), so the two
-  // systems never fight -- auto-placement decides where it OPENS, the drag
-  // decides where it SITS.
+  // Drag -- design note #10. Applied ON TOP of the auto-placement rather than replacing it: the card still
+  // opens next to the hex you clicked and dragging moves it from there. Re-anchoring resets the offset, so
+  // the two never fight -- auto-placement decides where it OPENS, the drag decides where it SITS.
   const drag = useDraggableCard(`${anchorClientX}:${anchorClientY}`);
 
   // Clamped so the whole card stays on screen. Without this a drag could
@@ -759,13 +519,10 @@ export function TileSelectionPopup({
       dispatchState.status === "pending";
 
   const tileCount = groups.length;
-  // Design note #9: `rotationHint` is REMOVED, not merely unrendered. It
-  // said "Double-click a tile to rotate it" / "This tile has only one legal
-  // rotation" -- both of which are now stated closer to where they matter:
-  // the gesture by the permanent header legend, and the per-tile rotation
-  // state by each tile's own "↻ 1/3" / "• fixed" readout. Keeping the
-  // variable around unused would leave the next reader wondering which of
-  // the three the real one is.
+  // Design note #9: `rotationHint` is REMOVED, not merely unrendered. Both of its strings are now stated
+  // closer to where they matter -- the gesture by the permanent header legend, the per-tile rotation state by
+  // each tile's own readout. Keeping the variable around unused would leave the next reader wondering which
+  // of the three is the real one.
 
   return (
     <div
@@ -961,14 +718,10 @@ export function TileSelectionPopup({
         </div>
       ) : (
         <div style={{ padding: "14px 18px 6px", minHeight: 0 }}>
-          {/* Design note #9: the old two-item caption row is down to one
-              item. `rotationHint` ("Double-click a tile to rotate it" /
-              "This tile has only one legal rotation") was removed as
-              redundant clutter -- the header legend already states the
-              double-click gesture permanently, and the per-tile rotation
-              readout below already shows "1/3" or "fixed", which says the
-              same thing about the specific tile in the place you are
-              looking. Three statements of one fact is two too many. */}
+          {/* Design note #9: the old two-item caption row is down to one. `rotationHint` was removed as redundant
+             clutter -- the header legend already states the double-click gesture permanently, and the per-tile
+             readout already shows "1/3" or "fixed" in the place you are looking. Three statements of one fact is two
+             too many. */}
           <div style={{ marginBottom: 12 }}>
             <span style={{ fontSize: FONT_SIZE.control, opacity: 0.85 }}>
               {/* Design note #6: "Catalog tiles" offline, never "Legal". */}
@@ -1060,11 +813,9 @@ export function TileSelectionPopup({
                     userSelect: "none",
                   }}
                 >
-                  {/* Design note #9: 104px -> 150px (originally 56px). The
-                      artwork IS the content of this picker -- everything
-                      else on the card is a label for it -- so it gets the
-                      space. At 150px the track geometry of a #57 vs a #9 is
-                      distinguishable without leaning in. */}
+                  {/* Design note #9: 104px -> 150px (originally 56px). The artwork IS the content of this picker --
+                     everything else on the card is a label for it -- so it gets the space. At 150px the track geometry of a
+                     #57 versus a #9 is distinguishable without leaning in. */}
                   <div style={{ position: "relative" }}>
                     <TilePreviewThumbnail
                       tileId={group.tileId}
@@ -1073,18 +824,11 @@ export function TileSelectionPopup({
                       hexSize={64}
                     />
 
-                    {/* Design note #9: REVENUE, the number that actually
-                        decides which tile you want, overlaid on the artwork
-                        rather than listed underneath it. Placement is the
-                        point: revenue is a property OF the tile, and a
-                        player scanning the row compares artwork, so the
-                        figure has to live where their eye already is. Gold
-                        on near-black is the highest-contrast pairing on
-                        this card and is used for nothing else, so the
-                        numbers read as a set at a glance.
-
-                        Absent for plain track -- see `TileGroup.revenue`
-                        for why no badge beats a "0". */}
+                    {/* Design note #9: REVENUE, the number that actually decides which tile you want, overlaid on the artwork
+                       rather than listed underneath. Placement is the point: revenue is a property OF the tile, and a player
+                       scanning the row compares artwork, so the figure has to live where their eye already is. Gold on
+                       near-black is the highest-contrast pairing on this card and is used for nothing else.
+                       Absent for plain track -- see the group's own note for why no badge beats a "0". */}
                     {group.revenue !== null && (
                       <span
                         title={`Printed revenue: ${group.revenue}`}

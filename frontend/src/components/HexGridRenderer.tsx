@@ -2211,14 +2211,9 @@ export function HexGridRenderer({
       }}
       className={className}
     >
-      {/* Design note #25: the map canvas is once again the direct, single
-          child here -- no nested wrapper div. Design notes #20/#23/#24's DOM
-          overlay/frame detour is gone entirely: the row/column margin
-          labels are now drawn NATIVELY on the canvas itself (see
-          `drawBoardMarginLabels`, called at the end of `draw()`'s
-          world-space pass), so there's no longer any separate DOM element
-          that needs to be sized or positioned relative to the canvas at
-          all. */}
+      {/* Design note #25: the map canvas is the direct, single child again. The DOM overlay/frame detour of
+         #20/#23/#24 is gone -- the row/column margin labels are drawn NATIVELY on the canvas (see
+         `drawBoardMarginLabels`), so no separate DOM element needs sizing against the canvas at all. */}
       <canvas
         ref={canvasRef}
         style={{
@@ -2240,25 +2235,15 @@ export function HexGridRenderer({
         onPointerLeave={handlePointerLeave}
         onWheel={handleWheel}
       />
-      {/* Active coordinate + value hover tooltip -- see design note #21,
-          enriched by design note #26/item 2 (drops the old "Hovering: "
-          prefix so the on-screen text matches that item's own literal
-          "G19: New York (Value: $20)" example exactly). Positioned with
-          plain `position: fixed` viewport coordinates (not relative to
-          this wrapper), so it tracks the raw cursor position exactly.
-          Design note #75: ADAPTIVE QUADRANT, mirroring `drawOffboardTooltip`
-          -- reported, this always anchored down-right of the cursor
-          regardless of room, running off the panel for hexes near its
-          right/bottom edge (Boston, Fall River). `preferLeft`/`preferAbove`
-          (computed in `handlePointerMove` from the cursor's position within
-          the canvas's own panel) flip which corner of the tooltip sits at
-          the cursor, using `right`/`bottom` (viewport-anchored, same as
-          `left`/`top`) instead of just always growing down-right. */}
-      {/* Design note #505: gated at the RENDER, not only at the three places
-          that set it. "A picker owns this hex, so nothing else annotates it"
-          is then true by construction -- a future fourth path to setting the
-          label cannot reintroduce the pop-over-the-ring bug, because there is
-          nowhere left for it to appear. */}
+      {/* Coordinate + value hover tooltip -- design note #21, enriched by #26/item 2 (drops the "Hovering: "
+         prefix so the text matches the specified format literally). Plain `position: fixed` viewport coordinates
+         rather than relative to this wrapper, so it tracks the raw cursor exactly.
+         Design note #75: ADAPTIVE QUADRANT, mirroring `drawOffboardTooltip`. It always anchored down-right
+         regardless of room, running off the panel for hexes near the right/bottom edge (Boston, Fall River).
+         `preferLeft`/`preferAbove` flip which corner sits at the cursor, using `right`/`bottom` instead. */}
+      {/* Design note #505: gated at the RENDER, not only at the three places that set it. "A picker owns this
+         hex, so nothing else annotates it" is then true by construction -- a future fourth path cannot
+         reintroduce the pop-over-the-ring bug, because there is nowhere left for it to appear. */}
       {hoveredCoordLabel && !suppressHoverTooltip && (
         <div
           style={{

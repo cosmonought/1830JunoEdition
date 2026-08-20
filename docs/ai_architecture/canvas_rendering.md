@@ -1561,3 +1561,377 @@ where the note is discussed inside a combined section rather than under its own 
 | `HexGridRenderer.tsx #585` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #585 — Slot rings are for home stations only |
 | `HexGridRenderer.tsx #588` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #588 — The veil was painting over the tokens |
 | `HexGridRenderer.tsx #608` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #608 — Floating is not placing |
+
+---
+
+# The in-situ radial tile picker — `RadialTileSelector.tsx`
+
+Candidate tiles arranged around the hex you clicked, in the 18xx.games idiom.
+
+### RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas
+A deliberate split, not an inconsistency.
+**The preview is canvas.** A chosen candidate is drawn onto the board through the renderer's existing
+`previewTile` path — at the real hex, the real zoom, the real palette, with the real neighbouring track
+either side. **That is the entire point of an in-situ picker: you are judging whether the tile FITS, and
+a thumbnail in a panel cannot answer that question no matter how accurate it is.**
+**The ring is DOM.** Drawing the candidates into the canvas would mean hand-rolling hit-testing, hover,
+focus, keyboard traversal and disabled states the platform already provides correctly — **and getting one
+of them subtly wrong is how a picker becomes unusable with a trackpad or unreachable without a mouse.**
+Each candidate still renders its REAL artwork, because the thumbnail is itself a canvas drawn from the
+same catalog the board uses; **there is no second, diverging illustration of a tile anywhere.**
+
+### RadialTileSelector.tsx #1 — Anchored to the board, not to the viewport
+The anchor was the click's raw `clientX`/`clientY`, frozen and rendered `position: fixed`. **Fixed
+positioning is relative to the VIEWPORT, so the instant the page scrolled, the board slid away underneath
+a ring that stayed exactly where it was.**
+What is stored now is the click's offset **inside the canvas** — a board coordinate — and the on-screen
+position is recomputed from the canvas's bounding rect whenever anything could have moved it: scroll
+(**captured, so ancestor scroll containers count too**) and resize.
+**Still not followed: pan and zoom of the board itself.** Those move the hex *within* the canvas, which
+this offset cannot see; correcting for them needs the renderer's live transform, not just its rect. **The
+ring is a short-lived interaction and panning mid-pick is not a flow anyone is in, so this is left as a
+stated limitation rather than a hidden one.** (`#506` later solves the SIZING half of the same unit
+problem.)
+
+### RadialTileSelector.tsx #2 — Two stages, one overlay
+**CHOOSING** — no tile picked. The ring is visible; the only other control is a dismiss X, because there
+is nothing yet to confirm or revert.
+**PREVIEWING** — a tile is on the hex. The ring is hidden (**it would sit on top of the very thing you are
+now judging**) and the two floating action buttons appear above the hex.
+**The X means different things in the two stages, and that is intentional rather than sloppy:** while
+choosing it dismisses, while previewing it steps BACK to the ring. **One escape control that always undoes
+exactly one step is easier to trust than two that each undo a different amount.**
+
+### RadialTileSelector.tsx #174 — The radius is solved for, not picked
+The ring used two fixed radii with a fixed capacity of 8 per ring. **Fixed capacity at a fixed radius is
+the overlap bug:** at eight items the thumbnails already sit about 80px apart centre to centre, and any
+hex offering more than eight packed them tighter still because the second ring only opened at nine.
+**The relationship is geometric, so it can be solved rather than tuned.** N items evenly spaced on a
+circle of radius R sit `2 · R · sin(π / N)` apart, so requiring that to clear the thumbnail plus a gutter
+gives `R ≥ needed / (2 · sin(π / N))`. **The radius grows exactly as fast as the count demands and no
+faster** — three candidates stay in a tight ring, twelve open out, with no capacity cliff between them.
+A minimum radius keeps a small ring clear of the hex and of the action buttons; the `sin` term takes over
+from about five candidates on. **`N = 1` and `N = 2` are special-cased because `sin(π/1)` is 0 (a division
+by zero) and `sin(π/2)` is 1 (a needlessly wide ring for two items opposite each other).**
+
+### RadialTileSelector.tsx #506 — The ring was measured in the wrong unit
+**Reported:** the candidate tiles are too small and overlap the central hex they are meant to replace.
+**Both symptoms are one cause, and this file's own header already named it** as a known limitation. The
+ring is positioned and sized in fixed CSS pixels; the hex is drawn at `hexSize · zoom`. **So every
+constant here was calibrated against a hex of one particular on-screen size, and is wrong by exactly the
+zoom factor at any other.**
+**The arithmetic.** `DEFAULT_HEX_SIZE` is 42 — a centre-to-corner radius, so an 84px-tall hex at zoom 1.
+`MIN_RADIUS` was 76, clearing a 42px radius by 34px. **At zoom 2 the hex has an 84px radius and
+`MIN_RADIUS` is still 76 — so the candidates are positioned INSIDE the hex they are replacing.** It is a
+unit error, not a tuning problem, **and it gets worse the further a player zooms in to make a dense area
+readable, which is exactly when they open this menu.** The same error shrinks the tiles: 54px against an
+84px hex is 64%, and against a 168px hex it is 32%.
+Both are now derived from the hex **as drawn**, via the live transform (`HexGridRenderer #506`). **Nothing
+here is tuned against a screenshot any more.** `null` keeps the old constants, so a caller without a
+radius degrades to the previous behaviour rather than collapsing the ring to zero.
+
+### RadialTileSelector.tsx #506a — A halo, solved rather than nudged
+The requirement is "absolutely zero overlap with the hex beneath" — **a guarantee, so it is computed
+rather than tuned:** `ringRadius ≥ hexRadiusPx + thumb/2 + RING_GAP`.
+**Both terms are the conservative extent, deliberately.** A pointy-top hex's distance from centre to edge
+varies between its apothem (0.866 R) and its full R at a vertex; using R for the central hex AND thumb/2
+for the candidate assumes both point their vertices straight at each other — **the worst case, and only
+actually true at two of the twelve positions. The cost is a few pixels of air at the other ten; the
+benefit is that the guarantee holds without anyone having to reason about relative hex orientation, which
+is the sort of reasoning that produces a bug at exactly one candidate count.**
+**It is a `Math.max` with the spacing term, not a replacement for it.** `#174` keeps candidates off EACH
+OTHER, this keeps them off the HEX; they bind in different regimes — clearance at low counts and high
+zoom, spacing at high counts — **so both are required and the larger wins.**
+
+### RadialTileSelector.tsx #471 / #174b — Sizing the candidates
+**#471 — bigger candidates.** 38px carried a whole hex's artwork at roughly the size of a favicon, and in
+a dense area — where the choice turns on which edges each tile connects — that is exactly where it failed.
+54px is a ~42% linear increase and **costs nothing in layout, because `#174` SOLVES the radius from this
+constant: the ring simply opens wider to keep the same spacing.** That is the whole reason it is a
+one-line change — the geometry was already parameterised on it.
+**#174b — sized for a 1080p board, not a 4K one.** The same property runs in reverse: 54 → 38 shrinks the
+ring proportionally and the spacing maths needs no edit. The confirm/cancel discs come down with it
+(44 → 34px, still clearing the ~24px minimum a pointer needs) — **44px was comfortable on a 4K panel and
+oversized on a 13" laptop, where it sat larger than the tile thumbnails it was confirming.**
+The candidate size is also a **ratio floor** against the central hex (at least 60% of its full height),
+taken as the larger of the ratio and an absolute pixel floor, **so zooming out cannot shrink a tile past
+legibility and zooming in cannot let it fall below the ratio.**
+
+### RadialTileSelector.tsx #200 — The confirm ring is its own component
+Placing a station token used to be instant: click a city, the treasury is charged, the token is on the
+board. **Laying a tile — the other thing a click on the map can mean, costing a comparable amount and just
+as irreversible — has always asked for a green check first. Two board interactions, two different
+contracts with the player, and the more expensive of the two was the one with no confirmation step.**
+The requirement was for the EXACT same red-X / green-check ring, **and "exact" is doing real work in that
+sentence: a second implementation with matching colours and sizes would drift the first time either was
+touched, and the divergence would be invisible in review because the two files would each look right on
+their own.**
+So the ring is **extracted rather than copied.** `RadialConfirmRing` owns the board-anchored positioning
+(`#1`), the outside-click and Escape dismissal, the two floating buttons and the caption pill;
+`RadialTileSelector` is a thin wrapper supplying candidate thumbnails as children, and the token flow
+supplies none. **There is one confirm ring in this app, and both callers get it by construction.**
+The token ring draws the piece being placed (`#462`): **the ring named the corporation in its caption and
+drew nothing, while its sibling has always previewed the TILE.** It is the token as the map draws it —
+livery fill, contrast ink, ticker, dark rim — centred so the question becomes "does that look right there"
+rather than "do I trust the label". `pointerEvents: none`, **or the centre becomes a dead zone.**
+
+### RadialTileSelector.tsx #168 — The backdrop must not swallow board clicks
+This was `position: fixed; inset: 0` with pointer events ON, to "catch the click that means somewhere
+else". **It caught every click, including the ones aimed at the board underneath — so clicking the
+previewed hex to rotate it never reached the canvas. It hit the backdrop, matched `target ===
+currentTarget`, and DISMISSED the selector instead. Rotation looked unresponsive; it was never being
+asked.**
+The backdrop is inert now and each interactive child opts back in. **The board stays live underneath,
+which is what an IN-SITU picker requires — the hex it is anchored to has to remain clickable, or the
+"click the tile to rotate" gesture cannot exist.**
+Dismissal moved to the three places that can each answer honestly: the X button (explicit close), a click
+on a DIFFERENT hex (**a new selection rather than a dismissal**), and the outside-pointerdown listener for
+a click off the board entirely.
+
+### RadialTileSelector.tsx #471 (the X) — Suppressed exactly where it is hidden and unnecessary
+**Reported:** remove the obscured red X — clicking away already closes it.
+The action row sits directly above the ring, and `#174` made the radius grow with the candidate count, **so
+at any useful count the 12 o'clock thumbnail rises to meet the buttons and the X ends up BEHIND a tile: a
+red control the player can see the edges of and cannot reliably hit.** It is also redundant there, since
+`onDismiss` closes on any outside click.
+**Not removed outright, because the X is not redundant everywhere.** While a tile is PREVIEWED it is half
+of a check/X pair, and the ring is hidden then (`#2`), so nothing overlaps it. The station-token ring is
+the same shape and the same argument.
+The floating buttons' offset **tracks the radius** — a fixed offset was correct only while the ring was
+fixed too.
+
+### RadialTileSelector.tsx #512 — Two captions, one of them saying nothing
+**Reported:** the selector produces two cluttering tooltips; remove the first entirely, truncate the second
+to exactly "Click the tile to rotate".
+**The choosing caption told the player what they had just done.** They clicked that hex, so its name and
+coordinates are the one thing they cannot be unsure of — **and "N options" counts tiles that are visibly
+arranged in a ring around the caption.** `#266` deleted the Auto-Route success message for exactly this
+reason: "every fact in it is now on screen as a fact rather than as a sentence about one."
+**The rotation caption keeps only its instruction.** The facing count was `#173`'s answer to a real problem
+(a tile with one legal facing makes "click to rotate" a lie) **but it solved it by making the player read a
+number to find out whether a gesture would do anything.** The tile is on the board and clicking it either
+turns or does not.
+**The element goes with the text, not just its content:** an empty positioned div still occupies its slot
+above the hex and still paints, so **rendering nothing is what actually removes the clutter.**
+The hex name leaves the VISIBLE caption but **not the accessible name** — a dialog needs one, and "which
+hex is this picker for" is exactly the question a screen-reader user cannot answer by glancing at the
+ring's position on the board.
+
+### RadialTileSelector.tsx #260 / #270 / #290 — A prop with no callers is the bug waiting to be re-enabled
+**#260:** the "(unvalidated)" caveat is gone. The distinction — local catalog versus
+`GetLegalTilePlacements` — is true and entirely internal; **to a player it read as a warning about the tile
+they were about to lay, and on the offline path EVERY candidate is local, so the tag was permanently
+present and never varied. A caveat that never changes carries no information; all it does is undermine
+confidence in a picker that is filtering correctly.** The flag stays on the interface because the caller
+still distinguishes the two sources for `canConfirm` and the Action Log.
+**#270:** the generic `tag` slot goes too. `#260` stopped passing the string and left the slot "in case a
+future caller wants an italic caveat"; nine chunks later nothing does, **and what the slot actually
+preserved was the ability to put that exact string back on the exact surface it was removed from.**
+**#290:** the token-migration caption is **not that slot returning under a new name.** `tag` was a
+formatting hook with no subject; this states one specific fact — what happens to the pieces already on the
+hex when the previewed tile lands. **The test the old slot failed is the one this passes: it has a caller,
+and the caller could not say this any other way.**
+
+### RadialTileSelector.tsx #271b / #488b — Which half of the split city your station ends up in
+The ring previews the TILE and said nothing about tokens standing on the hex it replaces. On an ordinary
+empty hex there is nothing to say; **on a president's own home city being split in two by an OO upgrade,
+the one thing they want to know is which half their station ends up in — and they were finding out by
+looking at the board afterwards.**
+**#488b draws the same answer on the tile, and the two MUST come from one computation** — otherwise the
+ring can say "city 2 of 2" while the marker sits on city 1. **That is the near-miss duplicate class TD-1
+catalogued, and a caption disagreeing with the artwork beside it is the version of it a player actually
+sees.**
+**A function of `tileId`, not a flat list,** because the destination depends on the candidate: the same
+token maps to city 0 of a one-city tile and city 1 of a two-city one, and the ring shows every candidate at
+once. Omitted, every thumbnail draws exactly what it drew before.
+
+### RadialTileSelector.tsx #628 / #629 — Scarcity, where the choice is made
+**#628:** `contract.rs` has always seeded a per-game tray from the printed 1830 quantities and decremented
+it as tiles are laid, **so this was enforced state the UI had never shown — a player could be refused a lay
+for a reason nothing on screen predicted.**
+**On the candidate rather than in a reference table**, because scarcity is only actionable at the moment of
+choosing: **"there are four #57s in the game" is trivia; "1 left" while you are picking between two tiles is
+the whole decision.** The badge appears **from two copies down** — a comfortable count on every thumbnail is
+noise that hides the one that matters.
+The count is a **lookup, not a table**: the ring shows a handful of tiles out of forty-six, and handing it
+the whole manifest would make this component a consumer of the catalog rather than of its caller.
+**`undefined` renders no counts at all; `null` from the lookup means the catalog does not carry that tile and
+is likewise silent — a mirror gap must not be displayed as a supply problem.**
+**#629 — an exhausted tile is not an option.** *Instructed:* grey it out. `#628` had left the candidate live,
+reasoning that the placement rules do not consult the tray and the contract is what refuses it. **True, and
+not a good experience: a control that looks available, accepts the click and produces a rejected transaction
+is the failure shape this codebase has removed repeatedly. The tray count is knowable BEFORE the click, so
+the refusal belongs before it too.**
+**Greyed and disabled, not hidden** — removing the thumbnail would leave a player wondering whether the tile
+was ever legal here, and "there are no more #57s" is often the reason a plan has to change. **Greyscale on
+top of the fade**, because tier colour is how a player reads the ring at speed: **a merely faint green tile
+still reads as an available green tile out of the corner of the eye.** The drop-shadow goes with the opacity
+— **a shadow at full strength under a faded thumbnail keeps it looking raised and clickable, which is the one
+impression this state has to undo.**
+**The derivation is not the authority:** the count reads the board rather than `REMAINING_TILES`, so this gate
+is the frontend's best answer. **It can only ever refuse a tile the contract would also refuse — both read the
+same arithmetic — and the contract still has the last word.**
+
+### RadialTileSelector.tsx #369 — The chrome was the other half of the rectangle
+`HexGridRenderer #368` fixed the artwork; **this is the half that was visible even once it was not.** A 10px
+rounded rectangle with a 2px border and an opaque fill, wrapped around a hexagonal tile: **six vertices of
+dark background showed at the corners and the eye read the CARD, not the tile.**
+The border was also redundant — the thumbnail already strokes the tile in the tier colour this border was set
+to, **so the ring carried two rims of one colour around two different shapes.** What remains is a transparent
+hit target: **the tile is its own chrome.**
+**#471 (no `title`):** a native tooltip on every thumbnail in a ring of eight means one follows the cursor
+continuously as the player sweeps the options, **covering the very tiles they are comparing.** The id is
+printed on the tile and its tier is its colour — both readable without hovering, which is what a chooser wants.
+
+---
+
+# The floating tile picker — `TileSelectionPopup.tsx`  *[unrendered since `App.tsx #162`]*
+
+Retained, unmounted, until the radial path has been exercised against a live chain. Its notes are kept
+because the flow they describe is the one the radial picker replaced.
+
+### TileSelectionPopup.tsx #1 — Self-contained dispatch, observer-only callback out
+This component calls `useGameSession().execGameplay` **itself** rather than asking `App.tsx` to dispatch on
+its behalf. `onDispatched` is an optional observer so the shell can fold the result into its Action Log
+**without this component needing to know that log exists.** (It is also why `App.tsx #23` must not *mount*
+it for a spectator — the central gate does not cover this path.)
+
+### TileSelectionPopup.tsx #2 — The rotation became a binding choice
+A prior pass was built against a contract with no `orientation` input at all: `execute_lay_tile` auto-picked
+the lowest legal rotation server-side, **so this popup could only ever preview rotations, never choose one,
+and said so in the UI.** That auto-pick has since been removed — **`orientation` is now a required message
+field and the contract commits exactly whichever rotation is submitted, rejecting it if that angle is not
+legal.** The rotation cycle is therefore real. (`#7` changed WHAT the gesture is — double-clicking the tile
+in the row — but not that it is binding.)
+
+### TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider
+**#3:** positioned from the click's own screen coordinates via `position: fixed`, clamped against the
+viewport edges. **This deliberately does NOT project the hex's on-canvas position through the pan/zoom
+transform a second time — the click's own coordinates are already exactly where the player just clicked,
+which is the more honest anchor.** A docked bottom bar and a centred modal were both considered and
+rejected: **the bar costs too much mouse travel on a large scrollable map, and the modal hides the very
+board you need to see while judging a rotation.**
+**#7 — the clamp became flip-aware.** At up to 900px, a card anchored right of a click past mid-screen
+would be shoved hard against the right edge, sliding it far from the hex it belongs to. **So it FLIPS to
+the other side of the cursor when the preferred side does not fit, and only clamps as a last resort.** The
+height reservation exists purely for that flip decision and was raised alongside the tile upscale —
+**leaving it at the old value would have had the card decide it fits below the cursor when it no longer
+does, and open with its Confirm button past the bottom edge.**
+The viewport size is **subscribed to**, not read during render: the old 280px card read `window.inner*`
+straight through and never listened for `resize`, **survivable when the card is narrow and not when
+`cardWidth` itself is derived from the viewport — a stale reading can leave the card wider than the window
+and hang its right-hand tiles off-screen with no way to scroll to them.**
+**#10 — dragging.** On a dense board there is no side guaranteed clear, **and auto-placement cannot solve
+that, because only the player knows which neighbours they are currently looking at.** Four implementation
+notes, each a bug avoided:
+
+1. **Pointer events, not mouse events** — one path covers mouse, touch and pen, and `setPointerCapture`
+   keeps tracking when the cursor outruns the card or crosses the canvas underneath.
+2. **Offset-based, not delta-accumulating** — the drag records where in the card you grabbed it, **so the
+   card never "slides" relative to the cursor over a long drag the way accumulated deltas do once a frame
+   is dropped.**
+3. **The offset resets when the popup re-anchors** — a dragged position is a statement about one hex's
+   surroundings. Keyed on the anchor coordinates rather than on `(q, r)` **so it also resets when the board
+   is panned under a re-opened popup.**
+4. **Clamped so it can never be dragged fully off-screen**, which would strand the close button somewhere
+   unreachable. The clamp keeps the *whole* card inside the viewport — **a card that is 90% off-screen is
+   not meaningfully recoverable.**
+
+Drag is applied ON TOP of auto-placement rather than replacing it: **auto-placement decides where it OPENS,
+the drag decides where it SITS.**
+
+### TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table
+The carousel only ever offers ids `GetLegalTilePlacements` returned, and Confirm sends exactly that id.
+**This component does not re-implement the contract's connectivity/terrain rules — that logic is nontrivial,
+already lives correctly on the contract, and duplicating it here would just be a second place for it to
+drift.**
+**#5 — why the real-tray-number overhaul cost this file almost nothing:** it has never held a tile-id table,
+a label map, an artwork switch, or any id literal at all. What the pass added is presentational and driven by
+the same single mirror: **the carousel groups by colour tier before tray number, because 46 real tray numbers
+are not contiguous and not tier-ordered** — a hex can offer #8 next to #57 — **so a bare ascending numeric
+list gave the player no signal about which era they were picking.**
+
+### TileSelectionPopup.tsx #6 / #8 — The picker without a chain, stated three times and blocked twice
+`offline` means these placements came from the local `TILE_CATALOG` mirror. **It exists so the picker still
+opens while developing against no backend, which it previously did not: with no client the click handler
+bailed before ever reporting a state, so this popup never mounted at all.**
+**`#4`'s invariant is not relaxed here, it is made visible.** An offline tray is filtered by **nothing at
+all** as of `#8` — not even by era — **so most of what it shows would be rejected outright by
+`execute_lay_tile`. Presenting that silently, in a UI otherwise identical to the authoritative one, would be
+the worst outcome available: it looks exactly like a legality answer while being nothing of the kind.**
+So: a banner says what was and was not checked; the heading reads "Catalog tiles" rather than "Legal tiles";
+the rotation caption drops the word "legal". **`handleConfirmPlacement` returns immediately AND the button is
+disabled and relabelled — belt and braces, because the disabled attribute alone is a presentational guarantee
+and this needs a behavioural one.**
+**#8 — era tabs, offline only.** Reported: offline, the player was trapped in the Yellow tray. Two causes
+together — the fallback filtered the catalog to the room's era (twelve tiles of forty-six), and this popup had
+no way to ask for anything else. **Both fixed in the places they belong:** the fallback returns the whole
+catalog (`HexGridRenderer #125`), and **the browsing lives HERE as a view control the player can change, rather
+than as a filter upstream they cannot see or reach.**
+**Strictly gated on `offline`.** Online, every entry is genuinely legal for that hex — **an era tab would only
+let a player hide legal moves from themselves, and a hex mid-upgrade legitimately offers two eras at once, so
+hiding one would look like the picker was broken.** Hidden when only one era is present.
+
+### TileSelectionPopup.tsx (sandbox) — A narrower claim than `offline`
+`offline` means "no chain answered, so these tiles are unvalidated" — true in the sandbox too, and the
+provisional labelling stays on. **What `offline` ALSO meant, until this prop existed, was "there is nowhere
+for a placement to go", and that is no longer true: the sandbox has a local reducer that accepts the lay and
+repaints the board.**
+So `sandbox` re-enables Confirm and routes it to the local callback. **A plain `offline` popup — a spectator,
+or a dev whose RPC dropped — still hard-refuses, because for those two there genuinely is no destination and a
+placement would be a lie.**
+The sandbox branch sits **before** the offline hard stop and never touches `execGameplay`: **there is no
+session, no signer and no chain, so calling the dispatch path would hang on a request nobody can answer and
+then surface a wallet error for a game that is not on a chain.**
+
+### TileSelectionPopup.tsx #7 (interaction) — Single click selects, double click rotates
+**The one real trap:** a double click fires `click`, `click`, then `dblclick`. **If selecting always reset the
+orientation index, those two leading clicks would zero the rotation a beat before `dblclick` advanced it, so
+every double click would land on index 1 and the tile would appear stuck one step from home.** Resetting only
+on a genuine tile CHANGE is what makes the gesture work — **and the early return that does it is easy to delete
+by accident.**
+Because double-click is undiscoverable it is also stated in the header legend, in each tile's `title`, and as a
+live `↻ n/m` readout; **because it is unreachable by keyboard, `r` and `ArrowRight` do the same thing** (Enter
+and Space are left alone — the browser already turns those into a `click`, which selects).
+**What this does NOT do:** the orientation index is one shared value, not a per-tile map, so switching tiles and
+back restarts at the first legal orientation. **Deliberate for now — predictable, and it keeps the rotation state
+a single number — but it is the obvious next step if players ask to compare two part-rotated tiles.**
+A `dblclick` on an unselected tile selects it **and** takes the first rotation step, **so the gesture always
+visibly does something.**
+
+### TileSelectionPopup.tsx #9 — The artwork is the content
+104 → 150px (originally 56px): **everything else on the card is a label for the artwork, so it gets the space.
+At 150px the track geometry of a #57 versus a #9 is distinguishable without leaning in.**
+**Revenue is overlaid on the artwork rather than listed underneath.** Placement is the point: **revenue is a
+property OF the tile, and a player scanning the row compares artwork, so the figure has to live where their eye
+already is.** Gold on near-black is the highest-contrast pairing on the card and is used for nothing else, so
+the numbers read as a set at a glance. **Absent for plain track and absent for a catalog gap, deliberately not
+distinguished: rendering "0" for a track tile would be wrong and "?" for a gap would be noise, so both simply
+show no badge.**
+`rotationHint` is **removed, not merely unrendered** — the gesture is stated by the permanent header legend and
+the per-tile state by its own `↻ 1/3` / `• fixed` readout. **Keeping the variable around unused would leave the
+next reader wondering which of the three is the real one.**
+
+---
+
+## `HexGridRenderer.tsx` — render-tree notes (JSX residue)
+
+### HexGridRenderer.tsx #25 — The canvas is the direct, single child again
+The DOM overlay/frame detour of `#20`/`#23`/`#24` is gone entirely: **the row and column margin labels are drawn
+NATIVELY on the canvas** (in `draw()`'s world-space pass), so there is no separate DOM element that needs sizing
+or positioning relative to the canvas at all.
+
+### HexGridRenderer.tsx #21 / #26 / #75 — The hover tooltip, and the adaptive quadrant
+Positioned with plain `position: fixed` viewport coordinates rather than relative to the wrapper, **so it tracks
+the raw cursor exactly.** `#26` drops the "Hovering: " prefix so the on-screen text matches the specified format
+literally.
+**#75 — reported:** it always anchored down-right of the cursor regardless of room, running off the panel for
+hexes near the right or bottom edge (Boston, Fall River). **`preferLeft`/`preferAbove` — computed from the
+cursor's position within the canvas's own panel — flip which corner of the tooltip sits at the cursor**, using
+`right`/`bottom` (viewport-anchored, same as `left`/`top`) instead of always growing down-right. Mirrors
+`drawOffboardTooltip`.
+
+### HexGridRenderer.tsx #505 — Gated at the render, not only where it is set
+"A picker owns this hex, so nothing else annotates it" **is true by construction now** — a future fourth path to
+setting the label cannot reintroduce the pop-over-the-ring bug, **because there is nowhere left for it to
+appear.**

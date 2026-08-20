@@ -1058,3 +1058,369 @@ whether it had reached you — and "no passes yet" was a whole clause spent sayi
 The PASSED stamps on the action bar **are** that count, drawn on the seats it is about.
 `consecutive_waterfall_passes` is still read, by `App.tsx #610`'s `passedSeats`. **The figure did not
 stop mattering; it stopped being prose.**
+
+---
+
+# The Buy Trains panel — `TrainPurchasePanel.tsx`
+
+### TrainPurchasePanel.tsx #0 — Why bank and corporation are not one control
+A corporation in the Hardware sub-phase can acquire a train two ways, **and they are different transactions
+in every respect that matters:**
+
+| | |
+|---|---|
+| **From the bank depot** | fixed price, finite printed supply, strict cheapest-first queue, and a purchase that can END THE PHASE — buying the depot's last 3-train launches Phase 4 and rusts every 2-train on the board. **Nobody consents; the bank always sells.** |
+| **From another corporation** | any price of $1 or more, no supply question, no phase advance and no rusting — **and a counterparty who has to agree**, unless one player presides over both. |
+
+The old arrangement put the corporate offer form under one heading and the depot purchase in a separate tray
+elsewhere on the page, **so the two halves of one decision were never on screen together.** This is one panel
+with two sections, **and the corporate half is COLLAPSED by default because the bank is the ordinary case and
+a trade is the exception.**
+
+### TrainPurchasePanel.tsx #1 — The quantity field is a convenience, not a batch
+`BuyHardwareFromPool` carries no quantity, **so "buy 3" is three sequential messages** — exactly as the Stock
+Round's multi-buy is N sequential `BuyStock`s (`App.tsx #42`), **and for the same reason: firing them in
+parallel would race the depot's own accounting and could leave a corporation having bought fewer trains than
+the log claims.**
+The cap is `min(depot supply, train limit − owned)` and the control **LISTS it rather than validating against
+it** — a `<select>` whose options are exactly the buyable quantities, **so there is nothing to type and nothing
+to reject.**
+**One tier per submission, deliberately.** 1830's depot is a strict queue — only the cheapest tier in stock is
+purchasable — **so a player who wants a 3-train and a 4-train is describing two separate situations separated
+by a phase change, not one order. The panel says so rather than offering a basket that cannot exist.**
+
+### TrainPurchasePanel.tsx #2 / #282 — A train badge is the whole interaction
+Composing a trade used to mean three dropdowns. **The middle one was the problem:** it listed all six models
+whether or not the seller owned any, **so the commonest question ("who has a 4-train I could buy?") was
+answered by opening six dropdowns one seller at a time.** The roster now shows every corporation's actual
+trains as clickable badges — **the question is answered by looking, and clicking the answer IS the selection.**
+**#282 — one badge per train, not a count.** They were grouped, a single "3" badge wearing an "×2". **Compact,
+and wrong for what this row is: a rack of things to click.** A count is a summary, and a summary is right when
+the reader wants HOW MANY; **here the reader wants WHICH, because each badge is an offer about one specific
+train. "3 ×2" makes the player do arithmetic to learn that two separate purchases are available, and it renders
+two purchasable objects as one object with a footnote.** It also mismatched the fleet everywhere else — the
+corporation table has always drawn one chip per train, **so the same roster read "3 3" there and "3 ×2" here.**
+`position` indexes into the seller's `owned_trains` **purely so the badge the player clicked is the badge that
+looks selected** — the dispatch names only the model, since one 3-train is interchangeable with another.
+
+### TrainPurchasePanel.tsx #3 — One train per trade
+`BuyTrainFromCorporation` names a single model and no count, and `train_trade.rs` records one offer at a time
+per buyer. **A multi-train trade would therefore be several offers, each separately acceptable — which is a
+negotiation the contract cannot express and this panel will not pretend to.** The limit is **stated in the UI
+rather than merely enforced, so a player planning a two-train deal finds out before composing it.**
+
+### TrainPurchasePanel.tsx #230 — The train limit is a second, tighter ceiling
+**Reported:** the Buy Trains action lets a corporation exceed its maximum train limit.
+The panel capped quantity at the DEPOT'S SUPPLY and nothing else. **1830 caps holdings per corporation by
+PHASE — four through Phases 2–3, three in Phase 4, two from Phase 5 — and the depot data already reports that
+figure. It was being displayed and not enforced, which is the worst of both: the number was on screen while the
+control ignored it.**
+**The binding ceiling is whichever is smaller**, and the message names whichever one bit.
+**Zero headroom is its own state, not a quantity error.** "Enter a number between 1 and 0" is nonsense; **"Train
+limit reached" is the actual situation, and it is a reason to move on rather than to retype.**
+
+### TrainPurchasePanel.tsx #296 — The number was already in the future tense
+**Reported:** the train-limit readout shows the limit that will apply AFTER the purchase, labelled as though it
+were the current one. A previous pass renamed it "Corp train limit", which fixed a different confusion and left
+this one — **arguably made it worse, since a more confident label on a wrong-tense number is a more convincing
+wrong answer.**
+**The bug is in the VALUE, not only the words.** It read `nextTier.trainLimit`, and that field means "trains one
+corporation may hold ONCE THIS TIER IS THE CURRENT PHASE" — **and the next tier is not the current phase whenever
+the depot has moved on. In Phase 3 with the 2s and 3s sold out, the panel read "/ 3" while the real limit was 4.
+Measured on the real fixture before this note was written.**
+Both figures are now derived and named: the phase the corporation is in **right now**, and the phase the next
+purchase **brings**. They are equal on the ordinary purchase and differ on exactly the purchase that advances the
+phase — **which is the one worth warning about**, and it is amber on **both** the label and the value, because
+**an amber number under a grey "Current Train Limit" would be the same wrong reading in a different colour.**
+Amber rather than red: **the ceiling is moving, which is a consequence to plan around, not an error.**
+**Enforcement stays on the after-value, deliberately:** buying the first 4-train starts Phase 4 and the limit
+drops with it, **so capping against the old one would offer a quantity the rules take back.**
+
+### TrainPurchasePanel.tsx #219 — The cap moves while the field is sitting there
+**Clamping on keystroke is not enough on its own.** The depot's supply is derived from what every corporation
+owns, so it drops when ANY of them buys. Two ordinary sequences leave a stale number in the box: buying 2 of 3
+remaining trains, or another player's purchase landing on a poll while this panel is open.
+The submit guard catches both, **but a field showing a number the player cannot buy, next to a button that
+refuses it, reads as the UI being broken rather than as the depot having moved.**
+**Downward only.** A supply that grows (it cannot today, but a tier change shifts the cap) **must not silently
+raise a quantity the player typed — that would be the UI buying more than they asked for.**
+
+### TrainPurchasePanel.tsx #247 — A dropdown that lists what is buyable
+**Reported:** the depot shows 2 of 5 left, but 2 cannot be selected. **Both halves were true and it was not one
+bug.**
+**It was not a dropdown.** It was `<input type="number">` that silently CLAMPED: typing 2 against a ceiling of 1
+rewrote the field mid-keystroke, **which is indistinguishable from the control refusing to accept the digit —
+exactly how it was reported. A clamp is the right behaviour and the wrong affordance: it enforces a rule the
+player cannot see by undoing their input.**
+**The ceiling was often the train limit, not the depot.** The cap is `min(depot, limit − owned)`, **so the panel
+showed the depot's 2 and enforced the limit's 1 without ever mentioning the limit, and the two numbers on screen
+could not be reconciled.**
+A `<select>` fixes the first — nothing to type, nothing to clamp — and a named **binding ceiling** fixes the
+second. It **says nothing at all when neither cap is close**: a permanent explanation of a constraint nobody is
+hitting is noise.
+**#294 — two numbers, two subjects.** "Quantity" sat beside a "Trains 2 / 4" readout and the pair was routinely
+read as one thing. **They are facts about different subjects: one counts cardboard in the bank, the other caps a
+corporation's holdings this phase. Naming the subject on each is the whole fix — neither number was wrong, and
+neither said whose it was.** `#248` is why the limit is here at all: it explains why the quantity list stops
+where it does, **and it was only available on the Operating Round strip — a different panel from the one
+enforcing it.**
+
+### TrainPurchasePanel.tsx #281 — The limit is on holdings, not on the bank
+**Reported:** the UI permits buying from other corporations even at or over the train limit.
+**The shape of the miss is instructive:** `#230` had already enforced the cap on the BANK section thoroughly,
+and the corporate section a few hundred lines below shared none of it — **because the cap had been reasoned
+about as a property of buying FROM THE DEPOT rather than as a property of the corporation's fleet.**
+**1830 caps what a corporation may HOLD. Where the train comes from is irrelevant.** So the same gate covers
+both, **and the reason is the same sentence — it is the same rule, and giving it two wordings would imply two
+rules.**
+**It disables rather than hiding.** The rival's trains are still worth seeing: **knowing who holds what is what
+tells a president which rivals are themselves train-locked, and who might come asking to buy one of theirs. A
+vanished section would answer a question nobody asked by removing the one they did.**
+**#485:** the reason no longer ends "Scrap or sell a train before buying another." **A corporation cannot scrap,
+and the Bank does not buy trains back — the sentence instructed the player to take an action 1830 does not
+contain.** The genuine rule is the one above: **a full fleet cannot accept another train from any source. That
+is a lock, not a prerequisite, and it clears only when a rival corporation chooses to buy.**
+
+### TrainPurchasePanel.tsx #232 — Only list corporations that have something to sell
+**Reported:** the accordion lists corporations with "no trains". It listed all seven with a placeholder each, on
+the reasoning that a complete roster is easier to scan. **In practice the opposite: early in a game most
+corporations own nothing, so the panel was mostly rows that could not be acted on, and the two or three that
+COULD were buried among them. The question this section answers is "who has a train I could buy", and a row that
+answers "not this one" is noise.**
+**`owned_trains` undefined is KEPT, and the distinction is load-bearing:** `undefined` means the chain did not
+say, **which is emphatically not "owns nothing". Filtering those out would empty the whole section against such
+a chain and make trading look removed rather than unsupported.**
+
+### TrainPurchasePanel.tsx #618 / #633 / #634 — Six rows, then one row and a caret
+**#618 — reported:** "each train has a large card/tile, but you can only ever interact with one of them … I
+wonder if there is a way to compress things so that when this action panel pops up it does not devour 60% of
+the screen?"
+**Nothing is dropped — what changes is the AXIS.** Each tier was a five-line vertical stack about 100px tall,
+wrapping into two or three rows of cards; the same six tiers as single lines are one column about a third the
+height.
+**And it reads better, which is the argument for doing it this way rather than just shrinking the cards.** The
+question here is comparative — "how many 4-trains are left, and what does the 5 cost?" — **and a wrapping grid
+puts those two figures in different places on different screen widths. Columns put every cost under every other
+cost. The card layout was spending its height to make comparison harder.**
+**The report's own observation is why this is safe:** "you can only ever interact with one of them". **The other
+five are reference, and reference wants a table.**
+**#633 — reported:** the panel is taking up the same vertical space as before. **Fair, and `#618` only did half
+the job: turning six five-line cards into six one-line rows made each row shorter and kept all six on screen.
+The height was never in the row's design; it was in the row COUNT.**
+**Five of the six are reference.** The depot sells cheapest-first, **so exactly one tier is ever purchasable.**
+The purchasable tier stands alone and the rest fold into a caret — the same accordion this file already uses for
+corporate trades, and for the same reason: **the ordinary case is the open one.** The collapsed summary still
+names what is next and what it costs.
+`nextTier` is the split, **and rusted tiers go with the later ones rather than being dropped: a 2-train that has
+left play is still the reason the board looks the way it does.** **No available tier is a real state** — every
+tier sold out, which in 1830 means Diesels or over — **and the accordion then holds the whole depot, which is
+honest: there is nothing to buy and the panel says so by having nothing in the top slot.**
+**#634 — the "For sale" badge is retired.** It was always a workaround for the layout rather than a fact worth
+stating: **six near-identical rows needed one of them marked; a single row standing above a caret labelled
+"Later trains" is marked by position, which is the stronger signal and costs no width.**
+
+### TrainPurchasePanel.tsx #283 — What happens to this tier, next
+A depot card said how many were left and, once they were gone, nothing. **Sold out is not the end of a tier's
+story — it is the middle.** The 3-trains leaving the depot is the moment every 3-train ON THE BOARD becomes a
+liability, **and the card went quiet exactly then.**
+So the fate rides on every card that has one, sold out or not. **"Permanent" is worth its own badge rather than
+an absence:** a player weighing $630 for a 6-train against $300 for a 4 **is weighing precisely the fact that one
+of them never dies, and an empty space does not state it.** Not shown once it has already happened — **a
+countdown to something that has occurred is noise.**
+
+### TrainPurchasePanel.tsx #617 — A train that looks like a train, and counts
+**Reported:** "is there some way to have train icons for each type? I think it may be very abstract for new
+players to buy '2' when they're buying a train."
+**Inline SVG is the answer to the emoji problem.** It is drawn by this file, from these coordinates, on every
+device — **there is no font to substitute, no vendor glyph set, and no colour-emoji fallback. The objection that
+ruled emojis out does not apply to a path we ship ourselves.**
+**The carriages are the tier, which is the part worth having.** A generic locomotive would say "train" and stop;
+**what a new player actually needs to learn is that the NUMBER IS A CAPACITY — a 3-train runs three revenue
+centres.** So the glyph is a locomotive plus one carriage per centre, and "buy a 3" becomes a picture of the
+thing it buys. **That teaches the rule the abstraction was hiding rather than merely decorating it.**
+**Diesel is drawn, not counted.** A D-train has no fixed length, **so a carriage count would be a lie in the one
+case where the number is not a number.** It gets a trailing ellipsis of dots: visibly "and onward", visibly not a
+count.
+**Purely decorative to assistive tech** — every glyph sits beside the tier already written as text, so
+`aria-hidden` keeps a screen reader from hearing the same fact twice.
+
+### TrainPurchasePanel.tsx #632 / #635 — The era palette, and a cursor that promised nothing
+**#632:** the tile colours a player already knows, **adjusted to be legible as INK on a near-black panel rather
+than as fills on a map. Brown is the case that forces the adjustment** — the tile brown is a fill colour and
+reads as mud at 12px on `#12141b`, so the ink is a warm tan that still says "brown era".
+**Not pulled from the tile catalog, deliberately:** those values are chosen to be correct as large filled hexes
+on a light board, **and reusing them here would be sharing a number that happens to match rather than a
+decision.** What IS shared is the tier-to-era **mapping**, which is the part that would actually be wrong if it
+drifted.
+**#635 — reported:** "when my mouse is over the train list, it gains a `?` icon … as though clicking them would
+do something, but nothing happens." `cursor: help` was inherited from the card layout, **where it was arguably
+right: a card with five lines of detail and a tooltip explaining the queue rule is a thing you interrogate. A
+one-line row whose four columns are already on screen has nothing left to reveal, so the cursor was promising an
+interaction that had been designed away.** The tooltips stay — **they just should not change the pointer.**
+
+### TrainPurchasePanel.tsx #508 — Condensed, because a sticky panel costs the board its height
+This panel is mounted INSIDE `ContextualActionBar`, which is `position: sticky` — **so it follows the player down
+the page instead of being scrolled away from, which is also what retires `#491`'s jump button.**
+**`condensed` is what makes that affordable.** A sticky element costs the board its full height for the whole
+scroll (`#298`), so **the pinned form drops what is PROSE and keeps what is CONTROL:** the tier, the price, the
+quantity and the Buy button. The quantity explanation is the longest piece of prose in the panel and **explains a
+rule rather than a value — read once, not on every scroll — so it is the first thing the condensed form gives
+back to the board.**
+**The corporate accordion needs no special handling** — already collapsed by default, header still reachable, **so
+a trade is one click away in either state rather than being hidden by the collapse.**
+The counterparty's Accept/Reject is **deliberately the same shape and the same corner as `PrivateTradePrompt`:
+these are the two consent flows in the app, they interrupt at the same moment in a turn, and a player should not
+have to learn two different affordances for "somebody is asking you to agree to something".**
+`countByModel` is **gone with `#282`** — it collapsed a roster into model-and-count and nothing else ever wanted
+that shape. **Deleted rather than left unused so the grouped rendering cannot quietly come back.**
+The accordion's initial-open flag exists **so the section can be rendered without a DOM to click it open with: a
+test that cannot reach a surface cannot check it, and this section carries the train-limit gate.**
+
+---
+
+# The Game Ledger — `FinancialLedger.tsx`
+
+### FinancialLedger.tsx #1 / #3 — Real data, and an honest design gap
+Bank cash (`virtual_bank_vgp` / `virtual_bank_start`, VGP) and the real-JUNO ante pool (`total_juno_pool`) are
+genuine `GameStateResponse` fields, rendered directly.
+**#3 — the Hardware Shop is an honest DESIGN GAP, not a fabricated shop.** `state.rs` has a real
+`HARDWARE_POOL`/`COMPANY_HARDWARE` map and `hardware.rs` a real `TRAIN_CATALOG`, **but zero `QueryMsg` variant
+reads either back.** This surfaces as an explicit "Not yet exposed by contract" cell per corporation plus one
+shared footnote, **rather than inventing plausible-looking inventory counts.**
+
+### FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board
+**#4** established net worth as the real `QueryMsg::PlayerNetWorth` figure — cash plus every certificate priced at
+its LIVE market value, summed on-chain — **and argued this panel could not compute it itself**, since
+`GameStateResponse` carries `par_value` but not the live price, **so reproducing it would mean either a second
+query plus duplicating the backend's valuation math, or silently substituting par for market. Both worse than
+calling the dedicated endpoint.**
+**#497 — reported:** the ledger shows "not connected" for Stock Value and Net Worth, masking local sandbox
+figures behind a wallet check. **It did.** The gate is `queryClient && contractAddress && gameId`, **and a
+sandbox has none of the three — so both columns fell to the placeholder for the whole of offline mode, on the one
+screen whose job is to total up what everybody owns.**
+**The premise expired.** `marketGrid` has since become a PROP of this panel (`#14`), and the player table already
+unpacks it into a price map for certificate exemptions — **the live prices `#4` says would need a second query
+are sitting in the same function that prints "not connected".** So the valuation is derivable, **and `#4`'s own
+escape clause is honoured: this reads the live price and returns `null` for a corporation that has none, rather
+than quietly pricing it at par.**
+**#497a — an estimate that knows it is one.** This does NOT replace the chain's figure; **what it replaces is the
+BLANK.** The distinction matters because the two can legitimately differ — the contract may value things this
+does not know about, **and a client-side total presented as authoritative would be `#4`'s "silently substituting"
+failure wearing a different hat.**
+**`null` propagates rather than being coerced to zero:** a player holding a corporation with no market position
+has an UNKNOWN portfolio value, not a zero one, **and reporting "$0 net worth" for someone holding five
+certificates is worse than reporting nothing at all.**
+**Precedence, most authoritative first:** the chain's `PlayerNetWorth` → the same arithmetic over holdings and
+live prices this table already has in hand → a placeholder saying why. **"Not connected" is the last resort now
+rather than the offline default — reached only when there is no query AND no market grid, at which point the cell
+really does have nothing behind it.**
+
+### FinancialLedger.tsx #555 — This is arithmetic, not an estimate
+**Reported:** Stock Value and Net Worth are both prefixed with `~`, as though they were guesses. **There is no
+guessing these values.**
+Correct, **and the `~` was answering a real question with the wrong symbol.** `#497a` added it to mark the
+locally-computed figure as distinct from the contract's — a sound concern. **But the two are not an approximation
+and an authority. They are the SAME SUM over the same inputs: cash on hand, plus each holding multiplied by its
+live market price. Nothing is rounded down, sampled or inferred.** The distinction that matters is
+**PROVENANCE — who did the addition — and `~` does not mean "computed here", it means "roughly", which is a claim
+about accuracy that was never true.**
+**The tooltip stays and does the job properly:** provenance belongs in words, where it can say which arithmetic
+ran and where, **attached to precisely the cells the client computed.** (`estimateCertificateCount` was renamed
+for exactly this reason; **this is the same correction, one column over and overdue.**)
+
+### FinancialLedger.tsx #7 / #14 — One table, not a table plus a tree; one table, not two
+**#7:** "Player Assets" and "Player Certificate Trees" were two views of one thing. **Answering "does Alice have
+the certificates AND the cash to take this company?" meant reading a table, scrolling to a grid of cards, finding
+the same player again, and holding both halves in your head.** They are one table now, with certificates and the
+holdings themselves as columns. The tree's per-card net-worth row is dropped as duplicative, **and its footnote is
+gone entirely: it explained that the certificate count was a client-side estimate, which is no longer true and was
+a development note in a player-facing UI regardless.**
+**#14:** "Corporation Assets" and "Corporate Stock Distribution" were two tables with **the same rows in the same
+order, stacked** — so answering the only question the ledger exists for meant reading treasury and trains in one,
+scrolling, finding the same ticker again, and reading IPO and pool split in the other.
+The column order follows how the question is actually asked: **WHO it is** (corporation, president), **WHAT IT IS
+WORTH** (market price, treasury), **WHAT IT CAN DO** (trains, limit, last payout), **WHO HOLDS IT** (IPO, bank
+pool, player hands).
+**The Total column is deleted.** It summed the three ownership columns as a visible reconciliation check, on the
+reasoning that a mismatch would indicate a contract bug. **That reasoning was sound and the column still had to
+go: it printed "100%" on every row of every game, so the one time it mattered it would be a single digit changing
+in a column nobody had read in months. A checker that cries wolf by never crying is not a checker.**
+
+### FinancialLedger.tsx #16 — The bank depot inventory
+Which trains are left, what they cost, and what buying one sets off, in one place — **each previously discoverable
+only by counting other corporations' holdings by hand, which is a lot of work to answer "can I afford to wait a
+turn".**
+**It lives in the BANK section rather than with the corporations because the depot belongs to the bank — it is
+stock nobody owns yet.** The Corporation Assets table answers "who has what"; this answers "what is still for
+sale".
+The per-tier counts come from the **queue rule**, not by subtracting owned trains from printed totals — **that
+shortcut is unsound for obsolete tiers and would report rusted trains as though they were still on the shelf.**
+**Two dimmed states, not one.** Sold out and rusted are different facts: **a tier can be unbuyable while its
+trains still run** (every 3-train keeps earning through Phases 4 and 5), **and only a genuinely rusted tier gets
+the strikethrough, because only then is it gone.** The tier chip is the same one the corporation rows use, with
+the rust tint deliberately off — **the tint means "a corporation's train is about to die", and this is a price
+list, not a holding.**
+
+### FinancialLedger.tsx #405 — One Player Assets table, two places
+**Reported:** the Stock Round footer prints raw addresses; replace it with a replication of this table.
+**"A replication of" is the phrase that decides the implementation.** Building a second table would replicate the
+LOOK and then drift on everything else — **the certificate-limit exemption needs live market prices, the money
+columns need the net-worth query and its three distinct pending states, and none of that survives being copied by
+eye.** The footer renders THIS component instead.
+**The raw-address problem is not fixed by the move, and an earlier draft of this note claimed it was.** It was
+wrong: this table truncated exactly as the footer did, only shorter. The fix is an optional `playerLabel`,
+resolved the way every other roster resolves a seat. **Recorded rather than quietly corrected, because a note
+asserting a fix that does not exist is worse than no note.**
+The label resolver is the **room-aware** one (`#559`): importing it from the sandbox fixture got the Alice/Bob
+table, which returns null for a real room id — **so presidents rendered as raw ids here while every other surface
+showed names.**
+
+### FinancialLedger.tsx #423 / #407 — The same pills the auction uses, carrying the revenue
+**#423:** this cell and the auction's seating table were two hand-rolled renderers for one thing, **and they had
+already drifted into disagreeing about what a private looks like** — the auction showed a bare numeral, this
+showed the full name with revenue appended, **and neither could be clicked.** One component is now both. **It also
+fixes the column's height:** full names wrapped, so a player holding three privates got a three-line row and the
+whole table went ragged.
+**#407 — reported:** privates must display their per-OR revenue wherever they are listed outside the auction —
+**it is what certificate-exchange timing is judged on.** Every one of these lists already KNEW the figure and
+**spent it on a `title` attribute. A tooltip is not a display: it needs a pointer, it needs a pause, and it shows
+one private at a time — so comparing "which of these three is worth holding through Phase 5" meant hovering three
+chips in sequence and remembering two numbers.** The auction is exempt because there the revenue is already the
+headline of every card.
+
+### FinancialLedger.tsx (smaller entries)
+- **#12** — the ante pool arrives as `ujuno`, so 40 JUNO reads as 40000000 raw. Converted through the shared
+  helper rather than by dividing here: **that helper does the six decimal places with integer string math, because
+  a `Uint128` above 2⁵³ loses precision the moment it becomes a double, and a pool of real money is the last place
+  to be quietly wrong.**
+- **#13** — each corporation's brand colour applied to the ink and a hairline underline rather than as a filled
+  background: **eight saturated fills across a header row would out-shout the percentages underneath, which are
+  the data. The colour is a wayfinding aid for tracking one column down a tall table, not a highlight.**
+- **#15** — the crown sits LEFT of the number. On the right it sat inside the right-aligned edge, **so a
+  president's row was pushed left by the glyph's width and its percentage no longer lined up. Moving it left puts
+  the variable-width element on the ragged side and leaves the digits flush, which is the entire point of a
+  right-aligned numeric column.**
+- **#5** — "Game Ledger" is a **display-text rename only.** The component, export and file name are deliberately
+  left alone: **a UI copy request scoped to tab renaming is read as changing what a player reads, not as a mandate
+  to rename a source module and touch every file that imports it.**
+- **#6** — real `<table>` elements, each in a horizontally-scrolling container **so a dense table degrades to a
+  scrollbar rather than an unreadable reflow on a narrow pane.**
+- **#8 (column rules)** — `*Num` right-justifies and the `*B` suffix adds the vertical rule. **The rule lives on
+  `borderRight` rather than `borderLeft` so the LAST column can use the plain variant and not draw an edge** —
+  with `borderLeft` the same trick would have to be applied to the first column, which reads worse when scanning
+  the style names.
+- **#32 / #552** — the Priority Deal marker is bare text, no pill: **this sits beside a name in a dense table that
+  already carries a crown and an ACTIVE badge elsewhere, and a third boxed element would turn the name column into
+  a row of competing containers.** `cursor: help` is what signals the tooltip exists at all. The crown's `color` is
+  back and **now does something — it was removed when this styled an emoji, which ignores it; the SVG fills with
+  `currentColor`.**
+- **#423 / #379 (style deletions)** — the private-column styles are **deleted with their markup rather than left to
+  rot.** Privates render as chips rather than a comma list: **a corporation holds at most a couple, and each is a
+  discrete asset with its own revenue, so they read as objects rather than as prose.**
+- **#43 (badge chip)** — slate, not amber: **it sat a few hundred pixels from the Bank Depot's amber CURRENT pill
+  and the two read as one inconsistent style rather than two unrelated states.** `FONT_SIZE.micro` rather than a
+  literal 12px, **because `typography.ts` scaled the whole ramp up on purpose and a hardcoded size would silently
+  opt out of that decision.**
+- **The net-worth hook is called unconditionally** (React hook rules) even before `gameState` resolves — it no-ops
+  cleanly on an empty address list, **and the fresh-array-every-render is safe because the hook depends only on the
+  joined content** (`utils_layer.md`, `gameState.ts #6`).

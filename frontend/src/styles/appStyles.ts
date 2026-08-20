@@ -1,27 +1,14 @@
 // frontend/src/styles/appStyles.ts
 //
-// THE SHARED INLINE-STYLE TABLE, lifted out of `App.tsx` unchanged.
+// THE SHARED INLINE-STYLE TABLE, lifted out of `App.tsx` unchanged -- a MOVE, not a rewrite: same
+// declarations, same order, so `git log -p` on a style reads as one continuous history.
 //
-// This module is a MOVE, not a rewrite. Every declaration below is the same
-// object literal `App.tsx` carried at the bottom of the file, in the same
-// order, with the same comments -- so `git log -p` on a style still reads as
-// one continuous history rather than as a deletion and an unrelated
-// creation. Nothing here is new, and nothing that was here was dropped.
+// It moved because a table with five consumers (`TopBar`, `MarketMoveLine`, `ContextualActionBar`,
+// `MainTabBar`, `AppShell`) is shared infrastructure, and shared infrastructure living inside one of its
+// consumers forces every other consumer to import from that consumer. `PHASE_TINT_STYLES` rides along;
+// separating it would put two halves of one lookup in two files.
 //
-// WHY IT MOVED. `styles` alone was 988 of `App.tsx`'s 9,636 lines, and it is
-// read by five separate components (`TopBar`, `MarketMoveLine`,
-// `ContextualActionBar`, `MainTabBar` and `AppShell` itself). A table with
-// five consumers is shared infrastructure, and shared infrastructure that
-// lives inside one of its consumers forces every other consumer to import
-// from that consumer -- which is how a file becomes a hub that cannot be
-// split. Hoisting it into `styles/`, alongside the existing `typography.ts`
-// and `palette.ts` tokens it already reads from, makes the dependency point
-// the way it always logically pointed.
-//
-// The phase-badge tints ride along because `PHASE_TINT_STYLES` is a
-// `React.CSSProperties` map keyed by phase tint -- the same kind of thing,
-// consumed by the same components, and separating it from `styles` would put
-// two halves of one lookup in two files.
+// Design history: see `docs/ai_architecture/ui_shell_layout.md`.
 
 import React from "react";
 
@@ -49,13 +36,9 @@ export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProp
 };
 
 export const styles: Record<string, React.CSSProperties> = {
-  /* ---- Design note #34: the single slim top bar. ----
-     `padding` is 6px vertical against the old header's 16px, and the brand
-     drops from `display` to `strong`: the point of the consolidation was
-     vertical space, so the row has to actually be short or nothing was
-     gained by merging. `flexWrap` stays on -- the sandbox phase switcher
-     genuinely can overflow on a narrow window, and wrapping is a better
-     failure than a clipped Connect button. */
+  /* Design note #34: the single slim top bar. 6px vertical against the old header's 16px -- the point of
+     the consolidation was vertical space, so the row has to actually be short. `flexWrap` stays on: the
+     sandbox phase switcher can overflow, and wrapping beats a clipped Connect button. */
   topBar: {
     display: "flex",
     alignItems: "center",
@@ -130,11 +113,9 @@ export const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     flexShrink: 0,
   },
-  // Pushes the connection cluster right. A spacer element rather than
-  // `marginLeft: auto` on the first right-hand child, because which child
-  // is first varies (the offline badge and the two error spans are all
-  // conditional) and an `auto` margin on a node that sometimes does not
-  // render silently un-pins the whole group.
+  // Pushes the connection cluster right. A spacer element rather than `marginLeft: auto` on the first
+  // right-hand child, because which child is first varies -- the offline badge and both error spans are
+  // conditional -- and an `auto` margin on a node that sometimes does not render un-pins the whole group.
   topBarSpacer: { flex: 1, minWidth: "8px" },
   topBarDot: {
     width: "9px",
@@ -184,13 +165,10 @@ export const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
 
-  // ---- Room strip -- design notes #1/#22. Sits between the brand header
-  // and the nav tabs, in the same #0F172A recessed tone `TopTicker`'s
-  // expanded body and `Lobby`'s panels use, so the two screens read as one
-  // application. ----
-  // Design note #34: `roomStrip` the container is gone -- its children are
-  // inline content in `topBar` now. The `roomStrip*` item styles below are
-  // kept because those children still exist and still need their look.
+  // Room strip -- design notes #1/#22, in the same recessed tone `TopTicker`'s expanded body and `Lobby`'s
+  // panels use, so the two screens read as one application.
+  // Design note #34: the `roomStrip` container is gone -- its children are inline content in `topBar` now.
+  // The item styles are kept because those children still exist and still need their look.
   spectatorNotice: {
     width: "100%",
     padding: "14px 28px",
@@ -296,35 +274,24 @@ export const styles: Record<string, React.CSSProperties> = {
   appRoot: {
     display: "flex",
     flexDirection: "column",
-    // Design note #13/item 1: was a hard `height: "100vh"` -- clipped this
-    // whole column (and everything inside it) to exactly one viewport-worth
-    // of pixels no matter how tall the actual board content needed to be.
-    // `minHeight` keeps the same "fills at least the full viewport on a
-    // short screen" look, but lets the column grow taller than 100vh when
-    // real content (the now-un-shrunk map canvas) needs more room, so the
-    // BROWSER's own page scrollbar carries the rest instead of an inner
-    // pane's.
+    // Design note #13/item 1: was a hard `height: "100vh"`, which clipped this column to one viewport-worth
+    // of pixels no matter how tall the board needed to be. `minHeight` keeps the same look on a short screen
+    // and lets the column grow, so the BROWSER's page scrollbar carries the rest instead of an inner pane's.
     minHeight: "100vh",
     width: "100%",
-    /* Design note #599: the SEED only. The real value is measured from the
-       dock and applied inline -- a constant here was right while the dock had
-       one height, and became "the log covers the page" the moment it could
-       grow. Kept as the pre-measurement default so the first paint does not
-       start with the footer over the content. */
+    /* Design note #599: the SEED only. The real value is measured from the dock and applied inline -- a
+       constant was right while the dock had one height, and became "the log covers the page" the moment it
+       could grow. Kept as the pre-measurement default so the first paint does not start with the footer over
+       the content. */
     paddingBottom: "96px",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     backgroundColor: "#12141a",
     color: "#e6e8ef",
   },
-  // Design note #12/item 5 (Upper Brand Header): fonts, badges, and wallet
-  // fields all upscaled roughly 40-60% past their original small-print
-  // sizes so the absolute topmost bar reads comfortably on a widescreen
-  // panel, matching the same "fill the real estate" intent already applied
-  // to the map/stock canvases.
-  //: no container, amber. Reads as a SCORE.
-  // $JUNO: contained pill, teal, bordered. Reads as a REAL ASSET -- see the
-  // comment at the render site for why the two are deliberately different
-  // kinds of object rather than two rows of the same kind.
+  // Design note #12/item 5 (upper brand header): fonts, badges and wallet fields upscaled 40-60% past their
+  // original small print so the topmost bar reads on a widescreen panel.
+  // VGP: no container, amber -- reads as a SCORE. $JUNO: contained pill, teal, bordered -- reads as a REAL
+  // ASSET. Two deliberately different kinds of object, not two rows of the same kind.
   nativeBalancePill: {
     display: "inline-flex",
     alignItems: "baseline",
@@ -370,54 +337,16 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#e07a7a",
     maxWidth: "280px",
   },
-  // ---- Main tabs -- see design note #9, upscaled by design note #12/item
-  // 5 (Primary Navigation Tabs): bigger text and generous click padding so
-  // "Rail Map" / "Stock Market" / "Financial Ledger" / "Rules Reference"
-  // read as clear, comfortably-clickable primary navigation. ----
-  // Design note #20/item 3: `#0F172A` background here matches
-  // `TopTicker.tsx`'s own expanded-body slate, and `mainTabButtonActive`
-  // below now shares `TopTicker.tsx`'s exact header color (`#1E293B`) --
-  // together these let the active tab flow directly into the ticker
-  // docked beneath it with no color seam or border line.
-  /* ==================================================================
-   *  DESIGN NOTE 299: THE TABS WERE A HEADING WEARING A BUTTON'S BORDER
-   * ==================================================================
-   *
-   * REPORTED: the main tabs are quite tall and push the chat and activity
-   * rows down.
-   *
-   * They were 14px of padding above and below a `heading`-sized label --
-   * the same type step a panel TITLE uses -- which is roughly a 47px
-   * control for a one-word destination. The tab bar added another 14px of
-   * its own above that, so the row cost about 60px before anything in it
-   * had been read.
-   *
-   * A tab is a navigation control, not a section heading. It takes the
-   * `control` step like every other clickable thing in the app, and the
-   * padding comes down to a standard compact button. The label is
-   * unchanged and still reads at a glance -- what shrank is the empty
-   * space around it. */
-  /* ==================================================================
-   *  DESIGN NOTE 456: THE TAB ROW HAD NO ESCAPE
-   * ==================================================================
-   *
-   * REPORTED: the "? Tutorials" button overflows its container.
-   *
-   * The row is a flex line with no `flexWrap` and no `minWidth: 0` on its
-   * children, and Tutorials is pinned right past an `auto` margin. Flex
-   * items refuse to shrink below their content width by default, so once
-   * four or five tab labels plus the button exceed the bar, nothing gives
-   * -- the row simply runs past its own padding, and the item on the far
-   * side of the auto margin is the one that visibly leaves.
-   *
-   * `flexWrap` is the fix and `rowGap` is what makes it survivable: a
-   * wrapped row needs vertical separation or the second line collides with
-   * the first. The bottom padding goes from `0` to `6px` for the same
-   * reason -- the original `6px 16px 0` assumed exactly one line and let
-   * the active tab's edge sit flush with the panel below it.
-   *
-   * `alignItems: center` because a wrapped Tutorials button is shorter than
-   * a tab and would otherwise stretch. */
+  // Main tabs -- design note #9, upscaled by #12/item 5 so the four destinations read as primary
+  // navigation. Design note #20/item 3: this background matches `TopTicker`'s expanded-body slate and the
+  // active tab shares its exact header colour, so the tab flows into the ticker with no seam.
+  // Design note #299: THE TABS WERE A HEADING WEARING A BUTTON'S BORDER. 14px of padding around a
+  // `heading`-sized label is a ~47px control for a one-word destination, and the bar added 14px more -- ~60px
+  // before anything had been read. A tab is a navigation control, not a section heading.
+  // Design note #456: THE TAB ROW HAD NO ESCAPE. Flex items refuse to shrink below their content width, so
+  // once the labels exceeded the bar nothing gave -- the row ran past its own padding and Tutorials, on the
+  // far side of an `auto` margin, was the item that visibly left. `flexWrap` is the fix and `rowGap` is what
+  // makes it survivable; bottom padding 0 -> 6px because the original assumed exactly one line.
   mainTabBar: {
     display: "flex",
     flexWrap: "wrap",
@@ -429,12 +358,8 @@ export const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     maxWidth: "100%",
   },
-  /* ---- Design note #46: every tab is visibly a control. ----
-     The resting border was `#2a2e3a` against a `#1a1d26` bar -- barely a
-     shade apart, so an unselected tab had no edge and read as recessed
-     rather than clickable. It is now a crisp slate line on a slightly
-     inset fill, which is what makes the row legible as a set of buttons
-     before anyone hovers anything. */
+  /* Design note #46: every tab is visibly a control. The resting border was barely a shade from the bar, so
+     an unselected tab had no edge and read as recessed rather than clickable. */
   mainTabButton: {
     // Design note #299: `control`, not `heading` -- a tab is a button.
     fontSize: FONT_SIZE.control,
@@ -449,16 +374,12 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#94a3b8",
     cursor: "pointer",
   },
-  /* The active tab is the only WHITE-edged thing in the bar, and the only
-     one with a lift. It also keeps `#1E293B` so it still docks seamlessly
-     into the panel below (design note #7 in `TopTicker.tsx`). */
-  /* Design note #456: condensed. At `8px 16px` beside a `control`-sized
-     label this was the widest single item in the row and the first thing to
-     be pushed out. It is a secondary control -- it opens a reader over the
-     current screen rather than navigating -- so it can afford to be smaller
-     than the tabs it sits beside. `flexShrink` lets it give way before the
-     row breaks, and `minWidth: 0` is what actually permits that: without
-     it a flex item will not shrink below its content. */
+  /* The active tab is the only WHITE-edged item in the bar and the only one with a lift, and it keeps the
+     ticker's own header colour so it docks seamlessly into the panel below (`TopTicker.tsx #7`).
+     Design note #456: Tutorials condensed. It was the widest single item and the first to be pushed out; it
+     is a secondary control, so it can afford to be smaller than the tabs. `flexShrink` lets it give way
+     before the row breaks, and `minWidth: 0` is what permits that -- a flex item will not otherwise shrink
+     below its content. */
   tutorialsButton: {
     flexShrink: 1,
     minWidth: 0,
@@ -503,94 +424,35 @@ export const styles: Record<string, React.CSSProperties> = {
     margin: "0 0 4px",
   },
   canvasPane: {
-    /* ==================================================================
-     *  DESIGN NOTE 600: `flex: 1` MEANS `flex-basis: 0`, AND THAT IS THE BUG
-     * ==================================================================
-     *
-     * REPORTED, twice: "the Action bar no longer travels down the screen as
-     * the player scrolls." The first fix -- removing a `position: relative`
-     * that had overridden `sticky` -- was a real bug and not this one.
-     *
-     * A sticky element travels only within its PARENT'S BOX. This pane is
-     * the action bar's parent, and `flex: 1` expands to `1 1 0%` -- a
-     * flex-basis of ZERO, grown to fill the flex line. In a column whose
-     * container is `min-height: 100vh`, that line is one viewport tall. So
-     * this pane computed to roughly the viewport height while its CONTENT --
-     * the bar, the auction dashboard, the player cards -- ran far past it and
-     * simply overflowed.
-     *
-     * The bar was sticking perfectly. It had a few pixels of parent to stick
-     * within, reached the bottom of that box, and scrolled away with it.
-     *
-     * WHY THE AUCTION SHOWED IT FIRST: the effect scales with how far the
-     * content overruns the pane, and the auction stacks six private-company
-     * cards, the action bar and a row of player cards on one tab. The same
-     * fault was present everywhere and simply had less to give it away.
-     *
-     * `1 0 auto`: still grows to fill a short page (which is what `flex: 1`
-     * was here for -- design note #13 wanted the pane to claim the full
-     * height rather than sit in a box), but its basis is now its CONTENT, so
-     * it is never shorter than what it holds. `flex-shrink: 0` because a
-     * pane that shrinks below its content is the state this note is about.
-     *
-     * NOT VERIFIED IN A BROWSER, and worth saying: this is reasoned from the
-     * flex spec rather than watched. Three earlier CSS causes were checked
-     * and ruled out first (no `overflow` on any ancestor, no `position`
-     * override, no competing stacking context) -- but if the bar still fails
-     * to travel, this note is the next thing to disbelieve. */
+    /* Design note #600: `flex: 1` MEANS `flex-basis: 0`, AND THAT IS THE BUG. A sticky element travels only
+       within its PARENT'S BOX, and `flex: 1` expands to `1 1 0%` -- a basis of ZERO, grown to fill a flex line
+       that is one viewport tall. So this pane computed to roughly the viewport height while its content ran
+       past it, and the bar stuck perfectly within the few pixels of parent it had.
+       The auction showed it first because the effect scales with the overrun and that tab stacks six cards, a
+       bar and a row of player cards.
+       `1 0 auto`: still grows to fill a short page, but its basis is its CONTENT, so it is never shorter than
+       what it holds. NOT VERIFIED IN A BROWSER -- reasoned from the flex spec after ruling out three other CSS
+       causes. If the bar still fails to travel, this is the next thing to disbelieve. */
     flex: "1 0 auto",
     display: "flex",
     flexDirection: "column",
     gap: "16px",
-    // Design note #13/item 1: was `overflow: "auto"` -- exactly the "tiny
-    // panel box" internal scrollbar this item asks to remove. Dropped
-    // outright: with no `overflow` set, this pane simply grows to its
-    // content's real height (the board canvas's now-un-shrunk natural
-    // size), same as any ordinary block content, and the page scrolls.
+    // Design note #13/item 1: `overflow: "auto"` removed -- exactly the inner scrollbar this item asks to
+    // eliminate. With no `overflow` set the pane grows to its content's real height, same as any block, and
+    // the page scrolls.
     padding: "20px",
   },
-  // ---- Contextual Top Action Bar -- see design note #8/item 5, upscaled
-  // by design note #12/item 5 (Gameplay Action Top Bar): larger button
-  // font/padding and a taller bar overall so the dynamic header action
-  // layout reads clearly at widescreen scale. ----
-  /* ---- Design note #31: THE slim bar. Was a tall panel because three
-   * trays lived inside it; those are separate blocks below it now, so this
-   * is a single row of controls and is styled as page chrome rather than as
-   * a card. ---- */
-  /* ==================================================================
-   *  DESIGN NOTE 297: THE CONTROLS FOLLOW THE PLAYER DOWN THE PAGE
-   * ==================================================================
-   *
-   * The board is taller than the viewport by design (`HexGridRenderer`
-   * design note #30 -- the page scrolls rather than the map), which means
-   * scrolling to see the southern hexes takes the action panel off the top
-   * of the screen. The two controls a player needs while looking at the
-   * map -- Place Token, Skip -- are the two that leave first.
-   *
-   * Sticky rather than fixed: fixed would take the bar out of flow and
-   * leave a gap where it was, and it only needs to stop at the top of the
-   * scroll container it already lives in.
-   *
-   * IT CONDENSES WHEN IT STICKS, because a pinned bar is a permanent
-   * subtraction from the map. Design note #298 covers what is dropped and
-   * why the choice is not arbitrary. */
-  /* ==================================================================
-   *  DESIGN NOTE 426: PLAIN `sticky top-0`
-   * ==================================================================
-   *
-   * REPORTED: the bar should use standard `sticky top-0` behaviour, so it
-   * only collapses when it actually reaches the top of the screen.
-   *
-   * `position: sticky; top: 0` was already here and is kept verbatim --
-   * what stopped it behaving that way was `marginBottom`, below. A sticky
-   * element's margin travels with it, so the bar reserved 12px of empty
-   * space beneath itself for the whole scroll, and it detached from the
-   * viewport edge 12px early. The margin moves to the CONTENT that follows,
-   * which is where the gap was actually wanted.
-   *
-   * `zIndex: 50` stays: sticky does not create a stacking context on its
-   * own, and without it the panels scrolling underneath paint over the bar
-   * at exactly the moment it is doing its job. */
+  // Contextual top action bar -- design note #8/item 5, upscaled by #12/item 5, slimmed by #31 (the three
+  // trays that made it a tall panel are separate blocks below it now, so this is page chrome, not a card).
+  // Design note #297: THE CONTROLS FOLLOW THE PLAYER DOWN THE PAGE. The board is taller than the viewport by
+  // design, so scrolling to the southern hexes takes Place Token and Skip off screen first. Sticky rather
+  // than fixed: fixed would leave a gap where the bar was, and it only needs to stop at the top of the
+  // container it already lives in. It condenses when it sticks -- see #298 for what is dropped.
+  // Design note #426: PLAIN `sticky top-0`. The positioning was already here; what stopped it behaving that
+  // way was `marginBottom` -- a sticky element's margin travels with it, so the bar reserved 12px beneath
+  // itself for the whole scroll and detached from the viewport edge early. The margin moves to the content
+  // that follows. `zIndex: 50` stays: sticky creates no stacking context, and without it the panels
+  // scrolling underneath paint over the bar at exactly the moment it is doing its job.
   actionBar: {
     position: "sticky",
     top: 0,
@@ -602,13 +464,10 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     flexWrap: "wrap",
     gap: "8px",
-    /* Design note #295: the action strip's own height. At 10px vertical
-       padding around a 19px control this bar ran past 60px; with the type
-       scale at 14px it lands inside the 44-52px band the layout targets.
-       Design note #655: the clause that used to end this sentence -- "and
-       `maxHeight` stops a wrapped row from silently growing past it" --
-       described a property `actionBar` does not have and should not. This
-       bar WRAPS, and a wrapped row growing is the wrap working. */
+    /* Design note #295: the strip's own height -- at 10px padding around a 19px control this ran past 60px;
+       with the type scale at 14px it lands inside the 44-52px band the layout targets.
+       Design note #655: the clause that used to end this sentence described a `maxHeight` this bar does not
+       have and should not. This bar WRAPS, and a wrapped row growing is the wrap working. */
     padding: "6px 12px",
     backgroundColor: "#1b2130",
     borderWidth: "1px",
@@ -619,18 +478,12 @@ export const styles: Record<string, React.CSSProperties> = {
        own margin scrolls with it and offsets it from `top: 0`. The gap is
        now the following content's `marginTop`, which stays put. */
   },
-  // Active Player Turn Notifications -- design note #18/item 4. Spread onto
-  // `actionBar` alongside its base style, not replacing it, so the bar's
-  // own layout/padding/background are unaffected -- only the border color
-  // and the shared pulsing-glow animation are added.
-  /* Design note #298: the pinned form. Vertical padding halves and the
-     bar loses its rounding against the top edge -- it is now a chrome
-     element rather than a card, and a floating rounded card that never
-     moves reads as a stuck modal. */
-  /* ---- Design note #390: the wrong-tab redirect ----
-     The bar becomes one centred control. Padding grows because it is now
-     the only thing in the strip and a lone button pinned left in a
-     full-width bar reads as a leftover rather than as the point. */
+  // Turn notifications -- design note #18/item 4. Spread onto `actionBar` alongside its base style so only
+  // the border colour and the glow are added.
+  // Design note #298: the pinned form. Vertical padding halves and the rounding goes -- a floating rounded
+  // card that never moves reads as a stuck modal.
+  // Design note #390: the wrong-tab redirect. Padding grows because the bar is now one control, and a lone
+  // button pinned left in a full-width bar reads as a leftover rather than as the point.
   actionBarRedirect: {
     justifyContent: "center",
     padding: "14px 16px",
@@ -657,20 +510,11 @@ export const styles: Record<string, React.CSSProperties> = {
     borderColor: `rgba(${TURN_PULSE_INK_RGB}, 0.75)`,
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 481: THE SUB-PHASE, BESIDE THE TITLE
-   * ==================================================================
-   *
-   * Sized and coloured to read as a CONTINUATION of `actionBarRoundLabel`
-   * rather than as a second heading: same uppercase treatment and letter
-   * spacing, one step lighter in weight and colour. "OPERATING ROUND ·
-   * LAY TRACK 2/5" should scan as one line, because it is one fact --
-   * where the turn is -- split across two spans only because half of it is
-   * conditional.
-   *
-   * `whiteSpace: nowrap` because the bar wraps (`flexWrap` on `actionBar`),
-   * and a step name broken across two lines inside a wrapping row is how a
-   * 48px bar becomes a 70px one. */
+  /* Design note #481: THE SUB-PHASE, BESIDE THE TITLE. Sized and coloured as a CONTINUATION of the round
+     label rather than a second heading -- "OPERATING ROUND / LAY TRACK 2/5" should scan as one line, because
+     it is one fact split across two spans only because half of it is conditional.
+     `whiteSpace: nowrap` because the bar wraps, and a step name broken across two lines inside a wrapping
+     row is how a 48px bar becomes a 70px one. */
   actionBarSubPhaseInline: {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
@@ -698,48 +542,19 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.04em",
     color: "#9aa0ac",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 426: TRUE-CENTRED, WHICH THE SPACER PAIR WAS NOT
-   * ==================================================================
-   *
-   * REPORTED: true-centre the action buttons (Skip / Undo).
-   *
-   * This row -- Pass Turn, the contextual buttons, Undo -- was a flex line
-   * with a `flex: 1` spacer before the group and another after it, and
-   * design note #309 described that as centring: "a leading spacer balances
-   * the trailing one that already pins the phase badge, which centres the
-   * group between them without either rail having to know what the other
-   * holds."
-   *
-   * Two equal spacers do centre the group BETWEEN THEMSELVES. They do not
-   * centre it on the bar, because the phase badge sits outside the trailing
-   * spacer and the leading spacer has nothing balancing it -- so the whole
-   * group is pushed left by exactly the badge's width, and by more when the
-   * badge escalates to its wider alert wording. The buttons drifted as
-   * phase text changed, which is the tell.
-   *
-   * `1fr auto 1fr` is the same grid `orPanelActionRow` has used all along,
-   * and it is immune to that: the side rails are equal by construction
-   * whatever they contain, so the centre column is centred on the PANEL.
-   * The two bars now centre identically, which also settles design note
-   * #309's actual goal -- muscle memory built in one phase landing in the
-   * next.
-   *
-   * The spacers are gone from the markup with it; `actionBarSpacer` stays
-   * defined for the auction bar's own row, which is a genuine flex line. */
-  /* Design note #636: the Stock/Auction branch as a COLUMN, mirroring
-     `orPanel`. Identity on one row, actions on the next -- the same shape
-     and the same 3px gap, so the two rounds' bars are the same object with
-     different contents rather than two layouts that happen to share a
-     border. */
+  /* Design note #426: TRUE-CENTRED, WHICH THE SPACER PAIR WAS NOT. Two equal spacers centre the group
+     BETWEEN THEMSELVES, not on the bar -- the phase badge sits outside the trailing spacer, so the group was
+     pushed left by exactly the badge's width and drifted as the phase text changed. `1fr auto 1fr` is the
+     same grid `orPanelActionRow` has always used and is immune to that. `actionBarSpacer` stays defined for
+     the auction bar's own row, which is a genuine flex line.
+     Design note #636: the Stock/Auction branch as a COLUMN mirroring `orPanel` -- identity on one row,
+     actions on the next, same shape and gap, so the two rounds' bars are one object with different contents. */
   actionBarPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
   actionBarButtons: {
     display: "grid",
-    /* Design note #654: `minmax(0, 1fr)` rather than bare `1fr`. A `1fr`
-       track still has an `auto` minimum, so a rail whose content is wider
-       than its share -- the phase badge with a Phase Shift Imminent warning
-       beside it -- grows past half and drags the centre column off true. The
-       explicit `0` floor lets the rails shrink and keeps the middle middle. */
+    /* Design note #654: `minmax(0, 1fr)` rather than bare `1fr`. A `1fr` track still has an `auto` minimum, so
+       a rail wider than its share grows past half and drags the centre off true. The explicit `0` floor lets
+       the rails shrink and keeps the middle middle. */
     gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
     alignItems: "center",
     gap: "6px",
@@ -759,11 +574,10 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     flexWrap: "wrap",
   },
-  /* Design note #426: the right rail, holding the phase badge. `justifySelf:
-     end` rather than a spacer, so the badge pins right without stealing
-     width from the centred group. */
-  /* Design note #427: the reason the return bar is on screen at all,
-     stated beside the button rather than left to the button's wording. */
+  /* Design note #426: the right rail. `justifySelf: end` rather than a spacer, so the badge pins right
+     without stealing width from the centred group.
+     Design note #427: the reason the return bar is on screen at all, stated beside the button rather than
+     left to the button's wording. */
   returnBarNotice: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
@@ -789,24 +603,10 @@ export const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     overflow: "hidden",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 654: LEAD AND TRAIL, NOT LEFT AND RIGHT
-   * ==================================================================
-   *
-   * `actionBarRailRight` stood here, holding the phase badge with
-   * `justifySelf: end`. The badge is flush LEFT now, so the pair is named
-   * for position in the row rather than for a side: `actionBarRailLead`
-   * carries the phase group, `actionBarRailTrail` carries nothing and exists
-   * to be the third grid column.
-   *
-   * An empty element as layout is worth defending, because it looks like
-   * something to delete. It is not a spacer of the kind design note #426
-   * removed -- those were two `flex` children sized by their own content,
-   * which centred the group between THEM and not on the bar. This is a grid
-   * TRACK: `minmax(0, 1fr)` either side of an `auto`, and the two rails have
-   * equal weight whatever they hold, including nothing. Delete it and the
-   * centre column becomes the last column, which is the bug this note is
-   * about. */
+  /* Design note #654: LEAD AND TRAIL, NOT LEFT AND RIGHT. The badge is flush left now, so the pair is named
+     for position rather than side; the trailing rail carries nothing and exists to be the third grid column.
+     An empty element as layout is worth defending because it looks like something to delete: it is a grid
+     TRACK, not one of the flex spacers #426 removed. Delete it and the centre column becomes the last one. */
   actionBarRailLead: {
     display: "flex",
     flexDirection: "row",
@@ -816,13 +616,9 @@ export const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   actionBarRailTrail: { display: "block", minWidth: 0 },
-  /* Design note #426: nudged back up. Design note #31 slimmed these to
-     `small`/7px on the reasoning that "in a single chrome strip they only
-     have to be comfortably clickable, not the focal point of the screen" --
-     which took them below comfortable. These are the primary actions of a
-     turn and several are destructive-ish (Skip forgoes a step outright), so
-     they get one step of the type scale back and a little more room around
-     the label. Still not the focal point; just reliably hittable. */
+  /* Design note #426: nudged back up. #31 slimmed these on the reasoning that a chrome strip only has to be
+     comfortably clickable, which took them below comfortable. These are the primary actions of a turn and
+     several are destructive-ish, so they get one step of the type scale back. */
   actionBarButton: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
@@ -833,36 +629,15 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#e6e8ef",
     cursor: "pointer",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 619: THE STYLE EXISTED; THE NAME AT THE CALL SITE DID NOT
-   * ==================================================================
-   *
-   * REPORTED, of the Buy Trains step: "if a corporation MUST buy a train
-   * because it has a valid route and no trains, the 'End Turn' button needs
-   * to be grayed out."
-   *
-   * It already refused the click -- design note #293 disabled it three passes
-   * ago and wrote the tooltip explaining the obligation. What it did not do
-   * was LOOK refused, and the reason is worth recording because the class of
-   * bug is not confined to this button.
-   *
-   * `ContextualActionBar` reached for `styles.actionButtonDisabled`. The key
-   * here is `actionBarButtonDisabled`. `styles` is typed
-   * `Record<string, React.CSSProperties>`, so a missing key is `undefined`
-   * rather than a compile error, and spreading `undefined` into a style
-   * object is a silent no-op. Two call sites -- Undo, in both the pinned and
-   * expanded bars -- had therefore been styling nothing at all since they
-   * were written, and `tsc` and ESLint were both perfectly happy.
-   *
-   * The contextual buttons (End Turn among them) were a plainer miss: they
-   * passed `disabled` and never spread a disabled style at all. So the bar
-   * had three ways of drawing an unavailable control and only one of them
-   * worked.
-   *
-   * A `Record<string, T>` STYLE SHEET CANNOT CATCH THIS, which is the real
-   * lesson. An audit across every file importing this module found exactly
-   * one phantom key, so the sweep is done -- but nothing stops the next one,
-   * and the failure is invisible by construction. */
+  /* Design note #619: THE STYLE EXISTED; THE NAME AT THE CALL SITE DID NOT. `ContextualActionBar` reached
+     for `styles.actionButtonDisabled`; the key here is `actionBarButtonDisabled`. `styles` is typed
+     `Record<string, React.CSSProperties>`, so a missing key is `undefined` rather than a compile error, and
+     spreading `undefined` is a silent no-op -- two call sites had been styling nothing since they were
+     written, with `tsc` and ESLint both perfectly happy. The contextual buttons were a plainer miss: they
+     passed `disabled` and spread no disabled style at all, so the bar had three ways of drawing an
+     unavailable control and one of them worked.
+     A `Record<string, T>` style sheet cannot catch this. One audit found one phantom key, so the sweep is
+     done -- but nothing stops the next one, and the failure is invisible by construction. */
   actionBarButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
   /* Design note #619: the standing "you must buy a train" notice. Amber, not
      red -- an obligation the rules impose is not an error the player has
@@ -916,50 +691,22 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#caa42a",
     transform: "translateX(14px)",
   },
-  /* Design note #266: twenty `route*` style keys were deleted here along
-     with the panel they dressed -- the dashed-border box, the waypoint
-     pills, the train chips, the hop counter, the two red warning styles and
-     the Auto/Manual pair. They now live in `RoutePlannerPanel.tsx`, next to
-     the only markup that ever used them. */
-  /* Design note #228: the active-corporation strip. A row rather than a
-     boxed card -- it sits directly above the stepper inside a panel that
-     already has a border, and nesting a second frame would read as a
-     separate widget instead of as this panel's own heading. */
+  /* Design note #266: twenty `route*` keys were deleted here with the panel they dressed. They live in
+     `RoutePlannerPanel.tsx`, next to the only markup that ever used them.
+     Design note #228: the active-corporation strip. A row rather than a boxed card -- it sits inside a panel
+     that already has a border, and a second frame would read as a separate widget. */
   orContextCard: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
     gap: "6px 14px",
-    /* Design note #299: the strip's height is set by the station-token row
-       and the train chips inside it, which are already compact -- so the
-       44px floor was adding empty space to a row that had none to give.
-       Dropped rather than lowered: a minimum height on a card whose
-       contents already exceed it does nothing except on the one screen
-       where the card is nearly empty, and there the extra height is not
-       worth the pixels everywhere else.
-
-       ==================================================================
-        DESIGN NOTE 371: 3px WAS ONE PIXEL TOO FEW
-       ==================================================================
-
-       REPORTED: the train chips inside this card are clipped at the
-       bottom.
-
-       #299 was right that the 44px floor was dead space and wrong by a
-       hair about the padding. The chips are the tallest thing in this row
-       at 24px (`TrainBadges` design note #370), and at 3px top and bottom
-       the card is 30px -- which fits, until the row WRAPS. A wrapping flex
-       container distributes its lines by `align-content`, whose initial
-       value is `stretch`; with the card's height driven by content that is
-       usually harmless, but any ancestor rounding or a partially-filled
-       last line pushes the final row against the padding edge, and the
-       thing that goes is the 1px bottom border of a 5px-radius chip.
-
-       6px, and `alignContent: center` so a wrapped set of lines is
-       centred in the box rather than stretched against its edges. Two
-       pixels each way is not the space #299 reclaimed -- that was the
-       40px difference between a 44px floor and a 30px row. */
+    /* Design note #299: the 44px floor is dropped rather than lowered -- a minimum height on a card whose
+       contents already exceed it does nothing except on the one screen where the card is nearly empty.
+       Design note #371: 3px WAS ONE PIXEL TOO FEW. The chips are 24px, so at 3px either side the card is 30px
+       -- which fits until the row WRAPS: a wrapping flex container distributes its lines by `align-content`,
+       whose initial value is `stretch`, and any rounding or partially-filled last line pushes the final row
+       against the padding edge. 6px, plus `alignContent: center`. */
     padding: "6px 10px",
     alignContent: "center",
     borderRadius: "8px",
@@ -995,13 +742,10 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "7px",
     minWidth: 0,
   },
-  /* Design note #575: `rosterLiveryAcronym`'s typography exactly -- the
-     monospace face and its tracking included. Approximating it would give
-     the same company two slightly different looks on two screens, which is
-     the specific thing this change was asked for to stop.
-
-     `flexShrink: 0` for that file's own reason: the acronym is the handle
-     and must not be the thing that ellipsises when the bar is narrow. */
+  /* Design note #575: `rosterLiveryAcronym`'s typography exactly, monospace face and tracking included --
+     approximating it would give the same company two slightly different looks on two screens, which is the
+     specific thing this was asked for to stop. `flexShrink: 0` because the acronym is the handle and must
+     not be the thing that ellipsises when the bar is narrow. */
   orContextAcronym: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.strong,
@@ -1010,23 +754,16 @@ export const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     flexShrink: 0,
   },
-  /* `orContextDot` is GONE -- design note #236. The whole bar is the
-     corporation's colour now, so a dot of that same colour drawn on it was
-     invisible by construction. */
-  /* Colours on these five are supplied per-render from
-     `corporationBarInk` -- see design note #236. What stays here is
-     everything that does not depend on which corporation is acting. */
+  /* `orContextDot` is GONE -- design note #236. The whole bar is the corporation's colour now, so a dot of
+     that same colour drawn on it was invisible by construction.
+     Colours on these five are supplied per-render from `corporationBarInk`; what stays here is everything
+     that does not depend on which corporation is acting. */
   orContextTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800 },
   orContextName: { fontSize: FONT_SIZE.small },
   orContextPresident: { fontSize: FONT_SIZE.small, whiteSpace: "nowrap" },
-  /* Design note #236: the figures CONTINUE FROM THE LEFT.
-     This carried `marginLeft: auto`, which flung them to the far edge of the
-     panel. On a wide window that left a gulf between the corporation's name
-     and its own numbers, so reading "PRR ... $640" meant crossing the bar,
-     and the three figures ended up further from the label they belong to
-     than from the window edge. They now flow inline after the identity,
-     which is how the sentence actually reads: this corporation, then what it
-     has. */
+  /* Design note #236: the figures CONTINUE FROM THE LEFT. `marginLeft: auto` flung them to the far edge, so
+     reading "PRR ... $640" meant crossing the bar and the figures ended up further from their own label than
+     from the window edge. They flow inline after the identity, which is how the sentence reads. */
   orContextFacts: {
     display: "inline-flex",
     alignItems: "center",
@@ -1094,22 +831,15 @@ export const styles: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  /* Design note #164: the two-row Operating Round panel. */
-  /* Design note #299: the gap between the corporation strip, the sub-phase
-     stepper and the action row. Three stacked rows at 6px each is 18px of
-     pure separation in a panel whose own rows are ~30px -- halved, which
-     still reads as three distinct bands. */
+  /* Design note #164: the two-row Operating Round panel.
+     Design note #299: three stacked rows at 6px each is 18px of pure separation in a panel whose own rows
+     are ~30px -- halved, which still reads as three distinct bands. */
   orPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
-  /* Design note #481: `orPanelStepperRow` is GONE, and so is the rule that
-     divided it from the action row. The strip it framed is now an inline
-     phrase beside the round title (`actionBarSubPhaseInline` below), which
-     is what removed the row rather than merely emptying it -- a style kept
-     "in case" is how a deleted row comes back. */
-  /* Design note #426: this row was ALREADY true-centred -- `1fr auto 1fr`
-     rails plus `justifyContent: center` on `orPanelActions` inside them.
-     It is the model the non-Operating-Round bar (`actionBarButtons`) has
-     now been rebuilt to match; see that style's own note for what it was
-     doing instead and why the spacer pair only looked like centring. */
+  /* Design note #481: `orPanelStepperRow` is GONE, and so is the rule that divided it from the action row.
+     The strip is an inline phrase beside the round title now -- a style kept "in case" is how a deleted row
+     comes back.
+     Design note #426: this row was ALREADY true-centred, and is the model `actionBarButtons` was rebuilt to
+     match; see that style's note for why the spacer pair only looked like centring. */
   orPanelActionRow: {
     display: "grid",
     // THE WHOLE POINT. Equal `1fr` rails mean the centre column is centred
@@ -1119,60 +849,24 @@ export const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "1fr auto 1fr",
     alignItems: "center",
     gap: "10px",
-    /* ==================================================================
-     *  DESIGN NOTE 655: THE CEILING WAS THE BUG IT WARNED ABOUT
-     * ==================================================================
-     *
-     * REPORTED, at the Run Routes step: "there's a horizontal rule that looks
-     * like 'Run Routes' is supposed to be above, but instead the rule is
-     * bisecting the Phase marker, the Run Routes button, and the Undo button,
-     * while C&O's four train chips below the 'Run Routes' button are not
-     * enclosed in the action panel and bleed onto the map."
-     *
-     * One cause, two symptoms. `maxHeight: 60px` capped this row's BOX, not
-     * its contents. Routes is the busiest step -- Run Routes, Auto-Route,
-     * Skip, Undo, the phase badge and the utilities -- so the centre column
-     * wraps to a second line and the row's real content runs past 60px. With
-     * no `overflow` set, that surplus paints outside the box.
-     *
-     * The rule is `condensedTrainRow`'s `borderTop`. That row is a SIBLING in
-     * `orPanel`'s column, so it is laid out at this row's declared bottom
-     * edge -- 60px -- while the buttons are still being drawn below it. The
-     * divider lands across the controls instead of under them, and the chips
-     * that follow are positioned past where the panel believes it ends, so
-     * they fall outside its background and over the map.
-     *
-     * Design note #426 named this exact failure while keeping it: "a
-     * `maxHeight` that no longer fits its contents is how a bar starts
-     * clipping its own controls." It raised the number instead of removing
-     * the cap, which buys the distance to the next step that needs one more
-     * button. A ceiling on a wrapping row has no version that is right; the
-     * FLOOR is what design note #295 actually wanted -- a band the row never
-     * falls below, so a sparse step still reads as the same bar. `alignItems:
-     * center` keeps the contents centred in whatever height results.
-     *
-     * Removing the cap is also what makes the chips correct without touching
-     * them: they were never mispositioned, they were positioned relative to a
-     * boundary that lied. */
+    /* Design note #655: THE CEILING WAS THE BUG IT WARNED ABOUT. `maxHeight: 60px` capped this row's BOX, not
+       its contents. Routes is the busiest step, so the centre column wraps and the real content runs past 60px
+       -- and with no `overflow` set, that surplus paints outside the box.
+       The reported rule is the next row's `borderTop`: that row is a SIBLING laid out at this row's DECLARED
+       bottom edge while the buttons are still being drawn below it, so the divider lands across the controls
+       and the chips that follow fall outside the panel's background and over the map.
+       #426 named this failure while keeping it and raised the number instead. A ceiling on a wrapping row has
+       no version that is right; the FLOOR is what #295 actually wanted, with `alignItems: center` keeping the
+       contents centred in whatever height results. The chips were never mispositioned -- they were positioned
+       relative to a boundary that lied. */
     minHeight: "48px",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 631: THE SEAT CARD
-   * ==================================================================
-   *
-   * Built to `orContextCard`'s proportions rather than to a badge's: this is
-   * the Stock/Auction bar's answer to the corporation card, and two identity
-   * blocks of different sizes on two rounds of the same bar would read as two
-   * different kinds of thing.
-   *
-   * NO `borderRadius: 999px`. The pill shape is what made the old badge read
-   * as a tag ABOUT something rather than as the thing itself -- the same
-   * distinction design note #603 worked through on the turn-order bar. A card
-   * is a rectangle.
-   *
-   * `backgroundColor` AND `borderColor` COME FROM THE CALL SITE, because only
-   * it knows the seat. Everything that can be fixed is fixed here so the two
-   * cards cannot drift in shape while differing in colour. */
+  /* Design note #631: THE SEAT CARD, built to `orContextCard`'s proportions rather than a badge's -- two
+     identity blocks of different sizes on two rounds of the same bar would read as two kinds of thing.
+     NO `borderRadius: 999px`: the pill shape is what made the old badge read as a tag ABOUT something rather
+     than as the thing itself (#603 worked through the same distinction). A card is a rectangle.
+     Background and border come from the CALL SITE, because only it knows the seat; everything that can be
+     fixed is fixed here so the two cards cannot drift in shape while differing in colour. */
   seatContextCard: {
     display: "inline-flex",
     flexDirection: "column",
@@ -1205,32 +899,18 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     fontVariantNumeric: "tabular-nums",
   },
-  /* ==================================================================
-   *  DESIGN NOTE 631: THE ACTING-PLAYER BADGE WAS ALREADY UNREACHABLE
-   * ==================================================================
-   *
-   * Deleted here: `playerCashBadge`, its name/value parts, and
-   * `playerCashEscrow` further down. The seat card above replaces what it did
-   * -- and, checked before deleting, it had not been doing it for some time.
-   *
-   * It was the `seatOrderTrail ?? ...` fallback, in the NON-Operating-Round
-   * branch of the bar. Design note #601 worked out that the trail is non-null
-   * for exactly the two rounds that branch renders, so the fallback could
-   * never be taken; and the one state that might have slipped past -- no
-   * `gameState` yet -- fails the `activePlayerCash !== null` guard as well,
-   * because that figure is derived from the same absent state.
-   *
-   * THAT IS THE SECOND DEAD FALLBACK IN THIS ONE `??`. The roster pills were
-   * the first (#601). Both were kept "for the case the trail does not cover",
-   * both described an empty set, and both compiled and linted perfectly for
-   * months. The shape to distrust is a fallback whose condition is the
-   * negation of a condition maintained in a different file. */
-  /* Design note #317: escrow qualifies the figure beside it rather than
-     competing with it -- muted, and absent entirely when nothing is bid. */
-  /* Design note #563: the player card grid's own section. Spaced from the
-     corporation cards above rather than merged into their grid -- they are a
-     different kind of object and a shared grid would imply they were
-     comparable cells. */
+  /* Design note #631: THE ACTING-PLAYER BADGE WAS ALREADY UNREACHABLE. `playerCashBadge` and its parts are
+     deleted. It was the `seatOrderTrail ?? ...` fallback in the non-Operating-Round branch, and #601 worked
+     out that the trail is non-null for exactly the two rounds that branch renders -- and the one state that
+     might have slipped past (no `gameState` yet) fails the cash guard too, since that figure derives from
+     the same absent state.
+     THAT IS THE SECOND DEAD FALLBACK IN THIS ONE `??`. Both were kept "for the case the trail does not
+     cover", both described an empty set, and both compiled and linted perfectly for months. The shape to
+     distrust is a fallback whose condition is the negation of a condition maintained in a different file.
+     Design note #317: escrow qualifies the figure beside it rather than competing with it -- muted, and
+     absent entirely when nothing is bid.
+     Design note #563: the player-card grid's own section, spaced from the corporation cards rather than
+     merged into their grid -- a shared grid would imply they were comparable cells. */
   playerCardsSection: {
     display: "flex",
     flexDirection: "column",
@@ -1244,16 +924,10 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.3px",
     color: "#c8cdd8",
   },
-  /* Design note #578: the room gate. Deliberately plain -- it is a doorway,
-     not a screen, and anything decorative here would be competing with the
-     board it exists to get out of the way of. */
-  /* Design note #581: the status line dock. Anchored to the bottom EDGE
-     rather than given a height, so the expanded history grows upward from
-     the line and never off the screen.
-
-     `maxHeight` with `overflowY` is the ceiling: a long history must not
-     become the whole window. 60vh leaves the board visible above it, which
-     is the point of a peripheral surface. */
+  /* Design note #578: the room gate. Deliberately plain -- it is a doorway, not a screen.
+     Design note #581: the status-line dock, anchored to the bottom EDGE rather than given a height, so the
+     expanded history grows upward and never off the screen. `maxHeight` with `overflowY` is the ceiling: a
+     long history must not become the whole window, and 60vh leaves the board visible above it. */
   statusLineDock: {
     position: "fixed",
     left: 0,
@@ -1262,28 +936,13 @@ export const styles: Record<string, React.CSSProperties> = {
     zIndex: 3000,
     display: "flex",
     flexDirection: "column",
-    /* ==================================================================
-     *  DESIGN NOTE 614: THE DOCK MUST NOT BE THE THING THAT SCROLLS
-     * ==================================================================
-     *
-     * REPORTED: "the only way to collapse it is to scroll all the way to the
-     * top of the log."
-     *
-     * Exactly what `overflowY: auto` here buys. The dock is a column whose
-     * FIRST child is the header carrying the Collapse control, so a dock that
-     * scrolls is a dock that can carry its own escape hatch off-screen -- and
-     * with the history list scrolling too, a reader's wheel gesture landed on
-     * whichever of the two nested scrollers happened to be under the pointer.
-     *
-     * ONE SCROLLER, AND IT IS THE LIST. `overflow: hidden` here, `flex` and
-     * `minHeight: 0` down the chain (design note #614 in `TopTicker.tsx`), so
-     * a capped dock shortens the HISTORY and never the header. The collapse
-     * control is then unconditionally reachable, which is the property a
-     * control that undoes an expansion has to have.
-     *
-     * The cap stays for the reason design note #599 gives -- a long history
-     * must not become the whole window -- and design note #605's scroll
-     * compensation still pushes the page down by whatever the dock takes. */
+    /* Design note #614: THE DOCK MUST NOT BE THE THING THAT SCROLLS. The dock is a column whose FIRST child
+       is the header carrying Collapse, so a dock that scrolls can carry its own escape hatch off-screen -- and
+       with the history scrolling too, a wheel gesture landed on whichever of two nested scrollers was under
+       the pointer.
+       ONE SCROLLER, AND IT IS THE LIST: `overflow: hidden` here, `flex` and `minHeight: 0` down the chain
+       (`TopTicker.tsx #614`), so a capped dock shortens the HISTORY and never the header. The cap stays for
+       #599's reason, and #605's scroll compensation still pushes the page down by whatever the dock takes. */
     maxHeight: "60vh",
     overflow: "hidden",
     borderTop: "1px solid #2b3242",
@@ -1319,14 +978,10 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#8a90a0",
     cursor: "pointer",
   },
-  /* Design note #601: eight `rosterPill*` styles deleted here, with the
-     unreachable pill branch in `ContextualActionBar.tsx` that was their
-     only consumer. Design note #406's 8em name ceiling ('six seats have to
-     fit') is the one constraint worth carrying forward -- `SeatOrderTrail`
-     does not clamp its names, so a table of long sandbox nicknames widens
-     the trail rather than truncating. Six-seat games are supported, so if
-     that ever overflows the bar, a max-width on `seatName` is the fix and
-     this is the note that predicted it. */
+  /* Design note #601: eight `rosterPill*` styles deleted with the unreachable branch that was their only
+     consumer. #406's 8em name ceiling is worth carrying forward -- `SeatOrderTrail` does not clamp its names,
+     so a table of long sandbox nicknames widens the trail rather than truncating. If that ever overflows,
+     a max-width on the seat name is the fix and this is the note that predicted it. */
   orPanelRailLeft: {
     display: "flex",
     flexDirection: "row",
@@ -1334,14 +989,10 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     flexWrap: "wrap",
     justifySelf: "start",
-    /* Design note #482: THE CENTRING WAS ONLY EVER CONDITIONAL. The row's
-       `1fr auto 1fr` rails centre the action group on the panel -- but a
-       `1fr` track is `minmax(auto, 1fr)` and will not shrink below its
-       content, so a rail holding a long line of text widens instead of
-       clipping and drags the centre column with it. `minWidth: 0` is what
-       makes the rail yield, and it is what the sibling rail on the
-       non-Operating-Round bar has had since design note #458. Without it,
-       the centring holds only for as long as nothing wide is put in here. */
+    /* Design note #482: THE CENTRING WAS ONLY EVER CONDITIONAL. A `1fr` track is `minmax(auto, 1fr)` and will
+       not shrink below its content, so a rail holding a long line of text widens instead of clipping and drags
+       the centre column with it. `minWidth: 0` is what makes the rail yield -- the sibling rail on the other
+       bar has had it since #458. */
     minWidth: 0,
   },
   orPanelRailRight: {
@@ -1360,35 +1011,15 @@ export const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     justifyContent: "center",
   },
-  /* Design note #490: this is now a SECTION of the action panel rather than
-     a card floating beneath it, and the styling follows the move.
-
-     The full border is gone. A box inside a box reads as a separate object
-     -- which is exactly what this block used to be and no longer is -- so
-     what remains is a single hairline along the top, doing the one job the
-     border was really doing: separating the figures from the button row
-     immediately above them. `marginTop` pays for that rule; `orPanel`'s own
-     3px column gap is too tight to sit a divider in. */
-  /* Design note #498: the collapsed bar's Run Routes train row. Sized DOWN
-     from the ordinary chip -- it exists in the pinned form, whose whole
-     premise is that height is being taken from the board, so it buys its
-     line with the smallest type this bar uses rather than the control size.
-     `wrap` so four trains on a narrow window become two short lines instead
-     of overflowing the panel. */
-  /* ==================================================================
-   *  DESIGN NOTE 518: THE SUB-PHASE TRAIL
-   * ==================================================================
-   *
-   * Connected boxes rather than separated pills, which is what makes it read
-   * as a SEQUENCE rather than as a set of tags. The segments share edges --
-   * `marginLeft: -1px` collapses the doubled border between neighbours -- so
-   * the trail is one object with divisions rather than six objects in a row.
-   * That is the same construction the Par ladder on the stock cards uses,
-   * and for the same reason: both describe positions along one track.
-   *
-   * `flexWrap` because six steps at the era's full length can outrun a
-   * narrow window, and a wrapped trail still reads in order where a clipped
-   * one loses its tail. */
+  /* Design note #490: a SECTION of the action panel rather than a card floating beneath it. The full border
+     is gone -- a box inside a box reads as a separate object -- leaving a hairline doing the one job the
+     border really did; `marginTop` pays for it, since `orPanel`'s 3px gap is too tight to sit a divider in.
+     Design note #498: the collapsed bar's Run Routes train row, sized DOWN from the ordinary chip -- it lives
+     in the pinned form, whose premise is that height is being taken from the board.
+     Design note #518: THE SUB-PHASE TRAIL. Connected boxes rather than separated pills, sharing edges
+     (`marginLeft: -1px` collapses the doubled border), so it reads as a SEQUENCE rather than a set of tags --
+     the same construction the par ladder uses, and for the same reason. `flexWrap` because a wrapped trail
+     still reads in order where a clipped one loses its tail. */
   subPhaseTrail: {
     display: "inline-flex",
     flexDirection: "row",
@@ -1489,16 +1120,10 @@ export const styles: Record<string, React.CSSProperties> = {
   dividendPct: { color: "#6f7480", fontWeight: 400 },
   dividendNote: { fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.4 },
   dividendMove: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#9ec5ff", marginTop: "4px" },
-  /* Design note #214: the arrow is the one glyph in the line that carries a
-     DIRECTION, so it is the one that takes the direction's colour. Sized up
-     and weighted past the prices either side of it: those are tinted by
-     market zone (a rules fact), and if the arrow merely matched them the
-     line would read as three coloured things competing rather than one
-     movement between two values.
-
-     `lineHeight: 1` because the diagonal glyphs sit taller than the digits
-     and would otherwise push this row's baseline down relative to the
-     Withhold column beside it. */
+  /* Design note #214: the arrow is the one glyph in the line carrying a DIRECTION, so it takes the
+     direction's colour, sized and weighted past the zone-tinted prices either side -- if it merely matched
+     them the line would read as three coloured things competing rather than one movement between two values.
+     `lineHeight: 1` because the diagonal glyphs sit taller than the digits. */
   dividendMoveArrow: {
     fontWeight: 900,
     fontSize: "1.15em",
@@ -1617,11 +1242,9 @@ export const styles: Record<string, React.CSSProperties> = {
     // instead of being centered at their own fixed content size.
     alignItems: "stretch",
     justifyContent: "stretch",
-    // Design note #13/item 1: `overflow: "auto"` removed -- see
-    // `canvasPane`'s own comment above for why. `StockMarketRenderer` (the
-    // Stock Market tab, unaffected by this item) still gets its own
-    // dedicated pane height from this same un-clipped flex chain; only the
-    // Rail Map tab's canvas actually grows past one viewport in practice.
+    // Design note #13/item 1: `overflow: "auto"` removed -- see `canvasPane` above. `StockMarketRenderer`
+    // still gets its pane height from this same un-clipped flex chain; only the Rail Map's canvas actually
+    // grows past one viewport in practice.
     minHeight: "420px",
   },
   hexClickIndicator: {

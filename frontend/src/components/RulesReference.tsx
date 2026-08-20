@@ -1,282 +1,48 @@
 // frontend/src/components/RulesReference.tsx
 //
-// The "Rules Reference" top-level tab (see App.tsx's restructure, item 6 of
-// this pass): a clean, player-facing summary of real 1830 limits and caps,
-// for players to check mid-game.
+// The Rules Reference tab -- a player-facing summary of real 1830 limits and caps, checkable mid-game.
 //
-// Design notes:
-// 1. **Sourced, not remembered -- but presented clean, not annotated.**
-//    Every figure below was fetched from the open-source `tobymao/18xx`
-//    engine's real 1830 config (`lib/engine/game/g_1830/game.rb`,
-//    `lib/engine/game/g_1830/entities.rb`, plus the engine-wide defaults in
-//    `lib/engine/game/base.rb`/`lib/engine/corporation.rb` that 1830
-//    inherits from), the SAME repository this project has already used to
-//    source the board layout (`HexGridRenderer.tsx` design notes #6/#10/
-//    #12) and stock market grid (`StockMarketRenderer.tsx` design note #3).
-//    An earlier pass of this tab surfaced a per-row "confidence" badge
-//    (verbatim / engine default / not verbatim-confirmed) directly in the
-//    player-facing UI -- useful for this project's own development process,
-//    but exactly the kind of developer bookkeeping a player checking a rule
-//    mid-game doesn't want to see. This pass removes that UI entirely; the
-//    sourcing discipline itself hasn't changed (every figure below is still
-//    independently checked against this project's own already-implemented
-//    contract logic where the contract has an opinion -- see the two
-//    explicit confirmations below -- and against the sourced engine data
-//    otherwise), it just no longer surfaces as an on-screen tag.
-// 2. **This is reference-only content -- nothing here reads live game
-//    state.** Unlike every other new panel in this pass
-//    (`ContextualSubPanel.tsx`, `FinancialLedger.tsx`), this tab has no
-//    `gameState` prop at all: it's the same static rules regardless of
-//    which room/round is active, matching how a real rulebook insert would
-//    work.
-// 3. **Two rules explicitly confirmed against this contract's own
-//    implementation, not just the source engine.** Capitalization
-//    (`trading.rs`'s `FLOAT_CAPITALIZATION_MULTIPLIER = 10` applied the
-//    instant `FLOAT_THRESHOLD_PERCENTAGE = 60` is crossed) and the
-//    president's certificate (`STANDARD_SHARE_COUNT = 10` ten-percent
-//    units, sold as 9 physical certificates: one 20% president's
-//    certificate plus eight 10% certificates) are both real constants in
-//    `src/trading.rs`, re-checked directly against that file for this pass
-//    rather than only against the reference engine -- see the two rows
-//    below, each written out in full rather than left as a compressed
-//    label + badge.
-// 4. **President's certificate limit correction.** An earlier pass of this
-//    row stated the president's 20% certificate counts as 2 certificates
-//    against the certificate limit -- a common misconception, but wrong.
-//    Re-verified against three independent sources, described rather than
-//    quoted (design note #548): the published rulebook's own certificate
-//    -limit section, which states that the president's holding is two
-//    shares but one certificate; the long-standing 18xx.net rules summary,
-//    which makes the same distinction between certificates and the
-//    percentage each represents; and the open-source `tobymao/18xx`
-//    engine's own `num_certs`
-//    implementation (`lib/engine/game/base.rb`), which sums each share's
-//    `cert_size` -- a field that defaults to `1` and is never overridden to
-//    `2` for a president's `Share` object (`lib/engine/share.rb`/
-//    `lib/engine/corporation.rb`). All three agree without exception: it
-//    counts as exactly 1. A follow-up pass tightened this row's wording
-//    down to the single sentence the rule actually is ("Counts as exactly
-//    1 certificate.") and removed the earlier "physical card"/"hand slot"
-//    framing entirely -- that framing wasn't wrong, but it invited a reader
-//    to think of "hand slot count" and "certificate count" as two separate
-//    numbers that just happen to agree, when they're actually the same
-//    count by definition; stating the rule directly avoids that confusion.
-// 5. **Game Flow summaries, verified against this contract's own
-//    implementation, not just generic 1830 knowledge.** The Stock Round and
-//    Operating Round sections below describe what `contract.rs`/
-//    `trading.rs`/`operations.rs`/`hardware.rs` actually enforce, re-read
-//    directly for this pass rather than assumed from familiarity with
-//    physical 1830. Two honesty notes worth surfacing here rather than
-//    glossing over in the player-facing copy: (a) a corporation's Lay
-//    Track / Buy Equipment / Declare Dividends actions within its own
-//    Operating Round turn are NOT sequence-enforced by this contract -- a
-//    President may call them in any order, or skip any of them, before
-//    ending the turn (`operations.rs` module doc comment #10 explicitly
-//    notes `EndOperatingRoundTurn` does not require any prior action to
-//    have been taken); (b) route revenue itself is computed by
-//    `ExecuteOperatingRound`, a separate batched, creator/Validator-only
-//    transaction that runs every listed company's Pathfinding Revenue
-//    Engine pass in one shot (`operations.rs` module doc comment #1) --
-//    it is not yet wired into each corporation's individual turn the way
-//    Lay Track / Buy Equipment / Declare Dividends are. The summary below
-//    presents the classic conceptual sequence for player-facing clarity
-//    while these two notes keep this file's sourcing discipline intact.
-// 6. **Font-Size & Cleanliness Pass.** Two items:
-//    (1) Every text style in this file's `styles` object is scaled up --
-//    roughly the same 25-40% ratio `App.tsx`/`Chatbox.tsx`'s own prior
-//    "final visual theme" upscaling passes used (e.g. `App.tsx` design note
-//    #12) -- for significantly better legibility on this tab specifically:
-//    `pageTitle` 20px -> 26px, `sourceNote`/`flowIntro`/`flowStep`/
-//    `flowDetail` 12px -> 16px, `sectionTitle` 14px -> 18px, table text
-//    13px -> 16px, `rowNote` 11px -> 14px. Paddings/line-heights nudged up
-//    alongside the text so denser elements (table cells, flow-step cards)
-//    don't feel cramped at the new, larger point sizes.
-//    (2) Developer-comment/placeholder/TODO audit of the RENDERED output:
-//    this file's design notes above (like every other component in this
-//    codebase) live in a top-of-file JS comment block, which React never
-//    renders -- they were never player-visible to begin with. A full
-//    re-read of every JSX-rendered string in the component below (table
-//    cells, flow-step text, section titles, the source note) turned up
-//    zero "TODO"/"FIXME"/placeholder/debug strings; the confidence-badge
-//    UI design note #1 describes removing (verbatim/engine-default tags)
-//    was already gone before this pass, per that note's own account. This
-//    item is therefore a verified-clean audit, not a cleanup with visible
-//    before/after -- recorded here rather than silently skipped, so a
-//    future reader knows the check was actually done.
-// 7. **"Current Round Quick Reference" Section.** A new, prominent
-//    `position: sticky` section (`QuickReferenceSection`) now renders FIRST
-//    on this tab, stuck to the top of the page's own scroll container
-//    (`styles.root`'s `overflowY: "auto"`) as the player scrolls down
-//    through the longer reference tables below it. Two optional new props,
-//    `roundType`/`operatingSubPhase` (locally-typed unions structurally
-//    identical to `GameStateResponse['current_round_type']`/`App.tsx`'s own
-//    `OperatingSubPhase`, not imported -- same "no gameState coupling"
-//    discipline as design note #2, extended minimally): when `App.tsx`
-//    supplies them (see that file's own design note #17), this section
-//    DYNAMICALLY shows only the currently-active round's own numbered
-//    checklist, pulled from this file's own `STOCK_ROUND_FLOW`/
-//    `OPERATING_ROUND_FLOW`/new `AUCTION_FLOW` arrays (each gained a new
-//    `quick` field -- a compact one-line version of the existing `detail`
-//    prose, used here; the full `detail` text still drives the unchanged
-//    Game Flow sections further down the page) -- e.g. "Operating Round --
-//    Step 3 of 5: Dividends." When `roundType` is omitted (this tab used
-//    standalone, e.g. outside a live room), it instead CLEARLY OUTLINES all
-//    three round types side by side as compact cards, so the section is
-//    always useful, connected or not. `AUCTION_FLOW` documents the five
-//    real Waterfall Auction actions (`WaterfallBuyLowest`/`WaterfallBidHigher`/
-//    `WaterfallPass`/`WaterfallMiniAuctionRaise`/`WaterfallMiniAuctionPass`),
-//    sourced from `WaterfallAuctionDashboard.tsx`'s own design notes --
-//    this tab previously had no auction-round content at all.
-// 8. **Operating Round Flow Correction: "Buy Private Company" (Phase 3+).**
-//    `OPERATING_ROUND_FLOW` was missing a real, already-implemented action:
-//    a corporation's President may buy a still-owned private company
-//    directly from the player holding it, using the corporation's
-//    treasury. Sourced directly from this same contract's own
-//    `ContextualActionBar` implementation in `App.tsx` (design note #14
-//    there) rather than re-derived from scratch: available starting in
-//    Phase 3 (`current_global_era !== "Yellow"`, mirroring
-//    `trading::execute_buy_private_company`'s own
-//    `PrivatePurchaseLockedBeforePhase3` gate), dispatched during a
-//    corporation's own Operating Round turn, at a price bounded on-chain to
-//    50%-200% of the private's face value (`App.tsx`'s own floor
-//    `Math.ceil(cost / 2)` / ceiling `cost * 2`, re-enforced server-side by
-//    `trading.rs` regardless of what the client submits). Added as this
-//    section's fifth step; `flowIntro`'s "four actions" wording updated to
-//    "five actions" to match.
+// Design note #1: SOURCED, NOT REMEMBERED. Every figure was fetched from the open-source `tobymao/18xx`
+// engine's real 1830 config -- the same repository this project used for the board layout and the stock
+// market grid -- and independently checked against this contract wherever the contract has an opinion.
+// The per-row confidence badge an earlier pass surfaced is gone: that is developer bookkeeping, not
+// something a player checking a rule wants to see. The discipline is unchanged; it just no longer renders.
+//
+// Design note #2: reference-only. This tab has no `gameState` prop -- the same static rules regardless of
+// room or round, matching how a rulebook insert works. (#7 later added two optional DISPLAY props only.)
+//
+// Design note #3: capitalization and the president's certificate are re-checked against `trading.rs`
+// itself, not only against the reference engine.
+// Design note #4: the president's 20% certificate counts as EXACTLY 1 against the limit -- verified
+// against three independent sources, which agree without exception.
+// Design note #5: the Game Flow summaries describe what this contract enforces, with two honesty notes --
+// the OR's actions are not sequence-enforced, and route revenue runs as a separate batched transaction.
+//
+// Full sourcing history, the $350 removal and the annulment gap: `docs/ai_architecture/rules_and_sourcing.md`.
 
-// 9. **Legibility/Layout Follow-Up (direct feedback on design notes #6/#7).**
-//    Three fixes, all styling/structure -- no rule content changed except
-//    the new narrative section in item (3):
-//    (1) Content/description text was still reported too small even after
-//    design note #6's pass. Pushed further: `flowDetail`/`quickListDetail`
-//    15px -> 18px, `rowNote` 13px -> 16px, table `td`/`th` 16px -> 18px,
-//    `sourceNote`/`flowIntro` 15px -> 17px, `quickListItemCompact` (the
-//    disconnected fallback's compact cards) 13px -> 15px. Line-heights
-//    nudged up alongside (1.5-1.6 -> 1.6-1.7) so the larger text doesn't
-//    feel cramped.
-//    (2) Direct feedback: "Certificate Limits and Caps" and "Core Limits
-//    and Caps" "seem like they belong together rather than at the top and
-//    bottom." Restructured into a two-column layout
-//    (`styles.mainColumns`/`mainColumn`/`sideColumn`) below the page
-//    title/source note: a right-hand `<aside>` now stacks all three
-//    quick-lookup reference tables together in reading order -- Core
-//    Limits & Caps, Certificate Limit by Player Count, Starting Cash by
-//    Player Count -- while the left column carries the new narrative
-//    section (item 3) and the three Game Flow sections. `flexWrap: "wrap"`
-//    on `mainColumns` lets the side column drop below the main column on a
-//    narrow viewport rather than squeezing both into unreadable slivers.
-//    (3) Direct feedback: "the rules reference needs a more
-//    prosaic/narrative explanation of the game, your purpose as a player,
-//    and the win conditions." New `AboutSection` (prose paragraphs, no
-//    bullet lists, per the request's own "prosaic/narrative" wording) added
-//    at the top of the left column, right after the page title. Sourced
-//    directly from this contract's own real logic, not generic 1830
-//    knowledge -- re-read for this pass: personal net worth is
-//    `contract::calculate_player_net_worth` (cash plus live share value,
-//    a company's own treasury explicitly excluded -- see that function's
-//    own doc comment); the real-JUNO ante pool is redistributed
-//    proportionally to final net worth by
-//    `contract::finalize_and_distribute_payouts`, the shared core behind
-//    both `EndGameAndDistribute` (room creator, any time) and the former
-//    automatic $350 Game-End Trigger.
-//
-//    THE $350 TRIGGER IS NO LONGER DOCUMENTED AS AN END CONDITION. It was
-//    never canonical 1830 -- `market.rs`'s own module doc comment already
-//    conceded it is "this project's own explicit, user-requested house rule,
-//    not a transcription of the [reference] engine's behavior" -- and it has
-//    now been removed from the rules text and from the market grid's green
-//    game-end cell (`StockMarketRenderer.tsx` design note #27). This section
-//    enumerates the three real end paths: the Bank running dry
-//    (`GameSession::bank_is_broken`, `trading.rs`, the rulebook's primary end
-//    condition), presidential bankruptcy on a mandatory train purchase, and
-//    the room creator ending the game manually.
-//
-//    NOTE FOR THE BACKEND AUDIT: the contract still fires the $350 trigger.
-//    The frontend no longer advertises it, which closes the player-facing
-//    half of the discrepancy but not the contract half -- removing the
-//    trigger itself is a Rust change and is deliberately out of scope here.
-//
-//    SECOND, LARGER AUDIT ITEM -- ANNULMENT. This section now documents two
-//    CLASSES of ending, not three paths to one ending:
-//
-//      - NATURAL END (bank breaks, or presidential bankruptcy): the ante
-//        pool is distributed by final net worth, as before.
-//      - ANNULMENT (host ends the match, or a 48-hour inactivity timeout):
-//        no winner, no net-worth payout, every player refunded their own
-//        ante less gas and development fees.
-//
-//    The anti-exploit reason is the whole point: while every ending paid out
-//    by net worth, a host who was ahead could simply end the match and bank
-//    the lead. Refund-on-annul removes the incentive entirely.
-//
-//    THE CONTRACT DOES NOT DO THIS YET, and this is the sharper end of the
-//    discrepancy. `EndGameAndDistribute` runs the SAME
-//    `contract::finalize_and_distribute_payouts` that a natural end runs, so
-//    today a manual end still pays out by net worth. There is also no
-//    48-hour timeout in the contract at all -- no stored last-action
-//    timestamp, no permissionless expiry entry point.
-//
-//    Implementing annulment therefore needs a refund path distinct from the
-//    payout path, plus timeout state. That is a Rust change and is out of
-//    scope here by instruction. Until it lands, THIS TEXT DESCRIBES INTENDED
-//    RULES, NOT SHIPPED BEHAVIOUR -- flagged deliberately rather than
-//    quietly written as though it were already true.
+// Design note #9: LEGIBILITY AND LAYOUT FOLLOW-UP. Body/table/caption text pushed up again after #6's pass
+// was still reported too small, with line-heights nudged alongside so the larger text is not cramped.
+// The two Caps and Limits tables were brought together per direct feedback, and a narrative `AboutSection`
+// added -- prose paragraphs, no bullet lists, per the request's own "prosaic/narrative" wording -- sourced
+// from this contract's real logic: net worth is `contract::calculate_player_net_worth` (cash plus live
+// share value, a company's treasury explicitly EXCLUDED) and the ante pool is redistributed by
+// `contract::finalize_and_distribute_payouts`.
+// THE $350 TRIGGER IS NO LONGER DOCUMENTED AS AN END CONDITION -- it was never canonical 1830, and the
+// three real end paths are enumerated instead. AUDIT: the contract still fires it.
+// SECOND AUDIT ITEM -- ANNULMENT. Two CLASSES of ending are documented: a natural end pays out by net
+// worth, an annulment (host ends the match, or a 48-hour timeout) refunds every ante less fees. The
+// anti-exploit reason is the point: while every ending paid by net worth, a host who was ahead could end
+// the match and bank the lead. THE CONTRACT DOES NOT DO THIS YET -- `EndGameAndDistribute` runs the same
+// payout path and there is no timeout state at all -- so this text describes INTENDED RULES, NOT SHIPPED
+// BEHAVIOUR, flagged deliberately.
 
-// 10. **Page Restructure -- Top Row (Narrative | Current Round) / Bottom Row
-//    (side-by-side lookup tables).** Direct feedback on design note #9's
-//    layout: "Put the two Caps and Limits tables side-by-side at the bottom
-//    of the page. Above them, on the left let's have the narrative rules
-//    explanation, and on the right let's display the current round's rules
-//    reference." Three changes, no rule content changed:
-//    (1) The old sticky `QuickReferenceSection` (design note #7) -- which,
-//    when disconnected from a live room, only showed a one-line-per-step
-//    quick summary for all three rounds, and, when connected, showed a
-//    one-line checklist for the active round only -- is replaced by
-//    `CurrentRoundReferenceSection`. It is no longer sticky (it now lives in
-//    a normal top-row column, not pinned above the whole page), and it
-//    always renders all three rounds' FULL step-by-step `detail` prose (not
-//    just the `quick` one-liners), each step leading with its `quick`
-//    one-liner as a bold headline directly above the full `detail`
-//    paragraph. This was necessary because this restructure also REMOVES the
-//    three standalone "Game Flow -- Auction/Stock Round/Operating Round"
-//    sections that used to carry that same full-detail content further down
-//    the page -- folding them into this one column loses no information
-//    only because it now always shows full detail for every round, not just
-//    the active one. When connected via the `roundType`/`operatingSubPhase`
-//    props, the active round is reordered to the front and gets an "ACTIVE"
-//    badge (plus the existing UI-sub-phase badge for Operating Rounds); when
-//    disconnected, all three render in their normal order with no badge.
-//    (2) Page structure is now two stacked rows instead of the prior
-//    single two-column layout. `styles.topRow`: `AboutSection` (the
-//    narrative added in note #9(3)) on the left in `topRowLeft`,
-//    `CurrentRoundReferenceSection` on the right in `topRowRight` -- this is
-//    the literal "left = narrative, right = current round's rules
-//    reference" the feedback asked for. `styles.bottomRow`, below it, holds
-//    exactly the two lookup tables side by side: "Core Limits & Caps"
-//    (unchanged) and a new merged "Certificate Limit & Starting Cash by
-//    Player Count" table -- the two previously-separate "Certificate Limit
-//    by Player Count" / "Starting Cash by Player Count" tables are combined
-//    into one three-column table (Players | Certificate Limit | Starting
-//    Cash), zipped by matching `players` from the existing
-//    `CERT_LIMIT_BY_PLAYERS`/`STARTING_CASH_BY_PLAYERS` arrays (neither
-//    array's own data changed) -- read together as "the two Caps and Limits
-//    tables" the feedback named.
-//    (3) Styles: `mainColumns`/`mainColumn`/`sideColumn` (the prior
-//    left-column/right-sidebar layout) are removed and replaced by
-//    `topRow`/`topRowLeft`/`topRowRight`/`bottomRow`/`bottomRowColumn`.
-//    `quickRefSection`'s sticky positioning is dropped in favor of the new
-//    non-sticky `currentRoundSection`; `currentRoundBlock`/`flowItemHead`/
-//    `flowQuick`/`currentRoundDivider` are added for the new component;
-//    `flowItem` changes from a row layout (step name + detail inline) to a
-//    column layout, since it now stacks `flowItemHead` (step name + quick
-//    summary) above the full `flowDetail` paragraph rather than laying two
-//    inline siblings side by side. Styles left over from the old
-//    disconnected-fallback compact-card view that nothing renders with
-//    anymore (`quickRefTitle`, `quickList`, `quickListItem`,
-//    `quickListItemCompact`, `quickListIndex`, `quickListStep`,
-//    `quickListDetail`, `quickRefGrid`, `quickRefCard`) and the now-unused
-//    `flowIntro` (only used by the removed standalone Game Flow sections)
-//    are deleted rather than left dead in the file.
+// Design note #10: PAGE RESTRUCTURE. Top row is narrative left / current round right; the bottom row holds
+// the two lookup tables side by side, with certificate limit and starting cash merged into one three-column
+// table -- zipped by matching `players` rather than assumed-parallel indexing, so it stays correct even if
+// either array's row order changes independently.
+// The old sticky quick-reference section is replaced by a non-sticky panel that always renders EVERY
+// round's FULL step detail, which is what makes folding away the three standalone Game Flow sections lose
+// no content. Styles left over from the deleted view are deleted rather than left dead in the file.
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
@@ -289,15 +55,11 @@ interface RuleRow {
   note?: string;
 }
 
-/** The printed 1830 train roster -- Audit G-15. Mirrors
- *  `hardware::TRAIN_CATALOG` / `RUST_TRIGGERS` / `TRAIN_LIMIT_BY_PHASE`.
- *
- *  Documented here because every one of these numbers was previously
- *  discoverable only by reading Rust: cost, how many exist, what each can
- *  reach, and -- most consequential of all -- what kills it. A player
- *  deciding whether to buy the first 4-train is deciding whether to erase
- *  every 2-train on the board, including their own, and nothing in the app
- *  said so. */
+/** The printed 1830 train roster -- Audit G-15. Mirrors `hardware::TRAIN_CATALOG` / `RUST_TRIGGERS` /
+ *  `TRAIN_LIMIT_BY_PHASE`. Documented here because every one of these numbers was previously discoverable
+ *  only by reading Rust: cost, how many exist, what each can reach, and -- most consequential -- what kills
+ *  it. A player deciding whether to buy the first 4-train is deciding whether to erase every 2-train on the
+ *  board, including their own, and nothing in the app said so. */
 interface TrainRow {
   model: string;
   quantity: string;
@@ -397,11 +159,9 @@ interface FlowStep {
   quick: string;
 }
 
-/** Stock Round loop -- see design note #5. Repeats player-by-player until
- *  the room's creator explicitly begins the next Operating Round
- *  (`BeginOperatingRound`); this contract has no automatic pass-streak
- *  transition (`GameSession::consecutive_passes` is tracked but not yet
- *  consumed). */
+/** Stock Round loop -- design note #5. Repeats player-by-player until the room's creator explicitly begins
+ *  the next Operating Round; this contract has no automatic pass-streak transition
+ *  (`GameSession::consecutive_passes` is tracked but not yet consumed). */
 const STOCK_ROUND_FLOW: FlowStep[] = [
   {
     step: "Buy 1 share",
@@ -428,18 +188,13 @@ const STOCK_ROUND_FLOW: FlowStep[] = [
  *  design note #8 for the "Buy Private Company" step added by this pass. */
 const OPERATING_ROUND_FLOW: FlowStep[] = [
   {
-    // Design note #29: FIRST, not last. This is the chronological order a
-    // corporation's turn actually runs in -- a private is bought before
-    // track is laid, because the private's own special power (a free tile
-    // lay, a reserved hex) can change what track lay is legal in the very
-    // same turn. Listing it sixth described a sequence the game does not
-    // follow, in both the quick sidebar and the detailed panel, since both
-    // render from this one array.
-    //
-    // The Phase 3 caveat leads the text rather than trailing it: a step
-    // that is invisible for the first third of the game needs to say so
-    // before it says anything else, or a Phase 1 player spends their turn
-    // looking for a control that is not there.
+    // Design note #29: FIRST, not last. This is the chronological order a corporation's turn actually runs in
+    // -- a private is bought before track is laid, because the private's own power (a free tile lay, a reserved
+    // hex) can change what track lay is legal in the very same turn. Listing it sixth described a sequence the
+    // game does not follow, in both the sidebar and the detail panel, since both render from this one array.
+    // The Phase 3 caveat LEADS the text: a step invisible for the first third of the game needs to say so
+    // before it says anything else, or a Phase 1 player spends their turn looking for a control that is not
+    // there.
     step: "Buy Private Company",
     detail:
       "Unlocks in Phase 3. The President may spend the CORPORATION'S TREASURY — never personal cash — to buy a still-owned private company directly from the player holding it, at a price the two negotiate but bounded to 50%-200% of that private's face value. The private's revenue then flows to the corporation instead of the player.",
@@ -452,21 +207,13 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
     quick: "Lay or upgrade one connected tile, preserving existing track. Terrain fees from Treasury.",
   },
   {
-    // CORRECTION (design note #141): this step was MISSING from this list
-    // entirely, and the "Lay Track" text above actively denied it existed --
-    // it claimed the first tile lay "doubles as placing its home Station
-    // token -- there is no separate token-placement action". Both halves of
-    // that were wrong:
-    //
-    //   - The HOME token is granted automatically at FLOAT, by
-    //     `hexmap::grant_home_station_token` (called from `auction.rs` the
-    //     moment a corporation crosses 60%), not by laying a tile.
-    //   - There IS a separate action: `ExecuteMsg::PlaceStationToken` ->
-    //     `hexmap::execute_place_station_token`, with its own cost ladder,
-    //     token limit, reachability check and one-per-sub-round rule.
-    //
-    // So a player reading this reference was told not to look for a control
-    // that the Operating Round bar has had all along, in its own sub-phase.
+    // CORRECTION (design note #141): this step was MISSING from the list entirely, and the "Lay Track" text
+    // actively denied it existed -- claiming the first tile lay doubles as placing the home token. Both halves
+    // were wrong: the HOME token is granted automatically at FLOAT by `hexmap::grant_home_station_token`, and
+    // there IS a separate `ExecuteMsg::PlaceStationToken` with its own cost ladder, token limit, reachability
+    // check and one-per-sub-round rule.
+    // So a player reading this reference was told not to look for a control the Operating Round bar has had all
+    // along, in its own sub-phase.
     step: "Place a Station",
     detail:
       "After laying track, the President may place one additional Station token in a city its network already reaches. The city must have a free slot — a city whose every slot is taken by other corporations is closed to you, and also blocks your trains from running THROUGH it (they may still stop there). Token allowance, home token included: PRR, NYC and CPR get 4; B&O, C&O and ERIE get 3; NNH and B&M get 2. The first is the free home token granted automatically at float. The next one placed costs $40 from the company treasury, and every one after that costs $100. At most one station placement per corporation per Operating Round turn (e.g., one in OR 2.1, and another in OR 2.2).",
@@ -492,11 +239,9 @@ const OPERATING_ROUND_FLOW: FlowStep[] = [
   },
 ];
 
-/** Pre-Game Waterfall Auction -- see design note #7. The five real
- *  `ExecuteMsg` actions `waterfall.rs` implements, sourced from
- *  `WaterfallAuctionDashboard.tsx`'s own design notes (that component's
- *  interactive dashboard for this same round). Runs once, before Stock
- *  Round 1 ever opens -- allocates 1830's six private companies. */
+/** Pre-Game Waterfall Auction -- design note #7. The five real `ExecuteMsg` actions `waterfall.rs`
+ *  implements, sourced from `WaterfallAuctionDashboard.tsx`'s own notes. Runs once, before Stock Round 1
+ *  ever opens. */
 const AUCTION_FLOW: FlowStep[] = [
   {
     step: "Buy Lowest",
@@ -551,11 +296,9 @@ const ROUND_META: Readonly<Record<RulesRoundType, { label: string; flow: FlowSte
   OperatingRound: { label: "Operating Round", flow: OPERATING_ROUND_FLOW },
 };
 
-/** Mirrors `App.tsx`'s own `OPERATING_SUB_PHASE_LABELS` exactly (name +
- *  1-based index) -- hand-kept duplicate, not imported, per design note #7's
- *  "no gameState/App.tsx coupling beyond two optional display props"
- *  discipline. Only used for the small supplementary UI-step badge; the
- *  numbered checklist itself always comes from `OPERATING_ROUND_FLOW`. */
+/** Mirrors `App.tsx`'s `OPERATING_SUB_PHASE_LABELS` exactly (name + 1-based index) -- a hand-kept duplicate
+ *  rather than an import, per design note #7's "no gameState/App.tsx coupling beyond two optional display
+ *  props" discipline. Used only for the supplementary UI-step badge; the checklist comes from the flow array. */
 const OPERATING_SUB_PHASE_QUICK_LABELS: Readonly<Record<RulesOperatingSubPhase, { index: number; name: string }>> = {
   // Design note #144: mirrors `or_phase::OR_PHASE_ORDER`, which the contract
   // now ENFORCES rather than merely describes.
@@ -574,30 +317,16 @@ const OPERATING_SUB_PHASE_TOTAL = Object.keys(OPERATING_SUB_PHASE_QUICK_LABELS).
 /* Quick Reference strip -- RESTORED, design note #141                  */
 /* ------------------------------------------------------------------ */
 
-/** The compact, scannable round checklist that leads this page.
- *
- *  RESTORED, not newly invented. Design note #7 built a sticky
- *  `QuickReferenceSection` that showed one line per step; design note #10(2)
- *  deleted it in favour of `CurrentRoundReferenceSection`, which always
- *  renders every round's FULL `detail` prose. That trade lost something real:
- *  the full version is a document you read, and what a player wants mid-turn
- *  is a list they can glance at. Both now exist, and they are deliberately
- *  different tools rather than two sizes of the same one:
- *
- *    - THIS, at the top: one line per step, active round only when connected.
- *      Answers "what am I doing, and what comes next".
- *    - `CurrentRoundReferenceSection`, below: full prose for all three rounds.
- *      Answers "what exactly does that step mean".
- *
- *  It reads the SAME `FlowStep.quick` one-liners the flow arrays already
- *  carry -- the field design note #7 added for precisely this and which has
- *  been unused since #10(2) removed its only consumer. So a step added to a
- *  flow array appears in both places automatically; the two cannot drift.
- *
- *  DISCONNECTED it lists all three rounds side by side rather than hiding.
- *  In offline sandbox mode there is no live round, and a panel that renders
- *  nothing is indistinguishable from a panel that is broken -- which is
- *  exactly how its absence was reported. */
+/** Design note #17: the compact round checklist that leads this page. RESTORED, not newly invented -- #7
+ *  built it, #10(2) deleted it in favour of the full-detail panel, and that trade lost something real: the
+ *  full version is a document you read, and what a player wants mid-turn is a list they can glance at.
+ *  Both exist now as deliberately different tools: this answers "what am I doing, and what comes next"; the
+ *  panel below answers "what exactly does that step mean".
+ *  It reads the SAME `FlowStep.quick` one-liners the flow arrays already carry -- the field #7 added for
+ *  precisely this, unused since #10(2) removed its only consumer -- so a step added to a flow array appears
+ *  in both places automatically and the two cannot drift.
+ *  DISCONNECTED it lists all three rounds rather than hiding: in offline sandbox mode there is no live round,
+ *  and a panel that renders nothing is indistinguishable from a panel that is broken. */
 function QuickReferenceStrip({
   roundType,
   operatingSubPhase,
@@ -651,18 +380,11 @@ function QuickReferenceStrip({
   );
 }
 
-/** Right-column card -- see design note #10. Unlike the superseded
- *  `QuickReferenceSection` this replaces (one-line-per-step "quick"
- *  summaries only), this always renders EVERY round's FULL step-by-step
- *  detail -- the same `detail` prose the old standalone "Game Flow --
- *  Auction/Stock Round/Operating Round" sections used to carry -- so
- *  consolidating those three sections into this one column loses no
- *  content. When connected, the live round is reordered to the front and
- *  is ordered first (no badge -- see below); each step also leads with its own `quick`
- *  one-liner (bold) directly above the full `detail` paragraph, so the
- *  list stays scannable at a glance while still offering the complete
- *  explanation underneath -- both `FlowStep` fields now do real work
- *  everywhere this type is rendered. */
+/** Right-column card -- design note #10. Unlike the superseded quick-reference section this replaces, it
+ *  always renders EVERY round's FULL step detail -- the same prose the deleted standalone Game Flow sections
+ *  carried -- so consolidating them into this column loses no content. When connected, the live round is
+ *  reordered to the front; each step leads with its `quick` one-liner above the full paragraph, so the list
+ *  stays scannable while still offering the complete explanation. */
 function CurrentRoundReferenceSection({
   roundType,
   operatingSubPhase,
@@ -672,11 +394,9 @@ function CurrentRoundReferenceSection({
 }) {
   const connected = roundType !== undefined && roundType !== null;
 
-  // `operatingSubPhase` is deliberately NOT read here any more. It used to
-  // drive the ACTIVE badge in this panel; that badge was removed because the
-  // sidebar already marks the live round and the detail panel repeating it
-  // was noise. The prop stays on the signature because the sidebar half of
-  // this component still needs it -- see the quick-reference section.
+  // `operatingSubPhase` is deliberately NOT read here any more. It drove the ACTIVE badge, which was removed
+  // because the sidebar already marks the live round and the detail panel repeating it was noise. The prop
+  // stays on the signature because the sidebar half of this component still needs it.
   void operatingSubPhase;
 
   // Active round first, then the rest in their usual order -- never drops a
@@ -685,23 +405,13 @@ function CurrentRoundReferenceSection({
     ? [roundType as RulesRoundType, ...ROUND_ORDER.filter((rt) => rt !== roundType)]
     : ROUND_ORDER;
 
-  // Design note #143: which rounds are expanded.
-  //
-  // The rule asked for, and the reason each half of it matters:
-  //   - the ACTIVE round opens automatically whenever the round CHANGES, so
-  //     a player who has just moved from a Stock Round to an Operating Round
-  //     finds the relevant rules already in front of them; and
-  //   - a manual open/close of any section STICKS, so someone who deliberately
-  //     opened another round to check something is not fighting a panel that
-  //     keeps re-collapsing under them.
-  //
-  // Those two pull against each other, which is why this is state plus an
-  // effect rather than a derived value. Deriving "open = isActive" would make
-  // manual expansion impossible; pure state would never react to the round
-  // changing. The effect below fires ONLY on a genuine `roundType`
-  // transition, tracked against a ref -- not on every render, and not on the
-  // ~poll-interval re-render that reports the same round again, which would
-  // silently reopen a section the player had just closed.
+  // Design note #143: which rounds are expanded. Two requirements pull against each other -- the ACTIVE round
+  // opens automatically whenever the round CHANGES, and a manual open/close STICKS -- which is why this is
+  // state plus an effect rather than a derived value: deriving "open = isActive" would make manual expansion
+  // impossible, and pure state would never react to the round changing.
+  // The effect fires ONLY on a genuine round transition, tracked against a ref -- not on every render, and not
+  // on the poll-interval re-render that reports the same round again, which would silently reopen a section
+  // the player had just closed.
   const [openRounds, setOpenRounds] = useState<ReadonlySet<RulesRoundType>>(() =>
     connected ? new Set([roundType as RulesRoundType]) : new Set(ROUND_ORDER),
   );
@@ -717,12 +427,9 @@ function CurrentRoundReferenceSection({
       setOpenRounds(new Set(ROUND_ORDER));
       return;
     }
-    // Open the new active round. Deliberately ADDITIVE -- anything the player
-    // opened by hand stays open; this promotes the new round without
-    // confiscating their other choices.
-    // `forEach` into a fresh Set, not `[...prev, roundType]` -- tsconfig
-    // targets ES5 without `downlevelIteration`, so spreading a Set is a
-    // compile error here.
+    // Open the new active round, deliberately ADDITIVE -- anything opened by hand stays open.
+    // `forEach` into a fresh Set, not a spread: tsconfig targets ES5 without `downlevelIteration`, so spreading
+    // a Set is a compile error here.
     setOpenRounds((prev) => {
       const next = new Set<RulesRoundType>();
       prev.forEach((rt) => next.add(rt));
@@ -765,13 +472,9 @@ function CurrentRoundReferenceSection({
             >
               <span style={styles.roundAccordionChevron}>{isOpen ? "\u25be" : "\u25b8"}</span>
               <h4 style={styles.quickRefCardTitle}>{ROUND_META[rt].label}</h4>
-              {/* Design note #30: the ACTIVE badge is gone. The active
-                  round is already reordered to the front AND auto-opened
-                  AND given `roundAccordionHeaderActive`'s highlight -- the
-                  badge was a fourth signal for a fact three other things
-                  were already saying. The sub-phase detail it carried moves
-                  to the sub-phase list inside the panel, where it belongs
-                  next to the steps it describes. */}
+              {/* Design note #30: the ACTIVE badge is gone. The active round is already reordered to the front AND
+                 auto-opened AND given a highlighted header -- the badge was a fourth signal for a fact three other things
+                 were saying. Its sub-phase detail moves inside the panel, next to the steps it describes. */}
               {!isOpen && (
                 <span style={styles.roundAccordionHint}>{ROUND_META[rt].flow.length} steps</span>
               )}
@@ -872,11 +575,9 @@ export interface RulesReferenceProps {
   operatingSubPhase?: RulesOperatingSubPhase | null;
 }
 
-// Certificate Limit + Starting Cash, merged into one table for the bottom
-// row -- see design note #10(2). Both source arrays share the same set of
-// `players` values in the same order; zipped by matching `players` rather
-// than assumed-parallel indexing, so this stays correct even if either
-// array's own row order or contents ever changes independently.
+// Certificate limit + starting cash, merged for the bottom row -- design note #10(2). Zipped by matching
+// `players` rather than assumed-parallel indexing, so this stays correct even if either array's own row
+// order or contents ever changes independently.
 const CERT_AND_CASH_BY_PLAYERS: Array<{ players: number; limit: number; cash: number }> =
   CERT_LIMIT_BY_PLAYERS.map((certRow) => {
     const cashRow = STARTING_CASH_BY_PLAYERS.find((row) => row.players === certRow.players);
@@ -887,24 +588,13 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
   return (
     <div style={styles.root} className={className}>
       <h2 style={styles.pageTitle}>Rules Reference</h2>
-      {/* REGRESSION FIX (design note #140): the current-round panel is back
-          at the TOP, full width, above the narrative -- not in a side column.
-
-          Nothing deleted it; that is why it was hard to spot. Design note
-          #10(2) moved it out of its old sticky top position into
-          `topRowRight`, a `flex: 1 1 480px` column sharing a wrapping row
-          with `AboutSection`'s five paragraphs of prose. Above ~1000px the
-          two sit side by side and it is visible. Below that the row wraps,
-          `AboutSection` renders first, and the round panel lands underneath
-          a full screen of narrative -- present in the DOM, absent from view,
-          and reported as "vanished".
-
-          It leads the page again because of what it IS: the only part of
-          this screen that changes with the room's live state, and the part a
-          player consults mid-turn to see what they may do NOW. Static
-          reference tables can be scrolled to; the answer to "whose turn is
-          it and what comes next" cannot. `AboutSection` is orientation
-          material read once, so it moves below. */}
+      {/* REGRESSION FIX (design note #140): the current-round panel is back at the TOP, full width, above the
+         narrative. Nothing deleted it, which is why it was hard to spot: #10(2) moved it into a `flex: 1 1 480px`
+         column sharing a WRAPPING row with five paragraphs of prose. Above ~1000px the two sit side by side;
+         below that the row wraps, the narrative renders first, and the panel lands underneath a full screen of
+         text -- present in the DOM, absent from view, and reported as "vanished".
+         It leads the page again because of what it IS: the only part of this screen that changes with the room's
+         live state. Static tables can be scrolled to; "whose turn is it and what comes next" cannot. */}
       {/* Design note #141/#143: the compact strip leads full width -- it is
           the one thing read mid-turn. Below it, narrative on the left and the
           collapsible full round reference on the right, as before. */}
@@ -936,18 +626,11 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
                 <tbody>
                   {CORE_LIMITS.map((row) => (
                     <tr key={row.label}>
-                      {/* Design note #37: PLAIN TEXT, NO HOVER STATE AT
-                          ALL. Label left, value right, nothing hidden.
-                          This went through three rounds -- prose in the
-                          cell, then a tooltip with a marker glyph, then a
-                          tooltip with no marker -- and the last of those
-                          was the worst of the three: information that
-                          exists but is undiscoverable is not a feature, it
-                          is a trap for whoever maintains this next. If a
-                          `note` matters enough to keep, it belongs in the
-                          narrative section as visible prose; if it does
-                          not, it should be deleted. Either way it does not
-                          belong in a `title` on a lookup table. */}
+                      {/* Design note #37: PLAIN TEXT, NO HOVER STATE AT ALL. Label left, value right, nothing hidden. This went
+                         through three rounds -- prose in the cell, a tooltip with a marker glyph, a tooltip with no marker -- and
+                         the last was the worst: information that exists but is undiscoverable is not a feature, it is a trap for
+                         whoever maintains this next. If a note matters enough to keep it belongs in the narrative section as
+                         visible prose; if it does not, it should be deleted. */}
                       <td style={styles.td}>{row.label}</td>
                       <td style={styles.tdNum}>{row.value}</td>
                     </tr>

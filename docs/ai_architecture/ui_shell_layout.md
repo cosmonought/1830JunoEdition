@@ -1216,3 +1216,417 @@ The sub-phase exists earlier in the turn order (`trading.rs` puts private purcha
 ### ContextualActionBar.tsx #623 — `RunRoutesButton` joins the step's finishing action to the bar
 The finishing action for Run Routes rides on the bar alongside the planner's own controls, so the step
 can be completed from the pinned form (`#498`'s reasoning, applied to the button rather than the chips).
+
+---
+
+# The shared style table — `styles/appStyles.ts`
+
+### appStyles.ts (file header) — A move, not a rewrite
+Every declaration here is the same object literal `App.tsx` carried at the bottom of the file, in the
+same order, with the same comments — so `git log -p` on a style reads as one continuous history rather
+than a deletion and an unrelated creation.
+**Why it moved.** `styles` alone was 988 of `App.tsx`'s 9,636 lines and is read by five components
+(`TopBar`, `MarketMoveLine`, `ContextualActionBar`, `MainTabBar`, `AppShell`). **A table with five
+consumers is shared infrastructure, and shared infrastructure that lives inside one of its consumers
+forces every other consumer to import from that consumer — which is how a file becomes a hub that
+cannot be split.** `PHASE_TINT_STYLES` rides along because separating it from `styles` would put two
+halves of one lookup in two files.
+
+### appStyles.ts #34 — One slim top bar
+6px vertical padding against the old header's 16px, and the brand drops from `display` to `strong`:
+**the point of the consolidation was vertical space, so the row has to actually be short or nothing was
+gained.** `flexWrap` stays on — the sandbox phase switcher genuinely can overflow, and wrapping is a
+better failure than a clipped Connect button. `roomStrip` the container is gone; its children are
+inline content in `topBar` now, and the `roomStrip*` item styles survive because those children do.
+**The right-hand cluster is pushed by a spacer element, not `marginLeft: auto` on the first right-hand
+child** — which child is first varies (the offline badge and two error spans are all conditional), and
+an `auto` margin on a node that sometimes does not render silently un-pins the whole group.
+
+### appStyles.ts #13 (layout un-clamping) — `minHeight`, not `height: 100vh`
+A hard `100vh` clipped the whole column to one viewport-worth of pixels no matter how tall the board
+needed to be. `minHeight` keeps the "fills the viewport on a short screen" look while letting the
+column grow, **so the browser's own page scrollbar carries the rest instead of an inner pane's.**
+`overflow: "auto"` is likewise dropped from `canvasPane` and `boardPane` — that was the cramped inner
+frame window. `StockMarketRenderer` still gets its pane height from the same un-clipped flex chain;
+only the Rail Map's canvas actually grows past one viewport in practice.
+
+### appStyles.ts #600 — `flex: 1` means `flex-basis: 0`, and that is the bug
+**Reported, twice:** "the Action bar no longer travels down the screen as the player scrolls." The
+first fix (removing a `position: relative` that had overridden `sticky`) was a real bug and not this
+one.
+
+**A sticky element travels only within its PARENT'S BOX.** This pane is the bar's parent, and `flex: 1`
+expands to `1 1 0%` — **a flex-basis of ZERO**, grown to fill the flex line. In a column whose container
+is `min-height: 100vh`, that line is one viewport tall. So the pane computed to roughly the viewport
+height while its content ran far past it and simply overflowed. **The bar was sticking perfectly: it had
+a few pixels of parent to stick within, reached the bottom of that box, and scrolled away with it.**
+**Why the auction showed it first:** the effect scales with how far the content overruns the pane, and
+the auction stacks six private cards, the action bar and a row of player cards on one tab. The fault
+was present everywhere and simply had less to give it away.
+`1 0 auto`: still grows to fill a short page, but **its basis is now its CONTENT**, so it is never
+shorter than what it holds. `flex-shrink: 0` because a pane that shrinks below its content is the state
+this note is about.
+**Not verified in a browser, and worth saying:** this is reasoned from the flex spec. Three earlier CSS
+causes were checked and ruled out first (no `overflow` on any ancestor, no `position` override, no
+competing stacking context) — **but if the bar still fails to travel, this note is the next thing to
+disbelieve.**
+
+### appStyles.ts #299 / #456 / #46 — The tab row
+**#299 — the tabs were a heading wearing a button's border.** 14px of padding above and below a
+`heading`-sized label is roughly a 47px control for a one-word destination, and the bar added another
+14px, so the row cost about 60px before anything in it had been read. **A tab is a navigation control,
+not a section heading** — it takes the `control` step like every other clickable thing.
+**#456 — the tab row had no escape.** *Reported:* the Tutorials button overflows its container. The row
+is a flex line with no `flexWrap` and no `minWidth: 0` on its children, and Tutorials is pinned right
+past an `auto` margin. **Flex items refuse to shrink below their content width by default, so once the
+labels exceed the bar nothing gives — the row runs past its own padding and the item on the far side of
+the auto margin is the one that visibly leaves.** `flexWrap` is the fix and `rowGap` is what makes it
+survivable; bottom padding goes `0 → 6px` because the original assumed exactly one line.
+`flexShrink` plus `minWidth: 0` on the Tutorials button is what actually lets it give way before the row
+breaks — **without `minWidth: 0` a flex item will not shrink below its content.**
+**#46 — every tab is visibly a control.** The resting border was barely a shade from the bar, so an
+unselected tab read as recessed rather than clickable. The active tab is the only white-edged item and
+the only one with a lift, and it keeps `#1E293B` so it docks seamlessly into the ticker below it
+(`TopTicker.tsx #7`).
+
+### appStyles.ts #297 / #426 — Sticky, and what stopped it behaving like it
+**#297:** the board is taller than the viewport by design, so scrolling to the southern hexes takes the
+action panel off screen — and the two controls a player needs while looking at the map (Place Token,
+Skip) are the first to leave. **Sticky rather than fixed:** fixed would take the bar out of flow and
+leave a gap where it was, and it only needs to stop at the top of the container it already lives in.
+**#426 — plain `sticky top-0`.** *Reported:* the bar should only collapse when it actually reaches the
+top. `position: sticky; top: 0` was already there; **what stopped it behaving that way was
+`marginBottom`. A sticky element's margin travels with it**, so the bar reserved 12px of empty space
+beneath itself for the whole scroll and detached from the viewport edge 12px early. The margin moves to
+the content that follows, which is where the gap was wanted.
+`zIndex: 50` stays: **sticky does not create a stacking context on its own**, and without it the panels
+scrolling underneath paint over the bar at exactly the moment it is doing its job.
+
+### appStyles.ts #426 / #654 — True-centred, which the spacer pair was not
+**Reported:** true-centre the action buttons. The row was a flex line with a `flex: 1` spacer either
+side of the group, and `#309` described that as centring.
+**Two equal spacers do centre the group BETWEEN THEMSELVES. They do not centre it on the bar**, because
+the phase badge sits outside the trailing spacer and the leading spacer has nothing balancing it — so
+the group is pushed left by exactly the badge's width, and by more when the badge escalates to its
+wider alert wording. **The buttons drifted as the phase text changed, which is the tell.**
+`1fr auto 1fr` is the same grid the Operating Round row has always used and is immune to that.
+**#654 — lead and trail, not left and right.** The badge is flush left now, so the rails are named for
+position rather than side: one carries the phase group, the other **carries nothing and exists to be
+the third grid column.** An empty element as layout is worth defending because it looks like something
+to delete: **it is a grid TRACK, not a flex spacer of the kind `#426` removed. Delete it and the centre
+column becomes the last column.**
+**`minmax(0, 1fr)` rather than bare `1fr`:** a `1fr` track still has an `auto` minimum, so a rail whose
+content is wider than its share grows past half and drags the centre off true. **The explicit `0` floor
+lets the rails shrink and keeps the middle middle.** (`#482`/`#458` are the same fix, one bar over.)
+
+### appStyles.ts #295 / #655 — A ceiling on a wrapping row has no version that is right
+**#295** set the strip's height so a 19px control lands inside the 44–52px band the layout targets.
+**#655 — reported** at Run Routes: "there's a horizontal rule that looks like 'Run Routes' is supposed
+to be above, but instead the rule is bisecting the Phase marker, the Run Routes button, and the Undo
+button, while C&O's four train chips below are not enclosed in the action panel and bleed onto the map."
+**One cause, two symptoms.** `maxHeight: 60px` capped the row's BOX, not its contents. Routes is the
+busiest step, so the centre column wraps to a second line and the real content runs past 60px — and
+with no `overflow` set, **that surplus paints outside the box.** The rule is the next row's `borderTop`,
+and that row is a SIBLING laid out at this row's *declared* bottom edge while the buttons are still
+being drawn below it. **The chips were never mispositioned; they were positioned relative to a boundary
+that lied.**
+`#426` named this exact failure while keeping it — "a `maxHeight` that no longer fits its contents is
+how a bar starts clipping its own controls" — and raised the number instead of removing the cap.
+**The FLOOR is what `#295` actually wanted:** a band the row never falls below, with `alignItems:
+center` keeping the contents centred in whatever height results.
+
+### appStyles.ts #619 — A `Record<string, T>` style sheet cannot catch a phantom key
+**Reported,** of Buy Trains: "if a corporation MUST buy a train … the 'End Turn' button needs to be
+grayed out." **It already refused the click** (`#293` disabled it three passes earlier). What it did not
+do was LOOK refused.
+`ContextualActionBar` reached for `styles.actionButtonDisabled`. **The key here is
+`actionBarButtonDisabled`.** `styles` is typed `Record<string, React.CSSProperties>`, so a missing key
+is `undefined` rather than a compile error, and **spreading `undefined` into a style object is a silent
+no-op.** Two call sites had therefore been styling nothing at all since they were written, and `tsc` and
+ESLint were both perfectly happy. The contextual buttons were a plainer miss — they passed `disabled`
+and never spread a disabled style at all — **so the bar had three ways of drawing an unavailable control
+and only one of them worked.**
+An audit across every importer found exactly one phantom key, so the sweep is done — **but nothing stops
+the next one, and the failure is invisible by construction.**
+
+### appStyles.ts #299 / #371 — 3px was one pixel too few
+`#299` dropped a 44px floor from the corporation strip: **a minimum height on a card whose contents
+already exceed it does nothing except on the one screen where the card is nearly empty.**
+**#371 — reported:** the train chips inside that card are clipped at the bottom. `#299` was right about
+the floor and wrong by a hair about the padding. The chips are 24px, so at 3px top and bottom the card
+is 30px — **which fits, until the row WRAPS. A wrapping flex container distributes its lines by
+`align-content`, whose initial value is `stretch`**, and any ancestor rounding or a partially-filled
+last line pushes the final row against the padding edge. 6px, plus `alignContent: center`.
+
+### appStyles.ts #581 / #599 / #614 — The status-line dock
+**#581:** anchored to the bottom **edge** rather than given a height, so the expanded history grows
+upward from the line and never off the screen. `maxHeight` with `overflowY` is the ceiling — **a long
+history must not become the whole window;** 60vh leaves the board visible above it.
+**#599:** the reserved height constant is the **seed only.** The real value is measured from the dock and
+applied inline — a constant was right while the dock had one height and became "the log covers the page"
+the moment it could grow.
+**#614 — the dock must not be the thing that scrolls.** *Reported:* "the only way to collapse it is to
+scroll all the way to the top of the log." **The dock is a column whose FIRST child is the header
+carrying the Collapse control, so a dock that scrolls can carry its own escape hatch off-screen** — and
+with the history list scrolling too, a wheel gesture landed on whichever of two nested scrollers was
+under the pointer. **One scroller, and it is the list:** `overflow: hidden` here, `flex` and `minHeight:
+0` down the chain, so a capped dock shortens the HISTORY and never the header.
+
+### appStyles.ts #601 / #631 — Two dead fallbacks in one `??`
+Eight `rosterPill*` styles were deleted with the unreachable pill branch. `#406`'s 8em name ceiling is
+the one constraint worth carrying forward — **`SeatOrderTrail` does not clamp its names, so a table of
+long sandbox nicknames widens the trail rather than truncating; if that ever overflows, a max-width on
+the seat name is the fix and this is the note that predicted it.**
+**#631:** `playerCashBadge` and its parts are deleted too. It was the `seatOrderTrail ?? …` fallback in
+the non-Operating-Round branch, and `#601` had already worked out that the trail is non-null for exactly
+the two rounds that branch renders — **and the one state that might have slipped past (no `gameState`
+yet) fails the cash guard as well, because that figure derives from the same absent state.**
+**That is the second dead fallback in this one `??`.** Both were kept "for the case the trail does not
+cover", both described an empty set, and both compiled and linted perfectly for months. **The shape to
+distrust is a fallback whose condition is the negation of a condition maintained in a different file.**
+
+### appStyles.ts #518 — The sub-phase trail is one object with divisions
+Connected boxes rather than separated pills, which is what makes it read as a **sequence** rather than a
+set of tags: the segments share edges (`marginLeft: -1px` collapses the doubled border between
+neighbours). **The same construction the par ladder on the stock cards uses, and for the same reason —
+both describe positions along one track.** `flexWrap` because six steps at the era's full length can
+outrun a narrow window, and **a wrapped trail still reads in order where a clipped one loses its tail.**
+
+### appStyles.ts (smaller entries)
+- **#481** — the inline sub-phase is sized and coloured as a *continuation* of the round label, not a
+  second heading: "OPERATING ROUND · LAY TRACK 2/5" should scan as one line, because it is one fact split
+  across two spans only because half of it is conditional. `whiteSpace: nowrap` because the bar wraps,
+  **and a step name broken across two lines inside a wrapping row is how a 48px bar becomes a 70px one.**
+  `orPanelStepperRow` is gone with the row it framed — **a style kept "in case" is how a deleted row
+  comes back.**
+- **#426 (button sizing)** — `#31` slimmed the action buttons on the reasoning that a chrome strip needs
+  only "comfortably clickable", **which took them below comfortable.** These are the primary actions of a
+  turn and several are destructive-ish, so they get one step of the type scale back.
+- **#236** — the corporation figures **continue from the left.** `marginLeft: auto` flung them to the far
+  edge, so reading "PRR … $640" meant crossing the bar and the figures ended up further from their own
+  label than from the window edge. `orContextDot` is gone: **a dot of the corporation's colour drawn on a
+  bar of the corporation's colour was invisible by construction.**
+- **#575** — the bar's acronym takes `rosterLiveryAcronym`'s typography **exactly**, monospace face and
+  tracking included. Approximating it would give the same company two slightly different looks on two
+  screens, which is the specific thing the change was asked for to stop.
+- **#266** — twenty `route*` keys were deleted here with the panel they dressed; they live in
+  `RoutePlannerPanel.tsx`, next to the only markup that ever used them.
+- **#490** — the dividend block is a **section** of the panel now, not a card floating beneath it. The
+  full border is gone (**a box inside a box reads as a separate object**); what remains is a hairline
+  doing the one job the border really did.
+- **#214** — the market-move arrow is the one glyph carrying a DIRECTION, so it is the one that takes the
+  direction's colour, sized and weighted past the zone-tinted prices either side. `lineHeight: 1` because
+  the diagonal glyphs sit taller than the digits.
+- **#563 / #317** — the player-card grid is its own section rather than merged into the corporation grid
+  (**a shared grid would imply they were comparable cells**), and escrow is muted so it qualifies the
+  figure beside it rather than competing with it.
+
+---
+
+## `App.tsx` — the shell's render tree (JSX residue)
+
+Notes that lived in JSX comment containers and were missed by the Batch 1 scan.
+
+### App.tsx #18 (item 4) / #21 — Turn alerts mount off bare `isMyTurn`
+The keyframes are injected unconditionally (matching `Chatbox.tsx #2`'s convention for this codebase's
+plain-inline-style escape hatch) and the pulsing overlay mounts directly off `isMyTurn` — **no gating
+value, because `#21` made both channels mandatory with no opt-out anywhere.** The document-title flash
+is the other half and has no DOM footprint at all.
+
+### App.tsx #537c / #578 — The hotseat toolbar was a solo tool, then went entirely
+`#537c` hid it in a room, and **both of its controls are the reason.** The seat picker exists so one
+person can play everybody, which is precisely what identity gating forbids (`#534` makes the local id
+the viewer) — **a seat picker would offer a switch the dispatch gate refuses.** The scenario switcher
+re-seeds the board from a fixture, which `#537` had just stopped doing in a room, and **leaving a visible
+control that now does nothing is worse than removing it: a player clicks it, nothing changes, and the
+natural conclusion is that the game is broken rather than that the control does not apply.**
+**#578 deleted the toolbar outright** — seat switcher, auto-follow, scenario picker and train fixture
+were all controls for playing four people from one keyboard. The scenario and fixture pickers went with
+them rather than being kept: **they seed a board, and a room's board comes from its log.** The phase
+switcher that had moved into the toolbar went with it — two places to change sandbox settings is worse
+than one.
+
+### App.tsx #32 / #39 — The tutorials mount at shell level, three of them, mutually exclusive
+Mounted at the shell rather than inside the phase panels **so a modal survives its panel unmounting on a
+tab switch** — one that vanished when you clicked Rail Map would have to be re-triggered to finish
+reading.
+**#39 — three topics, one per round.** All three mount unconditionally and each decides for itself
+whether to open, keyed on its own `active`. **That is safe against two firing at once because
+`current_round_type` is a single value — the three flags are mutually exclusive by construction, not by
+coordination between them.** Each tracks its own "seen" flag, so a player who read the auction explainer
+still gets the Stock Round one.
+
+### App.tsx #543 — A prize is shown to whoever won it
+**Reported:** at the end of the auction BOTH players were told they had won the B&O and both could set
+its par price.
+The prompt fires wherever the winning action is APPLIED, **and in a room every client applies every
+action — that is the whole design (`#522`). So the prompt was raised on both screens, correctly, and then
+rendered on both because `open` asked only whether a prompt existed, not whose it was.** In solo hotseat
+that is right: one person is playing everybody. The identity test is the same branch `#534` uses for the
+turn gate — no room, no test.
+**It matters more than a label:** the prompt does not merely announce the win, **it SETS THE PAR PRICE**,
+and two people answering it is two dispatches of one mandatory choice.
+
+### App.tsx #416 / #440 — The home-station prompt blocks, then gets out of the way
+Blocking for the same reason the B&O prompt is: **a floated corporation owes its home station and 1830
+has no branch where it declines one.** Mounted at shell level because it can fire while the player is on
+any tab.
+**#440:** the modal hides itself once the player has accepted and been sent to the map — **a backdrop
+over the board they were just asked to click would be the flow blocking its own final step.**
+`pendingHomeToken` stays true throughout (the token is still owed until the click lands), **which is what
+brings the prompt back if the placement is abandoned.**
+
+### App.tsx #581 — The log is a status line, not a headline
+**Reported:** "I don't see the Activity Log ticker at the bottom of my screen?" — expecting a
+recommendation made twice and then not built. **It was at the top, in flow, where it has always been.**
+**The ticker and the action bar want opposite things from the reader.** The bar is what you MUST DO and
+should be the most findable object on screen; the log is what HAS HAPPENED and should be readable without
+ever demanding attention. **Stacked at the top they compete**, and the report two passes earlier was that
+the action bar was losing — which is why putting the ticker *inside* it (tried, reverted, `#490`) made
+things worse.
+**A status line at the bottom edge is the arrangement every IDE and most games converge on for exactly
+this content: peripheral, always present, never modal.** Unlike a toast it needs no dismissing, which
+matters at 1830's event volume — the reporter's own objection to toasts, and a correct one.
+**Fixed, so it survives scrolling the board.** The app root carries matching bottom padding so the last
+row of content cannot hide underneath, and **the box is anchored at the bottom rather than sized — so the
+expanded history grows UPWARD from the line instead of off the screen.**
+
+### App.tsx #419 — A panel inside `isWorkspaceTab` must say which workspace it is for
+**Reported:** the Buy Trains from Bank panel bleeds into the Stocks and Stock Market tabs.
+It did, **and the gate is why it was easy to miss:** `current_round_type === "OperatingRound" &&
+orSubPhase === "Hardware"` is a precise, correct statement about **when** the panel applies and says
+nothing about **where.** That branch sits inside `isWorkspaceTab`, true for four tabs — **so during Buy
+Trains the panel rendered on all four, including the two whose entire subject is share trading.**
+**This is `#27`'s bug again.** That note fixed the auction dashboard hijacking the Rail Map by adding a
+tab test to a condition that had only a phase test, and wrote down the lesson. The Stock Round panel
+beside this one learned it; the train panels did not. **The offer ledger leaked identically — same phase
+gate, same missing tab gate, same four tabs — and is fixed in the same pass, because a fix that left it
+bleeding onto the Stock Market tab would have answered the report rather than the bug.**
+`surfaceTabFor("OperatingRound")` rather than a literal `"map"`, **so if the Operating Round's home tab
+ever moves this follows it instead of quietly pointing at the wrong surface.**
+
+### App.tsx #233 — The offer ledger appears when there is one
+This rendered on every Hardware step, empty, reading "No offers outstanding" — **a permanent panel whose
+permanent content was that it had nothing to show.** Worse, it sat directly under the purchase panel, so
+the first thing a player saw when they went to buy a train was a heading about offers that did not exist.
+**A pending offer is an EVENT.** It arrives, blocks a turn, gets answered and goes away — so the panel
+representing it should do the same. The gate is scoped to offers **the viewer is party to** rather than
+any offer in the room, because this is the surface where they ANSWER one. `TrainTradePanel #1` argued a
+pending offer is public information and should be visible to everyone; **that is still true and is what
+the Action Log carries. A dedicated panel on the buy screen is a different claim — that you have
+something to do here.**
+
+### App.tsx #45 — An allowlist, not a denylist
+This read `activeMainTab !== "phase"`, **which silently assumed the only workspace tabs were the phase
+surface, the map and the chart.** Adding `"corps"` (`#41`) therefore opted it in by default: the Stocks
+tab passed the `!==` test, fell past the `=== "map"` branch, and **rendered a second copy of the Stock
+Market matrix underneath the corporation cards.** Naming the two tabs that OWN a board means a future tab
+has to ask for one rather than inherit it.
+
+### App.tsx #28 / #41 — The reference tabs
+**#28:** the phase tab renders NO reference board. Its content is the phase panel above, and the market
+chart has its own tab — **rendering the chart here too is what the old single-tab design did, and it is
+precisely the conflation this note split apart.**
+**#41:** the roster is gated on the TAB alone, not on the round. It renders during an Operating Round and
+the auction too, **because "what do I own and what is it worth" does not stop being a question when the
+Stock Round ends.** Its Buy/Sell controls are separately gated, so an out-of-phase viewer reads but
+cannot act.
+
+### App.tsx #23 — `!spectator` is load-bearing, not decorative
+`TileSelectionPopup` is the **second** of this app's two gameplay dispatch paths — it calls
+`execGameplay` itself (that component's `#1`) rather than routing through `runGameplayAction`, **so the
+gate inside that function does not cover it. Not mounting it is what covers it.**
+The action bar is likewise hidden entirely for spectators: **that is the COURTESY half of read-only mode
+— the guarantee is `runGameplayAction`'s gate**, which holds whether or not the bar renders. Hidden rather
+than disabled because a row of twenty greyed buttons offers a spectator nothing, and the room strip's
+badge already explains why they are gone. The sandbox room strip sits *outside* that branch: **a
+spectator has no action bar and the room strip is not an action, so hiding it with the controls would
+take away the one thing a watcher might legitimately want.**
+
+### App.tsx #162 — The in-situ radial selector replaces the popup
+`TileSelectionPopup` — a ~900px floating card with a carousel, era tabs, a rotation panel and a dispatch
+button — is no longer rendered. **It answered "which tiles exist" well and "does this tile fit HERE" not
+at all, because judging fit means looking at the hex and its neighbours, and the card covered them.**
+The two branches it had (chain-backed and offline) collapse into ONE, and **that merge is safe because
+the distinction never lived in the presentation:** it is carried by `provisional`, which labels the ring,
+and by `canConfirm`, which decides whether a lay can be dispatched at all. **Keeping two nearly identical
+JSX blocks was how the old spectator bug got in — one branch grew a `!spectator` guard the other did not
+need, and the asymmetry was invisible.**
+**The file is retained, unrendered, until the radial path has been exercised against a live chain** —
+deleting a component whose replacement has only been run offline would leave no way back.
+
+### App.tsx (smaller entries)
+- **#141** — the refused-click cue is **amber, not red**: nothing failed and the player did nothing
+  wrong, they clicked a hex that cannot take a tile. Red is reserved for the query error above, which IS
+  a fault. It reuses the same floating indicator the loading/error states use, **so the feedback appears
+  in the one place a player is already watching after a hex click.**
+- **#34** — one bar. The room context is the middle of the single header now. It still says WHICH room
+  this shell is bound to (every query targets `gameId`, and someone with two tabs open needs to tell them
+  apart) and **is still the only place `chatError` surfaces, because chat failing silently is worse than
+  chat saying it is broken.**
+- **#31** — THE one action bar, hoisted above the phase branch so it renders on every active tab. **It
+  used to live inside the non-auction branch only, which is why the auction grew its own Pass and the
+  phase tab ended up with two bars.**
+- **G-15 (train trading)** — safe to gate tightly on the Buy Trains step, and worth spelling out why: **an
+  offer can only be CREATED in Hardware, and while one is outstanding the buyer's turn is blocked there**
+  (`operations::PendingTrainOfferBlocksTurn`), so an offer cannot outlive the phase that produced it.
+  `orSubPhase` tracks the ACTIVE corporation's step, not the viewer's, **so a seller still sees this
+  during the buyer's Hardware phase — the only time their answer is wanted.**
+- **#205 / #218** — one train-consent prompt, two sources, decided by deployment: sandbox uses local state
+  (no chain to record an offer in, no second client to show it to); online derives from the contract's own
+  register so the prompt reaches the real counterparty. **Mutually exclusive by construction**, so it can
+  never show two offers at once.
+- **#165 / #166** — the trade sheet composes an offer, the prompt answers one. Rendered at shell level
+  because **both outlive the panel that opened them — the prompt in particular has to survive the
+  sub-phase advancing.**
+- **#602** — the Stock Round's player cards mount between the corporation cards and the board pane:
+  **they are two halves of one screen, and the players belong under the companies they hold.**
+
+## Short notes and cross-references — Batch 5A
+
+### App.tsx #158 — The Tutorials front door is its own state
+Separate from the four `TutorialModal`s' own state, **deliberately: those track "has this player been shown
+this yet", which is a different question from "is the reader open right now".** Rendered alongside the
+auto-opening modals rather than inside the tab bar — **it is a modal over the whole shell, not a part of the
+navigation that summons it.**
+
+### App.tsx #427 — The reference tabs get a way back
+The return bar's reason is stated beside the button rather than left to the button's wording. Only rendered
+while the player is standing somewhere the round is not played (`#390`/`#404`).
+
+### App.tsx #483 — The reachable EDGES, carried alongside the hexes
+Reachability is a property of track, not of hexes: a hex can be reached along one edge and not another, so
+the reachable set travels as edges and the veil reads them.
+
+### App.tsx #521 / #537b — Sandbox multiplayer, offered rather than demanded
+Solo play needs no gesture, so the room strip is an invitation rather than a gate. **`#537b` releases the
+roster when a room ends, so a solo session afterwards is not still holding the room's seats.**
+
+### App.tsx #568 / #573a — The auction's own text, and what an exchange closes
+`#568`: the auction renders private descriptions from **the same catalog** every other surface uses.
+`#573a`: an exchange closes the **COMPANY**, which is why the certificate is deliberately not marked used —
+the two are different events and conflating them would double-count the closure.
+
+### App.tsx #598 — The message box, hidden until asked for
+The chat input and its filter pills are the two rows `#581`'s one-line status dock gives back; they appear
+in the expanded view, **because filtering is something you do while READING the log.**
+
+### App.tsx #250 / #291 — Two `null`-not-zero cases in the Operating Round
+`#250` — **no train, no route**: a corporation with an empty fleet reports `null` rather than `0`, because
+"cannot run" and "ran for nothing" are different facts and only one of them is a revenue figure.
+`#291` — **the dividend decision moves the marker too**, which is why the projection is computed beside the
+buttons rather than left to the chart.
+
+### appStyles.ts #40 — The rails must GROW, not merely exist
+A grid rail with no width cannot centre anything: `minmax(0, 1fr)` gives the rails a floor of zero **and**
+the ability to take width, which is what makes the centre column centre on the panel.
+
+### appStyles.ts #427 / #603 — The return bar, and why a card is a rectangle
+`#427`: the reason the return bar is on screen at all is stated beside the button rather than left to the
+button's wording.
+`#603`: the turn-order bar worked through the same distinction `#631` later applied to the seat card — **a
+pill reads as a tag ABOUT something; the thing itself is a rectangle.**
+
+### FinancialLedger.tsx #170 — See `ContextualSubPanel.tsx #170`
+A name beats a truncated hash, **and the resolver returns `null` for a real wallet so live rooms are
+unchanged.** (`#559` is the room-aware version this file actually imports.)

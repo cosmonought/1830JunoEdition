@@ -1,96 +1,19 @@
 // frontend/src/utils/gameState.ts
 //
-// A hand-kept TypeScript mirror of `src/msg.rs`'s `QueryMsg::GetGameState`
-// response shape (`GameStateResponse` and every nested type), plus a small
-// polling hook (`useGameStatePolling`) so every new dashboard panel this
-// pass adds (Chatbox's turn alert, the Stock/Operating Round contextual
-// sub-panel, the Financial Ledger tab) can share ONE live query instead of
-// each re-implementing its own `queryContractSmart` call the way
-// `App.tsx`'s pre-existing `refreshVgpBalance` did for just `player_cash`.
+// A hand-kept TypeScript mirror of `msg.rs`'s `QueryMsg::GetGameState` response shape, plus the polling
+// hooks every dashboard panel shares instead of re-implementing its own query.
 //
-// Design notes:
-// 1. **Hand-kept mirror, not codegen -- same DESIGN GAP as every other
-//    contract-data mirror in this codebase** (see `HexGridRenderer.tsx`
-//    design note #2, `StockMarketRenderer.tsx` design note #1): there is no
-//    schema-derived TS type for `GameStateResponse`, so this file's fields
-//    must be kept in exact sync with `src/msg.rs` by hand any time that
-//    struct changes. Verified field-for-field against `src/msg.rs` for this
-//    pass (`GameStateResponse`, `PlayerCashEntry`, `PlayerShareEntry`,
-//    `PublicCompanyState`, `PrivateCompanyState`).
-// 2. **What this file deliberately does NOT expose, because the backend
-//    doesn't either.** `src/state.rs` genuinely models hardware/train
-//    inventory (`HardwareAsset`, `HARDWARE_POOL`, `COMPANY_HARDWARE`,
-//    `TRAINS_PURCHASED_COUNT`) and route-tracing (`pathfinding.rs`,
-//    referenced by `ExecuteMsg::ExecuteOperatingRound`'s own doc comment in
-//    `src/msg.rs`) -- but NO `QueryMsg` variant returns any of it.
-//    `PublicCompanyState` has no hardware/train/route field at all. This
-//    file does not invent one; every panel that would want that data (the
-//    Operating Round contextual sub-panel's "routes and train sheets", the
-//    Financial Ledger's "Hardware Shop inventory") must render an honest
-//    "not yet exposed by the contract" state instead of a fabricated
-//    number -- see `ContextualSubPanel.tsx`/`FinancialLedger.tsx`.
-// 3. **Certificates are DERIVED but EXACT -- not a backend count.**
-//    `src/state.rs` has an internal `count_player_certificates()` helper,
-//    but it is used only inside `trading.rs`/`auction.rs`'s own limit
-//    checks -- no query surfaces its result. `certificateCount` below
-//    reconstructs the count exactly from what genuinely is
-//    queryable (`private_companies[].owner`, `public_companies[].player_
-//    holdings`/`.president`). A player's president's 20% certificate in a
-//    company counts as exactly ONE certificate against the limit -- verified
-//    against three independent sources (official Lookout Games rulebook,
-//    18xx.net rules text, and the open-source `tobymao/18xx` engine's own
-//    `num_certs`/`cert_size` implementation; see the Rules Reference tab's
-//    own design note #4 for the full citations) -- NOT two, despite
-//    representing double the ownership. An earlier pass of this comment
-//    said this rule was deliberately left unimplemented because it hadn't
-//    been confirmed against source; that premise no longer holds on either
-//    count -- the rule itself is now confirmed, and the code below
-//    implements it: `holding.percentage` is split into the president's own
-//    20% (counted as 1 certificate, when `company.president` matches
-//    `playerAddress`) plus whatever percentage the player holds beyond
-//    that, each ordinary 10% block of which still counts as 1 certificate.
-//    Every caller of this function should still present its result as "~N
-//    (est.)", not a bare number -- it remains a client-side reconstruction,
-//    not a query straight off `count_player_certificates()` itself.
-// 4. **Polling, not a subscription.** CosmWasm has no push/subscription
-//    query mechanism reachable from a browser the way this project is
-//    wired (a plain `CosmWasmClient`/`SigningCosmWasmClient` over RPC) --
-//    `useGameStatePolling` re-fires `GetGameState` on a fixed interval
-//    (default 6s) plus once immediately whenever `client`/`contractAddress`/
-//    `gameId` change, mirroring `App.tsx`'s pre-existing
-//    `refreshVgpBalance` one-shot-plus-manual-refresh pattern but now
-//    interval-driven and shared. A monotonic request-sequence guard
-//    (mirroring `HexGridRenderer.tsx`'s click-interceptor staleness guard,
-//    design note #7 there) discards a stale in-flight response if a newer
-//    poll already resolved first.
-// 5. **Station Tokens (`HexGridRenderer.tsx` design note #36).** Added
-//    `PublicCompanyState.home_hex_label`/`station_token_hexes`/
-//    `station_token_limit`, mirroring `msg.rs::PublicCompanyState`'s own
-//    same-named fields exactly -- needed so `App.tsx` can pass
-//    `state.public_companies` straight into `HexGridRenderer`'s new
-//    `publicCompanies` prop (typed there as the narrower
-//    `StationTokenCompany[]`; this wider `PublicCompanyState[]` is
-//    structurally assignable to it, no conversion needed).
-// 6. **Player Net Worth (`FinancialLedger.tsx`).** Added
-//    `PlayerNetWorthResponse`, mirroring `msg.rs::PlayerNetWorthResponse`
-//    exactly, plus `usePlayerNetWorths` -- a SEPARATE polling hook from
-//    `useGameStatePolling` above, not a field folded into
-//    `GameStateResponse`, because `QueryMsg::PlayerNetWorth` takes a
-//    per-player `wallet_address` argument `GetGameState` has no equivalent
-//    for; one room-wide `GameStateResponse` poll can't answer "what is
-//    EACH player's net worth" in a single call the way it already answers
-//    "what is each player's cash" (`player_cash`) or "each company's
-//    holdings" (`public_companies[].player_holdings`). `usePlayerNetWorths`
-//    instead fires one `PlayerNetWorth` query per address in
-//    `playerAddresses` (via `Promise.all`, so they resolve concurrently,
-//    not one-by-one) on the same fixed-interval-plus-monotonic-guard
-//    pattern `useGameStatePolling` established. Its `refresh` callback
-//    depends on `playersKey` (`playerAddresses.join(",")`) rather than
-//    `playerAddresses` itself, so a `GameStateResponse` poll returning a
-//    same-content-but-new-array-reference `player_addresses` (as every
-//    poll does, being a fresh JSON parse) doesn't tear down and rebuild
-//    this hook's own interval every 6 seconds in lockstep -- only an
-//    actual membership change (a player joining) does.
+// Design note #1: hand-kept, not codegen -- there is no schema-derived TS type, so these fields must be
+// kept in exact sync with `src/msg.rs` by hand. Same DESIGN GAP as every other contract mirror here.
+//
+// Design note #2: what this deliberately does NOT expose, because the backend does not either. `state.rs`
+// genuinely models hardware/train inventory and route-tracing, but NO `QueryMsg` returns any of it. Every
+// panel that would want it renders an honest "not yet exposed by the contract" state.
+//
+// Design note #4: polling, not a subscription -- CosmWasm has no browser-reachable push mechanism, so each
+// hook re-fires on a fixed interval with a monotonic sequence guard that discards a stale response.
+//
+// Design notes #3/#6/#7 and #352/#379/#526/#544/#553/#656/#662: see `docs/ai_architecture/utils_layer.md`.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -102,21 +25,14 @@ import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 /* Contract data mirror -- see design note #1                         */
 /* ------------------------------------------------------------------ */
 
-/** Hover text for the inline Priority Deal `#1` marker.
- *
- *  Defined once and shared by every surface that renders the marker
- *  (`FinancialLedger`'s Player Assets table, `ContextualSubPanel`'s Stock
- *  Round Player Index) so the two cannot drift into explaining the same
- *  indicator two different ways -- which is exactly what happens when a
- *  tooltip string is retyped per call site. */
+/** Hover text for the inline Priority Deal marker. Defined once and shared by every surface that renders
+ *  it, so two panels cannot drift into explaining the same indicator two different ways -- which is exactly
+ *  what happens when a tooltip string is retyped per call site. */
 export const PRIORITY_DEAL_TOOLTIP = "Priority Deal: Starts the next Stock Round.";
 
 export type TileColor = "Yellow" | "Green" | "Brown";
-/** Pre-Game Waterfall Auction (`waterfall.rs`): every room now genesis-starts
- *  in `"WaterfallAuction"`, before `"StockRound"` is ever reachable -- see
- *  `WaterfallAuctionDashboard.tsx`, which is the only panel that renders
- *  anything while this value is current. Mirrors `state.rs`'s `RoundType`
- *  enum exactly. */
+/** Pre-Game Waterfall Auction (`waterfall.rs`): every room genesis-starts here, before `"StockRound"` is
+ *  ever reachable. Mirrors `state.rs`'s `RoundType` exactly. */
 export type RoundType = "WaterfallAuction" | "StockRound" | "OperatingRound";
 
 export interface PlayerCashEntry {
@@ -139,18 +55,11 @@ export interface PublicCompanyState {
   treasury: string;
   total_shares_issued: number;
   par_value: string | null;
-  /** Total revenue this corporation's trains earned on their most recent
-   *  route run -- `msg.rs::PublicCompanyState.last_route_revenue`.
-   *
-   *  Written by `operations::execute_run_manual_route` on EVERY run, paid
-   *  out or withheld alike, and reset to zero by a run that found no legal
-   *  route. So it always reads as "what it earned last time", never a stale
-   *  high-water mark. `"0"` for a corporation that has never run.
-   *
-   *  Optional because a contract predating the field returns no key at all,
-   *  and `undefined` must stay distinguishable from a real `"0"`: the first
-   *  means "this build cannot tell you", the second means "it earned
-   *  nothing". `LastRoutePayout` renders the two differently. */
+  /** Total revenue this corporation's trains earned on their most recent run. Written on EVERY run, paid out
+   *  or withheld alike, and reset to zero by a run that found no legal route -- so it always reads as "what it
+   *  earned last time", never a stale high-water mark.
+   *  Optional because a contract predating the field returns no key, and `undefined` must stay distinguishable
+   *  from a real `"0"`: the first means "this build cannot tell you", the second "it earned nothing". */
   last_route_revenue?: string;
   president: string | null;
   ipo_pool_percentage: number;
@@ -165,43 +74,25 @@ export interface PublicCompanyState {
    *  at float) -- mirrors `msg.rs::PublicCompanyState.station_token_hexes`
    *  exactly. Empty before this company floats. */
   station_token_hexes: Array<[number, number]>;
-  /* ==================================================================
-   *  DESIGN NOTE 560: A HEX IS NOT A CITY
-   * ==================================================================
-   *
-   * REPORTED: placing ERIE's home station, the player clicked the TOP-RIGHT
-   * city and the token landed on the bottom-left one.
-   *
-   * `station_token_hexes` above is `(q, r)` and cannot express the
-   * difference. ERIE's home hex carries two separate cities; so does New
-   * York, and so does every OO tile. With only a hex to go on, the renderer
-   * falls back to a heuristic, and the heuristic picks the first slot --
-   * which is the bottom-left one, every time, for every corporation.
-   *
-   * So the answer the player gave is recorded. `hexContractTypes.ts` has
-   * declared this field since design note #134 (backend Audit G-12) and the
-   * renderer already PREFERS it over the heuristic; nothing on this side
-   * ever wrote it, so the preference never had anything to prefer.
-   *
-   * OPTIONAL, and the three states stay distinguishable: absent means "this
-   * chain predates G-12, fall back to the heuristic"; an entry means "this
-   * slot, definitively"; and a hex present in `station_token_hexes` with no
-   * entry here means the same as absent for that token specifically. What it
-   * must never mean is "no token", which is why the two arrays are written
-   * together and never one without the other. */
+  /* Design note #560: A HEX IS NOT A CITY. `station_token_hexes` is `(q, r)` and cannot express which of a
+     two-city hex holds a token -- ERIE's home, New York and every OO tile carry two -- so the renderer falls
+     back to a heuristic, and the heuristic picks the first slot every time for every corporation.
+     So the answer the player gave is recorded. `hexContractTypes.ts` has declared this field since #134 and
+     the renderer already PREFERS it; nothing on this side ever wrote it, so the preference never had anything
+     to prefer.
+     OPTIONAL, with three distinguishable states: absent means "this chain predates G-12, use the heuristic";
+     an entry means "this slot, definitively"; a hex in `station_token_hexes` with no entry means the same as
+     absent for that token. What it must never mean is "no token" -- which is why the two arrays are written
+     together and never one without the other. */
   station_tokens?: Array<[number, number, number]> | null;
   /** This company's total Station Token limit, home token included -- see
    *  `hexmap::station_token_limit`. Mirrors `msg.rs::PublicCompanyState.
    *  station_token_limit` exactly. */
   station_token_limit: number;
-  /** Audit G-15c: the MODEL of every train this corporation owns, e.g.
-   *  `["2", "2", "4"]`. Duplicates are meaningful.
-   *
-   *  OPTIONAL, and the optionality carries meaning the UI must respect:
-   *  `undefined` means a contract predating the field, i.e. "unknown", NOT
-   *  "owns nothing". A UI that conflates the two would grey out every train
-   *  on every corporation against an older chain and make trading look
-   *  broken rather than unsupported. */
+  /** Audit G-15c: the MODEL of every train this corporation owns, e.g. `["2", "2", "4"]` -- duplicates are
+   *  meaningful. OPTIONAL, and the optionality carries meaning the UI must respect: `undefined` means a
+   *  contract predating the field, i.e. UNKNOWN, not "owns nothing". Conflating the two would grey out every
+   *  train on every corporation against an older chain and make trading look broken rather than unsupported. */
   owned_trains?: string[] | null;
 }
 
@@ -223,11 +114,9 @@ export interface PrivateCompanyState {
   closed: boolean;
 }
 
-/** A corporation's standing offer for a private company -- design note #662.
- *
- *  Snake_case to match everything else on `GameStateResponse`, even though
- *  no contract sends it: a reader scanning this object should not have to
- *  work out which fields came off the wire from their casing. */
+/** A corporation's standing offer for a private company -- design note #662. Snake_case to match everything
+ *  else on `GameStateResponse` even though no contract sends it: a reader scanning this object should not
+ *  have to work out which fields came off the wire from their casing. */
 export interface PrivatePurchaseOffer {
   private_id: number;
   /** Carried, not re-derived, so every client's prompt names what the buyer
@@ -252,28 +141,16 @@ export interface GameStateResponse {
   /** Index into `player_addresses` -- whose turn it currently is. Advanced
    *  by `ExecuteMsg::PassTurn`. */
   active_player_index: number;
-  /** Real field, but per `src/state.rs`'s own doc comment currently static
-   *  `0` for every room -- nothing yet reassigns it during play on chain.
-   *  The SANDBOX reassigns it at the end of a Stock Round (design note #353
-   *  in `sandboxSession.ts`), which is the rule the contract will apply
-   *  when it implements `conclude_stock_round`'s own half. */
+  /** Real field, but per `state.rs`'s own doc comment currently static `0` for every room -- nothing yet
+   *  reassigns it during play on chain. The SANDBOX reassigns it at the end of a Stock Round
+   *  (`sandboxSession.ts #353`), which is the rule the contract will apply when it implements its own half. */
   priority_deal_index: number;
-  /* ==================================================================
-   *  SANDBOX-ONLY FIELDS
-   * ==================================================================
-   *
-   * Neither of these comes off the wire. `GetGameState` does not report
-   * them and a live room leaves them `undefined`, which every reader below
-   * treats as "not applicable" rather than as a value -- see design note
-   * #352 for why they live on the state object at all rather than in module
-   * scope (the undo snapshot copies the state; it cannot copy a closure).
-   *
-   * Marked optional rather than added to the mirror of the contract's
-   * response shape, so nothing here can be mistaken for a field the chain
-   * will one day send.
-   */
-  /** Design note #352: the seat that last bought or sold this Stock Round,
-   *  for the Priority Deal handover. `null` when nobody has traded. */
+  /* SANDBOX-ONLY FIELDS. Neither comes off the wire: `GetGameState` does not report them and a live room
+     leaves them `undefined`, which every reader treats as "not applicable" rather than as a value. They live
+     on the state object rather than in module scope because the undo snapshot copies the state and cannot
+     copy a closure (#352). Marked optional rather than added to the mirror, so nothing here can be mistaken
+     for a field the chain will one day send.
+     Design note #352: the seat that last bought or sold this Stock Round, for the Priority Deal handover. */
   last_trader_index?: number | null;
   /** Design note #353: set for one dispatch when a full round of passes
    *  closed the Stock Round, so the shell can log the handover and move to
@@ -284,34 +161,21 @@ export interface GameStateResponse {
    *  operating queue finished its turn and the macro round closed. Consumed
    *  and cleared by the caller, which owns the log and the tab. */
   operating_round_just_ended?: boolean;
-  /** Design note #656: WHICH STEP of its turn the acting corporation is on.
-   *
-   *  This was `orSubPhase`, React state in `App.tsx`, re-seeded by an effect
-   *  keyed on the era and the phase tier -- so buying a train that advanced
-   *  the phase sent the buying corporation back to the top of its own turn.
-   *  A cursor held outside the reducer is also not in the action log, so a
-   *  client that joined or undid mid-turn rebuilt every treasury exactly and
-   *  then showed whichever step its own effect seeded. Same split design note
-   *  #642 found in the round machine, one layer down.
-   *
-   *  Sandbox-only and optional, per the block above: `GetGameState` does not
-   *  report it, and a live room leaves it `undefined` because the CONTRACT
-   *  owns the cursor there (`or_phase`, and `WrongOperatingSubPhase` when a
-   *  client disagrees). Readers treat `undefined` as "ask the opening rule",
-   *  never as a step. */
+  /** Design note #656: WHICH STEP of its turn the acting corporation is on. This was React state in `App.tsx`
+   *  re-seeded by an effect keyed on the era and phase tier -- so buying a train that advanced the phase sent
+   *  the buying corporation back to the top of its own turn. A cursor held outside the reducer is also not in
+   *  the action log, so a client that joined or undid mid-turn rebuilt every treasury exactly and then showed
+   *  whichever step its own effect seeded. Same split #642 found one layer down.
+   *  Sandbox-only: a live room leaves it `undefined` because the CONTRACT owns the cursor there (`or_phase`,
+   *  and `WrongOperatingSubPhase` when a client disagrees). Readers treat `undefined` as "ask the opening
+   *  rule", never as a step. */
   operating_sub_phase?: OperatingSubPhase;
-  /** Design note #662: the private-company purchase awaiting its owner's
-   *  answer, or `null`/absent when none is.
-   *
-   *  On the STATE rather than in a React ref because a proposal is something
-   *  the other player has to see, and the sandbox's shared state is the only
-   *  thing both clients hold. It was `privateProposal` in `App.tsx` -- so the
-   *  seller was never asked and the buyer answered their own offer.
-   *
-   *  Sandbox-only, like the fields above. The contract's `BuyPrivateCompany`
-   *  is single-party: it reads `private.owner` and never consults them
-   *  (`PrivateTradePanel` design note #0), so there is no chain-side offer
-   *  for this to mirror and a live room leaves it undefined. */
+  /** Design note #662: the private-company purchase awaiting its owner's answer. On the STATE rather than in
+   *  a React ref because a proposal is something the other player has to see, and the sandbox's shared state
+   *  is the only thing both clients hold -- it was a ref in `App.tsx`, so the seller was never asked and the
+   *  buyer answered their own offer.
+   *  Sandbox-only: the contract's `BuyPrivateCompany` is single-party (it reads `private.owner` and never
+   *  consults them), so there is no chain-side offer for this to mirror. */
   private_purchase_offer?: PrivatePurchaseOffer | null;
   consecutive_passes: number;
   current_global_era: TileColor;
@@ -327,22 +191,13 @@ export interface GameStateResponse {
   private_companies: PrivateCompanyState[];
 }
 
-/** The seat that should be holding the controls right now, given the phase.
- *
- *  Two different pointers answer "who acts next" in 1830, and which one is
- *  correct depends entirely on the round:
- *
- *  - **Waterfall Auction and Stock Round** are seat-driven. Players act in
- *    seating order, so `active_player_index` is the answer directly.
- *  - **Operating Rounds** are corporation-driven. The queue
- *    (`active_operating_order`) names companies, not people, and the human
- *    who may act is whoever presides over the company currently up. The seat
- *    pointer is not meaningful here and can easily point at a player with
- *    nothing to do.
- *
- *  Returns `null` when the acting seat cannot be resolved -- an Operating
- *  Round whose current corporation has no president on record, for
- *  instance. Callers should leave the seat where it is rather than guess. */
+/** The seat that should be holding the controls right now, given the phase. Two pointers answer "who acts
+ *  next" in 1830 and which is correct depends entirely on the round: the Waterfall Auction and Stock Round
+ *  are SEAT-driven, so `active_player_index` is the answer directly; Operating Rounds are
+ *  CORPORATION-driven, and the seat pointer is not meaningful there and can easily point at a player with
+ *  nothing to do.
+ *  Returns `null` when the acting seat cannot be resolved. Callers should leave the seat where it is rather
+ *  than guess. */
 export function actingSeatIndex(state: GameStateResponse): number | null {
   if (state.player_addresses.length === 0) return null;
 
@@ -360,42 +215,18 @@ export function actingSeatIndex(state: GameStateResponse): number | null {
 }
 
 
-/* ==================================================================
- *  DESIGN NOTE 544: A MINI-AUCTION SUSPENDS THE TURN ORDER
- * ==================================================================
- *
- * REPORTED: a player bought a private, which opened a mini-auction they
- * were the lowest bidder in. The mini-auction card named them as being on
- * turn. The Turn Order named them. The Auction Round ACTION PANEL named
- * somebody else -- and only that somebody else could do anything.
- *
- * `actingSeatIndex` above returns `active_player_index` during the auction,
- * and that field is right about the WATERFALL and knows nothing about a
- * contest running on top of it. The mini-auction's cursor lives on a
- * different document (`WaterfallStateResponse.mini_auction.current_turn`),
- * on a different atom, fetched by a different query. So the two halves of
- * the screen were each reading a pointer that was correct about a different
- * question, and neither was wrong on its own terms.
- *
- * THE SUSPENSION IS THE WHOLE RULE. While a contest is live the main
- * rotation does not advance and nobody may take a waterfall action -- the
- * reducer has preserved `waterfall.current_turn` across a contest since
- * design note #338 precisely so it can be resumed untouched afterwards.
- * That makes it a STALE pointer for the duration, not a live one, and
- * anything asking "who may act" has to prefer the contest's cursor.
- *
- * WHY AN ADDRESS AND NOT A SEAT INDEX. A mini-auction bidder is identified
- * by address; mapping back to a seat only to have callers map forward again
- * would add a lookup that can fail (a bidder missing from
- * `player_addresses`) to a path that currently cannot.
- *
- * `actingSeatIndex` IS LEFT ALONE. It answers a narrower question -- which
- * SEAT the phase points at -- and the sandbox seat-switcher and the
- * Operating Round president lookup both still want exactly that. Widening
- * it would have meant threading the waterfall document through every
- * caller, including several that have no business knowing an auction
- * exists.
- */
+/* Design note #544: A MINI-AUCTION SUSPENDS THE TURN ORDER. `actingSeatIndex` returns
+   `active_player_index` during the auction, and that field is right about the WATERFALL and knows nothing
+   about a contest running on top of it -- the contest's cursor lives on a different document, on a
+   different atom, fetched by a different query. So the two halves of the screen each read a pointer that
+   was correct about a different question, and neither was wrong on its own terms.
+   THE SUSPENSION IS THE WHOLE RULE: while a contest is live the main rotation does not advance and nobody
+   may take a waterfall action -- the reducer has preserved `waterfall.current_turn` across a contest since
+   #338 precisely so it can be resumed untouched, which makes it a STALE pointer for the duration.
+   WHY AN ADDRESS AND NOT A SEAT INDEX: a bidder is identified by address, and mapping back only to have
+   callers map forward again would add a lookup that can fail to a path that currently cannot.
+   `actingSeatIndex` IS LEFT ALONE -- it answers a narrower question, and widening it would thread the
+   waterfall document through callers that have no business knowing an auction exists. */
 export function actingAddress(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
@@ -409,14 +240,10 @@ export function actingAddress(
   return state.player_addresses[seat] ?? null;
 }
 
-/** Whether `address` is shut out of the contest currently running -- i.e. a
- *  seat at the table who is not one of its bidders. `false` whenever no
- *  mini-auction is live, because there is then nothing to be excluded from.
- *
- *  Design note #545 (`ContextualActionBar`): drives the greyed-out roster
- *  pills, and states a real fact about the game rather than a visual one --
- *  these players cannot act, and cannot be acted for, until the contest
- *  resolves. */
+/** Whether `address` is shut out of the contest currently running -- a seat at the table who is not one of
+ *  its bidders. `false` whenever no mini-auction is live, because there is then nothing to be excluded from.
+ *  `ContextualActionBar #545`: states a real fact about the game rather than a visual one -- these players
+ *  cannot act, and cannot be acted for, until the contest resolves. */
 export function isSidelinedByMiniAuction(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
@@ -451,26 +278,14 @@ export interface QueryCapableClient {
 /* Derived helpers -- see design note #3                              */
 /* ------------------------------------------------------------------ */
 
-/**
- * EXACT certificate count for `playerAddress`.
- *
- * Renamed from `estimateCertificateCount`, and the "~N" presentation it
- * required is gone with it. The name was inherited from a pass where the
- * president's-certificate rule was unconfirmed and the count really was a
- * guess. That rule is now confirmed against three independent sources
- * (design note #3) and implemented below, and every input --
- * `private_companies[].owner`, `public_companies[].player_holdings`,
- * `.president` -- is queryable exact state. Nothing here approximates
- * anything.
- *
- * Equivalent to `(total public % / 10) - presidencies held + privates
- * held`: a president's 20% share is a single physical certificate, so it
- * counts once rather than twice.
- *
- * The one thing it still cannot do is see a certificate the QUERIES do not
- * expose -- but no such certificate exists in the current schema, so that
- * is a statement about future changes, not about present accuracy.
- */
+/** EXACT certificate count for `playerAddress`. Renamed from `estimateCertificateCount`, and the "~N"
+ *  presentation went with it: the name was inherited from a pass where the president's-certificate rule was
+ *  unconfirmed and the count really was a guess. That rule is now confirmed against three independent
+ *  sources (design note #3) and every input is queryable exact state. Nothing here approximates anything.
+ *  Equivalent to `(total public % / 10) - presidencies held + privates held`: a president's 20% share is a
+ *  single physical certificate, so it counts once rather than twice.
+ *  The one thing it cannot do is see a certificate the QUERIES do not expose -- but no such certificate
+ *  exists in the current schema, so that is a statement about future changes, not present accuracy. */
 export function certificateCount(playerAddress: string, state: GameStateResponse): number {
   let count = 0;
   for (const priv of state.private_companies) {
@@ -495,12 +310,9 @@ export function certificateCount(playerAddress: string, state: GameStateResponse
   return count;
 }
 
-/* Design note #526: the local copy is GONE. It carried its own doc comment
-   saying "Mirrors `RulesReference.tsx`'s `CERT_LIMIT_BY_PLAYERS`" -- a
-   correctness requirement enforced by a sentence, which is the arrangement
-   TD-1 catalogued and design note #507 hit again. `utils/gameSetup.ts` is
-   the one table now; multiplayer initialisation needed it too, and a third
-   copy is what this delegation exists to avoid. */
+/* Design note #526: the local copy is GONE. It carried a doc comment saying "mirrors `RulesReference`'s
+   table" -- a correctness requirement enforced by a sentence, the arrangement TD-1 catalogued and #507 hit
+   again. `utils/gameSetup.ts` is the one table now; a third copy is what this delegation exists to avoid. */
 
 /** How many certificates a player may hold, given the room's size.
  *  `null` for a player count the printed table does not cover, so a caller
@@ -521,33 +333,15 @@ export interface CertificateBreakdown {
   limit: number | null;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 7: THE CERTIFICATE LIMIT EXEMPTION
- * ==================================================================
- *
- * Shares of a corporation whose market price sits in the Yellow, Orange or
- * Brown zone do not count toward a player's certificate limit. That is a
- * MARKET-POSITION rule, not an ownership rule: the same certificate counts
- * today and stops counting tomorrow if the price moves up into a zone, with
- * nothing about the certificate itself changing.
- *
- * WHY THE ZONE ARRIVES AS A CALLBACK. The zone table lives in
- * `StockMarketRenderer.tsx` (`marketZoneForPrice`), and `utils/` may not
- * import from `components/` -- the one-way rule this codebase holds. Taking
- * `zoneForPrice` as a parameter keeps that boundary intact AND keeps this
- * function pure and testable, rather than copying the price-to-zone table
- * into a second place where it could drift from the board a player is
- * looking at.
- *
- * OMITTING THE CALLBACK IS A VALID CALL, not a degraded one: the caller
- * simply has no market data (an unfloated-only room, or a live game where
- * `GetMarketGrid` has not been wired). Everything is then counted, which is
- * the correct conservative answer -- a corporation with no market position
- * is not in any zone.
- *
- * PRIVATE COMPANIES ARE NEVER EXEMPT. They have no market price at all, so
- * there is no zone for them to be in; they always count.
- */
+/* Design note #7: THE CERTIFICATE LIMIT EXEMPTION. Shares priced in the Yellow, Orange or Brown zone do not
+   count toward the limit -- a MARKET-POSITION rule, not an ownership one: the same certificate counts today
+   and stops counting tomorrow if the price moves, with nothing about the certificate changing.
+   WHY THE ZONE ARRIVES AS A CALLBACK: the table lives in `StockMarketRenderer.tsx` and `utils/` may not
+   import from `components/`. Taking it as a parameter keeps that boundary intact AND keeps this pure and
+   testable, rather than copying the price-to-zone table where it could drift from the board.
+   OMITTING THE CALLBACK IS A VALID CALL, not a degraded one -- the caller has no market data, everything is
+   counted, and that is the correct conservative answer. PRIVATE COMPANIES ARE NEVER EXEMPT: no price, no
+   zone. */
 export function certificateBreakdown(
   playerAddress: string,
   state: GameStateResponse,
@@ -612,59 +406,20 @@ export function playerCompanyHoldings(
   return holdings;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 497: THE LEDGER SAID "NOT CONNECTED" TO ITS OWN DATA
- * ==================================================================
- *
- * REPORTED: the Game Ledger's Player Assets table shows "not connected" for
- * Stock Value and Net Worth, masking local Sandbox figures behind a
- * wallet-connection check.
- *
- * It did. `netWorthsEnabled` is `queryClient && contractAddress && gameId`,
- * and a sandbox has none of the three -- design note #24 in `App.tsx` is
- * explicit that "sandbox never touches the network at all". So both columns
- * fell to the `!netWorthsEnabled` placeholder for the whole of offline mode,
- * on the one screen whose job is to total up what everybody owns.
- *
- * `FinancialLedger`'s design note #4 is why, and it was right WHEN WRITTEN:
- *
- *   "This panel can't compute it itself from `gameState` alone:
- *    `GameStateResponse` carries each company's `par_value` but not its live
- *    market price (that's a separate `GetMarketGrid` query), so reproducing
- *    the real figure client-side would mean either a second query plus
- *    duplicating the backend's own valuation math, or silently substituting
- *    par value for market price -- both worse than just calling the
- *    dedicated endpoint."
- *
- * The premise expired. `marketGrid` has since become a PROP of that panel
- * (its own design note #14, for the Corporation Assets table's Market Price
- * column), and `PlayerAssetsSection` already unpacks it into a
- * `marketPrices` map to decide certificate exemptions. The live prices the
- * note says would need a second query are sitting in the same function that
- * prints "not connected".
- *
- * So the valuation is derivable, and the note's own escape clause -- do not
- * substitute par value for market price -- is honoured below: this reads the
- * live price and returns `null` for a corporation that has none, rather than
- * quietly pricing it at par.
- *
- * ==================================================================
- *  DESIGN NOTE 497a: AN ESTIMATE THAT KNOWS IT IS ONE
- * ==================================================================
- *
- * This does NOT replace `QueryMsg::PlayerNetWorth`. The chain's figure stays
- * authoritative wherever there is a chain to ask, and the caller prefers it.
- * What this replaces is the BLANK -- and the distinction matters, because
- * the two can legitimately differ: the contract may value things this does
- * not know about, and a client-side total presented as authoritative would
- * be the "silently substituting" failure the note above warns against
- * wearing a different hat.
- *
- * `null` PROPAGATES rather than being coerced to zero. A player holding a
- * corporation with no market position has an UNKNOWN portfolio value, not a
- * zero one, and reporting "$0 net worth" for someone holding five
- * certificates is worse than reporting nothing at all.
- */
+/* Design note #497: THE LEDGER SAID "NOT CONNECTED" TO ITS OWN DATA. The gate is
+   `queryClient && contractAddress && gameId`, and a sandbox has none of the three -- so both money columns
+   fell to the placeholder for the whole of offline mode, on the screen whose job is to total up what
+   everybody owns.
+   `FinancialLedger #4` was why, and it was right WHEN WRITTEN: reproducing the figure would have meant a
+   second query plus duplicating the backend's valuation math, or substituting par for market price. THE
+   PREMISE EXPIRED -- `marketGrid` is a prop of that panel now and is already unpacked into a price map, so
+   the live prices are sitting in the same function that printed "not connected".
+   Design note #497a: AN ESTIMATE THAT KNOWS IT IS ONE. This does not replace `PlayerNetWorth`; the chain's
+   figure stays authoritative and the caller prefers it. What this replaces is the BLANK -- and the two can
+   legitimately differ, so a client-side total presented as authoritative would be the "silently
+   substituting" failure wearing a different hat.
+   `null` PROPAGATES rather than being coerced to zero: an unknown portfolio value is not a zero one, and
+   reporting "$0 net worth" for someone holding five certificates is worse than reporting nothing. */
 
 /** One 1830 certificate is 10% of a corporation, and a market price is
  *  quoted per certificate -- so a 30% holding is three certificates at that
@@ -672,11 +427,8 @@ export function playerCompanyHoldings(
  *  rather than an arithmetic convenience. */
 const PERCENT_PER_CERTIFICATE = 10;
 
-/** What `playerAddress`'s shares are worth at live market prices, or `null`
- *  when any corporation they hold has no price to value them at.
- *
- *  `marketPrices` is keyed by `company_id`, exactly as `FinancialLedger`'s
- *  own `marketPrices` map already is. */
+/** What `playerAddress`'s shares are worth at live market prices, or `null` when any corporation they hold
+ *  has no price to value them at. Keyed by `company_id`, exactly as `FinancialLedger`'s own map is. */
 export function estimateStockPortfolioValue(
   playerAddress: string,
   state: GameStateResponse,
@@ -710,31 +462,14 @@ export function estimatePlayerNetWorth(
   return { stockValue, netWorth: cash + stockValue };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 379: A PRIVATE CAN BELONG TO A COMPANY, NOT A PLAYER
- * ==================================================================
- *
- * REPORTED: when a corporation buys a private company from a player, there
- * is nowhere in the UI to see that the corporation now owns it.
- *
- * `PrivateCompanyState` has carried BOTH owners since the schema was
- * written -- `owner` for a player and `owner_protocol_id` for a
- * corporation, "mutually exclusive" per its own doc comment -- and the
- * phase-gated corporate purchase that sets the second one has been
- * implemented since `PrivateTradePanel`. Every reader in the app looked
- * only at `owner`. So the moment a private crossed from a player to a
- * company it left the seller's ledger row and arrived nowhere: it paid
- * revenue to a treasury (design note #329) that no surface attributed to
- * it.
- *
- * ONE HELPER, so the ledger column and the Operating Round strip cannot
- * disagree about what a corporation owns -- the same reason
- * `playerPrivateCompanies` exists for the other half of the pair.
- *
- * CLOSED PRIVATES ARE EXCLUDED, matching `playerSellablePrivateCompanies`
- * and the reservation badges: a closed company is off the board, pays
- * nothing, and listing it would show an asset the corporation no longer
- * has. */
+/* Design note #379: A PRIVATE CAN BELONG TO A COMPANY, NOT A PLAYER. `PrivateCompanyState` has carried
+   both owners since the schema was written -- `owner` for a player, `owner_protocol_id` for a corporation,
+   mutually exclusive per its own doc comment -- and every reader in the app looked only at `owner`. So the
+   moment a private crossed from a player to a company it left the seller's ledger row and arrived nowhere:
+   it paid revenue to a treasury (#329) that no surface attributed to it.
+   ONE HELPER, so the ledger column and the Operating Round strip cannot disagree about what a corporation
+   owns. CLOSED PRIVATES ARE EXCLUDED -- a closed company is off the board, pays nothing, and listing it
+   would show an asset the corporation no longer has. */
 export function corporationPrivateCompanies(
   companyId: number,
   state: GameStateResponse,
@@ -744,11 +479,9 @@ export function corporationPrivateCompanies(
   );
 }
 
-/** Every private company `playerAddress` currently owns -- the other half
- *  of a Financial Ledger "certificate tree". Includes closed privates still
- *  on this player's own ledger (e.g. a Phase 5-closed private they held at
- *  closure) -- use `playerSellablePrivateCompanies` below instead when the
- *  goal is specifically what a corporation could still buy from them. */
+/** Every private `playerAddress` currently owns -- the other half of a certificate tree. Includes closed
+ *  privates still on this player's own ledger; use the sellable list below when the goal is specifically
+ *  what a corporation could still buy from them. */
 export function playerPrivateCompanies(
   playerAddress: string,
   state: GameStateResponse,
@@ -756,13 +489,10 @@ export function playerPrivateCompanies(
   return state.private_companies.filter((p) => p.owner === playerAddress);
 }
 
-/** Every private company `playerAddress` currently owns AND could still
- *  sell to a corporation via `BuyPrivateCompany` -- i.e. `playerPrivateCompanies`
- *  minus any already `closed` (a closed private permanently rejects
- *  `execute_buy_private_company`, per `trading.rs` module doc comment #17,
- *  so offering one here would just produce a guaranteed-failing tx). The
- *  "Buy Private Company" action tray (`App.tsx`'s `ContextualActionBar`)
- *  uses this, not the plain list above, to populate its dropdown. */
+/** Every private `playerAddress` owns AND could still sell via `BuyPrivateCompany` -- the list above minus
+ *  any already `closed`. A closed private permanently rejects `execute_buy_private_company` (`trading.rs`
+ *  module doc #17), so offering one would just produce a guaranteed-failing tx. The Buy Private Company
+ *  tray uses this, not the plain list. */
 export function playerSellablePrivateCompanies(
   playerAddress: string,
   state: GameStateResponse,
@@ -777,32 +507,23 @@ export function playerSellablePrivateCompanies(
 export interface UseGameStatePollingResult {
   gameState: GameStateResponse | null;
   loading: boolean;
-  /** Set on the most recent failed query; NOT cleared just because an
-   *  earlier successful `gameState` is still being displayed -- callers
-   *  that want "stale but still show the last good state" behavior (most
-   *  of this dashboard) can keep rendering `gameState` while also
-   *  surfacing `error` as a small inline note, matching this codebase's
-   *  established "never silently hide a failure" discipline (see
-   *  `App.tsx`'s pre-existing `vgpBalanceNote` pattern). */
+  /** Set on the most recent failed query; NOT cleared just because an earlier successful state is still being
+   *  displayed -- callers wanting "stale but still show the last good state" can keep rendering while
+   *  surfacing this as an inline note, matching this codebase's "never silently hide a failure" discipline. */
   error: string | null;
   refresh: () => void;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 6000;
 
-/** Polls `QueryMsg::GetGameState` on a fixed interval -- see design note #4.
- *  Returns `null` `gameState` (not a thrown error) whenever `client` is
- *  absent, matching `HexGridRenderer.tsx`'s own "omit the query props to
- *  keep this query-free" convention rather than forcing every caller to
- *  guard against a client-less render. */
+/** Polls `QueryMsg::GetGameState` on a fixed interval -- design note #4. Returns `null` rather than throwing
+ *  whenever `client` is absent, matching `HexGridRenderer.tsx`'s "omit the query props to keep this
+ *  query-free" convention rather than forcing every caller to guard against a client-less render. */
 export function useGameStatePolling(
   client: QueryCapableClient | null | undefined,
-  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured
-   *  contract (`config.CONTRACT_ADDRESS` unset), which is a supported state,
-   *  not an error -- the same offline mode `HexGridRenderer`'s tile-catalog
-   *  fallback runs in. The hook then behaves exactly as it does with no
-   *  client: it clears state, stops loading, and never queries. Typed
-   *  optional rather than coerced to `""` at the call site so the offline
+  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured contract, which is a supported state,
+   *  not an error -- the same offline mode the tile-catalog fallback runs in. The hook clears state, stops
+   *  loading and never queries. Typed optional rather than coerced to `""` at the call site, so the offline
    *  case cannot be mistaken for a real address that happens to be empty. */
   contractAddress: string | null | undefined,
   gameId: number,
@@ -865,12 +586,9 @@ export interface UsePlayerNetWorthsResult {
 
 const DEFAULT_NET_WORTH_POLL_INTERVAL_MS = 6000;
 
-/** Polls `QueryMsg::PlayerNetWorth` for every address in `playerAddresses`
- *  on a fixed interval -- see design note #6 for why this is a distinct
- *  hook from `useGameStatePolling` rather than a field on
- *  `GameStateResponse`. Every address's query fires concurrently via
- *  `Promise.all`, not sequentially, so this scales to a full player table
- *  in one round-trip-latency's worth of time, not N of them. */
+/** Polls `QueryMsg::PlayerNetWorth` for every address on a fixed interval -- design note #6 for why this is
+ *  a distinct hook rather than a field on `GameStateResponse`. Every query fires concurrently via
+ *  `Promise.all`, so this scales to a full player table in one round-trip-latency's worth of time, not N. */
 export function usePlayerNetWorths(
   client: QueryCapableClient | null | undefined,
   contractAddress: string,
@@ -934,21 +652,11 @@ export function usePlayerNetWorths(
   return { netWorths, loading, error, refresh };
 }
 
-/* ------------------------------------------------------------------ */
-/* Pre-Game Waterfall Auction (`waterfall.rs`) -- see design note #7    */
-/* ------------------------------------------------------------------ */
-//
-// 7. **Waterfall Auction state (`WaterfallAuctionDashboard.tsx`).** Mirrors
-//    `msg.rs`'s `WaterfallStateResponse`/`WaterfallPrivateStatus`/
-//    `WaterfallBidEntry`/`WaterfallMiniAuctionStatus` exactly, plus a THIRD,
-//    independent polling hook (`useWaterfallStatePolling`) on the same
-//    fixed-interval-plus-monotonic-guard pattern as `useGameStatePolling`/
-//    `usePlayerNetWorths` above -- a separate hook rather than folding this
-//    into `GameStateResponse` because `QueryMsg::GetWaterfallState` is its
-//    own query and, unlike `PlayerNetWorth`, is only ever meaningful while
-//    `current_round_type === "WaterfallAuction"`; every other panel in this
-//    dashboard can keep polling `GetGameState` alone without ever paying for
-//    a query whose response it never renders.
+// Pre-Game Waterfall Auction (`waterfall.rs`) -- design note #7. Mirrors `WaterfallStateResponse` and its
+// nested types exactly, plus a THIRD independent polling hook on the same fixed-interval-plus-monotonic-
+// guard pattern. Separate rather than folded into `GameStateResponse` because `GetWaterfallState` is its
+// own query and, unlike `PlayerNetWorth`, is only meaningful while the auction is current -- so every other
+// panel keeps polling `GetGameState` alone without paying for a response it never renders.
 
 /** One standing bid on a private company -- mirrors `msg.rs`'s
  *  `WaterfallBidEntry` exactly. */
@@ -976,11 +684,9 @@ export interface WaterfallPrivateStatus {
  *  mini-auction is active. */
 export interface WaterfallMiniAuctionStatus {
   private_id: number;
-  /** The competing bidders, in the order they will be asked to act:
-   *  ascending by the bid each held when the contest opened, so the lowest
-   *  bidder is always first to answer. See `sandboxSession.ts` design note
-   *  #544 for why the queue is fixed at that moment rather than re-sorted
-   *  after every raise. */
+  /** The competing bidders, in the order they will be asked to act: ascending by the bid each held when the
+   *  contest opened, so the lowest bidder is always first to answer. See `sandboxSession.ts #544` for why the
+   *  queue is fixed at that moment rather than re-sorted after every raise. */
   bidders: string[];
   /** Whose turn it currently is within `bidders` -- always someone other
    *  than `high_bidder`, whose own turns are auto-skipped. */
@@ -1018,13 +724,10 @@ export interface UseWaterfallStatePollingResult {
 
 const DEFAULT_WATERFALL_POLL_INTERVAL_MS = 4000;
 
-/** Polls `QueryMsg::GetWaterfallState` on a fixed interval -- see design
- *  note #7. Callers should gate rendering on `enabled` (typically
- *  `gameState?.current_round_type === "WaterfallAuction"`) rather than
- *  unconditionally polling every game room forever; when `enabled` is
- *  `false` this hook tears down its interval and clears `waterfallState`
- *  rather than continuing to query a phase that's already over. */
-/** Mirrors `msg::TrainOfferEntry`. */
+/** Polls `QueryMsg::GetWaterfallState` -- design note #7. Callers should gate on `enabled` rather than
+ *  polling every room forever; when it is `false` the hook tears down its interval and clears state rather
+ *  than continuing to query a phase that is already over.
+ *  Mirrors `msg::TrainOfferEntry`. */
 export interface TrainOfferEntry {
   offer_id: number;
   buyer_protocol_id: number;
@@ -1048,14 +751,10 @@ export interface UseTrainOffersPollingResult {
   refresh: () => void;
 }
 
-/** Audit G-15: polls `GetTrainOffers`.
- *
- *  Its own hook rather than a field on the main game-state poll, following
- *  the same pattern `useWaterfallStatePolling` established. Offers change on
- *  a different rhythm from the board -- they appear and vanish on two
- *  players' actions rather than on turn boundaries -- and a seller needs to
- *  see one arrive while it is emphatically NOT their turn, so this cannot key
- *  off turn state. */
+/** Audit G-15: polls `GetTrainOffers`. Its own hook rather than a field on the main poll, following the
+ *  pattern the waterfall hook established: offers change on a different rhythm from the board -- they appear
+ *  and vanish on two players' actions rather than on turn boundaries -- and a seller needs to see one arrive
+ *  while it is emphatically NOT their turn, so this cannot key off turn state. */
 export function useTrainOffersPolling(
   client: QueryCapableClient | null | undefined,
   contractAddress: string | null | undefined,
@@ -1101,13 +800,9 @@ export function useTrainOffersPolling(
 
 export function useWaterfallStatePolling(
   client: QueryCapableClient | null | undefined,
-  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured
-   *  contract (`config.CONTRACT_ADDRESS` unset), which is a supported state,
-   *  not an error -- the same offline mode `HexGridRenderer`'s tile-catalog
-   *  fallback runs in. The hook then behaves exactly as it does with no
-   *  client: it clears state, stops loading, and never queries. Typed
-   *  optional rather than coerced to `""` at the call site so the offline
-   *  case cannot be mistaken for a real address that happens to be empty. */
+  /** OFFLINE-AWARE, exactly as the game-state hook is: no configured contract is a supported state, the hook
+   *  clears and never queries, and the prop is typed optional rather than coerced to `""` so the offline case
+   *  cannot be mistaken for a real address that happens to be empty. */
   contractAddress: string | null | undefined,
   gameId: number,
   enabled: boolean,
@@ -1152,38 +847,18 @@ export function useWaterfallStatePolling(
 }
 
 
-/* ==================================================================
- *  DESIGN NOTE 553: A CORPORATION'S PAR IS THE CORPORATION'S, NOT YOURS
- * ==================================================================
- *
- * REPORTED: the president founds a corporation at $67 and their Buy button
- * goes on saying $67. Every other player is shown $100 and pays $100 -- and
- * the two clients then place the corporation's market token in different
- * boxes.
- *
- * `parValueFor` read the local par LADDER (`srParValues`), falling back to a
- * hardcoded "100" when this browser had never touched it. The ladder is a UI
- * selection: it exists so the founding buyer can choose a price. It is
- * per-browser by design and it is empty on every client but the one that
- * made the choice, so everybody else fell through to the default -- which
- * happens to be the top rung, which is why the wrong number looked like a
- * plausible one.
- *
- * SO THE LADDER IS AN INPUT, AND THE PAR IS A FACT. Once the founding
- * purchase lands, `PublicCompanyState.par_value` holds the answer, it came
- * off the shared state, and every client has it. The ladder is consulted
- * only while that field is still empty -- which is exactly what design note
- * #351 already said the rule was ("once `par_value` is set the company has a
- * price and the ladder is locked"); the reducer honoured it and the price
- * the UI quoted and dispatched did not.
- *
- * THE SAME BUG AS DESIGN NOTE #549, one layer up. There the reducer resolved
- * WHO from local state; here the UI resolved HOW MUCH from local state. Both
- * are the same mistake -- deriving a shared fact from a per-browser value --
- * and both produce the same shape of failure: no error, two clients that
- * disagree, and a symptom that surfaces somewhere else entirely (here, the
- * stock market chart).
- */
+/* Design note #553: A CORPORATION'S PAR IS THE CORPORATION'S, NOT YOURS. The resolver read the local par
+   LADDER, falling back to a hardcoded "100" when this browser had never touched it. The ladder is a UI
+   selection -- per-browser by design, and empty on every client but the one that made the choice -- so
+   everybody else fell through to the default, which happens to be the top rung, which is why the wrong
+   number looked like a plausible one.
+   SO THE LADDER IS AN INPUT, AND THE PAR IS A FACT: once the founding purchase lands
+   `PublicCompanyState.par_value` holds the answer and every client has it. The ladder is consulted only
+   while that field is empty -- exactly what #351 already said the rule was; the reducer honoured it and the
+   price the UI quoted and dispatched did not.
+   THE SAME BUG AS #549, one layer up: there the reducer resolved WHO from local state, here the UI resolved
+   HOW MUCH. Both produce the same failure -- no error, two clients that disagree, and a symptom that
+   surfaces somewhere else entirely. */
 export function parPriceFor(
   state: GameStateResponse | null,
   companyId: number,

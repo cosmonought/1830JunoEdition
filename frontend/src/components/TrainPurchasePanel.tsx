@@ -2,76 +2,20 @@
 //
 // The Buy Trains step's action panel -- two sources, two sections.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHY BANK AND CORPORATION ARE NOT ONE CONTROL
-// ===================================================================
+// Design note #0: the bank depot (fixed price, finite supply, strict cheapest-first queue, and a purchase
+// that can END THE PHASE) and a rival corporation (any price, no supply question, no rusting, and a
+// counterparty who has to agree) are different transactions in every respect that matters. One panel,
+// two separated sections, with the corporate half COLLAPSED by default because the bank is the ordinary
+// case and a trade is the exception.
 //
-// A corporation in the Hardware sub-phase can acquire a train two ways, and
-// they are different transactions in every respect that matters:
+// Design note #1: the quantity field is a convenience, not a batch -- `BuyHardwareFromPool` carries no
+// quantity, so "buy 3" is three sequential messages. ONE TIER PER SUBMISSION, because 1830's depot is a
+// strict queue and a player wanting a 3 and a 4 is describing two situations separated by a phase change.
 //
-//   FROM THE BANK DEPOT. A fixed price, a finite printed supply, a strict
-//   cheapest-first queue, and a purchase that can END THE PHASE -- buying
-//   the depot's last 3-train launches Phase 4 and rusts every 2-train on the
-//   board. Nobody consents; the bank always sells.
+// Design notes #2/#3: a train badge is the whole interaction (seller and model in one gesture), and
+// `BuyTrainFromCorporation` names one model and no count, so one train per trade.
 //
-//   FROM ANOTHER CORPORATION. Any price of $1 or more, no supply question at
-//   all, no phase advance and no rusting -- and a counterparty who has to
-//   agree, unless one player happens to preside over both companies.
-//
-// The old panel put a corporation-to-corporation offer form under the
-// heading "Buy a train from another corporation" and the depot purchase in a
-// completely separate tray elsewhere on the page, so the two halves of one
-// decision were never on screen together. This is one panel with two clearly
-// separated sections, and the corporate half is COLLAPSED by default because
-// the bank is the ordinary case and a trade is the exception.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE QUANTITY FIELD IS A CONVENIENCE, NOT A BATCH
-// ===================================================================
-//
-// `ExecuteMsg::BuyHardwareFromPool` carries no quantity. So "buy 3" is three
-// sequential messages, exactly as `StockRoundPanel`'s multi-buy is N
-// sequential `BuyStock`s (App.tsx design note #42) -- and for the same
-// reason: firing them in parallel would race the depot's own accounting and
-// could leave a corporation having bought fewer trains than the log claims.
-//
-// The cap is `min(depot supply, train limit - owned)` and the quantity
-// control LISTS it rather than validating against it -- a `<select>` whose
-// options are exactly the buyable quantities, so there is nothing to type
-// and nothing to reject. See design note #247 for why the previous
-// clamp-on-type input read as a control refusing valid input.
-//
-// ONE TIER PER SUBMISSION, deliberately. 1830's depot is a strict queue --
-// only the cheapest tier still in stock is purchasable -- so a player who
-// wants a 3-train and a 4-train is describing two separate situations
-// separated by a phase change, not one order. The panel says so rather than
-// offering a basket that cannot exist.
-//
-// ===================================================================
-//  DESIGN NOTE 2: A TRAIN BADGE IS THE WHOLE INTERACTION
-// ===================================================================
-//
-// Composing a trade used to mean three dropdowns: pick a corporation, pick a
-// model, type a price. The middle one was the problem -- it listed all six
-// models whether or not the seller owned any, greying out the ones they did
-// not, so the commonest question ("who has a 4-train I could buy?") was
-// answered by opening six dropdowns one seller at a time.
-//
-// The roster now shows every corporation's actual trains as clickable
-// badges. The question is answered by looking, and clicking the answer IS
-// the selection -- seller and model in one gesture, with only a price left
-// to type.
-//
-// ===================================================================
-//  DESIGN NOTE 3: ONE TRAIN PER TRADE
-// ===================================================================
-//
-// `BuyTrainFromCorporation` names a single `model_type` and no count, and
-// `train_trade.rs` records one offer at a time per buyer. A multi-train
-// trade would therefore be several offers, each separately acceptable --
-// which is a negotiation the contract cannot express and this panel will not
-// pretend to. The limit is stated in the UI rather than merely enforced, so
-// a player planning a two-train deal finds out before composing it.
+// Design history: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -90,13 +34,9 @@ export interface TrainPurchaseCompany {
   president: string | null;
   /** `Uint128` on the wire, so a string here too. */
   treasury: string;
-  /** Models currently held, e.g. `["2", "2", "4"]`. Duplicates are
-   *  meaningful and drive the badge counts.
-   *
-   *  `null`/`undefined` means UNKNOWN -- a chain predating
-   *  `PublicCompanyState.owned_trains` -- not "owns nothing". The corporate
-   *  section says so rather than rendering an empty roster that looks like a
-   *  board where nobody has bought a train. */
+  /** Models currently held, e.g. `["2", "2", "4"]` -- duplicates are meaningful and drive the badge counts.
+   *  `null`/`undefined` means UNKNOWN (a chain predating `owned_trains`), NOT "owns nothing": the corporate
+   *  section says so rather than rendering an empty roster that looks like a board where nobody has bought. */
   owned_trains?: string[] | null;
 }
 
@@ -127,11 +67,9 @@ export function trainPriceError(raw: string): string | null {
   return null;
 }
 
-/* `countByModel` is GONE with design note #282. It collapsed a roster into
-   model-and-count for the trade badges, and nothing else ever wanted that
-   shape -- the corporation table has always drawn one chip per train.
-   Deleted rather than left unused so the grouped rendering cannot quietly
-   come back. */
+/* `countByModel` is GONE with design note #282. It collapsed a roster into model-and-count for the trade
+   badges and nothing else ever wanted that shape -- the corporation table has always drawn one chip per
+   train. Deleted rather than left unused so the grouped rendering cannot quietly come back. */
 
 
 export interface TrainPurchasePanelProps {
@@ -155,34 +93,16 @@ export interface TrainPurchasePanelProps {
   onProposeTrade: (proposal: TrainTradeProposal) => void;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
-  /** Whether the corporate-trade accordion starts open. Defaults to closed,
-   *  which is the shipping behaviour -- design note #0's argument that the
-   *  bank is the common case and the trade section is the exception.
-   *
-   *  Exists so the section can be rendered without a DOM to click it open
-   *  with. A test that cannot reach a surface cannot check it, and this
-   *  section carries the train-limit gate. */
+  /** Whether the corporate-trade accordion starts open. Defaults closed, per #0's argument that the bank is
+   *  the common case. Exists so the section can be rendered without a DOM to click it open with -- a test
+   *  that cannot reach a surface cannot check it, and this section carries the train-limit gate. */
   defaultCorporateOpen?: boolean;
-  /* ==================================================================
-   *  DESIGN NOTE 508: THE PANEL TRAVELS WITH THE BAR NOW
-   * ==================================================================
-   *
-   * REPORTED: the train purchasing interface should condense and travel
-   * with the collapsed/sticky Action Panel.
-   *
-   * This panel is mounted INSIDE `ContextualActionBar` as of #508, which is
-   * `position: sticky` -- so it follows the player down the page instead of
-   * being scrolled away from. That is also what retires the "Buy Trains"
-   * jump button design note #491 added: a control whose only job was to
-   * scroll back to a panel that no longer goes anywhere.
-   *
-   * `condensed` is what makes that affordable. A sticky element costs the
-   * board its full height for the whole scroll (design note #298), so the
-   * pinned form drops what is PROSE and keeps what is CONTROL: the tier, the
-   * price, the quantity and the Buy button. The corporate accordion needs no
-   * special handling -- it is already collapsed by default (design note #0)
-   * and its header stays reachable, so a trade is one click away in either
-   * state rather than being hidden by the collapse. */
+  /* Design note #508: THE PANEL TRAVELS WITH THE BAR NOW. Mounted inside `ContextualActionBar`, which is
+     `position: sticky`, so it follows the player down the page instead of being scrolled away from -- which
+     is what retires #491's jump button.
+     `condensed` is what makes that affordable: a sticky element costs the board its full height for the whole
+     scroll (#298), so the pinned form drops what is PROSE and keeps what is CONTROL. The corporate accordion
+     needs no special handling -- already collapsed, header still reachable. */
   condensed?: boolean;
 }
 
@@ -208,12 +128,9 @@ export function TrainPurchasePanel({
      reference, and a reference list that opens itself is the vertical space
      this pass exists to give back. */
   const [laterTrainsOpen, setLaterTrainsOpen] = useState(false);
-  /* Design note #282: `position` indexes into the seller's `owned_trains`,
-     which is what tells two identical models apart. The dispatch still
-     names only the model -- `BuyTrainFromCorporation` has no notion of
-     which copy, and one 3-train is interchangeable with another -- so this
-     exists purely so the badge the player clicked is the badge that looks
-     selected. */
+  /* Design note #282: `position` indexes into the seller's `owned_trains`, which is what tells two identical
+     models apart. The dispatch still names only the model -- one 3-train is interchangeable with another --
+     so this exists purely so the badge the player clicked is the badge that looks selected. */
   const [selection, setSelection] = useState<{
     sellerId: number;
     model: string;
@@ -231,20 +148,11 @@ export function TrainPurchasePanel({
 
   const depotSupply = nextTier === null ? 0 : (nextTier.remaining ?? 99);
 
-  /* ==================================================================
-   *  DESIGN NOTE 633: THE ONE YOU CAN BUY, AND EVERYTHING ELSE
-   * ==================================================================
-   *
-   * `nextTier` is the split. Rusted tiers go with the later ones rather than
-   * being dropped: a 2-train that has left play is still the reason the
-   * board looks the way it does, and design note #283's "sold out is the
-   * middle of a tier's story, not the end" applies just as much to a tier
-   * behind a caret as to one on screen.
-   *
-   * NO AVAILABLE TIER IS A REAL STATE -- every tier sold out, which in 1830
-   * means the game is at Diesels or over. The available list is then empty
-   * and the accordion holds the whole depot, which is honest: there is
-   * nothing to buy and the panel says so by having nothing in the top slot. */
+  /* Design note #633: THE ONE YOU CAN BUY, AND EVERYTHING ELSE. Rusted tiers go with the later ones rather
+     than being dropped: a 2-train that has left play is still the reason the board looks the way it does.
+     NO AVAILABLE TIER IS A REAL STATE -- every tier sold out, which in 1830 means Diesels or over. The
+     accordion then holds the whole depot, which is honest: there is nothing to buy and the panel says so by
+     having nothing in the top slot. */
   const availableTiers = useMemo(
     () => (nextTier === null ? [] : depot.filter((row) => row.tier === nextTier.tier)),
     [depot, nextTier],
@@ -254,66 +162,18 @@ export function TrainPurchasePanel({
     [depot, nextTier],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 230: THE TRAIN LIMIT IS A SECOND, TIGHTER CEILING
-   * ==================================================================
-   *
-   * REPORTED BUG: the Buy Trains action lets a corporation exceed its
-   * maximum train limit.
-   *
-   * The panel capped quantity at the DEPOT'S SUPPLY and nothing else, so a
-   * corporation one train below its limit could buy four more as long as the
-   * bank had them. 1830 caps holdings per corporation by PHASE -- four
-   * through Phases 2-3, three in Phase 4, two from Phase 5 -- and
-   * `depotInventory` already reports that figure per tier as `trainLimit`.
-   * It was being displayed and not enforced, which is the worst of both:
-   * the number was on screen while the control ignored it.
-   *
-   * THE BINDING CEILING IS WHICHEVER IS SMALLER. A corporation two trains
-   * short of its limit facing a depot with five may buy two; one facing a
-   * depot with one may buy one. Both are caps on the same field, so the
-   * field takes the minimum and the message names whichever one bit.
-   *
-   * ZERO HEADROOM IS ITS OWN STATE, not a quantity error. "Enter a number
-   * between 1 and 0" is nonsense; "Train limit reached" is the actual
-   * situation, and it is a reason to move on rather than to retype.
-   */
-  /* ==================================================================
-   *  DESIGN NOTE 296: THE NUMBER WAS ALREADY IN THE FUTURE TENSE
-   * ==================================================================
-   *
-   * REPORTED: the train-limit readout confuses players -- it shows the
-   * limit that will apply AFTER the purchase, labelled as though it were
-   * the current one.
-   *
-   * The previous pass renamed it "Corp train limit", which fixed a
-   * different confusion (bank stock versus corporation ceiling) and left
-   * this one untouched -- arguably made it worse, since a more confident
-   * label on a wrong-tense number is a more convincing wrong answer.
-   *
-   * THE BUG IS IN THE VALUE, NOT ONLY THE WORDS. `trainLimit` reads
-   * `nextTier.trainLimit`, and `DepotTier.trainLimit` is documented as
-   * "trains one corporation may hold ONCE THIS TIER IS THE CURRENT PHASE".
-   * The next tier is not the current phase whenever the depot has moved on
-   * -- so in Phase 3 with the 2s and 3s sold out, the panel read "/ 3"
-   * while the real limit was 4. Measured on the real fixture before this
-   * note was written.
-   *
-   * Both figures are now derived and named:
-   *
-   *   `currentTrainLimit` -- the phase the corporation is in RIGHT NOW.
-   *   `limitAfterPurchase` -- the phase the next purchase brings.
-   *
-   * They are equal on the ordinary purchase (buying a 3-train during Phase
-   * 3 changes nothing) and differ on exactly the purchase that advances the
-   * phase, which is the one worth warning about.
-   *
-   * ENFORCEMENT STAYS ON THE AFTER-VALUE, deliberately. Buying the first
-   * 4-train starts Phase 4 and the limit drops with it, so a corporation
-   * cannot end that purchase holding more than the new ceiling -- capping
-   * against the old one would offer a quantity the rules take back. What
-   * was wrong was never the arithmetic; it was that the screen did not say
-   * which moment the number belonged to. */
+  /* Design note #230: THE TRAIN LIMIT IS A SECOND, TIGHTER CEILING. The panel capped quantity at the DEPOT'S
+     SUPPLY and nothing else, while 1830 caps holdings per corporation by PHASE -- and the figure was being
+     displayed and not enforced, which is the worst of both. The binding ceiling is whichever is smaller, and
+     the message names whichever one bit. ZERO HEADROOM IS ITS OWN STATE: "enter a number between 1 and 0" is
+     nonsense, "train limit reached" is the situation, and it is a reason to move on rather than to retype.
+     Design note #296: THE NUMBER WAS ALREADY IN THE FUTURE TENSE. It read `nextTier.trainLimit`, which means
+     "trains one corporation may hold ONCE THIS TIER IS THE CURRENT PHASE" -- and the next tier is not the
+     current phase whenever the depot has moved on. In Phase 3 with the 2s and 3s sold out the panel read
+     "/ 3" while the real limit was 4, measured on the real fixture.
+     Both figures are derived and named now, equal on an ordinary purchase and differing on exactly the one
+     that advances the phase. ENFORCEMENT STAYS ON THE AFTER-VALUE: buying the first 4-train starts Phase 4
+     and the limit drops with it, so capping against the old one would offer a quantity the rules take back. */
   const ownedTrainCount = buyer?.owned_trains?.length ?? 0;
   const currentTrainLimit = useMemo(
     () => depot.find((row) => row.isCurrent)?.trainLimit ?? null,
@@ -330,30 +190,12 @@ export function TrainPurchasePanel({
   const atTrainLimit = limitHeadroom === 0;
   const supplyCap = Math.min(depotSupply, limitHeadroom);
 
-  /* ==================================================================
-   *  DESIGN NOTE 219: THE CAP MOVES WHILE THE FIELD IS SITTING THERE
-   * ==================================================================
-   *
-   * Clamping on keystroke is not enough on its own. The depot's supply is
-   * not a constant this panel owns -- it is derived from what every
-   * corporation owns, so it drops when ANY of them buys, including this one.
-   * Two ordinary sequences leave a stale number in the box:
-   *
-   *   - buy 2 of the 3 remaining trains, and the field still reads 2 against
-   *     a supply of 1;
-   *   - another player's purchase lands on a poll while this panel is open.
-   *
-   * The submit guard catches both -- `quantityValid` re-reads `supplyCap`,
-   * so the button disables and says why -- but a field showing a number the
-   * player cannot buy, next to a button that refuses it, reads as the UI
-   * being broken rather than as the depot having moved. Clamping down to the
-   * new ceiling keeps the field describing something purchasable.
-   *
-   * DOWNWARD ONLY. A supply that grows (it cannot today, but a tier change
-   * shifts `nextTier` and with it the cap) must not silently raise a
-   * quantity the player typed -- that would be the UI buying more than they
-   * asked for.
-   */
+  /* Design note #219: THE CAP MOVES WHILE THE FIELD IS SITTING THERE. Supply is derived from what every
+     corporation owns, so it drops when ANY of them buys -- including on a poll while this panel is open.
+     The submit guard catches that, but a field showing a number the player cannot buy next to a button that
+     refuses it reads as the UI being broken rather than as the depot having moved.
+     DOWNWARD ONLY. A supply that grows must not silently raise a quantity the player typed -- that would be
+     the UI buying more than they asked for. */
   useEffect(() => {
     const cap = Math.max(1, supplyCap);
     setQuantityText((current) => {
@@ -363,13 +205,10 @@ export function TrainPurchasePanel({
     });
   }, [supplyCap]);
 
-  /* Design note #247: WHICH rule stopped the list where it did.
-   *
-   * With two ceilings in play and only one of them displayed, a player
-   * facing "2 in the depot, 1 selectable" had no way to reconcile the two
-   * numbers. This names the binding one, and says nothing at all when
-   * neither is close -- a permanent explanation of a constraint nobody is
-   * hitting is noise. */
+  /* Design note #247: WHICH rule stopped the list where it did. With two ceilings in play and one of them
+     displayed, a player facing "2 in the depot, 1 selectable" had no way to reconcile the numbers. This names
+     the binding one, and says nothing when neither is close -- a permanent explanation of a constraint nobody
+     is hitting is noise. */
   const bindingCeiling: string | null =
     nextTier === null || atTrainLimit
       ? null
@@ -412,43 +251,16 @@ export function TrainPurchasePanel({
             ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
             : null;
 
-  /* ==================================================================
-   *  DESIGN NOTE 281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK
-   * ==================================================================
-   *
-   * REPORTED: the UI permits buying trains from other corporations even at
-   * or over the train limit.
-   *
-   * It did, and the shape of the miss is instructive: design note #230 had
-   * already enforced the cap -- on the BANK section, thoroughly, with a
-   * headroom figure, a clamped quantity field and a named reason. The
-   * corporate section a few hundred lines below shared none of it, because
-   * the cap had been reasoned about as a property of buying FROM THE DEPOT
-   * rather than as a property of the corporation's fleet.
-   *
-   * 1830 caps what a corporation may HOLD. Where the train comes from is
-   * irrelevant -- four through Phases 2-3, three in Phase 4, two from Phase
-   * 5, however it was acquired. A corporation at its limit buying from a
-   * rival ends up over the limit exactly as it would buying from the bank,
-   * and the contract would refuse it either way.
-   *
-   * So the same `atTrainLimit` gates both, and the reason is the same
-   * sentence -- it is the same rule, and giving it two wordings would imply
-   * two rules.
-   *
-   * IT DISABLES RATHER THAN HIDING. The rival's trains are still worth
-   * seeing: knowing who holds what is what tells a president which rivals
-   * are themselves train-locked, and who might come asking to buy one of
-   * theirs. A vanished section would answer a question nobody asked by
-   * removing the one they did.
-   *
-   * Design note #485: the reason no longer ends "Scrap or sell a train
-   * before buying another." A corporation cannot scrap, and the Bank does
-   * not buy trains back -- the sentence instructed the player to take an
-   * action 1830 does not contain. The rule it was reaching for is the
-   * genuine one stated above: the cap is on HOLDINGS, so a full fleet cannot
-   * accept another train from any source. That is a lock, not a prerequisite,
-   * and it clears only when a rival corporation chooses to buy. */
+  /* Design note #281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK. #230 had enforced the cap on the
+     BANK section thoroughly, and the corporate section shared none of it -- because the cap had been reasoned
+     about as a property of buying FROM THE DEPOT rather than of the corporation's fleet. 1830 caps what a
+     corporation may HOLD, whatever the source, so the same gate covers both and the reason is the same
+     sentence: giving it two wordings would imply two rules.
+     IT DISABLES RATHER THAN HIDING. Knowing who holds what tells a president which rivals are themselves
+     train-locked; a vanished section would answer a question nobody asked by removing the one they did.
+     Design note #485: the reason no longer ends "scrap or sell a train before buying another" -- a
+     corporation cannot scrap and the Bank does not buy trains back, so the sentence instructed the player to
+     take an action 1830 does not contain. It is a lock, not a prerequisite. */
   const tradeBlockedReason: string | null =
     blockedReason ??
     (atTrainLimit
@@ -456,28 +268,13 @@ export function TrainPurchasePanel({
       : null);
   const canTrade = canAct && sessionReady && tradeBlockedReason === null;
 
-  /* ==================================================================
-   *  DESIGN NOTE 232: ONLY LIST CORPORATIONS THAT HAVE SOMETHING TO SELL
-   * ==================================================================
-   *
-   * REPORTED BUG: the accordion lists corporations with "no trains".
-   *
-   * It listed all seven, each with a "no trains" placeholder where its
-   * badges would be, on the reasoning that a complete roster is easier to
-   * scan than a filtered one. In practice the opposite: early in a game most
-   * corporations own nothing, so the panel was mostly rows that could not be
-   * acted on, and the two or three that COULD were buried among them. The
-   * question this section answers is "who has a train I could buy", and a
-   * row that answers "not this one" is noise.
-   *
-   * `owned_trains` UNDEFINED IS KEPT, and the distinction is load-bearing:
-   * `undefined` means the chain did not say (a contract predating the
-   * field), which is emphatically not "owns nothing". Filtering those out
-   * would empty the whole section against such a chain and make trading look
-   * removed rather than unsupported -- so they stay, with the note that says
-   * which case it is. On a current chain every corporation reports an array,
-   * so only real owners appear.
-   */
+  /* Design note #232: ONLY LIST CORPORATIONS THAT HAVE SOMETHING TO SELL. It listed all seven with a "no
+     trains" placeholder each, on the reasoning that a complete roster is easier to scan. In practice the
+     opposite: early on most corporations own nothing, so the panel was mostly rows that could not be acted
+     on and the two or three that COULD were buried among them.
+     `owned_trains` UNDEFINED IS KEPT, and the distinction is load-bearing: it means the chain did not say,
+     which is emphatically not "owns nothing". Filtering those out would empty the section against such a
+     chain and make trading look removed rather than unsupported. */
   const sellers = useMemo(
     () =>
       companies.filter(
@@ -517,67 +314,21 @@ export function TrainPurchasePanel({
             whether to buy the last 3-train needs to see that a 4-train costs
             $300 and that six 2-trains are about to rust -- which is a fact
             about the tiers they CANNOT buy. */}
-        {/* ==================================================================
-             DESIGN NOTE 618: SIX ROWS, NOT SIX CARDS
-            ==================================================================
-
-             REPORTED: "the Buy Trains action panel is quite large for what it
-             shows. Each train has a large card/tile, but you can only ever
-             interact with one of them. The information they display is quite
-             useful, so I don't want to lose that, but I wonder if there is a
-             way to compress things so that when this action panel pops up it
-             does not devour 60% of the screen?"
-
-             Nothing is dropped -- every figure and flag below is the one that
-             was on the card. What changes is the AXIS. Each tier was a
-             five-line vertical stack about 100px tall, and six of them
-             wrapped into two or three rows of cards; the same six tiers as
-             single lines are one column about a third the height.
-
-             AND IT READS BETTER, WHICH IS THE ARGUMENT FOR DOING IT THIS WAY
-             RATHER THAN JUST SHRINKING THE CARDS. The question a player asks
-             here is comparative -- "how many 4-trains are left, and what does
-             the 5 cost?" -- and a wrapping grid of cards puts those two
-             figures in different places on different screen widths. Columns
-             put every cost under every other cost. The card layout was
-             spending its height to make comparison harder.
-
-             THE REPORT'S OWN OBSERVATION IS WHY THIS IS SAFE: "you can only
-             ever interact with one of them". The other five are reference,
-             and reference wants a table. Only the purchasable tier keeps a
-             raised treatment, because that one IS the control. */}
-        {/* ==================================================================
-             DESIGN NOTE 633: ONE ROW BY DEFAULT, FIVE BEHIND A CARET
-            ==================================================================
-
-             REPORTED: "the new Buy Trains from the Bank action panel has
-             condensed the horizontal space the previous version occupied, but
-             it is taking up the same (or more) vertical space as before. The
-             intention however was to cut down how much vertical space the
-             buying from the bank took up."
-
-             Fair, and design note #618 only did half the job. Turning six
-             five-line cards into six one-line rows made each row shorter and
-             kept all six on screen -- so the panel got tidier and barely got
-             shorter. The height was never in the row's design; it was in the
-             row COUNT.
-
-             AND FIVE OF THE SIX ARE REFERENCE. 1830's depot sells
-             cheapest-first, so exactly one tier is ever purchasable. The
-             other five answer "what is coming and what will it cost me",
-             which is a question a player asks a few times a game and not
-             every time this panel opens.
-
-             SO THE PURCHASABLE TIER STANDS ALONE and the rest fold into a
-             caret -- the same accordion this file already uses for corporate
-             trades, and for the same reason recorded there: the ordinary case
-             is the open one. The collapsed summary still names what is next
-             and what it costs, so the commonest reference question is
-             answered without expanding anything.
-
-             THIS IS ALSO WHAT RETIRES THE "FOR SALE" BADGE (design note
-             #634): a lone row under a heading that says Available cannot be
-             mistaken for one of six. */}
+        {/* Design note #618: SIX ROWS, NOT SIX CARDS. Nothing is dropped -- what changes is the AXIS. Each tier was
+           a five-line stack ~100px tall wrapping into two or three rows of cards; the same six as single lines are
+           one column about a third the height.
+           AND IT READS BETTER, which is the argument for doing it this way rather than shrinking the cards: the
+           question here is comparative, and a wrapping grid puts "how many 4s are left" and "what does the 5 cost"
+           in different places on different widths. Columns put every cost under every other cost.
+           The report's own observation is why this is safe -- "you can only ever interact with one of them". The
+           other five are reference, and reference wants a table. */}
+        {/* Design note #633: ONE ROW BY DEFAULT, FIVE BEHIND A CARET. #618 made each row shorter and kept all six
+           on screen, so the panel got tidier and barely got shorter -- the height was never in the row's design, it
+           was in the row COUNT.
+           And five of the six are reference: the depot sells cheapest-first, so exactly one tier is ever
+           purchasable. The rest fold into the same accordion this file already uses for corporate trades, for the
+           reason recorded there -- the ordinary case is the open one. The collapsed summary still names what is
+           next and what it costs. This is also what retires the "For sale" badge (#634). */}
         <div style={styles.depotGrid}>
           {availableTiers.map((tier) => (
             <DepotRow
@@ -626,52 +377,22 @@ export function TrainPurchasePanel({
         {nextTier ? (
           <>
             <div style={styles.buyRow}>
-              {/* ==================================================
-                   DESIGN NOTE 294: TWO NUMBERS, TWO SUBJECTS
-                  ==================================================
-
-                  "Quantity" sat immediately beside a "Trains 2 / 4"
-                  readout, and the pair was routinely read as one thing --
-                  players could not tell whether the 4 was the depot's
-                  stock, the corporation's ceiling, or what the ceiling
-                  would be after buying.
-
-                  They are facts about different subjects: one counts
-                  cardboard in the bank, the other caps a corporation's
-                  holdings this phase. Naming the subject on each is the
-                  whole fix -- neither number was wrong, and neither said
-                  whose it was. */}
+              {/* Design note #294: TWO NUMBERS, TWO SUBJECTS. "Quantity" sat beside a "Trains 2 / 4" readout and the pair
+                 was read as one thing -- players could not tell whether the 4 was the depot's stock, the corporation's
+                 ceiling, or what the ceiling would be after buying. They are facts about different subjects: one counts
+                 cardboard in the bank, the other caps a corporation's holdings this phase. Naming the subject on each is
+                 the whole fix -- neither number was wrong, and neither said whose it was. */}
               <label style={styles.quantityLabel} htmlFor="depot-quantity">
                 Buy from bank
               </label>
-              {/* ==================================================================
-                   DESIGN NOTE 247: A DROPDOWN THAT LISTS WHAT IS BUYABLE
-                  ==================================================================
-
-                  REPORTED BUG: the depot shows 2 of 5 left, but 2 cannot be
-                  selected in the quantity dropdown.
-
-                  Both halves of that were true and it was not one bug.
-
-                  IT WAS NOT A DROPDOWN. It was a `<input type="number">`
-                  that silently CLAMPED what you typed. Typing 2 against a
-                  ceiling of 1 rewrote the field to 1 mid-keystroke, which is
-                  indistinguishable from the control refusing to accept the
-                  digit -- exactly how it was reported. A clamp is the right
-                  behaviour and the wrong affordance: it enforces a rule the
-                  player cannot see by undoing their input.
-
-                  THE CEILING WAS OFTEN THE TRAIN LIMIT, NOT THE DEPOT.
-                  `supplyCap` is `min(depot, limit - owned)`, so a
-                  corporation holding 3 of 4 caps at 1 however many trains
-                  the bank has. The panel showed the depot's 2 and enforced
-                  the limit's 1 without ever mentioning the limit, so the two
-                  numbers on screen could not be reconciled.
-
-                  A `<select>` fixes the first: it lists exactly the
-                  quantities that can be bought, so there is nothing to type
-                  and nothing to clamp. `bindingCeiling` below fixes the
-                  second by naming which rule set the ceiling. */}
+              {/* Design note #247: A DROPDOWN THAT LISTS WHAT IS BUYABLE. Two things were true at once and it was not one
+                 bug. IT WAS NOT A DROPDOWN -- it was `<input type="number">` that silently CLAMPED, so typing 2 against a
+                 ceiling of 1 rewrote the field mid-keystroke, indistinguishable from the control refusing the digit. A
+                 clamp is the right behaviour and the wrong affordance: it enforces a rule the player cannot see by
+                 undoing their input.
+                 AND THE CEILING WAS OFTEN THE TRAIN LIMIT, NOT THE DEPOT -- `min(depot, limit - owned)` -- so the panel
+                 showed the depot's 2 and enforced the limit's 1 without ever mentioning the limit.
+                 A `<select>` fixes the first; `bindingCeiling` names which rule set the ceiling and fixes the second. */}
               <select
                 id="depot-quantity"
                 value={quantityText}
@@ -689,16 +410,12 @@ export function TrainPurchasePanel({
                 )}
               </select>
 
-              {/* Design note #248: the limit, where the decision is made.
-                  `Trains: 2 / 4` is the fact that explains why the quantity
-                  list stops where it does, and it was only available on the
-                  Operating Round strip at the top of the screen -- a
-                  different panel from the one enforcing it. */}
-              {/* Design note #296: the label states WHICH MOMENT the number
-                  describes. On an ordinary purchase these are the same
-                  figure and it reads as the plain current limit; on the
-                  purchase that advances the phase it says so, in amber,
-                  because the ceiling is about to move under the player. */}
+              {/* Design note #248: the limit, where the decision is made. `Trains: 2 / 4` explains why the quantity list
+                 stops where it does, and it was only available on the Operating Round strip -- a different panel from the
+                 one enforcing it. */}
+              {/* Design note #296: the label states WHICH MOMENT the number describes. On an ordinary purchase these are
+                 the same figure and it reads as the plain current limit; on the purchase that advances the phase it says
+                 so, in amber, because the ceiling is about to move under the player. */}
               <span
                 style={styles.limitReadout}
                 title={
@@ -762,13 +479,10 @@ export function TrainPurchasePanel({
               </button>
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}
-            {/* Design note #1: stated, because it is the question a player
-                asks the moment they see a quantity field.
-
-                Design note #508: except when pinned. This is the longest
-                piece of prose in the panel and it explains a rule rather
-                than a value -- read once, not on every scroll -- so it is
-                the first thing the condensed form gives back to the board. */}
+            {/* Design note #1: stated, because it is the question a player asks the moment they see a quantity field.
+               Design note #508: except when pinned. This is the longest piece of prose in the panel and it explains a
+               rule rather than a value -- read once, not on every scroll -- so it is the first thing the condensed form
+               gives back to the board. */}
             {!condensed && (
               <p style={styles.note}>
                 One tier per purchase. The depot sells cheapest-first, so a 3-train and a 4-train
@@ -840,32 +554,14 @@ export function TrainPurchasePanel({
                       </span>
                     </span>
                     <span style={styles.badgeRow}>
-                      {/* ==================================================
-                           DESIGN NOTE 282: ONE BADGE PER TRAIN
-                          ==================================================
-
-                          These were grouped -- a single "3" badge wearing an
-                          "x2" superscript for a corporation holding two
-                          3-trains. Compact, and wrong for what this row is:
-                          a rack of things to click.
-
-                          A count is a summary, and a summary is the right
-                          shape when the reader wants to know HOW MANY. Here
-                          the reader wants to know WHICH, because each badge
-                          is an offer they are about to make on one specific
-                          train. "3 x2" makes the player do arithmetic to
-                          learn that two separate purchases are available,
-                          and it renders two purchasable objects as one
-                          object with a footnote.
-
-                          It also mismatched the fleet everywhere else on
-                          screen: the corporation table's own train chips
-                          have always drawn one chip per train, so the same
-                          roster read as "3 3" there and "3 x2" here.
-
-                          `owned_trains` is already a list with duplicates
-                          that are meaningful -- this just stops collapsing
-                          it. `countByModel` is gone with it. */}
+                      {/* Design note #282: ONE BADGE PER TRAIN. These were grouped -- a single "3" wearing an "x2". Compact, and
+                         wrong for what this row is: a rack of things to click. A count is a summary and answers HOW MANY; here
+                         the reader wants WHICH, because each badge is an offer about one specific train. "3 x2" makes the player
+                         do arithmetic to learn two purchases are available, and renders two purchasable objects as one object
+                         with a footnote.
+                         It also mismatched the fleet everywhere else -- the corporation table has always drawn one chip per train,
+                         so the same roster read "3 3" there and "3 x2" here. `owned_trains` is already a list with meaningful
+                         duplicates; this just stops collapsing it. */}
                       {trains == null ? (
                         // `undefined` means the chain did not say, which is
                         // emphatically not "owns nothing" -- reporting it as
@@ -1020,12 +716,9 @@ export interface TrainTradePromptProps {
   onReject: () => void;
 }
 
-/** The counterparty's Accept / Reject.
- *
- *  Deliberately the same shape and the same corner as `PrivateTradePrompt`:
- *  these are the two consent flows in the app, they interrupt at the same
- *  moment in a turn, and a player should not have to learn two different
- *  affordances for "somebody is asking you to agree to something". */
+/** The counterparty's Accept / Reject. Deliberately the same shape and the same corner as
+ *  `PrivateTradePrompt`: these are the two consent flows in the app, they interrupt at the same moment in a
+ *  turn, and a player should not have to learn two affordances for "somebody is asking you to agree". */
 export function TrainTradePrompt({
   proposal,
   viewerIsSeller,
@@ -1086,35 +779,15 @@ export function TrainTradePrompt({
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================
- *  DESIGN NOTE 617: A TRAIN THAT LOOKS LIKE A TRAIN, AND COUNTS
- * ==================================================================
- *
- * REPORTED: "I know we ruled out emojis for their variant renderings across
- * devices and operating systems, but is there some way to have train icons
- * for each type? I think it may be very abstract for new players to buy '2'
- * when they're buying a train."
- *
- * INLINE SVG IS THE ANSWER TO THE EMOJI PROBLEM. It is drawn by this file,
- * from these coordinates, on every device -- there is no font to substitute,
- * no vendor glyph set, and no colour-emoji fallback. The objection that ruled
- * emojis out does not apply to a path we ship ourselves.
- *
- * THE CARRIAGES ARE THE TIER, WHICH IS THE PART WORTH HAVING. A generic
- * locomotive would say "train" and stop; what a new player actually needs to
- * learn is that the NUMBER IS A CAPACITY -- a 3-train runs three revenue
- * centres. So the glyph is a locomotive plus one carriage per centre, and
- * "buy a 3" becomes a picture of the thing it buys. That teaches the rule the
- * abstraction was hiding, rather than merely decorating it.
- *
- * DIESEL IS DRAWN, NOT COUNTED. A D-train has no fixed length -- it runs as
- * far as the track allows -- so a carriage count would be a lie in the one
- * case where the number is not a number. It gets the locomotive and a trailing
- * ellipsis of dots instead: visibly "and onward", visibly not a count.
- *
- * PURELY DECORATIVE TO ASSISTIVE TECH. Every glyph sits beside the tier it
- * depicts, already written as text, so `aria-hidden` keeps a screen reader
- * from hearing the same fact twice. */
+/* Design note #617: A TRAIN THAT LOOKS LIKE A TRAIN, AND COUNTS. Inline SVG is the answer to the emoji
+   problem -- drawn by this file, from these coordinates, on every device, with no font to substitute and
+   no colour-emoji fallback. The objection that ruled emojis out does not apply to a path we ship.
+   THE CARRIAGES ARE THE TIER, which is the part worth having: what a new player needs to learn is that the
+   NUMBER IS A CAPACITY, so the glyph is a locomotive plus one carriage per revenue centre and "buy a 3"
+   becomes a picture of the thing it buys.
+   DIESEL IS DRAWN, NOT COUNTED -- a D-train has no fixed length, so a carriage count would be a lie in the
+   one case where the number is not a number.
+   `aria-hidden`: every glyph sits beside the tier already written as text. */
 function TrainGlyph({ tier, color }: { tier: string; color: string }) {
   const carriages = tier === "D" ? 3 : Math.min(6, Number(tier) || 0);
   const isDiesel = tier === "D";
@@ -1155,21 +828,12 @@ function TrainGlyph({ tier, color }: { tier: string; color: string }) {
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 632: THE ERA PALETTE, LIGHTENED FOR A DARK PANEL
- * ==================================================================
- *
- * The tile colours a player already knows, adjusted to be legible as INK on
- * this panel's near-black rather than as fills on a map. Brown is the case
- * that forces the adjustment: the tile brown is a fill colour and reads as
- * mud at 12px on `#12141b`, so the ink is a warm tan that still says "brown
- * era" beside a yellow and a green.
- *
- * NOT PULLED FROM `hexTileCatalog`, deliberately. Those values are chosen to
- * be correct as large filled hexes on a light board; reusing them here would
- * be sharing a number that happens to match rather than a decision. What is
- * shared is the tier-to-era MAPPING (`tierTint`), which is the part that
- * would actually be wrong if it drifted. */
+/* Design note #632: THE ERA PALETTE, LIGHTENED FOR A DARK PANEL. The tile colours a player already knows,
+   adjusted to be legible as INK on near-black rather than as fills on a map -- brown forces the adjustment,
+   since the tile brown reads as mud at 12px and the ink is a warm tan that still says "brown era".
+   NOT PULLED FROM `hexTileCatalog`, deliberately: those values are chosen to be correct as large filled
+   hexes on a light board, and reusing them would be sharing a number that happens to match rather than a
+   decision. What IS shared is the tier-to-era mapping, which is the part that would be wrong if it drifted. */
 const ERA_INK: Readonly<Record<PhaseTint, string>> = {
   yellow: "#d9c05a",
   green: "#6fbf7f",
@@ -1223,26 +887,12 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
             saying. */}
         <span style={styles.depotFate}>
         {tier.rusted && <span style={styles.depotFlag}>rusted</span>}
-        {/* ==================================================
-             DESIGN NOTE 283: WHAT HAPPENS TO THIS TIER, NEXT
-            ==================================================
-
-            A depot card said how many were left and, once they
-            were gone, nothing. Sold out is not the end of a tier's
-            story -- it is the middle. The 3-trains leaving the
-            depot is the moment every 3-train ON THE BOARD becomes
-            a liability, and the card went quiet exactly then.
-
-            So the fate rides on every card that has one, sold out
-            or not, and the tiers that have none say so. "Permanent"
-            is worth its own badge rather than an absence: a player
-            weighing $630 for a 6-train against $300 for a 4 is
-            weighing precisely the fact that one of them never dies,
-            and an empty space does not state it.
-
-            NOT SHOWN ONCE IT HAS ALREADY HAPPENED -- the `rusted`
-            flag above says that, in the past tense, and a countdown
-            to something that has occurred is noise. */}
+        {/* Design note #283: WHAT HAPPENS TO THIS TIER, NEXT. A card said how many were left and, once they were
+           gone, nothing -- but sold out is not the end of a tier's story, it is the middle: the 3-trains leaving
+           the depot is the moment every 3-train ON THE BOARD becomes a liability, and the card went quiet then.
+           "Permanent" is worth its own badge rather than an absence: a player weighing $630 for a 6-train against
+           $300 for a 4 is weighing precisely the fact that one of them never dies, and an empty space does not
+           state it. Not shown once it has already happened -- the `rusted` flag says that in the past tense. */}
         {!tier.rusted &&
           (tier.rustPhaseLabel !== null ? (
             <span
@@ -1322,25 +972,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "5px",
     border: "1px solid transparent",
     backgroundColor: "transparent",
-    /* ==================================================================
-     *  DESIGN NOTE 635: A ROW THAT DOES NOTHING SHOULD NOT OFFER TO
-     * ==================================================================
-     *
-     * REPORTED: "when my mouse is over the train list, it gains a ? icon at
-     * the bottom of the cursor as though clicking them would do something,
-     * but nothing happens."
-     *
-     * `cursor: help` -- inherited from the card layout, where it was
-     * arguably right: a card with five lines of detail and a tooltip
-     * explaining the queue rule is a thing you interrogate. A one-line row
-     * whose four columns are already on screen has nothing left to reveal,
-     * so the cursor was promising an interaction that had been designed
-     * away.
-     *
-     * THE TOOLTIPS STAY. `title` still explains why a tier is or is not
-     * purchasable, which is worth having on hover -- it just should not
-     * change the pointer. A default cursor over a tooltip is the ordinary
-     * arrangement everywhere else in this app. */
+    /* Design note #635: A ROW THAT DOES NOTHING SHOULD NOT OFFER TO. `cursor: help` was inherited from the card
+       layout, where it was arguably right -- a card with five lines of detail and a queue-rule tooltip is a
+       thing you interrogate. A one-line row whose four columns are already on screen has nothing left to
+       reveal, so the cursor promised an interaction that had been designed away.
+       THE TOOLTIPS STAY: `title` still explains why a tier is or is not purchasable -- it just should not change
+       the pointer. */
     cursor: "default",
   },
   /* Design note #618: only the purchasable row keeps a raised treatment --
@@ -1383,18 +1020,10 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.03em",
   },
   depotFlag: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", fontStyle: "italic" },
-  /* ==================================================================
-   *  DESIGN NOTE 634: THE "FOR SALE" BADGE IS RETIRED
-   * ==================================================================
-   *
-   * INSTRUCTED, once the depot collapsed: "I'm not sure the 'For sale' badge
-   * is any longer necessary and would remove it."
-   *
-   * Agreed, and the badge was always a workaround for the layout rather than
-   * a fact worth stating. Six near-identical rows needed one of them marked;
-   * a single row standing above a caret labelled "Later trains" is marked by
-   * position, which is the stronger signal and costs no width. `depotFlagNext`
-   * is deleted with it rather than left unused. */
+  /* Design note #634: THE "FOR SALE" BADGE IS RETIRED. It was always a workaround for the layout rather than
+     a fact worth stating: six near-identical rows needed one of them marked, and a single row standing above
+     a caret labelled "Later trains" is marked by position, which is the stronger signal and costs no width.
+     `depotFlagNext` is deleted with it rather than left unused. */
 
   /* ---- Buy row ---- */
   buyRow: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" },
@@ -1429,11 +1058,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
   },
   limitValueFull: { color: "#c8a24a" },
-  /* Design note #296: the future-tense treatment. Amber on BOTH the label
-     and the value, because the pair is one statement -- an amber number
-     under a grey "Current Train Limit" would be the same wrong reading in
-     a different colour. Amber rather than red: the ceiling is moving, which
-     is a consequence to plan around, not an error. */
+  /* Design note #296: the future-tense treatment. Amber on BOTH the label and the value, because the pair is
+     one statement -- an amber number under a grey "Current Train Limit" would be the same wrong reading in a
+     different colour. Amber rather than red: the ceiling is moving, which is a consequence to plan around. */
   limitLabelFuture: { color: "#e0b062" },
   limitValueFuture: { color: "#e0b062" },
   /** The baseline the after-value is measured against. */

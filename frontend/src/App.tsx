@@ -4715,63 +4715,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   return (
     <div style={{ ...styles.appRoot, paddingBottom: `${statusDockHeight + 12}px` }}>
-      {/* Active Player Turn Notifications -- design note #18/item 4, now
-          MANDATORY per design note #21 (no opt-out anywhere). The keyframes
-          are injected unconditionally (matching Chatbox.tsx's own
-          established convention, design note #2 there, for this codebase's
-          plain-inline-style escape hatch), and the pulsing overlay mounts
-          directly off bare `isMyTurn` -- no gating value. The document-title
-          flash (the OTHER half of this notification) has no DOM footprint
-          at all -- see the `useDocumentTitleFlash(isMyTurn)` call above. */}
+      {/* Design note #18/item 4, made MANDATORY by #21: keyframes injected unconditionally (Chatbox.tsx
+         #2's convention for this codebase's inline-style escape hatch) and the pulsing overlay mounts off bare
+         `isMyTurn` -- no gating value. The document-title flash is the other half and has no DOM footprint. */}
       <style>{TURN_PULSE_KEYFRAMES_CSS}</style>
       <style>{PHASE_SHIFT_PULSE_CSS}</style>
       {isMyTurn && <div style={styles.turnPulseOverlay} aria-hidden="true" />}
 
-      {/* Hotseat dev toolbar. Rendered ONLY in the sandbox branch, so it is
-          structurally impossible to reach in a live game -- the same
-          containment the phase switcher it absorbed already relied on. Sits
-          above every other chrome element because it changes what the whole
-          screen means: which player you are looking at. */}
-      {/* ==================================================================
-           DESIGN NOTE 537c: THE HOTSEAT TOOLBAR IS A SOLO TOOL
-          ==================================================================
+      {/* Hotseat dev toolbar -- rendered ONLY in the sandbox branch, so it is structurally impossible to reach
+         in a live game. Sits above every other chrome element because it changes what the whole screen means. */}
+      {/* Design note #537c: THE HOTSEAT TOOLBAR IS A SOLO TOOL, hidden in a room. The seat picker would offer
+         a switch the dispatch gate refuses (#534 makes the local id the viewer); the scenario switcher re-seeds
+         from a fixture, which #537 has just stopped doing in a room -- and a visible control that now does
+         nothing reads as a broken game rather than as a control that does not apply. */}
+      {/* Design note #578: THE SANDBOX TOOLBAR IS GONE. Seat switcher, auto-follow, scenario picker and train
+         fixture were all controls for playing four people from one keyboard. The pickers went with them rather
+         than being kept: they seed a board, and a room's board comes from its log. */}
 
-           Hidden in a room, and both of its controls are the reason.
-
-           THE SEAT PICKER exists so one person can play everybody (design
-           note #24's hotseat). In a room that is precisely what identity
-           gating forbids -- design note #534 makes the local id the viewer,
-           so a seat picker would offer a switch the dispatch gate refuses.
-
-           THE SCENARIO SWITCHER re-seeds the board from a fixture, which
-           design note #537 has just stopped doing in a room. Leaving a
-           visible control that now does nothing is worse than removing it:
-           a player clicks it, nothing changes, and the natural conclusion is
-           that the game is broken rather than that the control does not
-           apply.
-
-           `sandboxState` was already dynamic here -- the toolbar reads
-           `player_addresses` and would have shown the right number of seats.
-           It is the ACTIONS that do not belong. */}
-      {/* Design note #578: THE SANDBOX TOOLBAR IS GONE. Seat switcher,
-          auto-follow, scenario picker and train fixture were all controls
-          for playing four people from one keyboard. The scenario and
-          fixture pickers went with them rather than being kept: they seed a
-          board, and a room's board comes from its log. */}
-
-      {/* Design note #32: FTUE. Mounted at the shell level, not inside the
-          phase panels, so a modal survives its panel unmounting on a tab
-          switch -- one that vanished when you clicked Rail Map to look at
-          the board would have to be re-triggered to finish reading.
-
-          Design note #39: THREE topics, one per round. All three are
-          mounted unconditionally and each decides for itself whether to
-          open, keyed on its own `active`. That is safe against two firing
-          at once because `current_round_type` is a single value -- the
-          three `active` flags are mutually exclusive by construction, not
-          by coordination between them. Each also tracks its own "seen"
-          flag, so a player who read the auction explainer still gets the
-          Stock Round one when the game reaches it. */}
+      {/* Design note #32: FTUE mounted at the shell level, not inside the phase panels, so a modal survives its
+         panel unmounting on a tab switch.
+         Design note #39: THREE topics, one per round, all mounted unconditionally and each keyed on its own
+         `active`. Safe against two firing at once because `current_round_type` is a single value -- the flags are
+         mutually exclusive by construction, not by coordination. Each tracks its own "seen" flag. */}
       <TutorialModal
         topicKey="waterfall-auction"
         heading="Waterfall Auction"
@@ -4800,35 +4765,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         active={marketTutorialArmed}
       />
 
-      {/* Design note #332: the mandatory buy the treasury cannot fund.
-          Mounted at the shell level beside the tutorials rather than inside
-          the Operating Round panel, because it is a full-screen decision
-          about the PRESIDENT's money -- the corporation's own panels are
-          about the corporation's. */}
+      {/* Design note #332: the mandatory buy the treasury cannot fund. Mounted at shell level beside the
+         tutorials because it is a full-screen decision about the PRESIDENT's money -- the corporation's own
+         panels are about the corporation's. */}
       {/* Design note #399: blocking, because until it is answered the B&O
           is presided over with no price -- a state design note #387 refuses
           to render a token or a figure for. */}
-      {/* ==================================================================
-           DESIGN NOTE 543: A PRIZE IS SHOWN TO WHOEVER WON IT
-          ==================================================================
-
-           REPORTED: at the end of the auction BOTH players were told they
-           had won the B&O and both could set its par price.
-
-           `setBoParPrompt` fires wherever the winning action is APPLIED, and
-           in a room every client applies every action -- that is the whole
-           design (design note #522). So the prompt was raised on both
-           screens, correctly, and then rendered on both because `open` asked
-           only whether a prompt existed, not whose it was.
-
-           In solo hotseat that is right: one person is playing everybody, so
-           every prompt is theirs. The identity test is the same branch
-           design note #534 uses for the turn gate -- no room, no test.
-
-           IT MATTERS MORE THAN A LABEL. The prompt does not merely announce
-           the win; it SETS THE PAR PRICE, which is a real decision with a
-           real consequence for the corporation. Two people answering it is
-           two dispatches of one mandatory choice. */}
+      {/* Design note #543: a prize is shown to whoever won it. The prompt fires wherever the winning action is
+         APPLIED, and in a room every client applies every action (#522) -- so it was raised on both screens
+         correctly and then rendered on both, because `open` asked only whether a prompt existed, not whose.
+         It matters more than a label: the prompt SETS THE PAR PRICE, so two people answering it is two
+         dispatches of one mandatory choice. Same identity branch #534 uses for the turn gate. */}
       {/* Design note #547: the par decision and the round handover, in one
           card. `parPending` carries design note #543's identity test already
           resolved -- see the prop's own comment for why it is decided here
@@ -4854,17 +4801,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onProceed={handleProceedToStockRound}
       />
 
-      {/* Design note #416: blocking, for the same reason the B&O prompt is
-          -- a floated corporation owes its home station and 1830 has no
-          branch where it declines one. Mounted at shell level beside the
-          other two prompts rather than inside the map panel, because it can
-          fire while the player is on any tab. */}
-      {/* Design note #440: the modal hides itself once the player has
-          accepted it and been sent to the map -- a backdrop over the board
-          they were just asked to click would be the flow blocking its own
-          final step. `pendingHomeToken` stays true throughout (the token is
-          still owed until the click lands), which is what brings the prompt
-          back if the placement is somehow abandoned. */}
+      {/* Design note #416: blocking, for the same reason the B&O prompt is -- a floated corporation owes its
+         home station and 1830 has no branch where it declines one. Shell level, because it can fire on any tab. */}
+      {/* Design note #440: the modal hides once the player has accepted and been sent to the map -- a backdrop
+         over the board they were just asked to click would be the flow blocking its own final step.
+         `pendingHomeToken` stays true throughout, which brings the prompt back if the placement is abandoned. */}
       <HomeStationPrompt
         pending={homeStationPlacement ? null : pendingHomeToken}
         presidentLabel={
@@ -4922,13 +4863,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         bankruptLabel={bankruptLabel}
       />
 
-      {/* Design note #34: one bar. The room context below used to be a
-          second full-width strip of its own; it is now the middle of the
-          single header. It still says WHICH room this shell is bound to --
-          every query and action targets `gameId`, and someone with two tabs
-          open needs to tell them apart -- and is still the only place
-          `chatError` surfaces, because chat failing silently is worse than
-          chat saying it is broken. */}
+      {/* Design note #34: one bar. The room context is the middle of the single header now. It still says WHICH
+         room this shell is bound to, and is still the only place `chatError` surfaces -- chat failing silently
+         is worse than chat saying it is broken. */}
       <TopBar
         onLeaveGame={onLeaveGame}
         roomContext={
@@ -4943,13 +4880,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
-            {/* The phase switcher that stood here MOVED into
-                the sandbox toolbar, deleted by design note #578 along with
-                the solo mode whose controls it held.
-                Two separate places to change sandbox settings -- one in the
-                room strip, one in a banner -- is worse than one, and the
-                seat switcher has to live in the banner because it needs the
-                room for four buttons. */}
+            {/* The phase switcher that stood here moved into the sandbox toolbar and went with it (#578). Two places
+               to change sandbox settings is worse than one, and the seat switcher needed the room for four buttons. */}
             <span style={styles.roomStripLabel}>
               Mock state &middot; hotseat controls above
             </span>
@@ -4985,44 +4917,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onClose={() => setTutorialLibraryOpen(false)}
       />
 
-      {/* In-Place Accordion Ticker + Inline Control Strip -- design notes
-          #18-#20. Docked directly below the main nav tabs now (design note
-          #20/item 3 -- was above them before this pass), full-width,
-          visible regardless of which tab is active. No modal/pop-up: the
-          Feed Overlay this used to open is gone entirely, replaced by
-          `TopTicker.tsx`'s own in-place accordion body. `InlineQuickChat`
-          (the control strip) sits directly below the ticker, always
-          mounted regardless of `isTickerExpanded`, sharing the same
-          `chatDraft`/`setChatDraft`/`feedFilter`/`setFeedFilter` state the
-          ticker's preview and expanded history both read from. */}
-      {/* ==================================================================
-           DESIGN NOTE 581: THE LOG IS A STATUS LINE, NOT A HEADLINE
-          ==================================================================
-
-           REPORTED: "I don't see the Activity Log ticker at the bottom of my
-           screen?" -- expecting a recommendation I made twice and then did
-           not build. It was at the top, in flow, where it has always been.
-
-           WHY THE BOTTOM EDGE. The ticker and the action bar want opposite
-           things from the reader. The action bar is what you MUST DO and
-           should be the most findable object on the screen; the log is what
-           HAS HAPPENED and should be readable without ever demanding
-           attention. Stacked at the top they compete, and the report two
-           passes ago was that the action bar was losing -- which is why
-           putting the ticker inside it (tried, reverted, design note #490)
-           made things worse rather than better.
-
-           A status line at the bottom edge is the arrangement every IDE and
-           most games converge on for exactly this content: peripheral,
-           always present, never modal. Unlike a toast it needs no
-           dismissing, which matters at 1830's event volume -- the reporter's
-           own objection to toasts, and a correct one.
-
-           FIXED, so it survives scrolling the board. The app root carries
-           matching bottom padding so the last row of content cannot hide
-           underneath it, and the box is anchored at the bottom rather than
-           sized -- so the expanded history grows UPWARD from the line
-           instead of off the screen. */}
+      {/* In-place accordion ticker + inline control strip -- design notes #18-#20. Docked below the nav tabs
+         (#20/item 3), full-width, visible on every tab. No modal: the old Feed Overlay is gone, replaced by
+         `TopTicker`'s own in-place accordion body. `InlineQuickChat` sits below it, always mounted regardless of
+         expansion, sharing the same draft/filter state the preview and history both read from. */}
+      {/* Design note #581: THE LOG IS A STATUS LINE, NOT A HEADLINE. The ticker and the action bar want opposite
+         things from the reader -- one is what you MUST DO, the other what HAS HAPPENED -- and stacked at the top
+         they compete, which is why putting the ticker inside the bar made things worse (#490).
+         A status line at the bottom edge is what every IDE converges on for this content: peripheral, always
+         present, never modal, and needing no dismissal at 1830's event volume.
+         FIXED, so it survives scrolling. The app root carries matching bottom padding, and the box is anchored
+         at the bottom rather than sized -- so the expanded history grows UPWARD instead of off the screen. */}
       <div ref={statusDockRef} style={styles.statusLineDock}>
         <TopTicker
           latestItem={latestFeedItem}
@@ -5054,28 +4959,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               (ActivityFeed) is removed entirely -- `canvasPane` now renders
               directly, claiming the panel's full available width. */}
           <main style={styles.canvasPane}>
-            {/* Design note #31: THE one action bar, hoisted above the
-                phase branch so it renders on every active tab -- auction,
-                stock round and rail map alike. It used to live inside the
-                non-auction branch only, which is why the auction grew its
-                own Pass and the phase tab ended up with two bars. */}
-                {/* Item 5: contextual gameplay action bar -- see design notes
-                    #8/#10. Step-by-step OR sub-phase guidance is design note
-                    #10/item 2.
-
-                    Design note #23: hidden entirely for spectators. This is
-                    the COURTESY half of read-only mode -- the guarantee is
-                    `runGameplayAction`'s gate, which holds whether or not
-                    this bar renders. Hidden rather than disabled because a
-                    row of twenty greyed-out buttons is visual noise offering
-                    a spectator nothing; the badge in the room strip already
-                    explains why they are gone. */}
-                {/* Design note #521: sandbox multiplayer, offered rather than
-                    demanded -- solo play needs no gesture. Above the action
-                    bar and outside the spectator branch: a spectator has no
-                    action bar (design note #23) and the room strip is not an
-                    action, so hiding it with the controls would take away the
-                    one thing a watcher might legitimately want. */}
+            {/* Design note #31: THE one action bar, hoisted above the phase branch so it renders on every active tab.
+               It used to live inside the non-auction branch only, which is why the auction grew its own Pass and the
+               phase tab ended up with two bars. */}
+                {/* Item 5: the contextual gameplay action bar -- design notes #8/#10, with OR sub-phase guidance in
+                   #10/item 2.
+                   Design note #23: hidden entirely for spectators. This is the COURTESY half of read-only mode -- the
+                   guarantee is `runGameplayAction`'s gate, which holds whether or not this renders. Hidden rather than
+                   disabled because twenty greyed buttons offer a spectator nothing; the room strip's badge explains why. */}
+                {/* Design note #521: sandbox multiplayer, offered rather than demanded. Outside the spectator branch on
+                   purpose -- a spectator has no action bar (#23) and the room strip is not an action, so hiding it with
+                   the controls would take away the one thing a watcher might legitimately want. */}
                 {sandbox && (
                   <SandboxRoomBar
                     roomCode={sandboxRoomCode}
@@ -5287,91 +5181,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               />
             ) : (
               <>
-                {/* Audit G-15: train trading, shown only during the Buy
-                    Trains step.
-                    
-                    Safe to gate this tightly, and worth spelling out why: an
-                    offer can only be CREATED in the Hardware phase, and while
-                    one is outstanding the buyer's turn is blocked there
-                    (`operations::PendingTrainOfferBlocksTurn`). So an offer
-                    cannot outlive the phase that produced it, and hiding the
-                    panel elsewhere hides nothing a player could act on.
-                    
-                    `orSubPhase` tracks the ACTIVE corporation's step, not the
-                    viewer's, so a seller still sees this during the buyer's
-                    Hardware phase -- which is the only time their answer is
-                    wanted. */}
+                {/* Audit G-15: train trading, shown only during Buy Trains. Safe to gate this tightly because an offer can
+                   only be CREATED in Hardware and blocks the buyer's turn there while outstanding
+                   (`operations::PendingTrainOfferBlocksTurn`) -- so it cannot outlive the phase that produced it.
+                   `orSubPhase` tracks the ACTIVE corporation's step, not the viewer's, so a seller still sees this during
+                   the buyer's Hardware phase, which is the only time their answer is wanted. */}
                 {/* Design note #203: the Buy Trains step's own panel -- the
                     bank depot and the corporate marketplace, in that order,
                     with the second collapsed. Same `orSubPhase === "Hardware"`
                     gate the offer ledger below uses. */}
-                {/* ===================================================================
-                     DESIGN NOTE 419: THE TRAIN PANELS BELONG TO ONE TAB
-                    ===================================================================
-
-                     REPORTED: the Buy Trains from Bank panel bleeds into the
-                     Stocks and Stock Market tabs.
-
-                     It did, and the gate below is why it was easy to miss:
-                     `current_round_type === "OperatingRound" && orSubPhase
-                     === "Hardware"` is a precise, correct statement about
-                     WHEN this panel applies, and says nothing about WHERE.
-
-                     This whole branch sits inside `isWorkspaceTab`, which is
-                     true for four tabs -- `phase`, `corps`, `map` and
-                     `stock`. So during an Operating Round's Buy Trains step
-                     the panel rendered on every one of them, including the
-                     two whose entire subject is share trading.
-
-                     THIS IS DESIGN NOTE #27'S BUG AGAIN. That note fixed the
-                     auction dashboard hijacking the Rail Map by adding a tab
-                     test to a condition that had only a phase test, and
-                     wrote down the lesson: a panel inside `isWorkspaceTab`
-                     must say which workspace it is for. The Stock Round panel
-                     beside this one learned it (`activeMainTab === "corps"`).
-                     The train panels did not.
-
-                     `surfaceTabFor("OperatingRound")` rather than a literal
-                     `"map"`, so if the Operating Round's home tab ever moves,
-                     this follows it instead of quietly pointing at the wrong
-                     surface -- the same anti-drift reason the round
-                     transitions already call it rather than naming tabs. */}
-                {/* Design note #508: `TrainPurchasePanel` used to mount here,
-                    below the action bar. It is rendered BY the bar now, so it
-                    inherits the bar's stickiness and travels with the player
-                    instead of scrolling away -- which is also what retired
-                    design note #491's jump button. */}
-                {/* ===================================================================
-                     DESIGN NOTE 233: THE LEDGER APPEARS WHEN THERE IS ONE
-                    ===================================================================
-
-                    This rendered on every Hardware step, empty, reading "No
-                    offers outstanding" -- a permanent panel whose permanent
-                    content was that it had nothing to show. Worse, it sat
-                    directly under the purchase panel, so the first thing a
-                    player saw when they went to buy a train was a heading
-                    about offers that did not exist.
-
-                    A pending offer is an EVENT. It arrives, it blocks a
-                    turn, it gets answered, it goes away -- so the panel that
-                    represents it should do the same. `viewerTrainOffers`
-                    below is the gate, and it is scoped to offers the viewer
-                    is actually party to rather than to any offer in the
-                    room, because this is the surface where they ANSWER one.
-                    The prompt (design note #218) is the interruption; this
-                    is the record beside it.
-
-                    Design note #1 in that file argued a pending offer is
-                    public information and should be visible to everyone.
-                    That is still true and is what the Action Log carries; a
-                    dedicated panel on the buy screen is a different claim --
-                    that you have something to do here. */}
-                {/* Design note #419: the offer ledger is the purchase
-                    panel's sibling and leaked identically -- same phase
-                    gate, same missing tab gate, same four tabs. Fixed
-                    together, because a fix that left the ledger bleeding
-                    onto the Stock Market tab would have answered the report
-                    rather than the bug. */}
+                {/* Design note #419: THE TRAIN PANELS BELONG TO ONE TAB. The gate `current_round_type === "OperatingRound"
+                   && orSubPhase === "Hardware"` is a precise statement about WHEN this panel applies and says nothing
+                   about WHERE -- and this branch sits inside `isWorkspaceTab`, true for four tabs, so during Buy Trains it
+                   rendered on all four including the two whose entire subject is share trading.
+                   This is #27's bug again: that note fixed the auction hijacking the Rail Map by adding a tab test to a
+                   condition that had only a phase test, and wrote down the lesson. The Stock Round panel learned it.
+                   `surfaceTabFor("OperatingRound")` rather than a literal `"map"`, so if the round's home tab moves this
+                   follows it instead of quietly pointing at the wrong surface. */}
+                {/* Design note #508: `TrainPurchasePanel` used to mount here. It is rendered BY the bar now, so it inherits
+                   the bar's stickiness and travels with the player -- which is also what retired #491's jump button. */}
+                {/* Design note #233: THE LEDGER APPEARS WHEN THERE IS ONE. This rendered on every Hardware step, empty,
+                   reading "No offers outstanding" -- a permanent panel whose permanent content was that it had nothing to
+                   show, sitting directly under the purchase panel.
+                   A pending offer is an EVENT: it arrives, blocks a turn, gets answered and goes away. The gate is scoped
+                   to offers the VIEWER is party to rather than any offer in the room, because this is where they ANSWER
+                   one. `TrainTradePanel #1`'s "a pending offer is public information" is still true and is what the Action
+                   Log carries; a dedicated panel on the buy screen is a different claim -- that you have something to do. */}
+                {/* Design note #419: the offer ledger is the purchase panel's sibling and leaked identically -- same phase
+                   gate, same missing tab gate, same four tabs. Fixed together, because a fix that left the ledger bleeding
+                   onto the Stock Market tab would have answered the report rather than the bug. */}
                 {activeMainTab === surfaceTabFor("OperatingRound") &&
                   gameState?.current_round_type === "OperatingRound" &&
                   orSubPhase === "Hardware" &&
@@ -5403,30 +5241,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   />
                 )}
 
-                {/* Stock Round (SR) Action Control Panel -- requirement 1's
-                    "directly above ... the Stock Market Matrix." Gated on
-                    a live Stock Round so it never renders during Operating
-                    Round (Waterfall bypasses this whole branch already, via
-                    `isWaterfallPhase` above).
-
-                    ALSO gated on the stock tab (design note #27). This is
-                    the same class of problem as the auction hijacking the
-                    Rail Map, caught while fixing it: the panel is not
-                    exclusive -- it renders ABOVE the canvas rather than
-                    instead of it -- so the map was still technically there.
-                    But the panel now leads with an eight-card corporation
-                    roster, which pushed the rail map most of a screen down.
-                    "Visible if you scroll far enough" is not the Rail Map
-                    tab doing its job. Its controls are all Stock-Round
-                    actions and belong with the market. */}
-                {/* Design note #41: gated on the TAB alone, not on the round.
-                    The roster is a reference surface now -- it renders in an
-                    Operating Round and during the auction too, because
-                    "what do I own and what is it worth" does not stop being
-                    a question when the Stock Round ends. Its Buy/Sell
-                    controls are separately gated on `isMyTurn` and session
-                    readiness, so an out-of-phase viewer reads but cannot
-                    act. */}
+                {/* Stock Round panel -- requirement 1's "directly above the Stock Market Matrix", gated on a live Stock
+                   Round (the Waterfall bypasses this branch entirely).
+                   ALSO gated on the stock tab (design note #27), caught while fixing that one: this panel is not exclusive
+                   -- it renders ABOVE the canvas rather than instead of it -- but its eight-card roster pushed the rail
+                   map most of a screen down, and "visible if you scroll far enough" is not the Rail Map tab doing its job. */}
+                {/* Design note #41: gated on the TAB alone, not on the round. The roster is a reference surface -- "what do
+                   I own and what is it worth" does not stop being a question when the Stock Round ends. Its Buy/Sell
+                   controls are separately gated, so an out-of-phase viewer reads but cannot act. */}
                 {activeMainTab === "corps" && (
                   <StockRoundPanel
                     publicCompanies={gameState?.public_companies ?? []}
@@ -5472,39 +5294,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   />
                 )}
 
-                {/* Design note #602: the Stock Round's mount point. Between
-                    the corporation cards above and the board pane below --
-                    they are two halves of one screen, and the players belong
-                    under the companies they hold. Defined once near the top
-                    of this render; see #563/#602 there for the guard and for
-                    why the auction could not reach this line. */}
+                {/* Design note #602: the Stock Round's player-card mount point, between the corporation cards and the board
+                   pane -- they are two halves of one screen, and the players belong under the companies they hold. Defined
+                   once near the top of this render; see #563/#602 there for the guard. */}
                 {playersPanel}
 
-                {/* Design note #28: the phase tab renders NO reference
-                    board. Its content is the phase panel above -- the
-                    auction dashboard or the Stock Round cards -- and the
-                    2D market chart now has its own tab. Rendering the
-                    chart here too is what the old single-tab design did,
-                    and it is precisely the conflation this note split
-                    apart: a player on the Stock Round tab is choosing
-                    shares, not reading the chart, and the chart is one
-                    click away when they want it. */}
-                {/* Design note #45: AN ALLOWLIST, NOT A DENYLIST.
-                    This read `activeMainTab !== "phase"`, which silently
-                    assumed the only workspace tabs were the phase surface,
-                    the map and the chart. Adding `"corps"` (design note
-                    #41) therefore opted it in by default: the Stocks tab
-                    passed the `!== "phase"` test, fell past the `=== "map"`
-                    branch, and rendered a second copy of the Stock Market
-                    matrix underneath the corporation cards.
-                    
-                    Naming the two tabs that OWN a board means a future tab
-                    has to ask for one rather than inherit it. */}
-                {/* Design note #1 in `RadialTileSelector`: the radial ring
-                    anchors to the board pane's live rect rather than to the
-                    viewport, so a page scroll moves the two together instead
-                    of leaving the menu behind. A callback ref, so a re-mount
-                    re-measures rather than holding a stale node. */}
+                {/* Design note #28: the phase tab renders NO reference board. Its content is the phase panel above, and the
+                   market chart has its own tab -- rendering the chart here too is what the old single-tab design did, and
+                   it is precisely the conflation this note split apart. */}
+                {/* Design note #45: AN ALLOWLIST, NOT A DENYLIST. This read `activeMainTab !== "phase"`, which silently
+                   assumed the only workspace tabs were the phase surface, the map and the chart -- so adding `"corps"`
+                   (#41) opted it in by default and rendered a second Stock Market matrix under the corporation cards.
+                   Naming the two tabs that OWN a board means a future tab has to ask for one rather than inherit it. */}
+                {/* `RadialTileSelector` design note #1: the ring anchors to the board pane's live rect rather than to the
+                   viewport, so a page scroll moves the two together. A callback ref, so a re-mount re-measures rather than
+                   holding a stale node. */}
                 {(activeMainTab === "map" || activeMainTab === "stock") && (
                 <div style={styles.boardPane} ref={setBoardEl}>
                   {activeMainTab === "map" ? (
@@ -5683,15 +5487,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         />
       )}
 
-      {/* Interactive Floating Tile-Selection Popup Overlay -- see
-          HexGridRenderer.tsx design note #7. Only rendered on the Rail Map
-          tab, and only once the click interceptor's
-          GetLegalTilePlacements query has actually resolved;
-          "loading"/"error" states get a lightweight inline indicator
-          instead of the full carousel card. `position: fixed` means this
-          can render anywhere in the tree -- kept as a sibling of the main
-          layout rather than nested inside boardPane so it's never clipped
-          by that pane's own `overflow: auto`. */}
+      {/* The floating tile-selection overlay -- `HexGridRenderer.tsx` design note #7. Rail Map tab only, and only
+         once the legality query has resolved; loading/error states get a lightweight inline indicator instead.
+         `position: fixed`, so it is kept as a sibling of the main layout rather than nested inside `boardPane`
+         and clipped by that pane's own overflow. */}
       {activeMainTab === "map" && hexClickQuery?.status === "loading" && (
         <div
           style={{
@@ -5715,15 +5514,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           GetLegalTilePlacements failed: {hexClickQuery.message}
         </div>
       )}
-      {/* Design note #141: the visual cue for a hex that refused the click.
-          Amber, not red -- nothing failed and the player did nothing wrong;
-          they clicked a hex that simply cannot take a tile. Red is reserved
-          for the query error directly above, which IS a fault.
-
-          Reuses the same floating indicator the loading/error states use,
-          so the feedback appears in the one place a player is already
-          watching after a hex click, rather than in a banner elsewhere on
-          the page. Auto-dismisses -- see `handleHexClickQuery`. */}
+      {/* Design note #141: the cue for a hex that refused the click. AMBER, not red -- nothing failed and the
+         player did nothing wrong; red is reserved for the query error above, which IS a fault. Reuses the same
+         floating indicator the loading/error states use, so the feedback appears where the player is already
+         watching after a hex click. Auto-dismisses. */}
       {activeMainTab === "map" &&
         hexClickQuery?.status === "blocked" &&
         hexClickQuery.message !== null && (
@@ -5739,39 +5533,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             🚫 {hexClickQuery.message}
           </div>
         )}
-      {/* Design note #23: `!spectator` is load-bearing, not decorative.
-          `TileSelectionPopup` is the SECOND of this app's two gameplay
-          dispatch paths -- it calls `useGameSession().execGameplay` itself
-          (that component's own design note #1) rather than routing through
-          `runGameplayAction`, so the gate inside that function does not
-          cover it. Not mounting it is what covers it. */}
-      {/* ===================================================================
-           DESIGN NOTE 162: THE IN-SITU RADIAL SELECTOR REPLACES THE POPUP
-          ===================================================================
-
-          `TileSelectionPopup` -- a ~900px floating card carrying a scrolling
-          carousel, era tabs, a rotation panel and a dispatch button -- is no
-          longer rendered. It answered "which tiles exist" well and "does
-          this tile fit HERE" not at all, because judging fit means looking
-          at the hex and its neighbours, and the card covered them.
-
-          The two branches it had (chain-backed `"success"` and local
-          `"offline"`) collapse into ONE here. That merge is safe because
-          the distinction never lived in the presentation: it is carried by
-          `provisional`, which labels the ring, and by `canConfirm`, which
-          decides whether a lay can be dispatched at all. Keeping two nearly
-          identical JSX blocks was how the old spectator bug got in -- one
-          branch grew a `!spectator` guard the other did not need, and the
-          asymmetry was invisible.
-
-          The file itself is retained, unrendered, until the radial path has
-          been exercised against a live chain. Deleting a component whose
-          replacement has only been run offline would leave no way back. */}
-      {/* Design note #165/#166: the two halves of the trade engine. The
-          sheet is where an offer is composed; the prompt is where it is
-          answered. Rendered at the shell level rather than inside the
-          action bar because both outlive the panel that opened them -- the
-          prompt in particular has to survive the sub-phase advancing. */}
+      {/* Design note #23: `!spectator` is load-bearing, not decorative. `TileSelectionPopup` is the SECOND of
+         this app's two gameplay dispatch paths -- it calls `execGameplay` itself (that file's #1) rather than
+         routing through `runGameplayAction`, so the gate inside that function does not cover it. Not mounting
+         it is what covers it. */}
+      {/* Design note #162: THE IN-SITU RADIAL SELECTOR REPLACES THE POPUP. The floating card answered "which
+         tiles exist" well and "does this tile fit HERE" not at all, because judging fit means looking at the hex
+         and its neighbours, and the card covered them.
+         Its two branches collapse into ONE here, safely, because the distinction never lived in the presentation:
+         it is carried by `provisional` and by `canConfirm`. Keeping two nearly identical JSX blocks is how the
+         old spectator bug got in -- one branch grew a `!spectator` guard the other did not need.
+         The file is retained, unrendered, until the radial path has been exercised against a live chain. */}
+      {/* Design notes #165/#166: the two halves of the trade engine -- the sheet composes an offer, the prompt
+         answers one. Shell level rather than inside the action bar because both outlive the panel that opened
+         them; the prompt in particular has to survive the sub-phase advancing. */}
       <ProposePrivatePurchase
         open={privateTradeOpen}
         buyerTicker={
@@ -5787,24 +5562,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onPropose={handleProposePrivatePurchase}
         onClose={() => setPrivateTradeOpen(false)}
       />
-      {/* ===================================================================
-           THE TRAIN CONSENT PROMPT -- design notes #205 and #218
-          ===================================================================
-
-          ONE component, TWO sources, and which one is live is decided by
-          which deployment this is:
-
-            SANDBOX  `sandboxTrainProposal` -- local state, because there is
-                     no chain to record an offer in and no second client to
-                     show it to (design note #205).
-            ONLINE   `liveTrainOffer` -- derived from the contract's own
-                     offer register via `GetTrainOffers`, so the prompt
-                     reaches the actual counterparty on their own machine
-                     (design note #218).
-
-          They are mutually exclusive by construction: `liveTrainOffer`
-          returns `null` in sandbox and `sandboxTrainProposal` is only ever
-          set outside it, so this can never show two offers at once. */}
+      {/* The train consent prompt -- design notes #205 and #218. ONE component, TWO sources, decided by
+         deployment: SANDBOX uses local state (no chain to record an offer in, no second client to show it to),
+         ONLINE derives from the contract's own register so the prompt reaches the real counterparty.
+         Mutually exclusive by construction, so this can never show two offers at once. */}
       <TrainTradePrompt
         proposal={liveTrainOffer?.proposal ?? sandboxTrainProposal}
         // Sandbox names the seller so the clicker knows whose decision they stand in for; online, liveTrainOffer only exists for the seller's president.

@@ -37,6 +37,8 @@ directory is anchored as **`<source file> #<N>`**, so:
 | [routing_pathfinding.md](routing_pathfinding.md) | Route drafting, waypoints and bridging, revenue centres vs hexes, train capacity, auto-route |
 | [ui_shell_layout.md](ui_shell_layout.md) | Tabs, top ticker and activity feed, dock height reservation, turn notifications, inline styles |
 | [session_keys_wallet.md](session_keys_wallet.md) | Wallet and `x/authz` session keys, spectator/read-only mode, viewer identity, sandbox identity |
+| [utils_layer.md](utils_layer.md) | The `utils/` layer: hand-kept `msg.rs` mirrors, polling hooks, certificate and net-worth derivation, who-acts-next resolution |
+| [rules_and_sourcing.md](rules_and_sourcing.md) | Where the 1830 numbers come from, how they were verified, and the rule corrections that verification forced |
 
 ## Recurring principles
 
@@ -90,16 +92,16 @@ These arguments appear across many notes and are worth reading once:
 | 2 | Firebase middleware (`sandboxSession`, `sandboxState`, `sandboxRoom`, `config/firebase`, `actionLog`, `feed`) | Done |
 | 3 | Canvas rendering + tile math (incl. the Phase 0 legacy fold) | Done |
 | 4 | Stock market + trading UI (`StockMarketRenderer`, `StockRoundPanel`, `WaterfallAuctionDashboard`, `ContextualActionBar`) | Done |
-| 5 | Remaining frontend files | Pending |
+| 5A | JSX residue (`App.tsx`, `HexGridRenderer.tsx`) + the eight heaviest tail files (`appStyles`, `RadialTileSelector`, `TrainPurchasePanel`, `gameState`, `RulesReference`, `hexContractTypes`, `TileSelectionPopup`, `FinancialLedger`) | Done |
+| 5B | The remaining ~75 frontend files | Pending |
 | 6 | Rust contract backend | Pending |
 
 Test files (`src/tests.rs`, `frontend/src/**/*.test.ts`) are out of scope by decision — they
 are self-documenting.
 
-> **Known residue from batches 1–3.** Those passes scanned *own-line* comment groups only, so JSX
-> comment containers (`{/* … */}`) were skipped. `App.tsx` (368 lines / 33 blocks) and
-> `HexGridRenderer.tsx` (27 lines / 3 blocks) still carry theirs; the `.ts` files carry none. Batch 4
-> extracts both forms. Scheduled for the final verification pass.
+> **JSX residue from batches 1–3: cleared in Batch 5A.** Those passes scanned *own-line* comment groups
+> only, so JSX comment containers (`{/* … */}`) were skipped — 33 blocks in `App.tsx` and 3 in
+> `HexGridRenderer.tsx`; the `.ts` files carry none. Batch 4 onward extracts both forms.
 
 ---
 
@@ -402,3 +404,252 @@ different number.
 | `ContextualActionBar.tsx #631` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #631 — The seat card, built like the corporation card |
 | `ContextualActionBar.tsx #636` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #636 — The same three rows as an Operating Round |
 | `ContextualActionBar.tsx #654` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #654 — The grid had three columns and two children |
+
+---
+
+## Anchor index — Batch 5A
+
+Every `#N` these seven files cite, and where it resolves. A row whose section names a **different** source
+file is a cross-reference: that file owns the note, and this one cites it by number.
+
+### appStyles.ts
+
+| anchor | document | section |
+|---|---|---|
+| `appStyles.ts #1` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #233 — The offer ledger appears when there is one |
+| `appStyles.ts #7` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #456 / #46 — The tab row |
+| `appStyles.ts #8` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `appStyles.ts #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `appStyles.ts #10` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #10 — Off-board pre-printed track |
+| `appStyles.ts #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `appStyles.ts #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `appStyles.ts #13` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #13 (layout un-clamping) — `minHeight`, not `height: 100vh` |
+| `appStyles.ts #14` | [contract_economy.md](contract_economy.md) | App.tsx #14 — Buy Private Company action tray |
+| `appStyles.ts #18` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #18 (item 4) / #21 — Turn alerts mount off bare `isMyTurn` |
+| `appStyles.ts #19` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #19 / #27 — Viewport maximisation, then true proportional scale |
+| `appStyles.ts #20` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `appStyles.ts #22` | [contract_economy.md](contract_economy.md) | WaterfallAuctionDashboard.tsx #22 — The opening bid is face value PLUS the increment |
+| `appStyles.ts #25` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `appStyles.ts #30` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #30 — Reverted: the board is not a scroll window |
+| `appStyles.ts #31` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #34` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #34 — One slim top bar |
+| `appStyles.ts #35` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #34 / #35 — Blank city hexes and their real values |
+| `appStyles.ts #36` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #36 (station tokens prop) — Structural assignability |
+| `appStyles.ts #40` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #40 — The rails must GROW, not merely exist |
+| `appStyles.ts #46` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #456 / #46 — The tab row |
+| `appStyles.ts #47` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #47 / #364 / #366 — The reservation badge and its tooltip line |
+| `appStyles.ts #141` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx (smaller entries) |
+| `appStyles.ts #164` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #164 — The Operating Round panel is two rows |
+| `appStyles.ts #214` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #228` | [state_machine.md](state_machine.md) | App.tsx #228 — The acting corporation, resolved once |
+| `appStyles.ts #236` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #266` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #279` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #279 — No placeholder where a control should be |
+| `appStyles.ts #295` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #295 / #655 — A ceiling on a wrapping row has no version that is right |
+| `appStyles.ts #297` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #297 / #426 — Sticky, and what stopped it behaving like it |
+| `appStyles.ts #298` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #298 — What a pinned bar is allowed to keep  *[reversed by #590]* |
+| `appStyles.ts #299` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #456 / #46 — The tab row |
+| `appStyles.ts #317` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #371` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #371 — 3px was one pixel too few |
+| `appStyles.ts #379` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #379 (strip half) — Privates the company owns |
+| `appStyles.ts #390` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #427 — The reference tabs get a way back |
+| `appStyles.ts #406` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #601 / #631 — Two dead fallbacks in one `??` |
+| `appStyles.ts #426` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #297 / #426 — Sticky, and what stopped it behaving like it |
+| `appStyles.ts #427` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #427 / #603 — The return bar, and why a card is a rectangle |
+| `appStyles.ts #451` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #451 — Undo, and what it would undo |
+| `appStyles.ts #456` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #456 / #46 — The tab row |
+| `appStyles.ts #458` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #426 / #654 — True-centred, which the spacer pair was not |
+| `appStyles.ts #481` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #482` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #426 / #654 — True-centred, which the spacer pair was not |
+| `appStyles.ts #489` | [stock_market.md](stock_market.md) | StockRoundPanel.tsx #31 / #489 / #504 — The operating snapshot strip |
+| `appStyles.ts #490` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #494` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #494 — The per-train route ink |
+| `appStyles.ts #498` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #498 — Except during Run Routes, which IS the board |
+| `appStyles.ts #509a` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #509a — Show the money moving, do not describe it |
+| `appStyles.ts #518` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #518 — The sub-phase trail is one object with divisions |
+| `appStyles.ts #563` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #575` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts (smaller entries) |
+| `appStyles.ts #578` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #537c / #578 — The hotseat toolbar was a solo tool, then went entirely |
+| `appStyles.ts #581` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #581 / #599 / #614 — The status-line dock |
+| `appStyles.ts #589` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #575 / #589 / #410 / #465 — The bar names a corporation the way the card does |
+| `appStyles.ts #599` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #581 / #599 / #614 — The status-line dock |
+| `appStyles.ts #600` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #600 — `flex: 1` means `flex-basis: 0`, and that is the bug |
+| `appStyles.ts #601` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #601 / #631 — Two dead fallbacks in one `??` |
+| `appStyles.ts #603` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #427 / #603 — The return bar, and why a card is a rectangle |
+| `appStyles.ts #605` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #605 — Reserving the height is only half of it |
+| `appStyles.ts #614` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #581 / #599 / #614 — The status-line dock |
+| `appStyles.ts #619` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #619 — A `Record<string, T>` style sheet cannot catch a phantom key |
+| `appStyles.ts #631` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #601 / #631 — Two dead fallbacks in one `??` |
+| `appStyles.ts #636` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #636 — The same three rows as an Operating Round |
+| `appStyles.ts #654` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #426 / #654 — True-centred, which the spacer pair was not |
+| `appStyles.ts #655` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #295 / #655 — A ceiling on a wrapping row has no version that is right |
+
+### RadialTileSelector.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `RadialTileSelector.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `RadialTileSelector.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #1 — Anchored to the board, not to the viewport |
+| `RadialTileSelector.tsx #2` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #2 — Two stages, one overlay |
+| `RadialTileSelector.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `RadialTileSelector.tsx #57s` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #628 / #629 — Scarcity, where the choice is made |
+| `RadialTileSelector.tsx #168` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #168 — The backdrop must not swallow board clicks |
+| `RadialTileSelector.tsx #173` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #512 — Two captions, one of them saying nothing |
+| `RadialTileSelector.tsx #174` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #174 — The radius is solved for, not picked |
+| `RadialTileSelector.tsx #174b` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #471 / #174b — Sizing the candidates |
+| `RadialTileSelector.tsx #181` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #181 — The price is on the button |
+| `RadialTileSelector.tsx #200` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #200 — The confirm ring is its own component |
+| `RadialTileSelector.tsx #260` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #260 / #270 / #290 — A prop with no callers is the bug waiting to be re-enabled |
+| `RadialTileSelector.tsx #266` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #512 — Two captions, one of them saying nothing |
+| `RadialTileSelector.tsx #270` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #260 / #270 / #290 — A prop with no callers is the bug waiting to be re-enabled |
+| `RadialTileSelector.tsx #271b` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #271b / #488b — Which half of the split city your station ends up in |
+| `RadialTileSelector.tsx #290` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #260 / #270 / #290 — A prop with no callers is the bug waiting to be re-enabled |
+| `RadialTileSelector.tsx #369` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #369 — The chrome was the other half of the rectangle |
+| `RadialTileSelector.tsx #462` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #200 — The confirm ring is its own component |
+| `RadialTileSelector.tsx #471` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #471 / #174b — Sizing the candidates |
+| `RadialTileSelector.tsx #488b` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #271b / #488b — Which half of the split city your station ends up in |
+| `RadialTileSelector.tsx #506` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #506 — The ring was measured in the wrong unit |
+| `RadialTileSelector.tsx #506a` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #506a — A halo, solved rather than nudged |
+| `RadialTileSelector.tsx #512` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #512 — Two captions, one of them saying nothing |
+| `RadialTileSelector.tsx #628` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #628 / #629 — Scarcity, where the choice is made |
+| `RadialTileSelector.tsx #629` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #628 / #629 — Scarcity, where the choice is made |
+
+### TrainPurchasePanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TrainPurchasePanel.tsx #0` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #0 — Why bank and corporation are not one control |
+| `TrainPurchasePanel.tsx #1` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #1 — The quantity field is a convenience, not a batch |
+| `TrainPurchasePanel.tsx #2` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #2 / #282 — A train badge is the whole interaction |
+| `TrainPurchasePanel.tsx #3` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #3 — One train per trade |
+| `TrainPurchasePanel.tsx #182` | [contract_economy.md](contract_economy.md) | App.tsx #207 — The train being run is observed, not picked  *[superseded by #227]* |
+| `TrainPurchasePanel.tsx #203` | [contract_economy.md](contract_economy.md) | App.tsx #203 — Render the whole depot, tier by tier |
+| `TrainPurchasePanel.tsx #219` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #219 — The cap moves while the field is sitting there |
+| `TrainPurchasePanel.tsx #230` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #230 — The train limit is a second, tighter ceiling |
+| `TrainPurchasePanel.tsx #232` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #232 — Only list corporations that have something to sell |
+| `TrainPurchasePanel.tsx #247` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #247 — A dropdown that lists what is buyable |
+| `TrainPurchasePanel.tsx #248` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #247 — A dropdown that lists what is buyable |
+| `TrainPurchasePanel.tsx #281` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #281 — The limit is on holdings, not on the bank |
+| `TrainPurchasePanel.tsx #282` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #2 / #282 — A train badge is the whole interaction |
+| `TrainPurchasePanel.tsx #283` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #283 — What happens to this tier, next |
+| `TrainPurchasePanel.tsx #294` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #247 — A dropdown that lists what is buyable |
+| `TrainPurchasePanel.tsx #296` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #296 — The number was already in the future tense |
+| `TrainPurchasePanel.tsx #298` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #508 — Condensed, because a sticky panel costs the board its height |
+| `TrainPurchasePanel.tsx #485` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #281 — The limit is on holdings, not on the bank |
+| `TrainPurchasePanel.tsx #491` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #508 — Condensed, because a sticky panel costs the board its height |
+| `TrainPurchasePanel.tsx #508` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #508 — Condensed, because a sticky panel costs the board its height |
+| `TrainPurchasePanel.tsx #617` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #617 — A train that looks like a train, and counts |
+| `TrainPurchasePanel.tsx #618` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #618 / #633 / #634 — Six rows, then one row and a caret |
+| `TrainPurchasePanel.tsx #632` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #632 / #635 — The era palette, and a cursor that promised nothing |
+| `TrainPurchasePanel.tsx #633` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #618 / #633 / #634 — Six rows, then one row and a caret |
+| `TrainPurchasePanel.tsx #634` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #618 / #633 / #634 — Six rows, then one row and a caret |
+| `TrainPurchasePanel.tsx #635` | [contract_economy.md](contract_economy.md) | TrainPurchasePanel.tsx #632 / #635 — The era palette, and a cursor that promised nothing |
+
+### gameState.ts
+
+| anchor | document | section |
+|---|---|---|
+| `gameState.ts #1` | [utils_layer.md](utils_layer.md) | gameState.ts #1 — Hand-kept mirror, not codegen |
+| `gameState.ts #2` | [utils_layer.md](utils_layer.md) | gameState.ts #2 — What this deliberately does NOT expose, because the backend does not either |
+| `gameState.ts #3` | [utils_layer.md](utils_layer.md) | gameState.ts #3 — Derived but EXACT, not a backend count |
+| `gameState.ts #4` | [utils_layer.md](utils_layer.md) | gameState.ts #4 — Polling, not a subscription |
+| `gameState.ts #6` | [utils_layer.md](utils_layer.md) | gameState.ts #6 — Net worth is a separate hook, not a field |
+| `gameState.ts #7` | [utils_layer.md](utils_layer.md) | gameState.ts #7 (waterfall) — A third independent hook, gated by the caller |
+| `gameState.ts #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `gameState.ts #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `gameState.ts #17` | [utils_layer.md](utils_layer.md) | gameState.ts (player privates) — Two lists, deliberately |
+| `gameState.ts #329` | [utils_layer.md](utils_layer.md) | gameState.ts #379 — A private can belong to a company, not a player |
+| `gameState.ts #338` | [utils_layer.md](utils_layer.md) | gameState.ts #544 — A mini-auction suspends the turn order |
+| `gameState.ts #351` | [utils_layer.md](utils_layer.md) | gameState.ts #553 — A corporation's par is the corporation's, not yours |
+| `gameState.ts #352` | [utils_layer.md](utils_layer.md) | gameState.ts #352 / #656 / #662 — Sandbox-only fields, marked as such |
+| `gameState.ts #353` | [utils_layer.md](utils_layer.md) | gameState.ts (priority deal) — A real field the contract does not yet move |
+| `gameState.ts #379` | [utils_layer.md](utils_layer.md) | gameState.ts #379 — A private can belong to a company, not a player |
+| `gameState.ts #411` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #411 — The operating queue has to be built by somebody |
+| `gameState.ts #497` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board |
+| `gameState.ts #497a` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board |
+| `gameState.ts #507` | [utils_layer.md](utils_layer.md) | gameState.ts #526 — The certificate-limit table has one home |
+| `gameState.ts #526` | [utils_layer.md](utils_layer.md) | gameState.ts #526 — The certificate-limit table has one home |
+| `gameState.ts #544` | [utils_layer.md](utils_layer.md) | gameState.ts #544 — A mini-auction suspends the turn order |
+| `gameState.ts #545` | [utils_layer.md](utils_layer.md) | gameState.ts #544 — A mini-auction suspends the turn order |
+| `gameState.ts #549` | [utils_layer.md](utils_layer.md) | gameState.ts #553 — A corporation's par is the corporation's, not yours |
+| `gameState.ts #553` | [utils_layer.md](utils_layer.md) | gameState.ts #553 — A corporation's par is the corporation's, not yours |
+| `gameState.ts #560` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #134 / #560 — A hex is not a city |
+| `gameState.ts #642` | [utils_layer.md](utils_layer.md) | gameState.ts #352 / #656 / #662 — Sandbox-only fields, marked as such |
+| `gameState.ts #656` | [utils_layer.md](utils_layer.md) | gameState.ts #352 / #656 / #662 — Sandbox-only fields, marked as such |
+| `gameState.ts #662` | [utils_layer.md](utils_layer.md) | gameState.ts #352 / #656 / #662 — Sandbox-only fields, marked as such |
+
+### RulesReference.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `RulesReference.tsx #1` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #1 — Sourced, not remembered — but presented clean, not annotated |
+| `RulesReference.tsx #2` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #2 — Reference-only content: this tab reads no live game state |
+| `RulesReference.tsx #3` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #3 — Two rules confirmed against this contract, not just the source engine |
+| `RulesReference.tsx #4` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #4 — The president's certificate counts as exactly 1 |
+| `RulesReference.tsx #5` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #5 — Game Flow summaries, and two honesty notes |
+| `RulesReference.tsx #6` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #6 / #9(1) — Two legibility passes |
+| `RulesReference.tsx #7` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #7 → #10 → #140 → #17 — Where the current-round panel lives |
+| `RulesReference.tsx #8` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #8 — The step that was missing entirely |
+| `RulesReference.tsx #9` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #9(3) — The narrative section, and the two end-condition audits |
+| `RulesReference.tsx #10` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #7 → #10 → #140 → #17 — Where the current-round panel lives |
+| `RulesReference.tsx #17` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #7 → #10 → #140 → #17 — Where the current-round panel lives |
+| `RulesReference.tsx #29` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #29 — Buy Private Company is FIRST, not last |
+| `RulesReference.tsx #30` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #30 / #37 — Signals, and where a note belongs |
+| `RulesReference.tsx #31` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #28 / #31 — Measure the label, not just the anchor |
+| `RulesReference.tsx #37` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #30 / #37 — Signals, and where a note belongs |
+| `RulesReference.tsx #140` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #7 → #10 → #140 → #17 — Where the current-round panel lives |
+| `RulesReference.tsx #141` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #141 — Station tokens: the reference denied a control that exists |
+| `RulesReference.tsx #143` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #143 — Which rounds are expanded: state plus an effect, not a derived value |
+| `RulesReference.tsx #144` | [contract_economy.md](contract_economy.md) | App.tsx #144 (routes skip) — Disabled with the reason, not dispatched to fail |
+| `RulesReference.tsx #640` | [rules_and_sourcing.md](rules_and_sourcing.md) | RulesReference.tsx #640 — Which build the browser is actually running |
+
+### TileSelectionPopup.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TileSelectionPopup.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #1 — Self-contained dispatch, observer-only callback out |
+| `TileSelectionPopup.tsx #2` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #2 — The rotation became a binding choice |
+| `TileSelectionPopup.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TileSelectionPopup.tsx #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `TileSelectionPopup.tsx #5` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `TileSelectionPopup.tsx #6` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #6 / #8 — The picker without a chain, stated three times and blocked twice |
+| `TileSelectionPopup.tsx #7` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TileSelectionPopup.tsx #8` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #6 / #8 — The picker without a chain, stated three times and blocked twice |
+| `TileSelectionPopup.tsx #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `TileSelectionPopup.tsx #10` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TileSelectionPopup.tsx #14` | [contract_economy.md](contract_economy.md) | App.tsx #14 — Buy Private Company action tray |
+| `TileSelectionPopup.tsx #29` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #21 / #26 / #29 — The hover card |
+| `TileSelectionPopup.tsx #39` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #39 / #70 / #109 — Adaptive placement, and the offset that moved four times |
+| `TileSelectionPopup.tsx #47` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #47 / #364 / #366 — The reservation badge and its tooltip line |
+| `TileSelectionPopup.tsx #55` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #55 — Strict canvas layering hierarchy |
+| `TileSelectionPopup.tsx #57` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `TileSelectionPopup.tsx #58` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #52 / #56 / #58 / #73 / #77 — The two-node coordinate, five passes |
+| `TileSelectionPopup.tsx #162` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #162 — Click the preview to rotate it |
+
+### FinancialLedger.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `FinancialLedger.tsx #1` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #1 / #3 — Real data, and an honest design gap |
+| `FinancialLedger.tsx #3` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #1 / #3 — Real data, and an honest design gap |
+| `FinancialLedger.tsx #4` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board |
+| `FinancialLedger.tsx #5` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #6` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #7` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #7 / #14 — One table, not a table plus a tree; one table, not two |
+| `FinancialLedger.tsx #8` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `FinancialLedger.tsx #12` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #13` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #14` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #7 / #14 — One table, not a table plus a tree; one table, not two |
+| `FinancialLedger.tsx #15` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #16` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #16 — The bank depot inventory |
+| `FinancialLedger.tsx #170` | [ui_shell_layout.md](ui_shell_layout.md) | FinancialLedger.tsx #170 — See `ContextualSubPanel.tsx #170` |
+| `FinancialLedger.tsx #379` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #405` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #405 — One Player Assets table, two places |
+| `FinancialLedger.tsx #407` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #423 / #407 — The same pills the auction uses, carrying the revenue |
+| `FinancialLedger.tsx #423` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #423 / #407 — The same pills the auction uses, carrying the revenue |
+| `FinancialLedger.tsx #497` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board |
+| `FinancialLedger.tsx #497a` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #4 / #497 / #497a — The chain first, then the board |
+| `FinancialLedger.tsx #552` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
+| `FinancialLedger.tsx #555` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #555 — This is arithmetic, not an estimate |
+| `FinancialLedger.tsx #559` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #405 — One Player Assets table, two places |

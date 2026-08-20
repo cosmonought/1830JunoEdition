@@ -402,3 +402,259 @@ Without the key, switching rooms would keep the previous room's `actionLog`, tic
 and OR sub-phase cursor — state that is meaningless in a different game and actively misleading in
 it. `mode` is part of the key too (`#24`): a viewer who spectates a game and then joins it properly
 must get a genuinely fresh shell.
+
+---
+
+# `utils/sandboxRoom.ts` — The room log itself
+
+### sandboxRoom.ts #0 — Why event sourcing is the only honest option here
+The obvious design is to mirror the sandbox **game state** into a document and let `onSnapshot` push it
+around. That cannot work in this codebase, and the reason is the reason for everything else.
+
+**The sandbox is not one state object. It is three atoms plus a turn cursor:**
+
+| Atom | Advanced by |
+|---|---|
+| `sandboxState` — the `GameStateResponse` | `applySandboxAction` |
+| `mapGrid` — the tile grid | `applySandboxLayTile` |
+| `sandboxMarket` — the price chart | `applySandboxMarketAction` |
+| App-local | `orSubPhase`, route drafts, pending offers, and more |
+
+They advance **together** on one dispatch, and each reducer takes a context built from the others.
+Mirroring one atom would desync the other two; mirroring all of them means serialising a graph whose
+shape is an implementation detail of four modules, **and any field added anywhere would silently stop
+replicating.**
+
+**The action log is already complete**, which is what makes the alternative work. Every sandbox mutation
+goes through `runGameplayAction` as a `GameplayExecuteMsg` — including the tile lay, which dispatches
+`LayTile` alongside its local `setMapGrid` — so the board is reconstructible from the same stream.
+Replaying the log through the existing pipeline reproduces all three atoms **by running the code that
+produced them, rather than by copying their output.**
+
+That is also what gives refresh-resilience for free: a browser with no state reads the log from index 0
+and arrives where everyone else is.
+
+### sandboxRoom.ts #1 — The index is the contract
+Order is everything — **1830 is not commutative**, and "buy share then pay dividend" is a different game
+from the reverse. Each entry carries a monotonic integer `index` and readers sort by it.
+
+**An integer, not `serverTimestamp()`.** `ChatBox.tsx #2` already recorded why in this codebase:
+`serverTimestamp()` resolves to `null` in the local snapshot the SDK emits optimistically, so an entry is
+briefly unsortable by the very field meant to sort it. **Chat can tolerate a message that jumps a place on
+write. A game state machine cannot:** applying two actions in the wrong order produces a divergent board
+that never reconciles, because every later action is computed against it.
+
+`createdAt` rides along for debugging and for human-readable ordering in the Firebase console. **Nothing
+reads it for sequencing.**
+
+### sandboxRoom.ts #2 — The collision this does not solve
+Two clients writing index N simultaneously is possible. Firestore's `addDoc` gives each a distinct
+document, so both survive with the same index — and the tie-break (document id) is deterministic, so
+**every client resolves it identically. Nobody diverges.**
+
+What it does **not** do is prevent the second action from being computed against a state that did not
+include the first. **That is a genuine limitation of a client-authoritative log with no referee, and it is
+stated here rather than hidden:** the sandbox has no server to arbitrate, and building one is a backend
+change. In practice 1830 is strictly turn-based and two players acting in the same instant are already
+playing wrongly.
+
+### sandboxRoom.ts #519 — A new top-level collection, beside `games`
+A sandbox room has no chain game, no contract address and no on-chain roster — it shares none of
+`RoomDoc`'s shape, and `firestore.rules` guards that collection with rules (write-once `chainGameId`, no
+game-state fields) written for a document this one is not.
+
+### sandboxRoom.ts #520 — The room code is read aloud
+The code's whole job is to survive being **spoken over a voice call and typed by somebody else**, so the
+alphabet is chosen for that rather than for entropy per character.
+
+`0/O`, `1/I/L` and `5/S` are **out** — the pairs that get misheard and mistyped. **A room code that fails
+one time in twenty is worse than a slightly longer one that never does.** What remains is 22 letters and 7
+digits; three characters is ~24,000 combinations, ample where rooms are abandoned within an hour and a
+collision merely means picking again.
+
+**The first draft of this table kept `0`.** It dropped `O` from the letters and `1`/`5` from the digits and
+then ended `…67890` — so the one character most likely to be confused with a letter survived the rule
+written to remove it. The harness caught it on the second run; a reviewer reading the string would have had
+to count. **That is the argument for asserting the property (no confusable character appears) rather than
+pinning the alphabet, which would merely have recorded the mistake.**
+
+**The `JUNO-` prefix is part of the code, not decoration.** It makes the string self-describing when it
+turns up pasted in a chat window with no context, and it gives `parseRoomCode` something to recognise.
+
+**Forgiving on input, strict on output:** lower case, missing prefix, surrounding spaces and a pasted
+`juno-4t2` all resolve to `JUNO-4T2`; anything that is not a real code resolves to `null` rather than to a
+plausible-looking room nobody is in. **A player mistyping a code should be told, not silently dropped into
+an empty room they will wait in.**
+
+### sandboxRoom.ts (message encoding) — JSON text, not a nested map
+Firestore **rejects nested arrays**, and several messages carry one (`RunManualRoute.path` is an array of
+objects). Round-tripping through JSON also guarantees every client applies a structurally identical object
+rather than one Firestore has reshaped on the way through.
+
+### sandboxRoom.ts #643 — When it happened, not when it was replayed
+**Reported:** the activity log stamps every entry in a game with the same time, and re-reports actions from
+earlier playthroughs.
+
+`appendSandboxAction` has always written a `createdAt` server timestamp; **`toAction` simply never read it
+back.** So a client rebuilding from the log had no idea when anything happened and stamped each replayed
+entry with `Date.now()` — which, during a rebuild, is the same instant for the whole game. **Every timestamp
+identical is not a clock bug; it is an accurate record of when the replay ran.**
+
+`undefined` for entries written before this, and for the moment between a local write and the server's
+timestamp resolving. Callers fall back to the current time.
+
+### sandboxRoom.ts (append) — `nextIndex` is the caller's, which is why this is not a transaction
+The caller already holds the live log (it is subscribed to it), so it knows the next index without a round
+trip. **A `runTransaction` that re-read the collection on every dispatch would add a network round trip to
+every click for a guarantee `#2` explains this cannot make anyway.**
+
+### sandboxRoom.ts (subscribe) — The whole ordered log, not a delta
+The consumer's job is "make my state match this sequence". A delta would make it "apply exactly the entries
+I have not seen" — **the same thing when nothing goes wrong and a silent desync when anything does** (a
+dropped snapshot, a reconnect, a late entry landing behind the cursor). The caller tracks how far it has
+applied and takes the tail; **that cursor is cheap to keep and impossible to get subtly wrong.**
+
+### sandboxRoom.ts #527 — The room document is the anteroom, not the game
+`#0` argues at length that game **state** must not be mirrored into Firestore. The waiting room is the one
+thing that is legitimately document state, and the distinction is worth being precise about **because it
+looks like an exception.**
+
+**What lives in the document is everything true BEFORE the game exists:** who is here, what they are
+called, whether they have said they are ready. None of it is derived from anything, none of it is ordered,
+and **a late write simply wins** — exactly the shape `onSnapshot` on a document handles well and an
+append-only log handles badly (a "ready" that toggles twice would otherwise be two entries the replay has
+to reconcile).
+
+**The moment the game starts, that stops being true.** `status: "playing"` is a latch, and everything after
+it comes from the log. **The document owns the lobby, the log owns the game, and `status` is the handover.**
+
+### sandboxRoom.ts (join) — A transaction, unlike the append
+The players array is a **read-modify-write on one field that several clients touch at once**, so a plain
+update would drop whoever wrote a millisecond earlier — the classic lost join. The action log needs no
+transaction because appends never touch the same document; **this does because they all touch this one.**
+
+### sandboxRoom.ts #541 — Editing a name is not rejoining
+**Reported:** clicking "Set Name" twice appears to reorder the players.
+
+It did exactly that. The update filtered the player out and appended them: `[...others, player]`. **So every
+nickname edit and every ready toggle moved that player to the back of the array**, and two people editing in
+turn churned the whole roster.
+
+**The order is not cosmetic.** `toSetupPlayers` reads this array to build the payload the host shuffles, so
+a lobby whose list reshuffles itself while people are typing is a lobby whose seating nobody can predict —
+**and it moves under the reader while they are looking at it.**
+
+An existing player is **updated in place** and only a genuinely new one is appended.
+
+### sandboxRoom.ts (ready check) — Both conditions
+Every player marked ready, **and enough of them to deal a legal game.** The second is the one a ready check
+usually forgets: one person alone in a room can tick ready and satisfy "all ready" trivially. 1830 needs at
+least two.
+
+### sandboxRoom.ts #528 — Who this browser is
+The waiting room needs to tell one player from another, and the sandbox has no wallet and no
+authentication. Each browser mints an id once and keeps it in `sessionStorage`.
+
+**Session, not local, storage.** Two tabs of the same browser must be **two players** — that is how a single
+developer playtests this at all — and `localStorage` is shared across tabs, so both would claim the same
+seat and the second join would overwrite the first. `sessionStorage` is per-tab, exactly the granularity
+wanted.
+
+**It survives a refresh**, which is the other half: a player who reloads mid-game must reclaim their own
+seat rather than appear as a new one and find the game has more players than it dealt for.
+
+---
+
+# `config/firebase.ts` — Initialisation and configuration
+
+### firebase.ts #0 — The architectural boundary this file sits on
+**Firebase is Web2 and off-chain only.** It carries exactly three things:
+
+1. **Chat** — `games/{gameId}/chat`
+2. **Player presence** — `games/{gameId}/seats/{address}.lastSeen`
+3. **Room discovery** — the `games/` collection, i.e. the pre-game staging lobby that exists *before* a room
+   is on-chain at all
+
+The Juno contract remains the **single** source of truth for game state, rules, board tiles, treasuries,
+turn order and turn execution. Nothing in this module — or anything reading from it — may store, derive,
+mirror or validate official game state. **Firestore is in Test Mode (open read/write); treating anything it
+returns as authoritative would mean treating an anonymous, unauthenticated, client-writable document as
+authoritative.**
+
+**The one field that looks like it crosses the line and does not:** `RoomDoc.chainGameId`. That is a
+**pointer**, not state — the `u64` the contract itself assigned at `CreateGameRoom` and emitted as a tx
+attribute. It is written once by the host from a confirmed transaction result and thereafter only ever used
+as the argument to a real `GetGameState` query. **If Firestore lies about it, the query returns a different
+room or fails outright; it cannot make the contract agree.** `firestore.rules` enforces this in the database
+itself — `chainGameId` is write-once, and no client may write any field named for game state.
+
+### firebase.ts #1 — Why this file does not throw at import
+Identical reasoning to `config.ts #0`, and the same failure it was written to prevent. That module used to
+validate at module scope, which **crashed the whole bundle before React could mount** whenever `.env` was
+incomplete, and made the documented Offline Sandbox Mode unreachable.
+
+Firebase would reintroduce exactly that bug in a new place: `initializeApp` with a missing
+`apiKey`/`projectId` **throws synchronously**, and at module scope it would take down the app at `import`
+time — for a subsystem that only carries chat and lobby. **Losing the entire rail map because nobody
+configured a chat backend is an absurd failure mode, so it is structurally prevented here rather than
+merely avoided by convention.**
+
+Two-tier rule:
+
+- **Reading config never throws.** Unset values are `undefined`, meaning "no real-time backend" — a
+  legitimate state in which the board, the tile catalog and every on-chain query still work perfectly.
+- **Requiring a live Firestore handle throws**, and only at the moment an operation genuinely needs one.
+  The error names the exact missing variable.
+
+`getFirestoreDb()` returns `null` rather than throwing, and every caller degrades to a clearly-labelled
+"real-time features unavailable" state.
+
+### firebase.ts #2 — Lazy, idempotent initialization
+Deferred to first use and memoised, for **three separate reasons that each independently require it**:
+
+- `#1`: it must not run at import.
+- **`React.StrictMode` double-invokes effects in development.** An effect that initializes Firebase would
+  run twice, and `initializeApp` throws `app/duplicate-app` on a second call with the same name. The
+  `getApps().length` check makes a second call reuse the existing instance.
+- **Webpack HMR** re-executes a changed module while the previous Firebase app is still live in the same
+  page — the same duplicate-app collision by a different route. Same guard covers it.
+
+### firebase.ts #3 — Validation is shape-only, and only for what Firestore uses
+Matching `config.ts #3`: this checks the **shape** of each value to catch "still a placeholder" and "left
+unset", **not to verify the credentials are real.** A wrong-but-well-formed `projectId` is caught by
+Firestore with a clear permission/not-found error; a placeholder was not, which is the whole reason for the
+check. (`"your-project-id"` is a **well-formed** project id and deliberately passes; the check rejects the
+dotted/underscored/uppercase placeholders people actually paste.)
+
+**Only three variables are required**, because this app uses Firestore and nothing else:
+`REACT_APP_FIREBASE_API_KEY`, `REACT_APP_FIREBASE_PROJECT_ID`, `REACT_APP_FIREBASE_APP_ID`.
+
+`authDomain` (Auth), `storageBucket` (Storage) and `messagingSenderId` (FCM) are passed through when present
+but are **not** required, because no code path touches those products. **Requiring them would fail the app
+for a missing value it never reads** — the precise species of dishonest validation `config.ts` exists to
+avoid. Revisit the moment Auth is added, which it should be before Test Mode lapses.
+
+**Nothing secret goes here.** Every one of these values ships to the browser in plain text. **A Firebase
+"API key" is a public project identifier, not a credential** — it identifies which project a request is for
+and grants nothing on its own. What actually protects the data is `firestore.rules`, **which is why that
+file matters far more than any value here.**
+
+### firebase.ts (env reads) — Literal `process.env.REACT_APP_FOO` expressions only
+`react-scripts` substitutes them **textually at build time**, and neither destructuring nor dynamic indexing
+is substituted — **both silently yield `undefined` in a production bundle.** `readOptional` is shared from
+`config.ts` and takes the already-read **value** for exactly that reason.
+
+### firebase.ts (handles) — `null` is a supported state
+`getFirestoreDb()` returns the handle or `null`; pass it straight through and render a "real-time offline"
+affordance. **Do not coerce it or assert past it.** `isFirebaseConfigured` should **label the UI honestly,
+not hide the failure** — a player who sees "Real-time offline" and a reason is informed; one who sees an
+empty room list is misled into thinking nobody is playing.
+
+The throwing variant is for a path **about to perform a real read or write** with a caller able to surface
+the error — never at module scope, and never on a render path the unconfigured state also takes.
+
+### firebase.ts (collection paths) — One definition, shared
+Same rule as `config.ts #1`: **a path string duplicated across modules is a path string that will eventually
+drift.** These three are the **entire** Firestore surface this app uses, and `firestore.rules` is written
+against exactly these shapes — **change one here and the rules file must change with it, or writes start
+being denied in production while continuing to work in Test Mode.**

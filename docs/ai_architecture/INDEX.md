@@ -23,7 +23,8 @@ directory is anchored as **`<source file> #<N>`**, so:
 | File | Covers |
 |---|---|
 | [state_machine.md](state_machine.md) | Round types, Operating Round sub-phase cursor, turn gating, auto-skip, float events, home stations, undo/revert semantics |
-| [firebase_middleware.md](firebase_middleware.md) | Event-sourced room log, replay drain, setup event, presence, chat transport, the chain/Firestore boundary |
+| [sandbox_reducer.md](sandbox_reducer.md) | The local reducer's charter, the Operating Round machine, determinism under replay, and the fixtures (`sandboxSession.ts`, `sandboxState.ts`) |
+| [firebase_middleware.md](firebase_middleware.md) | Event-sourced room log, replay drain, setup event, presence, chat transport, the chain/Firestore boundary, room codes, Firebase config |
 | [canvas_rendering.md](canvas_rendering.md) | Radial tile selector, board veil/dimming, cursor modes, tile preview and rotation, token migration markers, board click routing |
 | [stock_market.md](stock_market.md) | Par values, IPO vs bank pool pricing, market chart marks and moves, stock round cards |
 | [contract_economy.md](contract_economy.md) | Treasuries, token pricing, train purchase and the depot queue, emergency funding, bankruptcy, private companies, the waterfall auction |
@@ -49,6 +50,20 @@ These arguments appear across many notes and are worth reading once:
    fee, never to become a second rulebook. A client-side copy of a rule can only drift.
 6. **Fire on the edge, not on the condition.** Effects that dispatch must compare against a
    previous-value ref, or they re-broadcast on every render until the next poll lands.
+7. **If the reducer needs it to decide, it travels in the message.** Context (`ctx`) is only for
+   things identical on every client by construction — the map, the era. A shared fact derived from a
+   per-browser value diverges silently under replay: `sandboxSession.ts #549` (the actor), `#553`
+   (the par ladder), `#579` (the price) are the same bug three times.
+8. **A value that must be correct, read from a field nothing writes.** The other repeat offender:
+   `sandboxSession.ts #411`, `#431`, `#621` and `#642` are one defect in four places. Stamp every
+   bookkeeping value where the round opens, together, so a reader sees the whole opening position.
+9. **A UI quoting a transaction the state does not perform.** The renderer drew $80 while the
+   reducer charged $20 (`#432`); the modal promised the president's money and nothing took it
+   (`#333`); the badge promised an auto-award nothing performed (`#336`). When a surface describes an
+   action, something must actually do it.
+10. **Sort comparators must be total.** `NaN` or an incomparable pair makes `sort` produce an order
+    that is not an order — which lands the Operating Round cursor on a corporation that has already
+    operated (`#468`, `#646`).
 
 ## Batch status
 
@@ -56,7 +71,7 @@ These arguments appear across many notes and are worth reading once:
 |---|---|---|
 | 0 | Scaffold this directory | Done |
 | 1 | `frontend/src/App.tsx` | Done |
-| 2 | Firebase middleware layer | Pending |
+| 2 | Firebase middleware (`sandboxSession`, `sandboxState`, `sandboxRoom`, `config/firebase`, `actionLog`, `feed`) | Done |
 | 3 | Canvas rendering + tile math | Pending |
 | 4 | Stock market + trading UI | Pending |
 | 5 | Remaining frontend files | Pending |

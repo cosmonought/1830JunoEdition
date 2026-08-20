@@ -1,58 +1,16 @@
 // frontend/src/utils/actionLog.ts
 //
-// Turns a dispatched `ExecuteMsg` into a line a player can read.
+// Turns a dispatched ExecuteMsg into a line a player can read.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE LOG WAS WRITTEN FOR THE PERSON WHO WROTE IT
-// ===================================================================
+// The label is DERIVED from the message and the state it acted on, never passed
+// in: hand-written labels at each call site named the contract's variants, leaked
+// the backend, and never said WHO acted -- which made the log a list of verbs.
 //
-// Every entry in the Activity Log was the contract's own variant name, hand
-// typed at the call site: "RunManualRoute", "BuyHardwareFromPool (mock)",
-// "DeclareDividends: Pay (mock)". Three problems, and the third is the one
-// that makes the log useless rather than merely ugly.
+// `gameState` is the BEFORE state, the only one every caller has at dispatch
+// time; `afterState` is the resolved one where a synchronous reducer offers it.
+// Each figure takes the side it belongs to -- see #2.
 //
-//   IT NAMED A MESSAGE, NOT AN EVENT. "BuyStock" is what the client sent.
-//   What happened is that somebody bought a share of something.
-//
-//   IT LEAKED THE BACKEND. A player has no idea what `BuyHardwareFromPool`
-//   is, and the "(mock)" suffixes were notes to a developer about wiring
-//   that has since been finished -- stale as well as internal.
-//
-//   IT NEVER SAID WHO. This is the fatal one. In a four-player hotseat with
-//   eight corporations, a log of twenty entries that names no actor is not a
-//   history of the game; it is a list of verbs. "Who bought that train?" was
-//   unanswerable from the one surface built to answer it.
-//
-// So the label is DERIVED from the message and the state it acted on, rather
-// than being passed in. That choice is deliberate: a hand-written label at
-// each call site is a second thing to keep in step with the message, and it
-// was already drifting (the "(mock)" suffixes outlived their mocks).
-// `runGameplayAction` describes what it is about to send, so a new dispatch
-// site gets a readable line for free and cannot forget to write one.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE BEFORE STATE IS ALWAYS THERE
-// ===================================================================
-//
-// `gameState` is the state BEFORE the action applies. That is the only state
-// every caller is guaranteed to have at dispatch time -- the reducer has not
-// run yet, and on a live chain the result will not be known for a block or
-// two. So it is the required argument, and every line can be written from it
-// alone.
-//
-// This note originally went on to claim the before-state was also the more
-// useful one to REPORT: that "depot 2/5 remaining" reads as a purchase
-// against the supply it came out of, and that "1/5" answered a question
-// nobody asked. That was wrong, and QA caught it. A player clicking Buy
-// watches the log to find out what the depot holds NOW -- and 2/5 does not
-// merely answer a different question, it contradicts the depot panel sitting
-// next to it, which has already redrawn to 1/5. See design note #2 for the
-// distinction that actually holds.
-//
-// Where a figure only exists after the fact -- the exact per-player dividend
-// split, say -- it is computed here from the before-state rather than
-// waited for, because the arithmetic is fully determined by what is already
-// known.
+// See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0, #1
 
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
@@ -70,26 +28,8 @@ import { stationTokenPrice } from "./stationTokens";
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */
   gameState: GameStateResponse | null;
-  /* ==================================================================
-   *  DESIGN NOTE 2: THE RESOLVED STATE, WHEN THERE IS ONE
-   * ==================================================================
-   *
-   * Design note #1 argued for describing the BEFORE state because it is the
-   * only one available at dispatch time. That holds on a chain, where the
-   * result is a block away, and does not hold in the sandbox, whose reducer
-   * is synchronous -- so the resolved state is one call away and the log was
-   * reporting a prediction where it could have reported a fact.
-   *
-   * The distinction that survives is which side of an action a given figure
-   * belongs to, and it is not uniform:
-   *
-   *   AFTER  the depot's remaining stock, a treasury balance -- the reader
-   *          wants to know where things stand now.
-   *   BEFORE what a thing COST, which corporation acted, who held what --
-   *          facts about the action rather than its consequences.
-   *
-   * So both are available and each figure takes the one that fits.
-   * `undefined` on a live chain, where the before-derived phrasing stands. */
+  /* AFTER for where things stand now (depot stock, a balance); BEFORE for facts about the action (what it cost, who acted). undefined on a live chain, where the before-derived phrasing stands.
+     See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #2 */
   afterState?: GameStateResponse | null;
   mapGrid: MapGridResponse;
   era: TileColorTier;
@@ -99,45 +39,11 @@ export interface ActionLogContext {
    *  before/after. `undefined` when the chart is not available, and the line
    *  then omits the price move rather than inventing one. */
   marketPrices?: Readonly<Record<number, number | undefined>>;
-  /** Where the price would land if this corporation pays out. Supplied by
-   *  the caller because the projection lives with the chart.
-   *
-   *  Design note #434: keyed by COMPANY, not by price. It took a price, and
-   *  the projection then had to find a cell by searching for that price --
-   *  which on a chart that repeats prices across rows found the wrong one,
-   *  so this log quoted a destination the token never went to. The caller
-   *  looks the corporation's real `(x, y)` up instead. */
+  /** Keyed by COMPANY, not by price: searching the chart for a price finds the first of several matching cells, so the log quoted a destination the token never reached.
+   *  See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #434 */
   projectPrice?: (companyId: number, choice: "pay" | "withhold") => number | null;
-  /* ==================================================================
-   *  DESIGN NOTE 478: THE STEP IS PART OF WHAT PASSING MEANS
-   * ==================================================================
-   *
-   * REPORTED: passing in an Operating Round logs "[Player] passed the
-   * turn"; it should read "[Corporation] passed [step]" -- "PRR passed Lay
-   * Track".
-   *
-   * Two separate errors sat in that one sentence.
-   *
-   *   THE WRONG ACTOR. An Operating Round is corporation-driven: the queue
-   *   names companies and the human is only whoever presides over the one
-   *   that is up (`gameState.ts`'s `actingSeatIndex` makes the same
-   *   distinction for the same reason). Naming the president in a log of
-   *   corporate actions puts a different KIND of noun in one line of a
-   *   column that is otherwise all tickers, and in a hotseat where one
-   *   player presides over three companies it does not identify which one
-   *   passed.
-   *
-   *   THE MISSING OBJECT. "Passed the turn" is true of every pass, so a run
-   *   of them is a run of identical lines. What a reader wants to know is
-   *   what was declined -- track, a token, a route -- because that is what
-   *   explains the corporation's position later.
-   *
-   * The step cannot be derived here. The contract persists a sub-phase
-   * cursor but the client's own copy (`orSubPhase`, App.tsx) is the one
-   * that says which step the button was pressed FROM, and it is not part of
-   * `GameStateResponse`. So it is passed in, and stays optional: a caller
-   * without one gets the shorter sentence rather than a guessed step, which
-   * is the same rule design note #2 applies to `afterState`. */
+  /* An OR is corporation-driven, so the line names the CORPORATION and the step it declined. The step is not on GameStateResponse, so it is passed in and stays optional.
+     See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
   orSubPhase?: OperatingSubPhase | null;
 }
 
@@ -168,13 +74,8 @@ function actingPlayer(context: ActionLogContext): string {
   return address ? context.labelForAddress(address) : "A player";
 }
 
-/** Whoever is acting, as the round defines "whoever" -- the corporation
- *  currently up in an Operating Round, the seated player everywhere else.
- *
- *  Design note #478: this is the distinction `actingPlayer` above cannot
- *  make, and every OR line that named a human was making the same mistake.
- *  Exported because App.tsx needs the same answer when it records what an
- *  Undo would revert. */
+/** Whoever is acting, as the round defines it. Exported because App.tsx needs the same answer when recording what an Undo would revert.
+ *  See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
 export function actingActor(context: ActionLogContext): string {
   const state = context.gameState;
   if (state?.current_round_type === "OperatingRound") {
@@ -206,14 +107,8 @@ function hexName(mapGrid: MapGridResponse, q: number, r: number): string {
   return boardHexLabel(q, r) ?? `(${q}, ${r})`;
 }
 
-/**
- * One human sentence for `msg`, or `null` when this message has nothing
- * worth reporting beyond its own name.
- *
- * `null` rather than a generic fallback: the caller keeps its own label for
- * those, and a sentence that says less than the variant name would be a
- * downgrade dressed as an improvement.
- */
+/** null rather than a generic fallback: the caller keeps its own label, and a sentence saying less than the variant name is a downgrade dressed as an improvement.
+ *  See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0 */
 export function describeGameplayAction(
   msg: GameplayExecuteMsg,
   context: ActionLogContext,
@@ -321,11 +216,8 @@ export function describeGameplayAction(
     );
     if (!tier) return `${corp(gameState, protocolId)} tried to buy a train from an empty depot.`;
 
-    /* Design note #2: the SUPPLY is an after-figure and the PRICE is a
-       before-figure, in one sentence. Reading the resolved state rather than
-       subtracting one from the old one also means the log cannot disagree
-       with the depot panel about what is left -- both ask
-       `depotInventory` of the same state. */
+    /* Supply is an after-figure and price is a before-figure, in one sentence. Reading the resolved state means the log cannot disagree with the depot panel.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #2 */
     const settled = context.afterState
       ? depotInventory(context.afterState).find((row) => row.tier === tier.tier)
       : undefined;
@@ -354,23 +246,8 @@ export function describeGameplayAction(
   if ("RejectTrainOffer" in msg) return `${actingPlayer(context)} rejected a train offer.`;
   if ("RescindTrainOffer" in msg) return `${actingPlayer(context)} withdrew a train offer.`;
 
-  /* ==================================================================
-   *  DESIGN NOTE 361: PRIVATES ARE KNOWN BY NUMBER AS WELL AS NAME
-   * ==================================================================
-   *
-   * REPORTED: the log prints "Schuylkill Valley" where it should print
-   * "1. Schuylkill Valley".
-   *
-   * The auction cards have been numbered 1-6 since design note #304, on the
-   * reasoning that 1830 players refer to these companies by waterfall order
-   * as much as by name -- "the 3" is how a table talks about the Delaware &
-   * Hudson. The log was the one surface still using bare names, so a player
-   * reading back what happened had to translate between two vocabularies.
-   *
-   * ONE HELPER, used by every arm that names a private, so the log cannot
-   * develop two formats. Falls back to the bare id when the room does not
-   * report the company -- "private #3" is still better than "undefined",
-   * and it is the same fallback design note #307 established. */
+  /* Privates are named "3. Delaware & Hudson" -- players refer to them by waterfall order as much as by name. One helper, so the log cannot develop two formats.
+     See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #361 */
   const namePrivate = (privateId: number): string => {
     const entry = context.gameState?.private_companies.find(
       (row) => row.private_id === privateId,
@@ -391,11 +268,8 @@ export function describeGameplayAction(
   }
 
   if ("AdvanceOperatingSubPhase" in msg) {
-    /* Design note #478: "skipped a step" had the right actor and the wrong
-       amount of information -- it is the one message whose whole content IS
-       which step, and it was the only part left out. The cursor has not
-       moved yet at dispatch time, so `orSubPhase` is still the step being
-       declined. */
+    /* The one message whose whole content IS which step, and the step was the only part left out. The cursor has not moved at dispatch time.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
     const ticker = corp(gameState, msg.AdvanceOperatingSubPhase.protocol_id);
     const step = stepName(context);
     return step ? `${ticker} passed ${step}.` : `${ticker} skipped a step.`;
@@ -404,30 +278,8 @@ export function describeGameplayAction(
   /* ---- Stock Round and the auction: the player acts. ---- */
 
   if ("BuyStock" in msg) {
-    /* ==================================================================
-     *  DESIGN NOTE 554: A PURCHASE IS A PRICE
-     * ==================================================================
-     *
-     * REPORTED: the line should say what the share cost.
-     *
-     * It is the one figure a reader of the log actually wants. "P1 bought a
-     * 10% share of ERIE from the IPO" tells you a thing you probably
-     * watched happen; what you cannot reconstruct afterwards is what it
-     * cost, and in a game where the same share sells at par from the IPO
-     * and at market from the pool, the price is what distinguishes two
-     * otherwise identical lines.
-     *
-     * FROM THE MESSAGE FIRST. `par_value` travels IN the purchase (it is
-     * what founds the corporation), so an IPO buy can be priced from the
-     * action itself rather than from any client's view of the board -- the
-     * property design note #553 is about. A pool buy has no such field and
-     * falls back to the chart, which is the right source for a market
-     * price.
-     *
-     * SILENT WHEN UNKNOWN, rather than "$0" or "$?". A live chain computes
-     * the price server-side and this client may genuinely not know it; a
-     * sentence that omits the cost is honest, and one that invents a figure
-     * for the log is worse than the omission it replaces. */
+    /* The price is the one figure a reader cannot reconstruct afterwards. From the message first (par_value travels in the purchase), then the chart. SILENT when unknown -- an invented figure is worse than an omission.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #554 */
     const { protocol_id, source, par_value: parValue } = msg.BuyStock;
     const fromIpo = source === "Ipo";
     const priced = Number(parValue);
@@ -453,11 +305,8 @@ export function describeGameplayAction(
 
   if ("WaterfallBidHigher" in msg) {
     const { private_id, bid_amount } = msg.WaterfallBidHigher;
-    /* Design note #307: NAME IT. "private #3" is the contract's identifier
-       and means nothing at the table. Design note #361 added the number
-       back in front of the name, which is how players actually refer to
-       these companies -- the lookup that used to sit here is now inside
-       `namePrivate`, so both arms format identically. */
+    /* "private #3" is the contract's identifier and means nothing at the table; the lookup lives in namePrivate so both arms format identically.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #361 */
     return `${actingPlayer(context)} bid $${bid_amount} on ${namePrivate(private_id)}.`;
   }
 
@@ -475,11 +324,8 @@ export function describeGameplayAction(
   }
 
   if ("PassTurn" in msg) {
-    /* Design note #478. In an Operating Round the Pass button ends the
-       CORPORATION's turn from whatever step it is standing on, so both
-       facts belong in the sentence. Outside one, `PassTurn` really is a
-       seated player passing and the original wording is the correct one --
-       there is no corporation to name and no sub-phase to be on. */
+    /* In an OR, Pass ends the CORPORATION's turn from a step; outside one it really is a seated player passing and the original wording is right.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
     if (gameState?.current_round_type === "OperatingRound") {
       const step = stepName(context);
       return step
@@ -489,11 +335,8 @@ export function describeGameplayAction(
     return `${actingPlayer(context)} passed the turn.`;
   }
   if ("UndoLastAction" in msg) {
-    /* Design note #479: ONLINE, THE CLIENT DOES NOT KNOW WHAT IT UNDID.
-       The sandbox names the reverted action from its snapshot stack (see
-       App.tsx's `handleUndoLastAction`); a live chain resolves undo itself,
-       a block or two later, so naming an action here would be a guess
-       printed as a fact. It names the actor and stops. */
+    /* Online the client does not know what it undid -- a live chain resolves undo a block or two later, so naming an action would be a guess printed as a fact.
+       See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #479 */
     return `${actingActor(context)} reverted their last action.`;
   }
   if ("BeginOperatingRound" in msg) return "The Operating Round began.";

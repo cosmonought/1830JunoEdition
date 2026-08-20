@@ -1,123 +1,25 @@
 // frontend/src/config/firebase.ts
 //
-// Firebase App + Firestore initialization (Step 4: Real-Time Integration).
+// Firebase App + Firestore init. WEB2 AND OFF-CHAIN ONLY: chat, presence and
+// room discovery. The Juno contract stays the single source of truth for all
+// game state, and Firestore is in Test Mode -- nothing it returns is authoritative.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE ARCHITECTURAL BOUNDARY THIS FILE SITS ON
-// ===================================================================
+// RoomDoc.chainGameId is a POINTER, not state: written once from a confirmed tx
+// and only ever used as a GetGameState argument. firestore.rules enforces that.
 //
-// Firebase is WEB2 AND OFF-CHAIN ONLY. It carries exactly three things:
+// Nothing here is secret -- a Firebase API key is a public project identifier.
+// firestore.rules is what protects the data.
 //
-//   1. Chat            -- `games/{gameId}/chat`
-//   2. Player presence -- `games/{gameId}/seats/{address}.lastSeen`
-//   3. Room discovery  -- the `games/` collection, i.e. the pre-game staging
-//                         lobby that exists BEFORE a room is on-chain at all
+// Init is lazy, memoised and never throws at import; reading config yields
+// undefined ("no real-time backend"), and only requiring a live handle throws.
 //
-// The Juno contract remains the SINGLE source of truth for game state,
-// rules, board tiles, treasuries, turn order and turn execution. Nothing in
-// this module -- or anything reading from it -- may store, derive, mirror or
-// validate official game state. Firestore is in Test Mode (open read/write);
-// treating anything it returns as authoritative would mean treating an
-// anonymous, unauthenticated, client-writable document as authoritative.
-//
-// The one field that looks like it crosses the line and does not:
-// `RoomDoc.chainGameId`. That is a POINTER, not state -- the `u64` the
-// contract itself assigned at `CreateGameRoom` and emitted as a tx
-// attribute. It is written once by the host from a confirmed transaction
-// result and thereafter only ever used as the argument to a real
-// `GetGameState` query. If Firestore lies about it, the query returns a
-// different room or fails outright; it cannot make the contract agree.
-// `firestore.rules` (repo root) enforces this in the database itself --
-// `chainGameId` is write-once, and no client may write any field named for
-// game state.
-//
-// ===================================================================
-//  DESIGN NOTE 1: WHY THIS FILE DOES NOT THROW AT IMPORT
-// ===================================================================
-//
-// Identical reasoning to `../config.ts`'s own design note #0, and the same
-// failure it was written to prevent. That module used to validate at module
-// scope, which crashed the whole bundle before React could mount whenever
-// `.env` was incomplete, and made the documented Offline Sandbox Mode
-// unreachable. Firebase would reintroduce exactly that bug in a new place:
-// `initializeApp` with a missing `apiKey`/`projectId` throws synchronously,
-// and if that call sat at module scope it would take down the app at
-// `import` time -- for a subsystem that only carries CHAT AND LOBBY. Losing
-// the entire rail map because nobody configured a chat backend is an absurd
-// failure mode, so it is structurally prevented here rather than merely
-// avoided by convention.
-//
-// So the same two-tier rule applies:
-//
-//   - READING config never throws. Unset values are `undefined`, meaning
-//     "no real-time backend" -- a legitimate state in which the board, the
-//     tile catalog and every on-chain query still work perfectly.
-//   - REQUIRING a live Firestore handle throws, and only at the moment an
-//     operation genuinely needs one (opening the lobby, sending a chat
-//     message). The error names the exact missing variable.
-//
-// `getFirestoreDb()` returns `null` rather than throwing, and every caller
-// in `utils/lobby.ts` / `components/ChatBox.tsx` is written to degrade to a
-// clearly-labelled "real-time features unavailable" state on `null`.
-//
-// ===================================================================
-//  DESIGN NOTE 2: LAZY, IDEMPOTENT INITIALIZATION
-// ===================================================================
-//
-// Initialization is deferred to first use and memoised, for three separate
-// reasons that each independently require it:
-//
-//   - Design note #1: it must not run at import.
-//   - `React.StrictMode` (see `index.tsx` design note #3) double-invokes
-//     effects in development. An effect that initializes Firebase would run
-//     twice, and `initializeApp` throws `app/duplicate-app` on a second call
-//     with the same name. The `getApps().length` check below makes a second
-//     call reuse the existing instance instead.
-//   - Webpack HMR re-executes a changed module while the previous Firebase
-//     app is still live in the same page, which is the same duplicate-app
-//     collision arriving by a different route. Same guard covers it.
-//
-// ===================================================================
-//  DESIGN NOTE 3: VALIDATION IS SHAPE-ONLY, AND ONLY FOR WHAT FIRESTORE USES
-// ===================================================================
-//
-// Matching `../config.ts` design note #3: this checks the shape of each
-// value to catch "still a placeholder" and "left unset", not to verify the
-// credentials are real. A wrong-but-well-formed `projectId` is caught by
-// Firestore with a clear permission/not-found error; a placeholder was not,
-// which is the whole reason for the check.
-//
-// Only THREE variables are actually required, because this app uses
-// Firestore and nothing else:
-//
-//   REACT_APP_FIREBASE_API_KEY      -- required
-//   REACT_APP_FIREBASE_PROJECT_ID   -- required
-//   REACT_APP_FIREBASE_APP_ID       -- required
-//
-// `authDomain` (Firebase Auth), `storageBucket` (Cloud Storage) and
-// `messagingSenderId` (FCM) are passed through when present but are NOT
-// required, because no code path here touches those products. Requiring
-// them would fail the app for a missing value it never reads -- the precise
-// species of dishonest validation `../config.ts` exists to avoid. Revisit
-// the moment Auth is added (which it should be, before Test Mode lapses --
-// see `firestore.rules`).
-//
-// NOTHING SECRET GOES HERE. Every one of these values ships to the browser
-// in plain text, exactly like the chain config. A Firebase "API key" is a
-// public project identifier, not a credential -- it identifies which
-// project a request is for and grants nothing on its own. What actually
-// protects the data is `firestore.rules`, which is why that file matters
-// far more than any value below.
+// See docs/ai_architecture/firebase_middleware.md - firebase.ts #0, #1, #2, #3
 
 import { initializeApp, getApps, type FirebaseApp, type FirebaseOptions } from "firebase/app";
 import { getFirestore, type Firestore } from "firebase/firestore";
 
-// Design note #2 of `../config.ts`: the reads MUST be literal
-// `process.env.REACT_APP_FOO` expressions -- `react-scripts` substitutes
-// them textually at build time, and neither destructuring nor dynamic
-// indexing is substituted (both silently yield `undefined` in a production
-// bundle). `readOptional` is shared from `../config` and takes the
-// already-read VALUE for exactly that reason.
+// The reads must be literal process.env.REACT_APP_FOO expressions: react-scripts substitutes them textually, and destructuring or dynamic indexing silently yields undefined in a production bundle.
+// See docs/ai_architecture/firebase_middleware.md - firebase.ts #3
 import { readOptional } from "../config";
 
 /** Named so a duplicate-app collision (design note #2) is legible in a
@@ -147,11 +49,8 @@ function looksLikeApiKey(value: string): boolean {
   return /^AIza[0-9A-Za-z_-]{35}$/.test(value);
 }
 
-/** Project ids are lowercase alphanumerics and hyphens, 6-30 chars, and
- *  cannot start or end with a hyphen. Rejects `"your-project-id"`? No --
- *  that is a WELL-FORMED project id and deliberately passes: this is a
- *  shape check, not an existence check (design note #3). It does reject the
- *  dotted/underscored/uppercase placeholders people actually paste. */
+/** A SHAPE check, not an existence check -- "your-project-id" is well-formed and deliberately passes; this rejects the dotted/underscored/uppercase placeholders people paste.
+ *  See docs/ai_architecture/firebase_middleware.md - firebase.ts #3 */
 function looksLikeProjectId(value: string): boolean {
   return /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(value);
 }
@@ -214,12 +113,8 @@ export function firebaseConfigError(): string | null {
   return null;
 }
 
-/** Whether every required Firebase value is present AND well-formed.
- *
- *  `false` means real-time features are off: no lobby, no chat, no
- *  presence. Use it to LABEL the UI honestly, not to hide the failure --
- *  a player who sees "Real-time offline" and a reason is informed; one who
- *  sees an empty room list is misled into thinking nobody is playing. */
+/** false means real-time features are off. Use it to LABEL the UI honestly, not to hide the failure: an empty room list misleads, a stated reason informs.
+ *  See docs/ai_architecture/firebase_middleware.md - firebase.ts #1 */
 export function isFirebaseConfigured(): boolean {
   return firebaseConfigError() === null;
 }
@@ -275,12 +170,8 @@ export function getFirebaseApp(): FirebaseApp | null {
   }
 }
 
-/** The Firestore handle, or `null` when Firebase is unconfigured or failed
- *  to initialize.
- *
- *  `null` is a supported, meaningful state -- pass it straight through and
- *  render a "real-time offline" affordance. Do NOT coerce it or assert past
- *  it; every consumer in this codebase already branches on it. */
+/** null is a supported, meaningful state -- pass it through and render a "real-time offline" affordance rather than coercing or asserting past it.
+ *  See docs/ai_architecture/firebase_middleware.md - firebase.ts #1 */
 export function getFirestoreDb(): Firestore | null {
   if (cachedDb) return cachedDb;
 
@@ -297,12 +188,8 @@ export function getFirestoreDb(): Firestore | null {
   }
 }
 
-/** The Firestore handle, or throw naming the exact missing variable.
- *
- *  Call ONLY from a path that is about to perform a real read or write and
- *  has a caller able to surface the error -- never at module scope, and
- *  never on a render path that the unconfigured state also takes. This is
- *  the direct analogue of `../config.ts`'s `requireContractAddress()`. */
+/** Call ONLY from a path about to perform a real read or write with a caller able to surface the error -- never at module scope, never on a render path the unconfigured state also takes.
+ *  See docs/ai_architecture/firebase_middleware.md - firebase.ts #1 */
 export function requireFirestoreDb(): Firestore {
   const db = getFirestoreDb();
   if (!db) {
@@ -314,16 +201,8 @@ export function requireFirestoreDb(): Firestore {
   return db;
 }
 
-/* ------------------------------------------------------------------ */
-/* Collection paths -- one definition, shared                           */
-/* ------------------------------------------------------------------ */
-//
-// Same rule as `../config.ts` design note #1: a path string duplicated
-// across modules is a path string that will eventually drift. These three
-// are the ENTIRE Firestore surface this app uses, and `firestore.rules` is
-// written against exactly these shapes -- change one here and the rules
-// file must change with it, or writes start being denied in production
-// while continuing to work in Test Mode.
+// One definition of each collection path: firestore.rules is written against exactly these shapes, so a change here must move with it or writes are denied in production while working in Test Mode.
+// See docs/ai_architecture/firebase_middleware.md - firebase.ts #0
 
 /** Room discovery / pre-game staging rooms. */
 export const ROOMS_COLLECTION = "games";

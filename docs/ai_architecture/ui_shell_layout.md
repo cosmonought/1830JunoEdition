@@ -372,3 +372,204 @@ Ledger and the Player Index now. The whole optimistic-note chain went with them:
 state, `runGameplayAction`'s third parameter, and the two notes `BuyStock`/`SellStock` passed into
 it. Those two were the only writers and their only reader was the readout just deleted — **a write
 path to a value nothing displays is how a "harmless" leftover becomes a puzzle later.**
+
+---
+
+# `utils/actionLog.ts` — Turning a message into a sentence
+
+### actionLog.ts #0 — The log was written for the person who wrote it
+Every entry was the contract's own variant name, hand-typed at the call site: `"RunManualRoute"`,
+`"BuyHardwareFromPool (mock)"`, `"DeclareDividends: Pay (mock)"`. Three problems, and the third makes the
+log useless rather than merely ugly:
+
+- **It named a message, not an event.** "BuyStock" is what the client *sent*. What *happened* is that
+  somebody bought a share of something.
+- **It leaked the backend.** A player has no idea what `BuyHardwareFromPool` is, and the "(mock)" suffixes
+  were notes to a developer about wiring since finished — stale as well as internal.
+- **It never said who.** This is the fatal one. In a four-player hotseat with eight corporations, a log of
+  twenty entries that names no actor is not a history of the game; **it is a list of verbs.** "Who bought
+  that train?" was unanswerable from the one surface built to answer it.
+
+So the label is **derived** from the message and the state it acted on rather than passed in. A hand-written
+label at each call site is a second thing to keep in step with the message, **and it was already drifting.**
+`runGameplayAction` describes what it is about to send, so a new dispatch site gets a readable line for free
+and cannot forget to write one.
+
+### actionLog.ts #1 — The before state is always there
+`gameState` is the state **before** the action applies. That is the only state every caller is guaranteed to
+have at dispatch time — the reducer has not run yet, and on a live chain the result will not be known for a
+block or two. So it is the required argument.
+
+This note originally went on to claim the before-state was also the more **useful** one to report: that
+"depot 2/5 remaining" reads as a purchase against the supply it came out of. **That was wrong, and QA caught
+it.** A player clicking Buy watches the log to find out what the depot holds **now** — and 2/5 does not
+merely answer a different question, **it contradicts the depot panel sitting next to it**, which has already
+redrawn to 1/5.
+
+Where a figure only exists after the fact — the exact per-player dividend split, say — it is computed here
+from the before-state rather than waited for, because the arithmetic is fully determined by what is already
+known.
+
+### actionLog.ts #2 — The resolved state, when there is one
+`#1` argued for the before state because it is the only one available at dispatch time. **That holds on a
+chain and does not hold in the sandbox**, whose reducer is synchronous — so the resolved state is one call
+away and the log was reporting a prediction where it could have reported a fact.
+
+**The distinction that survives is which side of an action a given figure belongs to, and it is not
+uniform:**
+
+| Side | Figures |
+|---|---|
+| **After** | the depot's remaining stock, a treasury balance — the reader wants to know where things stand now |
+| **Before** | what a thing **cost**, which corporation acted, who held what — facts about the action rather than its consequences |
+
+Both are available and each figure takes the one that fits. `undefined` on a live chain, where the
+before-derived phrasing stands. Reading the resolved state rather than subtracting one from the old one also
+means **the log cannot disagree with the depot panel about what is left** — both ask `depotInventory` of the
+same state.
+
+### actionLog.ts #478 — The step is part of what passing means
+**Reported:** passing in an Operating Round logs "[Player] passed the turn"; it should read "[Corporation]
+passed [step]" — "PRR passed Lay Track".
+
+**Two separate errors sat in that one sentence.**
+
+- **The wrong actor.** An OR is corporation-driven: the queue names companies and the human is only whoever
+  presides over the one that is up. Naming the president in a log of corporate actions **puts a different
+  kind of noun in one line of a column that is otherwise all tickers**, and in a hotseat where one player
+  presides over three companies it does not identify which one passed.
+- **The missing object.** "Passed the turn" is true of every pass, so a run of them is a run of identical
+  lines. What a reader wants to know is **what was declined** — track, a token, a route — because that is
+  what explains the corporation's position later.
+
+**The step cannot be derived here.** The contract persists a sub-phase cursor but the client's own copy
+(`orSubPhase`) is the one that says which step the button was pressed **from**, and it is not part of
+`GameStateResponse`. So it is passed in, and stays **optional**: a caller without one gets the shorter
+sentence rather than a guessed step — the same rule `#2` applies to `afterState`.
+
+`actingEntity` is the distinction `actingPlayer` cannot make, and **every OR line that named a human was
+making the same mistake.** Exported because `App.tsx` needs the same answer when it records what an Undo
+would revert.
+
+For `AdvanceOperatingSubPhase`, "skipped a step" had the right actor and the wrong amount of information —
+**it is the one message whose whole content IS which step, and it was the only part left out.** The cursor
+has not moved at dispatch time, so `orSubPhase` is still the step being declined.
+
+For `PassTurn`: in an OR the Pass button ends the **corporation's** turn from whatever step it is standing
+on, so both facts belong in the sentence. **Outside one, `PassTurn` really is a seated player passing** and
+the original wording is correct — there is no corporation to name and no sub-phase to be on.
+
+### actionLog.ts #554 — A purchase is a price
+**Reported:** the line should say what the share cost.
+
+**It is the one figure a reader of the log actually wants.** "P1 bought a 10% share of ERIE from the IPO"
+tells you a thing you probably watched happen; what you cannot reconstruct afterwards is what it cost — and
+in a game where the same share sells at par from the IPO and at market from the pool, **the price is what
+distinguishes two otherwise identical lines.**
+
+**From the message first.** `par_value` travels **in** the purchase (it is what founds the corporation), so
+an IPO buy can be priced from the action itself rather than from any client's view of the board — the
+property `#553` is about. A pool buy has no such field and falls back to the chart, the right source for a
+market price.
+
+**Silent when unknown, rather than "$0" or "$?".** A live chain computes the price server-side and this
+client may genuinely not know it; **a sentence that omits the cost is honest, and one that invents a figure
+for the log is worse than the omission it replaces.**
+
+### actionLog.ts #434 — The dividend projection is keyed by company, not by price
+It took a **price**, and the projection then had to find a cell by searching for that price — which on a
+chart that repeats prices across rows found the wrong one, **so this log quoted a destination the token
+never went to.** The caller looks the corporation's real `(x, y)` up instead.
+
+### actionLog.ts #361 — Privates are known by number as well as name
+**Reported:** the log prints "Schuylkill Valley" where it should print "1. Schuylkill Valley".
+
+The auction cards have been numbered 1–6 since `#304`, on the reasoning that **1830 players refer to these
+companies by waterfall order as much as by name** — "the 3" is how a table talks about the Delaware &
+Hudson. The log was the one surface still using bare names, **so a player reading back what happened had to
+translate between two vocabularies.**
+
+**One helper, used by every arm that names a private**, so the log cannot develop two formats. Falls back to
+the bare id when the room does not report the company — `#307`: "private #3" is the contract's identifier and
+means nothing at the table, but it is still better than `undefined`.
+
+### actionLog.ts #479 — Online, the client does not know what it undid
+The sandbox names the reverted action from its own history; **a live chain resolves undo itself, a block or
+two later, so naming an action here would be a guess printed as a fact.** It names the actor and stops.
+
+### actionLog.ts (null return) — No sentence beats a worse sentence
+`describeGameplayAction` returns `null` when a message has nothing worth reporting beyond its own name,
+**rather than a generic fallback**: the caller keeps its own label for those, and a sentence that says less
+than the variant name would be a downgrade dressed as an improvement.
+
+---
+
+# `utils/feed.ts` — The merged timeline
+
+### feed.ts #1 — `ActionLogEntry`/`ActionLogStatus` moved here from `App.tsx`
+Same shape, plus exactly one new field — `timestampMs`, a real sortable epoch alongside the existing
+display-only `timestamp` string. Moved so both `App.tsx` (which still constructs these) and `mergeFeedItems`
+(which sorts them against chat messages) **share one definition instead of two independently drifting
+copies.**
+
+### feed.ts #2 — Real sortable timestamps, not insertion-order guessing
+Both `ActionLogEntry` and `ChatMessage` already carried a display-only `toLocaleTimeString()` string **with
+no reliable sort key**. `timestampMs` is what `mergeFeedItems` actually sorts by, so the combined timeline is
+genuinely chronological **even though the two source arrays use opposite insertion conventions internally**
+(Action Log prepends, Chat appends).
+
+Merged **oldest-first**, matching ordinary chat reading order, since the feed auto-scrolls to the bottom on
+new arrivals.
+
+### feed.ts #3 — Icon matching was a label-substring lookup  *[deleted by #425]*
+Every `ActionLogEntry.label` is a human-readable string set by `App.tsx`'s handlers, and `iconForLogEntry`
+read that same string to classify it into one of five badge categories, falling back to a generic icon rather
+than mis-tagging.
+
+### feed.ts #425 — The emoji helpers are gone
+`iconForLogEntry` and `iconForLogStatus` were **deleted, not merely left uncalled.** They produced the
+category badges and status circles `TopTicker` used to prefix every log line with, and the requirement is
+that the log carry clean text and nothing else.
+
+**Why delete rather than stop calling.** Two exported functions whose entire output is emoji, sitting in the
+module the log renders from, are **a standing invitation to put the badges back** — and the category one
+deserved removing on its own merits regardless: **it inferred a type by substring-matching the label**, so it
+restated a word already visible in the sentence beside it and mis-tagged any entry containing another
+category's keyword ("Skip Station Token" is a Tile; "Private Revenue" is Stock).
+
+`ActionLogStatus` is unaffected and still carried on every entry — `TopTicker` reads it to mark a failure **in
+words**. **The status was never the problem; rendering it as a coloured circle was.**
+
+### feed.ts #343 — The round is stamped, not derived
+The round context an entry happened in — "Auction", "SR1", "OR 1.1" — is **stored on the entry** rather than
+computed when the log is rendered, **and the difference is the whole point.** A derived prefix reads the
+**current** round, so the moment the auction ended every historic line would relabel itself "SR1" and the log
+would claim the privates were auctioned during the Stock Round. **A log that rewrites its own history is
+worse than one with no prefixes at all.**
+
+Optional, so entries written before this field existed render without a prefix rather than with an empty
+bracket.
+
+### feed.ts (chat id) — Widened from `number` to `string | number`
+Chat is no longer a local counter — it is a Firestore collection, and the identity of a message is its
+**document id**, which is a string. **Deriving a number from that string would be strictly worse:** a hash
+can collide, and a counter is per-client, so the same message would carry different ids in different
+browsers — **exactly the wrong property for the value React uses as a list key.** Nothing downstream needed
+changing: `mergeFeedItems` only interpolates it into a template string, and ordering has always come from
+`timestampMs`.
+
+### feed.ts (F-8 purge) — `ChatMessage` and `truncateChatAddress` moved here; `Chatbox.tsx` deleted
+Two reasons, one practical and one about layering:
+
+- **The `Chatbox` component itself was dead.** It had not been rendered anywhere since its state was hoisted
+  into `App.tsx` and its UI replaced by `TopTicker`'s accordion plus `InlineQuickChat`. Only the type and the
+  truncation helper were still live, so the file was ~200 lines of unreachable React kept alive by two small
+  exports.
+- **The dependency ran the wrong way.** `utils/feed.ts` is a pure domain module and it was importing a type
+  out of `components/` — **utilities depending on the view layer, which is backwards and is what made the
+  dead component look load-bearing.**
+
+### feed.ts (author colours) — A fixed palette hashed by identity
+Deterministic per-author colour tag, **not a random or session-only assignment**, so the same author reads as
+the same colour across every render and every reopen — the same "fixed palette keyed by identity" convention
+`StockMarketRenderer.tsx`'s `TICKER_COLORS` established for corporation tokens.

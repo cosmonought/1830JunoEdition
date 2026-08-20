@@ -1,76 +1,18 @@
 // frontend/src/utils/sandboxRoom.ts
 //
-// Real-time Sandbox multiplayer, as an append-only action log on Firestore.
+// Real-time sandbox multiplayer as an append-only action log on Firestore.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHY EVENT SOURCING IS THE ONLY HONEST OPTION HERE
-// ===================================================================
+// State is NOT mirrored: the sandbox is three atoms plus a turn cursor that
+// advance together, so replaying the log reproduces them by running the code
+// that produced them. A browser with no state reads from index 0 and catches up.
 //
-// The obvious design is to mirror the sandbox GAME STATE into a document and
-// let `onSnapshot` push it around. That cannot work in this codebase, and the
-// reason is worth stating because it is the reason for everything below.
+// Entries carry a monotonic integer `index` and readers sort by it -- 1830 is
+// not commutative, and serverTimestamp() is null in the optimistic local
+// snapshot. Simultaneous writes at one index are resolved identically by every
+// client (document id tie-break); what that cannot prevent is the second action
+// having been computed against a state without the first.
 //
-// The sandbox is not one state object. It is THREE atoms plus a turn cursor:
-//
-//   `sandboxState`   the `GameStateResponse`, via `applySandboxAction`
-//   `mapGrid`        the tile grid, via `applySandboxLayTile`
-//   `sandboxMarket`  the price chart, via `applySandboxMarketAction`
-//   App-local        `orSubPhase`, route drafts, pending offers, and more
-//
-// They advance TOGETHER on one dispatch, and each reducer takes a context
-// built from the others -- `applySandboxAction` is handed `mapGrid` and a
-// `marketPriceFor` that reads the chart. Mirroring one atom would desync the
-// other two; mirroring all of them means serialising a graph whose shape is
-// an implementation detail of four modules, and any field added anywhere
-// would silently stop replicating.
-//
-// THE ACTION LOG IS ALREADY COMPLETE, which is what makes the alternative
-// work. Every sandbox mutation goes through `runGameplayAction` as a
-// `GameplayExecuteMsg` -- including the tile lay, which dispatches `LayTile`
-// alongside its local `setMapGrid` (App.tsx `handleSandboxLayTile`), so the
-// board is reconstructible from the same stream. Replaying the log through
-// the existing pipeline therefore reproduces all three atoms by running the
-// code that produced them, rather than by copying their output.
-//
-// That is also what gives refresh-resilience for free: a browser with no
-// state reads the log from index 0 and arrives where everyone else is.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE INDEX IS THE CONTRACT
-// ===================================================================
-//
-// Order is everything -- 1830 is not commutative, and "buy share then pay
-// dividend" is a different game from the reverse. So each entry carries a
-// monotonic integer `index` and readers sort by it.
-//
-// AN INTEGER, NOT `serverTimestamp()`, and `ChatBox`'s design note #2 has
-// already recorded why in this codebase: `serverTimestamp()` resolves to
-// `null` in the local snapshot the SDK emits optimistically, so an entry is
-// briefly unsortable by the very field meant to sort it. Chat can tolerate a
-// message that jumps a place on write. A game state machine cannot: applying
-// two actions in the wrong order produces a divergent board that never
-// reconciles, because every later action is computed against it.
-//
-// `createdAt` rides along anyway, for debugging and for a human-readable
-// ordering in the Firebase console. Nothing reads it for sequencing.
-//
-// ===================================================================
-//  DESIGN NOTE 2: THE COLLISION THIS DOES NOT SOLVE
-// ===================================================================
-//
-// Two clients writing index N simultaneously is possible. Firestore's
-// `addDoc` gives each a distinct document, so both survive with the same
-// index -- and the tie-break below (document id) is deterministic, so every
-// client resolves it IDENTICALLY. Nobody diverges.
-//
-// What it does not do is prevent the second action from being computed
-// against a state that did not include the first. That is a genuine
-// limitation of a client-authoritative log with no referee, and it is stated
-// here rather than hidden: the sandbox has no server to arbitrate, and
-// building one is a backend change this pass is scoped out of. In practice
-// 1830 is strictly turn-based and two players acting in the same instant are
-// already playing wrongly -- the hotseat seat cursor makes it visible when
-// they do.
+// See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0, #1, #2
 
 import {
   addDoc,
@@ -95,43 +37,13 @@ import { getFirestoreDb } from "../config/firebase";
    only ever handles the union. */
 import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
 
-/** Design note #519: a NEW top-level collection, beside `games` rather than
- *  inside it. A sandbox room has no chain game, no contract address and no
- *  on-chain roster -- it shares none of `RoomDoc`'s shape, and `firestore.rules`
- *  guards that collection with rules (write-once `chainGameId`, no
- *  game-state fields) written for a document this one is not. */
+/** A new top-level collection beside `games`: a sandbox room shares none of RoomDoc's shape, and firestore.rules guards that collection for a different document.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #519 */
 export const SANDBOX_ROOMS_COLLECTION = "sandbox_rooms";
 export const SANDBOX_ACTIONS_SUBCOLLECTION = "actions";
 
-/* ==================================================================
- *  DESIGN NOTE 520: THE ROOM CODE IS READ ALOUD
- * ==================================================================
- *
- * The code's whole job is to survive being spoken over a voice call and
- * typed by somebody else, so the alphabet is chosen for that rather than for
- * entropy per character.
- *
- * `0/O`, `1/I/L` and `5/S` are OUT. They are the pairs that get misheard and
- * mistyped, and a room code that fails one time in twenty is worse than a
- * slightly longer one that never does. What remains is 22 letters and 7
- * digits; three of them is ~24,000 combinations, which is ample for a game
- * where rooms are created and abandoned within an hour and a collision
- * merely means picking again.
- *
- * THE FIRST DRAFT OF THIS TABLE KEPT `0`. It dropped `O` from the letters and
- * `1`/`5` from the digits and then ended "...67890" -- so the one character
- * most likely to be confused with a letter survived the rule written to
- * remove it. The harness caught it on the second run; a reviewer reading the
- * string would have had to count. That is the argument for asserting the
- * PROPERTY (no confusable character appears) rather than pinning the
- * alphabet, which would merely have recorded the mistake.
- *
- * THE `JUNO-` PREFIX IS PART OF THE CODE, not decoration. It makes the
- * string self-describing when it turns up pasted in a chat window with no
- * context, and it gives `parseRoomCode` something to recognise so a player
- * who pastes the whole thing and a player who types only the suffix both
- * succeed.
- */
+/* The alphabet drops 0/O, 1/I/L and 5/S because the code is read aloud; the JUNO- prefix is part of it. The harness asserts the PROPERTY, since the first draft kept 0 despite the rule written to remove it.
+   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #520 */
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRTUVWXYZ2346789";
 const ROOM_CODE_LENGTH = 3;
 const ROOM_CODE_PREFIX = "JUNO-";
@@ -145,13 +57,8 @@ export function generateRoomCode(): string {
   return `${ROOM_CODE_PREFIX}${out}`;
 }
 
-/** Normalises whatever a player typed into the canonical code, or `null`.
- *
- *  FORGIVING ON INPUT, STRICT ON OUTPUT. Lower case, missing prefix,
- *  surrounding spaces and a pasted `juno-4t2` all resolve to `JUNO-4T2`;
- *  anything that is not a real code resolves to `null` rather than to a
- *  plausible-looking room nobody is in. A player mistyping a code should be
- *  told, not silently dropped into an empty room they will wait in. */
+/** Forgiving on input, strict on output: a bad code resolves to null rather than to a plausible room nobody is in.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #520 */
 export function parseRoomCode(raw: string): string | null {
   const cleaned = raw.trim().toUpperCase().replace(/\s+/g, "");
   const body = cleaned.startsWith(ROOM_CODE_PREFIX)
@@ -174,30 +81,11 @@ export interface SandboxAction {
   /** Who dispatched it, for the log and for "whose turn" display. Not a
    *  permission: the sandbox has no authentication. */
   actor: string;
-  /** The `GameplayExecuteMsg` itself. Stored as JSON TEXT rather than as a
-   *  nested map, deliberately -- Firestore rejects nested arrays, and
-   *  several messages carry one (`RunManualRoute.path` is an array of
-   *  objects). Round-tripping through JSON also guarantees every client
-   *  applies a structurally identical object rather than one Firestore has
-   *  reshaped on the way through. */
+  /** Stored as JSON text, not a nested map -- Firestore rejects nested arrays and RunManualRoute.path is one. Round-tripping also guarantees every client applies a structurally identical object.
+   *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #1 */
   payload: string;
-  /* ==================================================================
-   *  DESIGN NOTE 643: WHEN IT HAPPENED, NOT WHEN IT WAS REPLAYED
-   * ==================================================================
-   *
-   * REPORTED: the activity log stamps every entry in a game with the same
-   * time, and re-reports actions from earlier playthroughs.
-   *
-   * `appendSandboxAction` has always written a `createdAt` server timestamp;
-   * `toAction` simply never read it back. So a client rebuilding from the log
-   * had no idea when anything happened and stamped each replayed entry with
-   * `Date.now()` -- which, during a rebuild, is the same instant for the whole
-   * game. Every timestamp identical is not a clock bug; it is an accurate
-   * record of when the REPLAY ran.
-   *
-   * `undefined` FOR ENTRIES WRITTEN BEFORE THIS, and for the moment between a
-   * local write and the server's timestamp resolving. Callers fall back to the
-   * current time, which is what they were doing for everything until now. */
+  /* createdAt is read back so a replayed entry keeps its own clock; stamping Date.now() during a rebuild made every entry share one instant. undefined for older entries and unresolved writes.
+     See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #643 */
   at?: number;
 }
 
@@ -263,14 +151,8 @@ export async function hostSandboxRoom(hostId: string, nickname: string): Promise
   return code;
 }
 
-/** Appends one action to the room's log.
- *
- *  `nextIndex` is supplied by the CALLER rather than read here, and that is
- *  the whole reason this is not a transaction: the caller already holds the
- *  live log (it is subscribed to it), so it knows the next index without a
- *  round trip. A `runTransaction` that re-read the collection on every
- *  dispatch would add a network round trip to every click for a guarantee
- *  design note #2 explains this cannot make anyway. */
+/** nextIndex comes from the CALLER, which is why this is not a transaction: the caller is already subscribed to the log, and a re-read per dispatch buys a guarantee #2 says is unobtainable anyway.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #2 */
 export async function appendSandboxAction(
   roomCode: string,
   nextIndex: number,
@@ -313,17 +195,8 @@ export async function readSandboxLog(roomCode: string): Promise<SandboxAction[]>
   return sortActions(out);
 }
 
-/** Subscribes to the room's log.
- *
- *  HANDS BACK THE WHOLE ORDERED LOG on every change, not a delta. The
- *  consumer's job is "make my state match this sequence", and a delta would
- *  make it "apply exactly the entries I have not seen" -- which is the same
- *  thing when nothing goes wrong and a silent desync when anything does (a
- *  dropped snapshot, a reconnect, a late entry landing behind the cursor).
- *  The caller tracks how far it has applied and takes the tail; that cursor
- *  is cheap to keep and impossible to get subtly wrong.
- *
- *  Returns the unsubscribe function, or a no-op when Firestore is absent. */
+/** Hands back the WHOLE ordered log, not a delta -- a delta is identical when nothing goes wrong and a silent desync on a dropped snapshot or reconnect. The caller keeps the cursor.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0 */
 export function subscribeSandboxLog(
   roomCode: string,
   onActions: (actions: SandboxAction[]) => void,
@@ -348,27 +221,8 @@ export function subscribeSandboxLog(
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 527: THE ROOM DOCUMENT IS THE ANTEROOM, NOT THE GAME
- * ==================================================================
- *
- * Design note #0 argues at length that game STATE must not be mirrored into
- * Firestore -- it must be derived from the action log. The waiting room is
- * the one thing that is legitimately document state, and the distinction is
- * worth being precise about because it looks like an exception.
- *
- * WHAT LIVES IN THE DOCUMENT is everything true BEFORE the game exists:
- * who is here, what they are called, whether they have said they are ready.
- * None of it is derived from anything, none of it is ordered, and a late
- * write simply wins -- which is exactly the shape `onSnapshot` on a document
- * handles well and an append-only log handles badly (a "ready" that toggles
- * twice would otherwise be two entries the replay has to reconcile).
- *
- * THE MOMENT THE GAME STARTS, that stops being true and the document stops
- * being authoritative. `status: "playing"` is a latch, and everything after
- * it comes from the log. So the two systems never overlap: the document
- * owns the lobby, the log owns the game, and `status` is the handover.
- */
+/* The room document is the ANTEROOM: unordered lobby facts where a late write simply wins. status: "playing" is the latch, and everything after it comes from the log.
+   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
 export type SandboxRoomStatus = "waiting" | "playing";
 
 export interface SandboxRoomPlayer {
@@ -426,13 +280,8 @@ export function subscribeSandboxRoom(
   );
 }
 
-/** Adds this player to the room, or updates their nickname/ready flag.
- *
- *  A TRANSACTION, unlike `appendSandboxAction`. The players array is a
- *  read-modify-write on ONE field that several clients touch at once, so a
- *  plain update would drop whoever wrote a millisecond earlier -- the
- *  classic lost join. The action log needs no transaction because appends
- *  never touch the same document; this does because they all touch this one. */
+/** A TRANSACTION, unlike the append: the players array is a read-modify-write on one document several clients touch, which is the classic lost join.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
 export async function upsertSandboxPlayer(
   roomCode: string,
   player: SandboxRoomPlayer,
@@ -444,25 +293,8 @@ export async function upsertSandboxPlayer(
     const snapshot = await tx.get(ref);
     if (!snapshot.exists()) return;
     const room = toRoomDoc(roomCode, snapshot.data());
-    /* ==================================================================
-     *  DESIGN NOTE 541: EDITING A NAME IS NOT REJOINING
-     * ==================================================================
-     *
-     * REPORTED: clicking "Set Name" twice appears to reorder the players.
-     *
-     * It did exactly that. This filtered the player out and appended them:
-     * `[...others, player]`. So every nickname edit and every ready toggle
-     * moved that player to the BACK of the array, and two people editing
-     * in turn churned the whole roster.
-     *
-     * The order is not cosmetic. `toSetupPlayers` reads this array to build
-     * the payload the host shuffles, so a lobby whose list reshuffles itself
-     * while people are typing is a lobby whose seating nobody can predict --
-     * and it moves under the reader while they are looking at it.
-     *
-     * SO AN EXISTING PLAYER IS UPDATED IN PLACE and only a genuinely new one
-     * is appended. Arrival order is then stable for the whole lobby, which
-     * is the one thing a waiting-room roster should be. */
+    /* An existing player is updated IN PLACE. Filter-and-append moved them to the back on every rename, and toSetupPlayers reads this order to build the shuffle payload.
+       See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #541 */
     const existing = room?.players ?? [];
     const index = existing.findIndex((entry) => entry.id === player.id);
     const players =
@@ -481,11 +313,8 @@ export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
   await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { status: "playing" });
 }
 
-/** Every player marked ready, and enough of them to deal a legal game.
- *
- *  BOTH CONDITIONS, and the second is the one a "ready check" usually
- *  forgets: one person alone in a room can tick ready and satisfy "all
- *  ready" trivially. 1830 needs at least two. */
+/** Both conditions: all ready AND enough players. One person alone satisfies "all ready" trivially, and 1830 needs two.
+ *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
 export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: number): boolean {
   if (!room || room.status !== "waiting") return false;
   if (room.players.length < minPlayers) return false;
@@ -503,24 +332,8 @@ export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
   }));
 }
 
-/* ==================================================================
- *  DESIGN NOTE 528: WHO THIS BROWSER IS
- * ==================================================================
- *
- * The waiting room needs to tell one player from another, and the sandbox
- * has no wallet and no authentication. So each browser mints an id once and
- * keeps it in `sessionStorage`.
- *
- * SESSION, NOT LOCAL, storage. Two tabs of the same browser must be two
- * players -- that is how a single developer playtests this at all -- and
- * `localStorage` is shared across tabs, so both would claim the same seat
- * and the second join would overwrite the first. `sessionStorage` is
- * per-tab, which is exactly the granularity wanted.
- *
- * IT SURVIVES A REFRESH, which is the other half: a player who reloads
- * mid-game must reclaim their own seat rather than appear as a new one and
- * find the game has more players than it dealt for.
- */
+/* sessionStorage, not localStorage: two tabs must be two players, which is how one developer playtests this. It survives a refresh so a reloading player reclaims their own seat.
+   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #528 */
 const PLAYER_ID_STORAGE_KEY = "juno.sandbox.playerId";
 
 export function localPlayerId(): string {

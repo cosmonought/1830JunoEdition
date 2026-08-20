@@ -1,521 +1,20 @@
 // frontend/src/App.tsx
 //
-// Milestone 4: the main UI layout wrapper -- wires the Web3 Wallet + Session
-// Key layer (Milestones 1-2: WalletContext.tsx / sessionKey.ts /
-// GameSessionContext.tsx) and the 2D Canvas Graphics Engine (Milestone 3:
-// HexGridRenderer.tsx) into one screen. This pass flattens the previous
-// two-level tab dashboard into exactly four top-level tabs, consolidates the
-// Chatbox/Action Log into one left-pinned Activity Feed, and adds a
-// Contextual Top Action Bar that swaps its buttons based on the room's live
-// round type.
+// AppShell: the dashboard shell. Wires the wallet + session-key layer, the
+// 2D canvas engine, and the Firestore room log into one screen.
 //
-// Design notes / scope, since this is a layout-and-wiring pass, not a full
-// live-chain integration:
-// 1. **RESOLVED (Step 4: Firebase Real-Time Integration).** This note used
-//    to read "No game/room selection UI yet ... `gameId` stands in for
-//    the currently open room ... swap it for real room state once that flow
-//    exists." That flow now exists, and this is the swap.
+// Four top-level tabs (Rail Map / Stock Market / Game Ledger / Rules), a
+// round-aware Contextual Action Bar above the canvas, and a top ticker that
+// merges chat and the action log into one timeline.
 //
-//    `components/Lobby.tsx` is the room-selection screen, and `GameRouter`
-//    at the bottom of this file is the boundary: with no room chosen it
-//    renders the Lobby, and once a player is genuinely in a room's on-chain
-//    roster it renders `AppShell` with a REAL `gameId` -- the `u64` the
-//    contract itself assigned at `CreateGameRoom`, parsed from that
-//    transaction's own `game_id` attribute (see `Lobby.tsx` design note #2).
-//    Every `game_id` in every query and every `ExecuteMsg` below now comes
-//    from that one prop.
+// The contract is the authority for all game state; Firestore carries chat,
+// presence and the sandbox action log only.
 //
-//    `AppShell` also receives `roomId`, the FIRESTORE room id, which is a
-//    different identifier serving a different system: `gameId` addresses the
-//    contract, `roomId` addresses off-chain chat and presence. Both are
-//    load-bearing and they are never interchangeable -- see design note #22.
-// 22. **Firebase carries chat and presence ONLY (Step 4).** The strict
-//    boundary, restated here because this file is where it would be
-//    easiest to violate: the Juno contract remains the single source of
-//    truth for game state, rules, board tiles, treasuries and turn
-//    execution, and Firestore stores none of it. What changed in this file
-//    is exactly two things, both transport-level:
-//
-//      - `chatMessages` is no longer `useState<ChatMessage[]>` fed by a
-//        local `nextChatMessageId++` counter. It comes from
-//        `useFirestoreChat(roomId, ...)`, so the chat half of the merged
-//        feed is now genuinely multiplayer. `TopTicker`/`InlineQuickChat`
-//        are UNCHANGED -- both already read from `mergeFeedItems` rather
-//        than owning chat state, so replacing the transport underneath them
-//        required no change to either component (see `ChatBox.tsx` design
-//        note #0 for why no new chat panel was added).
-//      - `usePresenceHeartbeat` runs for the whole session, so the table can
-//        see when the active turn-holder has dropped. That is a UI hint with
-//        no authority: the contract's own Inactivity Timeout Safety Valve is
-//        the only thing permitted to have consequences for an absent player.
-//
-//    `actionLog` remains entirely local and on-chain-derived. It is NOT
-//    written to Firestore -- it is this browser's record of transactions it
-//    itself dispatched, and mirroring it would be the first step toward
-//    treating an off-chain document as a game log.
-// 2. **The map/stock panes still render mock data, not a live `GetMapGrid`/
-//    `GetMarketGrid` query.** Per this milestone's own original request,
-//    `MOCK_MAP_GRID`/`MOCK_MARKET_GRID` are small, hand-built responses so
-//    `HexGridRenderer`/`StockMarketRenderer` can be visually verified
-//    end-to-end before any query-wiring work exists for THOSE two queries
-//    specifically. `GetGameState` (design note #7 below) IS wired live,
-//    unlike those two -- an intentionally uneven state of wiring across
-//    this screen's three queries, not an oversight.
-// 3. *(superseded by design note #7 -- see there for the live
-//    `useGameStatePolling` this note used to describe a one-shot version
-//    of.)*
-// 4. **Mock action parameters, not mock plumbing.** There's still no
-//    stock-picker/revenue-input UI, so every gameplay button below that
-//    needs a `protocol_id`/`par_value`/`percentage`/`revenue_amount`
-//    parameter uses a hardcoded constant, clearly labeled "(mock)" in its
-//    own button text -- but every one of them calls the exact same
-//    `execGameplay` -> `execViaSessionKey` -> `authz.MsgExec` pipeline
-//    `PassTurn` does. Clicking any of them is how this screen visually
-//    proves that background pipeline actually fires, via the Activity
-//    Feed's Action Log (design note #6).
-// 5. *(superseded by design note #6 -- the Action Log is no longer a
-//    standalone panel; see there for where it lives now.)*
-// 6. **Consolidated left-side Activity Feed (item 4 of this pass).**
-//    Chatbox and the Action Log used to be two separate panels in a row
-//    above the canvas. `ActivityFeed` below merges them into ONE bordered
-//    container -- chat on top, the automatic transaction trail underneath,
-//    sharing one scroll region -- pinned to the far left edge of the
-//    workspace, ahead of the canvas column, on BOTH the Rail Map and Stock
-//    Market tabs (the two tabs that actually have a canvas workspace;
-//    Financial Ledger/Rules Reference are full-width reference screens with
-//    no canvas, so they don't carry this feed). This also supersedes the
-//    previous pass's separate `Sidebar` "Gameplay Actions" column -- those
-//    buttons now live in the Contextual Top Action Bar (design note #8)
-//    instead, so the left edge is single-purpose (activity/history), not
-//    split between two different sidebars.
-// 7. **One shared live `GetGameState` poll, not several one-off queries.**
-//    `utils/gameState.ts`'s `useGameStatePolling` is a properly typed,
-//    interval-driven (default 6s) poll of the FULL `GameStateResponse` --
-//    the balance display, the Chatbox's turn-alert comparison, the
-//    Contextual Sub-Panel, the Contextual Top Action Bar's round-type
-//    switch (design note #8), the Financial Ledger tab, and
-//    `HexGridRenderer`'s `currentEra` prop all derive from this ONE shared
-//    result. Every action that mutates game state calls the poll's own
-//    `refreshGameState()` afterward.
-// 8. **Contextual Top Action Bar (item 5 of this pass).**
-//    `ContextualActionBar` sits directly above the canvas, on both the Rail
-//    Map and Stock Market tabs, and swaps its entire button set based on
-//    the live `gameState.current_round_type`: a Stock Round shows
-//    "Buy Share (mock)" / "Sell Shares (mock)" / "Pass Turn"; an Operating
-//    Round shows "Place Station Token" / "Run Trains (mock)" /
-//    "Declare Dividends (mock)" / "Buy Train (mock)". Each maps to a real
-//    `GameplayExecuteMsg` variant already in `sessionKey.ts`'s allow-list
-//    (`BuyStock`/`SellStock`/`PassTurn`/`ExecuteOperatingRound`/
-//    `DeclareDividends`/`BuyHardwareFromPool`) EXCEPT "Place Station Token":
-//    there is no standalone "place a station" message distinct from
-//    `LayTile`, and `LayTile` itself needs a specific `(q, r)` hex the
-//    player has clicked -- it cannot be fired from a single generic button
-//    the way the others can. That button is therefore deliberately
-//    non-dispatching: it logs a short informational Action Log entry
-//    pointing the player at the Rail Map canvas's own existing click ->
-//    `TileSelectionPopup` flow, rather than fabricating a fake dispatch or
-//    silently doing nothing. "Undo Last Action" (a real, already-wired
-//    message with no natural home in either round-type's button set) stays
-//    available as a small always-visible utility button on the same bar,
-//    independent of round type.
-// 9. **Four flattened top-level tabs (item 3 of this pass).** The previous
-//    two-level "Game Board (Rail Map/Stock Market sub-tabs) / Financial
-//    Ledger / Rules Reference" structure is now exactly four SIBLING tabs:
-//    "Rail Map", "Stock Market", "Financial Ledger", "Rules Reference" --
-//    `MainTab`/`MainTabBar` below. The Dashboard Control Bar and its
-//    wallet/session controls stay visible across all four. The Activity
-//    Feed / Contextual Top Action Bar / canvas / Contextual Sub-Panel are
-//    scoped to whichever of "Rail Map"/"Stock Market" is active (both share
-//    the same workspace layout, design note #6/#8); Financial Ledger and
-//    Rules Reference keep their own full-width, canvas-free layouts,
-//    unchanged from the previous pass.
-// 10. **Step-by-Step Action Sub-Phases (item 2 of this pass).** Design note
-//    #8's Operating Round button set used to show all four OR actions at
-//    once, all the time. `orSubPhase` (`OperatingSubPhase`) now walks the
-//    player through a corporation's turn in the real 1830 legal
-//    chronological order instead: Track -> Tokens -> Dividends -> Hardware.
-//    Purely client-side UI sequencing (see `OperatingSubPhase`'s own doc
-//    comment for why) -- reset to "Track" by a `useEffect` keyed on
-//    `gameState.active_corporation_index`/`current_round_type` so a new
-//    corporation's turn (or leaving the Operating Round entirely) always
-//    starts the sequence over. Each phase's buttons: Track shows "Skip
-//    Track Lay" (laying an actual tile is still the existing canvas-click
-//    flow, design note #8); Tokens shows the existing "Place Station Token"
-//    hint alongside a new "Skip Tokens"; Dividends shows the existing "Run
-//    Trains (mock)" (kept here, not dropped, since real revenue must be run
-//    before dividends can be declared against it -- see that button's own
-//    inline comment) plus explicit "Pay Dividends"/"Withhold Revenue"
-//    buttons (both the same real `DeclareDividends` message, differing only
-//    in its `distribute` field); Hardware shows the `MOCK_TRAIN_CATALOG`
-//    marketplace tray (display/selection only -- `BuyHardwareFromPool` has
-//    no per-model parameter yet) plus "Buy Train (mock)" and "End Turn"
-//    (`PassTurn` -- the same message `msg.rs` documents as the one that
-//    also advances an Operating Round to the next corporation).
-// 11. **Manual Route Point UI.** A new "Select Route Points" toggle sits on
-//    the Contextual Top Action Bar, always visible (independent of round
-//    type/OR sub-phase, like "Undo Last Action" -- design note #8), and only
-//    meaningful on the Rail Map tab.
-//
-//    **THE LIMITATION THAT USED TO STAND HERE IS RESOLVED (Step 4.5).** This
-//    note previously read, correctly at the time: "this contract has NO
-//    `ExecuteMsg`/`QueryMsg` that accepts or validates a caller-submitted
-//    path at all... building one would be a genuine new contract feature,
-//    not a frontend wiring gap." That feature was subsequently built.
-//    `ExecuteMsg::RunManualRoute` validates a declared path step by step --
-//    connectivity, the corporation's own station, rival token blockades, and
-//    the train's distance budget -- and Batch 3 replaced its original
-//    `hex_path: string[]` with `path: RouteWaypoint[]`, so a stop can name
-//    WHICH station on a two-city hex it means. `handleRunTrains` now sends
-//    the route the player actually built (via `routePointsToWaypoints`)
-//    instead of discarding it, which is what this toggle was always for.
-//
-//    The client-side checks below remain, and are still worth having: they
-//    catch a bad path before it costs a signature and a gas fee, rather than
-//    duplicating the contract's authority. While active, `HexGridRenderer`'s existing `onHexClick` callback
-//    (already a plain prop on that component, previously unused by this
-//    file -- see its own doc comment) is wired to `handleRouteHexClick`
-//    instead of the LayTile click-interceptor (`queryClient`/
-//    `contractAddress`/`gameId`/`protocolId` are all omitted from
-//    `<HexGridRenderer>` while `routeSelectMode` is on, which per that
-//    component's own design note #7 fully disables its query-firing click
-//    interceptor, leaving `onHexClick` as the only click consumer). Each
-//    click appends `{q, r, hexLabel}` to `routePoints`; clicking the most
-//    recently added point again removes it (a quick one-step undo);
-//    `axialHexDistance` (a plain, standard axial-coordinate hex-distance
-//    formula, independent of this file needing any of HexGridRenderer's own
-//    internal pixel/rotation helpers) rejects a new point that isn't a
-//    direct neighbor of the current last point, with an inline
-//    `routeFeedback` message explaining why -- so the resulting path array
-//    is at least a genuinely connected hex chain. The one REAL constraint
-//    this can check against already-live app state: `routeHopCount`
-//    (`routePoints.length - 1`) is compared against the currently
-//    `selectedHardwareModel`'s own `maxDistance` (design note #10's
-//    `MOCK_TRAIN_CATALOG`, itself a mirror of a real `COMPANY_HARDWARE`
-//    train's route-length limit), flagging `routeExceedsMaxDistance` when
-//    the manually-built path is longer than that train could legally run.
-//    Everything else a true validation needs -- whether each hop actually
-//    follows laid track with a connecting edge, whether the path touches the
-//    corporation's own station, whether a rival blockade sits in the way --
-//    is checked ON-CHAIN by `RunManualRoute` and is deliberately NOT
-//    reimplemented here. A second copy of those rules in TypeScript could
-//    only drift from the authority, and the contract rejects a bad route
-//    cleanly with a named error the Action Log already surfaces.
-// 12. **Global Dashboard Text & Layout Upscaling (final visual theme pass,
-//    item 5).** A pure typography/spacing pass across every surrounding
-//    control panel -- no new components, no behavior changes -- so the
-//    dashboard fills widescreen real estate as comfortably as the map/stock
-//    canvases already do (`HexGridRenderer.tsx`/`StockMarketRenderer.tsx`'s
-//    own viewport-maximization passes). Six panels, each upscaled roughly
-//    25-60% past its original small-print sizing: the Upper Brand Header
-//    (`styles.dashboard`/`dashboardBrand`/`statusBadge`/`addressIndicator`/
-//    `vgpBalance`/`button` -- the "18Cosmos" title row, wallet/session
-//    badges, and Connect/Disconnect/Initialize buttons); the Primary
-//    Navigation Tabs (`styles.mainTabBar`/`mainTabButton`); the left-side
-//    Activity Feed's own Action Log half (`styles.activityFeed`/
-//    `actionLogPanel`/`actionLog*`, widened 300px -> 380px to give the
-//    larger text room -- Chatbox.tsx's own design note #4 covers its chat
-//    half); the Contextual Top Action Bar (`styles.actionBar`/
-//    `actionBarButton`/`hardwareTrayCard`/`routePanel*` -- every button/
-//    label inside the dynamic header action layout, not just the top-level
-//    round-type buttons); and the Stock Market Rule Legend
-//    (`StockMarketRenderer.tsx`'s own `styles.legend*`, that file's own
-//    design note #18). The Round Detail Footer is `ContextualSubPanel.tsx`
-//    -- the "automated contextual block underneath the board" this file
-//    renders as `<ContextualSubPanel>` -- see that file's own design note
-//    #5 for its upscaling. Deliberately NOT touched: canvas-internal text
-//    (`HexGridRenderer`/`StockMarketRenderer`'s own per-cell/per-hex fonts
-//    already have their own dedicated dynamic-scaling systems from earlier
-//    passes) and `RulesReference.tsx`/`FinancialLedger.tsx` (full-width
-//    reference screens outside this item's named list of six panels).
-// 13. **Page-Level Scrolling & Height Un-Constraint (item 1 of this pass).**
-//    Every ancestor of the map/stock canvas used to cascade a HARD height
-//    ceiling down from `styles.appRoot`'s `height: "100vh"`, through
-//    `mainRow`'s `flex: 1` / `minHeight: 0`, down to `canvasPane`'s
-//    `overflow: "auto"` and `boardPane`'s own `overflow: "auto"` -- so no
-//    matter how large the actual board content was, it was always squeezed
-//    into whatever pixel height the browser viewport happened to have, with
-//    any overflow trapped behind that pane's own tiny internal scrollbar
-//    instead of the page's. `appRoot`'s `height: "100vh"` is now
-//    `minHeight: "100vh"` (still fills at least a full viewport on a short
-//    page, but can grow taller to fit real content instead of clipping it),
-//    and `canvasPane`/`boardPane` both drop `overflow: "auto"` outright (see
-//    each style's own comment for exactly what replaced it). With no
-//    ancestor left imposing a hard height, the whole column's height is now
-//    simply the sum of its own content's natural sizes -- exactly what
-//    `HexGridRenderer.tsx`'s own design note #27 relies on to size the
-//    canvas at its true maximum proportional scale instead of being
-//    shrink-to-fit -- and the BROWSER's own page scrollbar (not any inner
-//    pane's) is what carries a player down to whatever doesn't fit above the
-//    fold. The left-side Activity Feed's own `overflowY: "auto"` (design
-//    note #6) and the Action Log's own `overflowY: "auto"` (design note #7)
-//    are both deliberately left untouched -- those are independent,
-//    genuinely-scrollable chat/log HISTORY lists, not a viewport clamped
-//    around the board, so they're outside this item's "surrounding our rail
-//    map canvas" scope.
-// 14. **Buy Private Company Action Tray (Private Company lifecycle pass).**
-//    A new tray in the Hardware sub-phase (design note #10/item 2) alongside
-//    the existing Buy Train/End Turn buttons -- the Phase-Gated Corporate
-//    Purchase Protocol (`trading.rs` module doc comment #17) is itself a
-//    corporate treasury purchase, the same category of action as buying
-//    Hardware, so it's grouped into that same step rather than getting a
-//    fifth top-level sub-phase of its own. Dispatches the real
-//    `BuyPrivateCompany` message (now in `sessionKey.ts`'s
-//    `GAMEPLAY_MESSAGE_KEYS` allow-list) against `MOCK_LAY_TILE_PROTOCOL_ID`
-//    (B&O), the same stand-in "currently operating corporation" every other
-//    OR action on this bar already uses (design note #1). The dropdown lists
-//    `playerSellablePrivateCompanies(activePlayerAddress, gameState)` --
-//    privates `activePlayerAddress` still owns AND aren't `closed` (a closed
-//    private permanently rejects the real message, so it's excluded rather
-//    than offered as a guaranteed-failing option). The price slider is
-//    bounded to the contract's own 50%-200%-of-face-value legal range,
-//    computed client-side from the selected private's `cost` (floor
-//    `Math.ceil(cost / 2)`, ceiling `cost * 2`) -- purely a UX guardrail,
-//    since `trading::execute_buy_private_company` re-enforces the exact same
-//    bound on-chain regardless. The whole tray is hidden outside Phase 3+
-//    (`current_global_era !== "Yellow"`), mirroring the contract's own
-//    `PrivatePurchaseLockedBeforePhase3` gate, and hidden entirely if
-//    `activePlayerAddress` currently has nothing left to sell.
+// Design history for this file lives in docs/ai_architecture/ - see INDEX.md.
+// Inline references below name notes by number, e.g. "App.tsx #382".
 
-// 15. **Restored Boston/New York Nameplates (`MOCK_MAP_GRID` fix).** Bug:
-//    "Boston" and "New York"'s preprinted nameplates never drew, even on a
-//    freshly loaded board before any tile had been laid. The suppression
-//    logic itself, `HexGridRenderer.tsx`'s `hexHasLaidTile(mapGrid, q, r)`,
-//    is correct and purely `mapGrid.tiles`-membership-based (`tiles.some(t
-//    => t.q === q && t.r === r)`) -- it has no terrain- or catalog-based
-//    logic and does not special-case `BostonHub`/`NewYorkHub` at all. The
-//    real bug was upstream, in this file: `MOCK_MAP_GRID` (design note #2,
-//    this file's own hand-built stand-in for a live `GetMapGrid` query)
-//    used to pre-seed all three landmark hexes (New York, Boston,
-//    Baltimore) with a `tile_id: 10` entry each, reasoning at the time
-//    that this was "accurate to the physical board's own pre-printed
-//    track." That reasoning conflated two different things: what's
-//    physically pre-printed on a real 1830 board, versus what this
-//    codebase's own `MAP_GRID`/`hexHasLaidTile` semantics mean, which is
-//    strictly narrower -- confirmed by an audit of every `MAP_GRID.save`
-//    call site in the backend (`hexmap.rs`), which is called ONLY from
-//    inside `execute_lay_tile`. A real, freshly created game's `MAP_GRID`
-//    is genuinely empty at all three landmark hexes until a player's first
-//    explicit `LayTile` message there -- so `MOCK_MAP_GRID` pre-seeding
-//    them was actively less accurate to real chain state than an empty
-//    array would have been, and it caused every nameplate-suppression
-//    check in `HexGridRenderer.tsx` to treat the landmarks as permanently
-//    tiled from the moment the app loaded, hiding their names forever
-//    (not just briefly, since nothing in this mock/demo build ever removes
-//    a `MOCK_MAP_GRID` entry).
-//
-//    Fix: `MOCK_MAP_GRID.tiles` is now `[]`. This is safe -- nothing about
-//    a landmark's own visual rendering actually depended on `mapGrid.tiles`
-//    membership in the first place. `drawLandmarkTrack` draws each
-//    landmark's authentic pre-printed track completely unconditionally (it
-//    loops `LANDMARK_HEXES` directly, never consults `mapGrid` at all), and
-//    the static background fill pass likewise loops `STATIC_BOARD_HEXES`
-//    unconditionally and already has each landmark's `printedColor:
-//    "Yellow"` baked in. The only thing that was ever gated on
-//    `mapGrid.tiles` membership was the nameplate-suppression logic itself
-//    -- which is exactly the thing this fix un-breaks. No other on-screen
-//    element changes as a result of this edit.
-//
-// 16. **Activity Log Auto-Scroll & Full-Height Flex (Left Panel refactor
-//    pass).** Two fixes to `ActionLogPanel`, scoped to layout/behavior only
-//    -- no map/tile/contract changes:
-//    (1) `styles.actionLog` (the scrollable entry list) gains `flex: 1` +
-//    `minHeight: 0` so it actually claims the vertical space
-//    `actionLogPanel` has available (flex column layouts need an explicit
-//    `minHeight: 0` on a flexed child, or that child's content-based
-//    min-height silently overrides the flex-basis and defeats internal
-//    scrolling -- the classic flexbox gotcha). `styles.activityFeed` (the
-//    outer `<aside>`) gets the same `minHeight: 0` treatment for the same
-//    reason, one level up, so its two children (`Chatbox` and
-//    `ActionLogPanel`) each get a genuine bounded height to scroll inside
-//    of, instead of the whole aside just growing tall and relying on the
-//    page/aside-level scrollbar.
-//    (2) Auto-scroll: `entries` are prepended (`setActionLog((log) => [new,
-//    ...log])`, confirmed at every call site in this file), so the NEWEST
-//    entry is always array index 0 -- rendered at the TOP of the list, not
-//    the bottom. A `useRef`+`useEffect` keyed on `actionLog.length` sets
-//    `container.scrollTop = 0` whenever a new entry arrives, so a player
-//    who has scrolled down into older history is snapped back up to see
-//    the newest event -- deliberately the opposite direction from a
-//    typical chat log, because this list's insertion order is reversed
-//    from Chatbox's (see that component's own design note #5 for its
-//    scroll-to-bottom counterpart, which is correct there because chat
-//    messages are appended, not prepended).
-//    (3) `styles.actionLogDetail`'s `wordBreak: "break-all"` (needed for
-//    unbroken tx-hash strings) was also breaking ordinary readable detail
-//    text (e.g. "No tile laid this turn -- advancing to the Tokens phase.")
-//    mid-word, which reads as sloppy for the plain-English entries this
-//    item asked to verify render "cleanly formatted." Switched to
-//    `wordBreak: "break-word"` + `overflowWrap: "anywhere"`, which still
-//    force-wraps a single unbroken tx-hash token that has no natural break
-//    point, but prefers breaking at actual word boundaries first -- so
-//    readable sentences wrap like prose while hashes still never overflow
-//    the panel.
-//
-// 17. **"Game Ledger" Tab Rename & Rules Reference Wiring (Ledger/Rules
-//    overhaul pass).** Two small pieces of `App.tsx`-side wiring for this
-//    pass's changes elsewhere:
-//    (1) `MainTabBar`'s `"ledger"` tab label changed from "Financial
-//    Ledger" to "Game Ledger" -- display text only, see
-//    `FinancialLedger.tsx`'s own design note #5 for why the source
-//    module/component/export name is deliberately left unchanged.
-//    (2) `<RulesReference />`'s render call site now passes
-//    `roundType={gameState?.current_round_type ?? null}` and
-//    `operatingSubPhase={orSubPhase}` -- both values this file already
-//    computes for its own Contextual Top Action Bar (design note #8),
-//    simply threaded through as two new OPTIONAL props (same
-//    "omit to degrade gracefully" convention as `FinancialLedger.tsx`'s own
-//    `queryClient`/`contractAddress`/`gameId`, design note #4 there) so
-//    that tab's new "Current Round Quick Reference" section can genuinely
-//    reflect the room's live round/sub-phase instead of only ever showing
-//    its static all-three-rounds fallback. See `RulesReference.tsx`'s own
-//    design notes for what it does with these two values.
-//
-// 18. **Full-Width Dashboard Layout, Compact Top Ticker, Combined Feed
-//    Overlay, and Active Turn Notifications (this pass).** SUPERSEDES
-//    design note #6's "Consolidated left-side Activity Feed" entirely --
-//    Chatbox + ActionLogPanel no longer render as an always-visible,
-//    fixed-width (`380px`) left sidebar; that sidebar is REMOVED from the
-//    dashboard grid layout outright. Four pieces:
-//    (1) **100% full-width main canvas.** With the left sidebar gone,
-//    `mainRow`'s old flex ROW (sidebar + `canvasPane`) collapses to just
-//    `canvasPane` rendered directly -- the Rail Map canvas, Stock Market
-//    matrix, Game Ledger, and Rules Reference tabs (none of which this
-//    file's own `canvasPane`/`boardPane` styles ever constrained to less
-//    than their container's width, even before this pass) now genuinely
-//    claim 100% of the available viewport width with nothing competing for
-//    it. No change to `HexGridRenderer.tsx`/`StockMarketRenderer.tsx`
-//    themselves -- both already measure and fill whatever width their
-//    parent pane grants them (their own prior viewport-maximization
-//    passes), so removing the sidebar is enough on its own.
-//    (2) **Compact Top Ticker Bar** (`TopTicker.tsx`) -- a thin, single-line
-//    bar rendered directly below `DashboardControlBar`, visible across
-//    every tab (not scoped to the Rail Map/Stock Market workspace the old
-//    sidebar was). Previews the single most recent item from a NEW
-//    chronologically merged Chat+Action Log timeline (`utils/feed.ts`'s
-//    `mergeFeedItems` -- see that file's own design notes for exactly how
-//    the merge/sort/icon-matching works), shows an unread-count badge
-//    while collapsed, and opens/closes `FeedOverlay.tsx` on click.
-//    (3) **Combined Feed Overlay** (`FeedOverlay.tsx`) -- a modal/dropdown,
-//    always mounted (gated by its own `isOpen` prop, matching this file's
-//    existing `TileSelectionPopup` convention), replacing the old
-//    always-visible sidebar's Chat+Action Log panels with ALL/CHAT/LOG
-//    filter pills over the SAME merged timeline, chat entries styled with a
-//    per-author brand color tag, log entries as compact status-colored
-//    badge strips, and the chat composer anchored at the overlay's own
-//    bottom. `chatMessages` state (previously owned entirely inside
-//    `Chatbox.tsx`) moves up into this file so it can be merged with
-//    `actionLog` -- `Chatbox.tsx` itself is no longer rendered directly
-//    (see that file's own design note #6 for what's still reused from it:
-//    the `ChatMessage` type and `truncateChatAddress` helper). Every
-//    `ActionLogEntry` construction site in this file
-//    (`handleTileDispatched`/`runGameplayAction`/`logInfo`) gains one new
-//    field, `timestampMs` (`Date.now()` at construction) -- needed so the
-//    merge can sort chat and log entries against each other by REAL time,
-//    not just each array's own internal insertion order (Action Log
-//    prepends, Chat appends -- see each file's own prior design notes).
-//    `ActionLogEntry`/`ActionLogStatus` themselves moved to `utils/feed.ts`
-//    (see that file's own design note #1) so both this file and the new
-//    feed components share one definition.
-//    (4) **Active Player Turn Notifications.** `isMyTurn` (the same
-//    `connectedWalletAddress === activePlayerAddress` comparison
-//    `Chatbox.tsx` used to make internally, design note #2 there --
-//    computed once here now that Chatbox itself isn't rendered) drives two
-//    independent effects: `utils/turnAlert.ts`'s `useDocumentTitleFlash`
-//    hook alternates `document.title` every 1000ms between "🚨 YOUR TURN! -
-//    Project 18XX" and "Project 18XX" while true, restoring the
-//    normal title immediately once it goes false (see that file's own
-//    design notes for the exact interval/restore contract); and a subtle
-//    repeating CSS pulse glow (`app-turn-pulse-glow`, a `<style>`-tag
-//    keyframes injection using the same escape-hatch convention
-//    `Chatbox.tsx`'s own design note #2 already established for this
-//    codebase's plain-inline-style convention) applies to both a
-//    `position: fixed`, `pointerEvents: "none"` viewport-margin overlay
-//    (`styles.turnPulseOverlay`, always mounted, rendered only while
-//    `isMyTurn`) and `ContextualActionBar`'s own outer wrapper (a new
-//    `isMyTurn` prop on that component, applied via
-//    `styles.actionBarTurnPulse`) -- covering both "around the top action
-//    bar" and "viewport margin" from this item's own request in one shared
-//    animation rather than two independently-tuned ones.
-//
-// 19. **Top Ticker Refinement: Prominent Sizing, Inline Quick-Chat, and
-//    Notification Settings (this pass).** Three pieces, layered on top of
-//    design note #18's dashboard refactor without changing its state
-//    ownership:
-//    (1) **Prominent Top Ticker sizing/typography** -- `TopTicker.tsx`'s
-//    own design note #4: taller bar, bigger `#F8FAFC` medium-weight text,
-//    and the unread badge/expand hint scaled up alongside it. No App.tsx
-//    change needed for this item -- purely internal to that component.
-//    (2) **Inline Quick-Chat Box** (`InlineQuickChat.tsx`) -- a new,
-//    always-mounted bar directly below `TopTicker`, letting a player send a
-//    chat message with zero friction (no "Expand" click, no modal) via a
-//    compact input + Send button, Enter to submit. Reuses the exact same
-//    `chatDraft`/`setChatDraft`/`handleSendChatMessage` this file already
-//    threads into `FeedOverlay`'s own composer -- deliberately ONE shared
-//    draft (see `InlineQuickChat.tsx`'s own design note #1), so typing
-//    started in one composer is still there if a player switches to the
-//    other.
-//    (3) **Notification Settings inside the Feed Overlay** -- historical,
-//    REMOVED by design note #21 below. At the time of this pass,
-//    `titleFlashEnabled`/`pulseGlowEnabled` (both default `true`) gated
-//    design note #18/item 4's two turn-alert channels via
-//    `isMyTurn && titleFlashEnabled` and `turnPulseActive = isMyTurn &&
-//    pulseGlowEnabled`. Both settings and the gating they did are gone --
-//    see design note #21 for why (turn alerts are now mandatory, with no
-//    per-player opt-out anywhere in the app).
-//
-// 20. **In-Place Accordion Panel, replacing the Feed Overlay modal (this
-//    pass).** `FeedOverlay.tsx` (design note #18/item 3's floating
-//    modal/backdrop) is no longer imported or rendered anywhere in this
-//    file -- its ALL/CHAT/LOG filtering, entry rendering, and Notification
-//    Settings toggles moved into `TopTicker.tsx` and `InlineQuickChat.tsx`
-//    directly (see those files' own design notes), so the whole feed now
-//    lives in-place rather than in a floating panel:
-//    (1) **`isTickerExpanded`** (renamed from `feedOpen`, same boolean
-//    role) now controls `TopTicker.tsx`'s in-place accordion body instead
-//    of `FeedOverlay`'s `isOpen`/mount-unmount. `handleToggleTickerExpand`
-//    (renamed from `handleToggleFeed`) is the only toggle needed --
-//    `handleCloseFeed` is gone entirely, since there's no backdrop/×
-//    button to close anymore, just the same header chevron toggling both
-//    directions.
-//    (2) **`filteredFeedItems`** is new -- `feedItems` (the full merged,
-//    unfiltered timeline from `mergeFeedItems`) filtered by `feedFilter`,
-//    the exact same filter state from design note #18/item 3 (now driven
-//    by the pills `InlineQuickChat.tsx` renders instead of the old modal).
-//    `latestFeedItem` and `unreadFeedCount` are now derived from this
-//    FILTERED array rather than the unfiltered one, so switching filters
-//    "instantly filters both the single-line preview and the expanded
-//    expanded history view" (this pass's own requirement) -- both
-//    `TopTicker`'s `latestItem` and `items` props come from this one
-//    filtered source, and `InlineQuickChat`'s pills are what drive it.
-//    (3) **Seamless tab docking.** `styles.mainTabButtonActive` and
-//    `styles.mainTabBar` now share the exact dark-slate palette this pass
-//    requested (`#1E293B` active tab / `#0F172A` bar background) with
-//    `TopTicker.tsx`'s own header (`#1E293B`) and body (`#0F172A`) --
-//    the active tab's background is now IDENTICAL to the ticker header
-//    directly beneath it, with `borderColor` matching too, so there is no
-//    color seam or border line where the active tab meets the ticker.
-//
-// 21. **Mandatory Turn Alerts -- Notification Settings removed entirely
-//    (this pass).** Direct feedback: players must not be able to opt out
-//    of turn alerts. `titleFlashEnabled`/`pulseGlowEnabled` state, their
-//    `handleToggleTitleFlash`/`handleTogglePulseGlow` callbacks, and the
-//    two toggle switches `TopTicker.tsx` used to render in its expanded
-//    body (that file's own former design note #6) are all deleted -- not
-//    disabled, not defaulted differently, gone. Both turn-alert channels
-//    now key DIRECTLY off `isMyTurn` with no intermediate gated value:
-//    `useDocumentTitleFlash(isMyTurn)` (was `isMyTurn && titleFlashEnabled`)
-//    and bare `isMyTurn` at both of the pulse's call sites (the fixed
-//    viewport overlay's render guard, and `ContextualActionBar`'s own
-//    `isMyTurn` prop -- `turnPulseActive` is gone, there is nothing left to
-//    gate). Because both channels are simple boolean expressions of
-//    `isMyTurn` alone, "alerts stop as soon as `isMyTurn` becomes `false`"
-//    (this pass's own requirement) falls out of the existing `useEffect`
-//    cleanup in `utils/turnAlert.ts` and the plain `{isMyTurn && ...}`
-//    JSX guard -- neither needed to change to satisfy it, just to lose
-//    their gating operand. `TopTicker.tsx`'s expanded body is now JUST the
-//    scrollable history list (that file's own updated design note #6) --
-//    no settings/checkbox/toggle UI survives anywhere in the ticker
-//    module.
+// Design notes #15-#21 (map fixtures, activity log, tab rename, ticker,
+// turn alerts) extracted - see docs/ai_architecture/INDEX.md
 
 // Design note #605: `useLayoutEffect` for the status dock's scroll
 // compensation -- it has to run after React commits the new bottom padding
@@ -649,17 +148,11 @@ import {
   actingAddress,
   parPriceFor,
   actingSeatIndex,
-  /* Design note #601: `isSidelinedByMiniAuction` no longer imported. Its one
-     caller here was `playerRoster`'s `sidelined` field, which existed for the
-     deleted roster pills. The function itself stays exported and tested in
-     `utils/gameState.ts` -- `WaterfallAuctionDashboard` is the surface that
-     still cares who is shut out of a contest. */
+  /* isSidelinedByMiniAuction not imported; the roster pills it fed are deleted.
+     See docs/ai_architecture/state_machine.md - App.tsx #601 */
 } from "./utils/gameState";
-// Design note #22: `truncateChatAddress` and the `ChatMessage` type are no
-// longer imported here. Both were only ever used to CONSTRUCT chat messages
-// locally, and this file no longer constructs any -- `useFirestoreChat`
-// returns them already built (and already labelled with a display name
-// rather than a raw address, which is what `truncateChatAddress` was for).
+// Chat messages arrive pre-built from useFirestoreChat; this file constructs none.
+// See docs/ai_architecture/firebase_middleware.md - App.tsx #22
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
 import {
   depotInventory,
@@ -742,11 +235,8 @@ import TutorialModal, {
   tutorialModeEnabled,
 } from "./components/TutorialModal";
 import { useFirestoreChat } from "./components/ChatBox";
-// NOT importing `truncateAddress` from `utils/lobby` -- `utils/address.ts`
-// carries the version this file wants, the one with configurable lead/trail
-// lengths, and importing the second would be a name collision. Two
-// truncators is one too many, but unifying them is a separate tidy-up, not
-// this pass's business.
+// truncateAddress comes from utils/address.ts (configurable lead/trail), not utils/lobby.
+// Importing both would collide. See docs/ai_architecture/ui_shell_layout.md - App.tsx #382
 import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
 
 // ---- Extracted from this file; see design note #382 below. ----
@@ -818,99 +308,33 @@ import {
   setRoomNicknames,
 } from "./utils/playerLabels";
 
-/* ==================================================================
- *  DESIGN NOTE 382: WHAT THIS FILE STOPPED BEING
- * ==================================================================
- *
- * `App.tsx` was 9,636 lines. The imports below are the visible half of a
- * move-only extraction that took roughly 3,500 of them out: nothing was
- * rewritten, no logic changed, and every moved declaration kept its own
- * design notes so their history reads as one file rename rather than as a
- * deletion here and an unrelated creation there.
- *
- * WHAT LEFT, and the rule that decided it: a declaration moved out if it
- * was ALREADY self-contained -- if it closed over nothing in `AppShell` and
- * could be lifted without threading a single new prop.
- *
- *   panels/ContextualActionBar.tsx   the 1,440-line round-aware control
- *                                    strip, with the four helpers that had
- *                                    no other consumer
- *   components/TopBar.tsx            wallet/session/room header
- *   components/MainTabBar.tsx        the tab strip AND the rules for which
- *                                    tabs exist
- *   styles/appStyles.ts              the 988-line shared style table
- *   styles/animations.ts             the `@keyframes` strings
- *   utils/gameConstants.ts           values that encode a rule
- *   utils/mockFixtures.ts            values that fake a chain query
- *   utils/routeWaypoints.ts          the manual route-point vocabulary
- *   utils/activeGame.ts              `BoardMode` and the stored room pointer
- *   utils/address.ts                 `truncateAddress`
- *
- * WHAT DELIBERATELY STAYED. `AppShell` itself, all 5,300 lines of it. Its
- * render tree could be cut into panels, but every one of those panels closes
- * over 40-80 locals, so the cut costs either an enormous prop list or a
- * context -- and either is a behavioural change wearing a refactor's
- * clothes. That is a separate pass with a separate risk budget. This one was
- * chosen precisely because it cannot change behaviour: the code that moved
- * is byte-identical to the code that was here.
- */
+/* Move-only extraction: ~3,500 lines left this file for panels/, styles/ and utils/.
+   See docs/ai_architecture/ui_shell_layout.md - App.tsx #382 */
 
 
-/* ------------------------------------------------------------------ */
-/* Action Log -- entries constructed here, rendered via the combined     */
-/* Feed Overlay (design note #18). `ActionLogEntry`/`ActionLogStatus`    */
-/* themselves now live in utils/feed.ts -- see that file's design note   */
-/* #1 for why.                                                           */
-/* ------------------------------------------------------------------ */
+/* Action Log entries are constructed here, rendered via the ticker.
+   ActionLogEntry/ActionLogStatus live in utils/feed.ts - App.tsx #18 */
 
-/** Design note #643: "Auction" / "SR2" / "OR 1.1", from a state rather than
- *  from whatever the browser is showing. `null` before the first poll. */
-/* Design note #659: `roundLabelFor` moved to `utils/roundLabel.ts` so the
-   rule about WHICH state it is asked about can carry a test. Imported above;
-   nothing about the function changed. */
+/** Round tag ("Auction"/"SR2"/"OR 1.1") from a state, not from what the browser shows; null before the first poll. roundLabelFor moved to utils/roundLabel.ts (#659).
+ *  See docs/ai_architecture/state_machine.md - App.tsx #643 */
 let nextLogEntryId = 1;
 
-// Design note #18/item 3's `nextChatMessageId` counter is REMOVED (design
-// note #22). Chat message ids are now Firestore document ids -- globally
-// unique and identical in every player's browser, which a per-client
-// counter could never be. See `utils/feed.ts`'s `ChatMessage.id` for why
-// that field was widened to `string | number` rather than the id being
-// hashed back down into a number.
+// Chat ids are Firestore document ids, not a local counter, so they match across clients.
+// See docs/ai_architecture/firebase_middleware.md - App.tsx #22
 
 /* ------------------------------------------------------------------ */
 /* App shell -- everything below here renders inside both providers   */
 /* ------------------------------------------------------------------ */
 
 interface AppShellProps {
-  /** The CONTRACT's game id -- the `u64` assigned by `CreateGameRoom`.
-   *  Every query and every `ExecuteMsg` below targets this.
-   *
-   *  Note this is now in the dependency array of every gameplay
-   *  `useCallback` below. It did not used to be, and that was correct then
-   *  and would be a bug now: `MOCK_GAME_ID` was a module-scope constant, so
-   *  a closure over it could never go stale, whereas a prop can. `GameRouter`
-   *  additionally keys `AppShell` on it, so in practice the component
-   *  remounts rather than re-closing -- but a correct dependency array
-   *  should not be load-bearing on a `key` prop two files away. */
+  /** The contract's u64 game id. In every gameplay useCallback dependency array because a prop can go stale where the old module constant could not.
+   *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #26 */
   gameId: number;
   /** The FIRESTORE room id -- addresses off-chain chat and presence only.
    *  A different identifier for a different system; see design note #22. */
   roomId: string;
-  /* ==================================================================
-   *  DESIGN NOTE 524: THE ROOM IS CHOSEN BEFORE THE BOARD EXISTS
-   * ==================================================================
-   *
-   * Design note #522 mounted the room strip inside this shell, which put
-   * "host or join" behind "enter the sandbox" -- so two playtesters had to
-   * agree to open the board separately, find the strip, and only then
-   * discover each other. The decision belongs where the other lobby
-   * decisions are.
-   *
-   * So the Lobby hosts or joins, and hands the code through `GameRouter` to
-   * here as the STARTING value. Everything after that is unchanged: this
-   * shell still owns the listener, the cursor and the dispatch intercept.
-   * `null` is an ordinary solo sandbox, which is what every non-sandbox
-   * mode passes. */
+  /* The room is chosen in the Lobby and handed down as the starting value; the shell owns the listener.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #524 */
   sandboxRoomSeed?: string | null;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
@@ -924,32 +348,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const wallet = useWallet();
   const session = useGameSession();
 
-  /* ---------------- The two gates, derived from `mode` ---------------- */
-  //
-  // DESIGN NOTE #23 -- read-only mode is enforced at the DISPATCH sites,
-  // not by disabling buttons. Hiding a control is a courtesy to the user;
-  // refusing to dispatch is the guarantee, and only the second survives a
-  // future pass adding a button without knowing spectators exist.
-  //
-  // This app has exactly TWO paths that can execute a gameplay message, and
-  // read-only mode is only as good as its coverage of both:
-  //
-  //   1. `runGameplayAction` below -- the funnel for every button on the
-  //      Contextual Action Bar, the Waterfall dashboard and the train-trade
-  //      panel. Gated inside the function itself, so all ~20 controls are
-  //      covered by one check.
-  //   2. `TileSelectionPopup` -- calls `useGameSession().execGameplay`
-  //      DIRECTLY (that component's own design note #1), so the gate in (1)
-  //      does not apply to it. Covered by not mounting it when `spectator`.
-  //
-  // If a third dispatch path is ever added it must be gated too.
-  // `grep -rn 'execGameplay('` over `src/` is the check, and it should
-  // return exactly those two call sites.
-  //
-  // Belt and braces regardless: a spectator is not in the contract's
-  // `player_addresses`, so the chain would reject anything they sent. These
-  // gates make that refusal instant, free and legible rather than costing a
-  // signature to discover.
+  // Read-only mode is enforced at the two dispatch sites, not by disabling buttons. grep -rn 'execGameplay(' must return exactly two call sites.
+  // See docs/ai_architecture/session_keys_wallet.md - App.tsx #23
   const spectator = mode === "spectate";
 
   // Design note #24. `sandbox` answers a different question from
@@ -958,95 +358,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // main thing it exists to exercise -- it simply has nothing to talk to.
   const sandbox = mode === "sandbox";
 
-  /* ==================================================================
-   *  DESIGN NOTE 220: THE SANDBOX HAS NO SESSION KEY, AND NEVER WILL
-   * ==================================================================
-   *
-   * REPORTED BUG: "the Buy Station Token button does not do anything -- it
-   * does not change the cursor, nor does it allow placement."
-   *
-   * The button was fine. So was the cursor, and so was the click path. Every
-   * control in the Contextual Action Bar renders
-   * `disabled={btn.disabled || !sessionReady}`, and `sessionReady` was
-   * `session.sessionStatus === "ready"` -- which becomes true only after a
-   * player initialises an `x/authz` session key against a connected wallet.
-   *
-   * THE SANDBOX HAS NO WALLET BY CONSTRUCTION (design note #24: "not 'may
-   * this viewer act?' but 'is there a chain at all?'"). `sessionStatus`
-   * therefore sits at `"uninitialized"` forever, and every button in the bar
-   * was permanently disabled. Not visibly so, either -- `actionBarButton`
-   * carries no disabled styling of its own, because inline styles cannot
-   * express `:disabled` (Lobby.tsx design note #3), so the controls looked
-   * completely normal and silently swallowed every click.
-   *
-   * That explains a whole family of "this button does nothing" reports at
-   * once, and it is why the same complaint kept coming back after the
-   * handlers behind those buttons were fixed: the handlers were never
-   * reached.
-   *
-   * The gate itself is right for a LIVE room -- dispatching without a
-   * session key would fail at signing time. It is simply the wrong question
-   * in the sandbox, where `runGameplayAction` short-circuits into the local
-   * reducer and never signs, broadcasts or touches a wallet at all. One
-   * derived value now asks the honest question -- "can this build dispatch
-   * anything?" -- and every panel reads it, so the two cannot drift apart
-   * again the way `TrainPurchasePanel` already had to work around locally.
-   */
+  /* sessionReady is the wrong question in sandbox: no wallet means sessionStatus never leaves "uninitialized" and every bar button is silently disabled.
+     See docs/ai_architecture/session_keys_wallet.md - App.tsx #220 */
   const controlsEnabled = session.sessionStatus === "ready" || sandbox;
 
-  /* ---------------- Sandbox phase toggle -- design note #25 ---------- */
-  //
-  // The sandbox could reach the rail map but nothing else. Both
-  // phase-scoped panels mount on `gameState.current_round_type`, and with
-  // no chain `gameState` is `null`, so the Waterfall Auction and the Stock
-  // Round were unreachable -- not broken, just never rendered, with no way
-  // to look at either.
-  //
-  // A DEBUG CONTROL, not a game mechanic. On a real chain the round type is
-  // contract state advanced by `PassTurn` and the operating-round engine;
-  // nothing in the UI may set it. This exists solely because the sandbox
-  // has no contract to advance it, so the alternative is a screen that can
-  // only ever depict one phase. It is rendered only when `sandbox` is true
-  // and it feeds only `sandboxGameState` -- there is no code path by which
-  // it can touch a real room's state.
-  /* Design note #177 (SandboxToolbar): the sandbox testbed is chosen by
-     SCENARIO now -- round type, era and train tier together -- because the
-     three have to agree and picking only the round type left the era
-     pinned to Green, which made the yellow and brown tile catalogs
-     unreachable. `sandboxPhase` is derived from it so every existing reader
-     is unchanged. */
-  /* Design note #578: the SETTER is gone with the toolbar that offered it.
-     The value stays: a room still has to boot from some board, and the
-     default scenario is the one it boots from. What is gone is a control
-     that let one player re-seed the fixture mid-session -- in a room that
-     would silently hand one client a different board from everyone else,
-     which is the whole failure class this consolidation removes. */
+  /* Sandbox scenario: a debug control, never a game mechanic. Feeds sandboxGameState only; the setter went with the toolbar (#177/#578).
+     See docs/ai_architecture/state_machine.md - App.tsx #25 */
   const [sandboxScenarioId] = useState<SandboxScenarioId>(DEFAULT_SANDBOX_SCENARIO);
   const sandboxPhase = sandboxScenario(sandboxScenarioId).phase;
   /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
   const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
 
-  /* ==================================================================
-   *  DESIGN NOTE 301: A NEW GAME FORGETS THAT YOU HAVE PLAYED BEFORE
-   * ==================================================================
-   *
-   * The zero-state scenario exists to be met the way a new player meets
-   * the game, and the tutorials are part of that -- but their "seen" flags
-   * live in `localStorage` and outlive every reset the scenario performs.
-   * Anyone who has opened this sandbox once has dismissed the auction
-   * explainer, so the one board built to show a first game was the one
-   * board that never taught it.
-   *
-   * Cleared on ENTERING the zero state, which includes a page load that
-   * starts there. That is deliberate rather than incidental: a new game is
-   * exactly when a first-game explainer should be offered again, and the
-   * mid-game fixtures leave the flags alone, so a tester hopping between
-   * `or-green` and `stock` is not interrupted.
-   *
-   * `replayTutorials` rather than `resetTutorials` -- see design note #159
-   * in `TutorialModal.tsx` for why the global off switch is left standing.
-   * A player who has said "stop showing me these" has said it about the
-   * app, not about this game. */
+  /* Entering the zero state clears tutorial "seen" flags so a first game teaches them again; mid-game fixtures leave them alone.
+     See docs/ai_architecture/state_machine.md - App.tsx #301 */
   useEffect(() => {
     if (!sandbox || !sandboxIsZeroState) return;
     replayTutorials(TUTORIAL_LIBRARY.map((topic) => topic.topicKey));
@@ -1072,175 +396,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     settledPrivatePricesRef.current = settledPrivatePrices;
   }, [settledPrivatePrices]);
 
-  /* Design note #246: which train distribution the fixture uses. A SECOND
-     axis alongside the scenario, not a sixth scenario -- which era you are
-     testing and who owns trains are independent questions. Seeded to the
-     historic distribution so nothing changes until a tester asks. */
-  // Design note #578: setter gone with the toolbar, for the reason above.
+  // Train distribution is a second fixture axis, not a sixth scenario. Setter removed with the toolbar (#578).
+  // See docs/ai_architecture/state_machine.md - App.tsx #246
   const [sandboxTrainFixture] = useState<SandboxTrainFixture>("default");
 
-  /* ===================================================================
-   *  DESIGN NOTE 178: UNDO IS A SNAPSHOT STACK, AND ONLY IN SANDBOX
-   * ===================================================================
-   *
-   * `sandboxSession.ts` refused to model undo, and its reasoning was right
-   * for the place it was written: "undo is a full replay of the contract's
-   * event log, and the sandbox has no log." A REDUCER cannot undo itself --
-   * it sees one message and the state it produces, never the state it
-   * replaced.
-   *
-   * But the owner of the state can. Every sandbox action goes through one
-   * function, so pushing the OUTGOING state onto a stack before replacing
-   * it costs one line and gives exact, unlimited, single-step undo -- no
-   * inverse operation per message type, and therefore nothing to get wrong
-   * per message type either.
-   *
-   * SANDBOX ONLY, and that is not a shortcut. On chain the contract owns
-   * history; `UndoLastAction` is a real message and the server decides what
-   * it means. Restoring a local snapshot there would desync the UI from the
-   * chain, which is worse than an undo button that defers.
-   *
-   * The map grid rides along, because a tile lay changes both and undoing
-   * one without the other would leave a tile on a board whose treasury had
-   * never paid for it.
-   *
-   * ===================================================================
-   *  DESIGN NOTE 310: THE SNAPSHOT HAS TO COVER EVERY ATOM AN ACTION MOVES
-   * ===================================================================
-   *
-   * REPORTED: undo during the Auction breaks the turn cursor -- the bottom
-   * panel says it is one player's turn while the hotseat gate thinks it is
-   * another's, so seats get skipped and actions fire for the wrong player.
-   *
-   * The snapshot held `state`, `mapGrid` and `subPhase`, and the sandbox
-   * keeps its game state in FOUR atoms, not one. `sandboxWaterfall` owns
-   * `current_turn`, `mini_auction.current_turn` and `mini_auction.bidders`;
-   * `sandboxMarket` owns the token positions; `settledPrivatePrices` owns
-   * what each private actually sold for. None of the three were captured.
-   *
-   * So undo restored `active_player_index` (which is what the seating rail
-   * and the round panels read) and left `waterfall.current_turn` where the
-   * undone action had put it (which is what every control gate reads). The
-   * two pointers are supposed to be the same fact; after one undo they were
-   * one seat apart, and every subsequent action widened the gap.
-   *
-   * THE FIX IS THE SHAPE, NOT A PATCH. Rather than restoring the waterfall
-   * cursor specifically -- which would leave the market and the settled
-   * prices to be found the same way later -- the snapshot now carries every
-   * piece of state the dispatch path writes. The rule to keep: if
-   * `runGameplayAction` can change it, this record holds it.
-   */
-  /* ==================================================================
-   *  DESIGN NOTE 591f: THE SNAPSHOT STACK IS DELETED
-   * ==================================================================
-   *
-   * Design note #178 built it and design notes #310/#439/#475/#479 refined
-   * it over five passes, and every one of those refinements was correct for a
-   * single client. None of it survives contact with a room: the stack holds
-   * only what THIS browser dispatched, so it can neither undo somebody
-   * else's action nor be trusted to agree with anybody about what happened.
-   *
-   * DELETED, not left switchable. A second undo mechanism that works in a
-   * mode that no longer exists is a trap for whoever next reads the file --
-   * and its per-atom restore list (#310) is genuinely useful, so it moved
-   * intact into `rebuildSandbox`, where the replay needs exactly the same
-   * list for the same reason. */
+  /* Undo is a log revert now. The per-client snapshot stack (#178/#310) is deleted; its per-atom restore list moved into rebuildSandbox.
+     See docs/ai_architecture/state_machine.md - App.tsx #591 */
 
-  /* Design note #578: THE HOTSEAT SEAT SWITCHER IS GONE, with the mode it
-     served. It let one browser act for four mock players, which is the whole
-     idea a room replaces -- and it was the source of design note #534's
-     confusion about who "you" are, because in a hotseat the answer changed
-     as the turn moved. Its two handlers and the auto-follow toggle went
-     with it. */
+  /* The hotseat seat switcher is gone with the mode it served.
+     See docs/ai_architecture/state_machine.md - App.tsx #578 */
 
-  /** Who the dashboard should think it is looking at.
-   *
-   *  Design note #25. In sandbox there is no wallet, so `wallet.address` is
-   *  `null` -- and every turn-gated control on both phase panels compares
-   *  the connected address against the active player. The result was a
-   *  sandbox where the Auction and Stock Round rendered, but rendered
-   *  entirely DISABLED, which is close to useless for judging layout: you
-   *  cannot polish a control you can only see greyed out. Seating the
-   *  viewer as the sandbox's first player (Alice, who `sandboxGameState`
-   *  makes the active player in every phase) puts the panels in their live,
-   *  enabled state.
-   *
-   *  READ-ONLY IDENTITY. This is used for DISPLAY and ENABLEMENT only --
-   *  whose cash to show, whose holdings to mark "you", whether a control is
-   *  live. It is deliberately NOT used for anything that signs: every
-   *  dispatch still goes through `wallet.address`, and in sandbox
-   *  `runGameplayAction` refuses before building a message at all. A
-   *  pretend identity that could sign would be a genuinely dangerous
-   *  shortcut; one that can only light up a button is not. */
-  //  HOTSEAT UPDATE. This used to be hardcoded to `SANDBOX_PLAYERS[0]`, which
-  //  worked exactly until the simulated turn moved off seat 0 -- at which
-  //  point every turn-gated control on the dashboard went dead and stayed
-  //  dead, because no wallet could ever become the active player. The seat is
-  //  now switchable (see `SandboxToolbar`), so the whole loop is reachable
-  //  solo.
-  //
-  //  The read-only caveat above is UNCHANGED and still load-bearing: this
-  //  identity lights up controls and decides whose figures to show. It never
-  //  signs. `runGameplayAction` still refuses to build a chain message in
-  //  sandbox; it routes to the local reducer instead.
-  /* ==================================================================
-   *  DESIGN NOTE 535: THE ROOM'S OWN NAMES
-   * ==================================================================
-   *
-   * REPORTED: a live game still shows the offline mock players rather than
-   * the real ones from the lobby.
-   *
-   * Half of that was the roster, fixed in the setup handler below. This is
-   * the other half: `sandboxPlayerLabel` resolves a name by looking the
-   * address up in `SANDBOX_PLAYERS` and indexing `["Alice", "Bob", ...]`.
-   * A real player's id is a minted `p-xxxx` that is not in that array, so it
-   * returned `null` and every caller fell through to `truncateAddress` --
-   * the game was not showing Alice INSTEAD of the real name, it was showing
-   * a truncated id because it had no name to show.
-   *
-   * `nicknamesRef` carries the room's own roster, written when the setup
-   * event lands. The wrapper below keeps the ORIGINAL FUNCTION NAME, so
-   * every existing call site resolves correctly without being touched --
-   * roughly a dozen of them, in the ledger, the action log, the auction
-   * table and the sub-panel. Renaming them all would have been a much larger
-   * diff for the same behaviour, and the one this shape avoids is the diff
-   * that misses one.
-   *
-   * THE FIXTURE TABLE IS THE FALLBACK, not the other way round. Solo
-   * sandbox has no room roster, so it falls straight through to Alice and
-   * Bob exactly as before. */
-  /* Design note #534: this browser's identity and its room, declared above
-     `viewerAddress` because that value is derived from both. */
+  /** Read-only identity: decides whose figures to show and which controls light up. It never signs.
+   *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #25 */
   const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(sandboxRoomSeed);
   const localId = localPlayerId();
 
-  /* ==================================================================
-   *  DESIGN NOTE 534: IN A ROOM, YOU ARE YOURSELF
-   * ==================================================================
-   *
-   * REPORTED: the sandbox lets the local browser act for every player,
-   * because it was built as an offline hotseat.
-   *
-   * `viewerAddress` is the single identity input to everything that gates
-   * an action: `isMyTurn` compares it against the acting seat, and every
-   * `canAct` in the app compares it against a corporation's president. The
-   * hotseat works by making it a SEAT PICKER -- whoever the player selected
-   * is who they are, which is exactly right when one person is playing
-   * everybody.
-   *
-   * So the whole fix is one branch. In a Firebase room this browser is one
-   * person with one id (design note #528), and pointing `viewerAddress` at
-   * it makes every existing gate correct at once -- rather than adding a
-   * second "is it my turn" test beside the dozen that already exist and
-   * hoping the two agree.
-   *
-   * SOLO HOTSEAT IS UNTOUCHED. No room, no branch: the seat picker still
-   * decides who you are, and one player still controls everybody. That mode
-   * is how the whole game gets exercised without a second human, and design
-   * note #24 is explicit that it must keep working. */
-  /* Design note #534, simplified by #578: in a sandbox you are the seat this
-     browser holds, full stop. The fork that resolved a hotseat's "current
-     seat" is gone with the hotseat. */
+  /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
+     See docs/ai_architecture/session_keys_wallet.md - App.tsx #534 */
   const viewerAddress = sandbox ? localId : wallet.address;
 
   /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
@@ -1256,42 +428,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [privateAbilityError, setPrivateAbilityError] = useState<string | null>(null);
 
 
-  // Design note #22. Read once at mount rather than subscribed to: the name
-  // is set in the Lobby, before this component exists, and a rename
-  // mid-game would (correctly) not rewrite the byline on messages already
-  // sent -- `ChatBox.tsx` denormalises the name onto each message for
-  // exactly that reason.
+  // Display name read once at mount; a rename must not rewrite bylines on messages already sent.
+  // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   const [displayName] = useState<string>(() => loadDisplayName() ?? "");
 
-  // Design note #22: keeps this player's seat marked alive for the whole
-  // session, so the rest of the table can see when the active turn-holder
-  // has dropped rather than staring at a stalled board. A UI hint with no
-  // authority -- the contract's Inactivity Timeout Safety Valve is the only
-  // mechanism permitted to act on an absent player.
-  //
-  // Suppressed for spectators (design note #23): a spectator holds no seat
-  // document, so a heartbeat would be an `updateDoc` against a path that
-  // does not exist -- a guaranteed rejected write every 20 seconds. Passing
-  // `null` disables the hook outright rather than relying on its
-  // fire-and-forget `catch` to swallow the failure, which would work but
-  // would be failing on purpose.
-  // Sandbox has no Firestore room either (design note #24), so it joins
-  // spectators in sitting this out.
+  // Presence heartbeat: a UI hint with no authority. Suppressed for spectators (no seat doc) and sandbox (no room).
+  // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   usePresenceHeartbeat(spectator || sandbox ? null : roomId, wallet.address);
 
-  /* ---------------- Read-only query client -- design note #23 ---------- */
-  //
-  // A spectator has no wallet requirement, so there may be no
-  // `signingClient` to query through -- and every live panel on this screen
-  // reads through one. `useGameStatePolling` takes a structural
-  // `QueryCapableClient` (just `queryContractSmart`), which a plain
-  // `CosmWasmClient` satisfies without any signer, key or Keplr prompt.
-  //
-  // So: use the wallet's client when there is one (a player, or a spectator
-  // who happens to be connected), and otherwise connect an anonymous
-  // read-only client. This also quietly improves the PLAYER path -- the
-  // board now renders before the wallet is connected instead of sitting
-  // empty until it is.
+  // A spectator may have no signing client, so fall back to an anonymous read-only CosmWasmClient.
+  // See docs/ai_architecture/session_keys_wallet.md - App.tsx #23
   const [readOnlyClient, setReadOnlyClient] = useState<CosmWasmClient | null>(null);
 
   useEffect(() => {
@@ -1325,101 +471,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [wallet.signingClient, sandbox]);
 
-  /** The single client every live query on this screen reads through.
-   *
-   *  `undefined` in sandbox, which stops every poll on this screen at
-   *  source (`useGameStatePolling` treats a missing client as offline and
-   *  simply never queries). Panels then render their own empty states,
-   *  which is the honest depiction of a board with no chain behind it. */
+  /** undefined in sandbox, which stops every poll at source and lets panels render honest empty states.
+   *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #24 */
   const queryClient = sandbox ? undefined : (wallet.signingClient ?? readOnlyClient ?? undefined);
 
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
   const [activeMainTab, setActiveMainTab] = useState<MainTab>("map");
-  // Design note #10/item 2: which of the four legal OR action sub-phases
-  // the Contextual Top Action Bar is currently guiding the player through.
-  /* ==================================================================
-   *  DESIGN NOTE 656: THE CURSOR IS READ, NOT HELD
-   * ==================================================================
-   *
-   * REPORTED: "the game stayed in OR 1.1 and returned to C&O's turn,
-   * starting at step 3 (Station Tokens) ... It should not be looping at all."
-   *
-   * This was the whole cursor: `useState`, seeded by `initialOrSubPhase` and
-   * re-seeded by an effect below whose dependency array named
-   * `current_global_era` and `currentPhase.tier`. Buying a 3-train changes
-   * the era during the Buy Trains step of the corporation buying it, so the
-   * effect fired with the corporation unchanged and put the cursor back at
-   * the first visible step -- `Track` when Buy Private is hidden, `BuyPrivate`
-   * when it is not, which is why the reported step differed between games.
-   *
-   * In the sandbox the reducer owns it now (`settleOperatingCursor`), so
-   * `gameState.operating_sub_phase` is the answer and this state is not
-   * consulted at all.
-   *
-   * WHY THE LOCAL STATE SURVIVES ANYWAY, and is not the dead code this
-   * codebase keeps finding: a LIVE room's cursor belongs to the contract.
-   * `or_phase` persists it, `WrongOperatingSubPhase` rejects a client that
-   * disagrees, and `GetGameState` does not currently report it -- so until it
-   * does, a live room has nothing to read and this is what the bar follows.
-   * The `??` below states which room is which, once, instead of every reader
-   * asking. `operating_sub_phase` is only ever set by the sandbox reducer, so
-   * the branch is exact rather than a guess about the mode. */
+  // The OR cursor is READ from the reducer's operating_sub_phase when present; this local state is what a live room follows until GetGameState reports one.
+  // See docs/ai_architecture/state_machine.md - App.tsx #656
   const [liveOrSubPhase, setLiveOrSubPhase] = useState<OperatingSubPhase>(() =>
     initialOrSubPhase(null),
   );
 
 
-  // Stock Round (SR) control state -- see `StockRoundPanel.tsx` design
-  // note #1. Purely UI state; the real dispatch runs through
-  // `handleBuyShare`/`handleSellShares` below.
-  //
-  // Design note #29: `srSelectedProtocolId` is GONE. It held "which company
-  // the single set of Stock Round controls is pointed at", and there is no
-  // single set any more -- every corporation card carries its own Buy and
-  // Sell, and passes its own id to the handler. Keeping a shared selection
-  // alongside eight per-card actions would be a second, contradictory
-  // answer to "which company?" waiting to be read by mistake.
-  /* ==================================================================
-   *  DESIGN NOTE 398: ONE PAR SELECTION PER CORPORATION
-   * ==================================================================
-   *
-   * REPORTED: selecting a par value on one corporation's tile updates the
-   * par selector for all corporations, and for all players.
-   *
-   * It did, and the cause is the shape of this state rather than anything
-   * in the cards: `srParValue` was ONE string, threaded into all eight
-   * ladders as `parValue` and back out through one `onSelectParValue`. Every
-   * ladder was therefore a view of the same value, so pressing $90 on the
-   * PRR moved the highlight on the B&O, the C&O and everything else -- and
-   * because the dispatch read that single value, the NEXT president's
-   * purchase carried a price somebody else had chosen for a different
-   * company.
-   *
-   * This is precisely the bug design note #18 in `StockRoundPanel.tsx` fixed
-   * for the buy SOURCE, which was also one value shared across eight cards.
-   * That note's own words: "the toggle a player set on PRR silently governed
-   * the purchase they then made from B&M." Par is the same failure with
-   * worse consequences, because par is not a preference -- it is the price
-   * the certificate is bought at, and it is set once and permanently.
-   *
-   * KEYED BY `company_id`, not by index: the roster's order is the
-   * contract's and a company can be absent from a partial response, so an
-   * index would silently re-point one company's par at another's.
-   *
-   * THE DEFAULT IS NOT STORED. A company with no entry falls back to
-   * `MOCK_BUY_STOCK_PAR_VALUE` at read time, so the map holds only genuine
-   * choices -- which keeps "has this player picked a par for this company"
-   * answerable, and means seeding eight defaults is not a prerequisite for
-   * rendering.
-   *
-   * "AND FOR ALL PLAYERS" is the same single-value bug seen from the other
-   * side, and it is fixed by the same change in the hotseat: the map is
-   * cleared when the acting seat changes (see the effect below), so an
-   * incoming player never inherits the outgoing player's half-made choice.
-   */
-  /* Design note #399: the B&O private is won in the auction and owes its
-     winner a presidency AND a price. Held here until the prompt is answered,
-     because the certificate must not be granted without one. */
+  // Par is keyed per company_id, not one shared value; srSelectedProtocolId is gone (#29). B&O's par is held in a prompt (#399).
+  // See docs/ai_architecture/stock_market.md - App.tsx #398
   const [boParPrompt, setBoParPrompt] = useState<{ player: string } | null>(null);
   const [srParValues, setSrParValues] = useState<Readonly<Record<number, string>>>({});
   /* Design note #553: the corporation's own par wins over this browser's
@@ -1445,19 +511,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     srParValuesRef.current = srParValues;
   }, [srParValues]);
-  /* Design note #579: `parValueNumberFor` IS GONE. It read this browser's
-     par ladder and fell through to a hardcoded "100", and the reducer
-     preferred it over the message -- which is how a corporation parred at
-     $67 came to be recorded at $100 by every client but its founder.
-     Deleted rather than left unused: a helper that returns a plausible par
-     from local state is exactly what someone reaches for next time. */
+  /* parValueNumberFor is deleted: it read this browser's ladder and fell through to a hardcoded 100.
+     See docs/ai_architecture/stock_market.md - App.tsx #579 */
 
 
-  // Automatic Phase-Based Tab Navigation (design note below near its own
-  // `useEffect`): holds the last-seen `current_round_type` so the
-  // auto-switch effect fires only on genuine phase TRANSITIONS, never on
-  // every unchanged poll re-render -- see that effect's own comment for why
-  // this must be a ref, not a state variable.
+  // Must be a ref, not state: the auto-switch fires only on genuine round-type transitions.
+  // See docs/ai_architecture/state_machine.md - App.tsx #213
   const prevRoundTypeRef = useRef<RoundType | null>(null);
 
   // Design note #7: ONE shared live GetGameState poll. Every panel this
@@ -1471,40 +530,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     refresh: refreshGameState,
   } = useGameStatePolling(queryClient, CONTRACT_ADDRESS, gameId);
 
-  // Design note #25: in sandbox the poll above is permanently `null` (no
-  // client), so a hand-authored snapshot stands in. Everything downstream
-  // reads `gameState` and is completely unaware of the substitution --
-  // which is the point: the panels are being inspected as they will really
-  // behave, not through a sandbox-only rendering path that could drift from
-  // the real one.
-  //
-  // Memoised because `gameState` sits in the dependency array of a dozen
-  // hooks below. Rebuilding the object every render would give it a new
-  // identity each time and re-fire all of them continuously.
-  // Hotseat sandbox: this used to be a `useMemo` recomputed from the phase,
-  // which made it immutable by construction -- every dispatched action had
-  // nowhere to write, so the sandbox could only ever depict one frozen
-  // moment. It is now real state, seeded from the same fixture and advanced
-  // by `applySandboxAction`.
-  //
-  // The seeding effect below keys on the phase toggle: switching phase is a
-  // DEBUG action meaning "show me that screen", so it deliberately discards
-  // whatever the hotseat loop had accumulated and starts that phase clean.
-  // Preserving mutations across a phase jump would produce states the real
-  // game can never reach.
-  /* ==================================================================
-   *  DESIGN NOTE 538 (App side): ONE SEEDING RULE, THREE READERS
-   * ==================================================================
-   *
-   * The state, its synchronous ref and the scenario re-seed effect all
-   * derive their board from here. They seeded independently before, which is
-   * how two of them ended up with the fixture's roster while the third had
-   * been corrected -- and the resulting mismatch is exactly the "still four
-   * players" the last two passes chased.
-   *
-   * IN A ROOM THE ROSTER IS EMPTY (design note #538): the board loads, the
-   * players do not, and `SetupGame` is the only thing that ever adds one.
-   * Solo sandbox is untouched and gets the fixture exactly as before. */
+  // Sandbox substitutes a hand-authored snapshot for the poll; real state, not a memo, and memoised so a dozen dependent hooks do not re-fire. Room rosters seed empty (#538).
+  // See docs/ai_architecture/session_keys_wallet.md - App.tsx #62
   const seedSandboxState = useCallback(
     (roomCode: string | null): GameStateResponse | null => {
       if (!sandbox) return null;
@@ -1522,24 +549,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       : null,
   );
 
-  /* Design note #265: a synchronous mirror of the two sandbox atoms.
-   *
-   * `useState` values do not refresh inside one synchronous block, which
-   * broke two things: a loop of dispatches (the multi-train purchase) applied
-   * every message to the same base state, and the auction's charge was read
-   * from one hook's updater before another hook's updater had written it.
-   * A ref is written at dispatch time, so each action sees the last one's
-   * result and the log can describe what actually resulted.
-   *
-   * The state remains the RENDERING source of truth -- the ref exists so the
-   * dispatch path has something to read, not so components can bypass
-   * React. Both are written together, always. */
-  /* Design note #537a: SEEDED, not left null until an effect runs. The
-     dispatch path reads this ref, and the replay drain is async -- so a
-     setup event arriving before the sync effect had ever fired found it
-     null. Giving it the same initial value `sandboxState` itself gets closes
-     that window at the source, which is better than a fallback chain in the
-     reader: there is now no moment at which the ref has no state. */
+  /* Synchronous mirror of the sandbox atoms so a loop of dispatches sees each other's results. Seeded at construction (#537a).
+     See docs/ai_architecture/state_machine.md - App.tsx #265 */
   const sandboxStateRef = useRef<GameStateResponse | null>(
     sandbox
       ? sandboxRoomSeed
@@ -1561,62 +572,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandboxStateRef.current = sandboxState;
   }, [sandboxState]);
   useEffect(() => {
-    /* ==================================================================
-     *  DESIGN NOTE 537: A ROOM'S STATE COMES FROM THE LOG, NOT A FIXTURE
-     * ==================================================================
-     *
-     * REPORTED: a multiplayer game boots and then still shows the four
-     * offline mock players.
-     *
-     * This effect re-seeds `sandboxState` from `sandboxScenarioState(...)` --
-     * the four-player Alice/Bob/Carol/Dave fixture -- and it fires on
-     * `sandboxScenarioId` and `sandboxTrainFixture`, which are the debug
-     * toolbar's own controls. In solo sandbox that is exactly right: picking
-     * a scenario means "give me that board".
-     *
-     * In a room it is destructive. The state there is derived by replaying
-     * the log, and re-seeding throws that away and substitutes a fixture --
-     * so the roster reverts to four mocks, and every client that touched a
-     * toolbar control would be playing a different game from everyone else.
-     *
-     * So the seeding stops at the room boundary. `SetupGame` is what
-     * populates a room's roster, and the log is what maintains it. */
+    /* Scenario re-seeding stops at the room boundary: a room's state comes from the log, not the fixture.
+       See docs/ai_architecture/firebase_middleware.md - App.tsx #537 */
     if (sandboxRoomCode) return;
     setSandboxState(seedSandboxState(null));
-    // Switching scenario is a fresh testbed: drop any in-flight preview,
-    // selector or undo history rather than carrying state from a board that
-    // no longer exists.
-    /* ===================================================================
-     *  DESIGN NOTE 330: A NEW BOARD GETS A NEW LOG
-     * ===================================================================
-     *
-     * REPORTED: switching to the Zero State scenario leaves residual
-     * activity log entries from previous sandbox runs.
-     *
-     * It did, and the Zero State is where it is most obviously wrong --
-     * that scenario's entire claim is that it is a game before anything has
-     * happened, and it opened with a log describing a route somebody ran on
-     * a board that no longer exists. But the bug is not specific to it: the
-     * log is a ledger OF ONE BOARD, and every scenario switch replaces the
-     * board. An entry saying "PRR bought a 4-train for $300" is not merely
-     * stale after the switch, it is false -- there is no such PRR any more,
-     * and its treasury reads whatever the new fixture seeds.
-     *
-     * The three session-residue atoms go with it, for the same reason and
-     * with a sharper symptom each:
-     *
-     *   `settledPrivatePrices`  a fresh auction would show "Sold to Carol
-     *                           for $145" on a private nobody has bid on.
-     *   `usedPrivateAbilities`  a fresh board would show "Used" on a power
-     *                           whose owner does not own it yet.
-     *   `actionLog`             the report above.
-     *
-     * GUARDED ON `sandbox`, and the guard is load-bearing rather than
-     * defensive. This effect also depends on `gameId`, which changes on a
-     * LIVE chain when the player opens a different room -- so an unguarded
-     * purge would wipe a log of blocks that really happened, which is the
-     * opposite of this fix. Sandbox logs describe a fixture; chain logs
-     * describe history. */
+    // A scenario switch replaces the board, so the log and the three session-residue atoms go with it. Guarded on sandbox: gameId also changes on a live chain.
+    // See docs/ai_architecture/state_machine.md - App.tsx #330
     if (sandbox) {
       setActionLog([]);
       setSettledPrivatePrices({});
@@ -1630,133 +591,41 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const gameState = sandboxState ?? liveGameState;
 
-  /* Design note #656: the cursor, read rather than held. Declared here rather
-     than beside `liveOrSubPhase` because it needs `gameState`, and stating
-     the dependency in the position is cheaper than a ref. The sandbox
-     reducer's value wins whenever there is one; see the note on
-     `liveOrSubPhase` for why the fallback is a live room's cursor and not
-     dead code. */
+  /* Declared here because it needs gameState; the sandbox reducer's cursor wins when there is one.
+     See docs/ai_architecture/state_machine.md - App.tsx #656 */
   const orSubPhase: OperatingSubPhase = gameState?.operating_sub_phase ?? liveOrSubPhase;
 
-  /* Design note #553: the merged state, synchronously, for the two par
-     resolvers declared above it. `sandboxStateRef` alone would have been
-     right in the sandbox and blind on a live chain, where the corporation's
-     par arrives from the poll -- and a par resolver that works in one mode
-     and silently falls back to a hardcoded $100 in the other is the exact
-     failure this note is about, reintroduced in a narrower place.
-
-     A ref rather than a dependency for design note #536's reason: these
-     resolvers are read inside `runGameplayAction`'s context, whose identity
-     two DISPATCHING effects key on.
-
-     WRITTEN DURING RENDER, and deliberately not in an effect -- which is the
-     opposite of what design note #546 does one screen away, so the
-     difference is worth stating. That ref holds a CALLBACK and is only ever
-     read later, from an event; an effect keeps it from ever holding one
-     belonging to a render React discarded. This one is read DURING the same
-     render, by `parValueFor`, to price a button. Deferring it to an effect
-     would make the button show the previous par for one render -- and since
-     `parValueFor`'s identity would not have changed, nothing would schedule
-     the re-render that corrected it. The assignment is idempotent, so a
-     double render in StrictMode writes the same value twice. */
+  /* Merged state, synchronously, for the par resolvers. Written during render on purpose - parValueFor reads it in the same render to price a button.
+     See docs/ai_architecture/stock_market.md - App.tsx #553 */
   const gameStateRef = useRef<GameStateResponse | null>(null);
   gameStateRef.current = gameState;
 
-  // Design note #36: derived, not queried -- see `utils/gamePhase.ts`
-  // design note #1 for why `current_global_era` cannot answer this.
-  //
-  // DECLARED HERE, above `runGameplayAction`, rather than down with the
-  // other render-time derivations: that callback's sandbox branch prices a
-  // route from the board and the era, so both must exist by the time it is
-  // constructed. `const` bindings are not hoisted, and the callback closes
-  // over them directly rather than through a ref.
+  // Derived, not queried. Declared above runGameplayAction because its sandbox branch prices a route from the board and the era.
+  // See docs/ai_architecture/state_machine.md - App.tsx #36
   const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);
 
-  /* ===================================================================
-   *  DESIGN NOTE 169: ACT AS THE CORPORATION WHOSE TURN IT IS
-   * ===================================================================
-   *
-   * Every Operating Round action in this file targeted
-   * `MOCK_LAY_TILE_PROTOCOL_ID` -- a hardcoded `4`, chosen as a stand-in
-   * long before there was a turn queue to consult. The sandbox fixture
-   * meanwhile opens its Operating Round on `active_operating_order[0]`,
-   * which is protocol 1 (PRR).
-   *
-   * So the UI was acting AS B&O while the turn belonged to PRR, and the two
-   * disagreements that produced are exactly the reported lockout:
-   *
-   *   - `LayTile` and every other OR dispatch named the wrong corporation.
-   *     On chain that is `NotYourOperatingTurn`. In sandbox it charged B&O's
-   *     treasury -- which is `0`, because B&O is `floated: false` and has
-   *     never been capitalised.
-   *   - The Buy Private sheet read B&O's treasury to decide what the
-   *     corporation could afford, and got zero.
-   *
-   * THE PRESIDENCIES WERE NEVER MISSING. `sandboxState.ts` assigns one to
-   * every corporation and maps it through `SANDBOX_PLAYERS[corp.president]`,
-   * so `actingSeatIndex` resolved PRR's president (Alice, seat 0) correctly
-   * all along, and auto-follow moved the hotseat to her. The identity that
-   * was wrong was the CORPORATION's, not the player's.
-   *
-   * Derived from the queue, with the old constant as the fallback for a
-   * room whose Operating Round has not been started yet (an empty
-   * `active_operating_order`), so nothing that previously rendered starts
-   * rendering `undefined`. */
+  /* The acting corporation comes from the operating queue, not the old hardcoded B&O constant, which is kept only as the empty-queue fallback.
+     See docs/ai_architecture/state_machine.md - App.tsx #169 */
   const actingProtocolId = useMemo(() => {
     const queued = gameState?.active_operating_order[gameState.active_corporation_index];
     return queued ?? MOCK_LAY_TILE_PROTOCOL_ID;
   }, [gameState]);
 
-  // Design note #144: drives the Routes skip button's disabled state. The
-  // contract refuses that skip for any corporation owning a train, so the
-  // button is disabled with the reason rather than dispatching a transaction
-  // that is certain to be rejected.
-  /** The whole depot, tier by tier -- `depotInventory` already applies
-   *  1830's cheapest-first queue rule and the remaining-stock arithmetic
-   *  (its design note #4), so `TrainPurchasePanel` renders it rather than
-   *  deriving a second answer.
-   *
-   *  Design note #203: this used to be narrowed to the ONE purchasable tier
-   *  before it left this component, which is what the old one-card tray
-   *  needed. The panel shows every tier -- a player deciding whether to buy
-   *  the depot's last 3-train needs to see what a 4-train costs and which
-   *  tier is about to rust, and both are facts about tiers they cannot
-   *  currently buy. */
+  // Renders the whole depot tier by tier; depotInventory already applies the cheapest-first queue rule.
+  // See docs/ai_architecture/contract_economy.md - App.tsx #203
   const depot = useMemo(() => depotInventory(gameState), [gameState]);
 
   const ownsAnyTrain = useMemo(() => {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
-    // Audit G-15c closed the gap this used to stub out: `owned_trains` now
-    // arrives on `PublicCompanyState`, so the Routes skip button can be
-    // disabled for a corporation that genuinely holds a train.
-    //
-    // `undefined` still means "this chain does not say" (a contract predating
-    // the field), NOT "owns nothing" -- in that case report `false`, leaving
-    // the skip enabled and the contract as the authority. Erring the other
-    // way would disable a legal skip with no override.
+    // undefined means "this chain does not say", not "owns nothing": report false here so a legal skip stays enabled.
+    // See docs/ai_architecture/contract_economy.md - App.tsx #293
     return (company?.owned_trains?.length ?? 0) > 0;
   }, [gameState, actingProtocolId]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 293b: "OWNS NONE" IS NOT "WE WERE NOT TOLD"
-   * ==================================================================
-   *
-   * `ownsAnyTrain` above reports `false` for a chain that does not carry
-   * `owned_trains`, and its own note explains why that is the safe
-   * direction THERE: it leaves a skip enabled and the contract as the
-   * authority.
-   *
-   * It is the unsafe direction here. This gates END TURN, so reading
-   * "unknown" as "owns none" would lock a corporation's turn against a
-   * contract that never said anything -- a deadlock with no override, on
-   * the one control that ends the turn.
-   *
-   * The two questions therefore get two values. The obligation only exists
-   * when the roster is REPORTED and EMPTY; ignorance permits, because the
-   * cost of a wrong "must buy" is a stuck game and the cost of a wrong
-   * "may leave" is a move the contract will refuse on its own. */
+  /* Opposite direction from ownsAnyTrain: this gates End Turn, so ignorance must PERMIT or the turn deadlocks with no override.
+     See docs/ai_architecture/contract_economy.md - App.tsx #293 */
   const trainlessAndReported = useMemo(() => {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
@@ -1767,51 +636,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [gameState, actingProtocolId]);
 
 
-  /* ==================================================================
-   *  DESIGN NOTE 207: THE TRAIN BEING RUN IS OBSERVED, NOT PICKED
-   * ==================================================================
-   *
-   * This was `useState(MOCK_TRAIN_CATALOG[0].modelType)` -- a 2-train,
-   * always, with a setter wired to a tray selector that design note #182
-   * removed. So the route builder's capacity readout said "max 2 stops
-   * (2-train)" for a corporation running a 5, and `handleAutoRoute` would
-   * have drafted to the wrong cap.
-   *
-   * The best train a corporation OWNS is the honest answer and needs no
-   * control at all: a player running trains runs their biggest one, and if
-   * they own none there is nothing to run. Derived rather than selected also
-   * means it cannot go stale after a purchase.
-   *
-   * `MOCK_TRAIN_CATALOG`'s ORDER is the tier order, so the highest index a
-   * corporation holds is its best train. Falling back to the first entry
-   * when it owns nothing keeps the readout showing a real limit instead of
-   * blanking -- and a corporation with no train cannot reach the Routes step
-   * with anything to declare anyway. */
-  /* ==================================================================
-   *  DESIGN NOTE 227: THE PLAYER PICKS THE TRAIN, NOT THE APP
-   * ==================================================================
-   *
-   * Design note #207 replaced a broken `useState` (stuck on "2-train"
-   * forever) with the corporation's BEST owned train, derived. That was the
-   * right fix for the readout being wrong, and the wrong shape for the
-   * feature: a corporation routinely owns several trains and runs each of
-   * them on its own route, so "which train is this path for" is a choice the
-   * player makes, not a fact the app can observe.
-   *
-   * It matters mechanically, not just cosmetically -- the train's number is
-   * the cap on how many revenue centres the route may visit, so charting a
-   * path for a 3-train while the builder validates against a 5 lets a player
-   * assemble a route the contract will refuse.
-   *
-   * So the selection is STATE again, seeded from the best train and reset
-   * whenever the acting corporation changes. The derivation survives as the
-   * DEFAULT rather than as the answer: opening the builder on a corporation's
-   * biggest train is the common case, and the selector is there for the rest.
-   *
-   * `null` means "not chosen yet", which the resolver below turns into the
-   * default. Storing the default eagerly would make it impossible to tell a
-   * deliberate pick from a stale one after the corporation changed.
-   */
+  /* Which train this route is for is the player's choice, seeded from the corporation's best owned train. null means not chosen yet.
+     See docs/ai_architecture/contract_economy.md - App.tsx #227 */
   const bestOwnedTrain = useMemo(() => {
     const owned =
       gameState?.public_companies.find((company) => company.company_id === actingProtocolId)
@@ -1830,19 +656,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return best;
   }, [gameState, actingProtocolId]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 275: THE ROSTER, NOT THE SET OF MODELS
-   * ==================================================================
-   *
-   * This used to deduplicate -- "two 3-trains are one CHOICE, and offering
-   * '3' and '3' would be two buttons that do the same thing". That was
-   * right about the old question and wrong about the game: the two buttons
-   * do NOT do the same thing once each train is drafting its own route.
-   * Three 3-trains are three trains, three routes and three chips.
-   *
-   * Ordered by tier so the roster reads big-train-first, and carrying the
-   * INDEX because that is the only thing telling one 3-train from another.
-   */
+  /* The train ROSTER, not the set of models - three 3-trains are three routes. Carries the index, the only thing telling them apart.
+     See docs/ai_architecture/contract_economy.md - App.tsx #275 */
   const ownedTrainRoster = useMemo(() => {
     const owned =
       gameState?.public_companies.find((company) => company.company_id === actingProtocolId)
@@ -1862,14 +677,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       .sort((a, b) => (rank(a.model) < 0 ? 99 : rank(a.model)) - (rank(b.model) < 0 ? 99 : rank(b.model)));
   }, [gameState, actingProtocolId]);
 
-  /** Design note #228: the acting corporation, resolved once for the
-   *  Operating Round context strip.
-   *
-   *  STATIONS LEFT is `station_token_limit` minus the tokens already on the
-   *  board, which is the figure the player needs -- the limit alone answers
-   *  a question nobody asks. Floored at zero rather than allowed negative:
-   *  a chain reporting more placed tokens than the limit is a contract bug,
-   *  and rendering "-1 stations" would report it as a UI one. */
+  /** Stations left = station_token_limit minus tokens on the board, floored at zero.
+   *  See docs/ai_architecture/state_machine.md - App.tsx #228 */
   const activeCorporationContext = useMemo(() => {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
@@ -1911,17 +720,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [gameState, actingProtocolId]);
 
-  /** Design note #237: what the NEXT station token costs THIS corporation.
-   *
-   *  Was the flat `SANDBOX_NOMINAL_TOKEN_COST` -- $40 for every placement,
-   *  forever. 1830 charges nothing for the home token, $40 for the second
-   *  and $100 for every one after, so the constant was correct exactly once
-   *  per corporation and understated the third by 60%.
-   *
-   *  `null` means the allowance is spent. The button falls back to the
-   *  second-token price for its label in that state rather than printing
-   *  "$null" -- it is disabled by the placement check either way, and a
-   *  disabled control showing a plausible figure beats one showing a hole. */
+  /** 1830 token prices: home free, second $40, every one after $100. null means the allowance is spent.
+   *  See docs/ai_architecture/contract_economy.md - App.tsx #237 */
   const activeStationCompany = gameState?.public_companies.find(
     (company) => company.company_id === actingProtocolId,
   );
@@ -1949,22 +749,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // would leave the reference untouched and the canvas would never repaint.
   const [mapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
 
-  // Auto-Follow Turn. Moves the simulated seat to whoever may actually act,
-  /* Design note #578: THE AUTO-FOLLOW EFFECT IS GONE. It moved a hotseat
-     cursor to whichever seat could act, so one browser could play everybody
-     in turn. In a room each browser is one player and the cursor never
-     moves -- the question "which seat am I looking at" has a constant
-     answer, which is the point.
+  // The auto-follow effect is gone; in a room the seat cursor never moves. actingSeatIndex's reasoning lives in utils/gameState.ts.
+  // See docs/ai_architecture/state_machine.md - App.tsx #578
 
-     `actingSeatIndex`'s phase-dependent reasoning survives in
-     `utils/gameState.ts`, where `isMyTurn` and the action bar still ask it.
-     Only this consumer is gone. */
-
-  // Pre-Game Waterfall Auction (`waterfall.rs`): a second, independent poll
-  // against `QueryMsg::GetWaterfallState`, only actually enabled while
-  // `gameState.current_round_type === "WaterfallAuction"` -- see
-  // `utils/gameState.ts` design note #7. `WaterfallAuctionDashboard` below
-  // is the only consumer.
+  // Second poll against GetWaterfallState, enabled only during the auction. WaterfallAuctionDashboard is the only consumer.
+  // See docs/ai_architecture/contract_economy.md - App.tsx #90
   const isWaterfallPhase = gameState?.current_round_type === "WaterfallAuction";
   // Audit G-15: pending corporation-to-corporation train offers. Polled
   // separately from the board because a SELLER must see an offer arrive while
@@ -1986,28 +775,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     isWaterfallPhase,
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 261: THE AUCTION NEEDED TO BE STATE, NOT A MEMO
-   * ==================================================================
-   *
-   * REPORTED: no Auction button does anything.
-   *
-   * This was a `useMemo` over `(sandbox, sandboxPhase, gameId)` -- so the
-   * dashboard re-rendered the same frozen fixture after every click, and the
-   * five auction handlers dispatched into a reducer that had no arm for the
-   * response shape they affect. Two halves of one gap: no place to put a
-   * change, and nothing computing one.
-   *
-   * It is STATE now, seeded from the same fixture and advanced by
-   * `applySandboxWaterfallAction`. Re-seeded on a scenario or phase change
-   * for exactly the reason the game state is (design note #25): switching
-   * scenario means "show me that screen", not "carry my half-finished
-   * auction into it".
-   */
-  /* Design note #542: the auction atom is roster-bearing too, and a room's
-     copy must never carry the fixture's bidders. Seeded empty, then filled
-     by `SetupGame` -- the same shape `sandboxState` follows, for the same
-     reason. */
+  /* The auction is state, not a memo, so the five handlers have somewhere to write. A room's copy seeds empty (#542).
+     See docs/ai_architecture/contract_economy.md - App.tsx #261 */
   const [sandboxWaterfall, setSandboxWaterfall] = useState<WaterfallStateResponse | null>(() => {
     if (!sandbox) return null;
     const base = sandboxWaterfallState(sandboxPhase, gameId, sandboxIsZeroState);
@@ -2024,12 +793,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandboxWaterfallRef.current = sandboxWaterfall;
   }, [sandboxWaterfall]);
 
-  /* Design note #272: the third sandbox atom. The chart used to be a frozen
-     `useMemo` over the fixture table, so no trade could ever move a token;
-     it is state now, advanced by `applySandboxMarketAction` on the same
-     dispatch that advances the other two. Same ref treatment as the other
-     two, for design note #265's reason -- a loop of dispatches must see
-     each other's results. */
+  /* The market chart is the third sandbox atom, with the same ref treatment as the other two (#265).
+     See docs/ai_architecture/stock_market.md - App.tsx #272 */
   const [sandboxMarket, setSandboxMarket] = useState<SandboxMarketPrices>(() =>
     // Design note #387: the Zero State seeds an EMPTY chart. Nothing is
     // parred at turn one, so nothing has a market position.
@@ -2064,109 +829,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [sandboxMarket],
   );
 
-  /** Design note #411: one corporation's current chart price, for building
-   *  the Operating Round queue.
-   *
-   *  READS THE REF, NOT THE MEMO. `runGameplayAction` refreshes
-   *  `sandboxMarketRef` partway through a dispatch and then advances the
-   *  game state; a lookup closed over `sandboxMarketPrices` would be a
-   *  render behind at exactly that moment and could order the queue on
-   *  prices the same dispatch had already changed. Stable identity, so it
-   *  does not re-arm every consumer on each market tick. */
+  /** Reads the market REF, not the memo: runGameplayAction refreshes it mid-dispatch, so a closure over state would order the queue on stale prices.
+   *  See docs/ai_architecture/stock_market.md - App.tsx #411 */
   const marketPriceForCompany = useCallback(
     (companyId: number): number | null => sandboxMarketRef.current[companyId]?.price ?? null,
     [],
   );
 
-  /* Design note #646/#647: the operating-order tie-breaks. Read from the same ref
-     as the price and for the same reason (design note #411): the chart is a
-     separate atom, and the queue is rebuilt within a dispatch that may have
-     just moved a marker -- so both must come from the ref the dispatch has
-     already refreshed, not from a render-old state variable. */
+  /* Operating-order tie-breaks read the same ref as the price, for the same reason (#411/#647).
+     See docs/ai_architecture/stock_market.md - App.tsx #646 */
   const marketMarkForCompany = useCallback(
     (companyId: number) => sandboxMarketRef.current[companyId] ?? null,
     [],
   );
 
-  /** Design note #363: the board's own label -> `(q, r)` table.
-   *
-   *  HOISTED since design note #416. It was an inline lambda inside the
-   *  reducer's context object, which was fine while the float was the only
-   *  thing that needed it; the home-station prompt needs the SAME mapping to
-   *  decide which corporations owe a token and to name the hex it is bound
-   *  for. Two copies of "where is H12" is two answers waiting to disagree,
-   *  and the disagreement would be a modal pointing at the wrong hex. */
+  /** The board's label to (q,r) table, hoisted (#416) so the float and the home-station prompt share one mapping.
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #363 */
   const homeHexToAxial = useCallback((label: string): readonly [number, number] | null => {
     const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
     return hex ? ([hex.q, hex.r] as const) : null;
   }, []);
 
-  /* DECLARED HERE, not up with `mustBuyTrain`, and the placement is not
-     cosmetic: this memo reads `sandboxMarketPrices` to value the
-     president's holdings, and `const` bindings are not hoisted. `useMemo`
-     runs its callback and evaluates its dependency array during the render
-     pass, so declaring it above that table would throw a ReferenceError on
-     first paint rather than fail later. */
-  /* ===================================================================
-   *  DESIGN NOTE 332: THE EMERGENCY, DETECTED
-   * ===================================================================
-   *
-   * `mustBuyTrain` says the corporation is OBLIGED to buy. This says it
-   * cannot AFFORD to, which is the harder half and the one that costs the
-   * president their own money -- see `EmergencyTrainPurchaseModal.tsx`
-   * design note #0.
-   *
-   * THE PRICE IS THE DEPOT'S CHEAPEST PURCHASABLE TIER, not the cheapest
-   * printed train. 1830's depot sells cheapest-FIRST, so once the 2s are
-   * gone the 3-train is the cheapest thing money can buy there, and pricing
-   * the emergency against a $80 train nobody can buy would understate the
-   * shortfall by $100. `depotInventory` already models that queue.
-   *
-   * `null` -- rather than a plan with a zero shortfall -- whenever there is
-   * no emergency, so the modal's own mount condition is one identity check
-   * and cannot disagree with this derivation about whether one exists. */
-  /* ==================================================================
-   *  DESIGN NOTE 433: NO ROUTE, NO OBLIGATION
-   * ==================================================================
-   *
-   * REPORTED: a floated company with no valid routes is being forced to buy
-   * a train -- End Turn is blocked and there is no way out of the turn.
-   *
-   * Design note #293 built this gate and stated the rule as "a corporation
-   * that owns no train MUST buy one ... There is no branch of that rule
-   * where the turn simply ends." That is half of 1830's rule and the half
-   * that produces a deadlock.
-   *
-   * The full rule is conditional on being able to USE the train: a
-   * corporation is obliged to buy only if it has no trains AND has a route
-   * it could actually run. A company whose token sits on a city no track
-   * reaches has nothing to run, so it is not obliged, and 1830 lets its
-   * turn end. Forcing the purchase there is worse than a rules error --
-   * design note #293 deliberately keeps the button disabled even on an
-   * empty treasury, on the reasoning that the president must pay. So a
-   * corporation with no route and a poor president had End Turn disabled,
-   * the emergency modal demanding money for a train that could go nowhere,
-   * and no third control on the screen. That is a stuck game.
-   *
-   * THE PROBE ASKS A HYPOTHETICAL, which is what makes it different from
-   * `maxRouteRevenue` (design note #414) a few hundred lines below. That
-   * one measures what the trains a corporation OWNS can earn, and returns
-   * `null` when it owns none -- which is exactly the situation here, so it
-   * cannot answer this question. This asks instead: if this corporation
-   * bought the cheapest train available, could it run anything? A 2-train
-   * (two revenue centres) is the right hypothetical because it is the
-   * smallest thing the depot sells, so a "no" from it is a "no" for every
-   * train -- a bigger train reaches strictly more.
-   *
-   * `assignRouteSet` is the same search Auto Route and the auto-withhold use.
-   * A third opinion about what is runnable is how "the board says I can run
-   * and the button says I cannot" happens.
-   *
-   * IGNORANCE PERMITS, consistent with design note #293b above. No tokens on
-   * the board, no map yet, or a corporation the state does not carry all
-   * resolve to "no obligation" and leave End Turn live -- the contract
-   * refuses an illegal exit on its own, and a wrongly-enabled button costs a
-   * rejected message while a wrongly-disabled one costs the game. */
+  /* Declared here because it reads sandboxMarketPrices and const bindings are not hoisted. Emergency = obliged AND cannot afford; #433 adds "and has a route to run".
+     See docs/ai_architecture/contract_economy.md - App.tsx #332 */
   const couldRunARouteIfItHadATrain = useMemo(() => {
     const corporation = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
@@ -2190,31 +875,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const mustBuyTrain = trainlessAndReported && couldRunARouteIfItHadATrain;
 
   const emergencyPurchasePlan = useMemo(() => {
-    /* ==============================================================
-     *  DESIGN NOTE 358: THREE CONDITIONS, NOT ONE
-     * ==============================================================
-     *
-     * REPORTED: the modal appears immediately in the Zero State sandbox.
-     *
-     * It did, and the reason is that `mustBuyTrain` alone is a much weaker
-     * claim than it reads as. It answers "does this corporation own zero
-     * trains", which in a zero state is true of ALL EIGHT of them before
-     * anybody has done anything -- so the first thing a new player saw was
-     * a blocking emergency for a company that had not taken a turn.
-     *
-     * The obligation only exists at the moment it is due. All three:
-     *
-     *   THE ROUND    an Operating Round. Nothing buys trains in a Stock
-     *                Round or the auction.
-     *   THE STEP     `Hardware`, the Buy Trains sub-phase. A corporation
-     *                mid-track-lay is not yet obliged to do anything about
-     *                its empty roster.
-     *   THE MONEY    treasury below the cheapest depot train, which is the
-     *                condition that makes it an EMERGENCY rather than an
-     *                ordinary purchase.
-     *
-     * The zero state fails the first two, which is why the report describes
-     * it appearing "immediately". */
+    /* Three conditions, not one: an Operating Round, the Hardware step, and a treasury below the cheapest depot train.
+       See docs/ai_architecture/contract_economy.md - App.tsx #358 */
     if (!mustBuyTrain || !gameState) return null;
     if (gameState.current_round_type !== "OperatingRound") return null;
     if (orSubPhase !== "Hardware") return null;
@@ -2242,32 +904,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     });
   }, [mustBuyTrain, gameState, orSubPhase, actingProtocolId, sandbox, sandboxMarketPrices]);
 
-  /* Design note #3 in the modal: there is no dismissal any more. The plan
-     IS the mount condition -- `null` when there is no emergency, and
-     present for exactly as long as one is unresolved. The
-     `dismissedEmergencyFor` state that stood here let a player close the
-     modal and carry on, which is the bug requirement 1 reports. */
+  /* The plan IS the mount condition; there is no dismissal.
+     See docs/ai_architecture/contract_economy.md - App.tsx #3 */
   const emergencyModalPlan = emergencyPurchasePlan;
 
-  /* ===================================================================
-   *  DESIGN NOTE 359: THE TWO ENDINGS
-   * ===================================================================
-   *
-   * 1830 stops when the bank breaks or when a president cannot fund a
-   * mandatory train. Both are derived rather than stored, and neither is a
-   * message the contract sends -- `GetGameState` reports `is_active`, but
-   * the sandbox has no path that flips it, and on a live chain the poll
-   * would deliver the ending anyway.
-   *
-   * BANKRUPTCY IS READ OFF THE EMERGENCY PLAN, not computed a second time.
-   * `endgame.ts` already decides it, the modal already renders it, and a
-   * parallel derivation here could disagree with the modal about whether
-   * the game had ended -- which would show a Game Over behind a still-live
-   * emergency, or the reverse.
-   *
-   * ORDER MATTERS: bankruptcy wins. If a president is bankrupt AND the bank
-   * has emptied in the same tick, the bankruptcy is the more specific
-   * story and the one with a named player in it. */
+  /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
+     See docs/ai_architecture/state_machine.md - App.tsx #359 */
   const gameEndReason = useMemo<GameEndReason | null>(() => {
     if (emergencyPurchasePlan?.bankrupt) return "bankruptcy";
     if (sandbox && bankIsBroken(gameState)) return "bank-broken";
@@ -2296,77 +938,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
-  // Resets the Contextual Top Action Bar's OR sub-phase back to "Track"
-  // whenever a NEW corporation's turn starts (`active_corporation_index`
-  // changes) or the room leaves an Operating Round entirely -- see design
-  // note #10/item 2. Deliberately keyed on these two live poll fields, not
-  // on every poll tick, so it fires exactly once per actual turn change.
-  /* ===================================================================
-   *  DESIGN NOTE 175: THE SANDBOX OPENS ON TRACK
-   * ===================================================================
-   *
-   * THIS, not an address mismatch, is what was locking the green check.
-   * Measured rather than inferred: in the sandbox fixture the acting
-   * corporation is PRR, its president is Alice, auto-follow puts the hotseat
-   * on Alice, and `president === viewerAddress` evaluates TRUE. Every
-   * identity check passes. The gate that failed was the sub-phase one --
-   * `initialOrSubPhase` returns `BuyPrivate` from Phase 3 on (mirroring
-   * `or_phase::initial_sub_phase`), the fixture runs in the Green era, and
-   * confirming a tile lay requires `Track`.
-   *
-   * That is CORRECT for a live room and stays correct there: the contract
-   * persists its own cursor, opens the turn at `BuyPrivate`, and rejects a
-   * lay submitted out of order. Weakening it would make the bar disagree
-   * with the chain.
-   *
-   * The sandbox has no cursor to disagree with. It is a testing surface
-   * whose whole purpose is reaching the board quickly, and opening it on a
-   * step where the picker is locked -- with the remedy one unexplained
-   * click away in a different control -- fails at that. Same justification
-   * as the seat switcher and the legality filter before it: sandbox gets
-   * the affordance precisely because there is no authority there to
-   * contradict.
-   *
-   * A player can still walk back to `BuyPrivate` on the stepper, so nothing
-   * is unreachable -- only the default changed.
-   */
-  /* Design note #385: and it never opens on a step that is not there.
-     `initialOrSubPhase` returns `BuyPrivate` from Phase 3 on, but the strip
-     now drops that step once nothing is buyable -- so seeding the cursor
-     there would put the turn on a hidden step, which reads as an empty
-     action panel with no way forward but Skip. `visibleSubPhases` is asked
-     rather than re-deriving the condition, so the cursor and the strip
-     cannot disagree about which steps exist. */
+  // Resets the OR sub-phase on a genuine turn change. #385: never seed a step visibleSubPhases has dropped.
+  // See docs/ai_architecture/state_machine.md - App.tsx #10
   useEffect(() => {
-    /* ==================================================================
-     *  DESIGN NOTE 656: THIS EFFECT IS THE BUG, AND IT IS NOW FENCED
-     * ==================================================================
-     *
-     * REPORTED: a corporation that bought a 3-train was sent back to an
-     * earlier step of its own turn, repeatedly.
-     *
-     * THIS IS WHERE THAT HAPPENED. The body seeds the cursor for a new turn,
-     * which is right; the dependency array names `current_global_era`,
-     * `currentPhase.known`, `currentPhase.tier` and `private_companies`,
-     * which are all genuine inputs to WHERE a turn opens and none of which is
-     * a turn opening. Buying a train that advances the phase changes three of
-     * them at once, mid-turn, and the effect cannot tell that apart from a
-     * new corporation stepping up. A `useEffect` watches conditions; opening
-     * a turn is an event.
-     *
-     * The sandbox reducer raises that event now, so the guard below hands it
-     * the whole question. Not deleted, because a LIVE room still has no
-     * cursor to read -- `GetGameState` does not report the contract's -- and
-     * for a live room this effect is the only thing that opens a turn on the
-     * right step. It stays exactly as correct, and exactly as wrong, as it
-     * has always been there; what changes is that it can no longer contradict
-     * a reducer that knows better.
-     *
-     * The guard reads the FIELD rather than a `sandbox` flag deliberately. A
-     * mode flag is a claim about which code path is live; the field's
-     * presence is the code path itself having run. Design note #601's lesson
-     * about two conditions written in two files, each true exactly when the
-     * other is, applies directly -- so there is only one condition here. */
+    /* This effect seeds a turn's opening step and cannot tell a mid-turn phase change from a new turn - fenced by the reducer's own cursor when it has one.
+       See docs/ai_architecture/state_machine.md - App.tsx #656 */
     if (gameState?.operating_sub_phase !== undefined) return;
     const steps = visibleSubPhases(
       gameState?.current_global_era,
@@ -2375,35 +951,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // fallback when no corporation has reported a train yet.
       currentPhase?.known ? currentPhase.tier : null,
     );
-    /* ==================================================================
-     *  DESIGN NOTE 574: THE TESTING SHORTCUT OUTLIVED THE TESTING
-     * ==================================================================
-     *
-     * REPORTED: once the first 3-train is bought and corporations can buy
-     * private companies, the action bar correctly offers "Buy Private
-     * Company" -- and the Operating Round goes straight to Lay Track.
-     *
-     * This read `sandbox ? "Track" : initialOrSubPhase(...)`, and the note
-     * defending it is worth quoting because it was RIGHT when written: "the
-     * sandbox has no cursor to disagree with. It is a testing surface whose
-     * whole purpose is reaching the board quickly, and opening it on a step
-     * where the picker is locked -- with the remedy one unexplained click
-     * away -- fails at that."
-     *
-     * Every clause of that is about a solo testing session. The sandbox is
-     * now also the multiplayer game mode, and in a real game skipping the
-     * opening step is not a convenience, it is a rule not being applied:
-     * `BuyPrivate` is where a corporation may buy a private from a player,
-     * and a step the game silently walks past is a trade nobody gets to
-     * make.
-     *
-     * SO THE ROOM DECIDES, which is the same line design note #536 draws
-     * ("a room is not a hotseat") and for the same reason -- a solo sandbox
-     * keeps its shortcut, because there is still nobody there to be cheated
-     * by it. */
-    /* Design note #574, resolved by #578: the `sandbox ? "Track"` shortcut
-       is gone with solo mode. There is no longer a session where skipping
-       the opening step is a convenience rather than a rule not applied. */
+    /* The sandbox "always open on Track" shortcut is gone with solo mode: skipping BuyPrivate in a real game is a rule not applied.
+       See docs/ai_architecture/state_machine.md - App.tsx #574 */
     const opening = initialOrSubPhase(gameState?.current_global_era);
     setLiveOrSubPhase(steps.includes(opening) ? opening : steps[0]);
   }, [
@@ -2420,16 +969,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandboxRoomCode,
   ]);
 
-  // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
-  // `current_round_type` transition (compared against `prevRoundTypeRef`,
-  // not just "keyed on" the value) so it never re-fires -- and never
-  // overrides a manual tab click -- on every unchanged ~poll-interval
-  // re-render while the round type stays the same. `WaterfallAuction` and
-  // `StockRound` both auto-switch to the consolidated "Stock & Auction" tab;
-  // `OperatingRound` auto-switches back to "Rail Map". `MainTabBar`'s own
-  // `onSelect`/`setActiveMainTab` click handling is completely untouched by
-  // this effect, so manual tab clicking remains fully accessible at all
-  // times, exactly as required.
+  // Fires only on a genuine round-type transition (compared against prevRoundTypeRef), so it never overrides a manual tab click.
+  // See docs/ai_architecture/state_machine.md - App.tsx #213
   useEffect(() => {
     const currentRoundType = gameState?.current_round_type ?? null;
     const previousRoundType = prevRoundTypeRef.current;
@@ -2441,114 +982,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // disagreeing about where a Stock Round lands.
       setActiveMainTab(surfaceTabFor(currentRoundType));
 
-      /* ===============================================================
-       *  DESIGN NOTE 331: THE PRIVATES ARE PAID HERE, AND ONLY HERE
-       * ===============================================================
-       *
-       * `sandboxSession.ts` design note #328 explains why the reducer
-       * does not own this trigger: an Operating Round runs one TURN per
-       * floated corporation, so anything hung off a turn would pay the
-       * privates once per company per round.
-       *
-       * This branch is already the app's single "the round genuinely
-       * changed" edge -- it fires on a real transition compared against
-       * `prevRoundTypeRef`, not on every poll tick that reports the same
-       * round. That is exactly the once-per-round guarantee the payout
-       * needs, and reusing it is better than adding a second round-change
-       * detector that could disagree with this one about when a round
-       * started.
-       *
-       * SANDBOX ONLY. On a chain the contract pays the privates and the
-       * balances arrive in the next `GetGameState`; crediting them locally
-       * as well would double every owner's income on screen until the
-       * poll corrected it. */
+      /* The privates are paid on this round-change edge and only here - a per-turn trigger would pay them once per company. Sandbox only.
+         See docs/ai_architecture/contract_economy.md - App.tsx #331 */
       if (sandbox && currentRoundType === "OperatingRound") {
         payPrivateRevenueRef.current?.();
       }
     }
   }, [gameState?.current_round_type, sandbox]);
 
-  // Design note #28: the tab set changes shape by phase, so the active tab
-  // can cease to exist under the player -- sitting on "Auction" when the
-  // auction ends leaves `activeMainTab` pointing at a tab no longer in the
-  // bar, which renders nothing at all. Separate from the auto-navigation
-  // effect above on purpose: that one fires only on genuine TRANSITIONS and
-  // deliberately never overrides a manual click, whereas this is a
-  // correctness guard that must run whenever the pairing is invalid.
+  // Correctness guard: the tab set changes shape by phase, so the active tab can cease to exist under the player.
+  // See docs/ai_architecture/state_machine.md - App.tsx #28
   useEffect(() => {
     const roundType = gameState?.current_round_type ?? null;
     if (!isTabAvailable(activeMainTab, roundType)) {
-      // Design note #213: the ROUND'S OWN SURFACE, not a hardcoded `"map"`.
-      // This effect and the transition effect above both run in the commit
-      // where the round type changes, and this one still sees the tab the
-      // player was on rather than the one just chosen -- so a constant here
-      // silently overrode that choice. Asking the same function means the
-      // redirect agrees with the transition instead of undoing it.
+      // Ask surfaceTabFor for the round's own surface; a hardcoded "map" silently overrode the transition effect.
+      // See docs/ai_architecture/state_machine.md - App.tsx #213
       setActiveMainTab(surfaceTabFor(roundType));
     }
   }, [activeMainTab, gameState?.current_round_type]);
 
-  // Design note #34: `vgpBalance` and `derivedVgpBalanceNote` are DELETED.
-  // Both existed only to feed the top bar's Cash readout, which is gone --
-  // in-game cash lives in the Game Ledger and the Player Index now. The
-  // The whole optimistic-note chain went with them: `vgpBalanceNote` state,
-  // `runGameplayAction`'s third parameter, and the two notes BuyStock and
-  // SellStock passed into it. Those two were the only writers, and their
-  // only reader was the readout just deleted -- a write path to a value
-  // nothing displays is how a "harmless" leftover becomes a puzzle later.
+  // vgpBalance and the whole optimistic-note chain are deleted with the top-bar Cash readout.
+  // See docs/ai_architecture/ui_shell_layout.md - App.tsx #34
 
   /* `activePlayerAddress` went with design note #165's tray. It answered
      "whose privates can be sold right now", which only made sense while the
      tray was scoped to the acting player; the proposal sheet shops across
      every player's holdings, so the question no longer has a caller. */
 
-  // Active Player Turn Notifications -- design note #18/item 4, now
-  // MANDATORY and non-optional (design note #21 -- the opt-out
-  // `titleFlashEnabled`/`pulseGlowEnabled` settings design note #19/item 3
-  // introduced are removed entirely). Same comparison `Chatbox.tsx` used
-  // to make internally before this pass (design note #2 there), computed
-  // once here since that component is no longer rendered directly. Both
-  // alert channels below now key DIRECTLY off `isMyTurn` -- no gating
-  // value, no per-player toggle, enforced globally: they turn on the
-  // instant `isMyTurn` becomes `true` and stop the instant it becomes
-  // `false`.
-  // F-5: ROUND-TYPE AWARE. This was
-  //
-  //     wallet.address === activePlayerAddress
-  //
-  // which is right for a Stock Round and wrong for the whole of every
-  // Operating Round. `activePlayerAddress` is
-  // `player_addresses[active_player_index]` -- the STOCK ROUND turn pointer.
-  // During an Operating Round the acting entity is not a player at all: it is
-  // the corporation at `active_operating_order[active_corporation_index]`,
-  // and the authorised human is that corporation's `president`. The backend
-  // gates `LayTile` / `BuyHardwareFromPool` / `DeclareDividends` /
-  // `EndOperatingRoundTurn` on exactly that.
-  //
-  // The consequence was not a missing alert but an INVERTED one: for roughly
-  // half of game time the title flash and pulse glow fired for whoever
-  // happened to hold the stale SR pointer, while the president who actually
-  // had to act got nothing. Both halves of the mandatory notification
-  // requirement pointed at the wrong person simultaneously.
-  //
-  // Every field this needs is already on the polled `GameStateResponse`; no
-  // backend change and no extra query.
-  // The phase-dependent logic this used to spell out inline now lives in
-  // `actingSeatIndex` (`utils/gameState.ts`), because the sandbox's
-  // Auto-Follow needs the SAME answer to a slightly different question --
-  // "which seat may act" rather than "may I act". Two hand-written copies of
-  // the Operating-Round-means-the-president rule would be two things to keep
-  // in step, and the failure would be silent: the toolbar would follow one
-  // player while the controls enabled for another.
-  //
-  // `null` means no seat may act at all -- an Operating Round with an empty
-  // queue, or a floated-but-presidentless corporation. Nobody's turn, rather
-  // than everybody's, which is what makes the fallback to the Stock Round
-  // pointer deliberately absent.
-  /* Design note #544: `actingAddress`, not `actingSeatIndex`. A mini-auction
-     suspends the main rotation, and this is the gate `runGameplayAction`
-     reads -- so resolving it from the stale waterfall pointer is what let
-     the wrong player act and locked out the one actually on turn. */
+  // Turn alerts are mandatory and key directly off isMyTurn. F-5: isMyTurn must be round-type aware - an OR's acting entity is a corporation's president, not the SR pointer. #544: resolved from actingAddress, since a mini-auction suspends the rotation.
+  // See docs/ai_architecture/state_machine.md - App.tsx #21
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
     return actingAddress(gameState, waterfallState) === viewerAddress;
@@ -2556,11 +1018,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   useDocumentTitleFlash(isMyTurn);
 
-  /* Design note #536: mirrored into a ref for `runGameplayAction`'s turn
-     gate. A dependency would rebuild that callback on every turn change,
-     and the auto-skip and forced-withhold effects (design note #439) key on
-     its identity -- so a turn passing would re-arm two effects that
-     DISPATCH. */
+  /* Mirrored into a ref: a dependency would rebuild runGameplayAction and re-arm the two effects that dispatch (#439).
+     See docs/ai_architecture/session_keys_wallet.md - App.tsx #536 */
   const isMyTurnRef = useRef(isMyTurn);
   useEffect(() => {
     isMyTurnRef.current = isMyTurn;
@@ -2575,16 +1034,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     actingAddressRef.current = gameState ? actingAddress(gameState, waterfallState) : null;
   }, [gameState, waterfallState]);
 
-  /** Design note #300: the acting seat's personal cash. `null` when there
-   *  is no seat on turn or the chain does not report it -- a missing wallet
-   *  must not render as $0, which is a real and very different state.
-   *
-   *  Design note #317: during the Waterfall Auction this is AVAILABLE cash,
-   *  not the total. The badge sits next to Pass and Undo on the one screen
-   *  where the difference decides every action, and a player reading $600
-   *  off the bar while $400 of it stands on a bid would be reading the one
-   *  figure they cannot spend. Outside the auction there is no escrow, so
-   *  `availableCash` returns the total and the badge is unchanged. */
+  /** The acting seat's cash; null when unknown, never $0. During the auction this is AVAILABLE cash, not the total (#317).
+   *  See docs/ai_architecture/contract_economy.md - App.tsx #300 */
   const activeSeatCash = useMemo(() => {
     if (!gameState) return null;
     // Design note #544: during a contest this is the CONTESTANT's balance --
@@ -2594,19 +1045,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return availableCash(gameState, waterfallState, address);
   }, [gameState, waterfallState]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 639: EVERY SEAT'S SPENDABLE CASH, BY ADDRESS
-   * ==================================================================
-   *
-   * Back after design note #637 removed it, in a smaller form. The trail
-   * shows figures on the INACTIVE seats only, so this is what those segments
-   * read -- and a map rather than the old array, because the one thing every
-   * consumer did with it was `find` by address once per seat, which is a
-   * quadratic scan for a lookup.
-   *
-   * BOTH SEAT-DRIVEN ROUNDS, empty otherwise (design note #406): an
-   * Operating Round's turn belongs to a corporation and its bar draws no
-   * seat queue at all. */
+  /* Spendable cash per address for the inactive seats on the trail. A map, not an array - every consumer looked up by address.
+     See docs/ai_architecture/ui_shell_layout.md - App.tsx #639 */
   const seatFunds = useMemo(() => {
     const table = new Map<string, { available: number; escrowed: number }>();
     if (!gameState) return table;
@@ -2633,53 +1073,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return address ? escrowedBids(waterfallState, address) : 0;
   }, [gameState, waterfallState]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 547: THE AUCTION IS OVER WHEN THERE IS NOTHING LEFT IN IT
-   * ==================================================================
-   *
-   * The same test the dashboard's banner used (`privates.length === 0`),
-   * moved up to where the modal is raised. `privates` is documented as
-   * "every still-unowned core private company", so empty means all six are
-   * allocated -- there is no separate "auction finished" flag to read, and
-   * inventing one would be a second opinion about a fact this list already
-   * states.
-   *
-   * SANDBOX ONLY, unchanged from design note #306's reasoning: on a live
-   * chain the contract closes the round itself, and a client-side button
-   * offering to do it would be a lie. */
+  /* The auction is over when nothing is left in it; there is no separate finished flag. Sandbox only (#306).
+     See docs/ai_architecture/contract_economy.md - App.tsx #547 */
   const auctionHandoffPending =
     sandbox &&
     gameState?.current_round_type === "WaterfallAuction" &&
     (waterfallState?.privates.length ?? -1) === 0;
 
-  /* ==================================================================
-   *  DESIGN NOTE 565: DERIVE THE QUESTION, DO NOT LATCH IT
-   * ==================================================================
-   *
-   * REPORTED: refreshing during the Stock Round brings back the modal asking
-   * the B&O's winner to set a par value -- a decision made rounds ago.
-   *
-   * A refresh replays the room's whole log from index zero (design note
-   * #551, and that is what makes a rejoin work at all). So the auction's
-   * winning action runs again, `setBoParPrompt` fires again exactly as it
-   * did the first time, and the prompt is raised on a board where it has
-   * long since been answered. The `SetBoPar` event that answered it is
-   * further down the same log and now closes the prompt when it replays --
-   * but that only holds while the two arrive in that order, and it would
-   * still flash the modal on the way past.
-   *
-   * SO THE MODAL ASKS THE BOARD, not a flag. "Does the B&O still owe a
-   * price" is a question `public_companies` can answer at any moment, and
-   * an answer derived from state cannot be stale, cannot be raised twice,
-   * and cannot survive the thing that resolved it. `pendingHomeTokens`
-   * (design note #416) is the same shape and records the same argument: "a
-   * reload, a late poll, or two corporations floating on one dispatch all
-   * resolve correctly, and a prompt cannot be lost."
-   *
-   * THE LATCH STAYS, because it carries something the board does not: WHO
-   * won. A par set by the wrong player would be a worse bug than a modal
-   * shown twice. The latch says who may answer; this says whether there is
-   * still anything to answer. */
+  /* The modal asks the board, not a flag, so a replay cannot re-raise an answered prompt. The latch stays only to say WHO may answer.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #565 */
   const boParAlreadySet =
     (gameState?.public_companies.find((c) => c.ticker === BO_TICKER)?.par_value ?? null) !== null;
 
@@ -2693,62 +1095,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return sandboxPlayerLabel(address) ?? truncateAddress(address);
   }, [gameState, waterfallState]);
 
-  /* Design note #398, the "and for all players" half. In hotseat the seats
-     share one browser, so a par half-chosen by the outgoing player would
-     still be highlighted for the incoming one -- who would then buy a
-     president's certificate at a price they never picked. Cleared on the
-     seat change, the same trigger `StockRoundPanel` uses to drop its active
-     card. */
+  /* Clear half-made par choices when the acting seat changes, or an incoming player inherits a price they never picked.
+     See docs/ai_architecture/stock_market.md - App.tsx #398 */
   useEffect(() => {
     setSrParValues({});
   }, [activeSeatLabel]);
 
-  // In-Place Accordion Ticker / Inline Control Strip state -- design note
-  // #18, converted from a modal to an in-place accordion by design note
-  // #20. `chatMessages` was previously owned entirely inside
-  // `Chatbox.tsx`; moved up here so it can be merged with `actionLog` into
-  // one chronologically sorted timeline (`mergeFeedItems`).
-  //
-  // Design note #22 (Step 4): the LOCAL `useState<ChatMessage[]>` that used
-  // to live on this line is replaced by a live Firestore subscription. Note
-  // what did NOT have to change as a result -- `feedItems`, the filter, the
-  // unread count, `TopTicker` and `InlineQuickChat` are all untouched,
-  // because every one of them was already reading from `mergeFeedItems`
-  // rather than owning chat state. That is the payoff of the hoist design
-  // note #18 performed: swapping chat from a local array to a multiplayer
-  // transport is a one-line change at exactly one call site.
-  //
-  // Keyed on `roomId` (Firestore), NOT `gameId` (contract) -- chat is
-  // off-chain and belongs to the off-chain room, which is what lets the
-  // staging-room transcript in `Lobby.tsx` continue uninterrupted into the
-  // live game instead of resetting at launch.
+  // Chat state lives here so it can merge with actionLog via mergeFeedItems. Keyed on roomId (Firestore), not gameId (contract).
+  // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   const {
     messages: chatMessages,
     sendMessage: sendChatMessage,
     error: chatError,
-    // Design note #24: `null` in sandbox. `SANDBOX_ROOM_ID` names no real
-    // Firestore document, and subscribing to it would CREATE one the first
-    // time anyone typed -- littering the room collection with junk rooms
-    // from what is supposed to be a local, chain-free scratchpad.
-    /* ==================================================================
-     *  DESIGN NOTE 644: THE SANDBOX GETS ITS OWN ROOM AND ITS OWN IDENTITY
-     * ==================================================================
-     *
-     * This read `sandbox ? null : roomId`, which switched chat off entirely
-     * in the mode most people are playing -- see design note #644 in
-     * `ChatBox.tsx` for why that argument expired.
-     *
-     * THE IDENTITY MATTERS AS MUCH AS THE ROOM. `wallet.address` is null in a
-     * sandbox, and `sendMessage` refuses without an author, so passing the
-     * room alone would have moved the refusal rather than removed it.
-     * `localId` is the sandbox's own stable id -- the same one the action log
-     * records as `actor`, so a message and a move made by the same seat agree
-     * about who did them.
-     *
-     * `sandboxRoomCode` IS NULL UNTIL A ROOM IS OPENED, and that is the local
-     * case rather than an error: the hook keeps those messages in memory. A
-     * solo sandbox has a working chat box with nobody else in it, which is
-     * the honest rendering of a solo sandbox. */
+    // The sandbox gets its own room and its own identity: localId is the author, matching the action log's actor.
+    // See docs/ai_architecture/firebase_middleware.md - App.tsx #644
   } = useFirestoreChat(
     sandbox ? sandboxRoomCode : roomId,
     sandbox ? localId : wallet.address,
@@ -2762,74 +1122,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #598: the message box, hidden until asked for. */
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  /* ==================================================================
-   *  DESIGN NOTE 599: THE DOCK RESERVES ITS OWN HEIGHT
-   * ==================================================================
-   *
-   * REPORTED: "When Expanding the chat/activity log, it simply covers the
-   * viewport rather than pushing the viewport up."
-   *
-   * Design note #581 fixed the dock to the bottom edge so it survives
-   * scrolling the board, and paid for that with a constant 96px of padding
-   * on the app root -- a guess at its height, correct while the dock had one
-   * height and wrong the moment it could grow.
-   *
-   * MEASURED, NOT GUESSED. A `ResizeObserver` reports the dock's real height
-   * on every change -- expanding the log, opening the chat, a wrapped row on
-   * a narrow window -- and that becomes the root's bottom padding. So the
-   * page is always exactly as long as it needs to be, and the last row of
-   * content is never underneath the strip.
-   *
-   * NOT `position: sticky`, which would put the dock in flow and solve this
-   * for free. It cannot be: the app root is a column whose content is
-   * frequently shorter than the viewport, and a sticky footer in a short
-   * column sits directly under the content rather than at the bottom of the
-   * window -- which is where a status line has to be to be peripheral.
-   *
-   * THE OBSERVER IS THE CHEAP OPTION here despite looking like the expensive
-   * one. The alternative is a table of expected heights per state, which is
-   * a second description of a layout CSS already decides -- and the kind
-   * that drifts silently the first time a font or a padding changes. */
-  /* ==================================================================
-   *  DESIGN NOTE 605: RESERVING THE HEIGHT IS ONLY HALF OF IT
-   * ==================================================================
-   *
-   * REPORTED, after #599: "expanding the chat/activity log permanently
-   * obscures whatever is at the bottom of the screen: the expansion should
-   * grow the size of the screen."
-   *
-   * Design note #599 measured the dock and reserved its height as bottom
-   * padding, which makes the content REACHABLE. It does not make it VISIBLE,
-   * and those are different promises. The dock is `position: fixed`, so
-   * growing it paints over whatever occupied the bottom of the viewport;
-   * the extra padding lengthens the document underneath but does not move
-   * the scroll position, so the covered rows stay covered until the reader
-   * scrolls. "Permanently" is the fair description -- nothing ever brings
-   * them back on its own.
-   *
-   * THE MISSING HALF IS THE SCROLL. When the dock grows by N, the page must
-   * scroll down by N: the document just got N longer at the bottom, so
-   * scrolling N keeps every pixel of content exactly where it was on screen
-   * and the dock expands into space that was empty. Shrinking runs the same
-   * arithmetic backwards. That is what "grow the size of the screen" means
-   * in a fixed-footer layout -- you cannot push the viewport, so you move
-   * the page under it by the same amount.
-   *
-   * IN A LAYOUT EFFECT, NOT IN THE OBSERVER. Scrolling straight from the
-   * ResizeObserver callback races React: the padding that makes the document
-   * longer has not been committed yet, so `scrollBy` clamps against the OLD
-   * document height and under-scrolls by exactly the amount that matters.
-   * The delta is parked on a ref and spent after the commit, which is the
-   * one moment both facts are true.
-   *
-   * THE FIRST MEASUREMENT IS SKIPPED. `96` is a seed, not an observation, so
-   * the mount-time delta is the error in that guess -- compensating for it
-   * would scroll the page on load for no reason a reader could explain.
-   *
-   * BORDER BOX, NOT `contentRect`. The dock has a 1px top rule and
-   * `contentRect` excludes it, so #599 reserved one pixel less than the dock
-   * occupies. Invisible on its own, and wrong in the same direction every
-   * time this recomputes. */
+  /* The dock's real height is measured by a ResizeObserver and reserved as root padding; #605 also scrolls the page by the delta, in a layout effect, so the growth does not cover content.
+     See docs/ai_architecture/ui_shell_layout.md - App.tsx #599 */
   const statusDockRef = useRef<HTMLDivElement | null>(null);
   const [statusDockHeight, setStatusDockHeight] = useState(96);
   const measuredDockHeightRef = useRef<number | null>(null);
@@ -2860,57 +1154,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [statusDockHeight]);
   const [isTickerExpanded, setIsTickerExpanded] = useState(false);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
-  // Tracks how many CHAT items had already been seen the last time the
-  // accordion was expanded, so `unreadFeedCount` below only counts messages
-  // that arrived while it was collapsed. Design note #616: chat items, not
-  // feed items -- the two figures are subtracted, so they have to be counted
-  // in the same units.
+  // Counts CHAT items seen, not feed items - the two figures are subtracted, so they must share units.
+  // See docs/ai_architecture/ui_shell_layout.md - App.tsx #616
   const [lastSeenFeedCount, setLastSeenFeedCount] = useState(0);
 
   const feedItems = useMemo(() => mergeFeedItems(chatMessages, actionLog), [chatMessages, actionLog]);
-  // Design note #20/item 2: filtered by the same `feedFilter` the pills in
-  // `InlineQuickChat.tsx` now drive. `latestFeedItem`/`unreadFeedCount`
-  // below both derive from THIS filtered array (not the raw `feedItems`),
-  // so switching filters instantly updates both the ticker's single-line
-  // preview and its expanded history at once. (Design note #615: the
-  // history viewport is five rows now, not seven -- and design note #616
-  // takes the unread BADGE off this filtered array entirely.)
+  // Filtered by the pills InlineQuickChat drives; the preview and the expanded history both read this array.
+  // See docs/ai_architecture/ui_shell_layout.md - App.tsx #20
   const filteredFeedItems = useMemo(
     () => (feedFilter === "all" ? feedItems : feedItems.filter((item) => item.kind === feedFilter)),
     [feedItems, feedFilter],
   );
   const latestFeedItem = filteredFeedItems.length > 0 ? filteredFeedItems[filteredFeedItems.length - 1] : null;
-  /* ==================================================================
-   *  DESIGN NOTE 616: THE BADGE COUNTS CHAT, NOT HISTORY
-   * ==================================================================
-   *
-   * REPORTED: "there is a red badge that tracks how many messages have
-   * occurred since a player last opened the log, but in an 18xx game that is
-   * going to reach thousands of messages if a player never clicks it."
-   *
-   * It would, and the deeper problem is that the number stops meaning
-   * anything long before it stops being true. A red badge is a QUEUE
-   * indicator -- it promises that something is waiting for you and that
-   * opening it will clear a debt. Game log entries are not that: they are a
-   * record you consult, and nobody is owed a reading of "PRR laid tile #57 on
-   * H10". Counting them produced a permanently angry number that a player
-   * learns within one game to ignore, which costs the badge its use for the
-   * one case that IS a queue.
-   *
-   * CHAT IS THAT CASE. A message from another player is a person waiting for
-   * an answer, the count is naturally small, and clearing it by reading is
-   * exactly what the badge is claiming.
-   *
-   * COUNTED OFF `feedItems`, NOT `filteredFeedItems`. The filter pills change
-   * what the panel SHOWS; they do not change what has arrived. A player
-   * filtered to "log" who then receives three messages is precisely the
-   * player the badge exists for, and reading it off the filtered array would
-   * hide them at exactly that moment.
-   *
-   * THE SEEN MARK MOVES WITH IT. `lastSeenFeedCount` now counts chat items,
-   * so the two figures are subtracted in the same units -- mixing them was
-   * how an earlier version of this could go negative when a filter changed
-   * under it, which `Math.max` was quietly absorbing. */
+  /* The badge counts unread CHAT off the unfiltered feed: a log entry is a record, not a queue somebody is owed.
+     See docs/ai_architecture/ui_shell_layout.md - App.tsx #616 */
   const chatItemCount = useMemo(
     () => feedItems.reduce((total, item) => (item.kind === "chat" ? total + 1 : total), 0),
     [feedItems],
@@ -2929,12 +1186,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const handleToggleTickerExpand = useCallback(() => setIsTickerExpanded((prev) => !prev), []);
 
-  // Design note #22: pushes to `games/{roomId}/chat` instead of appending to
-  // a local array. The draft is cleared optimistically because the write is
-  // ALSO optimistic -- Firestore applies it to the local snapshot before the
-  // server confirms, so the message is on screen immediately and the round
-  // trip finishes in the background (see `ChatBox.tsx` design note #2 for
-  // the timestamp handling that makes that ordering stable).
+  // Pushes to games/{roomId}/chat; the draft clears optimistically because the write is optimistic too.
+  // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   const handleSendChatMessage = useCallback(() => {
     const text = chatDraft.trim();
     if (!text) return;
@@ -2942,68 +1195,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     void sendChatMessage(text);
   }, [chatDraft, sendChatMessage]);
 
-  /* REMOVED with design note #165: `sellablePrivates`,
-     `selectedPrivateId`, `privatePriceVgp`, their seeding effect, and
-     `handleSelectPrivate`.
-
-     All five existed to drive the inline tray's dropdown-and-slider. The
-     proposal sheet owns its own selection and price, and reads the whole
-     `private_companies` list directly so it can show privates owned by ANY
-     player -- which is the point. `sellablePrivates` was scoped to
-     `activePlayerAddress`, i.e. to what the acting player could sell
-     THEMSELVES, which is the wrong set for a corporation shopping among
-     everyone's holdings and is why the old tray could not express the
-     trade it was named after. */
+  /* The old inline tray's five state atoms are gone - the proposal sheet owns its own selection and reads every player's privates.
+     See docs/ai_architecture/contract_economy.md - App.tsx #165 */
 
 
-  /* ==================================================================
-   *  DESIGN NOTE 343 (source): THE ROUND, AS A SHORT TAG
-   * ==================================================================
-   *
-   * This memo has existed, correct and completely unused, since it was
-   * written -- it is the `roundLabel is assigned a value but never used`
-   * warning that has been standing in this file's lint output. It computes
-   * exactly the round context the Activity Log now stamps on every entry,
-   * so it is wired rather than deleted.
-   *
-   * Formats follow the brief: `Auction`, `SR1`, `OR 1.1`. The auction case
-   * shortened from "Waterfall Auction" because this is a prefix in a
-   * gutter, not a heading -- "[Waterfall Auction]" is wider than most of
-   * the lines it would sit beside.
-   */
-  /* ==================================================================
-   *  DESIGN NOTE 643: THE ROUND LABEL IS A FUNCTION OF A STATE
-   * ==================================================================
-   *
-   * Lifted out of the memo so a log writer can ask it about the state an
-   * action RESOLVED to, rather than about the state the browser is currently
-   * rendering. Those are the same thing during live play and completely
-   * different during a replay -- which is why an auction entry came back
-   * stamped "OR 1.1" after an undo.
-   *
-   * Module-scope rather than a `useCallback`: it closes over nothing, and a
-   * hook identity here would be one more thing for the log writers'
-   * dependency arrays to keep still. */
+  /* The round as a short tag, lifted to utils/roundLabel.ts (#643/#659) so a log writer can ask about the state an action resolved to.
+     See docs/ai_architecture/state_machine.md - App.tsx #343 */
   const roundLabel = useMemo(() => roundLabelFor(gameState), [gameState]);
 
-  /* Read through a ref by the log writers, which are declared above this
-     memo -- the same ordering workaround `logInfoRef` uses. A ref also
-     means the stamp is taken at WRITE time rather than closed over at
-     callback-construction time, which is what design note #343 requires:
-     an entry written during the auction must keep `[Auction]` even though
-     the callback that wrote it was built rounds earlier. */
+  /* Read through a ref so the stamp is taken at write time, not closed over when the callback was built.
+     See docs/ai_architecture/state_machine.md - App.tsx #343 */
   const roundLabelRef = useRef<string | null>(null);
   useEffect(() => {
     roundLabelRef.current = roundLabel;
   }, [roundLabel]);
 
-  // Interactive Floating Tile-Selection Popup Overlay state (see
-  // HexGridRenderer.tsx design note #7). `hexClickQuery` mirrors whatever
-  // HexGridRenderer's own click interceptor last reported; the popup itself
-  // only renders once that settles into a "success" state with at least the
-  // possibility of legal placements. `previewTile` is lifted up here (not
-  // owned by the popup) so it can be threaded straight into
-  // `<HexGridRenderer previewTile={...} />` below.
+  // Tile-selection state. previewTile is lifted here so it can be threaded into <HexGridRenderer>.
+  // See docs/ai_architecture/canvas_rendering.md - App.tsx #7
   const [hexClickQuery, setHexClickQuery] = useState<HexClickQueryState | null>(null);
   const [previewTile, setPreviewTile] = useState<
     { q: number; r: number; tileId: number; orientation: number } | null
@@ -3014,54 +1222,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  re-mount re-measures instead of holding a stale node. */
   const [boardEl, setBoardEl] = useState<HTMLDivElement | null>(null);
 
-  /** Design note #199: the ONE condition under which the tile selector
-   *  exists at all. Track is this UI's name for the contract's Lay Track
-   *  sub-phase (`OPERATING_SUB_PHASE_LABELS.Track` renders as "Lay Track").
-   *
-   *  Spectators are excluded here as well as by `runGameplayAction`'s own
-   *  gate, for the same reason the action bar is hidden from them: a control
-   *  they can open and never use is noise, not courtesy. */
-  /* ==================================================================
-   *  DESIGN NOTE 437: LOOKING IS NOT ACTING
-   * ==================================================================
-   *
-   * REPORTED: non-active players cannot select hexes to view the tile
-   * selector during an Operating Round.
-   *
-   * One flag was answering two questions. `tileSelectorArmed` decided both
-   * "may this person OPEN the picker" and, through `layTrackFocus` and the
-   * click interceptor, "is this the Lay Track step" -- so narrowing it to
-   * the acting player's Track step, which is correct for the second, also
-   * closed the picker to everyone else for the whole round.
-   *
-   * Design note #163 had already drawn this line once and drawn it in the
-   * right place: "`canLayTileNow` is deliberately NOT the condition. That
-   * value also refuses when it is not your turn, and a player should still
-   * be able to browse upgrades on somebody else's Track step." The
-   * principle was sound and the gate it protected was still the wrong one,
-   * because `tileSelectorArmed` itself carried `!spectator` and the
-   * sub-phase.
-   *
-   * So the flag splits in two, and each half answers its own question:
-   *
-   *   INSPECTING is available to anyone, in any sub-phase of an Operating
-   *   Round, spectators included. Reading the board is not a move, and a
-   *   player deciding what to do on their turn wants to study the upgrades
-   *   available at a hex before it arrives.
-   *
-   *   ACTING keeps every restriction it had. `canLayTileNow` (design note
-   *   #163) still gates the ring's confirm button, and it still refuses a
-   *   spectator, a wrong sub-phase and a wrong turn -- so a browsing player
-   *   sees a disabled Lay Track button carrying the reason, not a live one.
-   *
-   * THE COST IS REAL AND WORTH NAMING. The original note's third argument
-   * for the narrow gate was that "gating only here would leave every stray
-   * click costing a query round-trip" -- `GetLegalTilePlacements` fires on
-   * a resolved hex click. Widening the inspector widens that. It is
-   * accepted because the query is read-only, cheap, and already fires on
-   * every Track-step click; a player browsing is doing the thing the query
-   * exists to answer. The `sandbox` and `spectator` exclusions on the
-   * `queryClient` prop are unchanged, so neither path adds chain traffic. */
+  /** INSPECTING the board is open to anyone in any OR sub-phase; ACTING keeps every restriction (canLayTileNow).
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #437 */
   const tileInspectorArmed =
     (gameState?.current_round_type ?? null) === "OperatingRound";
 
@@ -3071,27 +1233,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const tileLayStepActive =
     !spectator && tileInspectorArmed && orSubPhase === "Track";
 
-  /* ==================================================================
-   *  DESIGN NOTE 224: ONLY LIGHT WHAT THIS CORPORATION CAN REACH
-   * ==================================================================
-   *
-   * The board-dimming set for the Lay Track sub-phase -- `trackReach`'s own
-   * design note #0 covers what it does and does not claim.
-   *
-   * `undefined` OUTSIDE LAY TRACK, which is what switches the veil off
-   * entirely: no dimming, no click gate, the board exactly as it was. The
-   * renderer treats an absent set that way by construction (design note
-   * #223 there), so there is one condition here rather than a flag pair that
-   * could disagree.
-   *
-   * ALSO `undefined` WHEN THE REACH IS UNKNOWABLE. `layableHexes` reports
-   * `unconstrained` for a corporation with no token on the board -- one that
-   * has floated but not yet placed its home, or any state reached before the
-   * first `GetGameState` resolves. Dimming everything then would tell the
-   * player they may build nowhere, which is both wrong and
-   * indistinguishable from the feature being broken. The hint is dropped and
-   * the contract stays the authority, which is the safe direction to fail.
-   */
+  /* The Lay Track veil. undefined outside Lay Track, and undefined when the reach is unknowable - dimming everything reads as broken.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #224 */
   const layTrackFocus = useMemo(() => {
     // Design note #437: the STEP, not the inspector. Veiling the board
     // while a player is merely browsing would tell them they may not build
@@ -3105,12 +1248,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       stationHexes: corporation?.station_token_hexes ?? [],
     });
     if (reach.unconstrained) return undefined;
-    /* Design note #241: the corporation's OWN NETWORK stays lit alongside
-       the legal placements. Choosing where to extend is a judgement about
-       the route the extension joins, and veiling that route left the legal
-       hexes lit and the reason for preferring one of them in the dark.
-       Unioned here rather than inside the renderer because this is the
-       layer that has both halves. */
+    /* The corporation's own network stays lit beside the legal placements; unioned here because this layer has both halves.
+       See docs/ai_architecture/canvas_rendering.md - App.tsx #241 */
     const visible = new Set<string>(reach.network);
     reach.hexes.forEach((key) => visible.add(key));
     // `network` is carried alongside for the rotation filter, which needs
@@ -3133,111 +1272,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [tileLayStepActive, gameState, actingProtocolId, mapGrid]);
 
 
-  /* Design note #199, layer 3: a ring left open when the turn moves on. The
-     sub-phase can advance without a board click -- the stepper's Advance
-     button, a token placed, another player's action arriving on a poll -- so
-     closing on the next click would leave the carousel floating over a board
-     that has moved past it. */
+  /* Layer 3: close the ring when the sub-phase advances, since that can happen without a board click.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #199 */
   useEffect(() => {
     if (tileInspectorArmed) return;
     setRadialSelector(null);
     setPreviewTile(null);
   }, [tileInspectorArmed]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 622: A CLICK AWAY IS A DISMISSAL, NOT A SELECTION
-   * ==================================================================
-   *
-   * REPORTED: "when I have the tile selector open and I click away from the
-   * options / hex that prompted the radial menu, it should just close the
-   * tile selector tool. Right now, when I click another hex, it is
-   * immediately selecting that hex when I only meant to close the tile
-   * selector tool, not immediately open it elsewhere."
-   *
-   * The ring's own outside-click handler says so explicitly and then carves
-   * the board out: "a click on the board is never a dismissal -- it is
-   * either a rotation, a new selection or a new target" (design note #168).
-   * That is true of a click on the board when NOTHING is open. It stops
-   * being true the moment a popover is covering part of that board, because
-   * the gesture people use to close a popover is to click somewhere else --
-   * and on this screen "somewhere else" is almost always another hex.
-   *
-   * So the board gets the same two-stage behaviour every other dismissible
-   * surface has: the first click outside closes, the second selects. Design
-   * note #172 already established the principle here, for water -- "clicking
-   * open water is the most natural 'never mind' gesture there is" -- and the
-   * only reason a hex behaved differently is that a hex had a more
-   * interesting thing to do.
-   *
-   * THE COST IS ONE EXTRA CLICK when a player really did mean to jump
-   * straight from one hex to another, and it is worth paying. Opening the
-   * wrong ring is not merely slower to undo: it throws away a previewed tile
-   * and rotation the player may have been part-way through choosing, and it
-   * fires a `GetLegalTilePlacements` for a hex nobody asked about.
-   *
-   * A CLICK ON THE HEX ALREADY OPEN IS A NO-OP rather than a re-open. The
-   * ring covers most of its own hex, so this mostly happens on the rim --
-   * and reopening would reset `previewTile`, discarding a selection in
-   * response to a click that landed on the thing already selected.
-   *
-   * READ THROUGH A REF, not a dependency. `handleHexClickQuery`'s identity is
-   * load-bearing -- the renderer takes it as an interceptor prop -- and
-   * rebuilding it every time the ring opens or closes would re-arm the click
-   * path on every selection. */
+  /* With a ring open, the first board click outside it DISMISSES and the second selects. Read through a ref so the interceptor identity stays stable.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #622 */
   const openRingHexRef = useRef<{ q: number; r: number } | null>(null);
 
   const handleHexClickQuery = useCallback((state: HexClickQueryState) => {
     setHexClickQuery(state);
 
-    /* ================================================================
-     *  DESIGN NOTE 199: THE TILE SELECTOR IS A LAY TRACK TOOL, FULL STOP
-     * ================================================================
-     *
-     * Design note #163 ("Universal Planning Mode") made the ring openable in
-     * every phase, on the reasoning that INSPECTING a hex is harmless and
-     * only DISPATCHING needs gating. The reasoning was sound and the result
-     * was not: a tool that opens on every click, in every round, and then
-     * refuses at the last step is a tool that reads as broken. Worse, it
-     * competes for the click during the Tokens and Routes sub-phases, where
-     * the board's click means something else entirely -- the player is
-     * aiming at a city to place a token and gets a tile carousel.
-     *
-     * The gate is now STRICT and it is applied at the point the ring opens,
-     * not at the point it confirms. Three layers, all of them necessary:
-     *
-     *   1. HERE -- a resolved query never opens the ring outside `Track`.
-     *   2. The renderer's four interceptor props (`queryClient` and friends)
-     *      are withheld outside `Track`, so on a live chain the click does
-     *      not even fire `GetLegalTilePlacements`. Gating only here would
-     *      leave every stray click costing a query round-trip.
-     *   3. `<RadialTileSelector>` is not mounted outside `Track`, so a ring
-     *      already open when the sub-phase advances closes with it rather
-     *      than floating over a board that has moved on.
-     *
-     * `canLayTileNow` is deliberately NOT the condition. That value also
-     * refuses when it is not your turn, and a player should still be able to
-     * browse upgrades on somebody else's Track step -- which is the half of
-     * design note #163 worth keeping. The sub-phase is the whole gate. */
+    /* The tile selector is a Lay Track tool: gated where the ring opens, in three layers. canLayTileNow is deliberately not the condition.
+       See docs/ai_architecture/canvas_rendering.md - App.tsx #199 */
     if (!tileInspectorArmed) {
       setRadialSelector(null);
       setPreviewTile(null);
       return;
     }
 
-    // Design note #162/#163: a resolved hex click OPENS THE RADIAL SELECTOR.
-    //
-    // Both answer shapes feed the same selector -- `"success"` carries the
-    // contract's verbatim `placements`, `"offline"` the local catalog
-    // mirror, and `provisional` is the only thing that distinguishes them
-    // downstream. `"blocked"` and `"loading"` are not openings: the first
-    // is a transient nudge with its own timer above, the second has nothing
-    // to show yet.
-    //
-    // Design note #172: `"not-a-hex"` is a CLOSING. Clicking open water is
-    // the most natural "never mind" gesture there is, and it used to do
-    // nothing at all -- the renderer returned before reporting anything, so
-    // an open ring just sat there. It now falls into the same `else` as
-    // every other non-opening status, which closes.
+    // A resolved hex click opens the ring; "blocked"/"loading" are not openings and "not-a-hex" is a closing (#172).
+    // See docs/ai_architecture/canvas_rendering.md - App.tsx #162
     if (state.status === "success" || state.status === "offline") {
       /* Design note #622: a ring is already open. This click is a dismissal
          if it landed on a different hex, and nothing at all if it landed on
@@ -3280,30 +1339,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // so this closure reads nothing from the DOM at all any more.
   }, [tileInspectorArmed]);
 
-  /* Design note #162: CLICK THE PREVIEW TO ROTATE IT.
-   *
-   * Rotation belongs on the tile, not in a panel: you are looking at the
-   * hex to decide whether the tile fits, and every pixel of travel to a
-   * separate control is travel away from the thing being judged.
-   *
-   * 60 degrees CLOCKWISE per click, wrapping at six -- so the gesture is
-   * also its own reset, and a player who overshoots keeps clicking rather
-   * than hunting for a second, opposite control.
-   *
-   * Only fires for a click on the hex the selector is open on. A click on
-   * any OTHER hex is a new selection and falls through to the normal
-   * interceptor. */
+  /* Click the preview to rotate: 60 degrees clockwise, wrapping at six. Only for the hex the selector is open on.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
 
-  // Design note #141: a blocked cue is a transient nudge, not a state the
-  // player has to dismiss. Every other `hexClickQuery` status ends by the
-  // player closing the popup (`handleCloseTilePopup`), but a blocked click
-  // opens no popup, so there is no close button and nothing would ever
-  // clear it -- the tooltip would sit on the board until the next click.
-  //
-  // Keyed on the whole state object rather than on `status`, so clicking a
-  // SECOND blocked hex restarts the timer instead of inheriting the first
-  // one's remaining time (which, on a fast double-click, could dismiss the
-  // second message almost immediately).
+  // A blocked cue is a transient nudge with its own timer; keyed on the whole state so a second blocked click restarts it.
+  // See docs/ai_architecture/canvas_rendering.md - App.tsx #141
   useEffect(() => {
     if (hexClickQuery?.status !== "blocked") return undefined;
     const timer = window.setTimeout(() => {
@@ -3316,14 +1356,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [hexClickQuery]);
 
 
-  // Manual Route Point UI state -- see design note #11. `routeSelectMode`
-  // gates whether `<HexGridRenderer>` below is wired for route-point
-  // clicking (via its plain `onHexClick`) instead of its normal
-  // LayTile-popup click interceptor; `routePoints` is the resulting chain,
-  // `routeFeedback` a short-lived inline message for a rejected click
-  // (non-adjacent to the last point).
-  // Design note #44: armed by finishing a first Operating Round as a
-  // president. One-way -- `TutorialModal` handles dismissal and remembering.
+  // Manual route-point state. routeSelectMode rewires the canvas click to the builder (#44 arms the first-OR tutorial).
+  // See docs/ai_architecture/routing_pathfinding.md - App.tsx #11
   const [marketTutorialArmed, setMarketTutorialArmed] = useState(false);
 
   // Design note #158: the Tutorials front door's open/closed state. Separate
@@ -3337,101 +1371,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // interceptor is disarmed and clicks route to a token handler instead.
   const [tokenTargetMode, setTokenTargetMode] = useState(false);
 
-  /* ===================================================================
-   *  DESIGN NOTE 201: A TOKEN IS CONFIRMED, NOT DROPPED
-   * ===================================================================
-   *
-   * Clicking a city used to place the token and charge the treasury in the
-   * same gesture. That is the only irreversible, money-spending board action
-   * in this app with no confirmation step -- laying a tile, which costs
-   * comparable money and is equally permanent, has always asked for a green
-   * check first.
-   *
-   * The click now STAGES a placement. Nothing is dispatched, nothing is
-   * charged, the sub-phase does not advance, and targeting mode stays armed
-   * so clicking a different city simply re-aims. The green check is the only
-   * thing that commits.
-   *
-   * The anchor is the hex CENTROID the renderer reports (design note #171),
-   * not the cursor, so the ring sits on the hex however the board is
-   * scrolled, panned or zoomed -- the same value the tile selector stores
-   * for the same reason.
-   */
+  /* A token is STAGED, not dropped: nothing dispatches until the confirmation ring. Anchored to the hex centroid (#171).
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #201 */
   const [pendingToken, setPendingToken] = useState<{
     q: number;
     r: number;
     hexLabel: string;
-    /* ==================================================================
-     *  DESIGN NOTE 556: THE RING BELONGS TO THE CORPORATION PLACING
-     * ==================================================================
-     *
-     * REPORTED: placing a home station in a Stock Round shows the right
-     * corporation on the CURSOR and the wrong one -- the B&O -- on the
-     * previewed marker.
-     *
-     * Two different questions were being answered by two different values,
-     * and only the cursor asked the right one. `stationCursorCorporation`
-     * resolves the company from `homeStationPlacement` (the corporation the
-     * player was prompted for); the confirmation ring read
-     * `actingProtocolId`, which is the OPERATING ROUND's current
-     * corporation. In an Operating Round those coincide, which is why the
-     * ring has always looked right -- a home station is placed the instant a
-     * corporation floats, and that can happen in a STOCK round, where the
-     * operating cursor is pointing at whatever was last there or at the head
-     * of a queue that has not started.
-     *
-     * So the company travels with the staged placement. `null` means "the
-     * corporation on turn", which is what a paid Tokens-step placement is
-     * and the only case `actingProtocolId` was ever right for. */
+    /* The company travels with the staged placement; null means "the corporation on turn".
+       See docs/ai_architecture/canvas_rendering.md - App.tsx #556 */
     companyId: number | null;
     /** Design note #453: which city on the hex, or `null` when the geometry
      *  cannot say. Travels to `PlaceStationToken.city_index`. */
     cityIndex: number | null;
-    /* ==================================================================
-     *  DESIGN NOTE 454: THE FREE PLACEMENTS CONFIRM TOO
-     * ==================================================================
-     *
-     * REPORTED: clicking a hex instantly places the token without
-     * confirmation.
-     *
-     * The ORDINARY Tokens step has confirmed since design note #201 --
-     * `RadialTokenConfirm` is the check/X ring the tile selector's confirm
-     * is modelled on. What placed instantly were the two FREE placements
-     * added later: the home station at float (design note #440) and the
-     * D&H's F16 token (#444). Both wrote straight to state on the board
-     * click, so the newest flows were the ones missing the oldest
-     * safeguard.
-     *
-     * They route through this staging state now, so every station placement
-     * in the app answers the same ring. `kind` is what the confirmation
-     * then dispatches -- a paid `PlaceStationToken`, or a free write that
-     * must NOT go through that message because it charges the escalating
-     * token price (design note #239). */
+    /* Free placements (home station, D&H F16) stage and confirm like paid ones. kind decides what the confirmation dispatches.
+       See docs/ai_architecture/canvas_rendering.md - App.tsx #454 */
     kind: "paid" | "free";
     offsetX: number;
     offsetY: number;
   } | null>(null);
 
-  /* ==================================================================
-   *  DESIGN NOTE 240: THE SAME VEIL, FOR TOKENS
-   * ==================================================================
-   *
-   * Design note #223 built the board-dimming machinery for the Lay Track
-   * step: light what the corporation may act on, veil the rest, refuse
-   * clicks outside the set. Station placement has exactly the same shape --
-   * a small set of legal targets scattered across a hundred hexes -- and had
-   * none of it, so a player armed the token cursor and then hunted for a
-   * city their network reached by eye.
-   *
-   * Reusing the veil rather than adding a second highlight mechanism means
-   * the two steps behave identically, and the refusal a click gets is the
-   * same refusal in both. The SET differs, and that is the whole difference:
-   * track may be laid on hexes the network reaches OR touches, while a token
-   * needs a city with a free, unreserved slot ON the network.
-   *
-   * ONLY WHILE TARGETING IS ARMED. The veil is a strong visual statement and
-   * it should appear when the player has asked to place a token, not for the
-   * whole Tokens step -- during which they may simply be reading the board. */
+  /* The same veil, for tokens. The SET differs: a token needs a city with a free unreserved slot ON the network. Only while targeting is armed.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #240 */
   const tokenTargetFocus = useMemo(() => {
     if (!tokenTargetMode) return undefined;
     if (!activeStationCompany) return undefined;
@@ -3450,58 +1410,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return {
       visible,
       highlighted,
-      /* ==============================================================
-       *  DESIGN NOTE 514: THE RING WORE B&O'S BLUE
-       * ==============================================================
-       *
-       * REPORTED: the placement preview renders as a blue B&O token
-       * whatever corporation is acting.
-       *
-       * `actingProtocolId` is derived from the operating queue and falls
-       * back to `MOCK_LAY_TILE_PROTOCOL_ID` when that queue is empty --
-       * and that constant is `4`, which its own comment names as B&O.
-       * Design note #433 introduced the fallback so nothing would render
-       * `undefined` before an Operating Round had opened, which is a real
-       * concern and the wrong answer HERE: a station placement always has
-       * a corporation, because `activeStationCompany` is the company whose
-       * tokens are being placed. It is in scope, it is exact, and it needs
-       * no fallback at all.
-       *
-       * Reading the queue for this was asking a question about turn ORDER
-       * to answer a question about IDENTITY. The two agree during an
-       * ordinary Operating Round turn, which is why the wrong colour only
-       * appeared when they came apart -- a home-station placement raised
-       * before the queue exists being the case reported. */
+      /* Read activeStationCompany, not the operating queue: identity and turn order agree only during an ordinary OR turn.
+         See docs/ai_architecture/canvas_rendering.md - App.tsx #514 */
       glowColor: STATION_PLACEMENT_HIGHLIGHT_INK, // design note #561
     };
   }, [tokenTargetMode, activeStationCompany, gameState, mapGrid]);
 
 
-  /* ===================================================================
-   *  DESIGN NOTE 166: THE PRIVATE COMPANY TRADE, AND WHO ACTUALLY AGREES
-   * ===================================================================
-   *
-   * Two pieces of client-side state: the proposal sheet's open flag, and
-   * the live proposal itself. Both are LOCAL -- see
-   * `PrivateTradePanel.tsx` design note #0 for why the consent half cannot
-   * be anything else today. `ExecuteMsg::BuyPrivateCompany` is single-party;
-   * the contract never asks the seller.
-   *
-   * The consequence for this file is narrow and worth stating: `proposal`
-   * is not synchronised to anything. In a live room the seller's client
-   * will never see it, which is why the prompt tells the proposer that
-   * accepting buys the private outright rather than pretending a
-   * counterparty agreed.
-   */
+  /* Both local: BuyPrivateCompany is single-party, so the proposal is never synchronised and the prompt says so.
+     See docs/ai_architecture/contract_economy.md - App.tsx #166 */
   const [privateTradeOpen, setPrivateTradeOpen] = useState(false);
-  /* Design note #662: DERIVED from the shared sandbox state, not held here.
-     `useState` was the bug: an offer only the buyer's browser knew about,
-     which is why the seller was never asked and the buyer could accept on
-     their behalf. The shape the prompt wants differs from the shape the log
-     carries -- the prompt needs a display label for the owner and the log
-     must not carry one, because a label is this client's rendering of a
-     wallet and two clients may resolve it differently. So the label is added
-     here, at the edge, and the wallet is what travels. */
+  /* Derived from shared sandbox state, not useState. The display label is added at the edge; the wallet is what travels.
+     See docs/ai_architecture/contract_economy.md - App.tsx #662 */
   const privateProposal = useMemo<PrivateTradeProposal | null>(() => {
     const offer = gameState?.private_purchase_offer ?? null;
     if (!offer) return null;
@@ -3516,57 +1436,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [gameState?.private_purchase_offer]);
 
-  /* ===================================================================
-   *  DESIGN NOTE 205: TWO CONSENT FLOWS, ONE SHAPE, DIFFERENT BACKENDS
-   * ===================================================================
-   *
-   * A train trade and a private company purchase are the same interaction
-   * from the player's side -- name a price, the counterparty answers -- and
-   * the app now presents them identically (see `TrainPurchasePanel`'s
-   * `TrainTradePrompt` and `PrivateTradePanel`'s `PrivateTradePrompt`, kept
-   * deliberately alike). What differs is what the chain can carry, and the
-   * difference is worth stating because it decides where this state lives:
-   *
-   *   TRAINS -- the contract has the full flow.
-   *   `BuyTrainFromCorporation` settles instantly when one player presides
-   *   over both corporations and otherwise RECORDS an offer, which
-   *   `AcceptTrainOffer`/`RejectTrainOffer`/`RescindTrainOffer` answer and
-   *   `GetTrainOffers` publishes. Online, this file dispatches and the
-   *   seller's own client sees the offer arrive. Nothing local is needed.
-   *
-   *   PRIVATES -- the contract has half of it. `BuyPrivateCompany` is
-   *   single-party: it reads `private.owner` and never asks them. See
-   *   `PrivateTradePanel`'s design note #0.
-   *
-   * `sandboxTrainProposal` therefore exists for exactly ONE deployment: the
-   * offline sandbox, which has no chain to record an offer in and no second
-   * client to show it to. It is the local stand-in for the offer register,
-   * and it is scoped to the sandbox rather than shared with the live path so
-   * that a live room can never end up answering a proposal the chain does
-   * not know about.
-   */
+  /* Trains have a full on-chain offer flow; privates are single-party. sandboxTrainProposal stands in for the offer register offline only.
+     See docs/ai_architecture/contract_economy.md - App.tsx #205 */
   const [sandboxTrainProposal, setSandboxTrainProposal] =
     useState<TrainTradeProposal | null>(null);
 
-  /* ===================================================================
-   *  DESIGN NOTE 163: UNIVERSAL PLANNING MODE
-   * ===================================================================
-   *
-   * Opening the tile selector used to require being the acting president in
-   * the Track sub-phase, because opening it and laying from it were the
-   * same gesture. That made the board unreadable exactly when a player most
-   * needs to read it: on somebody else's turn, or during a Stock Round,
-   * while deciding what a corporation will be able to build next round.
-   *
-   * The two are now separate. INSPECTING is always allowed -- click any hex,
-   * see its legal upgrades, preview one, rotate it, judge the fit.
-   * DISPATCHING is gated, and only the green check is affected.
-   *
-   * Nothing about this loosens a rule. A preview is client-side state that
-   * touches no message; `canLayTileNow` guards the one place a transaction
-   * is produced, and the contract independently rejects an out-of-turn lay
-   * regardless of what this UI allows.
-   */
+  /* Inspecting and dispatching are separate gestures; only the green check is gated.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #163 */
   const [radialSelector, setRadialSelector] = useState<{
     q: number;
     r: number;
@@ -3591,47 +1467,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     openRingHexRef.current = radialSelector ? { q: radialSelector.q, r: radialSelector.r } : null;
   }, [radialSelector]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 625: THE TURN ARRIVING IS AN EVENT, NOT A NOTIFICATION
-   * ==================================================================
-   *
-   * REPORTED: "when it passes from one corporation to another, if a player is
-   * already using the tile selector looking at the map (or whatever else), we
-   * need to disable that and force them to the view with the veil and their
-   * corporation's legal placements. When I was looking at map tiles and it
-   * became my corporation's turn, I had to click around several times to get
-   * to the correct display for the Lay Track phase."
-   *
-   * WHAT WAS ALREADY HANDLED, AND WHY IT WAS NOT ENOUGH. Design note #213's
-   * tab effect fires on a `current_round_type` transition -- and a corporation
-   * handover inside an Operating Round is not one. The sub-phase reset above
-   * fires correctly on `active_corporation_index`, so the STEP was right;
-   * what nothing touched was the screen the player was looking at and the
-   * picker they had open on it. So the state machine advanced properly and
-   * the view stayed exactly where browsing had left it, which is the worst
-   * combination: every control is correct and none of them is on screen.
-   *
-   * THE BROWSING STATE IS THE PART THAT HAS TO GO. An open ring belongs to
-   * whatever the player was studying a moment ago -- very likely a hex their
-   * corporation cannot reach, and, since design note #620, a ring whose
-   * candidate list is about to narrow under them as `canLayTileNow` flips
-   * true. Closing it is not tidying up; leaving it open would show a filtered
-   * carousel over a hex nobody chose.
-   *
-   * ONLY FOR THE PLAYER WHOSE TURN IT NOW IS. Everyone else is browsing on
-   * purpose and the handover is not about them -- yanking a spectator's map
-   * to a corporation they do not run would be the same interruption this note
-   * exists to remove, aimed at the wrong person.
-   *
-   * ONCE PER HANDOVER, tracked against the previous acting corporation rather
-   * than keyed on it. A player who deliberately clicks over to the Ledger
-   * mid-turn must be able to stay there: this fires on the edge, not on the
-   * condition, which is the same discipline design note #213 applies with
-   * `prevRoundTypeRef` and for the same reason.
-   *
-   * NO SUB-PHASE WRITE HERE. The effect above owns `orSubPhase` and already
-   * reseats it on this exact change. Two effects writing one cursor on one
-   * event is how they end up disagreeing about which of them ran last. */
+  /* A corporation handover closes the open picker and returns the new acting president to the board. Once per handover, and only for them.
+     See docs/ai_architecture/state_machine.md - App.tsx #625 */
   const prevActingCorporationRef = useRef<number | null>(null);
   useEffect(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") {
@@ -3651,81 +1488,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setActiveMainTab(surfaceTabFor("OperatingRound"));
   }, [gameState, actingProtocolId, viewerAddress]);
   const [routeSelectMode, setRouteSelectMode] = useState(false);
-  /* ==================================================================
-   *  DESIGN NOTE 275: ONE ROUTE PER TRAIN, KEYED BY TRAIN
-   * ==================================================================
-   *
-   * REPORTED: the router runs a single train even when the corporation owns
-   * three.
-   *
-   * `routePoints` was one array, so the app could hold exactly one route at
-   * a time -- which is not what a 1830 corporation does. It runs every
-   * train it owns in one turn, each on its own route, and the dividend is
-   * the sum.
-   *
-   * KEYED BY INDEX INTO `owned_trains`, not by model. That is the whole
-   * subtlety: a corporation with three 3-trains has three trains, and
-   * "the 3-train's route" does not identify any of them. `runnableTrains`
-   * had deduplicated the roster on the reasoning that "two 3-trains are one
-   * CHOICE" -- correct while the question was which train to validate ONE
-   * route against, wrong the moment the question became which train this
-   * route belongs to.
-   *
-   * A `Record` keyed by that index rather than an array parallel to the
-   * roster: the roster changes under this (a train rusts, one is bought
-   * mid-turn) and a parallel array would silently reassign every route to
-   * the wrong train when it did. Stale keys are simply ignored when the
-   * drafts are read back. */
+  /* One route per train, keyed by index into owned_trains - a model name does not identify one of three 3-trains.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #275 */
   const [routeDrafts, setRouteDrafts] = useState<Readonly<Record<number, RoutePoint[]>>>({});
   const [activeTrainIndex, setActiveTrainIndex] = useState<number>(0);
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
-  /* ==================================================================
-   *  DESIGN NOTE 278: DID THIS CORPORATION ACTUALLY RUN THIS TURN?
-   * ==================================================================
-   *
-   * The Dividends rule turns on whether revenue was EARNED THIS TURN, and
-   * `last_route_revenue` cannot answer that on its own. Its own doc comment
-   * is explicit: it reads as "what it earned last time", written on every
-   * run and zeroed only by a run that found no route. A corporation that
-   * banked $180 in OR1 and then skips Routes entirely in OR2 still reports
-   * $180 -- so testing the field alone would force a Pay/Withhold choice on
-   * a company that has not run a train this round, which is the opposite of
-   * the rule and would dispatch a declaration with nothing behind it.
-   *
-   * So the turn's own history is observed: `true` once routes are declared,
-   * `false` once the Routes step is skipped, and the whole record is
-   * discarded when the acting corporation changes.
-   *
-   * `null` MEANS UNKNOWN, AND UNKNOWN ENFORCES. A page reload mid-turn
-   * leaves no observation, and the two possible mistakes are not equal --
-   * wrongly hiding Skip strands a player on a step, wrongly showing it
-   * destroys money they have already earned. Unknown therefore falls back
-   * to the field, which is the conservative side of the rule this note
-   * exists to enforce. */
-  /* ==================================================================
-   *  DESIGN NOTE 522 (App side): THE ROOM, AND ITS CURSOR
-   * ==================================================================
-   *
-   * Four pieces of state, and three of them are refs for the same reason:
-   * `runGameplayAction` reads them, and that callback is in the dependency
-   * array of the two effects that DISPATCH on the player's behalf (design
-   * note #439's auto-skip and forced withhold). Rebuilding it on every
-   * applied action would re-arm those effects mid-replay, which is a render
-   * becoming a transaction -- and during a replay, a transaction becoming a
-   * second log entry.
-   *
-   * `appliedIndexRef` is how far this browser has replayed. It is the
-   * cursor the listener takes its tail from AND the index the next append
-   * claims, which is what keeps a client's own writes in sequence with what
-   * it has already applied. */
-  /* Design note #524: seeded from the Lobby's choice. `useState`'s initial
-     value rather than an effect, so the listener's very first run already
-     has the room -- an effect would open a solo session for one render and
-     then swap it, replaying the log into a board that had already begun. */
-  /* Design note #534: DECLARED EARLY, above `viewerAddress`, because that
-     value branches on it. The rest of the room's state stays below with the
-     listener that drives it -- only the two things identity depends on are
-     hoisted, so the move is as small as the dependency. */
+  /* last_route_revenue cannot say whether revenue was earned THIS turn, so the turn's own history is observed; null enforces. #522: the room cursor, three refs so dispatching effects are not re-armed.
+     See docs/ai_architecture/state_machine.md - App.tsx #278 */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
@@ -3737,51 +1506,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
   const appliedIndexRef = useRef(0);
-  /* ==================================================================
-   *  DESIGN NOTE 591b: TWO COUNTERS, BECAUSE THEY COUNT DIFFERENT THINGS
-   * ==================================================================
-   *
-   * One number used to serve both jobs, and undo is what separates them. The
-   * log is append-only, so "how long is the log" only ever grows; the list of
-   * actions that still COUNT shrinks the moment somebody reverts.
-   *
-   *   `appliedIndexRef` answers "where does the next append go" -- the log's
-   *   length, so an undone action still occupies its index and nothing is
-   *   ever written over it.
-   *
-   *   `appliedCountRef` answers "how much of the live history have I run" --
-   *   a position in the effective list, which is what the drain compares
-   *   against to notice a rewind.
-   *
-   * Conflating them would make an undo look like a gap in the log. */
+  /* Two counters: appliedIndexRef is where the next append goes, appliedCountRef is how much live history has run. Undo separates them.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #591 */
   const appliedCountRef = useRef(0);
   /** Design note #591b: resets every atom to the room's boot state, so the
    *  drain can replay from the fixture. Published by an effect below,
    *  because the setters it needs are declared after this. */
   const rebuildRef = useRef<(() => void) | null>(null);
-  /** Design note #591d: the log as last seen, for the undo controls. They ask
-   *  it what still counts and who authored it -- a ref rather than state
-   *  because the answer is only needed at the moment a button is pressed, and
-   *  making it a dependency would rebuild the handlers on every action. */
-  /* Design note #643: `at` joins the mirrored shape. A structural type that
-     omits a field the source carries is a silent narrowing -- the drain reads
-     `SandboxAction`s and this ref was quietly dropping their timestamp on the
-     way through. */
+  /** The log as last seen, for the undo controls; a ref so pressing a button does not rebuild the handlers. Mirrors `at` too (#643).
+   *  See docs/ai_architecture/state_machine.md - App.tsx #591 */
   const sandboxLogRef = useRef<
     Array<{ index: number; payload: string; actor: string; at?: number }>
   >([]);
-  /* ==================================================================
-   *  DESIGN NOTE 592a: WHERE THE ROUND STARTED
-   * ==================================================================
-   *
-   * The log index of the last action that OPENED a round -- `SetupGame` or
-   * `OpenStockRound` -- so the host's deeper undo knows how far "the start of
-   * the round" is.
-   *
-   * Derived from the log rather than counted as rounds pass, for design note
-   * #565's reason: a value derived from the log cannot be stale, cannot drift
-   * after a refresh, and cannot survive an undo that took the round boundary
-   * itself back. A counter would need correcting in all three cases. */
+  /* Log index of the last round-opening action, derived from the log rather than counted, so an undo cannot leave it stale.
+     See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const roundBoundaryIndexRef = useRef<number | null>(null);
   const sandboxSeatRef = useRef<string>("");
   useEffect(() => {
@@ -3802,17 +1540,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setRoutesRunThisTurn(null);
   }, [actingProtocolId]);
 
-  /* Design note #492 in `utils/dividendStep.ts`: what this corporation
-     actually committed at the Run Routes step, summed across every train it
-     dispatched. `last_route_revenue` cannot hold it -- `RunManualRoute` is
-     one message per train and each write replaces the last -- so the total
-     the player assembled is kept here and handed to the Dividends step.
-
-     KEYED BY CORPORATION and cleared whenever the acting one changes, the
-     same shape and the same effect `routesRunThisTurn` above uses. The
-     protocol id is carried rather than assumed: an optimistic sub-phase
-     advance can land a render where the queue has moved on, and a total
-     credited to the wrong corporation would be worse than none. */
+  /* The total actually committed at Run Routes, summed across trains and keyed by corporation. last_route_revenue holds only the last message.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
   const [committedRouteRevenue, setCommittedRouteRevenue] = useState<{
     protocolId: number;
     total: number;
@@ -3820,40 +1549,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     setCommittedRouteRevenue(null);
   }, [actingProtocolId]);
-  /* Mirrored into a ref for the same reason `routeDraftsRef` is:
-     `declareDividendsChoice` reads this, and the forced-withhold effect
-     (design note #414) depends on that callback's identity. Adding a
-     frequently-changing value to its dependency array would rebuild the
-     callback and re-arm the effect that dispatches on the player's behalf --
-     a re-render becoming a transaction. The ref keeps the read current
-     without touching identity. */
+  /* Mirrored into a ref so declareDividendsChoice's identity stays stable and the forced-withhold effect is not re-armed.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
   const committedRouteRevenueRef = useRef<{ protocolId: number; total: number } | null>(null);
   useEffect(() => {
     committedRouteRevenueRef.current = committedRouteRevenue;
   }, [committedRouteRevenue]);
-  /* ==================================================================
-   *  DESIGN NOTE 484: "IT SKIPPED ROUTES" IS A FACT THREE PLACES NEED
-   * ==================================================================
-   *
-   * REPORTED: a corporation that cannot run is still walked through Run
-   * Routes and Dividends, and Dividends still offers Skip at $0.
-   *
-   * The observation existed -- `routesRunThisTurn` -- and exactly one
-   * reader consumed it, to decide whether `last_route_revenue` was stale.
-   * Everything else that needed it re-asked a DIFFERENT question
-   * (`noEarnableRevenue`, which probes the pathfinder) and the two disagree
-   * in the gap that produced every symptom in the report:
-   *
-   *   `maxRouteRevenue` returns `null` -- "could not tell" -- for a
-   *   corporation with a train and no token on the board, and `null` is not
-   *   `0`, so `noEarnableRevenue` was `null` and the forced-withhold effect
-   *   declined to fire. The corporation sat on Dividends waiting for a
-   *   click, having already been auto-skipped past Routes one step earlier.
-   *   The two mechanisms had different opinions about the same corporation
-   *   in the same turn.
-   *
-   * Hoisted here, next to the state it reads, so the three consumers below
-   * share one answer instead of three approximations of it. */
+  /* One shared observation of "did this corporation run"; noEarnableRevenue probes the pathfinder and answers null in the case that matters.
+     See docs/ai_architecture/state_machine.md - App.tsx #484 */
   const skippedRoutesThisTurn =
     routesRunThisTurn?.protocolId === actingProtocolId && routesRunThisTurn.ran === false;
   /* Design note #275: read by the canvas click handler, which must see the
@@ -3876,26 +1579,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     ownedTrainRosterRef.current = ownedTrainRoster;
   }, [ownedTrainRoster]);
-  /* Design note #266: WHICH TOOL DREW WHAT IS ON SCREEN.
-     `routeSelectMode` stays as the CANVAS flag -- whether map clicks are
-     being routed to the builder -- and this says which of the two drafting
-     tools the panel's toggle is showing as chosen. They are separate
-     because they answer different questions: one gates an input, the other
-     labels a state, and both auto and manual want the input on. */
-  /* Design note #493: `routeBuildMode` is GONE. Design note #286 argued here
-     about which position the toggle should open on, and the honest answer
-     turned out to be that neither position did anything -- the map is
-     editable for the whole sub-phase either way (design note #266's
-     `routeSelectMode` effect just below). What #286 was really defending is
-     kept: the step still DRAFTS on arrival, so the table shows the tracer's
-     answer rather than an empty grid. */
+  /* routeSelectMode is the CANVAS flag; routeBuildMode is gone (#493) because neither toggle position changed behaviour.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
 
-  // Design note #33: hiding the toggle is not enough -- route mode also
-  // rewires the Rail Map's click handling, so a mode left ON when its phase
-  // ends would keep swallowing tile-lay clicks with no visible control to
-  // turn it back off. Force it off (and drop the half-built path with it)
-  // the moment the Routes sub-phase ends, in the same place the flag lives
-  // rather than in the bar that renders the switch.
+  // Force route mode off when the Routes step ends, or it keeps swallowing tile-lay clicks with no visible control to disable it.
+  // See docs/ai_architecture/routing_pathfinding.md - App.tsx #33
   const inRunTrainsSubPhase =
     (gameState?.current_round_type ?? null) === "OperatingRound" && orSubPhase === "Routes";
   useEffect(() => {
@@ -3906,13 +1594,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setRouteFeedback(null);
   }, [inRunTrainsSubPhase]);
 
-  /* Design note #266: entering the step ENGAGES the builder.
-     The panel is now on screen for the whole sub-phase, and a visible
-     builder whose map clicks go nowhere is worse than no builder -- the
-     player clicks a city, nothing happens, and the only clue is a control
-     they already appear to have selected. There is nothing else to click
-     the map for during Run Routes: tiles belong to Track and tokens to
-     Tokens, both of which have already passed. */
+  /* Entering the step engages the builder: a visible builder whose map clicks go nowhere is worse than none.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
   useEffect(() => {
     if (!inRunTrainsSubPhase) return;
     setRouteSelectMode(true);
@@ -3944,28 +1627,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setRouteFeedback(null);
   }, []);
 
-  /* ==================================================================
-   *  DESIGN NOTE 202: AUTO ROUTE IS A DRAFTING TOOL
-   * ==================================================================
-   *
-   * The button had been disabled since Audit G-13 removed
-   * `ExecuteOperatingRound`, with a tooltip explaining that the contract's
-   * own pathfinder has no message reaching it. That is true of the CONTRACT
-   * and irrelevant to the BUTTON: a player asking for a route to be drawn
-   * for them is asking the UI to pre-fill the manual builder, which needs no
-   * chain at all. The result leaves through the same `RunManualRoute` the
-   * player could have clicked out by hand, and the contract validates it
-   * exactly as it validates a hand-built one.
-   *
-   * So this fills in the route drafts and then gets out of the way. It is
-   * explicitly a SUGGESTION -- `autoTraceRoute`'s own design note #0 lists
-   * what it does not check, and every one of those remains
-   * `pathfinding.rs`'s -- and the player can extend, trim or clear whatever
-   * it drew. Naming it "Auto Route" rather than "Best Route" is deliberate
-   * for the same reason design note #186 refused "Calculate BEST Route": a
-   * client-side claim of optimality that the contract disagreed with would
-   * be worse than no button.
-   */
+  /* Auto Route pre-fills the manual builder and needs no chain; it is a suggestion, dispatched through the same RunManualRoute.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #202 */
   const handleAutoRoute = useCallback(() => {
     const corporation = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
@@ -3979,25 +1642,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
-    /* ==================================================================
-     *  DESIGN NOTE 280: THE BEST SET, CHOSEN JOINTLY
-     * ==================================================================
-     *
-     * Design note #275 drafted one train at a time, biggest first, handing
-     * each the hexes its predecessors took. Two things were wrong with that
-     * and both are now `assignRouteSet`'s (its own design notes #4 and #7):
-     *
-     *   IT BARRED WHOLE HEXES. Two trains may legally cross one hex on
-     *   different curves, and may reach the two separate stations of an OO
-     *   tile. Occupancy is per RAIL now.
-     *
-     *   IT DECIDED IN ORDER. The best route for the 5-train may be the only
-     *   route the 3-train could have run, and a greedy pass cannot see that
-     *   because it commits the 5-train before looking at the 3. The set is
-     *   chosen jointly against the combined payout.
-     *
-     * This loop is therefore gone entirely -- what remains is unpacking the
-     * answer into per-train drafts. */
+    /* assignRouteSet chooses the whole set jointly, per-rail rather than per-hex; this loop only unpacks the answer.
+       See docs/ai_architecture/routing_pathfinding.md - App.tsx #280 */
     const result = assignRouteSet({
       mapGrid,
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
@@ -4036,31 +1682,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // the drafted path is meant to be editable, and editing it means map
     // clicks have to reach the builder.
     setRouteSelectMode(true);
-    /* Design note #266: NO SUCCESS MESSAGE. This used to set
-       "Auto Route drafted 5 hexes worth $180. Edit it by clicking hexes, or
-       clear it and build your own." -- a red string, on the happy path,
-       restating the hex chain and the value that the panel renders two rows
-       above it, then explaining the panel's own controls. Every fact in it
-       is now on screen as a fact rather than as a sentence about one. See
-       `RoutePlannerPanel`'s design note #3. */
+    /* No success message: every fact in it is already on screen as a fact.
+       See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
     setRouteFeedback(null);
   }, [gameState, actingProtocolId, mapGrid, currentPhase, ownedTrainRoster]);
 
-  /* Design note #286: ARRIVING AT THE STEP MEANS ACTUALLY DRAFTING.
-     An empty table on arrival is worse than a drafted one -- the tracer's
-     answer is the better starting point for most players and an expert can
-     edit it, which is the whole argument #286 made.
-
-     Design note #493: the `routeBuildMode !== "auto"` guard is gone with the
-     toggle. It only ever skipped the draft when the player had switched to a
-     mode that behaved identically, so removing it makes the step draft
-     unconditionally -- which is what it did in practice, since the toggle
-     opened on auto.
-
-     Guarded per corporation rather than per render: the tracer is a search,
-     and re-running it after every board change would overwrite a route the
-     player has since edited by hand. One draft on arrival, then it is
-     theirs -- and `AutoRouteButton` is how they ask for another. */
+  /* Draft once on arrival, then the route is the player's; guarded per corporation so a board change cannot overwrite hand edits.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #286 */
   const autoDraftedForRef = useRef<number | null>(null);
   useEffect(() => {
     if (!inRunTrainsSubPhase) {
@@ -4091,76 +1719,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       clientX: number;
       clientY: number;
     }) => {
-      /* ==================================================================
-       *  DESIGN NOTE 243: THE WAYPOINT CARRIES THE LABEL, NOT THE NAME
-       * ==================================================================
-       *
-       * REPORTED BUG: auto-route prices a route correctly and manual route
-       * resolves to $0.
-       *
-       * This stored `info.hexLabel` -- which is `describeHex`'s DISPLAY
-       * string, "New York (G19)" -- as the waypoint's label. Two things
-       * followed, and only the first was visible:
-       *
-       *   IT PRICED AT ZERO. `sandboxRouteBreakdown` looks each stop up in a
-       *   table keyed on the canonical label, so every stop missed and the
-       *   whole route totalled nothing. `autoTraceRoute` builds its labels
-       *   from `STATIC_BOARD_HEXES` and therefore priced identical routes
-       *   correctly -- which is precisely the asymmetry reported, and the
-       *   reason it looked like two different revenue calculations when it
-       *   was always one being fed two different kinds of string.
-       *
-       *   IT WOULD HAVE BEEN REJECTED ON CHAIN. The same value goes into
-       *   `RunManualRoute`'s `path[].hex`. The contract resolves that
-       *   against its own hex table, so a submitted manual route named a hex
-       *   that does not exist.
-       *
-       * `boardLabel` is the identifier (design note #242). `hexLabel` stays
-       * the display string and is still what the feedback messages below
-       * quote, because "Altoona (H12) has no track" reads better than
-       * "H12 has no track".
-       */
+      /* Store boardLabel (the canonical identifier), not hexLabel (the display string) - the pricing table and the contract both key on the former.
+         See docs/ai_architecture/routing_pathfinding.md - App.tsx #243 */
       const boardLabel = info.boardLabel;
       if (boardLabel === null) return;
       const point: RoutePoint = { q: info.q, r: info.r, hexLabel: boardLabel };
 
-      /* Design note #266/#493: EDITING A DRAFT MAKES IT YOURS. This used to
-         flip the toggle to "Manual", because a control still reading
-         "Auto-Route" would be crediting the tracer for a path the player had
-         since changed. With no toggle there is nothing to correct: the click
-         edits the draft, which is what it always did underneath the label. */
+      /* Editing a draft makes it yours; with no auto/manual toggle there is nothing to correct.
+         See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
 
-      /* ==================================================================
-       *  DESIGN NOTE 256: A ROUTE RUNS BETWEEN TWO PAYING STOPS
-       * ==================================================================
-       *
-       * REPORTED: routes should start and end at a city, town or red
-       * off-board hex rather than anywhere the player happens to click.
-       *
-       * 1830's definition of a route is a run between two REVENUE CENTRES,
-       * with any amount of plain track in between. The builder enforced only
-       * that each click had track on it, so a route could begin and end on
-       * bare connectors -- which the contract then refused for failing the
-       * two-centre minimum, after the player had drawn the whole thing.
-       *
-       * The FIRST click is refused outright when it is not a revenue centre:
-       * there is no ambiguity about what it is, and refusing it costs the
-       * player one misplaced click rather than a whole path. The LAST is
-       * left to the readout and the Run button -- it cannot be enforced on
-       * click, because every intermediate click is momentarily "the last"
-       * and refusing plain track mid-draw would make it impossible to cross
-       * any.
-       */
-      /* Design note #264: A TOWN IS NOT A TERMINUS.
-         This used to test `hexStopValue > 0` -- "does this hex pay
-         anything" -- which is the right question for revenue and the wrong
-         one for termination. Towns pay, and 1830 does not let a route begin
-         or end on one: they are passed THROUGH, adding their value to a run
-         between two cities. `isRouteTerminusHex` asks the question that
-         actually applies. */
-      // Design note #275: the ACTIVE train's draft. Every rule below is
-      // about one train's own chain, so they all read this rather than a
-      // single global route.
+      // A route runs between two revenue centres: the FIRST click is refused outright if it is not one; the last is left to the readout. Towns are not termini (#264).
+      // See docs/ai_architecture/routing_pathfinding.md - App.tsx #256
       const current = routeDraftsRef.current[activeTrainIndexRef.current] ?? [];
       if (current.length === 0 && !isRouteTerminusHex(mapGrid, boardLabel)) {
         setRouteFeedback(
@@ -4169,18 +1738,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
 
-      /* Design note #186: A WAYPOINT NEEDS TRACK.
-       *
-       * Any hex could be added, including bare ground the corporation has
-       * never built on -- so a "route" could be drawn across empty prairie,
-       * priced, and submitted. The adjacency check below refuses a
-       * DISCONNECTED chain; it has nothing to say about a connected chain of
-       * hexes with no rails on them.
-       *
-       * Preprinted track counts: the gray hexes and the landmarks ship with
-       * rails the board draws and trains may run on, so `liveEdgesForHex` --
-       * which reads a laid tile's rotated mask AND the preprinted geometry --
-       * is the right test rather than "is there a tile record". */
+      /* A waypoint needs track. liveEdgesForHex counts preprinted rails as well as laid tiles.
+         See docs/ai_architecture/routing_pathfinding.md - App.tsx #186 */
       if (liveEdgesForHex(mapGrid, info.q, info.r).length === 0) {
         setRouteFeedback(
           `${info.hexLabel} has no track. Lay a tile there first, or pick a hex the network already runs through.`,
@@ -4191,41 +1750,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setRouteDrafts((all) => {
         const trainIndex = activeTrainIndexRef.current;
         const prev = all[trainIndex] ?? [];
-        /* ==================================================================
-         *  DESIGN NOTE 624: A ROUTE CANNOT BE LONGER THAN ITS TRAIN
-         * ==================================================================
-         *
-         * REPORTED: "the manual route selector lets me (visually) exceed the
-         * actual length my trains can run. We should not let this happen to
-         * prevent player confusion."
-         *
-         * Every other rule about a waypoint was enforced on the click -- it
-         * needs track (#186), it cannot repeat a hex, the first one has to be
-         * a terminus (#256/#264) -- and the train's own capacity was not,
-         * even though it is the most basic of them. A player could draw a
-         * seven-stop path with a 3-train, watch it price, and only learn it
-         * was illegal from a readout below the map.
-         *
-         * WHY IT IS A REFUSAL AND NOT A WARNING. `exceedsMaxDistance` already
-         * exists on the draft and already greys the row, so the state was
-         * being REPORTED. The report is that reporting is too late: by then
-         * the player has drawn a route they now have to unpick, and the
-         * drawing is the part that took the effort. Refusing the click that
-         * would break the rule costs one click and leaves a legal route on
-         * screen.
-         *
-         * REVENUE CENTRES, NOT HEXES. A 3-train runs three STOPS and may
-         * cross any amount of plain track between them, so the count has to
-         * ask each hex whether it pays -- which is what `autoTraceRoute` and
-         * the contract both measure, and what `maxDistance` is expressed in.
-         * Counting hexes would refuse perfectly legal long runs across empty
-         * track, which is the opposite failure.
-         *
-         * THE BRIDGE IS COUNTED TOO. `bridgeWaypoints` can fill a gap through
-         * a town or a third city (its own design note #5), so a single click
-         * may add several paying stops. Checking the RESULT rather than the
-         * click is what catches that -- and it is why this is applied at
-         * `commit` rather than at either append site. */
+        /* Refuse the click that would exceed the train's capacity, counted in revenue CENTRES and checked on the commit so a bridge's extra stops count.
+           See docs/ai_architecture/routing_pathfinding.md - App.tsx #624 */
         const cap =
           ownedTrainRosterRef.current.find((train) => train.trainIndex === trainIndex)
             ?.maxDistance ?? null;
@@ -4282,29 +1808,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return commit([...prev, point]);
         }
 
-        /* ==================================================================
-         *  DESIGN NOTE 276: THE GAP BETWEEN TWO STOPS IS NOT A DECISION
-         * ==================================================================
-         *
-         * REPORTED: manual routing forces a click on every plain track hex
-         * between two cities.
-         *
-         * The old rule here refused any non-adjacent click outright --
-         * "route points must chain through neighboring hexes" -- which is a
-         * true statement about routes and the wrong thing to ask of a
-         * player. The chain has to be connected; it does not have to be
-         * typed in one hex at a time, and on a built-up board nineteen of
-         * every twenty clicks had exactly one legal answer.
-         *
-         * `bridgeWaypoints` walks the live track between the two, preferring
-         * plain track over a shortcut through some third city (see its own
-         * design note #5 for why that preference matters -- an unasked-for
-         * city costs both revenue and a stop of the train's capacity).
-         *
-         * A FAILED BRIDGE IS STILL REFUSED, and says so. Two hexes with no
-         * rails between them are not a route, and filling that gap with a
-         * straight line would be the class of plausible fiction this
-         * codebase has deleted twice already. */
+        /* bridgeWaypoints fills the gap between two stops, preferring plain track over a third city. A failed bridge is still refused.
+           See docs/ai_architecture/routing_pathfinding.md - App.tsx #276 */
         const bridge = bridgeWaypoints(
           mapGrid,
           last,
@@ -4323,48 +1828,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return commit([...prev, ...bridge]);
       });
     },
-    // `mapGrid` joins for design note #186's track check -- a stale closure
-    // would judge a waypoint against the board as it was before the last
-    // tile lay, and refuse a hex the player has just built on.
-    //
-    // The draft and the active train are read through REFS (design note
-    // #275), so neither joins this list. They change on every click, and a
-    // handler identity that changed with them would rebuild the canvas's
-    // click prop mid-draw -- the same staleness trap `routePoints.length`
-    // used to sit in, one level up. The ERA is not needed either: design
-    // note #264 replaced the value test with an archetype test, and whether
-    // a hex holds a city does not change with the phase.
+    // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas click prop is not rebuilt mid-draw.
+    // See docs/ai_architecture/routing_pathfinding.md - App.tsx #232
     [mapGrid],
   );
 
-/* `routeHopCount` is GONE (design note #156). It counted hops between
-   selected hexes and was compared against a train's number, which is the
-   classic 18xx misreading: a 2-train is limited to two REVENUE CENTRES, not
-   two hexes of travel. `routeBreakdown.centres` replaced it as the capacity
-   figure and `routeBreakdown.hexes` as the "how far did I click" figure --
-   deleted rather than left unused so nothing can quietly start comparing
-   against it again. */
+/* routeHopCount is deleted: a 2-train is capped at two revenue centres, not two hexes of travel.
+   See docs/ai_architecture/routing_pathfinding.md - App.tsx #156 */
 
-  // Live preview of what the selected stops are worth. Recomputed as the
-  // player clicks, which is the whole point -- a number that only appears
-  // after dispatch cannot be used to compare two candidate routes.
-  //
-  // Below two points there is no route to price, and showing "$0" for a
-  // single click would read as "this city is worthless" rather than "you
-  // have not drawn a route yet".
-  /* ==================================================================
-   *  DESIGN NOTE 275: EVERY DRAFT, PRICED
-   * ==================================================================
-   *
-   * One memo over the whole roster rather than the old single
-   * `routeBreakdown`. Each entry is what `RoutePlannerPanel` renders as one
-   * row and what `handleRunTrains` dispatches as one message, so the panel,
-   * the total and the dispatch cannot disagree about which routes count. */
-  /** Design note #474: the acting corporation's station tokens, as `(q, r)`
-   *  pairs -- what a route must touch one of. Derived once rather than
-   *  looked up per draft: every train's route is judged against the same
-   *  corporation's tokens, and re-finding the company inside the map would
-   *  make the rule look per-train when it is per-corporation. */
+  // Every draft priced in one memo, so the panel, the total and the dispatch cannot disagree. #474: the corporation's tokens, derived once.
+  // See docs/ai_architecture/routing_pathfinding.md - App.tsx #275
   const routeTokenHexes = useMemo<ReadonlyArray<readonly [number, number]>>(
     () =>
       gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
@@ -4380,41 +1853,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         points.length < 2
           ? null
           : sandboxRouteBreakdown(mapGrid, routePointsToWaypoints(points), era);
-      /* ==================================================================
-       *  DESIGN NOTE 285: THE STOP COUNT IS THE STOP LIST
-       * ==================================================================
-       *
-       * REPORTED: a 2-train running City -> Town -> City reads "2/2 stops"
-       * in Manual mode and can be submitted, while Auto-Route rejects it.
-       *
-       * The arithmetic was audited across the whole board before changing
-       * anything, and it holds: `sandboxRouteBreakdown` counts every hex
-       * that pays, towns included, so that route reports three stops in
-       * both modes and no reachable hex on the board prices at $0. The
-       * manual bridge includes the town too. There was no divergence to
-       * find in the counting itself.
-       *
-       * WHAT THERE WAS is a hole one level up, and it produces exactly the
-       * reported symptom -- a route that cannot be blocked:
-       *
-       *   `maxDistance` comes from `MOCK_TRAIN_CATALOG`, and a model the
-       *   catalog does not know returns `undefined`. The old test read
-       *   `maxDistance !== undefined && centres > maxDistance`, so an
-       *   unrecognised train had NO capacity at all: every route passed,
-       *   however many stops it visited, and the readout printed a bare
-       *   count with no limit beside it. Any chain reporting a model this
-       *   build does not carry -- or any future train -- lands there.
-       *
-       * The cap now falls back rather than vanishing. An unknown train is
-       * treated as the smallest real one, which is the conservative
-       * direction: it can refuse a route the contract would have allowed,
-       * and it cannot wave through one the contract will refuse.
-       *
-       * AND THE COUNT IS NOW `stops.length` -- literally the list the panel
-       * renders. The two were already equal by construction, and equal by
-       * construction is a thing that stops being true when someone edits
-       * one of them. Reading the array the reader is looking at removes the
-       * possibility. */
+      /* An unknown train falls back to the smallest real capacity rather than having none; the count is stops.length, the list the panel renders.
+         See docs/ai_architecture/routing_pathfinding.md - App.tsx #285 */
       const centres = breakdown?.stops.length ?? 0;
       const cap = train.maxDistance ?? SMALLEST_TRAIN_CAPACITY;
       const last = points[points.length - 1];
@@ -4437,48 +1877,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           points.length >= 2 && last !== undefined
             ? !isRouteTerminusHex(mapGrid, last.hexLabel)
             : false,
-        /* ==============================================================
-         *  DESIGN NOTE 474: THE TOKEN RULE, WHICH WAS NOT CHECKED AT ALL
-         * ==============================================================
-         *
-         * A route must pass through a city this corporation holds a token
-         * in. Nothing enforced that: `handleRunTrains` filtered on revenue,
-         * distance and terminus, so a run drawn entirely across another
-         * company's network priced up and dispatched, and the contract
-         * refused it after the fact.
-         *
-         * ANY token, ANYWHERE on the run -- see the helper's own note for
-         * why "the home hex" is the wrong rule and gets more wrong as a
-         * corporation places more tokens. */
+        /* A route must touch a city this corporation holds a token in - ANY token, anywhere on the run.
+           See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
         tokenBlockReason: routeTokenBlockReason(points, routeTokenHexes),
       };
     });
   }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes]);
 
-  /* Design note #275: one overlay per drafted train, so the board shows the
-     whole turn at once rather than whichever route was drawn last.
-
-     THE COLOUR IS SHARED. All of them are this corporation's routes, so all
-     of them wear its colour (design note #254) -- distinguishing them by
-     hue would invent a second meaning for a channel that already answers
-     "whose turn is this". The ACTIVE train's route is the one the player is
-     editing, and that is what the panel's row highlight says. */
-  /* ===================================================================
-   *  DESIGN NOTE 373 (owner): ONE NUMBER, THREE SURFACES
-   * ===================================================================
-   *
-   * The shared cursor lives here because all three consumers are children
-   * of this shell and none of them is the parent of the others -- the map
-   * is in one pane, the corporation strip in the action bar, the Route
-   * Planner in a third. Lifting it is the only place they meet.
-   *
-   * DELIBERATELY NOT PERSISTED and deliberately not in the undo snapshot
-   * (design note #310's rule is about state the DISPATCH path writes). A
-   * hover cursor describes where the pointer is, which is not part of the
-   * game and should not survive a reload or an undo.
-   *
-   * `null` is the resting state and every surface clears to it on leave,
-   * so a highlight cannot outlive the pointer that caused it. */
+  /* One overlay per drafted train, all in the corporation's colour. The hover cursor is shared by three surfaces and is deliberately not persisted.
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #373 */
   const [highlightedTrainIndex, setHighlightedTrainIndex] = useState<number | null>(null);
 
   /* Cleared when the sub-phase moves off Run Routes: the cursor describes a
@@ -4505,39 +1912,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         hexes: points.map((point) => [point.q, point.r] as [number, number]),
         // Design note #373: the join key the three surfaces share.
         trainIndex: train.trainIndex,
-        /* Design note #373/#495: and the emphasis it was built for. The
-           renderer has supported `primary`/`muted` since #373 -- heavier
-           pen, brighter glow, the others faded to 0.32 alpha -- and
-           `highlightedTrainIndex` has been fed by the planner rows and the
-           train chips the whole time. Nothing connected them, so hovering a
-           chip lit its own row and left the map unchanged: the mechanism
-           existed at both ends and not in the middle.
-
-           `normal` when nothing is highlighted, so a board with no cursor on
-           it draws exactly as before rather than dimming everything. */
+        /* Connects highlightedTrainIndex to the renderer's primary/muted emphasis; normal when nothing is highlighted.
+           See docs/ai_architecture/routing_pathfinding.md - App.tsx #495 */
         emphasis: routeEmphasisFor(train.trainIndex, highlightedTrainIndex),
       });
     }
     return overlays;
   }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex]);
 
-  /* REMOVED with design note #162: `handleTileDispatched` and
-     `handleCloseTilePopup`.
-
-     Both were `TileSelectionPopup`'s callbacks. That component dispatched
-     its own `LayTile` and reported the outcome back so this file could fold
-     it into the Action Log; the radial selector instead routes its confirm
-     through `runGameplayAction`, which already logs every dispatch on the
-     one path every other control in this app uses. One fewer dispatch
-     route, and the log entry now comes from the same place as all the
-     others rather than from a second, parallel one. */
+  /* handleTileDispatched/handleCloseTilePopup removed: the radial selector confirms through runGameplayAction, so there is one dispatch route and one log writer.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
 
 
-  // Design note #2 in `utils/sandboxState.ts`: in sandbox the chart is
-  // DERIVED from the same corporations table the Stock Round cards read,
-  // so the two can no longer disagree. `MOCK_MARKET_GRID` remains only for
-  // the non-sandbox placeholder path (design note #2 at the top of this
-  // file -- illustrative data never produced by a live query).
+  // In sandbox the chart derives from the same corporations table the cards read. MOCK_MARKET_GRID is the placeholder path only.
+  // See docs/ai_architecture/stock_market.md - App.tsx #247
   const marketGrid = useMemo<MarketGridResponse>(
     () =>
       sandbox
@@ -4553,12 +1941,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [sandbox, gameId, sandboxMarket],
   );
 
-  /* Design note #563: one `PlayerFinances` per seat, in seating order.
-     Recomputed when the board or the chart moves, which is exactly when a
-     player's position can have changed -- and memoised because
-     `sellableHoldings` walks every corporation for every player, so a naive
-     recompute on each render is six passes over the roster per keystroke in
-     the chat box. */
+  /* One PlayerFinances per seat, memoised - sellableHoldings walks every corporation for every player.
+     See docs/ai_architecture/stock_market.md - App.tsx #563 */
   const stockRoundPlayerFinances = useMemo(() => {
     /* Design note #593: both seat-driven rounds. The Operating Round is
        excluded for the reason `actingSeatIndex` draws the same line -- its
@@ -4578,26 +1962,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   }, [gameState, marketGrid, settledPrivatePrices]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 610: WHICH SEATS HAVE PASSED, FOR THE TRAIL'S STAMPS
-   * ==================================================================
-   *
-   * Two counters, one shape. The Stock Round's rotation is counted by
-   * `consecutive_passes` and the auction's by `consecutive_waterfall_passes`,
-   * and both reset to zero on the first action that is not a pass -- which
-   * is what makes the stamp self-clearing rather than something this file
-   * has to remember to wipe.
-   *
-   * SUPPRESSED DURING A MINI-AUCTION. `passedSeatIndices` walks backwards
-   * through the FULL seating order, which is only the running rotation while
-   * the main auction is turning over. A mini-auction rotates over its
-   * contestants alone, so the same walk would step across seats that were
-   * never asked to act and stamp them for a pass they were never offered.
-   * `WaterfallStateResponse.current_turn` is documented as not meaningfully
-   * moving in that window either, so there is no cursor worth walking from.
-   *
-   * The Operating Round returns an empty set by falling through: its turn
-   * belongs to a corporation, and the trail is not rendered there at all. */
+  /* Pass stamps come from the two consecutive-pass counters, which self-clear. Suppressed during a mini-auction, empty in an Operating Round.
+     See docs/ai_architecture/ui_shell_layout.md - App.tsx #610 */
   const passedSeats = useMemo(() => {
     if (!gameState) return new Set<number>();
     const acting = actingAddress(gameState, waterfallState);
@@ -4620,13 +1986,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return new Set<number>();
   }, [gameState, waterfallState]);
 
-  /** Design note #306 in `WaterfallAuctionDashboard.tsx`: close the auction
-   *  and open Stock Round 1. Local, because the sandbox owns its own round
-   *  cursor -- `PassTurn` is what advances a real room. */
-  /* Design note #546: through the dispatch path, so in a room it reaches the
-     log and turns the round over for the whole table. It used to write local
-     state directly, which advanced exactly one browser and left the others
-     replaying stock-round actions into an auction. */
+  /** Closing the auction goes through the dispatch path so it reaches the log and turns the round over for the whole table.
+   *  See docs/ai_architecture/contract_economy.md - App.tsx #546 */
   const handleProceedToStockRound = useCallback(() => {
     void runGameplayActionRef.current?.(
       "The Waterfall Auction is complete \u2014 Stock Round 1 begins.",
@@ -4638,28 +1999,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, []);
 
-  /* ==================================================================
-   *  DESIGN NOTE 444: A PRIVATE POWER THAT TOUCHES THE BOARD GOES THERE
-   * ==================================================================
-   *
-   * REPORTED: the D&H's "Place Station" button does nothing.
-   *
-   * It did nothing in the most literal way available: this handler marked
-   * the ability spent and wrote a log line. There was no dispatch, no
-   * placement and no navigation -- the button reported an action it had
-   * not performed, which is the failure shape this codebase keeps removing.
-   *
-   * The hex-holding powers now route through the same map flow the home
-   * station uses (design note #440): veil the board to the one hex the
-   * power names, arm the cursor the gesture needs, and hand the player the
-   * board. The ability is marked spent WHEN THE CLICK LANDS, not when the
-   * button is pressed -- a player who opens the map and changes their mind
-   * has not used their D&H.
-   *
-   * THE SHARE EXCHANGES STAY AS THEY WERE, marked and logged. They touch no
-   * hex, and `ExecuteMsg` has no message for them (this file's design note
-   * #1 on the panel records that the whole panel is sandbox-only for
-   * exactly that reason). Routing them to a map would be theatre. */
+  /* Hex-holding private powers route through the shared map flow and are marked spent WHEN THE CLICK LANDS. Share exchanges stay marked-and-logged.
+     See docs/ai_architecture/contract_economy.md - App.tsx #444 */
   const handleUsePrivateAbility = useCallback(
     (ability: PrivateAbility, action: PrivateAbilityAction) => {
       const reservation = privateHexFor(ability.privateId);
@@ -4684,16 +2025,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
 
-      /* ==================================================================
-       *  DESIGN NOTE 573: THE EXCHANGES ACTUALLY EXCHANGE
-       * ==================================================================
-       *
-       * They used to fall through to the mark-it-used line below, which is
-       * the whole reported bug: the button greyed out and no share arrived.
-       *
-       * A REFUSAL LEAVES THE POWER ALONE (design note #573b). The `return`
-       * before `setUsedPrivateAbilities` is the entire difference between
-       * "you cannot do this yet" and "you have spent this on nothing". */
+      /* A refusal must leave the power alone - returning before setUsedPrivateAbilities is the whole difference.
+         See docs/ai_architecture/contract_economy.md - App.tsx #573 */
       if (action.key === "mh-exchange" || action.key === "ca-exchange") {
         const owner = viewerAddressRef.current;
         const outcome = resolvePrivateExchange(
@@ -4734,14 +2067,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [actingProtocolId, activeMainTab],
   );
 
-  /* Design note #659: `round` is an OPTIONAL override, and the default stays
-     the ref. Most `logInfo` callers report something about the round the game
-     is already in -- an auto-skip, a float, a station block -- and for those
-     the ref is right and asking them all to pass a round would be noise. The
-     one caller that needs the override is the round TRANSITION, which is
-     announcing a round the ref does not know about yet: the ref is fed by an
-     effect off `gameState`, and no effect has run at the moment the reducer's
-     answer comes back. */
+  /* round is an optional override; the default ref is right for every caller except a round transition, which announces a round the ref does not know yet.
+     See docs/ai_architecture/state_machine.md - App.tsx #659 */
   const logInfo = useCallback((label: string, detail: string, round?: string | null) => {
     const id = nextLogEntryId++;
     const timestamp = new Date().toLocaleTimeString();
@@ -4768,11 +2095,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfoRef.current = logInfo;
   }, [logInfo]);
 
-  /* Design note #546: same ordering workaround, same reason -- and here a ref
-     is additionally the SAFE choice. `runGameplayAction` sits in the
-     dependency array of the two effects that dispatch (design note #439), so
-     naming it as a dependency of this handler would be one more identity to
-     keep still. */
+  /* A ref, not a dependency: runGameplayAction is in the dependency array of the two effects that dispatch.
+     See docs/ai_architecture/session_keys_wallet.md - App.tsx #546 */
   const runGameplayActionRef = useRef<
     | ((
         fallbackLabel: string,
@@ -4782,21 +2106,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     | null
   >(null);
 
-  /* ===================================================================
-   *  DESIGN NOTE 331 (cont.): PAYING THE PRIVATES
-   * ===================================================================
-   *
-   * Reached through a ref for the same reason `logInfoRef` exists: the
-   * round-transition effect that fires this is declared ~1300 lines above,
-   * and this handler needs `logInfo` and the sandbox state refs, which are
-   * not available up there. A ref is the established shape in this file for
-   * exactly that ordering problem.
-   *
-   * It reads and writes `sandboxStateRef` rather than `sandboxState` for
-   * design note #265's reason -- the effect fires inside a render pass in
-   * which the state variable may still be the previous value, and paying
-   * against a stale board would credit the wrong owners.
-   */
+  /* Reached through a ref for declaration order, and reads sandboxStateRef so the payout is not credited against a stale board.
+     See docs/ai_architecture/contract_economy.md - App.tsx #331 */
   const payPrivateRevenue = useCallback(() => {
     const before = sandboxStateRef.current;
     if (!before) return;
@@ -4835,23 +2146,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          the SAME pipeline handles both -- the alternative was a second
          dispatch path for one message, which is how the two would drift. */
       msg: SandboxLogMsg,
-      /* Design note #439: set by the two effects that dispatch on the
-         player's behalf (the sub-phase auto-skip and the forced withhold).
-         Everything else is a click and defaults to `false`.
-
-         Design note #492a: `resetRouteRevenue` marks the first
-         `RunManualRoute` of a turn's batch, so the sandbox reducer starts
-         its per-turn sum from zero instead of adding to the last turn's. */
-      /* Design note #522: `isRemoteReplay` marks an action arriving FROM the
-         Firestore log rather than from this browser's own click. It is the
-         one thing that distinguishes the two directions of the loop, and
-         everything else about the dispatch is identical -- which is the
-         point: a replayed action must take exactly the path a local one
-         takes, or the two clients run different code and diverge. */
-      /* Design note #549: WHO the action is for. Set only by the replay
-         drain, from the log entry's own author -- a local dispatch leaves it
-         undefined and the reducer falls back to the turn cursor, which for a
-         local dispatch is the same seat by construction. */
+      /* automatic marks the two effects that dispatch on the player's behalf. #492a resets the per-turn revenue sum; #522 isRemoteReplay marks a log-driven action; #549 names the seat it acts for.
+         See docs/ai_architecture/state_machine.md - App.tsx #439 */
       options?: {
         automatic?: boolean;
         resetRouteRevenue?: boolean;
@@ -4863,26 +2159,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         actor?: string | null;
       },
     ) => {
-      /* ==================================================================
-       *  DESIGN NOTE 262: THE LOG DESCRIBES THE EVENT, NOT THE MESSAGE
-       * ==================================================================
-       *
-       * Every call site used to hand in its own label, and they were the
-       * contract's variant names -- "RunManualRoute", "BuyHardwareFromPool
-       * (mock)", "DeclareDividends: Pay (mock)". None of them said WHO
-       * acted, several leaked internals, and the "(mock)" suffixes outlived
-       * the mocks they were warning about.
-       *
-       * Deriving the label here rather than at the call site is the point:
-       * one place turns a message into a sentence, so a new dispatch cannot
-       * forget to write one and an old one cannot drift from what it sends.
-       * `describeGameplayAction` reads the state BEFORE the action applies,
-       * which is the only state available at dispatch time and the more
-       * useful one to report against (its design note #1).
-       *
-       * The passed label survives as the fallback for messages with nothing
-       * better to say -- a vaguer sentence than the variant name would be a
-       * downgrade dressed as an improvement. */
+      /* The label is derived here, once, from the state before the action applies - call sites used to pass contract variant names.
+         See docs/ai_architecture/state_machine.md - App.tsx #262 */
       const describeContext = {
         gameState,
         mapGrid,
@@ -4907,162 +2185,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            way the sandbox atoms can. */
         orSubPhase,
       };
-      /* Design note #265: seeded from the BEFORE state, then re-derived
-         against the resolved one inside the sandbox branch. A live chain has
-         no resolved state to offer at dispatch time, so this is what it
-         keeps -- which is why `afterState` is optional in the context rather
-         than required. */
-      /* ==================================================================
-           DESIGN NOTE 531a: THE SETUP EVENT NEVER LEAVES THE SANDBOX
-          ==================================================================
-
-           `SetupGame` is not a `GameplayExecuteMsg` and must not become one
-           -- `sessionKey.ts` maintains that type as the authz allow-list,
-           and a variant the chain has never heard of appearing in it would
-           be a lie about what the wallet may sign (design note #530).
-
-           ==================================================================
-            DESIGN NOTE 539: THIS GUARD USED TO `return` HERE, AND THAT WAS
-            THE BUG
-           ==================================================================
-
-           The first version read `if (isSetupGameMsg(msg)) return;` at this
-           line, with a comment asserting "the sandbox branch ABOVE handles
-           it and returns, so this line is unreachable for a setup event".
-
-           The sandbox branch is BELOW. It starts some forty lines further
-           down, so this guard ran FIRST and every `SetupGame` returned here
-           -- on every client, every time. The setup action reached the log,
-           replayed correctly, entered this function, and was discarded one
-           step before the handler that deals the game.
-
-           That is why the roster was empty and why nobody could act: with
-           `player_addresses` still `[]` from `withEmptyRoster`, no seat
-           matches anyone, so `isMyTurn` is false for all and the turn gate
-           refuses every action. Two symptoms, one dropped message.
-
-           The comment is the lesson. It stated an ordering confidently and
-           the ordering was wrong -- a claim about control flow that would
-           have taken one `grep -n` to check, asserted instead from memory
-           while satisfying a type error.
-
-           SO IT NARROWS RATHER THAN RETURNING. `chainMsg` is `null` for a
-           setup event, the sandbox branch below gets its chance, and the
-           refusal happens at the CHAIN DISPATCH -- the only place that
-           actually must not see one. */
-      /* Design note #546: `isSandboxOnlyMsg`, not `isSetupGameMsg`. There
-         are now two events the contract has never heard of, and one
-         predicate for both means adding a third cannot leave this line
-         behind -- which is the exact failure design note #539 records. */
+      /* This guard NARROWS instead of returning: returning here dropped every SetupGame before the sandbox branch below could deal the game. #546: isSandboxOnlyMsg covers both chain-unknown events.
+         See docs/ai_architecture/firebase_middleware.md - App.tsx #539 */
       const chainMsg: GameplayExecuteMsg | null = isSandboxOnlyMsg(msg) ? null : msg;
 
       let label =
         (chainMsg ? describeGameplayAction(chainMsg, describeContext) : null) ?? fallbackLabel;
 
       const id = nextLogEntryId++;
-      /* ==================================================================
-       *  DESIGN NOTE 643: A REPLAYED ACTION KEEPS ITS OWN CLOCK
-       * ==================================================================
-       *
-       * REPORTED: every entry in a game carries the same timestamp.
-       *
-       * It did, and accurately: a rebuilding client re-dispatches the whole
-       * log, and each of those dispatches stamped `Date.now()`. The log was
-       * not recording when the game happened -- it was recording when the
-       * rebuild ran, which for a whole history is one instant.
-       *
-       * `options.at` is the entry's own `createdAt`, surfaced by design note
-       * #643 in `sandboxRoom.ts` and handed down by the drain. Live dispatches
-       * pass nothing and take the current time, which is what they always
-       * did; only a replay has an earlier time to honour, and only a replay
-       * was wrong. */
+      /* A replayed action keeps its own clock: options.at is the log entry's createdAt, so a rebuild does not stamp the whole history with one instant.
+         See docs/ai_architecture/state_machine.md - App.tsx #643 */
       const timestampMs = options?.at ?? Date.now();
       const timestamp = new Date(timestampMs).toLocaleTimeString();
 
-      // Design note #23: the read-only gate for dispatch path (1). Every
-      // gameplay control on this screen except the tile popup -- the
-      // Contextual Action Bar's twenty-odd buttons, the Waterfall dashboard,
-      // the train-offer panel -- funnels through this one function, which is
-      // why the check belongs here rather than on each button. Disabling
-      // buttons individually would be a list that has to be kept complete
-      // forever; this is one invariant a new button cannot opt out of.
-      //
-      // The tile popup is path (2) and is NOT covered here -- it dispatches
-      // directly and is gated by not being mounted. See `AppShellProps`.
-      //
-      // Logged rather than silently dropped, so a spectator who finds a
-      // control this pass failed to hide gets an explanation instead of a
-      // dead click. The chain would refuse them anyway -- a spectator is not
-      // in `player_addresses` -- but failing here is instant, free and
-      // legible, where failing on-chain costs a signature and returns an
-      // error about turn order.
-      // Sandbox: apply the action to the LOCAL reducer instead of signing
-      // anything. Nothing is broadcast and no wallet is touched -- the
-      // message never leaves this function -- but the mock state advances, so
-      // the turn moves, balances change, and the UI re-renders exactly as it
-      // would against a chain.
-      //
-      // Deliberately still not a chain dispatch: `applySandboxAction` moves
-      // turn pointers and counters, and knows no rules. See
-      // `utils/sandboxSession.ts` design note 0 for why that boundary is the
-      // whole design rather than an unfinished edge.
+      // Read-only gate for dispatch path (1); the tile popup is path (2) and is gated by not being mounted. Refusals are logged, not silently dropped. Sandbox routes to the local reducer and never signs.
+      // See docs/ai_architecture/session_keys_wallet.md - App.tsx #23
       if (sandbox) {
-        /* ==================================================================
-         *  DESIGN NOTE 522: IN A ROOM, THE LOG IS THE ONLY WAY IN
-         * ==================================================================
-         *
-         * The event-sourcing loop, and the whole reason it is ONE branch
-         * rather than a parallel path: a local click in a room does not
-         * touch state at all. It appends to Firestore and stops. The
-         * `onSnapshot` listener then replays it back through this same
-         * function with `isRemoteReplay`, which is what actually moves the
-         * board.
-         *
-         * SO THE LOCAL PLAYER TAKES THE SAME ROUTE AS EVERYONE ELSE. That
-         * costs a round trip before your own action appears, and it buys the
-         * property that makes this design work: there is exactly one order
-         * of operations, the one in the log, and every client -- including
-         * the one that acted -- derives its state from it. An optimistic
-         * local apply would give the actor a state nobody else has, and
-         * reconciling it would mean rewinding and replaying on every
-         * remote action.
-         *
-         * `appliedIndexRef` is the cursor, and the append reads it for the
-         * next index. It is a ref rather than state because this callback
-         * must not be rebuilt when it moves -- `runGameplayAction` sits in
-         * the dependency array of the auto-skip and forced-withhold effects
-         * (design note #439), and rebuilding it re-arms effects that
-         * DISPATCH.
-         *
-         * SOLO SANDBOX IS UNTOUCHED. No room, no interception, no await on a
-         * network -- the branch below runs exactly as it did before. */
-        /* ==================================================================
-             DESIGN NOTE 536: A ROOM IS NOT A HOTSEAT
-            ==================================================================
-
-           REPORTED: the local browser can act on anybody's turn, because
-           the sandbox was built as an offline hotseat.
-
-           THE GATE IS HERE, at the dispatch, and that placement is this
-           codebase's own convention -- design note #23 makes the identical
-           argument for read-only mode: "the guarantee is
-           `runGameplayAction`'s gate, which holds whether or not this bar
-           renders". Disabled buttons are the courtesy; this is the promise.
-           A dozen surfaces can dispatch, and gating each one is a dozen
-           chances to miss one.
-
-           `automatic` IS EXEMPT, deliberately. The sub-phase auto-skip and
-           the forced $0 withhold are the GAME acting on a rule with no
-           decision in it (design note #475), and they fire on whoever's turn
-           it is -- including the moment a turn passes to somebody else.
-           Blocking them would strand a room on a step nobody can leave.
-
-           REPLAY IS EXEMPT for the more obvious reason: a replayed action
-           already happened, on its own author's turn. Re-checking it here
-           would mean every client refusing every action but its own and
-           the log applying to nobody. */
-        /* Design note #536, simplified by #578: the room check is gone --
-           every sandbox session is a room, so the gate simply applies. */
+        /* In a room a local click APPENDS to the log and stops; the listener replays it back through this function. One order of operations for every client. #536: the turn gate lives here, with automatic and replay exempt.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #522 */
         if (
           options?.isRemoteReplay !== true &&
           options?.automatic !== true &&
@@ -5072,32 +2212,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
-        /* Design note #578: the room is guaranteed by the gate that refuses
-           a roomless sandbox a board -- but the REF is still typed nullable
-           and the compiler is right to insist. A guarantee held by a render
-           gate several thousand lines away is not one a type can see, and
-           narrowing it here is cheaper than asserting it. */
+        /* The render gate guarantees a room, but the ref is typed nullable and narrowing here is cheaper than asserting.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #578 */
         const roomCode = sandboxRoomRef.current;
         if (roomCode && options?.isRemoteReplay !== true) {
-          /* ==============================================================
-           *  DESIGN NOTE 549a: THE ACTOR FIELD HELD A LABEL
-           * ==============================================================
-           *
-           * This wrote `sandboxSeatRef.current` -- the player's NICKNAME. A
-           * nickname is not an identity: two people may pick the same one,
-           * anybody may change theirs mid-game, and nothing in
-           * `player_addresses` will ever equal one. So the field named
-           * `actor` could not be used to attribute an action even in
-           * principle, which is part of why the reducer was reading the
-           * local cursor instead.
-           *
-           * THE SEAT THE ACTION ACTS FOR, not the browser that sent it. For
-           * an ordinary click those are the same thing -- the turn gate
-           * above has already refused anything else. For an `automatic`
-           * dispatch (design note #439's auto-skip and forced withhold) they
-           * are not: the game is acting on a rule, on behalf of whoever is
-           * on turn, and crediting that to whichever client's effect fired
-           * first would attribute a withhold to a spectator. */
+          /* actor is the SEAT the action acts for, not the browser that sent it - a nickname could never match player_addresses.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #549 */
           const authorId = localPlayerId();
           const ok = await appendSandboxAction(
             roomCode,
@@ -5113,32 +2233,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
-        /* ==================================================================
-             DESIGN NOTE 531: SETUP BUILDS THE TABLE, THEN GETS OUT OF THE WAY
-            ==================================================================
-
-             The setup event is handled FIRST and returns, because it is not
-             a move in a game -- it is what makes the game exist. Nothing
-             below it applies: there is no market move to project, no
-             corporation to charge, and `applySandboxAction` would be handed
-             a message it has never heard of.
-
-             IT IS IDEMPOTENT BY POSITION, not by a guard. The log holds
-             exactly one setup entry because only the host may write one
-             (design note #529a), and every client applies it at the same
-             index -- so a replay from zero rebuilds the same table rather
-             than dealing a second one over the first.
-
-             `dealSandboxGame` returning `null` is a roster 1830 cannot deal.
-             The state is left ALONE in that case rather than half-applied:
-             a board dealt for a count that does not exist is worse than one
-             that visibly never started. */
+        /* Setup is handled first and returns: it is not a move. Idempotent by position, and a roster 1830 cannot deal leaves state untouched.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #531 */
         if (isRevertToMsg(msg)) {
-          /* Design note #591: a revert is an instruction ABOUT the log, and
-             `effectiveActions` strips it before the drain ever gets here. If
-             one arrives anyway the honest response is to do nothing -- it has
-             already been honoured by the history arithmetic, and applying it
-             a second time as if it were a move would be inventing a rule. */
+          /* A revert is an instruction about the log; effectiveActions has already honoured it, so applying it as a move would invent a rule.
+             See docs/ai_architecture/state_machine.md - App.tsx #591 */
           return;
         }
 
@@ -5190,11 +2289,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           sandboxStateRef.current = granted;
           setSandboxState(granted);
 
-          /* Design note #461/#468: the mark, written here too. A par set
-             this way never passes through the market diff, and the Par Tray
-             shows the token from the moment the price is set -- the matrix
-             disagreeing with the tray for a whole Stock Round is the bug
-             that note was originally reported as. */
+          /* A par set through the prompt writes the market mark too, so the Par Tray and the matrix cannot disagree (#468).
+             See docs/ai_architecture/stock_market.md - App.tsx #461 */
           const par = Number(parValue);
           const bo = granted.public_companies.find((c) => c.ticker === BO_TICKER);
           if (bo && Number.isFinite(par) && par > 0) {
@@ -5216,27 +2312,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
-        /* ==============================================================
-         *  DESIGN NOTE 662: THE OFFER ARRIVES ON THE OWNER'S SCREEN
-         * ==============================================================
-         *
-         * REPORTED: "P1 sent an offer to buy P2's Private Company, but the
-         * decision modal appeared on P1's screen and allowed them to accept
-         * it."
-         *
-         * The proposal was `privateProposal`, React state in this file, and
-         * design note #205 states the premise it rested on: the local
-         * stand-in exists "for exactly ONE deployment: the offline sandbox,
-         * which has no chain to record an offer in and no second client to
-         * show it to." That premise expired when #578 removed solo mode and
-         * the sandbox became the multiplayer mode.
-         *
-         * Handled HERE, in the drain, beside `ExchangePrivate` and for the
-         * same reason: the drain is the path every client runs, so writing
-         * the offer here is what makes the seller see it. Then the answer
-         * clears it on both screens rather than on whichever one clicked --
-         * exactly the correction design note #565 made for the B&O par
-         * prompt, which was this same bug on a different modal. */
+        /* Private offers are written in the DRAIN so the seller's client sees them and the answer clears both screens.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #662 */
         if (isProposePrivatePurchaseMsg(msg)) {
           const base = sandboxStateRef.current;
           if (!base) return;
@@ -5269,11 +2346,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           if (!base) return;
           const { private_id, accept } = msg.AnswerPrivatePurchase;
           const offer = base.private_purchase_offer ?? null;
-          /* An answer to an offer that is not on the board is not an error
-             worth stopping a replay for -- two clients can answer the same
-             offer before either sees the other. The first answer settles it
-             and the second finds nothing to settle, which is the right
-             outcome rather than a crash. */
+          /* Answering an offer that is no longer there is not an error: the first answer settles it, the second finds nothing.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #662 */
           if (!offer || offer.private_id !== private_id) return;
           const cleared: GameStateResponse = { ...base, private_purchase_offer: null };
           sandboxStateRef.current = cleared;
@@ -5286,11 +2360,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             );
             return;
           }
-          /* ACCEPTED, so the sale itself goes through the ordinary message.
-             `BuyPrivateCompany` is what moves the certificate and the money,
-             and it is the message design note #660 enforces the B&O ban in
-             -- routing the accept through it means consent and legality are
-             checked by the same code every other purchase uses. */
+          /* An accepted offer goes through the ordinary BuyPrivateCompany, so consent and legality use the same code as every purchase.
+             See docs/ai_architecture/contract_economy.md - App.tsx #662 */
           void runGameplayActionRef.current?.(
             `BuyPrivateCompany: ${offer.private_name} @ $${offer.price}`,
             {
@@ -5362,54 +2433,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             logInfo("Room", "That roster cannot be dealt — 1830 seats two to six players.");
             return;
           }
-          /* Seeded from the sandbox's own current state -- the fixture's
-             corporations, privates and board are what a room plays WITH.
-             Only the seats, the cash and the bank are replaced, because
-             those are the only things the player count decides. */
-          /* ==============================================================
-           *  DESIGN NOTE 537a: SETUP MUST NOT BE SKIPPABLE
-           * ==============================================================
-           *
-           * This read `sandboxStateRef.current` and RETURNED if it was null.
-           * That ref is synced by an effect, and the replay drain is async --
-           * so on a fresh join the setup event could arrive before the ref
-           * had ever been written, and the one action that deals the game
-           * would be silently dropped. The board would then keep the
-           * fixture's four mock players for the rest of the session, with
-           * nothing in the log or the UI to say why.
-           *
-           * A silent early return on a timing condition is the worst
-           * available failure here: the log is intact, every later action
-           * applies, and the game is simply wrong. So the base falls back
-           * through the ref, the rendered state, and finally a freshly
-           * computed fixture -- the last of which always exists, so there is
-           * no path where setup does not run. */
+          /* Setup must not be skippable: fall back through the ref, the rendered state, then a fresh fixture, so there is no path where it does not run.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #537 */
           const base = sandboxStateRef.current;
           if (!base) return;
-          /* ==============================================================
-           *  DESIGN NOTE 535a: THE FIXTURE'S OWNERS GO WITH ITS PLAYERS
-           * ==============================================================
-           *
-           * Replacing `player_addresses` alone is not enough, and the gap is
-           * the reported bug's deeper half. The sandbox fixture is a MID-GAME
-           * testbed: its corporations already have presidents and its
-           * privates already have owners, and every one of those is a mock
-           * address (`SANDBOX_PLAYERS[...]`, see `sandboxState.ts`).
-           *
-           * Swap the roster and leave those alone, and the board is presided
-           * over by people who are not in the game -- corporations nobody in
-           * the room can act for, because every `canAct` compares a
-           * president against the viewer and none of them will ever match.
-           *
-           * SO A ROOM STARTS UNOWNED, which is also what 1830 actually says:
-           * every certificate begins in the IPO and every corporation is
-           * unfloated until somebody buys in. The fixture's pre-owned state
-           * is a convenience for testing a mid-game screen alone, not a
-           * legal opening position.
-           *
-           * The BOARD survives -- corporations, privates, the map and the
-           * market are what a room plays with. Only the ownership links to
-           * players who no longer exist are cut. */
+          /* A room starts UNOWNED - the fixture's mock presidents and private owners are cut, because no canAct would ever match them. The board survives.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #535 */
           const seated: GameStateResponse = {
             ...base,
             player_addresses: dealt.playerAddresses,
@@ -5452,17 +2481,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           sandboxStateRef.current = seated;
           setSandboxState(seated);
 
-          /* Design note #542: the auction atom is dealt in the SAME handler,
-             from the same roster. Two atoms advancing on one action is this
-             file's established pattern (the market already does it), and
-             splitting them is how the Action Bar and the auction panel came
-             to disagree about who is playing. */
-          /* Design note #542: from the REF, with no fallback. A fallback
-             would have to recompute the fixture, which pulls `sandboxPhase`,
-             `gameId` and `sandboxIsZeroState` into this callback's
-             dependencies -- rebuilding it, and re-arming the two effects
-             that dispatch (design note #439). The ref is seeded at
-             construction below for exactly this reason. */
+          /* The auction atom is dealt in the same handler from the same roster, read from the ref with no fallback.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #542 */
           const dealtWaterfall = waterfallForRoster(
             sandboxWaterfallRef.current,
             dealt.playerAddresses,
@@ -5476,11 +2496,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
-        /* Design note #522a: the tile grid is its own atom and no reducer
-           in `sandboxSession` touches it -- so the one message that changes
-           it applies it here, on the single path both a local click and a
-           replayed action take. Derived entirely from the message's own
-           parameters, which is what makes it reproducible from the log. */
+        /* The tile grid is its own atom; applying it inside the dispatch is what makes a lay replicate to every client.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #522 */
         if ("LayTile" in msg) {
           const lay = msg.LayTile;
           setMapGrid((current) =>
@@ -5488,82 +2505,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           );
         }
 
-        /* ==================================================================
-         *  DESIGN NOTE 265: THE LOG REPORTS WHAT HAPPENED, NOT WHAT WAS ASKED
-         * ==================================================================
-         *
-         * REPORTED: the log reads the state before the action resolves --
-         * "2/5 remaining" logged at the moment a purchase is clicked, rather
-         * than the 1/5 that is true once it lands.
-         *
-         * Design note #1 in `actionLog.ts` argued for describing the BEFORE
-         * state, on the grounds that it is the only state available at
-         * dispatch time. That is true on a chain and was never true here: the
-         * sandbox reducer is synchronous, so the resolved state is one
-         * function call away. The argument was right about the constraint and
-         * wrong about which side of it the sandbox sits on.
-         *
-         * THIS BLOCK NOW RESOLVES FIRST AND LOGS SECOND. It also fixes two
-         * real bugs that the functional-updater style was hiding:
-         *
-         *   THE CHARGE CROSSED THE ATOMS IN THE WRONG ORDER. The waterfall's
-         *   charge was captured inside `setSandboxWaterfall`'s updater and
-         *   read inside `setSandboxState`'s. React invokes each hook's queue
-         *   as that hook is evaluated during render, and `sandboxState` is
-         *   declared FIRST -- so the charge was read before it was written,
-         *   and an auction purchase never actually debited the buyer.
-         *
-         *   A LOOP OF DISPATCHES COLLAPSED. `handleBuyTrainsFromBank` awaits
-         *   N purchases in a row, and `sandboxState` in this closure does not
-         *   refresh between iterations. Reading it directly would have
-         *   applied every purchase to the same base state.
-         *
-         * A REF fixes both: it is written synchronously, so each dispatch
-         * sees the previous one's result, and the ordering is explicit rather
-         * than dependent on hook declaration order.
-         */
+        /* Resolve first, log second. A ref is written synchronously, which fixes both the cross-atom charge ordering and a loop of dispatches collapsing onto one base state.
+           See docs/ai_architecture/state_machine.md - App.tsx #265 */
         const before = sandboxStateRef.current;
 
-        // Design note #178: UNDO. Snapshot before mutating -- except for
-        // undo itself, which would otherwise push the state it is about to
-        // discard and make the button a no-op that consumes a stack slot.
-        //
-        // Design note #310: every atom, read from the REFS rather than from
-        // the rendered values. The refs are what this dispatch is about to
-        // overwrite, so they are what "before" means here; the state
-        // variables in this closure may be a render behind when several
-        // actions fire in one tick.
-        /* ==============================================================
-         *  DESIGN NOTE 475: AN AUTOMATIC ACTION LEAVES NO TRACE
-         * ==============================================================
-         *
-         * REPORTED: Undo reverts entire turns, and can revert the PREVIOUS
-         * player's.
-         *
-         * Design note #439 pushed a snapshot for every dispatch and taught
-         * Undo to walk past the automatic ones. The walk is what crossed
-         * turn boundaries: a corporation whose turn opens with three
-         * auto-skips has three automatic entries stacked on the previous
-         * player's `PassTurn`, and one press walked all the way down to it.
-         *
-         * Not pushing is the simpler and stricter answer. The stack then
-         * holds only decisions the player made, so Undo pops exactly one and
-         * cannot reach past a turn boundary it did not create -- `PassTurn`
-         * is a player action and stops it.
-         *
-         * WHAT AN AUTOMATIC ACTION IS: the sub-phase auto-skip and the
-         * forced $0 withhold, and nothing else. Both are the game acting on
-         * a rule with no decision in it, so there is nothing for a player to
-         * take back -- and both RE-DERIVE when the state they followed from
-         * is restored, which is why nothing is lost by not recording them.
-         *
-         * `UndoLastAction` still excludes itself, for design note #178's
-         * original reason: it would otherwise push the state it is about to
-         * discard and make the button a no-op that consumes a stack slot. */
-        /* Design note #591d: THE SNAPSHOT PUSH IS GONE with the stack it
-           fed. Undo replays the log now, so there is nothing to remember --
-           and remembering it per-client was the thing that made undo
-           incoherent in a room. */
+        // The snapshot push is gone with the stack it fed (#178/#310/#475): undo replays the log now.
+        // See docs/ai_architecture/state_machine.md - App.tsx #591
 
         /* Design note #261: the auction's own atom, advanced alongside the
            game state. `applySandboxWaterfallAction` returns the cash it
@@ -5598,28 +2545,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             };
           }
 
-          /* ==============================================================
-           *  DESIGN NOTE 303: A WON PRIVATE HAS TO BECOME AN OWNED ONE
-           * ==============================================================
-           *
-           * REPORTED: sold private companies disappear from the screen.
-           *
-           * The dashboard already renders a dimmed "Sold to X for $Y"
-           * card, and it lists them from `gameState.private_companies`
-           * filtered on `owner !== null`. Nothing ever set that owner.
-           * `applySandboxWaterfallAction` REPORTS the win -- it returns
-           * `won` so the caller can log it -- and the waterfall's own
-           * `removePrivate` drops the company off the live list. So the
-           * card left the auction grid and never arrived in the sold one.
-           *
-           * The reducer reporting rather than writing is the right split
-           * (it owns the auction atom, not the game state), so the write
-           * belongs here, where both are in hand.
-           *
-           * Design note #334: a LIST now. One purchase can cascade through
-           * several lone-bid privates, and looping is what stops the
-           * second and third from going missing the way the first once
-           * did. */
+          /* The reducer REPORTS a win; the owner is written here, where both atoms are in hand. A list, because one purchase can cascade (#334).
+             See docs/ai_architecture/contract_economy.md - App.tsx #303 */
           for (const { privateId, name, player, price } of result.won) {
             if (after) {
               after = {
@@ -5629,56 +2556,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 ),
               };
             }
-            /* The SETTLED price, which is not the same as the face value a
-               `PrivateCompanyState` carries -- a private won in a
-               mini-auction went for more, and the card was previously
-               reduced to quoting face value with a tooltip apologising for
-               it. Kept beside the state rather than written into `cost`,
-               which is a printed property of the company. */
+            /* The SETTLED price, kept beside the state - cost is a printed property of the company.
+               See docs/ai_architecture/contract_economy.md - App.tsx #303 */
             setSettledPrivatePrices((prev) => ({ ...prev, [privateId]: price }));
             logInfo(
               "Private Won",
               `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
             );
 
-            /* Design note #354: the B&O private hands its winner the
-               corporation's presidency, free. The rule lives in
-               `sandboxSession.ts` as a named function -- see its note for
-               what moves, what does not, and why it is not inline here.
-
-               Design note #399: and it is no longer granted HERE. The grant
-               needs a par price, the price is the winner's to choose, and
-               choosing it is a decision -- so the win raises a prompt and
-               the grant happens when that prompt is answered. Granting
-               first and pricing later produced a presided-over company with
-               no price, which design note #387 correctly refuses to draw. */
+            /* The B&O private grants a presidency, but not here: the grant needs a par, and the par is a decision, so the win raises a prompt (#399).
+               See docs/ai_architecture/contract_economy.md - App.tsx #354 */
             if (privateId === BO_PRIVATE_ID) {
               setBoParPrompt({ player });
             }
 
-            /* ==============================================================
-             *  DESIGN NOTE 576a: A CONSEQUENCE IS NOT APPENDED, IT IS DERIVED
-             * ==============================================================
-             *
-             * REPORTED: the Camden & Amboy issued TWICE the share it should
-             * have, and the certificate count jumped accordingly.
-             *
-             * The previous pass appended an `ExchangePrivate` event from
-             * here -- and this code runs inside the REPLAY of the winning
-             * action, on every client. So every client appended its own
-             * copy, the log grew two grants for one win, and every client
-             * then replayed both. Two players, two certificates.
-             *
-             * THE TEST WAS ALREADY WRITTEN DOWN and I applied it backwards.
-             * Design note #550: "a CHOICE must be logged, a CONSEQUENCE need
-             * not be." The B&O's par is a choice and is logged. The C&A's
-             * share is a pure consequence of a win that is ALREADY in the
-             * log -- so every client can derive it from the same action, at
-             * the same moment, without anybody announcing it.
-             *
-             * DERIVED HERE, THEN, and applied to the resolved state directly.
-             * No append, no second event, and nothing that can double
-             * because two browsers both noticed the same thing. */
+            /* A consequence is DERIVED by every client, not appended by each of them - appending inside a replay is how one win issued two certificates. #550: a choice is logged, a consequence need not be.
+               See docs/ai_architecture/firebase_middleware.md - App.tsx #576 */
             if (privateId === CA_PRIVATE_ID && after) {
               const prr = after.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
               if (prr) {
@@ -5706,19 +2599,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             }
           }
 
-          /* ==============================================================
-           *  DESIGN NOTE 337 (caller half): THE ALL-PASS PAYOUT
-           * ==============================================================
-           *
-           * The reducer reports that the table passed all the way round and
-           * what the markdown cost; the money moves here, because the
-           * privates' owners and revenues live on the GAME state and the
-           * waterfall reducer holds only the auction document.
-           *
-           * `applyPrivateRevenue` is the Operating Round's own payout
-           * function (design note #327), reused rather than reimplemented --
-           * so "who owns it", "is it closed", "does a corporate owner get
-           * it" and "who funds it" have exactly one answer in this app. */
+          /* The reducer reports the all-pass markdown; the money moves here through applyPrivateRevenue, the same payout the Operating Round uses.
+             See docs/ai_architecture/contract_economy.md - App.tsx #337 */
           if (result.markdown) {
             logInfo(
               "Waterfall",
@@ -5759,13 +2641,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           const ticker =
             before?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
             `#${companyId}`;
-          /* Design note #435: says what actually moved it. This read "fell
-             from $X to $Y on the sale" for EVERY move, so a withheld
-             dividend -- the most common way a price falls in 1830, and the
-             one a new president is most confused by -- was reported as a
-             share sale that never happened. The direction is derived too:
-             a payout RISES, and "fell" was wrong for it in the same
-             sentence. */
+          /* Say what actually moved the price: a withheld dividend is not a share sale, and a payout rises.
+             See docs/ai_architecture/stock_market.md - App.tsx #435 */
           const [verb, cause] =
             reason === "payout"
               ? (["rose", "on the dividend payout"] as const)
@@ -5791,43 +2668,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // Design note #273: what the chart says this share is worth, so
             // the wallet and the market agree about one trade.
             sharePrice: marketResult.tradePrice ?? undefined,
-            /* Design note #411: the Operating Round queue is ordered by
-               market price, and the chart is a separate atom the reducer
-               must not reach into. Read from the REF, which the block above
-               has just refreshed, so the order reflects any move this very
-               dispatch caused rather than the previous render's prices. */
+            /* Read the market ref the block above has just refreshed, so the queue reflects a move this dispatch caused.
+               See docs/ai_architecture/stock_market.md - App.tsx #411 */
             marketPriceFor: marketPriceForCompany,
             // Design note #647: the token's position -- column and arrival.
             marketMarkFor: marketMarkForCompany,
-            /* Design note #351: the par ladder's selection, for the
-               founding purchase that sets it. Read from the ref rather
-               than the state variable for design note #265's reason --
-               within one dispatch the state may still be a render behind,
-               and a par set from a stale selection would be the wrong
-               price forever.
-
-               Design note #398: and read for THE COMPANY IN THIS MESSAGE.
-               There is no longer a single "the par ladder's selection" to
-               read -- asking for one was the bug. The protocol id comes off
-               `msg` rather than from any ambient selection, because the
-               message is the only thing that knows which company this
-               particular dispatch is about. */
-            /* ==============================================================
-             *  DESIGN NOTE 579: THE LADDER STOPS HERE
-             * ==============================================================
-             *
-             * This was `parValueNumberFor(...)`, which reads this browser's
-             * own par ladder and falls through to a hardcoded "100" on every
-             * client that did not make the choice. The reducer preferred it
-             * over the message, so a corporation parred at $67 was recorded
-             * at $100 by everybody except its founder.
-             *
-             * The message's own `par_value` is now what the reducer reads
-             * (see `sandboxSession.ts`), and this is left only as the shape
-             * the context still declares. Passing the MESSAGE's figure keeps
-             * the two agreeing rather than leaving a second, quieter source
-             * of the same number sitting in the context for someone to reach
-             * for later. */
+            /* The par comes from the MESSAGE's own protocol_id and par_value, not from any ambient ladder selection (#579).
+               See docs/ai_architecture/stock_market.md - App.tsx #398 */
             parValue: (() => {
               if (!("BuyStock" in msg)) return undefined;
               const fromMsg = Number(msg.BuyStock.par_value ?? NaN);
@@ -5839,41 +2686,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                guessed. */
             homeHexToAxial,
           });
-          /* ==============================================================
-           *  DESIGN NOTE 400: A FLOAT IS AN EVENT, NOT JUST A FLAG
-           * ==============================================================
-           *
-           * REPORTED: when a company like ERIE floats, the UI completely
-           * skips the home token placement -- no feedback that it happened.
-           *
-           * It did happen: `applyFloatThreshold` sets `is_floated`, credits
-           * ten times par, and pushes the home hex onto
-           * `station_token_hexes` (design note #363). All of it silently.
-           * The player crossed 60% sold, the board gained a token, and
-           * nothing said so -- so the one placement in the game that the
-           * player does not perform reads as a placement that did not
-           * occur.
-           *
-           * THE RULES FIX THE DESTINATION, so this is not made into a
-           * choice. 1830 puts the home token on the home hex; offering a
-           * picker would invent a decision and then refuse every answer but
-           * one. What was missing is the REPORT, not the interaction.
-           *
-           * DIFFED HERE RATHER THAN REPORTED BY THE REDUCER, for design
-           * note #337's reason: the reducer holds the game document and the
-           * shell owns the log. Threading an event list out through
-           * `applySandboxAction` -- which floats companies several frames
-           * deep inside a share purchase -- would put a logging concern
-           * into a pure function's return type.
-           *
-           * Naming the HEX is the point of the message. "ERIE floated" is a
-           * state change; "ERIE floated and placed its home token on E11"
-           * is the same change with the thing the player would otherwise go
-           * looking for on the map. */
-          /* Design note #401: a par sets a price, and a price is a cell on
-             the chart. Diffed here beside the float announcement, and for
-             the same reason -- the market atom is separate state, so the
-             shell is what can write to both. */
+          /* A float is announced here by diffing before/after, naming the hex the home token landed on. #401: a par is also a cell on the chart.
+             See docs/ai_architecture/state_machine.md - App.tsx #400 */
           if (before) {
             for (const company of after.public_companies) {
               const wasUnparred =
@@ -5882,40 +2696,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const wasFloated =
                 before.public_companies.find((e) => e.company_id === company.company_id)
                   ?.is_floated ?? false;
-              /* ==============================================================
-               *  DESIGN NOTE 468: FLOATING IS ALSO A MOMENT TO CHECK
-               * ==============================================================
-               *
-               * REPORTED (critical): when the B&O floats in a Stock Round --
-               * having parred back in the Auction -- its token never reaches
-               * the market matrix, and the Operating Round queue that sorts
-               * on market price then breaks the round transition.
-               *
-               * This diff watched ONE transition: `par_value` going from null
-               * to set. That is the only moment a par is established for
-               * seven of the eight corporations, because their par is set by
-               * `BuyStock`, which dispatches through this path.
-               *
-               * The B&O's is not. Its par is set by answering the auction
-               * prompt (design note #399), which writes state directly and
-               * never passes through `runGameplayAction` -- so this diff
-               * never saw the transition and no mark was ever created. The
-               * Par Tray reads `par_value` off the game document and showed
-               * the company; the matrix reads the market atom and had never
-               * been told.
-               *
-               * SO THE INVARIANT IS ENFORCED AT FLOAT, not only at par. A
-               * floated corporation must have a market position -- the
-               * operating queue sorts on it and `sandboxMarketPositions`
-               * draws from it -- and that has to hold no matter which code
-               * path set the par. Checking it here catches the B&O and any
-               * future path that sets a par without dispatching.
-               *
-               * IDEMPOTENT BY CONSTRUCTION. `placeParMark` returns the same
-               * object when a mark already exists, so the ordinary case --
-               * parred by `BuyStock`, marked by the branch above, floating
-               * later -- passes through untouched and no token is ever
-               * dragged back to par after walking. */
+              /* The invariant is enforced at FLOAT, not only at par: the B&O's par is set by the auction prompt and never passes through this diff. Idempotent by construction.
+                 See docs/ai_architecture/stock_market.md - App.tsx #468 */
               const parredNow = wasUnparred === null && company.par_value !== null;
               const floatedNow = !wasFloated && company.is_floated;
               if ((parredNow || floatedNow) && company.par_value !== null) {
@@ -5926,12 +2708,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    wrong cell. */
                 setSandboxMarket((prices) => {
                   const next = placeParMark(prices, company.company_id, par, parBoxCellFor);
-                  /* The REF too. `beginOperatingRound` reads prices through
-                     `marketPriceForCompany`, which reads the ref -- and the
-                     Stock Round close that opens the Operating Round runs in
-                     this same dispatch, before React has committed the state.
-                     Without this the queue would sort the newly-floated
-                     company on a price the ref had not been told about yet. */
+                  /* Write the ref too: the Stock Round close that opens the Operating Round runs in this same dispatch, before React commits.
+                     See docs/ai_architecture/stock_market.md - App.tsx #316 */
                   if (next !== prices) sandboxMarketRef.current = next;
                   return next;
                 });
@@ -5951,37 +2729,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           sandboxStateRef.current = after;
           setSandboxState(after);
 
-          /* ==============================================================
-           *  DESIGN NOTE 642 (caller half): THE SHELL REPORTS, IT DOES NOT DECIDE
-           * ==============================================================
-           *
-           * Two blocks stood here. One saw `stock_round_just_ended` and built
-           * the Operating Round; the other saw `operating_round_just_ended`
-           * and closed the cycle, incrementing `macro_round_number`. Both were
-           * doing the reducer's job in the shell, and both were skipped by
-           * every replay -- see design note #642 in `sandboxSession.ts` for
-           * what that cost.
-           *
-           * `settleRoundTransitions` performs the transition now, so all that
-           * is left here is what a transition should CAUSE rather than what it
-           * IS: a line in the activity log.
-           *
-           * DETECTED BY COMPARING STATE, not by reading a flag. The flags are
-           * consumed inside the reducer now and are gone by the time this
-           * runs; more importantly a before/after comparison is a fact about
-           * the game, so it means the same thing on a replay as on a live
-           * dispatch. A flag is a message to whoever reads it first.
-           *
-           * SILENT ON A REPLAY. A rebuilding client re-applies every action in
-           * the log, so an unguarded line here would re-announce every round
-           * change the game has ever had -- which is exactly the duplicated,
-           * identically-timestamped history that was reported.
-           *
-           * NO TAB NAVIGATION EITHER. Design note #213's effect already
-           * watches `current_round_type` and moves the player to the round's
-           * own surface; doing it here as well was a second opinion about one
-           * transition, and on a replay it would yank the tab once per
-           * replayed round. */
+          /* settleRoundTransitions performs the transition; the shell only logs it. Detected by comparing state, silent on a replay, and no tab navigation here (#213 owns that).
+             See docs/ai_architecture/state_machine.md - App.tsx #642 */
         label =
           describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
 
@@ -5993,31 +2742,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
             timestamp,
             timestampMs,
-            /* Design note #643: from the state this action RESOLVED to, not
-               from a ref holding whatever round the browser is looking at
-               now. On a replay the ref is the present and the action is the
-               past, which is how an auction entry came to be tagged
-               "OR 1.1". */
-            /* ==========================================================
-                 DESIGN NOTE 659: AN ACTION BELONGS TO THE ROUND IT WAS TAKEN IN
-               ==========================================================
-
-               REPORTED: "it labels the last action of OR 1.1 as the first
-               action of SR2, i.e. it printed '[SR2] PRR passed Buy Trains.'"
-
-               This read `roundLabelFor(after)`. Design note #643 put it there
-               and its reasoning was right as far as it went: the round must
-               come from THIS action's own state rather than from a ref
-               holding whatever round the browser is looking at now, "because
-               on a replay the ref is the present and the action is the past."
-               It then took the wrong end of the action. `after` is the state
-               the action RESOLVED TO, and for the one action that closes a
-               round that is the next round -- so the entry is stamped with a
-               round that did not exist when the player clicked.
-
-               `before` is the round the action was taken IN, which is what a
-               log entry is for. It satisfies #643's actual requirement
-               identically: still the action's own state, still not a ref. */
+            /* Stamp the entry with the round the action was taken IN (before), not the one it resolved to.
+               See docs/ai_architecture/state_machine.md - App.tsx #659 */
             round: roundLabelFor(before) ?? undefined,
           },
           ...log,
@@ -6027,13 +2753,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             before.current_round_type !== after.current_round_type &&
             options?.isRemoteReplay !== true
           ) {
-            /* Design note #659: tagged with the round being ANNOUNCED, and
-               explicitly, because `logInfo`'s default is a ref fed by an
-               effect off `gameState` -- and no effect has run yet at this
-               point in the dispatch. Left to the default, the line opening
-               SR 2 was stamped `OR 1.1`: the exact inverse of the action
-               entry above it, which is why the pair read as one entry filed
-               under the wrong round rather than as two mislabelled ones. */
+            /* The transition line names the round being announced explicitly, because no effect has refreshed the round ref yet.
+               See docs/ai_architecture/state_machine.md - App.tsx #659 */
             const announcing = roundLabelFor(after) ?? undefined;
             const priorityHolder = after.player_addresses[after.priority_deal_index];
             const priorityLabel = priorityHolder
@@ -6046,16 +2767,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 announcing,
               );
             } else if (after.current_round_type === "StockRound") {
-              /* INSTRUCTED: "a second entry for [SR2] Announcing the stock
-                 round and who has Priority Deal."
-
-                 The Priority Deal was named on the OTHER transition and not
-                 on this one, which is the wrong way round for the reader: it
-                 was announced when the Stock Round ENDED, a round before it
-                 mattered, and withheld at the moment it decides who acts
-                 first. Said in both places now -- it costs a clause, and the
-                 player opening a Stock Round should not have to remember a
-                 line from two rounds ago to know whether they lead. */
+              /* Name the Priority Deal on BOTH transitions - it was announced a round before it mattered and withheld when it decided who acts first.
+                 See docs/ai_architecture/state_machine.md - App.tsx #659 */
               logInfo(
                 "Round",
                 `Operating Round ends — every corporation has operated. ${
@@ -6129,19 +2842,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         );
       }
     },
-    // `mapGrid`/`currentPhase` join the list because the sandbox branch now
-    // reads both to price a route. Omitting them would close over the board
-    // as it was when this callback was last built, so a route run after a
-    // tile lay would be scored against the PRE-LAY map -- the exact stale
-    // number the tester exists to make visible.
-    // `orSubPhase` joins them for design note #178's undo snapshot, which
-    // records the cursor alongside the state so an undone tile lay also
-    // restores the step the turn was on.
-    // `logInfo` joins for design note #261's auction, which announces a won
-    // private. The seating order the auction reducer needs is no longer a
-    // dependency: design note #265 reads it off `sandboxStateRef`, which is
-    // current by construction rather than as-of the last render -- one of
-    // the staleness classes the ref was introduced to close.
+    // mapGrid/currentPhase join because the sandbox branch prices a route from them; orSubPhase for the undo snapshot; logInfo for the auction announcement.
+    // See docs/ai_architecture/state_machine.md - App.tsx #265
     [
       session,
       refreshGameState,
@@ -6151,11 +2853,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       currentPhase,
       orSubPhase,
       logInfo,
-      /* Design note #662: the drain now dispatches `BuyPrivateCompany` when
-         an offer is accepted, and that dispatch names the game. Listed
-         rather than read off a ref because `gameId` is a prop and a prop
-         that changed would mean a different room -- the one case where the
-         stale closure would be silently wrong rather than merely late. */
+      /* The drain dispatches BuyPrivateCompany when an offer is accepted, and that dispatch names the game.
+         See docs/ai_architecture/firebase_middleware.md - App.tsx #662 */
       gameId,
       // Design note #262: the label is derived from live state, so a stale
       // closure here would name the corporation that WAS acting and quote
@@ -6163,15 +2862,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // the old variant-name labels never could be.
       gameState,
       marketGrid.positions,
-      /* Design note #398: the per-company par lookup. Stable (a `useCallback`
-         with no deps, reading a ref) but listed anyway -- an omitted stable
-         dependency is still a dependency, and the moment it stops being
-         stable a silent staleness bug is exactly the kind this file has
-         collected notes about. */
-      /* Design note #411: the market-price lookup for the Operating Round
-         queue. Stable for the same reason and listed on the same principle
-         as `parValueNumberFor` above -- both are `useCallback`s over a ref,
-         and both would go stale silently if that ever changed. */
+      /* Stable useCallbacks over refs, listed anyway: an omitted stable dependency is
+         still a dependency. See docs/ai_architecture/stock_market.md - App.tsx #398/#411 */
       marketPriceForCompany,
       // Design note #646: beside the price, and stable for the same reason
       // -- both are `useCallback`s over a ref, so neither changes identity.
@@ -6189,24 +2881,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     runGameplayActionRef.current = runGameplayAction;
   }, [runGameplayAction]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 591c: THE REBUILD RESETS EVERY ATOM, THROUGH BOTH DOORS
-   * ==================================================================
-   *
-   * Undo replays from the fixture, so every piece of state the dispatch path
-   * writes has to go back to its boot value first -- and design note #310
-   * already learned this list the hard way: restoring some atoms and not
-   * others leaves two pointers one seat apart and every later action widens
-   * the gap.
-   *
-   * REFS AND STATE TOGETHER, always. The very next thing that happens is a
-   * replay, and the replay reads the refs synchronously (design note #265) --
-   * so writing only the React state would have the reducer rebuild the game
-   * on top of the state it was supposed to have discarded.
-   *
-   * THE AUTOMATIC GUARDS GO TOO, for design note #475's reason: they exist to
-   * stop repeat firing within a turn, not to record history, and a replay
-   * has to be free to re-derive the consequences it derived the first time. */
+  /* A rebuild resets every atom through BOTH doors - refs and state together, plus the
+     automatic guards. See docs/ai_architecture/state_machine.md - App.tsx #591c */
   const rebuildSandbox = useCallback(() => {
     const board = seedSandboxState(sandboxRoomRef.current);
     sandboxStateRef.current = board;
@@ -6256,54 +2932,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 591d: UNDO APPENDS, IT DOES NOT POP
-   * ==================================================================
-   *
-   * REPORTED: "Undo in the stock round does not seem to do anything: the
-   * Activity Log prints 'Nothing to undo'. This is bad because if a player
-   * accidentally buys a share and needs to undo their turn, there's no way
-   * to do it."
-   *
-   * THE SNAPSHOT STACK IS GONE. Design note #178 built it, and its reasoning
-   * was right for a solo sandbox: the owner of the state can keep the
-   * outgoing copy, which gives exact single-step undo with no inverse
-   * operation per message type. What it cannot do is undo somebody ELSE's
-   * action, or reach an action this browser never dispatched -- and in a room
-   * most of the log is somebody else's. Every client held a different stack,
-   * which is why the button reported an empty one.
-   *
-   * So Undo appends `RevertTo` to the log, every client drops the reverted
-   * range and replays from the fixture, and the table undoes together. See
-   * `utils/logRevert.ts` for the history arithmetic and design note #592 for
-   * who may reach how far.
-   *
-   * IT IS NOT `automatic`, deliberately, and not turn-gated either: undoing
-   * is not a move in the round, and the player who needs it most is the one
-   * whose turn has just passed to somebody else. `undoReachFor` is the gate,
-   * and it gates on AUTHORSHIP rather than on whose turn it is. */
-  /* ==================================================================
-   *  DESIGN NOTE 591e: THE UNDO BUTTON NAMES THE KIND, NOT THE SENTENCE
-   * ==================================================================
-   *
-   * The first attempt here re-ran `describeGameplayAction` to quote the log's
-   * own sentence -- "Ada bought a 10% share of ERIE from the IPO for $67".
-   * That reads beautifully and cannot be built at this moment: the describer
-   * needs the map, the era and the board AS THEY WERE when the action was
-   * dispatched, and by the time Undo is pressed the board has moved on. The
-   * available options were to reconstruct a stale context (a sentence that
-   * looks authoritative and is subtly wrong about the price) or to say less
-   * and mean it.
-   *
-   * SO IT NAMES THE KIND OF ACTION. "the last share purchase" is short,
-   * always true, and enough for a player who is undoing something they did
-   * ten seconds ago. The Activity Log still carries the full sentence for
-   * anyone who wants the detail, and now carries the undo beside it.
-   *
-   * A TABLE RATHER THAN THE RAW KEY, because `RunManualRoute` and
-   * `AdvanceOperatingSubPhase` are message names, not English. An unmapped
-   * message falls back to the key -- ugly and unmistakably a fallback, which
-   * beats an empty string that would read as "undo nothing". */
+  /* Undo APPENDS RevertTo to the log so the whole table undoes together; gated on authorship, not on turn. #591e: the button names the kind of action, since the full sentence cannot be rebuilt after the board has moved.
+     See docs/ai_architecture/state_machine.md - App.tsx #591 */
   const describeLoggedAction = useCallback((action: { payload: string }): string => {
     const FRIENDLY: Readonly<Record<string, string>> = {
       BuyStock: "the last share purchase",
@@ -6337,19 +2967,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
   }, []);
 
-  /* ==================================================================
-   *  DESIGN NOTE 592d: THE BUTTON AND THE DISPATCH ASK ONE FUNCTION
-   * ==================================================================
-   *
-   * `undoReachFor` decides both whether the button is live and what happens
-   * when it is pressed. A separate `canUndo` boolean beside it would be a
-   * second opinion about the same question -- and this codebase's recurring
-   * bug is exactly that (design notes #559, #576, #580, #587).
-   *
-   * READ-ONLY IS FOLDED IN HERE rather than left as a second condition on the
-   * button, so the control has one reason to be disabled and it is always the
-   * true one. NOT the turn, deliberately: undo is not a move, and the player
-   * who needs it most has just watched their turn pass. */
+  /* undoReachFor decides both the button's enabled state and the dispatch; read-only is folded in so there is one reason to be disabled.
+     See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const undoBlockedReason = useMemo(() => {
     if (!sandbox) return controlsEnabled ? null : "Initialize the session key to act.";
     if (!controlsEnabled) return "Initialize the session key to act.";
@@ -6360,11 +2979,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       describeLoggedAction,
     );
     return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : null;
-    /* `sandboxAppliedCount` IS the dependency that matters and the linter
-       cannot see it: the reach is read out of `sandboxLogRef`, a ref, so
-       nothing here changes when the log grows. The count does, on every
-       applied action, which is exactly when the answer can change. Omitting
-       it would leave the button stuck on its first verdict for the game. */
+    // sandboxAppliedCount is the real dependency and the linter cannot see it:
+    // the reach is read out of a ref. See docs/ai_architecture/state_machine.md - App.tsx #592
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sandbox, controlsEnabled, localId, sandboxRoom, describeLoggedAction, sandboxAppliedCount]);
 
@@ -6398,83 +3014,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, [sandbox, runGameplayAction, gameId, logInfo, localId, sandboxRoom, describeLoggedAction]);
 
-  /* Design note #592c: `handleUndoToRoundStart` IS GONE with the second
-     button. One Undo, pressed as many times as needed -- `undoToRoundStart`
-     stays exported and tested, because "how far back is the round boundary"
-     is a real question this may want again, but nothing calls it today and a
-     handler wired to no control is a control somebody will assume exists. */
+  /* handleUndoToRoundStart is gone with the second button; undoToRoundStart stays exported and tested.
+     See docs/ai_architecture/state_machine.md - App.tsx #592 */
 
 
-  // Design note (Stock & Auction pass): reads real UI-driven selection state
-  // from `StockRoundPanel` (`srSelectedProtocolId`/`srSource`/`srParValue`)
-  // instead of the old hardcoded `MOCK_BUY_STOCK_*` constants -- see
-  // `StockRoundPanel.tsx` design note #2. `par_value` becomes `null`
-  // whenever the selected company is already floated, since a floated
-  // company's price comes from the Stock Market Matrix, not a fresh par
-  // choice (matches `BuyStock`'s own real semantics, not a fabricated one).
-  /* ---- Design note #29: THE TARGET COMPANY IS AN ARGUMENT ------------
-   *
-   * Both handlers used to read `srSelectedProtocolId` -- a single "which
-   * company is selected" value, which was correct while the Stock Round had
-   * exactly one set of controls fed by a pill selector.
-   *
-   * Permanently expanding the corporation cards breaks that assumption
-   * completely: there are now EIGHT live Buy buttons and eight live Sell
-   * buttons on screen at once. Reading a shared selection would mean every
-   * one of them dispatched against whichever company happened to be
-   * selected -- so clicking Buy inside the B&M card would buy PRR. Silently,
-   * with a perfectly successful transaction, and no way to tell from the UI
-   * that anything had gone wrong until the roster refreshed.
-   *
-   * Setting the selection on click and then dispatching does NOT fix it:
-   * `setState` is asynchronous, so the handler would still read the
-   * previous value on the click that mattered.
-   *
-   * So the company id is a parameter. There is no shared selection left to
-   * go stale, and the id travels with the click that produced it. */
-  /* ==================================================================
-   *  DESIGN NOTE 42: MULTI-BUY IS N TRANSACTIONS, NOT A BATCH
-   * ==================================================================
-   *
-   * The Brown zone lets a player take several bank-pool shares in one turn
-   * (`StockRoundPanel.tsx` design note #33). `ExecuteMsg::BuyStock` has no
-   * quantity parameter, so "buy 3" is three sequential `BuyStock` messages.
-   *
-   * SEQUENTIAL, AND STOPPING AT THE FIRST FAILURE. `runGameplayAction`
-   * awaits each broadcast, so purchase N+1 is only attempted once N has
-   * been accepted on chain. Firing them in parallel would race the
-   * contract's own pool accounting and could leave the player having bought
-   * fewer shares than the log claims. Each purchase is its own log entry,
-   * which is accurate rather than noisy -- it really is three purchases.
-   *
-   * A batched `BuyStock { quantity }` would make this one signature and one
-   * atomic state change, and is worth raising in the contract audit. Until
-   * then this is the honest shape of the operation, not a workaround
-   * pretending to be atomic. */
-  /* ==================================================================
-   *  DESIGN NOTE 558: THE SOURCE DECIDES THE PRICE, NOT THE FLOAT
-   * ==================================================================
-   *
-   * This read the corporation's `is_floated` and, once true, sent
-   * `par_value: null` -- "price this at market". The comment defended it as
-   * matching `BuyStock`'s real semantics, and it does not match 1830's.
-   *
-   * In 1830 the IPO always sells at PAR, for the whole life of the
-   * corporation, until the IPO is empty. The stock market price governs the
-   * BANK POOL. The two are different piles of shares at different prices and
-   * a player chooses between them every turn -- which is most of what makes
-   * a Stock Round interesting, and it collapses entirely if floating
-   * silently repoints the IPO at the market.
-   *
-   * The consequence is not cosmetic. A corporation whose price has run up
-   * would sell its remaining IPO shares at the higher figure, so the
-   * treasury it never receives and the player's cash both move by the wrong
-   * amount, and the error compounds for the rest of the game.
-   *
-   * FLOATING STILL MATTERS, just not here: it is what releases the treasury
-   * (design note #134) and puts the corporation into the operating order.
-   * What it does not do is change where a share bought from the IPO gets its
-   * price. */
+  // The target company is an ARGUMENT: eight cards means eight live Buy buttons, and a shared selection would dispatch against the wrong one. #42: multi-buy is N sequential BuyStock messages. #558: the IPO always sells at par; only the bank pool prices from the matrix.
+  // See docs/ai_architecture/stock_market.md - App.tsx #29
   const buyOneShare = useCallback(
     (protocolId: number, source: "Ipo" | "Bank") => {
       return runGameplayAction(
@@ -6487,14 +3032,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // per-card state now, so it arrives as an argument rather than
             // being read from a shared value that every card could flip.
             source,
-            /* Design note #558: the IPO is priced at par, always. The bank
-               pool takes `null` and is priced from the Stock Market Matrix,
-               which is the one case that field was ever meant to signal.
-
-               Design note #398: resolved from the company being BOUGHT,
-               which is now genuinely possible -- it used to say that and
-               then read a single shared value. Design note #553: and from
-               the corporation's own par rather than this browser's ladder. */
+            /* par_value carries the IPO's par; null means bank pool, priced from the matrix. Resolved from the company being bought (#398/#553).
+               See docs/ai_architecture/stock_market.md - App.tsx #558 */
             par_value: source === "Ipo" ? parValueFor(protocolId) : null,
           },
         },
@@ -6504,182 +3043,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId, parValueFor],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 416: WHO STILL OWES A HOME STATION
-   * ==================================================================
-   *
-   * Derived from the board every render rather than raised as a one-shot
-   * flag when the float happens. `pendingHomeTokens` asks "is this floated
-   * corporation's printed home hex empty", which stays true until it is
-   * answered -- so a reload, a late poll, or two corporations floating on
-   * one dispatch all resolve correctly, and a prompt cannot be lost.
-   *
-   * ONLY THE HEAD OF THE QUEUE is prompted. Several can float at once (a
-   * waterfall cascade, or a multi-buy crossing two thresholds); they are
-   * returned in operating order and the next appears as this one is
-   * answered.
-   *
-   * NATURALLY INERT AGAINST A LIVE CHAIN, and worth stating because it
-   * looks like a gap. The contract's `grant_home_station_token` places the
-   * token as part of floating, so on a real game the hex is already
-   * occupied by the time any state reaches this line and the list comes
-   * back empty. This prompt governs the SANDBOX, which is the only place
-   * the frontend owns the placement -- a frontend cannot decline to do
-   * something the chain has already done. */
+  /* Derived from the board every render, so a reload or a double float cannot lose the prompt. Only the head of the queue is asked; naturally empty on a live chain.
+     See docs/ai_architecture/state_machine.md - App.tsx #416 */
   const pendingHomeToken = useMemo(() => {
     if (!gameState) return null;
     const owed = pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
     if (!owed) return null;
 
-    /* ==================================================================
-     *  DESIGN NOTE 440: THE PRESIDENT'S PROMPT, NOT EVERYONE'S
-     * ==================================================================
-     *
-     * REPORTED: the home station prompt fires for all players.
-     *
-     * It did. `pendingHomeTokens` answers "which corporation owes a token",
-     * which is a fact about the BOARD and therefore true for every viewer
-     * at once -- so a modal keyed on it alone appeared on four screens,
-     * three of them belonging to players with no right to answer it. Worse,
-     * it is a BLOCKING modal with no dismissal (see the component's own
-     * note on why that is correct for the president), so the other three
-     * players were locked out of the game by a decision that was not
-     * theirs.
-     *
-     * The presidency is already carried on the pending entry, so the gate
-     * is a comparison rather than new plumbing.
-     *
-     * HOTSEAT KEEPS THE PROMPT, and that is why this tests the SEAT rather
-     * than the wallet. At a shared keyboard `viewerAddress` is the seat
-     * currently being played, which is exactly who should be answering --
-     * gating on a connected wallet would silence the prompt for the one
-     * mode where every seat is the viewer in turn. `sandboxSeatIndex`
-     * drives `viewerAddress` there, so following the seat is following the
-     * person holding the mouse.
-     *
-     * A CORPORATION WITH NO PRESIDENT ON RECORD prompts nobody. That state
-     * is reachable through the B&O private before its par is set, and a
-     * modal nobody can answer is the same lockout in a different costume --
-     * `pendingHomeTokens` already excludes hexes it cannot resolve, and
-     * this excludes presidencies it cannot attribute. */
-    /* ==================================================================
-     *  DESIGN NOTE 455: THE FLOAT DOES NOT WAIT FOR A TURN
-     * ==================================================================
-     *
-     * REPORTED: the prompt waits until it is the President's active turn to
-     * appear.
-     *
-     * It did, and design note #441's gate was not the cause -- comparing
-     * against `viewerAddress` is correct online, where that value is the
-     * connected wallet and does not move. In HOTSEAT it moves: sandbox
-     * derives `viewerAddress` from `sandboxSeatIndex`, and the Auto-Follow
-     * effect walks that pointer to whoever is acting. So the president
-     * became "the viewer" only when the turn reached them, and a float
-     * triggered by ANOTHER player's purchase sat waiting for a turn that
-     * might be three seats away.
-     *
-     * A float is not a turn action. It is a threshold crossing caused by
-     * whoever bought the 60th percent -- frequently not the president at
-     * all -- and 1830 resolves it immediately, before play continues. So
-     * the prompt fires on the FACT, not on the cursor.
-     *
-     * HOTSEAT ANSWERS FOR THE PRESIDENT, WHOEVER IS SEATED. One keyboard,
-     * one screen: the person at it is every seat in turn, so requiring the
-     * seat pointer to have arrived at the president is requiring a
-     * formality that has no counterpart in the physical game -- where the
-     * president simply reaches over and places their token. `hotseatSeat`
-     * below is that reading, and it is scoped to sandbox so an online
-     * client still shows this to exactly one player.
-     *
-     * THE SEAT FOLLOWS THE PROMPT, not the other way round. When the
-     * prompt fires for a president who is not the seated player, the
-     * accompanying effect moves the seat to them -- so the map flow that
-     * follows (design note #440) acts as the right corporation rather than
-     * as whoever happened to be up. Without that the placement would be
-     * attributed to the wrong seat's view. */
-    /* ==================================================================
-     *  DESIGN NOTE 460: THE SEAT SYNC HAS TO LAND FIRST
-     * ==================================================================
-     *
-     * REPORTED: the modal pops up for the player who bought the floating
-     * share rather than waiting for the President.
-     *
-     * Design note #455 fixed the opposite complaint -- the prompt waiting
-     * for the president's TURN -- and over-corrected. Its `hotseatSeat`
-     * escape hatch rendered the modal for whoever was seated the moment a
-     * corporation floated, on the reasoning that one keyboard means the
-     * person at it is every seat in turn. True of a turn; false of this
-     * instant. The float is caused by whoever bought the 60th percent, and
-     * that buyer is very often NOT the president -- so the modal appeared
-     * over the buyer's screen, addressed to somebody else, asking them to
-     * place a token they do not own.
-     *
-     * Both notes wanted the same thing and #455 reached for it one step too
-     * early. The prompt should fire IMMEDIATELY -- not wait for a turn --
-     * and it should fire FOR THE PRESIDENT. Those are compatible: the seat
-     * effect below moves the hotseat cursor to the president as soon as a
-     * token is owed, and this gate simply waits for that move to land.
-     *
-     * SO THE TEST IS STRICT IDENTITY, in hotseat and online alike. One
-     * render's delay while the seat syncs is the entire cost, and it buys a
-     * modal that is never addressed to the wrong person. `sandbox` no
-     * longer appears in this condition at all, which is the tell that the
-     * special case is gone rather than narrowed. */
+    /* The prompt fires immediately on the FACT of the float, and only for the president - strict identity, one render after the seat sync lands (#440/#455).
+       See docs/ai_architecture/state_machine.md - App.tsx #460 */
     if (!owed.president || owed.president !== viewerAddress) return null;
     return owed;
   }, [gameState, homeHexToAxial, viewerAddress]);
 
-  /* Design note #578: DESIGN NOTE #455's SEAT FIX IS GONE. It moved the
-     hotseat cursor to whichever president owed a home station, and fought
-     Auto-Follow for the cursor while it did. Both are hotseat mechanics.
+  /* #455's hotseat seat move is gone; in a room the prompt is already on the right client and there is no cursor to fight.
+     See docs/ai_architecture/state_machine.md - App.tsx #578 */
 
-     In a room the prompt is already on the right client -- `pendingHomeToken`
-     gates on the viewer BEING the president (design note #440), and the
-     viewer is fixed. There is no cursor to move, so there is nothing to fix
-     and nothing to fight. */
-
-  /* ==================================================================
-   *  DESIGN NOTE 440: THE HOME STATION IS PLACED ON THE MAP
-   * ==================================================================
-   *
-   * REPORTED: the prompt auto-places the token without map interaction.
-   *
-   * `null` when no home placement is in flight. When the president accepts
-   * the prompt this holds the corporation, the one legal hex, and the tab
-   * they came FROM -- so the flow can put them back where they were rather
-   * than stranding them on the map.
-   *
-   * WHY THE RETURN TAB IS CAPTURED RATHER THAN ASSUMED. A float can happen
-   * during a Stock Round (a purchase crosses 60%) or in the auction (the
-   * B&O private), so "back" is not a constant. Reading `activeMainTab` at
-   * the moment of the click records where the player actually was, which is
-   * the only honest answer -- the requirement says "the Stocks tab" because
-   * that is where a float usually happens, not because it always does. */
+  /* null when no home placement is in flight; otherwise the corporation, the one legal hex, and the tab to return to (captured, not assumed).
+     See docs/ai_architecture/state_machine.md - App.tsx #440 */
   const [homeStationPlacement, setHomeStationPlacement] = useState<{
-    /* ==============================================================
-     *  DESIGN NOTE 444: ONE VEIL, THREE ERRANDS
-     * ==============================================================
-     *
-     * Design note #440 built this for the home station. The D&H's two
-     * powers need exactly the same thing -- send the player to the Rail
-     * Map, black out every hex but one, arm the right cursor, and put them
-     * back afterwards -- so they use it rather than growing a second
-     * mechanism beside it.
-     *
-     * `kind` is what differs, and it differs in only two ways: which
-     * cursor to arm, and what the click does.
-     *
-     *   `home-station`    free token, the corporation's printed home hex
-     *   `private-station` free token, the D&H's F16
-     *   `private-tile`    an ORDINARY tile lay, at the hex's real terrain
-     *                     cost -- the click is NOT intercepted, it falls
-     *                     through to the tile picker, and the veil is doing
-     *                     all the work.
-     *
-     * That last one is why `kind` is not simply a boolean "is this a
-     * token". A tile lay through this flow is the normal lay path with the
-     * board narrowed to one hex; anything else would be a second tile
-     * pipeline to keep in step with the first. */
+    /* One veil, three errands. kind decides which cursor to arm and what the click does; private-tile deliberately does NOT intercept.
+       See docs/ai_architecture/canvas_rendering.md - App.tsx #444 */
     kind: "home-station" | "private-station" | "private-tile";
     companyId: number;
     q: number;
@@ -6711,17 +3095,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [homeStationPlacement]);
 
-  /** Design note #416: the prompt's answer. Free -- this deliberately does
-   *  NOT dispatch `PlaceStationToken`, which charges the escalating token
-   *  price (design note #239). A home station costs nothing, and routing it
-   *  through the paid message would bill a corporation for the one token
-   *  1830 gives it. */
-  /** Design note #440: the prompt's answer ARMS THE MAP. It no longer
-   *  places anything -- it records where the player was, sends them to the
-   *  Rail Map with the board veiled to one hex and the station cursor live,
-   *  and waits for the click. `handleStageFreeStation` below stages that
-   *  click, and `commitFreeStationPlacement` puts the token down once the
-   *  confirmation ring is answered (design note #454). */
+  /** The prompt's answer arms the map rather than placing anything; the placement is FREE and must not reach PlaceStationToken (#239/#440).
+   *  See docs/ai_architecture/state_machine.md - App.tsx #416 */
   const handlePlaceHomeStation = useCallback(
     (companyId: number, q: number, r: number) => {
       setHomeStationPlacement({
@@ -6746,22 +3121,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [gameState, activeMainTab, logInfo],
   );
 
-  /** Design note #440: the board click that finishes it.
-   *
-   *  Free -- this deliberately does NOT dispatch `PlaceStationToken`, which
-   *  charges the escalating token price (design note #239). A home station
-   *  costs nothing, and routing it through the paid message would bill a
-   *  corporation for the one token 1830 gives it. */
-  /* Design note #454: the board click STAGES a free placement; it no longer
-     performs one. `RadialTokenConfirm` then asks, and
-     `commitFreeStationPlacement` below is what the check actually runs.
-
-     This is the same STAGE-then-CONFIRM shape design note #201 gave the
-     paid placement, arriving late for the two free ones -- and the reason
-     it matters more here, not less: a home station is permanent, free, and
-     the first piece a corporation ever puts on the board. An accidental
-     click placing it instantly is not recoverable through the ordinary
-     flow. */
+  /** The board click STAGES the free placement; commitFreeStationPlacement runs when the ring is answered. Free, so not PlaceStationToken (#239).
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #454 */
   const handleStageFreeStation = useCallback(
     ({
       q,
@@ -6815,13 +3176,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [homeStationPlacement],
   );
 
-  /** Design note #454: what the confirmation ring runs for a free
-   *  placement.
-   *
-   *  Free -- this deliberately does NOT dispatch `PlaceStationToken`, which
-   *  charges the escalating token price (design note #239). A home station
-   *  costs nothing, and routing it through the paid message would bill a
-   *  corporation for the one token 1830 gives it. */
+  /** What the confirmation ring runs for a free placement - never the paid PlaceStationToken message.
+   *  See docs/ai_architecture/contract_economy.md - App.tsx #239 */
   const commitFreeStationPlacement = useCallback(
     ({ q, r, cityIndex }: { q: number; r: number; cityIndex: number | null }) => {
       const placement = homeStationPlacement;
@@ -6870,40 +3226,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setBoParPrompt(null);
       if (!winner) return;
 
-      /* ==============================================================
-       *  DESIGN NOTE 461/468: THE MARK IS SET OUTSIDE THE UPDATER
-       * ==============================================================
-       *
-       * A par set here does not pass through `runGameplayAction`, so the
-       * diff that normally creates a market mark never sees it -- design
-       * note #399 made this a prompt precisely because the auction has no
-       * `ExecuteMsg` for it. The mark therefore has to be written here too.
-       *
-       * BUT NOT INSIDE `setSandboxState`'S UPDATER, which is where a first
-       * cut put it. A state updater must be PURE: React may invoke it more
-       * than once for a single update (it does so deliberately in StrictMode),
-       * and calling another setter from inside one is a side effect in a
-       * function contracted not to have any. `placeParMark` is idempotent so
-       * the symptom would have been subtle rather than loud, which is worse
-       * -- it would have looked correct until some unrelated render made it
-       * run at a different moment.
-       *
-       * `sandboxStateRef` already carries the current state synchronously
-       * (design note #265), so the grant can be computed here, both atoms
-       * written from one place, and the updater left doing nothing but
-       * returning a value.
-       *
-       * DESIGN NOTE 468 MAKES THIS A BELT-AND-BRACES. The float diff now
-       * enforces "a floated corporation has a market position" regardless of
-       * how its par was set, so the B&O would gain its token there even if
-       * this line were removed. It stays because the token should appear
-       * when the par is SET -- the Par Tray shows it from that moment, and
-       * the matrix disagreeing with the tray for a whole Stock Round is the
-       * bug this was reported as. */
-      /* Design note #550: through the log. The grant, the par and the market
-         mark all happen in the replay handler now, so every client performs
-         them -- including this one, which sees its own action come back
-         round. */
+      /* Written OUTSIDE setSandboxState's updater: a state updater must be pure, and React may invoke it twice. #468 makes this belt-and-braces; #550 routes it through the log.
+         See docs/ai_architecture/stock_market.md - App.tsx #461 */
       void runGameplayActionRef.current?.(
         `${sandboxPlayerLabel(winner) ?? truncateAddress(winner)} pars the B&O at $${parValue}.`,
         { SetBoPar: { player: winner, par_value: parValue } },
@@ -6951,26 +3275,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
-    /* ==================================================================
-     *  DESIGN NOTE 275: ONE MESSAGE PER TRAIN
-     * ==================================================================
-     *
-     * `RunManualRoute` carries ONE `path`, because it declares one train's
-     * run -- so a corporation running three trains sends three messages.
-     * That is the contract's shape and not a limitation to work around:
-     * each route is validated on its own, and a rejected third route does
-     * not undo two accepted ones.
-     *
-     * Awaited in sequence rather than fired in parallel. The sandbox
-     * reducer is synchronous through a ref (design note #265) so the
-     * ordering matters there, and on a live chain sequential signing is
-     * what the wallet expects anyway -- `handleBuyTrainsFromBank` sends its
-     * N purchases exactly this way.
-     *
-     * INVALID DRAFTS ARE SKIPPED, NOT REFUSED. The panel's total already
-     * excludes them and says so; blocking the whole dispatch because one of
-     * three routes ends on a town would make the good two hostage to the
-     * bad one. */
+    /* One RunManualRoute per train, awaited in sequence. Invalid drafts are skipped, not refused - the good routes are not hostage to the bad one.
+       See docs/ai_architecture/routing_pathfinding.md - App.tsx #275 */
     const runnable = trainDrafts.filter(
       (draft) =>
         draft.value !== null &&
@@ -6990,16 +3296,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         );
         return;
       }
-      /* Design note #256: the LAST stop, reported here rather than on click.
-         Every intermediate click is momentarily the last one, so refusing
-         plain track during the draw would make it impossible to cross any --
-         but a route that ENDS on a connector is one the contract will refuse,
-         and finding that out from a rejected transaction is the outcome this
-         check exists to avoid. */
-      /* Design note #474: reported before the terminus hint, because a
-         tokenless route is wrong about WHERE it runs rather than about how
-         it ends -- telling the player to extend it would send them further
-         in the wrong direction. */
+      /* The LAST stop is reported here, not refused on click. #474: the token warning comes first, because a tokenless route is wrong about where it runs.
+         See docs/ai_architecture/routing_pathfinding.md - App.tsx #256 */
       const tokenless = drafted.find((draft) => draft.tokenBlockReason !== null);
       if (tokenless?.tokenBlockReason) {
         setRouteFeedback(tokenless.tokenBlockReason);
@@ -7029,36 +3327,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             game_id: gameId,
             protocol_id: actingProtocolId,
             path: routePointsToWaypoints(points),
-            // The dividend decision belongs to the Dividends sub-phase, which
-            // is the very next step -- so the revenue is withheld into the
-            // treasury here and paid out (or not) there. Declaring a payout
-            // from the Routes step would make the separate Dividends buttons
-            // meaningless.
+            // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
+            // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
             payout_strategy: "Withhold",
           },
         },
-        /* Design note #492a: only the first message clears the running
-           total; the rest add to it. Flagged HERE rather than inferred in
-           the reducer because this loop is the only thing that knows where a
-           turn's batch begins -- and it is set inside the loop rather than
-           from the index, since a draft with fewer than two points is
-           skipped above and would otherwise consume the flag without
-           dispatching anything. */
+        /* Only the first message of a turn's batch clears the running total, flagged inside the loop because short drafts are skipped.
+           See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
         { resetRouteRevenue: firstOfBatch },
       );
       firstOfBatch = false;
     }
 
-    /* Design note #492: the total actually committed, recorded from the very
-       list that was just dispatched rather than recomputed from the drafts.
-       Those are the same figures the planner panel priced and the same ones
-       the loop above sent, so the number the Dividends step spends is the
-       number the player watched being assembled.
-
-       `runnable` has already excluded every invalid draft (too long, ending
-       off a terminus, touching no token), so this cannot count a route that
-       was never sent -- which is the failure the panel's own total note
-       warns about. */
+    /* Record the total from the list actually dispatched, so the Dividends step spends the number the player watched being assembled.
+       See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
     const committedTotal = runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
     setCommittedRouteRevenue({ protocolId: actingProtocolId, total: committedTotal });
 
@@ -7066,67 +3348,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // this turn's and the dividend choice is binding.
     setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: true });
 
-    // Design note #142: advance Routes -> Dividends once trains have run.
-    // Optimistic, matching this file's existing convention (design note #4)
-    // of not gating local UI sequencing on a chain round-trip -- and now
-    // necessary rather than cosmetic, since running trains is the step that
-    // produces the figure the Dividends phase decides about.
+    // Optimistic advance to Dividends: running trains produces the figure that step decides about.
+    // See docs/ai_architecture/state_machine.md - App.tsx #142
     setLiveOrSubPhase("Dividends");
   }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain]);
 
-  // Generalized over `distribute` (design note #10/item 2 -- Phase 3's
-  // explicit "Pay Dividends" vs "Withhold Revenue" buttons are the same
-  // real `DeclareDividends` message, differing only in this one field).
-  // Both optimistically advance to Phase 4 ("Hardware") on click, matching
-  // this file's existing convention (design note #4) of not gating local UI
-  // state on live tx confirmation -- the Action Log entry above already
-  // reports success/failure independently.
-  /* ==================================================================
-   *  DESIGN NOTE 198: THE DIVIDEND WAS ALWAYS THE SAME $180
-   * ==================================================================
-   *
-   * `revenue_amount` was `MOCK_DECLARE_DIVIDENDS_REVENUE` -- a fixed
-   * constant left over from before routes were wired -- so whatever a
-   * corporation had actually just earned, it declared the mock figure. The
-   * panel directly above the buttons showed the REAL revenue and its real
-   * per-share split, and then the button sent a different number. Two
-   * figures for one decision, three inches apart, and the one the player
-   * could see was not the one that travelled.
-   *
-   * It now reads `last_route_revenue` off the corporation the action targets
-   * -- the same field `dividendRevenue` renders from, so the panel and the
-   * message cannot disagree. Read INSIDE the callback rather than closed
-   * over from the derived value further down this component: that value is
-   * declared after this callback, and naming it in a dependency array here
-   * would evaluate it before its own initialiser had run. */
-  /* Design note #439: `automatic` for the same reason the skip has it --
-     the forced $0 withhold (design note #414) is the game acting, and Undo
-     must rewind past it to whatever the player last chose. */
+  // revenue_amount reads the same field the panel renders, so the figure on screen and the figure in the message cannot differ. Read inside the callback for declaration order.
+  // See docs/ai_architecture/routing_pathfinding.md - App.tsx #198
   const declareDividendsChoice = useCallback(
     (distribute: boolean, automatic = false) => {
       const corporation = gameState?.public_companies.find(
         (entry) => entry.company_id === actingProtocolId,
       );
-      /* ==============================================================
-       *  DESIGN NOTE 484c: A SKIPPED TURN DECLARES ZERO, NOT LAST TURN'S
-       * ==============================================================
-       *
-       * This read `last_route_revenue` unconditionally. That field is the
-       * corporation's LAST run, which for a corporation that skipped Routes
-       * is a previous turn's figure -- so the forced $0 withhold could
-       * dispatch `DeclareDividends` for a stale positive amount and move
-       * real money into the treasury for a run that did not happen this
-       * turn.
-       *
-       * Design note #278 already identified the field as unreliable for
-       * exactly this reason and used the observation to hide the PAY
-       * button. It never reached the amount, so the button was corrected
-       * and the message was not. */
-      /* Design note #492: and the SAME committed total the panel above is
-         quoting. This is the pair design note #198 was written about -- the
-         figure on screen and the figure in the message -- so both read one
-         derivation. Without it a multi-train corporation would see its real
-         total, click Pay, and dispatch the last train's revenue. */
+      /* A skipped Routes step declares $0, not last turn's revenue; and it declares the same committed total the panel quotes (#492).
+         See docs/ai_architecture/state_machine.md - App.tsx #484 */
       const revenue = dividendDeclaration({
         lastRouteRevenue: corporation?.last_route_revenue,
         skippedRoutes: skippedRoutesThisTurn,
@@ -7170,29 +3405,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [declareDividendsChoice],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 204: QUANTITY IS N MESSAGES, NOT A BATCH
-   * ==================================================================
-   *
-   * `ExecuteMsg::BuyHardwareFromPool` carries no quantity field, so "buy 2"
-   * is two messages. Exactly the shape of `handleBuyShare`'s multi-buy
-   * (design note #42) and for the same reasons: `runGameplayAction` awaits
-   * each broadcast, so purchase N+1 is only attempted once N has been
-   * accepted, and each is its own Action Log line because it really is a
-   * separate purchase.
-   *
-   * SEQUENTIAL MATTERS MORE HERE THAN FOR SHARES. Buying the depot's last
-   * train of a tier advances the phase and can rust an entire generation of
-   * trains off the board. Firing a quantity in parallel would race that
-   * transition -- the second purchase would be priced and validated against
-   * a depot the first had not finished emptying.
-   *
-   * `tier` is taken for the log line only. The contract picks the model
-   * itself (`hardware.rs` module doc comment #2, "No model selection"), and
-   * the panel only ever offers the tier the depot's queue is already on, so
-   * the two cannot disagree -- but naming it here would be inventing a
-   * parameter the message does not have.
-   */
+  /* BuyHardwareFromPool has no quantity field, so "buy 2" is two sequential messages - a tier purchase can advance the phase and rust trains. tier is for the log line only.
+     See docs/ai_architecture/contract_economy.md - App.tsx #204 */
   const handleBuyTrainsFromBank = useCallback(
     async (tier: string, quantity: number) => {
       const times = Math.max(1, Math.floor(quantity));
@@ -7207,13 +3421,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         );
       }
 
-      /* Design note #262: ONE summary for a multi-train purchase.
-         Each message is its own transaction and gets its own line, which is
-         accurate -- but "bought a 3-train" three times in a row buries the
-         thing the player actually did. This adds the aggregate above them:
-         what it cost in total, and what the depot has left afterwards. Only
-         when there is an aggregate to state; for a single train the per
-         message line already says everything. */
+      /* One aggregate summary above the per-message lines, and only when there is an aggregate to state.
+         See docs/ai_architecture/state_machine.md - App.tsx #262 */
       if (times > 1 && before) {
         const ticker =
           gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
@@ -7232,34 +3441,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId, actingProtocolId, gameState, logInfo],
   );
 
-  // Buy Private Company Action Tray -- design note #14. `protocol_id` uses
-  // the same `MOCK_LAY_TILE_PROTOCOL_ID` stand-in every other OR action on
-  // this bar already targets (design note #1); `price` is stringified for
-  // the same big-int-safety reason every other `Uint128` field is.
-  /** Raise a proposal. Dispatches NOTHING -- design note #166. The purchase
-   *  message is sent only if the offer is accepted. */
-  /* ==================================================================
-   *  DESIGN NOTE 206: BUYING YOUR OWN PRIVATE NEEDS NOBODY'S PERMISSION
-   * ==================================================================
-   *
-   * Every proposal opened the consent prompt, including the commonest one in
-   * the game: a president selling a private company they personally own into
-   * the corporation they run. There is exactly one person involved in that
-   * transaction and the app was asking them to agree with themselves --
-   * a modal whose only possible answer is yes, in the middle of a turn.
-   *
-   * This is the same fork `train_trade.rs` already draws for trains
-   * (design note #205): one party means settle now, two parties mean ask.
-   * Applying it here makes the two flows behave alike, which matters because
-   * they look alike.
-   *
-   * THE COMPARISON IS AGAINST THE BUYING CORPORATION'S PRESIDENT, not
-   * against the viewer's wallet. The president is who the contract
-   * authorises for `BuyPrivateCompany`, and in a hotseat sandbox the viewer
-   * is whoever the seat switcher last selected -- so testing the viewer
-   * would auto-complete or prompt depending on which seat happened to be on
-   * screen, which is not a property of the trade at all.
-   */
+  // Proposing dispatches nothing (#166). A president selling their own private into their own corporation settles immediately - one party means no prompt.
+  // See docs/ai_architecture/contract_economy.md - App.tsx #206
   const handleProposePrivatePurchase = useCallback(
     (privateId: number, price: number) => {
       const target = gameState?.private_companies.find((p) => p.private_id === privateId);
@@ -7309,16 +3492,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [gameState, logInfo, actingProtocolId, runGameplayAction, gameId],
   );
 
-  /** Accepted. THIS is where the real message goes -- the one the contract
-   *  has always had, now sent only after both sides have said yes (in
-   *  sandbox) or after the buyer has confirmed knowing the seller was not
-   *  asked (in a live room). */
-  /* Design note #662: the ANSWER is a log entry, not a local dismissal.
-     Both of these used to clear `privateProposal` on the answering browser,
-     which closed the prompt on exactly one of the two screens showing it --
-     the same defect design note #565 fixed for the B&O par prompt. The drain
-     clears it now, on every client, and dispatches the purchase when the
-     answer is yes. */
+  /** The answer is a log entry, not a local dismissal: the drain clears the prompt on every client and dispatches the purchase on yes.
+   *  See docs/ai_architecture/contract_economy.md - App.tsx #662 */
   const handleAcceptPrivateOffer = useCallback(() => {
     if (!privateProposal) return;
     runGameplayAction(
@@ -7377,15 +3552,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId],
   );
 
-  // Deliberately non-dispatching -- see design note #8 for why "Place
-  // Station Token" has no single-button ExecuteMsg of its own.
-  // Design note #159: this was a HINT -- it logged a line telling the player
-  // to click a hex, and the hex click opened the tile picker, which lays
-  // track and has nothing to do with tokens. There was no way to place a
-  // token from this UI at all.
-  //
-  // It is now a real mode toggle. Turning it on disarms the tile picker and
-  // points the next board click at `handleTokenHexClick` below.
+  // A real mode toggle now, not a hint: turning it on disarms the tile picker and points the next board click at handleTokenHexClick.
+  // See docs/ai_architecture/canvas_rendering.md - App.tsx #159
   const handlePlaceStationTokenHint = useCallback(() => {
     setTokenTargetMode((current) => {
       const next = !current;
@@ -7427,21 +3595,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       nodeX: number;
       nodeY: number;
     }) => {
-      /* ==================================================================
-       *  DESIGN NOTE 238: THE THREE REFUSALS, BEFORE ANYTHING IS SIGNED
-       * ==================================================================
-       *
-       * This checked only `isTokenableHex` -- "does this hex have a city" --
-       * so a token could be staged on a city the corporation's track does
-       * not reach, on one whose slots are already full, and on another
-       * company's reserved home. All three are refused on chain, but only
-       * after a signature, and the error that came back named a contract
-       * variant rather than the situation.
-       *
-       * `evaluateStationPlacement` applies the same three rules here and
-       * returns the sentence explaining which one bit. Its own design note
-       * #2 is explicit about what it does NOT claim to judge, so the
-       * contract remains the authority rather than gaining a rival. */
+      /* evaluateStationPlacement applies the same three refusals the contract does, before a signature, and returns the sentence explaining which bit.
+         See docs/ai_architecture/canvas_rendering.md - App.tsx #238 */
       const placement = activeStationCompany
         ? evaluateStationPlacement({
             mapGrid,
@@ -7460,11 +3615,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
       setRouteFeedback(null);
-      // Design note #201: STAGE, do not place. Targeting mode stays on, so a
-      // click on another city re-aims rather than being swallowed by an open
-      // confirmation for a hex the player has changed their mind about.
-      // Design note #453: the node travels with the stage, so the
-      // confirmation dispatches the city the player actually clicked.
+      // Stage, do not place, so a click on another city re-aims. #453: the node travels with the stage.
+      // See docs/ai_architecture/canvas_rendering.md - App.tsx #201
       setPendingToken({
         q,
         r,
@@ -7491,11 +3643,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const { q, r, cityIndex, kind } = pendingToken;
     setPendingToken(null);
 
-    /* Design note #454: a FREE placement -- the home station or the D&H's
-       F16 token -- finishes through its own committer. It must not reach
-       `PlaceStationToken`, which charges the escalating price (design note
-       #239): routing it there would bill a corporation for a token 1830
-       gives it. */
+    /* A free placement finishes through its own committer; PlaceStationToken would charge the escalating price.
+       See docs/ai_architecture/contract_economy.md - App.tsx #239 */
     if (kind === "free") {
       // Design note #560: the slot travels with the placement.
       commitFreeStationPlacement({ q, r, cityIndex });
@@ -7513,11 +3662,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         protocol_id: actingProtocolId,
         q,
         r,
-        /* Design note #453: OMITTED when the geometry could not tell which
-           city was clicked. `sessionKey.ts` documents the absent key as
-           "resolve the lowest-indexed city with a free slot" -- always a
-           legal placement -- so omitting is the correct expression of "I do
-           not know", and sending a guessed `0` would not be. */
+        /* Omitted when the geometry cannot resolve which city was clicked - the contract's documented default is a legal placement, a guessed 0 is not.
+           See docs/ai_architecture/canvas_rendering.md - App.tsx #453 */
         ...(cityIndex === null ? {} : { city_index: cityIndex }),
       },
     });
@@ -7545,49 +3691,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (orSubPhase !== "Tokens" && tokenTargetMode) setTokenTargetMode(false);
   }, [orSubPhase, tokenTargetMode, actingProtocolId]);
 
-  // Phase-navigation-only handlers (design note #10/item 2) -- these don't
-  // dispatch anything themselves; they just log an informational Action Log
-  // entry (matching `handlePlaceStationTokenHint`'s own convention) and
-  // advance `orSubPhase` to the next legal step.
-  // Design note #144: ONE real dispatch replaces the three client-only skip
-  // handlers this used to have.
-  //
-  // Those called `setOrSubPhase` directly, moving the UI forward while the
-  // contract's cursor stayed where it was. Harmless while the sequence was a
-  // client-side convention; under G-14 enforcement it desyncs the bar from
-  // what the chain will actually accept, and the player's next action gets
-  // rejected with `WrongOperatingSubPhase` for reasons the UI just made
-  // invisible. The chain owns the cursor now, so skipping has to go through
-  // it.
-  //
-  // No optimistic `setOrSubPhase` here on purpose: `orSubPhase` is driven off
-  // the polled game state, so the bar advances when the chain says it did.
-  // Guessing would reintroduce exactly the desync this removes.
-  /* Design note #179: ADVANCE HAS TO MOVE SOMETHING.
-   *
-   * This dispatched `AdvanceOperatingSubPhase` and stopped. Online that is
-   * right -- the contract owns the cursor and the next poll reports the new
-   * one. In sandbox there is no poll and no contract, so the message went
-   * into the local reducer, which cannot help either: the sub-phase is
-   * CLIENT-SIDE state (`orSubPhase`, this file), deliberately not on
-   * `GameStateResponse`, so a reducer over that response has nothing to
-   * step. The button dispatched, logged, and visibly did nothing.
-   *
-   * The cursor's owner moves it. `OPERATING_SUB_PHASE_ORDER` is the same
-   * sequence the stepper renders, and `visibleSubPhases` drops `BuyPrivate`
-   * before Phase 3 -- so advancing walks the steps the player can actually
-   * see rather than a hidden one. */
-  /* Design note #439: TWO ENTRY POINTS, ONE IMPLEMENTATION.
-   *
-   * The skip is dispatched both by the player (the Skip button) and by the
-   * game (the auto-skip effect), and Undo has to tell them apart. A single
-   * function taking `automatic = false` would be wrong in the dangerous
-   * direction: `onClick={onSkipSubPhase}` hands React's MouseEvent in as the
-   * first argument, and a truthy event would mark every MANUAL skip as
-   * automatic -- so Undo would walk straight past the player's own choices.
-   *
-   * Two named callbacks make the caller state which it is, and neither can
-   * be invoked with the wrong one by accident. */
+  // One real AdvanceOperatingSubPhase replaces three client-only skips; the chain owns the cursor. #179: in sandbox the reducer moves it. #439: two named callbacks so a MouseEvent cannot mark a manual skip automatic.
+  // See docs/ai_architecture/state_machine.md - App.tsx #144
   const skipSubPhase = useCallback((automatic: boolean) => {
     /* Design note #278: skipping Routes is the observation that makes a
        stale `last_route_revenue` harmless -- whatever the field says, this
@@ -7649,25 +3754,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId, refreshTrainOffers, actingProtocolId],
   );
 
-  /** A train badge clicked and a price typed -- `TrainPurchasePanel`'s
-   *  `onProposeTrade`.
-   *
-   *  THE FORK IS WHO HAS TO AGREE, and it is decided here rather than in the
-   *  panel because only this file knows which deployment it is in:
-   *
-   *    SAME PRESIDENT -- one player controls both corporations, so there is
-   *    nobody to ask. `train_trade.rs` settles this case on the spot and
-   *    writes no offer, and the sandbox reducer's `BuyTrainFromCorporation`
-   *    arm does the same, so dispatching immediately is correct in both.
-   *
-   *    DIFFERENT PRESIDENTS, ONLINE -- dispatch, and the contract records an
-   *    offer the seller's own client will poll and answer. Real two-party
-   *    consent, carried by the chain.
-   *
-   *    DIFFERENT PRESIDENTS, SANDBOX -- there is no chain to record it in,
-   *    so the proposal is held locally and the prompt is shown. Accepting
-   *    then sends the same `BuyTrainFromCorporation` the online path sends
-   *    up front; rejecting sends nothing at all. Design note #205. */
+  /** The consent fork is decided here because only this file knows the deployment: same president settles, different presidents ask (on chain online, locally in sandbox).
+   *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #414 */
   const handleProposeTrainTrade = useCallback(
     (proposal: TrainTradeProposal) => {
       const buyer = gameState?.public_companies.find(
@@ -7760,50 +3848,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId, refreshTrainOffers],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 218: THE COUNTERPARTY GETS THE SAME PROMPT ONLINE
-   * ==================================================================
-   *
-   * The consent modal was sandbox-only, on the reasoning that a live room
-   * does not need one: the contract records the offer and the seller's
-   * president can answer it from `TrainTradePanel`'s pending-offer ledger.
-   *
-   * That is true about the MESSAGES and wrong about the interaction. The
-   * ledger is a row in a panel that renders only during the Hardware
-   * sub-phase, on the workspace tabs -- so the one player whose answer the
-   * game is waiting on is also the player most likely not to be looking at
-   * it. Meanwhile the BUYER's turn is blocked on that answer
-   * (`operations::PendingTrainOfferBlocksTurn`), so an unnoticed row stalls
-   * the table with no indication of why.
-   *
-   * A pending offer addressed to you is an interruption, and it should
-   * interrupt. This derives the same `TrainTradePrompt` the sandbox shows
-   * from the CHAIN's own offer register -- `GetTrainOffers`, already polled
-   * -- whenever the viewer presides over the selling corporation. One
-   * component, one affordance, two sources.
-   *
-   * WHAT DIFFERS FROM SANDBOX, and it is only the plumbing: accepting sends
-   * the real `AcceptTrainOffer` and rejecting the real `RejectTrainOffer`,
-   * both addressed by `offer_id`, rather than settling local state. The
-   * ledger stays exactly as it was -- it still lists every offer in the room
-   * including the ones this player is not party to, which the prompt
-   * deliberately does not (design note #1 there: a pending offer is public
-   * information, but only one person is being asked).
-   *
-   * ONE AT A TIME. `find` rather than a queue: `train_trade.rs` permits one
-   * outstanding offer per buying corporation, and stacking prompts for
-   * several sellers would be a modal pile-up for a state the contract makes
-   * rare. The next offer surfaces when this one is answered.
-   */
-  /** Design note #233: the offers this viewer is party to -- as the seller
-   *  who must answer, or as the buyer whose turn is held open by their own
-   *  outstanding offer. Anything else in the room is somebody else's
-   *  negotiation and does not warrant a panel on this player's buy screen.
-   *
-   *  IN SANDBOX EVERY OFFER QUALIFIES, for the same reason the consent
-   *  prompt is answerable there by whoever is looking (`PrivateTradePanel`
-   *  design note #2): one human drives every seat, so "offers addressed to
-   *  me" is not a distinction that exists. */
+  /* A pending offer addressed to you should interrupt: the same prompt is derived from GetTrainOffers online. One at a time (#233 scopes the ledger to offers this viewer is party to).
+     See docs/ai_architecture/session_keys_wallet.md - App.tsx #218 */
   const viewerTrainOffers = useMemo(() => {
     if (sandbox) return trainOffers;
     if (!viewerAddress) return [];
@@ -7846,40 +3892,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
 
 
-  /* ==================================================================
-   *  DESIGN NOTE 249: A STEP WITH NOTHING IN IT SHOULD NOT BE A CLICK
-   * ==================================================================
-   *
-   * REPORTED: a corporation with no trains has to skip Run Routes and
-   * Dividends by hand, and one at its train limit has to skip Buy Trains.
-   *
-   * Every Operating Round turn walks the same six steps, and for a great
-   * many corporations three of them are foregone conclusions. A company that
-   * owns no train cannot run a route, so it cannot have revenue, so it
-   * cannot declare a dividend -- two steps whose only available action is
-   * "move on". Early in an 1830 game most corporations are in exactly that
-   * position for several rounds, which turns a turn into a sequence of
-   * acknowledgements.
-   *
-   * WHY NOT HIDE THE STEPS INSTEAD. Because the contract's cursor still
-   * walks them -- `or_phase::OR_PHASE_ORDER` is fixed, and a client that
-   * jumped its display past a step the chain is still sitting on would
-   * desync the bar from what the chain will accept (design note #144). The
-   * cursor has to MOVE, which means dispatching the same
-   * `AdvanceOperatingSubPhase` the Skip button sends. So the skip still
-   * happens; it just happens without asking.
-   *
-   * FIRING ONCE IS THE WHOLE DIFFICULTY. Online, `handleSkipSubPhase` does
-   * not move `orSubPhase` locally -- the cursor is poll-driven -- so a naive
-   * effect would re-fire on every render until the next poll landed and
-   * broadcast a transaction each time. The ref below records which
-   * (corporation, step) pairs have already been auto-skipped, so each is
-   * attempted exactly once however many times this re-renders.
-   *
-   * KEYED ON THE CORPORATION TOO, not just the step: the next company in the
-   * queue reaches the same step needing its own decision, and a step-only
-   * key would silently suppress it.
-   */
+  /* A step with no decision in it skips itself - dispatched, not hidden, because the contract's cursor still walks it. Keyed on the corporation as well as the step.
+     See docs/ai_architecture/state_machine.md - App.tsx #249 */
   const atTrainLimitNow = useMemo(() => {
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
@@ -7894,45 +3908,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return owned >= limit;
   }, [gameState, actingProtocolId, depot]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 414: A TRAIN IS NOT THE SAME THING AS A ROUTE
-   * ==================================================================
-   *
-   * REPORTED: a corporation holding a train but with no legal route -- or
-   * with routes that total $0 -- is still walked through Run Routes and is
-   * still offered "Pay Dividends" on $0 at the step after.
-   *
-   * Design note #292 built the forced-withhold machinery and gated all of
-   * it on `ownsAnyTrain`, which is the CHEAP half of the question. Owning a
-   * train is necessary to run and nowhere near sufficient: a corporation
-   * whose token sits on a city no track reaches, or whose only route runs
-   * between two blank hexes, owns a train and can earn nothing with it. It
-   * therefore passed every guard, arrived at Dividends with a live Pay
-   * button quoting "$0 per share", and could pay a dividend of nothing --
-   * which is not a legal 1830 declaration, and which left the share price
-   * standing still when the rules move it left.
-   *
-   * THE PROBE IS THE DRAFTER, NOT A SECOND OPINION. `assignRouteSet` is the
-   * same search the Auto Route button runs (design note #280), asked for
-   * the same thing and read for its total rather than its paths. Writing a
-   * cheaper "can this corporation reach anything" check would be a second
-   * pathfinder to keep in step with the first, and the failure would be the
-   * worst kind: a step skipped for a corporation that did have a route, or
-   * a $0 dividend offered because the cheap check disagreed with the real
-   * one about a junction.
-   *
-   * SCOPED TO THE TWO STEPS THAT ASK. The search is not free, so it runs
-   * only during an Operating Round on Routes or Dividends, and only for a
-   * corporation that owns a train at all -- `ownsAnyTrain` is still the
-   * first question, it is just no longer the last one. Everywhere else this
-   * is `null`, meaning "not asked", which the readers below distinguish
-   * from a real `0`.
-   *
-   * `null` ALSO MEANS "COULD NOT TELL". A corporation with no tokens on the
-   * board yet returns no assignments, and so would a board that has not
-   * loaded. Both are reported as unknown rather than as zero, because the
-   * consequence of a wrong zero here is an automatic, irreversible withhold
-   * on a corporation that could have paid. */
+  /* Owning a train is necessary and not sufficient. The probe is assignRouteSet, the same search Auto Route runs; null means "could not tell", never zero.
+     See docs/ai_architecture/state_machine.md - App.tsx #414 */
   const maxRouteRevenue = useMemo<number | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (orSubPhase !== "Routes" && orSubPhase !== "Dividends") return null;
@@ -7947,15 +3924,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!corporation) return null; // the chain has not answered at all.
     const startHexes = corporation.station_token_hexes ?? [];
     if (startHexes.length === 0) {
-      /* This returned `null` -- unknown -- and the note above warns against
-         a wrong zero. But a corporation the chain HAS reported, whose token
-         list is an empty array, has nowhere for a route to start: that is
-         not ignorance, it is the answer. Reporting it as unknown left the
-         corporation stranded on Dividends with no auto-withhold, which is
-         the very state the report describes.
-
-         The distinction that keeps the warning honest is the one above:
-         a corporation absent from the response is still `null`. */
+      /* A corporation the chain reported with an empty token list has nowhere to start: that is the answer, not ignorance. Absent from the response stays null.
+         See docs/ai_architecture/state_machine.md - App.tsx #414 */
       return corporation.station_token_hexes ? 0 : null;
     }
 
@@ -7991,34 +3961,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return null;
   }, [ownsAnyTrain, maxRouteRevenue]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 438: WHY THIS CORPORATION CANNOT PLACE A STATION
-   * ==================================================================
-   *
-   * `null` when it can. The three blocking conditions are checked in the
-   * order a player would discover them -- do I have a token, can I pay for
-   * it, is there anywhere to put it -- so the reason reported is the first
-   * one that actually stops them rather than whichever is cheapest to test.
-   *
-   * THE TOPOLOGICAL CHECK IS THE REAL ONE, and it reuses
-   * `placeableStationHexes`, which is the same set the targeting veil
-   * lights (design note #240). A cheaper approximation -- "does the network
-   * touch any city" -- would disagree with the veil about reservations,
-   * occupied slots and OO tiles, and the failure would be the worst kind:
-   * a step skipped for a corporation the map would have let place, or a
-   * player held on a step whose veil lights nothing.
-   *
-   * SCOPED, because it walks every board hex. It runs only during an
-   * Operating Round on the Tokens step; everywhere else this is `null`,
-   * meaning "not asked". */
+  /* Blocking conditions in the order a player would discover them; the topological check reuses placeableStationHexes so it cannot disagree with the veil.
+     See docs/ai_architecture/state_machine.md - App.tsx #438 */
   const stationPlacementBlock = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (orSubPhase !== "Tokens") return null;
-    /* Design note #438: the rule itself lives in `utils/stationTokens.ts`,
-       beside `placeableStationHexes` which it consults and beside
-       `evaluateStationPlacement` which decides what "placeable" means. A
-       predicate about station legality that lived in the shell would be the
-       fourth opinion on that question in three files. */
+    /* The rule lives in utils/stationTokens.ts, beside the two functions it consults.
+       See docs/ai_architecture/state_machine.md - App.tsx #438 */
     return stationPlacementBlockReason({
       mapGrid,
       company: activeStationCompany,
@@ -8027,48 +3976,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     });
   }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
 
-  /** Why this step has no decision in it, or `null` when it does. */
-  /* ==================================================================
-   *  DESIGN NOTE 653: A ONCE-PER-GAME GUARD ON A ONCE-PER-TURN EVENT
-   * ==================================================================
-   *
-   * REPORTED: "C&O has no legal routes despite owning trains, but this Run
-   * Routes action has no Skip button, so the game is now bricked."
-   *
-   * There IS an auto-skip for exactly that case -- design note #414 built
-   * it, and #433 states the rule it implements: no route, no obligation. It
-   * did not fire, and the reason is the loop guard rather than the skip.
-   *
-   * `autoSkippedRef` keyed on `${actingProtocolId}:${orSubPhase}` and
-   * `forcedWithholdRef` on `${actingProtocolId}:withhold`. Neither key says
-   * WHEN. Both Sets are cleared only by a full sandbox rebuild, so the first
-   * time C&O auto-skips Routes the pair `3:Routes` is remembered for the
-   * rest of the game -- and every later turn where C&O again has no route
-   * hits a step that will not skip itself and offers no button that would.
-   * The same is true of the forced withhold on Dividends one step later.
-   *
-   * WHAT THE GUARD IS ACTUALLY FOR is a re-entrancy window a few
-   * milliseconds wide: `autoSkipReason` is derived, so it stays truthy for
-   * the render between dispatching the skip and the cursor moving off the
-   * step, and without a guard the effect fires again on that render. That is
-   * a WITHIN-TURN problem, and the key was scoped to the whole game.
-   *
-   * SO THE KEY GAINS THE TURN. `macro_round_number`, `sub_round_index` and
-   * `active_corporation_index` together name one corporation's one turn;
-   * prepending them keeps the re-entrancy guard exactly as tight inside a
-   * turn and re-arms it at every new one. Read off game state rather than
-   * counted locally, so a replay rebuilds the same key rather than a
-   * parallel tally that could disagree -- the lesson of #642.
-   *
-   * NOT THE WHOLE STORY. This unbricks the turn; it does not stop a
-   * corporation revisiting a step it already left, which is the separate
-   * `orSubPhase`-lives-outside-the-reducer defect and its own chunk. The two
-   * compounded: the cursor reset sent C&O back through Routes, and this
-   * guard then refused the skip that would have released it. */
-  /* Design note #653: the identity of one corporation's one turn. The
-     construction lives in `utils/turnGuardKey.ts` with its own tests -- see
-     that module's note for why a template literal inside an effect was the
-     wrong home for the property that actually matters. */
+  /** The re-entrancy guard is per TURN, not per game: macro_round_number + sub_round_index + active_corporation_index, built in utils/turnGuardKey.ts.
+   *  See docs/ai_architecture/state_machine.md - App.tsx #653 */
   const turnIdentity = useMemo(
     () => ({
       macro_round_number: gameState?.macro_round_number ?? null,
@@ -8091,54 +4000,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          control drafts a route that cannot exist. */
       return noEarnableRevenue;
     }
-    /* ==================================================================
-     *  DESIGN NOTE 438: A STATION STEP WITH NOWHERE TO PLACE
-     * ==================================================================
-     *
-     * REPORTED: players are forced to manually skip Place Station even when
-     * they have no valid placements.
-     *
-     * The step held every corporation every turn, and for most of a game
-     * most corporations cannot place at all: the allowance runs out, the
-     * treasury is short, or the network reaches no city with a free slot.
-     * Design notes #292 and #414 had already established that a step with
-     * no decision in it should not be held on -- Routes and Dividends both
-     * exit themselves -- and Tokens was simply never given the same
-     * treatment.
-     *
-     * THREE REASONS, REPORTED SEPARATELY, because they call for different
-     * responses from the player and the log line is the only place they
-     * find out which one applied. Running out of tokens is permanent; being
-     * short of cash is fixable next turn; having no reachable slot is a
-     * fact about the map that a tile lay might change.
-     *
-     * `stationPlacementBlock` does the work -- see its own note for why the
-     * topological check reuses `placeableStationHexes` rather than a
-     * cheaper approximation. */
+    /* The Tokens step exits itself when there is nowhere to place. Three reasons, reported separately - they call for different responses.
+       See docs/ai_architecture/state_machine.md - App.tsx #438 */
     if (orSubPhase === "Tokens") return stationPlacementBlock;
-    /* ==================================================================
-     *  DESIGN NOTE 292: A TRAINLESS DIVIDEND IS DECIDED, NOT SKIPPED
-     * ==================================================================
-     *
-     * Dividends used to share the Routes reason and take the same exit --
-     * `AdvanceOperatingSubPhase`, which moves the cursor and settles
-     * nothing. For a corporation that ran no trains that is the wrong
-     * exit, and design note #44 a few hundred lines below says why without
-     * having connected the two: "every corporation moves LEFT on its first
-     * turn, because it has no train yet and so cannot pay out". Skipping
-     * meant it did not move at all, so the tutorial explained a market
-     * lesson the board had not taught.
-     *
-     * 1830 has no third option here. Revenue of $0 is still revenue
-     * declared, and withholding it is what a trainless corporation does --
-     * which is the decision that steps the marker left. So the step
-     * dispatches the real `DeclareDividends` rather than stepping past it.
-     *
-     * Handled below rather than through `autoSkipReason`, because the two
-     * are different actions: one advances a cursor, the other declares. */
-    /* Design note #414: `!ownsAnyTrain` became `noEarnableRevenue` for the
-       same reason it did on Routes above -- a stranded train earns exactly
-       what no train earns, and the step below settles both identically. */
+    /* A trainless corporation DECLARES $0 withheld rather than skipping; 1830 has no third option, and the declaration is what steps the marker left. #414 widened it to a stranded train.
+       See docs/ai_architecture/state_machine.md - App.tsx #292 */
     if (orSubPhase === "Dividends" && noEarnableRevenue !== null) return null;
     if (orSubPhase === "Hardware" && atTrainLimitNow) {
       return "it is already at its train limit";
@@ -8146,41 +4012,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return null;
   }, [gameState, spectator, orSubPhase, noEarnableRevenue, stationPlacementBlock, atTrainLimitNow]);
 
-  /* Design note #292: the forced withhold. Same once-per-(corporation,step)
-     guard as the auto-skip beside it, and for the same reason -- online the
-     cursor is poll-driven, so an unguarded effect would broadcast a
-     declaration on every render until the next poll landed.
-
-     Design note #414: it now fires for a corporation that HAS a train and
-     cannot earn with it, not only for one with no train at all. The
-     declaration is identical either way -- $0, withheld, marker left -- so
-     the two cases share this effect rather than growing a second one that
-     would have to be kept in step with it. */
+  /* Same once-per-(corporation, step) guard as the auto-skip: online the cursor is poll-driven, so an unguarded effect would re-broadcast every render.
+     See docs/ai_architecture/state_machine.md - App.tsx #292 */
   const forcedWithholdRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return;
     if (spectator) return;
     if (orSubPhase !== "Dividends") return;
-    /* ==============================================================
-     *  DESIGN NOTE 484b: SKIPPING ROUTES SETTLES DIVIDENDS
-     * ==============================================================
-     *
-     * `noEarnableRevenue` alone was the condition, and it is a PREDICTION:
-     * it asks the pathfinder whether a route could have earned. Having
-     * skipped Routes is an OBSERVATION -- the step is behind this
-     * corporation and it ran nothing, whatever the pathfinder thinks it
-     * might have managed.
-     *
-     * The observation has to be enough on its own, because the prediction
-     * declines to answer in exactly the case the report is about (design
-     * note #484). And it cannot contradict the rules: a corporation that
-     * ran no trains has $0 to allocate, 1830 has no $0 dividend, so the
-     * declaration is a withhold and the marker steps left. There is no
-     * branch of the rule where this is a choice.
-     *
-     * MANUAL SKIPS TOO, deliberately. A player who declines to run a route
-     * they could have run has still run nothing, and the market move is not
-     * theirs to waive. */
+    /* Having skipped Routes is an OBSERVATION and is enough on its own; the pathfinder prediction declines to answer in exactly this case. Manual skips count too.
+       See docs/ai_architecture/state_machine.md - App.tsx #484 */
     if (noEarnableRevenue === null && !skippedRoutesThisTurn) return;
     // Design note #653: scoped to THIS turn, not to this corporation for
     // the whole game -- a corporation withholds on many turns.
@@ -8233,61 +4073,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfo,
   ]);
 
-  // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`
-  // dispatch the Stock Round's "Pass Turn" button uses (per `msg.rs`'s own
-  // doc comment, `PassTurn` is the one message that advances an Operating
-  // Round to the next corporation too -- not a separate ExecuteMsg), then
-  // resets the local phase back to "Track" for whichever corporation goes
-  // next (the poll-driven reset effect above would also catch this once
-  // `active_corporation_index` changes, but resetting immediately avoids a
-  // one-poll-interval flash of Phase 4's buttons for the new corporation).
-  /* ==================================================================
-   *  DESIGN NOTE 44: THE FORCED MARKET LESSON
-   * ==================================================================
-   *
-   * A first-time president finishes their first Operating Round, and their
-   * share price moves LEFT. Nothing on screen explains it, and the natural
-   * reading is "I played that badly" -- when in fact every corporation
-   * moves left on its first turn, because it has no train yet and so cannot
-   * pay out. That is a bad first impression caused entirely by a missing
-   * sentence.
-   *
-   * So this is the one tutorial that INTERRUPTS: it navigates the player to
-   * the market chart and opens on top of it, because the lesson is about a
-   * thing that just happened to a specific number they can see.
-   *
-   * TRIGGERED FROM THE ACTION, NOT FROM POLLED STATE. "Did this player just
-   * finish their first OR turn" is genuinely hard to infer from
-   * `GameStateResponse` -- indices advance, and a poll landing late or
-   * twice would fire it at the wrong moment or not at all. Ending the turn
-   * is an explicit click by a known viewer, so the click is the signal.
-   *
-   * GUARDED THREE WAYS, because a modal that interrupts must not do so
-   * twice: only for a president (the lesson is about YOUR corporation),
-   * only during the FIRST Operating Round, and `TutorialModal`'s own
-   * per-topic seen flag and global off switch both still apply -- this
-   * arms the modal, it does not bypass anyone's preferences.
-   *
-   * ==================================================================
-   *  DESIGN NOTE 412: AND A FOURTH GUARD, ON THE NAVIGATION ONLY
-   * ==================================================================
-   *
-   * REPORTED: End Turn in an Operating Round forces a redirect to the Stock
-   * Market page. It should do that only in tutorial mode.
-   *
-   * The three guards above are all about the SITUATION and none about the
-   * PLAYER, so every experienced player met this exactly once per game and
-   * had the board pulled out from under them mid-turn. `tutorialMode`
-   * defaults to false -- see `TutorialModal`'s design note #412 for why it
-   * is a new opt-in flag rather than the existing off switch inverted --
-   * so standard play now ends a turn and stays where it was.
-   *
-   * THE TAB SWITCH IS GATED; ARMING THE MODAL IS NOT. The explainer is a
-   * panel over the screen the player chose and costs one click to dismiss;
-   * the navigation is what moves them somewhere they did not ask to go, and
-   * it happens BEFORE the modal renders, so dismissing does not undo it.
-   * Gating both would silently retire a tutorial that still works for the
-   * player it was written for. */
+  // End Turn dispatches the same PassTurn the Stock Round uses. #44: the first-OR market lesson interrupts, guarded three ways; #412 gates only the NAVIGATION on tutorialMode.
+  // See docs/ai_architecture/state_machine.md - App.tsx #44
   const handleEndOperatingTurn = useCallback(() => {
     const viewerIsPresident =
       viewerAddress != null &&
@@ -8303,36 +4090,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
   }, [handlePassTurn, viewerAddress, gameState]);
 
-  // The board. Was `useMemo(() => MOCK_MAP_GRID, [])` -- immutable by
-  // construction, which is why laying a tile in sandbox appeared to do
-  // nothing: the picker confirmed, and there was no board to write to.
-  //
-  // State now, so `applySandboxLayTile` can replace it with a NEW object.
-  // That identity change is what `HexGridRenderer`'s draw effect watches;
-  // mutating the existing `tiles` array in place would leave the reference
-  // untouched and the canvas would never repaint.
+  // State, not a memo: applySandboxLayTile must replace the object, because that identity change is what the renderer's draw effect watches.
+  // See docs/ai_architecture/canvas_rendering.md - App.tsx #435
 
-  /** Applies a confirmed sandbox tile lay: paints the board, charges the
-   *  corporation, and moves the turn on.
-   *
-   *  Three separate things, because they live in three separate places --
-   *  the tile grid is its own query document, the treasury is on game state,
-   *  and the sub-phase cursor is App-local. Routing the charge through
-   *  `runGameplayAction` rather than adjusting the treasury directly keeps
-   *  ONE dispatch path: the same `LayTile` message a live game sends, the
-   *  same Action Log entry, the same reducer. */
+  /** Three separate writes in three places; the charge goes through runGameplayAction so a lay uses the one dispatch path.
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #436 */
   const handleSandboxLayTile = useCallback(
     (q: number, r: number, tileId: number, orientation: number) => {
-      /* Design note #522a: the board write used to happen HERE, beside the
-         dispatch. It moved into `runGameplayAction`'s sandbox branch, and
-         the move is what makes a tile lay replicate at all.
-
-         A remote client never runs this function -- it receives `LayTile`
-         from the log and replays it through the dispatch. With the
-         `setMapGrid` outside, that replay charged the treasury and left the
-         board blank: the acting player saw their tile and nobody else did.
-         Inside, the same message paints the same hex on every client,
-         including the one that acted. */
+      /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
+         See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
       runGameplayAction("LayTile (sandbox)", {
         LayTile: {
           game_id: gameId,
@@ -8362,11 +4128,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return "Planning Mode: Tile lay disabled — track is laid in an Operating Round.";
     }
     if (orSubPhase !== "Track") {
-      // DIRECTION-AWARE. This said "past the Track step" unconditionally,
-      // which is wrong in the commonest case: from Phase 3 the turn OPENS on
-      // `BuyPrivate`, so a player arriving at a fresh Operating Round was
-      // told they had missed a step they had not reached yet -- and given no
-      // hint that Advance Sub-Phase was the remedy.
+      // Direction-aware: from Phase 3 the turn OPENS on BuyPrivate, so "past the Track step" was wrong in the commonest case.
+      // See docs/ai_architecture/ui_shell_layout.md - App.tsx #440
       const order = OPERATING_SUB_PHASE_ORDER;
       const before = order.indexOf(orSubPhase) < order.indexOf("Track");
       return before
@@ -8383,48 +4146,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [spectator, gameState, orSubPhase, viewerAddress]);
   const canLayTileNow = tileLayDisabledReason === null;
 
-  /* ==================================================================
-   *  DESIGN NOTE 620: THE NETWORK FILTER BELONGS TO WHOEVER MAY LAY
-   * ==================================================================
-   *
-   * REPORTED: "inactive players are currently restricted from using the tile
-   * selector outside of the active player's legal placement options.
-   * Inactive players should be able to use the tile selector anywhere on the
-   * board so that they can look at possibilities and think about their
-   * strategies; only the active corporation player should be restricted to
-   * making a choice about their network."
-   *
-   * TWO EARLIER PASSES HAD ALREADY OPENED THE DOOR AND LEFT THIS SHUT.
-   * Design note #469 removed the click gate, so any viewer can open the ring
-   * on any hex; design note #437 narrowed the veil to the acting player, so
-   * the board no longer dims for a spectator. What neither touched was what
-   * the ring CONTAINS -- and this filter was still narrowing it by
-   * `layTrackFocus`, which describes ONE corporation's reach. So a player
-   * planning their own next turn opened the selector successfully and was
-   * shown only the orientations that happen to join somebody else's track,
-   * which is a stranger failure than being refused outright: the tool works,
-   * and quietly answers a question they did not ask.
-   *
-   * `canLayTileNow` IS THE RIGHT PREDICATE, and deliberately the same one the
-   * confirm button uses. The constraint exists because design note #6 in
-   * `sandboxTileLegality.ts` found the rotate gesture cycling through angles
-   * that looked legal and were not -- a real problem, and one that only
-   * exists for the player who might actually commit. For everyone else there
-   * is nothing to commit and therefore nothing to be wrong about; the honest
-   * answer to "what can this hex take" is every era-legal tile.
-   *
-   * SHARING THE PREDICATE IS THE POINT. The ring's contents and its confirm
-   * button now agree by construction about whose turn this is: a player who
-   * sees a narrowed carousel is exactly the player whose Lay Track button is
-   * live, and a player browsing sees the full set with a disabled button
-   * carrying the reason (`tileLayDisabledReason`). Two separate opinions
-   * about "is this my turn" is how the two halves drifted apart here in the
-   * first place.
-   *
-   * NOTE THIS IS THE SANDBOX/OFFLINE PATH ONLY. A chain answer is used
-   * verbatim (`provisional === false`) because `GetLegalTilePlacements` is
-   * asked about a hex, not about a corporation -- the contract already
-   * returns the same list to every viewer. */
+  /* canLayTileNow decides whether the carousel is narrowed to one corporation's reach - the same predicate the confirm button uses. Sandbox/offline path only; a chain answer is used verbatim.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #620 */
   const radialCandidates = useMemo<readonly LegalTilePlacement[]>(() => {
     if (!radialSelector) return [];
     if (!radialSelector.provisional) return radialSelector.placements;
@@ -8432,15 +4155,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       mapGrid,
       q: radialSelector.q,
       r: radialSelector.r,
-      // Design note #6 in that file: an orientation is only offered if its
-      // track actually meets this corporation's network. Without it the
-      // rotate gesture cycles through angles that look legal and are not.
-      // `undefined` when the reach is unknown, which leaves the previous
-      // behaviour rather than emptying the carousel.
-      //
-      // Design note #620: and `undefined` for anyone who may not lay, which
-      // is what lets them browse the whole hex rather than one corporation's
-      // slice of it.
+      // undefined for anyone who may not lay, which lets them browse the whole hex rather than one corporation's slice.
+      // See docs/ai_architecture/canvas_rendering.md - App.tsx #620
       networkHexes: canLayTileNow ? layTrackFocus?.network : undefined,
       networkPorts: canLayTileNow ? layTrackFocus?.ports : undefined,
       // The era comes from `currentPhase.tint`, the SAME derivation the
@@ -8457,26 +4173,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     layTrackFocus?.ports,
   ]);
 
-  /* ===================================================================
-   *  DESIGN NOTE 173: ROTATE THROUGH LEGAL ANGLES ONLY
-   * ===================================================================
-   *
-   * Click-to-rotate stepped `(orientation + 1) % 6` -- every angle, legal
-   * or not. On an edge hex that walks the tile's track off the board, and
-   * on an upgrade it walks straight through rotations that sever the track
-   * underneath. The player then has to recognise an illegal angle by eye
-   * and keep clicking past it, which is precisely the judgement the picker
-   * is supposed to be making for them.
-   *
-   * The legal set is not recomputed here. `radialCandidates` is already
-   * `(tile_id, orientation)` PAIRS -- `filterSandboxPlacements` evaluates
-   * path preservation per rotation (its design note #4), and a chain answer
-   * is per-rotation by construction. So the legal angles for the previewed
-   * tile are simply the ones already present for that tile id, and there is
-   * no second opinion to drift.
-   *
-   * Sorted, so the cycle runs in a predictable direction rather than in
-   * whatever order the source happened to list them. */
+  /* Rotate only through legal angles; the set is already present as (tile_id, orientation) pairs, sorted for a predictable direction.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #173 */
   const legalRotations = useMemo<number[]>(() => {
     if (previewTile === null) return [];
     const angles = radialCandidates
@@ -8515,13 +4213,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [radialSelector, handleDismissRadial, legalRotations],
   );
 
-  /** While a preview is on the board, the canvas belongs to ROTATION -- the
-   *  query interceptor is disarmed exactly as it is for route and token
-   *  modes, so a rotation costs no chain round-trip. */
-  /* Design note #0 in `utils/tokenMigration.ts`: the destination of every
-     token on the hex under the previewed tile. Recomputed as the player
-     cycles tiles, because a different tile can carry a different number of
-     cities. */
+  /** A live preview gives the canvas to rotation, so the query interceptor is disarmed. Token destinations are recomputed per candidate tile.
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #448 */
   const radialTokenNote = useMemo(() => {
     if (!radialSelector || !previewTile) return null;
     return describeTokenMigration(
@@ -8535,22 +4228,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, [radialSelector, previewTile, mapGrid, gameState]);
 
-  /* Design note #488b in `RadialTileSelector`: the same migration the caption
-     above is phrased from, handed to the ring as MARKERS so every candidate
-     thumbnail shows where the tokens on this hex would land on THAT tile.
-
-     One `previewTokenMigration` call per candidate, keyed on its own tile id
-     -- the destination city depends on how many cities the candidate carries,
-     so a single shared answer would be wrong for every tile but one. It is
-     the identical function the caption uses, which is what stops the picture
-     and the sentence disagreeing.
-
-     `stationTickerColor` for the fill, so a preview token wears the same
-     livery as the real one (design note #428's single palette). */
-  /* Design note #628: how many copies of a candidate are still in the tray.
-     Reads the live board, so it moves as tiles are laid and as upgrades
-     return the tile underneath -- `utils/tileSupply.ts` has the argument for
-     why counting the CURRENT map is exact rather than approximate. */
+  /* One previewTokenMigration per candidate, keyed on its tile id - the destination depends on how many cities that tile carries. #628: tray counts read the live board.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #449 */
   const radialStockFor = useCallback(
     (tileId: number) => tileStock(mapGrid, tileId),
     [mapGrid],
@@ -8576,24 +4255,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [radialSelector, mapGrid, gameState],
   );
 
-  /* ==================================================================
-   *  DESIGN NOTE 496 (App side): WHOSE TOKEN THE CURSOR IS CARRYING
-   * ==================================================================
-   *
-   * `null` outside a token placement, which is what keeps the generic disc
-   * for every other pointer state.
-   *
-   * THE ORDER MATCHES `cursorMode`'s. A home-station errand (design note
-   * #440) names its own corporation and is modal -- the player accepted a
-   * prompt to place THAT company's token -- so it wins over the acting
-   * corporation exactly as it wins the click. Reading `actingProtocolId`
-   * first would put the operating company's livery on a pointer placing
-   * somebody else's home token, which is precisely the confusion this
-   * cursor exists to remove.
-   *
-   * A `private-tile` errand is excluded for the same reason it takes the
-   * default cursor (design note #444): it ends in the tile picker, and a
-   * token-shaped pointer would promise a placement it does not perform. */
+  /* Order matches cursorMode's: a home-station errand names its own corporation and wins. private-tile is excluded because it ends in the tile picker.
+     See docs/ai_architecture/canvas_rendering.md - App.tsx #496 */
   const stationCursorCorporation = useMemo<{ ticker: string; color: string } | null>(() => {
     const companyId =
       homeStationPlacement && homeStationPlacement.kind !== "private-tile"
@@ -8609,38 +4272,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return { ticker, color: stationTickerColor(companyId) };
   }, [homeStationPlacement, tokenTargetMode, actingProtocolId, gameState]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 523: THE LISTENER IS THE ONLY WRITER
-   * ==================================================================
-   *
-   * The read half of the loop. Everything that changes sandbox state in a
-   * room arrives here first, in log order, and is replayed through
-   * `runGameplayAction` -- which is requirement 3 and not a stylistic
-   * preference: `applySandboxAction` takes a context assembled in that
-   * function from `mapGrid`, the market and the era. Calling the reducer
-   * directly would replay every action against a context this file would
-   * then have to rebuild by hand, and the first field anyone forgot would
-   * be a silent divergence rather than a crash.
-   *
-   * THE TAIL, NOT THE DELTA. `subscribeSandboxLog` hands back the whole
-   * ordered log every time (its own design note), and this takes everything
-   * past `appliedIndexRef`. A snapshot that arrives twice, out of order, or
-   * after a reconnect therefore cannot double-apply or skip -- the cursor
-   * decides what is new, not the event.
-   *
-   * SEQUENTIAL AND AWAITED, for the reason `handleRunTrains` awaits its own
-   * loop: the sandbox reducer is synchronous through refs, so firing the
-   * tail in parallel would let action N+1 read the state before N wrote it.
-   * `replayingRef` additionally stops a second snapshot interleaving with a
-   * replay already in flight.
-   *
-   * `automatic: true` keeps replayed actions off the Undo stack (design
-   * note #475). Undo is a LOCAL affordance over a shared log: popping a
-   * snapshot cannot unsend somebody else's action, and letting it try would
-   * put this browser behind a log it still believes it has applied. */
-  /* Design note #527: the room document, which owns the lobby. Separate
-     from the log subscription below, which owns the game -- two systems with
-     one handover (`status`). */
+  /* The listener is the only writer: the tail past appliedIndexRef, replayed through runGameplayAction, sequential and awaited. #527: the room doc is a separate subscription.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #523 */
   useEffect(() => {
     if (!sandbox || !sandboxRoomCode) {
       setSandboxRoom(null);
@@ -8668,39 +4301,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (replayingRef.current) return;
       replayingRef.current = true;
       try {
-        /* ==============================================================
-         *  DESIGN NOTE 591b: A SHORTER HISTORY MEANS START AGAIN
-         * ==============================================================
-         *
-         * The log is append-only, so it never shrinks -- but the list of
-         * actions that still COUNT does, the moment somebody undoes. That is
-         * the one thing an incremental cursor cannot follow: it knows how far
-         * it has read, not whether what it read is still true.
-         *
-         * So the drain asks `effectiveActions` for the live history and
-         * compares its LENGTH against how many actions it has applied. Fewer
-         * than applied means an undo landed, and the only honest response is
-         * to throw the state away and replay from the fixture. More means
-         * ordinary play and the tail is applied as before.
-         *
-         * A FULL REPLAY IS THE CHEAP OPTION, which is worth stating because
-         * it looks like the expensive one. A few hundred reducer calls over a
-         * plain object is milliseconds, and it reaches exactly the state the
-         * log describes. Inverting each message would need one correct
-         * inverse per message type, and the ones touching the market, the era
-         * or a waterfall cascade would be wrong in ways no test would
-         * obviously catch.
-         *
-         * `rebuildRef` is what the reseed hangs off -- see its declaration
-         * for why the atoms are reset through refs as well as state. */
+        /* A shorter effective history means an undo landed: throw the state away and replay from the fixture. A full replay is the cheap option.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #591 */
         sandboxLogRef.current = actions;
-        /* NAMED `history`, NOT `live`. The first version called this `live`
-           and shadowed the effect's own `let live = true` cleanup flag -- so
-           `if (!live) return` inside the loop was testing a non-empty array
-           instead of whether this subscription had been torn down. A replay
-           would have gone on writing state after unmount. ESLint caught the
-           now-unused outer binding; the shadow itself would have been
-           silent. */
+        /* Named history, not live - the first version shadowed the effect's own teardown flag.
+           See docs/ai_architecture/firebase_middleware.md - App.tsx #454 */
         const history = effectiveActions(actions);
         /* Design note #592a: the newest round-opening action still standing.
            `SetupGame` counts as one -- it opens the auction -- so a host can
@@ -8715,23 +4320,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         if (rewound) {
           rebuildRef.current?.();
           appliedCountRef.current = 0;
-          /* ==============================================================
-           *  DESIGN NOTE 643: THE LOG IS REBUILT TOO, NOT APPENDED TO
-           * ==============================================================
-           *
-           * REPORTED: the activity log holds events from previous
-           * playthroughs, and reports each game's actions more than once.
-           *
-           * A rewind throws the game state away and replays from zero -- and
-           * the replay writes a log entry per action, as any dispatch does.
-           * The entries from BEFORE the rewind were still sitting in
-           * `actionLog`, so every undo doubled the history, and the doubled
-           * copy included actions the undo had just declared never happened.
-           *
-           * The log is a rendering of the action list, so it is rebuilt from
-           * the same source and at the same moment as the state it describes.
-           * Anything else is two records of one history, agreeing only until
-           * somebody rewinds. */
+          /* The log is a rendering of the action list, so a rewind rebuilds it from the same source rather than appending to it.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #643 */
           setActionLog([]);
         }
         // The next log index to append at is the LOG's length, never the
@@ -8811,11 +4401,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      /* Read the log once before subscribing purely to TELL THE PLAYER
-         whether the room exists. An empty log is indistinguishable from a
-         wrong code otherwise, and the subscription below would happily
-         listen to a room nobody is in. The replay itself is left to the
-         listener: doing it here would apply the history twice. */
+      /* Read once before subscribing only to tell the player the room exists; the listener owns the replay.
+         See docs/ai_architecture/firebase_middleware.md - App.tsx #465 */
       const existing = await readSandboxLog(code);
       appliedIndexRef.current = 0;
       setSandboxAppliedCount(0);
@@ -8839,36 +4426,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // resolves the fixture's own names again rather than staying blank.
     clearRoomNicknames();
     setSandboxRoomCode(null);
-    /* Design note #551: and forget it, so the next refresh does not silently
-       rejoin a room this player has deliberately left. Written directly
-       rather than routed up through the router's state, because the shell
-       owns the leaving and a prop drilled two levels for one string would be
-       a longer path with the same effect. */
+    /* Forget the room on leave, so the next refresh does not silently rejoin it.
+       See docs/ai_architecture/firebase_middleware.md - App.tsx #551 */
     writeActiveSandboxRoom(null);
     setSandboxRoomError(null);
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
   }, []);
 
-  /* ==================================================================
-   *  DESIGN NOTE 532: THE HOST DEALS, ONCE
-   * ==================================================================
-   *
-   * Two writes, in this order, and the order is the whole safety property:
-   *
-   *   1. APPEND the setup event to the log.
-   *   2. LATCH the room document to `status: "playing"`.
-   *
-   * The log first, because the status flag is what every client uses to
-   * leave the waiting room -- flipping it before the setup entry exists
-   * would send them all to a board whose state has not been dealt. Doing it
-   * afterwards means the worst case is a client sitting in the anteroom a
-   * moment longer than necessary, which resolves on the next snapshot.
-   *
-   * THE SHUFFLE HAPPENS HERE, on the host, once (design note #526b) -- and
-   * `toSetupPlayers` reads the roster from the room document rather than
-   * from anything local, so the table dealt is the table the waiting room
-   * was showing everybody. */
+  /* Append the setup event FIRST, then latch status to playing - the flag is what sends every client to the board.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #532 */
   const handleStartSandboxGame = useCallback(async () => {
     if (!sandboxRoomCode || !sandboxRoom) return;
     if (!canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
@@ -8945,12 +4512,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
 
-  /** Design note #472: the hex whose tile selector is open, as the
-   *  renderer's `"q,r"` key -- or `undefined` when no ring is up.
-   *
-   *  Derived from `radialSelector` rather than tracked separately: the ring
-   *  and the veil must appear and vanish together, and one nullable object
-   *  already says whether it is open. */
+  /** Derived from radialSelector: the ring and the veil must appear and vanish together.
+   *  See docs/ai_architecture/canvas_rendering.md - App.tsx #472 */
   const soleFocusKey = useMemo(
     () => (radialSelector ? `${radialSelector.q},${radialSelector.r}` : undefined),
     [radialSelector],
@@ -8968,17 +4531,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         LayTile: { game_id: gameId, protocol_id: actingProtocolId, q, r, tile_id: tileId, orientation },
       });
     }
-    /* ==============================================================
-     *  DESIGN NOTE 444: THE D&H TILE ERRAND ENDS HERE
-     * ==============================================================
-     *
-     * A `private-tile` placement does not intercept the board click -- it
-     * only veils -- so this is where its round trip finishes: mark the
-     * power spent and put the player back on the tab they came from.
-     *
-     * MARKED ON THE LAY, NOT ON THE BUTTON PRESS. A player who opens the
-     * map, looks at F16 and dismisses the picker has not used their D&H,
-     * and the power is still theirs next turn. */
+    /* A private-tile errand only veils, so its round trip ends here - marked spent on the LAY, not on the button press.
+       See docs/ai_architecture/contract_economy.md - App.tsx #444 */
     if (homeStationPlacement?.kind === "private-tile") {
       if (homeStationPlacement.abilityKey) {
         setUsedPrivateAbilities((prev) =>
@@ -9055,35 +4609,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return rows.sort((a, b) => b.percentage - a.percentage);
   }, [dividendCorp, dividendPerShare]);
 
-  /* ==================================================================
-   *  DESIGN NOTE 434: THE CELL WAS IN HAND AND WAS BEING THROWN AWAY
-   * ==================================================================
-   *
-   * REPORTED: withholding on a $67 corporation moved its token to $60 -- a
-   * cell it was never on -- and the token then vanished from the matrix.
-   *
-   * `marketGrid.positions` carries `(x, y, price)` per corporation. This
-   * read that entry, kept ONLY the price, and handed the bare number to
-   * `projectDividendMove`, which had to find a cell again by searching
-   * `PRICE_GRID` for that price. The chart repeats prices across rows and
-   * the search returns the FIRST match, so a token correctly parked in the
-   * $67 par box at `(6, 5)` was projected from `(1, 10)` -- the $67 in the
-   * top row -- and one step left of THAT is `(0, 10)`, which is $60.
-   *
-   * The coordinates were never ambiguous; they were discarded one line
-   * before the code that needed them.
-   *
-   * SAME FAMILY AS DESIGN NOTE #415, and worth naming as such: that was
-   * `marketCellForPrice` resolving a PAR to the wrong cell, this is the
-   * same first-match search resolving a MOVE from the wrong cell. Both come
-   * from treating a price as an address on a board where it is not one.
-   *
-   * The projection now carries the cell through, so the readout, the action
-   * log and the token itself all step from the coordinate the marker is
-   * actually standing on -- and all three use `projectDividendCellMove`,
-   * which the token move already used. That is why the token appeared to
-   * disagree with its own preview: it was the only one of the three doing
-   * it correctly. */
+  /* Carry the CELL through, not just the price: the chart repeats prices across rows, so a first-match search projected from the wrong box (#415).
+     See docs/ai_architecture/stock_market.md - App.tsx #434 */
   const dividendCell = useMemo(
     () => marketGrid?.positions.find((p) => p.company_id === actingProtocolId) ?? null,
     [marketGrid, actingProtocolId],
@@ -9110,57 +4637,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     activeMainTab === "map" ||
     activeMainTab === "stock";
 
-  /* ==================================================================
-   *  DESIGN NOTE 533: NO BOARD UNTIL THERE IS A GAME
-   * ==================================================================
-   *
-   * The gate, and it returns EARLY rather than conditionally rendering the
-   * board underneath. Design note #529 has the reasoning: before the setup
-   * event lands, the player count is undecided, so starting cash and the
-   * certificate limit are undecided -- and those are what the ledger, the
-   * stock cards and the certificate counter all render from. A board shown
-   * here would be a plausible, correctly-drawn game that nobody is playing.
-   *
-   * `status === "waiting"` IS THE ONLY TEST. It is a latch the host flips
-   * once (design note #532), and it flips only AFTER the setup entry is in
-   * the log -- so by the time any client leaves this screen, the action that
-   * deals the table is already there to be replayed. The listener applies it
-   * before this component next renders, which is what makes the transition
-   * look simultaneous rather than staged.
-   *
-   * EVERY SANDBOX SESSION IS A ROOM (design note #578), so the room test is
-   * now belt-and-braces rather than a mode check -- the gate below has
-   * already refused a sandbox with no room. */
-  /* ==================================================================
-   *  DESIGN NOTE 578: ONE SANDBOX, NOT TWO
-   * ==================================================================
-   *
-   * INSTRUCTED: "I no longer need the solo sandboxes, the middleware one is
-   * sufficient."
-   *
-   * THIS EARLY RETURN IS THE WHOLE REFACTOR. Everything below it can now
-   * assume `sandboxRoomCode` is set, which is what lets 21 solo-vs-room
-   * branches collapse -- and those branches were the shape of most of the
-   * bugs this project has reported:
-   *
-   *   #538  a room must not load the fixture's four mock players
-   *   #542  ...and neither must the auction's separate atom
-   *   #534  who "you" are differs between a hotseat and a room
-   *   #536  a room is not a hotseat, so the turn gate applies
-   *   #574  an Operating Round shortcut written for solo, skipping a step
-   *         in a real game
-   *
-   * Every one is "the two paths disagree about something". One path cannot.
-   *
-   * SUBTRACTIVE ON PURPOSE, which is why it was safe to do without any test
-   * over this file: deleting a branch cannot invent a new arrangement, and
-   * `tsc` finds every reference left behind. A structural refactor of the
-   * same file would have had neither property.
-   *
-   * WHAT IS LOST, stated plainly: you can no longer poke at the board
-   * without Firestore. Two browser tabs are the replacement, and are a
-   * better check anyway -- they exercise the log, the replay and the
-   * identity gating, which a single tab never did. */
+  /* No board until the setup event is in the log - starting cash and the certificate limit are undecided before it. #578: every sandbox session is a room, which collapsed 21 solo-vs-room branches.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #533 */
   if (sandbox && !sandboxRoomCode) {
     return (
       <div style={styles.sandboxGateRoot}>
@@ -9210,56 +4688,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }
 
-  /* ==================================================================
-   *  DESIGN NOTE 563: THE PLAYERS, AS CARDS
-   * ==================================================================
-   *
-   * Below the corporation cards, in the same grid language. The Ledger's
-   * Player Assets TABLE is untouched -- two views of one dataset, each
-   * shaped for its own screen.
-   *
-   * SEAT-DRIVEN ROUNDS ONLY. An Operating Round's turn belongs to a
-   * corporation, and a row of player portfolios there would answer a
-   * question nobody on that screen is asking.
-   *
-   * ==================================================================
-   *  DESIGN NOTE 602: THE THIRD ATTEMPT AT "THE AUCTION HAS NO CARDS"
-   * ==================================================================
-   *
-   * REPORTED, again: "make sure that the Player cards from the Stock Round
-   * are showing up in the bottom panel of the Auction round as well."
-   *
-   * Twice before, the guard was widened and the cards still did not appear.
-   * Design note #571 added the tab test; #597d corrected that test to
-   * `surfaceTabFor` so it would resolve to `phase` in an auction. Both were
-   * right about the condition and both changed nothing, because the
-   * condition was never what was failing.
-   *
-   * THE SECTION WAS INSIDE THE WRONG HALF OF A TERNARY. The workspace
-   * renders `isWaterfallPhase && activeMainTab === "phase" ? <auction
-   * dashboard> : <everything else>`, and the cards sat in the ELSE arm. So
-   * during an auction on the phase tab -- the exact case the guard was being
-   * tuned for -- the whole arm was skipped and the guard was never evaluated
-   * at all. A correct condition on an unmounted subtree.
-   *
-   * WHY THIS IS EASY TO MISS AND WORTH THE NOTE: the two guards read as
-   * though they compose. `surfaceTabFor("WaterfallAuction") === "phase"` and
-   * the ternary tests `activeMainTab === "phase"`, so the inner guard looks
-   * like it AGREES with the branch it is in when it in fact contradicts it.
-   * Reading either one alone tells you the cards should render.
-   *
-   * SO THE PANEL IS HOISTED HERE, out of both arms, and each arm places it
-   * where that round wants it. The Stock Round renders it directly, between
-   * the corporation cards and the board pane. The auction HANDS IT TO THE
-   * DASHBOARD as a prop (design note #604), because the slot it belongs in
-   * -- the one the seating table used to fill -- is inside that component
-   * and not reachable from here.
-   *
-   * One definition, one guard, two mount points. A copy per branch would
-   * have been fewer moving parts today and would drift the first time
-   * somebody edited only the one they happened to be looking at.
-   *
-   * `null` when the guard fails, so a caller can place it unconditionally. */
+  /* Player cards are hoisted OUT of both ternary arms - the guard was correct and sat on an unmounted subtree. #604: the auction dashboard takes the node as a prop and places it.
+     See docs/ai_architecture/stock_market.md - App.tsx #602 */
   const playersPanel =
     gameState &&
     (gameState.current_round_type === "StockRound" ||
@@ -9457,11 +4887,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <EmergencyTrainPurchaseModal
         plan={emergencyModalPlan}
         sandbox={sandbox}
-        /* Design note #1 in the modal: the forced sale. Dispatches the
-           ordinary `SellStock` with the block the modal has already
-           validated against both restrictions -- the legality lives in
-           `endgame.ts`, so what reaches the reducer is a sale that was
-           legal at the moment the button was drawn. */
+        /* The forced sale dispatches the ordinary SellStock; endgame.ts already validated the block.
+           See docs/ai_architecture/stock_market.md - App.tsx #490 */
         onSellShares={(companyId, percentage) => {
           void runGameplayAction("SellStock: emergency funding", {
             SellStock: { game_id: gameId, protocol_id: companyId, percentage },
@@ -9470,13 +4897,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onConfirm={() => {
           const plan = emergencyModalPlan;
           if (!plan) return;
-          /* Design note #333: `EmergencyBuyHardware`, NOT the ordinary
-             `BuyHardwareFromPool`. They are different contract messages and
-             the difference is the whole feature -- the ordinary one charges
-             the treasury and floors at zero, which in this state would buy
-             the train without anyone paying the shortfall. The log line is
-             written by `runGameplayAction` from the resolved state, so it
-             reports what actually moved rather than what was intended. */
+          /* EmergencyBuyHardware, not BuyHardwareFromPool - the ordinary message charges the treasury and floors at zero.
+             See docs/ai_architecture/contract_economy.md - App.tsx #333 */
           void runGameplayAction(
             `EmergencyBuyHardware: ${plan.trainModel}-train`,
             { EmergencyBuyHardware: { game_id: gameId, protocol_id: plan.corporationId } },
@@ -9695,51 +5117,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   activeTab={activeMainTab}
                   onSelectTab={setActiveMainTab}
                   orSubPhase={orSubPhase}
-                  /* Design note #536: the courtesy half. In a room the
-                     controls go dead off-turn so a player is not invited to
-                     click something the dispatch gate will refuse; solo
-                     hotseat passes `controlsEnabled` unchanged and keeps
-                     every seat playable. */
-                  // Design note #578: always a room, so always turn-gated.
+                  // Controls go dead off-turn so a player is not invited to click what the dispatch gate will refuse.
+                  // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
                   sessionReady={controlsEnabled && isMyTurn}
-                  // Design note #31: PHASE-APPROPRIATE PASS. `WaterfallPass`
-                  // and `PassTurn` are different contract messages, not one
-                  // action with two names -- sending the wrong one would
-                  // fail with an error about turn state that mentions
-                  // nothing to do with passing.
+                  // WaterfallPass and PassTurn are different contract messages, not one action with two names.
+                  // See docs/ai_architecture/contract_economy.md - App.tsx #31
                   onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
-                  /* ==================================================
-                       DESIGN NOTE 311: PASSING IS ALWAYS LEGAL
-                      ==================================================
-
-                      REPORTED: Pass Turn is greyed out for the very first
-                      player of the auction.
-
-                      It was, and for every player, until somebody bid. The
-                      gate read "passing is illegal until at least one
-                      private has a standing bid" -- which is not an 1830
-                      rule and had the auction's own escape hatch backwards.
-                      An opening table with no bids anywhere is exactly the
-                      position the pass rule exists FOR: if all four players
-                      decline in succession, the cheapest private is marked
-                      down $5 and the round comes back around cheaper.
-                      Requiring a bid before anyone could pass made that
-                      markdown unreachable from the opening position, so the
-                      first player's only legal moves were to buy Schuylkill
-                      Valley at full price or to bid.
-
-                      `sandboxSession.ts`'s `WaterfallPass` branch has
-                      implemented the markdown since design note #271. This
-                      gate was the only thing standing in front of it.
-
-                      WHAT IS STILL BLOCKED, and it is a different question:
-                      a live mini-auction. `WaterfallPass` and
-                      `WaterfallMiniAuctionPass` are separate messages
-                      against separate cursors, and sending the former while
-                      a contest is running advances the main seat pointer
-                      out from under the mini-auction -- the same class of
-                      cursor desync as design note #310. Dropping out of a
-                      contest is the Drop out button on the card. */
+                  /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
+                     See docs/ai_architecture/contract_economy.md - App.tsx #311 */
                   passDisabledReason={
                     isWaterfallPhase && waterfallState?.mini_auction
                       ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
@@ -9872,33 +5257,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 )}
 
             {isWaterfallPhase && activeMainTab === "phase" ? (
-              /* Pre-Game Waterfall Auction (`waterfall.rs`): replaces the
-                 normal action bar + board + contextual panel for this phase
-                 -- see `WaterfallAuctionDashboard.tsx`'s own doc comment for
-                 why a dedicated dashboard, not a mode grafted onto
-                 `ContextualActionBar`, is the right shape for six privates'
-                 worth of bid trackers.
-
-                 BUG FIX (design note #27): `&& activeMainTab === "stock"` is
-                 new and is the whole fix for "the Rail Map tab just
-                 re-renders the auction screen".
-
-                 This branch sits inside `isWorkspaceTab`, which is TRUE FOR
-                 BOTH the map and stock tabs. So while `isWaterfallPhase`
-                 held, the auction dashboard replaced the workspace on
-                 EITHER tab -- clicking "Rail Map" dutifully set
-                 `activeMainTab` to `"map"`, and then this ternary rendered
-                 the auction anyway, because nothing here consulted the tab.
-                 The tab button worked perfectly and had no visible effect,
-                 which is the worst kind of broken.
-
-                 Worth stating plainly: this was NOT a sandbox bug. The
-                 sandbox only made it easy to hit, by letting someone sit in
-                 the auction phase indefinitely and click around. In a real
-                 game the rail map would have been equally unreachable for
-                 the whole of the private auction -- during which players
-                 have every reason to study the board they are about to
-                 compete over. */
+              /* && activeMainTab === "stock" is the fix: this branch sits inside isWorkspaceTab, so the auction replaced the workspace on the Rail Map tab too.
+                 See docs/ai_architecture/ui_shell_layout.md - App.tsx #27 */
               <WaterfallAuctionDashboard
                 waterfallState={waterfallState}
                 loading={waterfallStateLoading}
@@ -9921,23 +5281,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 onBidHigher={handleWaterfallBidHigher}
                 onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}
                 onMiniAuctionPass={handleWaterfallMiniAuctionPass}
-                /* ==================================================
-                     DESIGN NOTE 604: HANDED IN, NOT HUNG UNDERNEATH
-                    ==================================================
-
-                     Design note #602 mounted the cards as a SIBLING of the
-                     dashboard, which put them below it and left the empty
-                     seating panel sitting between the private company
-                     cards and them. Both problems are the same problem:
-                     from out here the only position available is "after
-                     the whole dashboard", and the place the cards belong
-                     is inside it.
-
-                     So the dashboard takes the node and places it, in the
-                     slot the seating table used to occupy. Same conduit
-                     pattern as `seatOrderTrail` on the action bar -- the
-                     child owns the layout, this file owns the content, and
-                     neither has to learn the other's job. */
+                /* Handed in as a prop, not hung underneath: the slot the cards belong in is inside the dashboard.
+                   See docs/ai_architecture/stock_market.md - App.tsx #604 */
                 playersPanel={playersPanel}
               />
             ) : (
@@ -10106,17 +5451,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     // about to rust.
                     phase={currentPhase}
                     outlook={currentRustOutlook}
-                    // Design note #8 in that file: market price is separate
-                    // data (`GetMarketGrid`) from the ownership registry.
-                    // Only the sandbox has it wired so far -- a live game
-                    // passes `undefined` and the roster renders a dash,
-                    // which is honest about not knowing rather than
-                    // inventing a price.
-                    // Design note #2 in `sandboxState.ts`: ONE price, two
-                    // renderers. This read the frozen `SANDBOX_MARKET_PRICES`
-                    // constant while the chart now reads the live atom, which
-                    // is the exact drift that note exists to prevent -- a
-                    // card saying $76 beside a token sitting on $71.
+                    // Market price is separate data from the ownership registry; a live game passes undefined and the roster renders a dash. Read the live atom, not the frozen constant.
+                    // See docs/ai_architecture/stock_market.md - App.tsx #247
                     marketPrices={sandbox ? sandboxMarketPrices : undefined}
                     playerLabel={sandbox ? sandboxPlayerLabel : undefined}
                     /* Design note #578: `hotseat` gone -- every seat is a browser. */
@@ -10174,48 +5510,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   {activeMainTab === "map" ? (
                     <HexGridRenderer
                       mapGrid={mapGrid}
-                      // Manual Route Point UI (design note #11): while
-                      // `routeSelectMode` is on, the click-interceptor props
-                      // (`queryClient`/`contractAddress`/`gameId`/`protocolId`)
-                      // are all omitted -- per HexGridRenderer's own design note
-                      // #7, that fully disables its GetLegalTilePlacements
-                      // click-interceptor/popup flow, leaving `onHexClick` as
-                      // the only click consumer, so a route-point click never
-                      // also pops open the LayTile popup underneath it.
-                      // Design note #24: SANDBOX FORCES THE OFFLINE PATH.
-                      // Withholding `contractAddress` (and the client) is
-                      // not merely tidy -- it is the mechanism. Per
-                      // HexGridRenderer's own design note #139, a missing
-                      // client OR a missing contract address means "there
-                      // is no chain to ask", which routes a hex click into
-                      // `localCatalogPlacements()` and opens the picker in
-                      // `offline` mode against the local tile catalog.
-                      // That is exactly the browsable, chain-free tile
-                      // picker the sandbox exists to provide, and it is
-                      // machinery that already existed -- sandbox mode just
-                      // guarantees the conditions for it.
-                      //
-                      // Withholding it also prevents the alternative, which
-                      // is worse than useless: `CONTRACT_ADDRESS` is a
-                      // non-empty MOCK string, so it is truthy, so without
-                      // this the interceptor would fire a real
-                      // `GetLegalTilePlacements` at a contract that does not
-                      // exist and every click would surface a query error
-                      // instead of a tile picker.
-                      // Design note #159: token targeting disarms the tile
-                      // picker exactly as route mode does. Both modes want
-                      // the same thing -- the click, and not the picker --
-                      // so they gate the same four props.
-                      // Design note #162: `previewRotateArmed` joins route
-                      // and token mode as a third reason to disarm the
-                      // query interceptor. All three want the raw click
-                      // rather than a tile picker.
-                      // Design note #199, layer 2: `!tileInspectorArmed` joins
-                      // the three mode flags. Outside the Lay Track sub-phase
-                      // the interceptor is disarmed entirely, so a stray board
-                      // click costs no `GetLegalTilePlacements` round-trip and
-                      // cannot open a carousel over a board whose click means
-                      // something else.
+                      // Withholding the four interceptor props is the MECHANISM, not tidiness: route mode, token targeting, preview rotation and being outside Lay Track all want the raw click. Sandbox withholds them to force the offline catalog path (#24).
+                      // See docs/ai_architecture/canvas_rendering.md - App.tsx #519
                       queryClient={
                         !tileInspectorArmed ||
                         routeSelectMode ||
@@ -10258,40 +5554,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           : actingProtocolId
                       }
                       cursorMode={
-                        /* Design note #440: a home placement arms the same
-                           crosshair the ordinary token step uses -- the
-                           gesture a player is being asked for is identical,
-                           so the cursor should not differ. */
-                        /* Design note #444: the TILE errand keeps the
-                           default cursor -- it ends in the tile picker, and
-                           a crosshair would promise a token placement. */
+                        /* A home placement arms the same crosshair the ordinary token step uses; a private-tile errand keeps the default cursor (#444).
+                           See docs/ai_architecture/canvas_rendering.md - App.tsx #440 */
                         (homeStationPlacement &&
                           homeStationPlacement.kind !== "private-tile") ||
                         tokenTargetMode
                           ? "token"
                           : "default"
                       }
-                      /* Design note #496: whose token this is. Read from the
-                         SAME two sources the cursor mode above is armed from,
-                         in the same order -- a home placement names its own
-                         corporation, and the ordinary token step is the
-                         acting one. Reading them separately is how the
-                         pointer ends up wearing the wrong livery on a D&H
-                         errand. */
+                      /* Read from the same two sources as cursorMode, in the same order, or the pointer wears the wrong livery.
+                         See docs/ai_architecture/canvas_rendering.md - App.tsx #496 */
                       tokenCursor={stationCursorCorporation}
                       onHexClick={
-                        /* Design note #440: FIRST in the chain. A home
-                           placement is modal in intent -- the player has
-                           accepted a prompt and been sent here to do one
-                           thing -- so it takes the click ahead of every
-                           other board mode rather than competing with
-                           whichever happened to be left on. */
-                        /* Design note #444: a `private-tile` errand does NOT
-                           intercept. The veil has already narrowed the board
-                           to one hex, and the click then runs the ordinary
-                           tile-picker path -- so a D&H tile lay is the same
-                           pipeline as every other lay, at the same terrain
-                           cost, rather than a second one to keep in step. */
+                        /* A home placement is modal in intent and takes the click first; a private-tile errand does not intercept at all (#444).
+                           See docs/ai_architecture/canvas_rendering.md - App.tsx #523 */
                         homeStationPlacement &&
                         homeStationPlacement.kind !== "private-tile"
                           ? handleStageFreeStation
@@ -10306,13 +5582,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       onHexClickQuery={handleHexClickQuery}
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
-                      // Station Tokens (HexGridRenderer.tsx design note #36):
-                      // `gameState.public_companies` (gameState.ts's own
-                      // `PublicCompanyState[]`) is structurally assignable to
-                      // the narrower `StationTokenCompany[]` this prop expects
-                      // -- no conversion needed. Omitted entirely while
-                      // `gameState` hasn't resolved yet, falling back to
-                      // HexGridRenderer's own stable empty-array default.
+                      // PublicCompanyState[] is structurally assignable to StationTokenCompany[]; omitted entirely until gameState resolves.
+                      // See docs/ai_architecture/canvas_rendering.md - App.tsx #36
                       publicCompanies={gameState?.public_companies}
                       // Design note #318: the reservation badges read this
                       // roster and clear themselves when a private closes.
@@ -10322,56 +5593,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       // shared cursor.
                       highlightedTrainIndex={highlightedTrainIndex}
                       onHighlightRoute={setHighlightedTrainIndex}
-                      // Design note #224: the Lay Track veil.
-                      // Design note #240: one veil, two steps. Track lay
-                      // lights what the network can build on; token
-                      // targeting lights the cities it may claim.
-                      // Design note #269: the tile picker and the token
-                      // ring are both anchored to a hex, and the hover
-                      // tooltip anchors to the same one. Whichever is open
-                      // owns that spot; the tooltip stands down. Mounted
-                      // here rather than inferred in the renderer because
-                      // both rings are mounted by this file.
+                      // One veil, two steps - track lay lights what the network can build on, token targeting the cities it may claim. #269: whichever ring is open owns the hover anchor.
+                      // See docs/ai_architecture/canvas_rendering.md - App.tsx #240
                       suppressHoverTooltip={
                         (tileInspectorArmed && radialSelector !== null) || pendingToken !== null
                       }
-                      /* ==================================================
-                           DESIGN NOTE 377 (shell half): WHOSE VEIL IS IT
-                          ==================================================
-
-                          The renderer has a board and no identity, so the
-                          question "is the person looking at this the one
-                          taking the turn" can only be answered here.
-
-                          `isMyTurn` is exactly that question and already
-                          existed for the tab-title flash -- it compares
-                          `viewerAddress` against `actingSeatIndex`, which
-                          in an Operating Round resolves to the PRESIDENT of
-                          the acting corporation rather than to a seat
-                          pointer. That is the right identity: the veil
-                          marks one corporation's reach, and the player who
-                          can act on it is its president.
-
-                          Spread onto whichever focus is live so the token
-                          targeting step inherits the same asymmetry without
-                          a second flag saying the same thing. */
+                      /* isMyTurn answers "is the viewer the acting corporation's president"; spread onto whichever focus is live.
+                         See docs/ai_architecture/canvas_rendering.md - App.tsx #377 */
                       layFocus={
-                        /* Design note #440: the home placement's veil takes
-                           precedence, and its `dim` is unconditionally
-                           `true` rather than `isMyTurn`. The other two ask
-                           "is the viewer the acting corporation's
-                           president"; this focus only exists because THIS
-                           viewer accepted the prompt, so the question is
-                           already answered by its presence. Passing
-                           `isMyTurn` here would darken the board for a
-                           president whose corporation floated outside its
-                           own operating turn -- which is most floats. */
-                        /* Design note #472: `soleFocusKey` is set while a
-                           tile selector is open, which veils every other
-                           hex deeply -- including the other legal
-                           placements. Spread onto whichever focus is live,
-                           the same way `dim` is, so one flag governs all
-                           three rather than each growing its own. */
+                        /* The home placement's veil dims unconditionally - it exists only because THIS viewer accepted the prompt. #472: soleFocusKey deepens it while a selector is open.
+                           See docs/ai_architecture/canvas_rendering.md - App.tsx #440 */
                         homeStationFocus
                           ? { ...homeStationFocus, dim: true, soleFocusKey }
                           : layTrackFocus
@@ -10384,11 +5615,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   ) : (
                     <StockMarketRenderer
                       marketGrid={marketGrid}
-                      // Design note #24 in that file: the par track is fed
-                      // by par_value, which the contract sets when the
-                      // President's Certificate is bought -- so a parred
-                      // but unfloated company appears on the track, which
-                      // is the whole point of it.
+                      // The par track is fed by par_value, so a parred but unfloated company appears on it.
+                      // See docs/ai_architecture/stock_market.md - App.tsx #530
                       parredCompanies={gameState?.public_companies}
                     />
                   )}
@@ -10579,15 +5807,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           set outside it, so this can never show two offers at once. */}
       <TrainTradePrompt
         proposal={liveTrainOffer?.proposal ?? sandboxTrainProposal}
-        // Sandbox: one human, one wallet, and the seat switcher already
-        // establishes that "who you are" is a local choice there -- so the
-        // prompt is answerable by whoever is looking. It still NAMES the
-        // seller, so the person clicking Accept is told whose decision they
-        // are standing in for.
-        //
-        // Online: `liveTrainOffer` only exists when the viewer IS the
-        // seller's president, so reaching this with a live offer already
-        // means the right person is being asked.
+        // Sandbox names the seller so the clicker knows whose decision they stand in for; online, liveTrainOffer only exists for the seller's president.
+        // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
         viewerIsSeller={
           liveTrainOffer !== null ||
           sandbox ||
@@ -10598,27 +5819,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       />
       <PrivateTradePrompt
         proposal={privateProposal}
-        /* ==========================================================
-             DESIGN NOTE 662: THE OWNER ANSWERS, IN EVERY MODE
-           ==========================================================
-
-           REPORTED: "the decision modal appeared on P1's screen and allowed
-           them to accept it."
-
-           This read `sandbox || ...`, and design note #2 in that file gave
-           the reason: "sandbox is one human at one wallet, so the prompt is
-           answerable by whoever is looking -- otherwise the only place this
-           flow can run end to end is the one place it cannot be tested."
-
-           True when written, and false since design note #578 removed solo
-           mode. A sandbox room is several humans at several wallets, and the
-           bypass turned "the owner must consent" into "whoever proposed it
-           may consent on their behalf". The flow can be tested end to end
-           precisely because there is now a second player to test it with.
-
-           Same wallet comparison in both modes now, which also means the
-           prompt's own "This is X's decision" caption is finally true on the
-           screen that cannot act on it. */
+        /* The owner answers in EVERY mode - the sandbox bypass turned "the owner must consent" into "whoever proposed it may consent for them".
+           See docs/ai_architecture/contract_economy.md - App.tsx #662 */
         viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}
         // Design note #0 in that file: `BuyPrivateCompany` has no accept
         // step, so outside sandbox this is a confirmation and says so.
@@ -10706,11 +5908,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 /* Room routing -- design note #1                                      */
 /* ------------------------------------------------------------------ */
 
-/** Survives a reload so a player who refreshes mid-game lands back at the
- *  board rather than at the room list. Holds BOTH ids because they address
- *  two different systems and neither can be derived from the other: the
- *  `u64` the contract assigned, and the Firestore room id chat/presence
- *  live under. */
+/** Holds both ids: the contract's u64 and the Firestore room id. Neither can be derived from the other.
+ *  See docs/ai_architecture/firebase_middleware.md - App.tsx #548 */
 
 function GameRouter() {
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(readActiveGame);
@@ -10732,15 +5931,8 @@ function GameRouter() {
     setActiveGame({ gameId, roomId, mode: "spectate" });
   }, []);
 
-  /** Design note #24: the escape hatch. Needs no wallet, no contract, no
-   *  Firestore room -- which is the entire point, since the absence of all
-   *  three is what made the lobby inescapable. */
-  /* Design note #524: the sandbox room code, chosen in the Lobby. Held here
-     rather than inside `AppShell` because the shell is keyed on the game and
-     remounts; this survives that, and it is what the Lobby has to write to
-     before the shell exists at all. */
-  /* Design note #551: seeded from the session, so a refresh comes back into
-     the room rather than into solo Sandbox. */
+  /** The escape hatch needs no wallet, contract or room. #524: the sandbox room code is held above AppShell, which remounts; #551 seeds it from the session.
+   *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #24 */
   const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(readActiveSandboxRoom);
   useEffect(() => {
     writeActiveSandboxRoom(sandboxRoomCode);
@@ -10765,15 +5957,8 @@ function GameRouter() {
 
   return (
     <AppShell
-      // Remounts cleanly on a room change. Without this key, switching
-      // rooms would keep the previous room's `actionLog`, ticker scroll
-      // position and OR sub-phase cursor -- state that is meaningless in a
-      // different game and actively misleading in it.
-      //
-      // `mode` is part of the key too (design note #24): a viewer who
-      // spectates a game and then joins it properly must get a genuinely
-      // fresh shell, not one carrying a spectator's accumulated
-      // "watching only" log entries and stale derived state.
+      // Keyed on room and mode so a room change - or a spectator joining properly - gets a genuinely fresh shell.
+      // See docs/ai_architecture/firebase_middleware.md - App.tsx #551
       key={`${activeGame.gameId}:${activeGame.roomId}:${activeGame.mode}`}
       gameId={activeGame.gameId}
       roomId={activeGame.roomId}
@@ -10799,42 +5984,8 @@ export default function App() {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Inline styles                                                       */
-/* ------------------------------------------------------------------ */
-// Plain inline style objects rather than a new App.css -- keeps this
-// milestone a single self-contained file, matching how it was requested.
-// Swap for a real stylesheet/CSS-in-JS library whenever this UI grows
-// past a first wiring pass.
+// Plain inline style objects rather than a stylesheet, matching how this was requested.
+// Note inline styles cannot express :disabled - see docs/ai_architecture/ui_shell_layout.md
 
-/** Design note #36: the four phase tints. Kept beside `styles` rather than
- *  in `palette.ts` because these are chrome colours on the dark top bar,
- *  not card-surface colours -- the palette module is specifically the
- *  light-card system and mixing the two is how a "shared" palette stops
- *  meaning anything. */
-/* ==================================================================
- *  DESIGN NOTE 324: THE PHASE BADGE IS A LABEL, NOT AN ALERT
- * ==================================================================
- *
- * REPORTED: make the base "Phase: Yellow/Green/Brown" badge neutral so only
- * upcoming phase-change alerts use high-contrast warning colours.
- *
- * The badge was tinted to match the era -- amber in Yellow, green in Green,
- * brown in Brown -- which reads as a colour-coded STATUS on a bar where
- * amber and red already mean "act now": `phaseShiftBadgeWarn` and
- * `phaseShiftBadgeCritical` sit inches away in the same rail, in the same
- * pill shape, in the same amber. So the permanent label and the two-buys
- * warning were competing at the same volume, and the warning is the one
- * that has to win: it appears for exactly the few purchases before a rust,
- * and it is the only badge on the bar a player must react to.
- *
- * Neutral slate for all three. The era is still named in the text, which is
- * what a label is for, and the ERA'S OWN COLOUR still appears everywhere it
- * is load-bearing -- the tile catalog, the sub-phase stepper, the board
- * tint. This badge was the one place the colour carried no information the
- * word did not already carry.
- *
- * One record per tint rather than a single style, so the shape is still
- * there if a future pass wants a subtle era cue back -- e.g. a left border
- * -- without re-tinting the whole pill.
- */
+/** The phase badge is a neutral LABEL: era tinting competed with the amber phase-shift warnings beside it. One record per tint so a subtle cue can return.
+ *  See docs/ai_architecture/ui_shell_layout.md - App.tsx #324 */

@@ -1,0 +1,66 @@
+# AI Architecture Notes — Index
+
+Extracted design commentary for **1830: Juno Edition** (React/Canvas frontend, Rust/CosmWasm
+backend, Firebase middleware). This directory is the archive that source files used to carry
+inline. Code keeps a 1–2 line comment naming the note; the reasoning lives here.
+
+## How to use this
+
+Source comments reference notes by number, e.g. `// see design note #481`. Every note in this
+directory is anchored as **`<source file> #<N>`**, so:
+
+- `Ctrl+F` for `#481` lands on the note.
+- The file prefix disambiguates — numbering is **per source file**, so `#3` in `Lobby.tsx` and
+  `#3` in `App.tsx` are unrelated notes. Always search the number; the prefix tells you which
+  one you found.
+- A few notes carry letter suffixes (`#591b`, `#537a`, `#549a`). These are follow-up passes on
+  the base note and are filed immediately after it.
+- Superseded notes are retained and marked **`[superseded by #N]`** rather than deleted. The
+  reasoning trail is the point.
+
+## Domain files
+
+| File | Covers |
+|---|---|
+| [state_machine.md](state_machine.md) | Round types, Operating Round sub-phase cursor, turn gating, auto-skip, float events, home stations, undo/revert semantics |
+| [firebase_middleware.md](firebase_middleware.md) | Event-sourced room log, replay drain, setup event, presence, chat transport, the chain/Firestore boundary |
+| [canvas_rendering.md](canvas_rendering.md) | Radial tile selector, board veil/dimming, cursor modes, tile preview and rotation, token migration markers, board click routing |
+| [stock_market.md](stock_market.md) | Par values, IPO vs bank pool pricing, market chart marks and moves, stock round cards |
+| [contract_economy.md](contract_economy.md) | Treasuries, token pricing, train purchase and the depot queue, emergency funding, bankruptcy, private companies, the waterfall auction |
+| [routing_pathfinding.md](routing_pathfinding.md) | Route drafting, waypoints and bridging, revenue centres vs hexes, train capacity, auto-route |
+| [ui_shell_layout.md](ui_shell_layout.md) | Tabs, top ticker and activity feed, dock height reservation, turn notifications, inline styles |
+| [session_keys_wallet.md](session_keys_wallet.md) | Wallet and `x/authz` session keys, spectator/read-only mode, viewer identity, sandbox identity |
+
+## Recurring principles
+
+These arguments appear across many notes and are worth reading once:
+
+1. **One question, one answer.** The project's most common bug class is two values that are
+   supposed to encode the same fact drifting apart (`#559`, `#576`, `#580`, `#587`, `#601`).
+   When a rule needs enforcing twice, share the predicate rather than reimplementing it.
+2. **Gate at the dispatch, not on the button.** Disabled controls are a courtesy; the guarantee
+   is the check inside `runGameplayAction`. See `App.tsx #23`, `#536`.
+3. **Ignorance permits — usually.** `null` means "not asked" and must be distinguished from a
+   real `0`. Which direction is safe depends on the cost of each mistake: see `#293b` and
+   `#433` for the same field being read the opposite way in two places, deliberately.
+4. **Derive the question, do not latch it.** State derived from the board cannot go stale,
+   cannot be raised twice, and cannot survive the thing that resolved it (`#565`, `#416`).
+5. **The contract is the authority.** The frontend may pre-check to save a signature and a gas
+   fee, never to become a second rulebook. A client-side copy of a rule can only drift.
+6. **Fire on the edge, not on the condition.** Effects that dispatch must compare against a
+   previous-value ref, or they re-broadcast on every render until the next poll lands.
+
+## Batch status
+
+| Batch | Scope | State |
+|---|---|---|
+| 0 | Scaffold this directory | Done |
+| 1 | `frontend/src/App.tsx` | Done |
+| 2 | Firebase middleware layer | Pending |
+| 3 | Canvas rendering + tile math | Pending |
+| 4 | Stock market + trading UI | Pending |
+| 5 | Remaining frontend files | Pending |
+| 6 | Rust contract backend | Pending |
+
+Test files (`src/tests.rs`, `frontend/src/**/*.test.ts`) are out of scope by decision — they
+are self-documenting.

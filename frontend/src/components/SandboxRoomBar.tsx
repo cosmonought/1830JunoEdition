@@ -1,39 +1,15 @@
-// frontend/src/components/SandboxRoomBar.tsx
-//
 // The Sandbox multiplayer lobby: host a room, or join one by code.
 //
-// ===================================================================
-//  DESIGN NOTE 521: A BAR, NOT A GATE
-// ===================================================================
+// Design note #521: a BAR, not a gate. Offline Sandbox is the one mode that runs
+// end to end with no wallet, chain or second player, so a modal asking "host or
+// join?" would put a multiplayer decision in front of the single-player front
+// door and every solo session would begin by dismissing it.
 //
-// The obvious shape for "Host Game / Join Game" is a modal that blocks the
-// board until one is chosen. That would be wrong here, and the reason is
-// what the sandbox is FOR.
+// Design note #521a: with Firestore unconfigured the controls are HIDDEN rather
+// than disabled. A disabled control invites the player to work out how to enable
+// it; this is a deployment fact they cannot act on from inside the game.
 //
-// Offline Sandbox Mode is the one place this app runs end to end with no
-// wallet, no chain and no second player -- it is how the rail map, the
-// tile picker and the whole Operating Round get exercised at all. A modal
-// asking "host or join?" before any of that is reachable would put a
-// multiplayer decision in front of the single-player mode's front door, and
-// every solo session would begin by dismissing it.
-//
-// So this is a strip that sits above the board and offers the two actions
-// without demanding either. Solo play is unchanged and needs no gesture;
-// multiplayer is one click away when somebody wants it.
-//
-// ===================================================================
-//  DESIGN NOTE 521a: WHAT THE STRIP SAYS WHEN IT CANNOT WORK
-// ===================================================================
-//
-// Firestore is optional in this app by construction (`config/firebase.ts`
-// design note #1: losing the rail map because nobody configured a chat
-// backend is an absurd failure mode). So an unconfigured build reaches this
-// component, and the honest thing is to say so once rather than to offer two
-// buttons that fail on click.
-//
-// The controls are hidden rather than disabled in that state. A disabled
-// control invites the player to work out how to enable it; this is a
-// deployment fact they cannot act on from inside the game.
+// See docs/ai_architecture/firebase_middleware.md, SandboxRoomBar.tsx #521.
 
 import React, { useState } from "react";
 

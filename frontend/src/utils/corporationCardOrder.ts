@@ -1,48 +1,22 @@
-// frontend/src/utils/corporationCardOrder.ts
+// Design note #464: the corporation cards hold still while you are trading.
 //
-// ==================================================================
-//  DESIGN NOTE 464: THE CARDS HOLD STILL WHILE YOU ARE TRADING
-// ==================================================================
+// #446 sorted floated companies to the front and was right about the ORDER and
+// wrong about the MOMENT: a Stock Round is eight cards a player buys from
+// repeatedly, buying is what causes floats, and so the act of using the screen
+// rearranged it under them.
 //
-// REPORTED: the corporation cards re-sort the moment a company floats,
-// disrupting the player's rhythm during a Stock Round.
+// The ordering itself is useful -- an Operating Round runs corporations in
+// market-price order, so the roster previews the round about to happen. So the
+// sort happens ONCE, when an Operating Round begins, and holds through that OR
+// and the Stock Round after it.
 //
-// Design note #446 sorted floated companies to the front, and it was right
-// about the ORDER and wrong about the MOMENT. A Stock Round is eight cards
-// a player buys from repeatedly, and buying is what causes floats -- so the
-// act of using the screen rearranged it. A player reaching for the card
-// they just looked at found something else there, caused by their own last
-// click.
+// Market value descending; an unfloated corporation has no market position at
+// all (`sandboxMarketPositions` refuses to give one) and sorts after every
+// company that does, rather than being treated as price zero and interleaved.
+// Ties break on `company_id` -- arbitrary but STABLE, which is the property that
+// matters.
 //
-// ==================================================================
-//  WHY THE ORDER IS RECOMPUTED AT A ROUND BOUNDARY
-// ==================================================================
-//
-// The ordering itself is genuinely useful: an Operating Round runs
-// corporations in market-price order, so a roster in that order is a
-// preview of the round about to happen. What makes it disruptive is
-// recomputing it CONTINUOUSLY, during the one round where the player is
-// interacting with the cards themselves.
-//
-// So the sort happens once, when an Operating Round begins, and the order
-// is then held -- through that Operating Round and through the Stock Round
-// that follows, until the next Operating Round re-sorts it. The player's
-// mental map of the screen changes only at a moment when the screen was
-// going to change anyway.
-//
-// ==================================================================
-//  MARKET VALUE, DESCENDING -- AND WHAT HAPPENS TO THE UNFLOATED
-// ==================================================================
-//
-// Highest price first, which is 1830's operating order. An unfloated
-// corporation has no market position at all (`sandboxMarketPositions`
-// refuses to give one), so it cannot be ranked among companies that do --
-// it sorts after all of them rather than being treated as price zero and
-// interleaved by accident.
-//
-// Ties break on `company_id`: an arbitrary but STABLE tiebreak, which is
-// the property that matters. Two corporations at the same price must not
-// swap places on an unrelated re-render.
+// See docs/ai_architecture/stock_market.md, corporationCardOrder.ts #464.
 
 /** The minimum a corporation must expose to be ranked. */
 export interface OrderableCorporation {
@@ -50,14 +24,12 @@ export interface OrderableCorporation {
   is_floated: boolean;
 }
 
-/**
- * The card order for an Operating Round: floated first, by market price
- * descending, then by `company_id`.
+/** The card order for an Operating Round: floated first, by market price
+ *  descending, then by `company_id`.
  *
- * Returns `company_id`s rather than the companies themselves, so a caller
- * can hold the answer across renders without pinning stale company objects
- * -- the roster it applies this to is refreshed on every poll.
- */
+ *  Returns `company_id`s rather than the companies themselves, so a caller can
+ *  hold the answer across renders without pinning stale company objects -- the
+ *  roster it applies to is refreshed on every poll. */
 export function operatingRoundCardOrder(
   companies: readonly OrderableCorporation[],
   marketPrices: Readonly<Record<number, number | null>> | undefined,
@@ -77,18 +49,13 @@ export function operatingRoundCardOrder(
     .map((company) => company.company_id);
 }
 
-/**
- * Applies a held order to the current roster.
+/** Applies a held order to the current roster.
  *
- * NEW COMPANIES GO TO THE END rather than being dropped or forcing a
- * re-sort. A roster that gained an entry the held order has never seen is
- * either a fixture change or a contract that grew a corporation mid-game;
- * appending shows it without disturbing the positions the player has
- * learned, and the next Operating Round files it properly.
- *
- * `null` or an empty order returns the roster untouched -- the honest
- * answer before any Operating Round has established one.
- */
+ *  NEW COMPANIES GO TO THE END rather than being dropped or forcing a re-sort.
+ *  Appending shows the entry without disturbing the positions the player has
+ *  learned, and the next Operating Round files it properly. `null` or an empty
+ *  order returns the roster untouched -- the honest answer before any Operating
+ *  Round has established one. */
 export function applyCardOrder<T extends OrderableCorporation>(
   companies: readonly T[],
   order: readonly number[] | null,

@@ -1,57 +1,23 @@
-// frontend/src/utils/privateReservations.ts
-//
 // Which hexes a private company is holding, and for how long.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE RESERVATION EXISTED ONLY AS PROSE
-// ===================================================================
-//
-// REPORTED: the map gives no indication that a hex is reserved by a private
-// company -- Burlington by the Champlain & St. Lawrence, Scranton by the
-// Delaware & Hudson.
-//
-// The reservation was real and stated in three places, all of them text: the
-// auction card's ability line, `PrivatePowerPanel`'s description, and the
-// rules reference. None of them is on screen while a president is choosing
-// where to lay track, which is the one moment the fact matters. A player
+// Design note #0: the reservation was real and stated in three places, all of
+// them text -- the auction card, the powers panel and the rules reference. None
+// is on screen while a president is choosing where to lay track, so a player
 // discovers the block by having a placement refused.
 //
-// ===================================================================
-//  DESIGN NOTE 1: DERIVED FROM OWNERSHIP, NOT HARDCODED ON
-// ===================================================================
+// Design note #1: DERIVED FROM OWNERSHIP, not a static list. The badge has to
+// CLEAR, and it clears two ways: CLOSED (the private leaves at Phase 5) and
+// ABSENT (a room that does not report it -- no claim, no badge). UNOWNED STILL
+// COUNTS: during the auction nobody holds the C&SL and the hex is still spoken
+// for; ownership changes only the tooltip.
 //
-// The badge has to CLEAR, and the two ways it clears are different:
+// Design note #2: the table stores hex LABELS and `HEX_LABEL_TO_AXIAL` resolves
+// them. Storing `(q, r)` here would be a second copy of the board's geometry,
+// free to drift -- `hexBoardData.ts` already had to move F16 once (#123). See
+// `WaterfallAuctionDashboard.tsx` design note #312 for why D&H holds F16 and M&H
+// holds nothing, and the `auction.rs` divergence that follows.
 //
-//   CLOSED   the private leaves the game at Phase 5 and its hold goes with
-//            it. `PrivateCompanyState.closed` says so directly.
-//   ABSENT   a room that does not report the private at all -- an older
-//            contract, or a variant without it. No claim, no badge.
-//
-// So this reads the live roster every time rather than baking a static list
-// of blocked hexes into the renderer. A badge that cannot turn off would be
-// worse than no badge by the middle of the game: it would be marking a
-// restriction that no longer exists, on the board a player is planning
-// against.
-//
-// UNOWNED STILL COUNTS. During the auction nobody holds the C&SL yet and the
-// hex is still spoken for -- no corporation may build there. The badge is
-// about the HEX's availability, which the private's existence decides; who
-// owns it changes only the tooltip.
-//
-// ===================================================================
-//  DESIGN NOTE 2: THE COORDINATES COME FROM THE BOARD, NOT FROM HERE
-// ===================================================================
-//
-// The table below stores hex LABELS ("B20"), and `HEX_LABEL_TO_AXIAL`
-// resolves them. Storing `(q, r)` pairs here would be a second copy of the
-// board's own geometry, free to drift from it -- and `hexBoardData.ts`
-// already had to move F16 once (design note #123, the missed Scranton city).
-// A label that no longer resolves yields no reservation rather than a badge
-// floating at (0, 0).
-//
-// See `WaterfallAuctionDashboard.tsx` design note #312 for why D&H holds F16
-// and M&H holds nothing, and for the divergence from `auction.rs` that
-// follows from it.
+// See docs/ai_architecture/hex_tile_math.md, privateReservations.ts #0 - #2.
 
 import { STATIC_BOARD_HEXES, NAMED_HEX_LABELS } from "../components/hexBoardData";
 import type { PrivateCompanyState } from "./gameState";
@@ -65,17 +31,13 @@ interface ReservationRule {
    *  NO AMPERSAND -- "CSL", not "C&SL". The character costs width on a hex
    *  corner and adds nothing at seven pixels. */
   initials: string;
-  /* ==================================================================
-   *  DESIGN NOTE 3: EACH BADGE HAS A FIXED HOME
-   * ==================================================================
-   *
-   * The 13-slot numbering from `hexGeometry.ts`: 1-6 are edge midpoints,
-   * 7-12 are corner vertices. These two are PINNED rather than negotiated
-   * through the shared claiming ledger, because there are exactly two of
-   * them on two known hexes and both had to be placed where they cannot
-   * reach a neighbour -- which is the overflow bug design note #364
-   * records. A claimed slot is the right answer when passes compete; a
-   * chosen one is the right answer when the position itself is the fix. */
+  /* Design note #3: each badge has a FIXED home. The 13-slot numbering from
+     `hexGeometry.ts` (1-6 edge midpoints, 7-12 corner vertices). These two are
+     pinned rather than negotiated through the shared claiming ledger, because
+     there are exactly two of them on two known hexes and both had to go where they
+     cannot reach a neighbour -- the overflow bug design note #364 records. A
+     claimed slot is right when passes compete; a chosen one is right when the
+     position itself is the fix. */
   slot: number;
   /** One line for the tooltip, in the player's terms rather than the
    *  contract's. */
@@ -129,12 +91,9 @@ export function reservationKey(q: number, r: number): string {
   return `${q},${r}`;
 }
 
-/**
- * Every hex currently spoken for by a private that is still in the game.
- *
- * Empty once both privates have closed, which is the state the badge exists
- * to stop misrepresenting.
- */
+/** Every hex currently spoken for by a private that is still in the game. Empty
+ *  once both privates have closed, which is the state the badge exists to stop
+ *  misrepresenting. */
 export function activeReservations(
   privateCompanies: readonly PrivateCompanyState[] | null | undefined,
 ): HexReservation[] {
@@ -180,13 +139,10 @@ export function reservationsByHex(
   return map;
 }
 
-/**
- * The tooltip line for one reservation.
- *
- * Names the holder when there is one, because "reserved by the D&H" and
- * "reserved by the D&H, which Carol owns" lead to different decisions: the
- * second tells a president whether the block is theirs to use.
- */
+/** The tooltip line for one reservation. Names the holder when there is one,
+ *  because "reserved by the D&H" and "reserved by the D&H, which Carol owns" lead
+ *  to different decisions: the second tells a president whether the block is
+ *  theirs to use. */
 export function describeReservation(
   reservation: HexReservation,
   labelForAddress?: (address: string) => string | null,
@@ -203,28 +159,15 @@ export function describeReservation(
   return `${where} is reserved — ${held}. No other corporation may lay track here until the private closes; ${reservation.power}.`;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 444: THE HEX A PRIVATE POWER ACTS ON
- * ==================================================================
- *
- * `activeReservations` above answers "which hexes are currently spoken
- * for", which is a question about the live game -- it filters on ownership
- * and closure because a badge must not mark a hex nothing protects.
- *
- * This answers a different and simpler question: WHERE does this private's
- * power act? That is a printed property of the board and true whether the
- * private is owned, unowned or closed, so it consults the rules table and
- * nothing else.
- *
- * Separate rather than a flag on the function above, because conflating
- * them is how a power would silently stop being executable at the moment
- * the badge stopped drawing -- two different conditions that happen to
- * involve the same table.
- *
- * `null` for the four privates that hold no ground, and for a rule whose
- * label the board does not carry (the same guard `activeReservations`
- * makes, for the same reason: `hexBoardData.ts` has moved F16 once already).
- */
+/* Design note #444: WHERE a private's power acts, which is a printed property of
+   the board and true whether the private is owned, unowned or closed -- a
+   different question from `activeReservations` above, which filters on ownership
+   and closure because a badge must not mark a hex nothing protects.
+
+   Separate rather than a flag, because conflating them is how a power would
+   silently stop being executable at the moment the badge stopped drawing. `null`
+   for the four privates that hold no ground, and for a label the board does not
+   carry. */
 export function privateHexFor(
   privateId: number,
 ): { q: number; r: number; hexLabel: string } | null {

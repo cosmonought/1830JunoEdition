@@ -1,63 +1,17 @@
-// frontend/src/components/PrivateCompanyPills.tsx
+// Design note #423 (UI half): named acronym pills for private companies,
+// clickable to reveal their rules text, shared by the auction's seating table
+// and the Ledger's Player Assets table.
 //
-// ==================================================================
-//  DESIGN NOTE 423 (UI half): NAMED PILLS, NOT NUMBERED CHIPS
-// ==================================================================
+// ONE component for both, because two independently-grown chip renderers are how
+// the two surfaces came to disagree about what a private looks like. Row height
+// is the constraint: pills never wrap and never grow, and the rules text opens
+// BELOW the row rather than beside it. One open at a time per instance.
 //
-// REPORTED: replace the generic numerical chips for private companies with
-// named acronym pills, laid out horizontally so row height is preserved,
-// and make them clickable to reveal their full rules text inline. Wanted in
-// both the auction's seating table and the Ledger's Player Assets table.
+// A `<button>`, not a div with an onClick -- interactive elements inside a table
+// are exactly where that becomes keyboard-unreachable and screen-reader
+// invisible, and `aria-expanded` says what the press will do.
 //
-// See `privateCatalog.ts` design note #423 for why `1`..`6` was never the
-// company's identity. This is the component both tables render.
-//
-// ==================================================================
-//  WHY ONE COMPONENT FOR TWO TABLES
-// ==================================================================
-//
-// The two surfaces had independently-grown chip renderers -- the auction's
-// `seatingPrivateChip` and the Ledger's `holdingChipPrivate` -- which is how
-// they came to disagree about what a private looks like in the first place
-// (one showed a number, the other a full name and a revenue figure). A
-// third hand-rolled pill would have been the third opinion.
-//
-// So the pill, its expansion, its state and its keyboard handling live here
-// once. The two callers differ only in `surface`, because one sits on the
-// auction's dark card and the other on the Ledger's dark table, and they
-// have different neighbours to contrast against.
-//
-// ==================================================================
-//  ROW HEIGHT IS THE CONSTRAINT, AND IT IS WHY EXPANSION GOES BELOW
-// ==================================================================
-//
-// The requirement names it: horizontal, to preserve row height. Both tables
-// are dense, and both have already been bitten by a cell that grows -- the
-// auction's `seatingPrivates` carries a fixed `0 0 128px` basis precisely so
-// a player winning their first private cannot shove the columns sideways
-// (design note #341), and design note #323 reserves the turn slot for the
-// same reason.
-//
-// So the pills never wrap and never grow: they scroll horizontally within
-// their cell if a player somehow holds more than fits. The rules text opens
-// BELOW the pill row rather than beside it, where it can take the height it
-// needs without moving any neighbouring column.
-//
-// ONE OPEN AT A TIME, per component instance. Two open panels in a table row
-// is a row that has become a paragraph, and the question a player asks here
-// is about one company at a time.
-//
-// ==================================================================
-//  A BUTTON, NOT A DIV WITH AN ONCLICK
-// ==================================================================
-//
-// These are interactive and they are in a table, which is exactly the
-// combination where a `div` with a click handler becomes unreachable by
-// keyboard and invisible to a screen reader. `<button>` gets focus, Enter
-// and Space for free, and `aria-expanded` tells a reader what the press
-// will do. The `title` stays for the hover case, but it is no longer the
-// only way to get the information -- which was the real limitation of the
-// chips this replaces: their full name lived exclusively in a tooltip.
+// See docs/ai_architecture/contract_economy.md, PrivateCompanyPills.tsx #423.
 
 import React, { useState } from "react";
 
@@ -99,12 +53,10 @@ export function PrivateCompanyPills({
     <span style={styles.root}>
       <span style={styles.pillRow}>
         {privates.map((priv) => {
-          /* Design note #423: `null` for an id outside the six, and the
-             pill then falls back to the full NAME rather than to the
-             number this component exists to remove. An unrecognised
-             private is a data problem; showing its name is the most
-             useful thing to do about it and the least likely to be
-             mistaken for a working acronym. */
+          /* Design note #423: `null` for an id outside the six, and the pill falls back to
+             the full NAME rather than the number this component exists to remove. An
+             unrecognised private is a data problem; its name is the most useful thing to
+             show and the least likely to be mistaken for a working acronym. */
           const acronym = privateAcronym(priv.private_id) ?? priv.name;
           const isOpen = priv.private_id === openId;
           return (
@@ -149,10 +101,9 @@ export function PrivateCompanyPills({
 const styles: Record<string, React.CSSProperties> = {
   root: { display: "flex", flexDirection: "column", gap: "4px", minWidth: 0 },
   empty: { fontSize: FONT_SIZE.micro, color: "#5c626e" },
-  /* HORIZONTAL AND NON-WRAPPING, which is the requirement's own phrasing
-     and the reason the cell's height is stable. `overflowX: auto` rather
-     than `hidden`: a player holding more privates than the cell can show
-     must still be able to reach them, and a scrollbar in a 128px cell is a
+  /* Horizontal and non-wrapping, which is what keeps the cell's height stable.
+     `overflowX: auto` rather than `hidden`: a player holding more privates than
+     fits must still be able to reach them, and a scrollbar in a 128px cell is a
      better answer than a hidden asset. */
   pillRow: {
     display: "flex",

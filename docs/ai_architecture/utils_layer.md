@@ -350,3 +350,112 @@ have been looking at" without teaching anybody anything.**
 **Deliberately a separate channel from availability.** The depot marks the purchasable tier with fill and border; era
 rides on the glyph. **Folding the two together — colouring only the buyable train — would make the scheme mean two
 things and answer neither reliably.**
+
+---
+
+# Batch 5C — Names, constants and the placeholders that are still fake
+
+## utils/corporationNames.ts — the eight canonical names
+
+### corporationNames.ts #1 — Why this is a frontend table and not a query
+`PublicCompanyState` carries **`ticker` and nothing else — there is no `name` field on the contract response, and
+adding one is a Rust change.** These names are also **FIXED: 1830 ships the same eight railroads every game, so a
+static table is not a stopgap standing in for real data, it is the correct place for a board constant.**
+
+**The alternative — writing "Pennsylvania Railroad" inline wherever a ticker is displayed — is how four components
+end up disagreeing about whether the Erie is "Erie Railroad" or "Erie RR". One table, imported.**
+
+### corporationNames.ts #2 — Ticker spelling is not consistent, so lookup normalises
+**This codebase already spells the same two companies more than one way.** `utils/sandboxState.ts` uses `NNH` and
+`ERIE`; the canonical labels are `NYNH` and `Erie`. **Rather than rename mock data and hope every future caller
+matches the casing, `corporationFullName()` upper-cases its input and resolves through an alias table, so `Erie`,
+`ERIE` and `erie` all land on the same entry.**
+
+**UNKNOWN TICKERS RETURN `null`, NOT THE TICKER BACK.** Callers decide what an unrecognised company should look
+like — **a tooltip wants to fall back to no tooltip, a table cell wants to fall back to a dash. Returning the
+ticker would make "PRR - PRR" the failure mode, which reads as data corruption rather than as a missing name.**
+
+### corporationNames.ts #582 — A standing order for the eight
+**REPORTED:** "There should be a standard/canonical order to list the Corporations in on the player cards/tiles,
+and simply skip the ones the player doesn't have any shares in."
+
+The player card listed them in `public_companies` order — **the order the state happens to hold and therefore not
+an order at all from the reader's side: two cards side by side could list the same two corporations the other way
+round, and a player checking who holds what has to re-find each row on every card.**
+
+**ALPHABETICAL BY TICKER, deliberately, over the two alternatives:**
+
+- **NOT market price** — **that reorders the rows every time a token moves, which is the one thing a reference
+  column must not do.**
+- **NOT the board's own numbering**, which no player can see and which `company_id` only implies.
+
+**A player memorises a stable order after two rounds and stops reading the labels. That only works if it never
+changes, so the order is a printed table rather than a sort over live data.**
+
+---
+
+## utils/gameConstants.ts — the named constants from `App.tsx`
+
+Each is **a value with a REASON — a cross-table join, a rules threshold, a fixed piece of copy — and each keeps the
+design note that records the reason.** They were scattered through `App.tsx`'s preamble, **some with their
+explanatory comment sitting several declarations away from the value it explains**; the move puts each note back
+against its own constant **without editing a word of either.**
+
+**`MOCK_*` fixtures deliberately did NOT come here. Those are stand-ins for data the chain will eventually supply,
+and mixing "this is the rule" with "this is a placeholder until the query lands" is exactly the confusion that lets
+a placeholder become permanent. They live in `mockFixtures.ts`, where the filename is the warning.**
+
+- **#354 — the two B&O identifiers.** Named constants rather than inline literals **because they are a CROSS-TABLE
+  join — private `#6` in `auction.rs`'s roster is the same company as ticker "B&O" in `public_company.rs`'s — and a
+  bare `6` at the join site reads as an arbitrary index.**
+- **`GamePhase.tint` → tile tier.** `tint` is already the exact three-value era `gamePhase.ts`'s
+  `TIER_PRESENTATION` assigns (**Phase 2 yellow; Phases 3-4 green; Phases 5/6/D brown**), **so this is a case change
+  rather than a second opinion about which era it is. Written as a table anyway rather than a string cast, so a
+  fourth `PhaseTint` would fail to compile here instead of silently producing a `TileColorTier` that does not
+  exist.**
+- **#398 — `buyStockProtocolId`.** The sandbox reducer needs a par price, **and the only honest source is the
+  company named in the message it is reducing.** A helper rather than an inline cast **so the shape assumption —
+  `BuyStock.protocol_id` — is written down once and can be tested directly.**
+
+---
+
+## utils/mockFixtures.ts — the surface area the frontend still fakes
+
+**Every constant here is a promise to delete something later, and while they sat interleaved with real game
+constants in `App.tsx`'s preamble that promise was invisible — a reader could not tell `MOCK_TRAIN_CATALOG` (a
+stand-in) from `SMALLEST_TRAIN_CAPACITY` (a rule) without reading both comments. Grouping them makes the remaining
+surface area countable: whatever is in this file is what the frontend still fakes.**
+
+**The tombstone comments came too.** A note recording that `MOCK_DECLARE_DIVIDENDS_REVENUE` was DELETED, and why,
+**is worth more here — among the surviving placeholders — than it was in a file that no longer has anything to do
+with them.**
+
+### The surviving placeholders
+
+- **`MOCK_GAME_ID` (`#1`) is GONE.** `AppShell` now receives a real `gameId` prop from `GameRouter`, sourced from
+  the contract's own `CreateGameRoom` response (`Lobby.tsx #2`). **A room-id constant survives only because
+  `MOCK_MAP_GRID`/`MOCK_MARKET_GRID` are module-scope literals that have to put SOMETHING in their `game_id`
+  field**, and `#2` is explicit that those two are **illustrative data never produced by a live query. It is
+  deliberately NOT the room anything talks to.**
+- **`MOCK_DECLARE_DIVIDENDS_REVENUE` (`#198`) is GONE.** It was `"0"`, **dispatched on every dividend declaration
+  regardless of what the corporation had just earned, while the panel beside the buttons showed the real figure.
+  Deleted rather than left unused so nothing can quietly start sending a constant again**;
+  `handleDeclareDividendsChoice` reads `last_route_revenue` from the corporation being acted for.
+- **`MOCK_*_PROTOCOL_ID` — B&O (protocol_id 4).** There is no company-selector UI yet, **so the tile-selection
+  popup's `GetLegalTilePlacements`/`LayTile` calls (and the OR-scoped mock action bar buttons) need SOME
+  `protocol_id` to target.** B&O is used **specifically because it is the simplest "always floatable" company in the
+  Rust test suite (`src/tests.rs`), not because of any in-game significance** — swap for real company-selection
+  state once that flow exists.
+- **`MOCK_TRAIN_CATALOG`** — a hand-kept mirror of `hardware::TRAIN_CATALOG` (`(model_type, baseline cost, max
+  route distance, bank quantity)`), same convention as `HexGridRenderer`'s `TILE_CATALOG` mirror. **Purely a
+  DISPLAY source for the Phase 4 "active engines" tray: `BuyHardwareFromPool` takes no model-selection parameter yet
+  (`hardware.rs` module doc `#2`, "No model selection" — it auto-picks from the pool), so selecting a tile here
+  only drives which model is highlighted, not which model actually gets purchased. Keep this in exact sync with the
+  Rust array if it ever changes.**
+- **`MOCK_MAP_GRID` (`#15`)** — the three landmark entries this array used to carry (New York/Boston/Baltimore,
+  each pre-seeded with `tile_id: 10`) are **REMOVED**; see that note for the bug this caused **and why an empty
+  `tiles: []` is actually the MORE accurate mock of a freshly-created real game, not less.**
+- **`MOCK_MARKET_GRID`** — illustrative only, **never actually produced by a live `GetMarketGrid` query.
+  PRR/NYC/ERIE deliberately share the same ($100 par) cell so `StockMarketRenderer`'s token-stacking behaviour is
+  visible without needing three real players to park there.** Positions use **the real board's own par column
+  (x=6) — `StockMarketRenderer #4` — not the old x=0..5, y=0 placeholder row a previous pass used here.**

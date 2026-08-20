@@ -1,62 +1,27 @@
-// frontend/src/utils/presidencyTransfer.ts
+// The President's Certificate changes hands.
 //
-// THE PRESIDENT'S CERTIFICATE CHANGES HANDS.
+// Design note #596: `BuyStock` moved percentages and set `president` only on the
+// FOUNDING purchase, so after that the crown never moved however the holdings
+// changed -- a corporation could be majority-owned by one player and presided
+// over by another indefinitely, which in 1830 decides who lays its track, runs
+// its trains and spends its treasury.
 //
-// ==================================================================
-//  DESIGN NOTE 596: BEING BOUGHT OUT OF A PRESIDENCY
-// ==================================================================
+// Design note #596a: IT IS A SWAP, NOT A RELABEL. The presidency is a PHYSICAL
+// CERTIFICATE worth 20% and there is exactly one, so a takeover exchanges it for
+// two ordinary 10% certificates. Nobody's PERCENTAGE moves; what changes is how
+// many CARDS each holds, because the certificate LIMIT counts cards. This file
+// therefore changes no `percentage` at all -- `certificateCount`
+// (`gameState.ts`) already derives the card count from `president`.
 //
-// REPORTED: "P1 was President of a corporation with 1 share (President's
-// 20%). P2 owned two shares and purchased a third. The card then showed: P2,
-// 3 certificates, 30%, and P1 (president's crown), 1 certificate, 20%... P1
-// must transfer the President's share to P2, so that the resulting card
-// should read: P2 (crown), 2 certificates, 30%, and P1, 2 certificates, 20%."
+// Design note #596b: the presidency passes on STRICTLY MORE. An equal holding
+// leaves it where it is, which stops the crown flickering between two players
+// buying alternately to 30%. When several are tied above the president, 1830
+// says "the one who most recently reached that level"; this module cannot see
+// history, so it takes the first in seating order and says so rather than
+// pretending the tie cannot arise -- it can, when a sale drops the president
+// below two players at once.
 //
-// Exactly right, and the reducer had no notion of it. `BuyStock` moved
-// percentages and set `president` only on the FOUNDING purchase; after that
-// the crown never moved again, however the holdings changed. So a corporation
-// could be majority-owned by one player and presided over by another
-// indefinitely -- which in 1830 decides who lays its track, runs its trains
-// and spends its treasury.
-//
-// ==================================================================
-//  DESIGN NOTE 596a: IT IS A SWAP, NOT A RELABEL
-// ==================================================================
-//
-// The subtle half, and the reason the report spells out the certificate
-// counts. The presidency is not a flag on a player -- it is a PHYSICAL
-// CERTIFICATE worth 20%, and there is exactly one. So a takeover is an
-// exchange: the new president hands back two ordinary 10% certificates and
-// receives the president's card; the outgoing president hands back the
-// president's card and receives those two 10% certificates.
-//
-// NOBODY'S PERCENTAGE MOVES. P2 held 30% before and holds 30% after; P1 held
-// 20% and holds 20%. What changes is how many CARDS each holds -- P2 goes
-// from three to two, P1 from one to two -- because the certificate LIMIT
-// counts cards, not percentages. Modelling this as "set `president` to P2"
-// would leave both players' certificate counts wrong for the rest of the
-// game, and the limit is a real constraint players plan around.
-//
-// This file therefore changes no `percentage` at all. The whole transfer is
-// expressed by moving `president`, and `certificateCount` (`gameState.ts`)
-// already derives the card count from that -- one certificate for the 20%
-// block plus one per 10% beyond it. The swap is real; it is simply already
-// implied by the one field.
-//
-// ==================================================================
-//  DESIGN NOTE 596b: STRICTLY MORE, AND TIES DO NOT MOVE IT
-// ==================================================================
-//
-// 1830: the presidency passes when another player holds MORE than the
-// president. An equal holding leaves it where it is -- the incumbent keeps
-// it, which is what stops the crown flickering between two players who buy
-// alternately to 30% each.
-//
-// ONLY ONE CHALLENGER CAN WIN, and when several are tied above the president
-// the rule is "the one who most recently reached that level". This module
-// cannot see history, so it takes the first in seating order and says so
-// here rather than pretending the tie cannot arise -- it can, when a sale
-// drops the president below two players at once.
+// See docs/ai_architecture/stock_market.md, presidencyTransfer.ts #596.
 
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
@@ -72,11 +37,10 @@ export interface PresidencyChange {
 
 /** Who should preside over this corporation, given its holdings.
  *
- *  `null` when nobody qualifies -- an unstarted company, or one whose shares
- *  are all in the pool. Returning the INCUMBENT when they still lead is
- *  deliberate: the caller compares against `company.president` and does
- *  nothing when they match, so "no change" and "no president" stay distinct.
- */
+ *  `null` when nobody qualifies -- an unstarted company, or one whose shares are
+ *  all in the pool. Returning the INCUMBENT when they still lead is deliberate:
+ *  the caller compares against `company.president` and does nothing when they
+ *  match, so "no change" and "no president" stay distinct. */
 export function presidentFor(company: PublicCompanyState): string | null {
   const holdings = company.player_holdings.filter((entry) => entry.percentage > 0);
   if (holdings.length === 0) return null;
@@ -117,13 +81,11 @@ export function presidentFor(company: PublicCompanyState): string | null {
   );
 }
 
-/**
- * Settles the presidency of every corporation whose holdings have moved.
+/** Settles the presidency of every corporation whose holdings have moved.
  *
- * Returns the state unchanged when no crown moves, so a caller can use
- * identity to decide whether anything happened -- and so this is safe to run
- * after every holding change rather than only where a takeover is expected.
- */
+ *  Returns the state unchanged when no crown moves, so a caller can use identity
+ *  to decide whether anything happened -- and so this is safe to run after every
+ *  holding change rather than only where a takeover is expected. */
 export function settlePresidencies(state: GameStateResponse): {
   state: GameStateResponse;
   changes: PresidencyChange[];

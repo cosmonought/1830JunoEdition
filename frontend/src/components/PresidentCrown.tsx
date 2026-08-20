@@ -1,48 +1,16 @@
-// frontend/src/components/PresidentCrown.tsx
+// Design note #552: an inline SVG crown, replacing both the nine-character word
+// "PRESIDENT" (#490) and the crown emoji (#15).
 //
-// ==================================================================
-//  DESIGN NOTE 552: OUR OWN CROWN, DRAWN NOT TYPED
-// ==================================================================
+// We ship the drawing, so it is the same picture on every platform; it inherits
+// `currentColor`, so it takes the row's ink rather than a vendor's; and it is
+// about one character wide. Still not a colour-only cue -- a SHAPE plus a real
+// accessible name, three channels with none load-bearing alone.
 //
-// REPORTED: the word "PRESIDENT" takes up a lot of space and a long player
-// name starts running into the next column. Bring the crown back -- but not
-// as an emoji, since those look different on every device.
+// Sized in `em`, not pixels: it sits beside text in five type scales. The
+// geometry is deliberately coarse (three peaks on a plinth, one filled path),
+// because at 11-13px a fourth peak or a stroke closes up into a grey smear.
 //
-// BOTH HALVES OF THAT ARE RIGHT, and they were previously traded against
-// each other rather than solved. Design note #15 used the crown emoji and
-// design note #490 removed it, each correctly:
-//
-//   #15  wanted a compact mark, because the president tag sits inside a
-//        right-aligned numeric column and a wide one pushes the digits out
-//        of alignment.
-//   #490 removed it because "a pictogram that renders in a platform colour
-//        font at a platform weight is decoration rather than a third
-//        channel" -- U+1F451 is a different picture on Windows, macOS,
-//        Android and Linux, at a weight and hue this app does not choose.
-//        So it could not be relied on to MEAN anything, and the word had to
-//        carry the meaning instead.
-//
-// An inline SVG answers both. It is the same drawing on every device
-// because we ship the drawing; it inherits `currentColor` so it takes the
-// row's own ink rather than a vendor's; and it is roughly one character
-// wide instead of nine.
-//
-// IT IS STILL NOT A COLOUR-ONLY CUE, which is the constraint #490 was
-// actually defending and the one worth restating so it is not lost again:
-// the crown is a SHAPE, distinguishable with no colour vision at all, and
-// it carries a real accessible name so a screen reader announces
-// "President" where a sighted reader sees the silhouette. Colour, shape and
-// text-alternative -- three channels, none of them load-bearing alone.
-//
-// SIZED IN `em`, NOT PIXELS. It sits beside text in five different type
-// scales (the ledger's micro rows, the stock card's ownership list, the
-// corporation table). An absolute size would be right in one of them.
-//
-// THE GEOMETRY is a three-peak crown on a plinth, and deliberately coarse:
-// this renders at roughly 11-13px, where a fourth peak or a row of jewels
-// closes up into a grey smear. Drawn as one filled path so it stays solid
-// at small sizes rather than relying on a stroke width that would round to
-// nothing.
+// See docs/ai_architecture/ui_shell_layout.md, PresidentCrown.tsx #552.
 
 import React from "react";
 

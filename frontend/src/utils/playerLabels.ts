@@ -1,57 +1,30 @@
-// frontend/src/utils/playerLabels.ts
+// What to call a player. One answer, for every surface.
 //
-// WHAT TO CALL A PLAYER. One answer, for every surface.
+// Design note #559: there were TWO `sandboxPlayerLabel`s -- a room-aware one at
+// `App.tsx` module scope, and `utils/sandboxState.ts`'s fixture Alice/Bob table
+// under the same name. `FinancialLedger` and `ContextualSubPanel` imported the
+// fixture version, which has never heard of a room and correctly returns `null`
+// for a `p-` id, so those two panels fell back to `truncateAddress`.
 //
-// ==================================================================
-//  DESIGN NOTE 559: TWO FUNCTIONS WITH ONE NAME
-// ==================================================================
+// THE IMPORT LOOKED RIGHT, which is the whole difficulty, and the failure is
+// silent and partial: most of the app shows names, one panel shows ids, and the
+// panel that shows ids looks like it has a formatting bug rather than the wrong
+// data source. One registry, one resolver -- owning the room does not entitle
+// `App.tsx` to a private copy.
 //
-// REPORTED: in the Game Ledger's Corporation Assets panel the presidents
-// are listed as `p-6aq2qcgg` rather than the names they set in the lobby.
-//
-// There were two `sandboxPlayerLabel`s. `App.tsx` declared a room-aware one
-// at module scope; `utils/sandboxState.ts` exports the fixture's own
-// Alice/Bob table under the same name. Every surface `App.tsx` rendered got
-// real names, and the two components that imported the label directly --
-// `FinancialLedger` and `ContextualSubPanel` -- got the fixture version,
-// which has never heard of a room and correctly returns `null` for a `p-`
-// id. The caller then fell back to `truncateAddress`, which is what the
-// player saw.
-//
-// THE IMPORT LOOKED RIGHT, which is the whole difficulty. Nothing about
-// `import { sandboxPlayerLabel } from "../utils/sandboxState"` suggests it
-// resolves a different set of names from the identically-named function two
-// files away, and the failure is silent and partial: most of the app shows
-// names, one panel shows ids, and the panel that shows ids looks like it has
-// a formatting bug rather than the wrong data source.
-//
-// So the registry lives here, and there is exactly one resolver. `App.tsx`
-// imports it like everybody else -- being the file that happens to own the
-// room does not entitle it to a private copy.
-//
+// See docs/ai_architecture/ui_shell_layout.md, playerLabels.ts #559.
 
 import { sandboxPlayerLabel as fixturePlayerLabel } from "./sandboxState";
 
-/* ==================================================================
- *  DESIGN NOTE 535b: MODULE SCOPE, SO NO HOOK DEPENDS ON IT
- * ==================================================================
- *
- * The first cut of this resolver was a `useCallback` inside `AppShell`, and
- * the linter immediately named the cost: twelve hooks read it, so it became
- * a dependency of all twelve. A stable `[]` callback would have been
- * harmless in practice and would still have meant editing a dozen dependency
- * arrays to say so -- churn in exactly the hooks (the dispatch, the
- * auto-skip, the forced withhold) where an accidental rebuild re-arms an
- * effect that dispatches.
- *
- * A module-level map avoids the question rather than answering it. Its
- * lifetime is the tab, which is the same lifetime as the player id it keys
- * on (design note #528) and as the room itself -- and `AppShell` remounts on
- * any game change, so there is no stale-between-games case for it to carry.
- *
- * IT IS A FALLTHROUGH, not a replacement: no room means an empty map and the
- * fixture's own Alice/Bob table answers, exactly as it did before.
- */
+/* Design note #535b: MODULE SCOPE, so no hook depends on it. The first cut was a
+   `useCallback` in `AppShell`, and the linter named the cost immediately: twelve
+   hooks read it, so it became a dependency of all twelve -- churn in exactly the
+   hooks (the dispatch, the auto-skip, the forced withhold) where an accidental
+   rebuild re-arms an effect that dispatches.
+
+   A module-level map avoids the question rather than answering it. Its lifetime
+   is the tab, the same lifetime as the player id it keys on (#528) and as the
+   room; `AppShell` remounts on any game change, so there is no stale case. */
 let ROOM_NICKNAMES: Record<string, string> = {};
 /* Design note #537b: whether a room has dealt. Distinct from "the map is
    empty" -- a room whose players all left blank nicknames would have an
@@ -68,39 +41,18 @@ export function clearRoomNicknames(): void {
   ROOM_ROSTER_ACTIVE = false;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 537b: NO MOCK NAMES IN A REAL ROOM
- * ==================================================================
- *
- * Design note #535 made this a fallthrough -- room roster first, fixture
- * table second -- so solo sandbox kept Alice and Bob. That is right for the
- * solo case and wrong for a room, and the failure mode is the one worth
- * guarding against: if a real id ever failed to resolve, it would fall
- * through and be labelled with SOMEBODY ELSE'S NAME. A player mislabelled as
- * "Alice" is far worse than one labelled with a raw id, because it looks
- * correct. It would also be a name belonging to a person who is not in the
- * game, on a screen whose whole job is to say who is.
- *
- * So once a room has dealt, the fixture table is unreachable: an unknown id
- * returns `null` and every caller falls through to `truncateAddress`, which
- * is ugly and unmistakably NOT a claim about identity. Ugly and honest beats
- * tidy and wrong on a roster.
- */
-/* ==================================================================
- *  DESIGN NOTE 578: THE FIXTURE FALLBACK IS NOW A NARROW WINDOW
- * ==================================================================
- *
- * Design note #537b made this a fallthrough -- room roster first, fixture
- * table second -- because solo sandbox needed Alice and Bob. There is no
- * solo sandbox now, so the fixture branch is reachable only in the moments
- * before a room's `SetupGame` replays, where every id is a `p-` string the
- * fixture does not know and correctly returns `null` for.
- *
- * KEPT, not deleted, and the reason is the one #537b already gives: the
- * fixture still seeds the BOARD a room boots from, so a corporation could
- * momentarily carry a fixture president. Returning that name would be worse
- * than returning nothing -- so the guard that makes the fixture unreachable
- * once a roster exists is the part that matters, and it stays. */
+/* Design note #537b: NO MOCK NAMES IN A REAL ROOM. #535's fallthrough is right
+   for solo sandbox and wrong for a room -- a real id that failed to resolve
+   would be labelled with SOMEBODY ELSE'S NAME, which is far worse than a raw id
+   because it looks correct, on a screen whose whole job is to say who is here.
+   Once a room has dealt, the fixture table is unreachable and callers fall
+   through to `truncateAddress`: ugly and honest beats tidy and wrong.
+
+   Design note #578: with no solo sandbox left, the fixture branch is reachable
+   only in the moments before a room's `SetupGame` replays. KEPT, not deleted,
+   because the fixture still seeds the BOARD a room boots from, so a corporation
+   could momentarily carry a fixture president -- the guard is the part that
+   matters, and it stays. */
 export function sandboxPlayerLabel(address: string): string | null {
   const fromRoom = ROOM_NICKNAMES[address];
   if (fromRoom) return fromRoom;
@@ -109,37 +61,21 @@ export function sandboxPlayerLabel(address: string): string | null {
 }
 
 
-/* ==================================================================
- *  DESIGN NOTE 569: A SEAT COLOUR THAT DOES A JOB
- * ==================================================================
- *
- * ASKED: "Do the player tiles/cards work better with colors? or should they
- * all be a uniform stripe? The colors don't get used elsewhere as far as I
- * can remember."
- *
- * That last clause is the whole argument, and it points at a fix rather than
- * at a removal. Colour that appears in exactly one place is decoration and
- * the player is right to be suspicious of it. Colour that means the same
- * thing in several places is a language.
- *
- * SO IT GETS A SECOND JOB, and the job was already asking for it: the action
- * bar is easy to see during an Operating Round because it wears the acting
- * CORPORATION's livery, and hard to see during the Auction and Stock Rounds
- * because those rounds have no corporation to borrow from. They have an
- * acting PLAYER. Same mechanism, same meaning -- "this belongs to whoever is
- * up" -- extended to the two rounds that were missing it.
- *
- * NOT THE CORPORATION LIVERIES, on instruction and for a reason worth
- * stating: a player stripe in the PRR's red would read as a claim about the
- * PRR, and on a screen where corporations and players sit side by side that
- * ambiguity is expensive. These are chosen well away from the eight
- * corporate hues and from each other.
- *
- * CHOSEN OR ASSIGNED. A seat that has picked a colour keeps it; a seat that
- * has not gets the next one by index. Both paths are here rather than the
- * picker owning the fallback, so a player who never opens the control is
- * never colourless and two players can never end up with one colour.
- */
+/* Design note #569: a seat colour that does a job. ASKED whether the player
+   cards work better with colours, noting "the colors don't get used elsewhere"
+   -- which is the whole argument, and it points at a fix rather than a removal:
+   colour in exactly one place is decoration; colour meaning the same thing in
+   several places is a language.
+
+   So it gets a second job. The action bar is easy to see during an Operating
+   Round because it wears the acting CORPORATION's livery, and hard to see in the
+   Auction and Stock Rounds, which have no corporation to borrow from -- but they
+   have an acting PLAYER.
+
+   NOT the corporation liveries, on instruction: a player stripe in the PRR's red
+   would read as a claim about the PRR. CHOSEN OR ASSIGNED -- both paths live
+   here rather than the picker owning the fallback, so no seat is ever colourless
+   and two seats can never share a colour. */
 export const SEAT_COLORS = [
   "#3f6fa8",
   "#a8593f",
@@ -166,9 +102,9 @@ export function setRoomColors(next: Record<string, string>): void {
 
 /** This seat's colour: their own choice, else the palette by index.
  *
- *  `index` rather than a hash of the address, deliberately -- a hash gives
- *  two seats the same colour roughly a third of the time at six players,
- *  and "roughly" is not a property a table of six people can live with. */
+ *  `index` rather than a hash of the address, deliberately -- a hash gives two
+ *  seats the same colour roughly a third of the time at six players, and
+ *  "roughly" is not a property a table of six people can live with. */
 export function seatColor(address: string, index: number): string {
   return ROOM_COLORS[address] ?? SEAT_COLORS[index % SEAT_COLORS.length];
 }

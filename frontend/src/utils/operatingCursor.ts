@@ -1,58 +1,24 @@
-// frontend/src/utils/operatingCursor.ts
+// Design note #656: the turn cursor is GAME STATE, not React state.
 //
-/* ==================================================================
- *  DESIGN NOTE 656: THE TURN CURSOR IS GAME STATE
- * ==================================================================
- *
- * REPORTED: "the game stayed in OR 1.1 and returned to C&O's turn, starting
- * at step 3 (Station Tokens). Last time I ended OR 1.1 with a corporation
- * purchasing a 3-train, it looped back to step 2 (Lay Track). It should not
- * be looping at all."
- *
- * WHERE THE CURSOR LIVED. `orSubPhase` was `useState` in `App.tsx`, seeded
- * and re-seeded by an effect whose dependency array named
- * `current_global_era`, `currentPhase.known`, `currentPhase.tier` and
- * `private_companies`. `derivePhase` reads the tier off the highest train
- * anybody owns, so buying the first 3-train moves it from "2" to "3" DURING
- * the Buy Trains step of the corporation that bought it -- and the effect
- * re-ran with `active_corporation_index` unmoved and set the cursor to
- * `visibleSubPhases[0]` -- `Track` when Buy Private is hidden, `BuyPrivate`
- * when it is not, which is why the same bug landed on step 2 in one
- * playthrough and step 3 in the next.
- *
- * `currentPhase.tier`, note, and NOT `current_global_era` -- the obvious
- * suspect, and this note's first answer. Design note #656a below records how
- * that was disproved and the larger bug it turned up instead.
- *
- * The effect was not wrong about anything it was written to do. Its job was
- * "open a new turn on the right step", and every dependency it names is a
- * genuine input to THAT question. What it could not express is that opening a
- * turn is an EVENT and not a condition -- and a `useEffect` can only watch
- * conditions.
- *
- * THIS IS DESIGN NOTE #642 ONE LAYER DOWN. That note found round transitions
- * split between the reducer and the shell, and the diagnosis applies verbatim
- * here: "applying a message was split across two places, so replays run the
- * reducer but not the shell, and corporate state rebuilt exactly while round
- * state did not." Same split, same consequence -- a client that joins or
- * undoes mid-turn rebuilt every treasury and every train and then showed
- * whichever step its own effect happened to seed.
- *
- * SO THE CURSOR MOVES INTO THE LOG, and this module holds the rules it moves
- * by. They were already written down -- `initialOrSubPhase` and
- * `visibleSubPhases` in `OperatingSubPhaseStepper.tsx`, plus the "hold at the
- * last step rather than wrapping, or a corporation lays a second tile" rule
- * that lived inside `skipSubPhase`'s callback. Nothing here is a new rule.
- * What is new is that all of them are reachable from the reducer and none of
- * them is reachable only from a React callback.
- *
- * WHY A SEPARATE MODULE rather than inlining into `sandboxSession.ts`: the
- * reducer is already the largest file in `utils/`, and these rules have
- * exactly one input each and no dependence on the reducer's vocabulary. They
- * are also the rules most likely to be read by someone asking "why did the
- * turn open there", and a question that specific deserves a file it can be
- * answered in.
- */
+// `orSubPhase` was `useState` in `App.tsx`, re-seeded by an effect depending on
+// `currentPhase.tier` -- which `derivePhase` reads off the highest train anybody
+// owns. So buying the first 3-train moved the tier DURING the buyer's own Buy
+// Trains step, the effect re-ran with `active_corporation_index` unmoved, and
+// the cursor jumped to `visibleSubPhases[0]`: `Track` or `BuyPrivate` depending
+// on whether Buy Private was showing, which is why the same bug landed on step 2
+// one playthrough and step 3 the next.
+//
+// The effect was not wrong about anything it was written to do. What it could
+// not express is that opening a turn is an EVENT and not a condition -- and a
+// `useEffect` can only watch conditions. This is design note #642 one layer
+// down: state split across the reducer and the shell means a replay rebuilds
+// every treasury and every train and then shows whichever step an effect seeded.
+//
+// Nothing here is a new rule; the rules already existed in
+// `OperatingSubPhaseStepper.tsx` and inside `skipSubPhase`'s callback. What is
+// new is that all of them are reachable from the reducer.
+//
+// See docs/ai_architecture/state_machine.md, operatingCursor.ts #656.
 
 import {
   initialOrSubPhase,
@@ -67,10 +33,9 @@ export type { OperatingSubPhase };
 /** The steps this game currently HAS, in order.
  *
  *  `visibleSubPhases` drops `Buy Private` outside Phases 3 and 4 (design note
- *  #613) and once nothing is left to buy (#385). Asked rather than
- *  re-derived, so the cursor and the strip the player is reading cannot
- *  disagree about which steps exist -- the same reason design note #385 gave
- *  when the App asked it. */
+ *  #613) and once nothing is left to buy (#385). Asked rather than re-derived, so
+ *  the cursor and the strip the player is reading cannot disagree about which
+ *  steps exist. */
 export function stepsFor(state: GameStateResponse): readonly OperatingSubPhase[] {
   const phase = derivePhase(state);
   return visibleSubPhases(
@@ -82,33 +47,20 @@ export function stepsFor(state: GameStateResponse): readonly OperatingSubPhase[]
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 656a: THE ERA FIELD DOES NOT MOVE, SO DO NOT ASK IT
- * ==================================================================
- *
- * Found while mutation-testing this chunk. `openingSubPhase` first read
- * `initialOrSubPhase(state.current_global_era)` -- the same expression the
- * App's effect used -- and the mutation that should have failed these tests
- * did not, because `current_global_era` NEVER CHANGES in a sandbox game.
- * `sandboxSession.ts` does not contain a single `current_global_era:` write;
- * the field is stamped at seed time and holds that value for the whole game.
- *
- * So the era test answers "Yellow" in a Phase 4 game, `initialOrSubPhase`
- * answers `Track`, and a turn could never open on `BuyPrivate` -- which is
- * precisely the rule-not-applied that design note #574 removed the sandbox
- * shortcut to prevent. The shortcut went; the outcome stayed, because a
- * second route to it was never noticed. "A step the game silently walks past
- * is a trade nobody gets to make", in that note's own words.
- *
- * `derivePhase` is the maintained answer. It reads the highest train tier
- * anybody owns, which is what actually advances a phase, and it is already
- * what `stepsFor` above asks. Two questions about the same phase should not
- * be put to two different fields.
- *
- * THE ERA FIELD ITSELF IS STILL WRONG and is a bigger problem than this
- * module: `App.tsx` passes it to the map as `currentGlobalEra`, where it
- * governs which tile colours may be laid. That is not a cursor question, so
- * it is flagged rather than fixed here. */
+/* Design note #656a: the era field does not move, so do not ask it. Found while
+   mutation-testing this chunk -- `current_global_era` NEVER CHANGES in a sandbox
+   game (`sandboxSession.ts` contains no `current_global_era:` write; it is
+   stamped at seed time), so the mutation that should have failed these tests did
+   not. The era test answers "Yellow" in a Phase 4 game, so a turn could never
+   open on `BuyPrivate` -- precisely the rule-not-applied #574 removed the
+   sandbox shortcut to prevent, arrived at by a second route nobody noticed.
+
+   `derivePhase` is the maintained answer and is already what `stepsFor` asks.
+   Two questions about the same phase should not be put to two different fields.
+
+   THE ERA FIELD ITSELF IS STILL WRONG and is a bigger problem than this module:
+   `App.tsx` passes it to the map as `currentGlobalEra`, where it governs which
+   tile colours may be laid. Flagged rather than fixed here. */
 function phaseAwareOpening(state: GameStateResponse): OperatingSubPhase {
   const phase = derivePhase(state);
   /* The same two tiers `visibleSubPhases` gates Buy Private on (design note
@@ -125,11 +77,10 @@ function phaseAwareOpening(state: GameStateResponse): OperatingSubPhase {
 /** Where a corporation's turn opens.
  *
  *  `initialOrSubPhase` answers in the abstract -- `Track` before Phase 3,
- *  `BuyPrivate` from Phase 3 on, mirroring `or_phase::initial_sub_phase`. It
- *  can name a step this particular game does not have, so the answer is
- *  filtered through `stepsFor` before it is used. Design note #385 made that
- *  point about seeding: a cursor on a hidden step reads as an empty action
- *  panel with no way forward but Skip. */
+ *  `BuyPrivate` from Phase 3 on, mirroring `or_phase::initial_sub_phase`. It can
+ *  name a step this game does not have, so the answer is filtered through
+ *  `stepsFor`: design note #385, a cursor on a hidden step reads as an empty
+ *  action panel with no way forward but Skip. */
 export function openingSubPhase(state: GameStateResponse): OperatingSubPhase {
   const steps = stepsFor(state);
   // Design note #656a: the derived phase, not the frozen era field.
@@ -140,14 +91,10 @@ export function openingSubPhase(state: GameStateResponse): OperatingSubPhase {
 /** One step forward, or stay put at the end.
  *
  *  HOLDS RATHER THAN WRAPS. Past the last step the turn is over, and wrapping
- *  to the front would let a corporation lay a second tile. That rule was
- *  written inside `skipSubPhase` in `App.tsx`; it belongs with the cursor.
- *
- *  A `current` that is not in `steps` also holds. That happens when the step
- *  list shrinks under a cursor sitting on the step that vanished -- the last
- *  private is bought while a corporation is on `BuyPrivate`. Holding is the
- *  conservative answer: `settleSubPhase` below is what resolves it, and it
- *  resolves it by moving forward rather than by guessing an index. */
+ *  would let a corporation lay a second tile. A `current` not in `steps` also
+ *  holds -- that happens when the step list shrinks under a cursor sitting on the
+ *  step that vanished. `settleSubPhase` resolves it by moving forward rather than
+ *  by guessing an index. */
 export function nextSubPhase(
   state: GameStateResponse,
   current: OperatingSubPhase,
@@ -160,18 +107,14 @@ export function nextSubPhase(
 
 /** Keeps the cursor on a step that exists.
  *
- *  The one case the old effect handled that a pure event model does not get
- *  for free. `visibleSubPhases` is not fixed for the whole game: the moment
- *  the last private company is bought, `BuyPrivate` stops being a step -- and
- *  if a corporation is standing on it, its cursor now names nothing.
+ *  The one case the old effect handled that a pure event model does not get for
+ *  free: `visibleSubPhases` is not fixed for the whole game, and the moment the
+ *  last private is bought `BuyPrivate` stops being a step.
  *
- *  Called after every action rather than watched for, which is the whole
- *  point of the move: it runs when the game changes rather than when React
- *  notices the game changed, so a replay produces it too.
- *
- *  MOVES FORWARD, never back. The step disappeared because it was completed
- *  or became impossible; either way the turn has advanced past it, and
- *  sending the cursor to `steps[0]` is precisely the reported bug. */
+ *  Called after every action rather than watched for, which is the whole point of
+ *  the move -- it runs when the game changes rather than when React notices.
+ *  MOVES FORWARD, never back: the step disappeared because it was completed or
+ *  became impossible, and sending the cursor to `steps[0]` is the reported bug. */
 export function settleSubPhase(
   state: GameStateResponse,
   current: OperatingSubPhase | null | undefined,

@@ -2138,3 +2138,708 @@ as unstyled body text — **indistinguishable from the corporation's name beside
 `styles` is typed `Record<string, React.CSSProperties>`, an index signature that accepts any key and so cannot tell
 a real style from a typo.** Colours come from `palette.ts` **so the ledger's copy of this badge and this one
 physically cannot drift apart again.** *(Same class as `appStyles.ts #619`.)*
+
+---
+
+# Batch 5C — The tab strip, the chrome, the style scale
+
+## MainTabBar.tsx — the tab set is computed
+
+### MainTabBar.tsx #0 — Five declarations, one concept
+The `MainTab` union, `orderedMainTabs`, `isTabAvailable`, `surfaceTabFor` and the strip itself all live in one
+file **because the tab set is COMPUTED rather than fixed, and a computed set is only coherent if the rule and the
+renderer cannot drift apart.** `AppShell` imports only `MainTab`, `isTabAvailable` and `surfaceTabFor`; the
+ordering function and the hover CSS stay private.
+
+### MainTabBar.tsx #1 — The active phase leads
+**A player's attention starts at the left edge**, and in a game where the legal action changes completely between
+rounds the first tab must be the one they can act in — **otherwise every phase transition begins with a hunt.**
+
+### MainTabBar.tsx #213 — One answer to "which tab is this round played on"
+**REPORTED:** leaving the auction for a Stock Round dumped the player on the Rail Map instead of the Stock &
+Auction surface.
+
+**Two effects disagreeing, and the loser winning.** The transition effect correctly sent a new Stock Round to
+`"corps"`. The availability guard declared right below it — which exists because the tab SET changes shape by
+phase, so the active tab can cease to exist under the player — **ran in the same commit still reading
+`activeMainTab` as `"phase"` (React has not re-rendered, so the first effect's write is not visible yet)**, found
+`"phase"` absent from a Stock Round's tab list, and redirected to a hardcoded `"map"`. Declared second, landed
+second, Rail Map won every time.
+
+**Reordering the effects would "fix" it by luck.** The real defect is that the guard had its own opinion about
+where to land and that opinion was a constant. Both callers now ask one function.
+
+**The mapping** (`#28`'s split, stated once): the auction has a dedicated phase surface; a Stock Round's surface
+IS the Stocks roster (`#41` — there is no `"phase"` entry that round); an Operating Round is played on the rail map.
+
+### MainTabBar.tsx #390 — The tabs that are not a place to act
+**REPORTED:** players get confused viewing the map during a Stock Round, or the market during an Operating Round.
+
+**The naive check `activeTab !== surfaceTabFor(roundType)` is wrong for three of the six tabs.** `ledger` and
+`rules` are REFERENCE surfaces — opened mid-turn precisely to check something before acting — and `stock` is the
+market chart, read during every round. **Treating those as "the wrong tab" would replace the action panel with a
+redirect the moment a player consulted anything, which is a worse trap than the one being fixed: it makes the
+reference material cost you your controls.**
+
+So the redirect fires **only when the player is on ANOTHER ROUND'S PLAYING SURFACE** — the map during a Stock
+Round, the corporations during an Operating Round.
+
+### MainTabBar.tsx #404 — Reference tabs get the bar too
+**REVERSES #390, which is left standing rather than edited away.** #390's reasoning was sound and its conclusion
+wrong, **because it assumed the alternative was leaving the FULL action bar there — and the full bar is the actual
+hazard.** Playtest: Pass and Undo sit live on a screen the player is only reading, and **a turn gets spent by
+accident from the Game Ledger. A misclick on a reference tab should not be able to end a turn.**
+
+So the exclusion goes and the panel on those tabs carries **the Return button and NOTHING ELSE** (panel half in
+`ContextualActionBar.tsx`). `isPlayingSurface` is kept and still exported — the distinction is real and the bar's
+copy differs for the two cases — **but it no longer gates the redirect.**
+
+### MainTabBar.tsx #46 — Hover states need real CSS
+Only the states inline styles cannot reach live in the `<style>` tag; **resting and active looks stay in
+`styles.mainTabButton`/`mainTabButtonActive`, so there is one place to read a tab's normal appearance rather than
+two that have to be kept in agreement.** Inline `React.CSSProperties` cannot express `:hover` (`Lobby.tsx #3`), and
+**an unselected tab that never responds to the pointer is the specific thing that made these read as disabled.**
+`:focus-visible` mirrors hover **because the browser default outline is nearly invisible against this dark chrome.**
+
+### MainTabBar.tsx #158 — The Tutorials front door is not a fifth tab
+Pinned right past an auto margin and deliberately NOT styled as a tab: **it does not change which screen you are
+on, it opens a reader over whichever screen you are already on.** Tab treatment would imply a navigation it does
+not perform and put a permanently-unselected tab next to four that highlight.
+
+---
+
+## TopBar.tsx — one slim strip
+
+### TopBar.tsx #0 — A pure move
+The component body, its three private helpers (`firstMissingEnvVar`, `nativeBalanceTitle`, `statusDotColor`) and
+`NETA_CREDIT_CSS` are the same text `App.tsx` carried. **Each helper has exactly one caller. As top-level functions
+in a 9,600-line file they looked like shared utilities and meant reading `TopBar` required scrolling away from it.**
+
+### TopBar.tsx #28 — Phase tab vs reference boards
+`"phase"` splits a conflation present since the tabs were flattened: one tab was both "the thing you act in" and
+"the stock market chart", renaming itself between Auction / Stock Round / Stock Market. **That made the 2D market
+chart — a REFERENCE board a player wants mid-auction to see where prices stand — unreachable during the two phases
+where it is most worth consulting, because the tab that would have shown it was busy being the auction.**
+
+| Class | Tab | Meaning |
+|---|---|---|
+| ACTIONABLE | `"phase"` | the surface where the current round is played (auction dashboard, or Stock Round panel) |
+| REFERENCE | `"map"` | rail map (**also actionable in an OR**) |
+| | `"stock"` | market chart — always just a board |
+| | `"ledger"` / `"rules"` | never actionable |
+
+**The Operating Round has no dedicated `"phase"` surface** because its actionable surface IS the rail map, so
+during an OR the phase tab is absent and `"map"` leads. **That is why `orderedMainTabs` returns a LIST rather than
+a fixed array with a reshuffle: the tab set itself changes shape by phase, not just its order.**
+
+### TopBar.tsx #41 — `"corps"`, the persistent Stocks tab
+The roster used to be reachable only as the Stock Round's phase surface, **making "who owns what, and what is it
+worth" a fact you could look up during a Stock Round and nowhere else — including during the Operating Round that
+decides those valuations.**
+
+**NAMING TRAP:** the id is `"corps"` with LABEL "Stocks"; a DIFFERENT tab has id `"stock"` with label "Stock
+Market". **`"stock"`/`"stocks"` as sibling ids would be one letter apart and impossible to review; the two surfaces
+are unrelated (a corporation roster vs. the price chart).**
+
+### TopBar.tsx #34 — One top bar
+There were **two full-width headers stacked above the tab bar** — this one and a room strip — **three rows of
+chrome before a single hex of the board, and not even different subjects: both are "what am I connected to".**
+
+Now one slim strip: identity and room context left, connection controls right, `Connect Keplr` last. Room content
+arrives as a `roomContext` NODE rather than being rebuilt here, **because the sandbox phase switcher and the
+spectator badge need state that lives in `AppShell`.**
+
+**Deleted, and why it was safe:**
+
+- **The cash readout** — in-game cash belongs to the Game Ledger and Player Index, not the row that also shows a
+  crypto balance. **That adjacency was the exact F-3 confusion, and the honest fix is not two visual treatments of
+  two kinds of money side by side, it is not putting them side by side.**
+- **The field labels** ("Master Wallet", "Session Key", "Wallet") — a truncated bech32 next to a status dot needs
+  no caption; tooltips carry the full values.
+- **The always-visible "Initialize Session Key" button** — now appears only while actionable (wallet connected,
+  session not ready), then collapses to a dot. **A button that has been pressed and cannot usefully be pressed
+  again is just width.**
+
+The session key is **condensed, not dropped**: it authorises gameplay transactions, so its state stays visible and
+its error still renders inline.
+
+### TopBar.tsx #40 — The phase badge is not in this bar
+It was, briefly, between the brand and the room context. **Wrong slot for a measurable reason: this header is a
+single `flex` row, and two more pills pushed the wallet cluster onto a second line, undoing #34's consolidation.**
+The badge lives at the far right of the Contextual Action Bar, **which is also the better home on the merits — the
+bar already says WHAT ROUND it is; the phase says which trains and tiles that round can use.**
+
+### TopBar.tsx F-4 — Why the wallet cannot connect
+`config.ts` deliberately no longer throws at import (`config.ts #0`) — **an unconfigured build boots into offline
+mode instead of dying. The cost of that correctness is that "Connect Keplr" would otherwise look like it should
+work and simply fail on click.** Surfacing the reason names the exact environment variable. **Computed at render,
+not memoised: it reads build-time constants that cannot change during a session.**
+
+### TopBar.tsx #47 — The Neta DAO credit
+Sits with the BRAND, not the wallet cluster: **it is an attribution, so it belongs next to the thing being
+attributed — and the right-hand group is the one that already wraps first when the bar gets tight (#34). Parking a
+decorative link there would push a functional control onto a second line.** `flexShrink: 0` + `nowrap`;
+`rel="noopener noreferrer"` **because `target="_blank"` without it hands the new tab a `window.opener` handle back
+into this app.**
+
+---
+
+## TutorialModal.tsx — explain consequences, not controls
+
+### TutorialModal.tsx #0 — What this must not become
+The waterfall auction is **the one phase whose mechanics cannot be inferred by looking at it**: a player sees six
+cards and a Buy button and still has no idea what happens when the cheapest is bought, **because the cascade is a
+consequence, not a control.**
+
+**The rule this file holds itself to: EXPLAIN CONSEQUENCES, NOT CONTROLS.** A modal that says "click Buy to buy" is
+**worse than nothing — it trains players to dismiss tutorials unread, which then costs them the one that mattered.**
+
+### TutorialModal.tsx #1 — The preference is global and persistent
+"Turn tutorials off" is a **GLOBAL switch, not a per-tutorial "don't show this one again"**: someone who does not
+want to be taught the auction does not want to be taught the stock round either. Persists in `localStorage`, not
+`sessionStorage` — **a tutorial that returns every time the tab is reopened has not really been dismissed.**
+Storage access is wrapped **because private browsing throws on access; the preference then simply does not persist.**
+
+**SEEN-TRACKING IS SEPARATE FROM THE OFF SWITCH.** A tutorial shows once per player per topic even with tutorials
+ON, **because re-showing the auction explainer at the start of every auction is exactly the behaviour that makes
+people turn tutorials off in the first place.**
+
+### TutorialModal.tsx #412 — Tutorial mode is opt-in, and nothing else is
+**REPORTED:** clicking End Turn in an Operating Round yanks the player to the Stock Market tab.
+
+The redirect is `#44`'s and its reasoning is sound **for the player it was written about** — a first-time president
+watches their share price move left and reads it as their own mistake. **What it lacked was a way to say "I am not
+that player": its three guards are all about the SITUATION, and every experienced player passes through that
+situation exactly once per game while wanting none of it.** "They can dismiss the modal" is not an answer —
+**the navigation happens before the modal is on screen, and dismissing it does not put the board back.**
+
+**THE POLARITY IS DELIBERATE.** A THIRD flag rather than a reuse of `tutorialsDisabled`, and **the difference is
+the default**: the off switch defaults to false, so `!tutorialsDisabled()` is TRUE for everyone who never touched
+the setting — **which would leave the redirect firing for exactly the standard play the requirement disables it
+for, while looking as though it had been gated.** Tutorial mode defaults to FALSE.
+
+**Only the NAVIGATION is gated.** The explainer still arms and opens under its own rules; it is a panel over the
+current screen and costs one click.
+
+### TutorialModal.tsx #159 — Forgetting is not the same as being told to stop
+**REPORTED:** tutorials do not appear on the zero-state sandbox, which is precisely where they should.
+
+The trigger was never broken — **what stops it is the SEEN flag, which persists in `localStorage` and which anyone
+who has run this sandbox once has already set. The zero state resets the game and had no way to reset the teaching.**
+
+**This deliberately does NOT clear the global off switch:**
+
+| Flag | Records | Reset by |
+|---|---|---|
+| SEEN | "I have read this one" — a fact about progress through a game | starting a new game (invalidates it exactly as it invalidates the board) |
+| OFF switch | "Stop showing me these" — a standing preference about the APPLICATION | the player, only |
+
+**Clearing both would mean a player who ticked "turn tutorials off" gets them back every fresh sandbox, which is
+the behaviour that checkbox exists to prevent.**
+
+### TutorialModal.tsx #158 — The tutorials had no front door
+Every tutorial opens exactly once, automatically, on its phase becoming active. **A good default and a terrible
+only option: dismiss the Operating Round explainer while you think you have understood it, discover ten minutes
+later that you have not, and the content exists and is unreachable.**
+
+`TUTORIAL_LIBRARY` is the same four page sets addressed **by name instead of by phase**, and deliberately does NOT
+consult the seen flags or the off switch — **those exist to stop tutorials INTERRUPTING, and a player who clicked
+"Tutorials" is not being interrupted, they are asking.** `TutorialLibrary` renders the SAME shell via
+`TutorialPager`, **so a tutorial read from here is not a second, subtly different presentation of the same words**;
+no seen flag is written and no off-switch checkbox is offered. `pageIndex` moved into the pager, **so keeping the
+dots/Back/Next shell inline would have meant two independently-maintained readers for one set of words.**
+
+### TutorialModal.tsx #4 — Page shell
+The Operating Round pages are several times longer than the auction's. **A fixed height would clip them;
+`maxHeight` plus scroll keeps the modal a consistent size on short pages and readable on long ones, instead of the
+card resizing under the player's cursor every time they press Next.** Bodies may carry **hard line breaks** — the
+OR pages are numbered step lists, and collapsing them into one run-on paragraph would undo the only structure they
+have. **Split into real blocks rather than `white-space: pre-line`, so blank lines cannot open ragged vertical gaps.**
+
+### TutorialModal.tsx #44 (referenced) — The Stock Market explainer
+Shown on a **FORCED navigation** to the market chart the moment a president finishes their first Operating Round.
+**Page 2 is written in the second person about something that has just happened, which is the whole reason this
+tutorial interrupts rather than waiting to be found: a first-time president watching their share price drop with no
+explanation reasonably concludes they played badly.**
+
+---
+
+## PresidentCrown.tsx #552 — Our own crown, drawn not typed
+
+**REPORTED:** the word "PRESIDENT" takes up a lot of space and long names run into the next column. Bring the crown
+back — **but not as an emoji, since those look different on every device.**
+
+**Both halves are right, and they were previously traded against each other rather than solved:**
+
+- **#15** wanted a compact mark, **because the president tag sits inside a right-aligned numeric column and a wide
+  one pushes the digits out of alignment.**
+- **#490** removed the emoji because "a pictogram that renders in a platform colour font at a platform weight is
+  decoration rather than a third channel" — **U+1F451 is a different picture on Windows, macOS, Android and Linux,
+  so it could not be relied on to MEAN anything.**
+
+**An inline SVG answers both:** same drawing on every device because we ship the drawing; inherits `currentColor`
+so it takes the row's own ink; **roughly one character wide instead of nine.**
+
+**STILL NOT A COLOUR-ONLY CUE** — the constraint #490 was actually defending. The crown is a **SHAPE**,
+distinguishable with no colour vision at all, and carries a real accessible name. **Colour, shape and
+text-alternative — three channels, none load-bearing alone.**
+
+**SIZED IN `em`, NOT PIXELS**: it sits beside text in five different type scales, and an absolute size would be
+right in one of them. **THE GEOMETRY is deliberately coarse** — three peaks on a plinth, rendering at ~11-13px,
+**where a fourth peak or a row of jewels closes up into a grey smear.** One filled path, **so it stays solid at
+small sizes rather than relying on a stroke width that would round to nothing.**
+
+---
+
+## CorporateLogo.tsx — three asset traps in one component
+
+### CorporateLogo.tsx #410 — The historical logo, with the ticker behind it
+**ONE COMPONENT, TWO SURFACES** — the livery stripe and the Operating Round corporation card — **so a corporation
+cannot be a logo on one screen and an acronym on the other** (same reasoning as `#408`'s palette mirrors).
+
+**THE DIRECTORY IS `Logos`, NOT `logos`.** The requirement specified lowercase; the files are `public/Logos/`.
+**It matters in exactly one place and it is the place that is hard to test for: the dev server runs on a
+case-INSENSITIVE filesystem where both paths work. Most production static hosts are case-SENSITIVE, where the
+lowercase path is a 404 against a directory that plainly exists** — so the failure would never appear in
+development and **every logo would silently degrade to the text fallback in production, which, because the fallback
+is graceful, would look like a feature that was never built rather than one that broke.**
+
+**THE FILES ARE WEBP, NOT SVG.** Every one carries the `RIFF....WEBP` magic number and not one contains an `<svg>`
+element — **raster images given a vector extension.** A static host maps `.svg` to `Content-Type: image/svg+xml`;
+**a browser handed that type parses the body as XML rather than sniffing it; WebP bytes are not XML, so the decode
+fails and `onError` fires** — again producing exactly the pre-feature appearance, on every host, forever. Files
+renamed to `.webp` (bytes untouched). **Confirmed by the harness, which reads the magic number of each file rather
+than trusting its name — the check that would have caught this in the first place.**
+
+**THE AMPERSAND.** `B&O` and `C&O` carry one. **In a URL path segment `&` is a legal sub-delimiter, so a browser
+would usually fetch it unescaped — but it is the query-string separator, and any proxy, CDN rewrite rule or logging
+layer between the app and the file is entitled to treat it as one.** `encodeURIComponent` encodes **the FILENAME
+only, not the directory separator**, which is why the base path is concatenated rather than run through the same
+call. The URL builder is **pure and exported so the encoding can be tested without a DOM — a regression here is
+invisible on a case-insensitive dev machine.**
+
+### CorporateLogo.tsx #429 — A circle needs a tighter cap than a stripe
+The default width cap is `size * 2.4`, chosen for the livery STRIPE. **The market chart's occupant tokens are
+CIRCLES: a herald at 2.4x the circle's height would run out of both sides, and the badge's `overflow: hidden` would
+crop the mark rather than fit it — worse than the text fallback, because a cropped herald looks like a rendering
+fault while an acronym looks like a decision.** Cap is overridable in pixels; `undefined` keeps the existing ratio,
+**so this is a pure addition.**
+
+**The `failed` flag resets per ticker.** A different corporation is a different file, and **a file that has not
+been tried yet has not failed. Without this, one missing logo would poison the slot for every corporation rendered
+through the same element afterwards — React reuses the component instance when only the props change.**
+
+**Capped rather than fixed square**: these are historical heralds with wildly different aspect ratios (the NYC oval
+vs. the PRR keystone), **so a square box would letterbox some and crop none, while an uncapped width lets the
+widest one shove the float badge off the end of the stripe.**
+
+---
+
+## ReturnToTurnBar.tsx #427 — A way back from the reference tabs
+
+**REPORTED:** add an action bar to the Ledger and Rules tabs containing only a "Return to [relevant tab]" button,
+during a player's active turn.
+
+Every other tab renders `ContextualActionBar` at the top, **so on these two the bar simply vanished — and with it
+the only persistent thing on screen that said a turn was in progress.** The failure is small and repeated: a player
+checks the Ledger, gets absorbed, **and has to remember both that they were mid-turn and which tab they came from.
+The tab bar can take them back, but it does not tell them they need to go.**
+
+**WHY IT IS NOT `ContextualActionBar`.** Every control on that bar acts on the ACTING corporation or seat.
+**Those actions belong to the surface where their consequences are visible: skipping the Track step from inside the
+Rules tab dispatches a real message and shows the player a rulebook.**
+
+**ONLY DURING THE PLAYER'S TURN** — the restriction is what stops this becoming chrome. **A bar that rendered
+always would be a permanent banner that means nothing, which is how persistent UI stops being read at all.**
+
+**THE DESTINATION IS DERIVED, NOT NAMED.** `surfaceTabFor` is the same lookup the round transitions use, so "the
+relevant tab" **cannot drift from where the game actually sends a player when the round changes.**
+
+---
+
+## styles/ — the CSS escape hatch and the scales
+
+### animations.ts #0 — Why keyframe strings are a module
+Inline `React.CSSProperties` **cannot express `:hover` or `@keyframes`** (`#46`), so the few effects that need real
+CSS are template strings injected next to the element that uses them. Grouped **because they are the same KIND of
+thing — raw CSS text, not a style object.** `NETA_CREDIT_CSS` and `MAIN_TAB_HOVER_CSS` travel with their own
+components instead: **each has exactly one consumer and would only be indirection here.** The turn-alert pulse's
+other half — `document.title` flashing — lives in `utils/turnAlert.ts`, **which has no DOM footprint to inject.**
+
+### animations.ts #35 — White, not red
+**Two red pulses on screen simultaneously read as one effect, which is worst exactly when both are firing: your
+turn, during a contested mini-auction.** The turn indicator moved because **it is the one drawn over EVERYTHING** —
+dark chrome, linen-white cards and the map canvas in turn — **and white/crisp silver is the only ink that keeps a
+consistent weight across all three; red read as urgent on the dark shell and as a smudge over the cards.** Red is
+now exclusively the auction's "contested" colour.
+
+### animations.ts (phase-shift CRITICAL step)
+**Opacity rather than the box-shadow glow** the other two pulses use: **this badge sits inline in a crowded action
+bar, where a spreading glow would bleed over the controls either side of it; the turn overlay and the auction card
+own their whitespace and can afford one.** The pulse **bottoms out at 0.55, not 0 — a warning that blinks fully out
+is unreadable for half its cycle, and this one carries text the player needs to read.** Reduced motion drops the
+animation and **keeps the static crimson: escalation must survive the animation being switched off, which is the
+other reason the two steps differ in colour and not merely in whether they pulse.**
+
+### animations.ts #601 — The mini-auction chaser is gone
+`ROSTER_CONTEST_CHASE_CSS` dressed the action bar's roster pills, **which turned out to be unreachable**
+(`ContextualActionBar.tsx #601`). Deleting the pills left it with no consumer.
+
+**WHAT IT MEANT IS WORTH KEEPING FINDABLE.** `#545` chose a multicolour chaser for a running mini-auction
+**because green is reserved for "on turn in the ordinary rotation", and a mini-auction SUSPENDS that rotation — so
+painting a contestant green would assert the one thing that is not true.** The chaser still rings the contested
+card in `WaterfallAuctionDashboard.tsx` (`#320`/`#344`). **The bar no longer marks a contest at all;
+`SeatOrderTrail` draws the seat queue and says nothing about mini-auction membership.**
+
+### animations.ts #597 — A transition is noticed; a state is not
+**REPORTED:** the acting seat's colour "is still too subtle... a very slim border on the left edge".
+
+**TWO SEPARATE PROBLEMS, and the report names both without separating them.**
+
+- **THE BAND IS TOO SMALL.** A 6px vertical sliver on the left edge is **the least visible place a colour can be
+  put on a wide panel.** It becomes a full-width bar along the top edge — the widest dimension the panel has.
+- **THE CUE NEVER CHANGES.** `#570` made the colour a STATE, and **a state, however bold, stops being seen within a
+  few minutes. Habituation is not a matter of contrast; it is a matter of nothing happening. The existing my-turn
+  pulse has the same flaw: it is a CONTINUOUS animation, running when you look away and still running when you look
+  back, and carries no arrival.**
+
+**SO THE SIGNAL IS THE CHANGE ITSELF.** A one-shot sweep runs whenever the acting seat changes, and stops. **Motion
+that starts is caught peripherally in a way that motion which has always been running is not — and because it ends,
+it costs nothing for the rest of the turn.**
+
+**TWO INTENSITIES**, because "somebody's turn began" and "YOUR turn began" are different news.
+
+**REPLAYED BY REMOUNTING, not by a timer.** The band carries `key={acting seat}`, **so React replaces the element
+on every change and the browser starts the animation fresh. A JS-driven restart would need a class toggle, a reflow
+read and a cleanup, all to reproduce what a changed key does for free.** Reduced motion keeps the band, drops the
+sweep — **the colour still says whose turn it is, which is the information.**
+
+### corporationLivery.ts #428 — One palette, imported three times
+The eight canonical corporation colours and the contrast maths. **The table lived in three files at once:**
+`hexContractTypes.ts` (`STATION_TICKER_COLORS`), `StockMarketRenderer.tsx` and `StockRoundPanel.tsx` (two
+module-local `TICKER_COLORS`).
+
+**The duplication was deliberate and documented rather than accidental**, which is what made it worth removing
+carefully. `#408` ended: "ALL THREE MIRRORS ARE UPDATED TOGETHER ... so changing one would give the map and the
+cards different opinions about who a corporation is." **That is a correctness requirement enforced by a comment,
+and the failure it guards against is silent: a pass recolouring two of the three would leave the map and the stock
+cards disagreeing, with no type error and nothing visibly wrong on whichever screen the author was looking at.**
+
+`StockRoundPanel`'s `#389` already CLAIMED this arrangement — "one table, not a second palette that looks close."
+**It was the intent all along; the livery stripe simply read the panel's own private copy rather than the map's.**
+
+**WHY `styles/` AND NOT `components/`:** three consumers in two folders plus `utils/` contrast code. Leaving the
+canonical table in `hexContractTypes.ts` **would keep every other consumer importing a corporation's identity out
+of the HEX MAP's contract-shape module** — the dependency direction `appStyles.ts` records its own hoist for.
+`styles/` imports nothing from `components/`, **so nothing here can create a cycle.**
+
+**THE CONTRAST HELPERS COME TOO, AND THAT IS NOT SCOPE CREEP.** `relativeLuminance` / `bestContrastTextColor` lived
+in `hexContractTypes.ts` only by accident of history. **A colour table whose contrast function lives in a different
+module is a table that can be recoloured without its legibility guarantee being re-checked** — the specific thing
+`#408` audited by hand. Both are **re-exported from `hexContractTypes.ts`, so this is a pure addition** for the
+existing call sites.
+
+### corporationLivery.ts #408 — The colours the board uses
+**REPORTED:** the corporate colours do not match the physical board game.
+
+The palette **was never canonical — eight plausible, well-spaced hues tuned for legibility without asking what
+colour the pieces actually are. For a player who knows 1830 that is worse than an arbitrary palette: the Erie is
+yellow on the board, and reaching for the yellow token to find it is the B&O costs more than having no expectation
+at all.**
+
+Re-checked rather than assumed against the specified hues:
+
+- **CONTRAST.** Every entry clears **4.5:1** against whichever of black or white `bestContrastTextColor` returns —
+  **the WCAG threshold for NORMAL text, which is the right bar because the stripe's ticker is 16px bold and 16px
+  bold is NOT "large text" by WCAG (that starts at 18.66px bold).** Lowest is **B&M green at 5.35:1**. The shade of
+  each hue was chosen to clear the bar **rather than the bar being lowered to fit a shade.**
+- **SEPARATION.** Minimum pairwise **dE across all 28 combinations is 44.4** (ERIE yellow vs. NNH orange), against
+  the **8.4** that started `#403`. **Canonical and distinguishable turned out not to be in tension — the physical
+  game already had to solve this problem with ink on cardboard.**
+- **THE CONTRAST INK FLIPS WHERE IT SHOULD.** C&O cyan, ERIE yellow and NNH orange take BLACK; the other five take
+  white. **Asserted per colour rather than trusted.**
+
+**NYC IS `#1a1a1a`, NOT `#000000`.** The requirement allows "a very dark gray to ensure UI legibility": **pure
+black would be indistinguishable from the card borders and the chart's gridlines, and a corporation whose livery is
+the same colour as the furniture reads as a rendering failure rather than as the New York Central.**
+
+**THE "ALL THREE MIRRORS" PARAGRAPH IS GONE, because there are no longer three mirrors.** Leaving it would tell a
+future reader to go and find two copies that do not exist.
+
+Keyed by `public_company::CORE_PUBLIC_COMPANIES`'s fixed `company_id`s (1-8: PRR/NYC/CPR/B&O/C&O/ERIE/NNH/B&M).
+**Purely a frontend legibility aid, not backend data.**
+
+`tickerColor` is **THE ONLY WAY TO READ THE TABLE**, exported alongside the record **so callers do not each
+re-implement the `?? fallback` — three of them previously did.**
+
+### corporationLivery.ts #46 — The contrast maths
+`relativeLuminance` is the standard sRGB-to-linear WCAG formula; `bestContrastTextColor` returns whichever of pure
+white or pure black has the higher ratio per `(lighter + 0.05) / (darker + 0.05)`. **Picked dynamically per badge
+rather than one colour asserted for every fill: three of the eight are light enough to need black and five need
+white, so any fixed choice is wrong for at least three of them.** The old caveat about several colours failing 7:1
+AAA **was written against the PRE-#408 palette and is no longer the live situation. AAA is still not claimed.**
+
+### palette.ts — the paper-card treatment
+The two card sets were restyled light in separate passes and **drifted immediately: five near-white values, no two
+the same, across two components one tab apart — which reads exactly as it sounds: slightly grubby, as though some
+cards were dirtier than others.** **The fix is not "pick a better hex twice". It is ONE value both files import, so
+a future pass physically cannot restyle one set without the other. Uniformity is now structural rather than a
+coincidence that survives until the next edit.**
+
+**THE ONE RULE FOR VARIANTS:** card STATE is expressed through **borders, accents and badges — never through the
+card's background.** That constraint keeps the set looking like one deck of certificates instead of a colour-coded
+chart. **The single deliberate exception is `CARD_SURFACE_MUTED`**, for a genuinely inert card (an unfloated
+corporation with nothing to act on) — a cooler, dimmer paper reads as "not in play" **without introducing a hue.**
+
+`CARD_SURFACE` is a **warm near-white rather than pure `#ffffff`: at full white the cards glare against this app's
+very dark chrome, and the gold and green accents both look washed out.**
+
+`CARD_GLOW_MINI_AUCTION` (red `#ef4444`) was **DELETED** by `WaterfallAuctionDashboard.tsx #320`. **Removed rather
+than left exported-and-unused: a colour token that nothing imports is a standing invitation to reintroduce the
+exact problem #320 fixed.** The chaser's palette is deliberately not a token — **a nine-stop gradient that only
+makes sense as a whole, living in the keyframes beside the rule that uses it.**
+
+**The lowest-offered private is GREEN, deliberately outside the gold family.** Gold marks "look here", red marks
+"contested", **green marks the third thing — AVAILABILITY, the action you can actually take right now. Three
+states, three hues, no overlap.**
+
+**The active-turn pulse is exported as BOTH a hex and a bare `r, g, b` triple**, because the pulse is an
+`@keyframes` block built as a raw CSS string and **every stop needs its own alpha. Without the triple the animation
+would hardcode `255, 255, 255` and this constant would be decorative — a colour "constant" that the actual colour
+does not come from is worse than no constant.**
+
+**TEXT ON PAPER:** every value is dark-on-light. **Light-on-light is the obvious mistake when a surface flips and
+is easy to catch; the subtle one is a mid-grey that was fine at 4.5:1 on a dark card and drops to 2:1 on white.**
+
+**WHY "UNFLOATED" IS SLATE AND NOT AMBER.** The Ledger renders two amber pills within a few hundred pixels: the
+roster's UNFLOATED badge and the Bank Depot's CURRENT badge. **Two golds that close do not read as two states —
+they read as one style applied inconsistently, and the eye tries to relate them. They are not related at all.**
+Amber in this app means "look here"; **UNFLOATED is the opposite claim.** Slate says "inert" **without spending the
+attention colour, which frees amber to mean one thing again.** **THE SHAPE DIFFERS TOO** — squared 4px and
+monospaced where every neighbour is a 999px pill in the body face — **because a distinction that survives being
+desaturated is a stronger one, and it keeps working for a red-green colourblind viewer who cannot use the
+amber/slate difference at all.**
+
+**ESCALATION COLOURS:** `gamePhase.ts #5` establishes that the phase shift and the rust are THE SAME PURCHASE,
+counted by one number. **Two purchases out is orange, one is crimson. Because both readouts read the same countdown
+AND the same two constants, they cannot drift into disagreeing about urgency any more than they can disagree about
+the count.** **Orange rather than yellow** for the two-away step, **specifically because yellow/amber is already
+spent on "look here" and on the Yellow ERA — a yellow rust warning during the Yellow era would be invisible.**
+
+### typography.ts — one tunable scale
+The legibility pass had to change ~60 `fontSize` literals across five components. **Doing that by hand is a
+one-time fix for a recurring question — the next "still a bit small" runs the same sweep again, and the sizes drift
+apart a little more each pass because no two sweeps hit exactly the same set.** The scale is deliberately **SMALL
+(seven steps): a scale with a step for every size anyone ever wanted is just the scattered literals again with
+extra indirection.**
+
+**WHY NOT A ROOT `font-size` AND `rem`** — worth writing down so nobody tries it and quietly gets nothing:
+
+- **Every style here is an inline `React.CSSProperties` object with explicit `px`. A root font-size does not touch
+  a `px` value**, so the change would have had no visible effect without converting all sixty literals anyway.
+- **Form controls (`<input>`, `<select>`, `<button>`) do not inherit font-size from an ancestor by default** —
+  browsers apply their own UA stylesheet. **Any approach relying on inheritance silently misses exactly the
+  controls this pass most needed to fix.**
+
+The canvas renderers are **deliberately OUT of scope**: both have zoom-aware font scaling, **and a fixed scale
+imposed from outside would fight those systems rather than help.**
+
+### typography.ts #3 — The third pass, and why it goes the other way
+**REPORTED:** the interface has to be viewed at 50% browser zoom to look proportionate on a 1080p screen.
+
+Two passes had run before, **both upward**: ~1.25x over the original sizes, then a further +2px on every step. Net,
+body 13→18px, controls 14→19px, badges 10-11→15px, brand title 26→34px. **Compounded, about 1.4x — and a UI drawn
+1.4x too large is one a player fixes with the zoom control, which is exactly what happened.**
+
+**THE PREVIOUS FEEDBACK WAS PROBABLY MEASURING THE SAME PROBLEM FROM THE OTHER SIDE.** "Hard to read" and "needs
+50% zoom" are not opposite complaints **if the reader was already zoomed out to fit the board on screen: shrinking
+the page to see the map makes the text small, the fix applied was to grow the text, and growing the text made the
+page need more shrinking. Each pass made the next one necessary.**
+
+So this pass sets **desktop-dense targets AND caps the board to the viewport** (`HexGridRenderer #30`) — **the half
+that was missing. Text at a normal size only stays readable if the page is not being zoomed out to accommodate
+something else.** Numbers: **13px body, 14px controls, 11-12px badges/metadata, 16px section headings.** Every step
+moves together — **bumping only the sizes someone complained about is what produces a scale whose steps no longer
+mean anything.**
+
+**Control padding moves WITH the font, always.** The inverse of the note above: **text shrunk without shrinking the
+box around it leaves controls that are small AND still tall, which is the worst of both — the density never arrives
+and the type just looks lost.** A 14px label in 7px vertical padding is a ~30px control, **which is what puts an
+action strip inside the 44-52px band the layout targets.**
+
+---
+
+## utils/stickyCollapse.ts #480 — "Scrolled at all" is not "pinned"
+
+**REPORTED:** the Action Panel collapses the moment the page scrolls off the absolute top. It should stay expanded
+until its own top edge reaches the top of the screen.
+
+The old test was `window.scrollY > 24`, **measuring not "is the panel pinned" but "has the page moved". Those
+coincide only if the panel is the first thing on the page, which it is not** — a room strip, a tab rail and a
+header sit above it. **So the panel collapsed while still sitting in the middle of the viewport with its full
+height available, which is the one moment collapsing buys nothing. It threw away rows of content to reclaim space
+that was not under pressure, and it did it 24 pixels into a wheel gesture.**
+
+**A sticky element is PINNED exactly when its top edge has reached its sticky offset.** So the measurement is
+`getBoundingClientRect().top - stickyTop`, **not a scroll position. It is self-correcting: whatever sits above can
+change height, the header can wrap, a banner can appear, and the number still means the same thing.**
+
+**WHY NOT AN INTERSECTION OBSERVER SENTINEL** — the canonical trick, and the first thing tried. **It needs a
+zero-height marker rendered immediately above the sticky node, and this panel's parent is a flex column, where a
+"zero-height" child is not free: it collects the container's `gap` and pushes everything below it down by that
+gap. The cure would have been a negative margin to cancel a height that only exists to be observed** — more layout
+risk than the scroll read it replaces. **Measuring the panel itself adds no DOM at all.**
+
+### stickyCollapse.ts #480a — The release needs slack, the collapse does not
+Collapsing shortens the panel, which shortens the document. **Near the bottom of a page the browser then CLAMPS the
+scroll position — and a clamp moves the panel's top edge back down, below the line that triggered the collapse,
+which expands it, which lengthens the document, which lets the scroll return. That is a loop, and it presents as
+the bar flickering at the end of a long page.**
+
+**The asymmetric threshold breaks it.** Collapsing triggers **exactly at the pin line**, so the behaviour is
+precisely what was asked for; **releasing requires the top edge to be a few pixels clear**, so a sub-pixel clamp
+cannot re-cross the boundary on its own. `stickyOffsetOf` **reads the offset from the node's own computed style
+rather than assuming it**: `actionBar` uses `top: 0` today, and **a panel that later pins below a fixed header
+would otherwise collapse a header's height too early — the same class of error #480 is about.** `auto` and any
+unparseable value mean "not offset", **which for a sticky element is 0.**
+
+---
+
+## utils/turnAlert.ts — the tab-title flash
+
+Split into its own hook rather than inlined in `App.tsx` **since it is a self-contained side effect with its own
+cleanup/restore responsibility** — the "one clear job per hook" convention `useGameStatePolling` established.
+
+**EXACT ALTERNATION CONTRACT.** While `isMyTurn` is true, `document.title` alternates every 1000ms between the
+alert and normal titles, **starting on the ALERT title immediately (not waiting a full second) so a player who
+glances at a background tab sees the alert state right away.** The moment `isMyTurn` goes false the interval is
+cleared **AND the title is explicitly restored in that same cleanup — so the tab title can never get stuck
+mid-flash on the alert string after a turn ends.**
+
+**NO DEPENDENCY ON WHICH TAB IS FOCUSED.** The title updates unconditionally, **matching a real "flash the browser
+tab" notification — most browsers only show the alternating title while the tab is unfocused, which is exactly the
+situation this feature exists for.**
+
+**The two title constants are the app's REAL title at runtime and they outrank `public/index.html`.** The hook runs
+on every mount and assigns unconditionally, **so whatever `index.html` sets is only ever visible for the instant
+before React mounts. Renaming the app means renaming BOTH, and missing this one would have left the old name
+flashing back into the tab a moment after load — which is worse than not renaming at all, because it looks like a
+bug rather than an oversight.**
+
+The hook takes an **already-computed `isMyTurn` boolean** and has no wallet or game-state knowledge of its own,
+**matching this codebase's "presentational/effect hooks don't own address-resolution logic" split.**
+
+---
+
+## utils/playerLabels.ts — what to call a player
+
+### playerLabels.ts #559 — Two functions with one name
+**REPORTED:** in the Ledger's Corporation Assets panel the presidents are listed as `p-6aq2qcgg` rather than the
+names they set in the lobby.
+
+**There were two `sandboxPlayerLabel`s.** `App.tsx` declared a room-aware one at module scope; `utils/sandboxState.ts`
+exports the fixture's Alice/Bob table **under the same name.** Every surface `App.tsx` rendered got real names;
+the two components that imported the label directly — `FinancialLedger` and `ContextualSubPanel` — **got the
+fixture version, which has never heard of a room and correctly returns `null` for a `p-` id.** The caller then fell
+back to `truncateAddress`.
+
+**THE IMPORT LOOKED RIGHT, which is the whole difficulty.** Nothing about `import { sandboxPlayerLabel } from
+"../utils/sandboxState"` suggests it resolves a different set of names from the identically-named function two
+files away, **and the failure is silent and partial: most of the app shows names, one panel shows ids, and the
+panel that shows ids looks like it has a formatting bug rather than the wrong data source.**
+
+One registry, one resolver. **Being the file that happens to own the room does not entitle `App.tsx` to a private
+copy.**
+
+### playerLabels.ts #535b — Module scope, so no hook depends on it
+The first cut was a `useCallback` inside `AppShell`, **and the linter immediately named the cost: twelve hooks read
+it, so it became a dependency of all twelve.** A stable `[]` callback **would still have meant editing a dozen
+dependency arrays — churn in exactly the hooks (the dispatch, the auto-skip, the forced withhold) where an
+accidental rebuild re-arms an effect that dispatches.**
+
+**A module-level map avoids the question rather than answering it.** Its lifetime is the tab — the same lifetime as
+the player id it keys on (`#528`) and as the room — **and `AppShell` remounts on any game change, so there is no
+stale-between-games case.**
+
+### playerLabels.ts #537b / #578 — No mock names in a real room
+`#535` made this a fallthrough (room roster first, fixture second) so solo sandbox kept Alice and Bob. **Right for
+the solo case and wrong for a room: if a real id ever failed to resolve, it would fall through and be labelled with
+SOMEBODY ELSE'S NAME. A player mislabelled as "Alice" is far worse than one labelled with a raw id, because it
+looks correct — and it would be a name belonging to a person who is not in the game, on a screen whose whole job is
+to say who is.**
+
+So **once a room has dealt, the fixture table is unreachable**: an unknown id returns `null` and callers fall
+through to `truncateAddress`, **which is ugly and unmistakably NOT a claim about identity. Ugly and honest beats
+tidy and wrong on a roster.**
+
+**#578:** there is no solo sandbox now, so the fixture branch is reachable **only in the moments before a room's
+`SetupGame` replays.** KEPT, not deleted — **the fixture still seeds the BOARD a room boots from, so a corporation
+could momentarily carry a fixture president, and returning that name would be worse than returning nothing.**
+
+### playerLabels.ts #569 — A seat colour that does a job
+**ASKED:** "Do the player tiles/cards work better with colors? ... The colors don't get used elsewhere as far as I
+can remember."
+
+**That last clause is the whole argument, and it points at a fix rather than at a removal. Colour that appears in
+exactly one place is decoration and the player is right to be suspicious of it. Colour that means the same thing in
+several places is a language.**
+
+**SO IT GETS A SECOND JOB**, and the job was already asking for it: the action bar is easy to see during an
+Operating Round **because it wears the acting CORPORATION's livery, and hard to see during the Auction and Stock
+Rounds because those rounds have no corporation to borrow from. They have an acting PLAYER.**
+
+**NOT THE CORPORATION LIVERIES**, on instruction: **a player stripe in the PRR's red would read as a claim about
+the PRR, and on a screen where corporations and players sit side by side that ambiguity is expensive.** Chosen well
+away from the eight corporate hues and from each other.
+
+**CHOSEN OR ASSIGNED.** A seat that has picked a colour keeps it; a seat that has not gets the next by index.
+**Both paths are here rather than the picker owning the fallback, so a player who never opens the control is never
+colourless and two players can never end up with one colour.** Index rather than a hash of the address,
+deliberately — **a hash gives two seats the same colour roughly a third of the time at six players, and "roughly"
+is not a property a table of six people can live with.**
+
+---
+
+## Small shell modules
+
+### index.tsx — the React 18 entry point
+Uses `react-dom/client`'s `createRoot` (the concurrent-root API), **not the legacy `ReactDOM.render`, which is
+deprecated under React 18 and prints a console warning.** **ASSUMPTION (unverified in that pass):** expects an
+`index.html` with `<div id="root">`; **no `public/` folder was present alongside `src/` when this was written**, so
+`ROOT_ELEMENT_ID` is the single line to follow a different scaffold. Wrapped in `React.StrictMode` — **no effect on
+production builds.**
+
+### utils/address.ts — `truncateAddress`, moved unchanged
+It has **two callers — `TopBar` and `AppShell` — which is precisely why it could not travel with either. A helper
+shared by two components that is declared inside one of them makes the other import from a sibling for a four-line
+string function.**
+
+**NOTE THE NAME COLLISION, pre-existing and deliberate:** `utils/lobby.ts` exports its own `truncateAddress`, and
+`App.tsx` carried a comment explaining it was NOT importing that one **because this local version takes
+configurable lead/trail lengths.** That comment travelled to the import site in `AppShell`. **Two truncators is
+still one too many; unifying them is a separate tidy-up.**
+
+### utils/buildStamp.ts #640 — Which build is the browser actually running
+**Three round-trips of one debugging session went to the question "is the build you are looking at current". Each
+time the answer had to be inferred from incidental evidence** — whether the phase badge read "Phase: 3 (Green)" or
+"Phase: Green (3-Train)", whether the depot showed one train or six — **which works, is slow, and only works for
+whoever remembers what changed when.**
+
+**A REPORTED BUG THAT CANNOT BE REPRODUCED HAS EXACTLY TWO EXPLANATIONS, and they need completely different work:
+the code is wrong in a way the tests miss, or the running bundle predates the fix. Telling them apart first costs
+one number; guessing wrong costs a pass of investigation aimed at code that is already correct.**
+
+**A HAND-BUMPED CONSTANT, deliberately, rather than a git hash or a compile-time timestamp:**
+
+- **A hash needs build plumbing (`REACT_APP_*`, a CI step) and answers "which commit" — true, and not the question.
+  The question is "does this bundle contain the change we just discussed", which is a human-scale fact.**
+- **A timestamp answers "when was this compiled", which a stale dev server will happily report as five seconds ago
+  while serving a cached chunk.**
+
+The number is **the highest design note in the source**. Every substantive change writes one, **so bumping this is
+the same gesture as documenting the change, and a reader comparing "the fix is #621" against "your build says 612"
+needs no other context.**
+
+**IT WILL GO STALE IF SOMEBODY FORGETS** — a real weakness, stated plainly rather than pretending the constant is
+authoritative. **A build reporting 640 definitely contains #640, but a build reporting 640 might also contain later
+work by an author who did not bump it. It fails in the safe direction — understating, never overstating.**

@@ -1,46 +1,12 @@
-// frontend/src/components/ConnectWalletButton.tsx
+// The Connect Keplr button and the burner-wallet recommendation in front of it.
 //
-// The Connect Keplr button, and the burner-wallet security recommendation
-// that now stands in front of it.
+// Button and modal ship as ONE component because there is more than one Connect
+// Keplr entry point; `wallet.connect` is not exported from here, so bypassing
+// the recommendation means deleting this component. Escape and backdrop both
+// route to Cancel, never Proceed.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHY THIS IS A COMPONENT AND NOT A MODAL PROP
-// ===================================================================
-//
-// The requirement is "when a user clicks Connect Keplr, show the warning
-// first". There is more than one Connect Keplr button in this app -- the
-// top bar in `App.tsx` and the lobby's own in `Lobby.tsx` -- and a warning
-// that only one of them honours is not a warning, it is a coin flip.
-//
-// So the button and the modal ship as ONE component and every entry point
-// renders it. `wallet.connect` is not exported from here and no caller
-// wires it directly; bypassing the recommendation means deleting this
-// component, which is a visible change rather than an easy omission.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THIS IS ADVICE, AND IT DOES NOT PRETEND OTHERWISE
-// ===================================================================
-//
-// The modal cannot verify that the wallet a player picks in Keplr is
-// actually a burner -- nothing in the browser can. It is a recommendation
-// shown at the one moment it is actionable, which is the moment before the
-// extension opens, and it says so plainly.
-//
-// It is therefore NOT dismissible-forever and has no "don't show again"
-// toggle, unlike `TutorialModal`. A tutorial teaches something once; this
-// is a checkpoint on a security decision that is re-made every time a
-// different wallet could be selected. That said, it is a single extra
-// click on an action taken once per session, and Cancel is a real exit --
-// the point is a considered choice, not a toll booth.
-//
-// ===================================================================
-//  DESIGN NOTE 2: ESCAPE AND BACKDROP CANCEL -- AND THAT MEANS CANCEL
-// ===================================================================
-//
-// Both dismissal paths route to Cancel, never to Proceed. A modal that
-// opened a wallet connection because someone pressed Escape would be doing
-// the opposite of what the gesture means, and this particular modal exists
-// to slow that decision down.
+// See docs/ai_architecture/session_keys_wallet.md, ConnectWalletButton.tsx
+// #0 / #1 / #2.
 
 import React, { useCallback, useEffect, useState } from "react";
 

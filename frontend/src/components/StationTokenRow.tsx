@@ -1,48 +1,18 @@
-// frontend/src/components/StationTokenRow.tsx
+// A corporation's station allowance drawn as tokens rather than as "2/4".
 //
-// A corporation's station allowance, as tokens rather than as a fraction.
+// Design note #0: the fraction priced every token at $40 when the third and
+// fourth cost $100 (`utils/stationTokens.ts #0`), counted forwards while the
+// price counts backwards, and did not look like the circles it describes. One
+// circle per token in placement order, each captioned with its cost; spent
+// tokens grey out IN PLACE so the row does not shrink.
 //
-// ===================================================================
-//  DESIGN NOTE 0: "2/4" IS A COUNT; THE ROW IS AN INVENTORY
-// ===================================================================
+// Design note #1: the bar is painted in the corporation's brand colour, so a
+// token in that colour would be invisible by construction. A darkened inset
+// gives the tokens a surface, and each carries a ring in the bar's derived ink.
+// Placed tokens DESATURATE rather than fade -- alpha on a coloured bar reads as
+// background, grey reads as spent against any hue.
 //
-// The Operating Round bar reported stations as `2/4 - $40 ea`. Three things
-// wrong with that, and only the first is cosmetic:
-//
-//   IT PRICED THEM ALL THE SAME. "$40 ea" is false for every token after the
-//   second, which costs $100 (`utils/stationTokens.ts` design note #0). The
-//   one number a president needs before deciding to place is the one the
-//   readout got wrong.
-//
-//   IT COUNTED FORWARDS WHILE THE PRICE COUNTS BACKWARDS. "2 of 4 left" says
-//   nothing about WHICH two are left, and the two remaining are not
-//   interchangeable -- one costs $40 and the next $100.
-//
-//   IT DID NOT LOOK LIKE THE THING IT DESCRIBES. Tokens are circles on the
-//   map. A fraction is not.
-//
-// So the row draws the corporation's whole allowance, one circle per token,
-// in placement order, each captioned with what it costs. Spent tokens grey
-// out in place -- the row does not shrink -- so "two placed, next one $100"
-// is one glance rather than an inference.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE ROW SITS ON THE CORPORATION'S OWN COLOUR
-// ===================================================================
-//
-// The bar this renders into is painted with the corporation's brand colour
-// (App.tsx design note #236), which creates a problem specific to this
-// component: a token drawn in that same colour on that same background is
-// invisible by construction.
-//
-// Two things fix it without giving up the brand link. The row sits in its
-// own slightly darkened inset, so the tokens have a surface to read against;
-// and each token carries a ring in the bar's own derived ink, which
-// separates it from that surface whatever hue the corporation is.
-//
-// PLACED TOKENS DESATURATE RATHER THAN FADE. Alpha alone on a coloured bar
-// makes a token look like the background rather than like a spent piece;
-// a neutral grey fill reads as "used" against any hue.
+// See docs/ai_architecture/hex_tile_math.md, StationTokenRow.tsx #0 / #1.
 
 import React from "react";
 
@@ -61,28 +31,11 @@ export interface StationTokenRowProps {
   inkMuted: string;
   /** Shown when the corporation has no allowance to draw. */
   emptyLabel?: string;
-  /* ==================================================================
-   *  DESIGN NOTE 362: THE HOME TOKEN'S CAPTION IS ITS HEX, NOT ITS PRICE
-   * ==================================================================
-   *
-   * REPORTED: the first station marker slot displays "$0", which is
-   * unhelpful.
-   *
-   * It was accurate and useless in the same breath. Every other slot's
-   * caption is a DECISION -- $40, then $100, the money the next placement
-   * will cost -- and the home token has no decision attached: it is granted
-   * free at float and goes on a hex printed on the board. So the one slot
-   * that could not be priced was captioned with a price, and "$0" beside a
-   * circle reads as "worth nothing" rather than "already yours".
-   *
-   * The hex label is the fact a player actually wants there. It answers
-   * where the corporation starts, which is the question the home token
-   * exists to represent, and on the Operating Round strip it is the only
-   * place that answer appears at all.
-   *
-   * `null` falls back to the price. One core company (NNH) has no home hex
-   * assigned on this board (`gameState.ts` on `home_hex_label`), and
-   * inventing a label for it would be worse than the "$0" this replaces. */
+  /* Design note #362: the home token's caption is its HEX, not "$0". Every other
+     caption is a decision -- the money the next placement costs -- and the home
+     token is granted free on a printed hex, so "$0" beside a circle read as "worth
+     nothing" rather than "already yours". `null` falls back to the price: NNH has
+     no home hex on this board, and inventing a label would be worse. */
   homeHexLabel?: string | null;
 }
 
@@ -181,58 +134,22 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     flexShrink: 0,
   },
-  /* ==================================================================
-   *  DESIGN NOTE 487a: THE HALO WAS RESTATING THE ORDER
-   * ==================================================================
-   *
-   * REPORTED: subsequent tokens carry a strange ring border that makes them
-   * look non-uniform next to the home token.
-   *
-   * `tokenNext` was `boxShadow: 0 0 0 2px rgba(255,255,255,0.55)` -- a
-   * second, offset white ring on whichever slot was next to be bought. It
-   * did make that slot obvious, and it made it obvious by making one circle
-   * in a row of identical circles look like a different component.
-   *
-   * WHAT IT SAID IS ALREADY SAID BY POSITION. `stationTokenSlots` sets
-   * `isNext: index === placedCount` -- so the next token is, always and by
-   * construction, the leftmost circle that has not greyed out. The halo was
-   * a second rendering of the row's own ordering, and it cost the row its
-   * uniformity to say something the row was already saying.
-   *
-   * `isNext` SURVIVES ON THE DATA and is still what the placement button
-   * reads for its price. Only the ring is gone; nothing downstream loses
-   * the fact. */
+  /* Design note #487a: the second white ring on the next-to-buy slot is GONE. It
+     made one circle in a row of identical circles look like a different component,
+     to say something position already says -- `isNext: index === placedCount`
+     means the next token is always the leftmost circle that has not greyed out.
+     `isNext` survives on the data and still prices the placement button. */
   price: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     lineHeight: 1,
   },
-  /* ==================================================================
-   *  DESIGN NOTE 450: NO SLASH THROUGH THE HOME HEX
-   * ==================================================================
-   *
-   * REPORTED: remove the diagonal slash through the home hex text on the
-   * Operating Round action bar's token display -- graying it out is enough.
-   *
-   * The strikethrough was added for PRICES, and the reasoning held for
-   * them: "$40" on a spent slot is an amount the player will never pay, so
-   * striking it says historical rather than payable.
-   *
-   * Design note #362 then changed what the first slot CONTAINS. The home
-   * token has no price -- it is granted free -- so its caption became the
-   * hex label, "E11". A strikethrough through a place name says something
-   * quite different from one through a price: it reads as cancelled,
-   * removed, or no longer valid, when the truth is the opposite -- that hex
-   * is where the corporation permanently sits. The one slot whose caption
-   * is a FACT rather than an OFFER was the one being crossed out.
-   *
-   * Dimming already carries "spent" on every slot, and it carries it
-   * without asserting anything about the text's validity. So the
-   * strikethrough goes -- for the prices too, rather than being made
-   * conditional: `fontWeight` plus the inherited muted ink is a legible
-   * "already used", and one rule for the row beats two that have to be kept
-   * in step with which slot holds which kind of caption. */
+  /* Design note #450: no strikethrough, for prices either. #362 made the first
+     slot's caption a hex label, and a line through a place name reads as cancelled
+     or no longer valid when the truth is the opposite. Dimming already carries
+     "spent" without asserting anything about the text's validity, and one rule for
+     the row beats two kept in step with which slot holds which kind of caption. */
   pricePlaced: { fontWeight: 400 },
   empty: { fontSize: FONT_SIZE.small, fontStyle: "italic" },
 };

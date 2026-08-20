@@ -247,3 +247,293 @@ As the **seller** who must answer, or as the **buyer** whose turn is held open b
 outstanding offer. Anything else in the room is somebody else's negotiation and does not warrant a
 panel on this player's buy screen. *(In the old solo sandbox every offer qualified, because one human
 drove every seat.)*
+
+---
+
+# Batch 5C — The full session-key stack
+
+## utils/sessionKey.ts — the ephemeral browser key
+
+### sessionKey.ts #1 — Key generation
+`@cosmjs/crypto`'s `Random`/`Secp256k1` (a CSPRNG wrapper plus curve validation), then the raw scalar wrapped in a
+`@cosmjs/proto-signing` `DirectSecp256k1Wallet`. **`@cosmjs/amino`'s `Secp256k1Wallet` is the equivalent for
+amino-style signing (what Keplr's injected signer typically uses); direct protobuf signing was chosen because it is
+the simpler, more standard path for a locally generated key that never touches Keplr's UI, and CosmWasm's
+`MsgExecuteContract`/`MsgExec` are natively protobuf either way.**
+
+### sessionKey.ts #2 — `sessionStorage`, not `localStorage`
+The private key **should not survive a browser restart or be shared across tabs once this tab closes.** A stolen
+session key **can only ever do what its authz grant allows** (`ContractExecutionAuthorization` +
+`AcceptedMessageKeysFilter` scoping in `WalletContext.tsx`) **and spend whatever the developer FeeGrant covers —
+never move the player's real JUNO — which is the whole point of keeping it this narrowly scoped.**
+
+### sessionKey.ts #3 — `GAMEPLAY_MESSAGE_KEYS` is the single source of truth
+`WalletContext.tsx` imports **this exact array** into the on-chain grant's `AcceptedMessageKeysFilter` **so the
+client-side allow-list and the on-chain enforcement can never drift apart.** `execViaSessionKey` also asserts
+against it locally, **so a coding mistake fails fast in the browser instead of as an opaque on-chain rejection.**
+
+**Deliberately EXCLUDES `CreateGameRoom`, `JoinGameRoom` and `EndGameAndDistribute` — those move real JUNO and stay
+Keplr-signed** through `WalletContext`'s `signingClient`. **Every other `ExecuteMsg` variant is pure VGP/gameplay
+state and is safe to delegate.**
+
+### sessionKey.ts #4 — Wire-format correction vs. the blueprint
+`msg.rs`'s `ExecuteMsg` has **no `#[serde(rename_all = ...)]`, so it serializes with serde's default *externally
+tagged* representation — the JSON key is the exact Rust variant name, e.g. `{"BuyStock": {...}}`, NOT
+`{"buy_stock": {...}}`.** `SharePurchaseSource` is the same: `{"Ipo"}`/`{"Bank"}`, not lowercase. **The blueprint's
+inline call-site examples used the wrong casing.** `GameplayExecuteMsg` is the corrected, exact-cased type.
+
+Variant keys are **PascalCase while their fields stay snake_case** — fields serialize as literally named in the
+Rust struct (already snake_case in `msg.rs`); **only the enum's externally-tagged variant name follows serde's
+PascalCase default.**
+
+### sessionKey.ts #5 — `Any` must be real protobuf bytes
+`MsgExec.msgs` is `repeated google.protobuf.Any`, and `Any` is a real protobuf wrapper (`{ typeUrl, value:
+Uint8Array }`) — **the inner `MsgExecuteContract` MUST be encoded with `.encode(...).finish()` before being placed
+in that array. Passing a decoded/plain object as `Any.value` (as an earlier sketch did) encodes successfully
+client-side but fails to decode on-chain, since the chain's `Any` unpacking expects real protobuf bytes, not JSON.**
+
+**Only nested `Any` fields need pre-encoding.** The OUTER `MsgExec` is passed to `signAndBroadcast` as a plain
+`typeUrl`/`value` `EncodeObject`; **the extended registry encodes it automatically.**
+
+### sessionKey.ts F-4 — The placeholder that was the actual bug
+`DEVELOPER_FEE_GRANTER_ADDRESS` used to be the literal string `"juno1...devfeegrantaddress..."`, **which is not
+valid bech32 — and since every gameplay transaction routes `granter: feeGranter`, EVERY session-key transaction
+would have failed at fee-grant resolution the moment this pointed at a live chain. Nothing caught it earlier
+because nothing validated it: the failure surfaced at broadcast, as far from the mistake as it is possible to get.**
+
+`../config` now reads all four from the environment. **It is also the single definition shared with
+`WalletContext.tsx`, which matters specifically for `CONTRACT_ADDRESS`: this file's copy scopes the authz grant's
+`ContractExecutionAuthorization` while that file's copy signs it, and two drifting copies would authorize a
+contract the app never calls.**
+
+### sessionKey.ts — `createExtendedRegistry`
+Extends CosmWasm's default registry with the full `x/authz` set: **`MsgExec` (session key) and
+`MsgGrant`/`MsgRevoke` (master wallet). Neither client works without this — a `SigningCosmWasmClient` built with
+the plain default registry throws "Unregistered type url" the moment it tries to encode any of these, which only
+surfaces at broadcast time, not at connection time.** Both signing clients **MUST** be constructed with this same
+factory rather than two independently-assembled registries, **precisely so this list cannot drift out of sync.**
+
+### sessionKey.ts — Fee granter and key disposal
+`feeGranter` **defaults to `DEVELOPER_FEE_GRANTER_ADDRESS`**, overridable per-call (e.g. a per-tournament sponsor),
+**but every gameplay tx should set *some* feeGranter — the session key itself is never expected to hold JUNO to pay
+gas with.** `clearSessionKey` **only forgets the key locally; callers should also broadcast a `MsgRevoke`
+(`WalletContext.revokeSessionKey`) if the on-chain grant should stop working immediately.**
+
+### sessionKey.ts — `RouteWaypointDto`: the unit of a route is a STATION, not a hex
+Exact mirror of `msg.rs`'s `RouteWaypoint`. **That distinction became load-bearing when the contract's pathfinder
+moved its path history to `(hex, city_node)` keys, so a route can legally serve BOTH stations of a two-city hex —
+New York's brown tile (#62) and every OO tile carry two independent cities on physically separate track.** The old
+payload was `hex_path: string[]`, **which could not say which of the two a stop meant, so the contract had to
+refuse any repeated hex label outright rather than guess and risk paying for a stop the train never reached.**
+
+`city_node` is **OPTIONAL and omitting it is the normal case** — "this hex has one stop, or none", which is almost
+the whole board. Indexed exactly like the contract's own city registries (`0` first city, `1` second). **Naming a
+city the hex does not have is rejected on-chain with `NoSuchCityOnHex` rather than silently coerced.**
+
+### sessionKey.ts — Message-variant notes
+- **`AdvanceOperatingSubPhase` (Audit G-14):** advances past the current OR sub-phase without acting in it. **The
+  six OR actions are gated on-chain against a persisted cursor, so this is the only way past a phase the
+  corporation has nothing to do in — and every skip is a recorded, replayable event rather than a client-side jump.**
+- **`BuyPrivateCompany`** — the Phase-Gated Corporate Purchase Protocol (`trading.rs #17`): a corporation buying a
+  player-owned private's wrapper into its treasury once Phase 3 has launched. **`price` is a string for the same
+  big-int-safety reason every other `Uint128` field is.**
+- **`LayTile.orientation` is a required, explicit, player-chosen field.** A prior contract version **auto-picked the
+  lowest legal rotation server-side and took no `orientation` input at all, which silently removed a real 1830
+  strategic choice (which direction a route extends).** `TileSelectionPopup.tsx` is the only caller and always
+  sends the player's actual selection.
+- **`RunManualRoute.path`** replaced the deprecated `hex_path: string[]`. **Only `protocol_id`'s registered
+  President may send it, and it requires `BeginOperatingRound` to have populated the OR Corporation Turn Queue
+  first.**
+- **`PlaceStationToken.city_index` is OPTIONAL and additive**: a hex carrying two separate cities (New York #54/#62,
+  the OO tiles) needs it to be answerable at all; on a single-city hex the only valid value is `0`. **Omitting the
+  key entirely makes the contract resolve the lowest-indexed city with a free slot — always a legal placement
+  rather than a rejection.**
+
+---
+
+## context/WalletContext.tsx — the master Keplr wallet
+
+### WalletContext.tsx #1 — What the master signer is for
+Exactly the things blueprint Section 0 scopes to Keplr: **`CreateGameRoom` / `JoinGameRoom` /
+`EndGameAndDistribute` (real JUNO movement) and issuing/revoking the session key's authz grant.** Every in-game
+gameplay message goes through `execViaSessionKey` instead.
+
+### WalletContext.tsx #2 — The grant is narrowly scoped
+`ContractExecutionAuthorization` + `AcceptedMessageKeysFilter`, restricted to **this one `CONTRACT_ADDRESS`** and to
+**`GAMEPLAY_MESSAGE_KEYS` imported from `sessionKey.ts`, the single source of truth, since the two files must never
+drift.** **This corrects and supersedes the broader `GenericAuthorization` sketch in blueprint Section 2.1**, which
+that document already flagged as a pre-mainnet gap.
+
+### WalletContext.tsx #3 — Only a public address is cached
+**Only the master wallet's public `juno...` address is ever written to `sessionStorage`** — purely so the UI can
+show "reconnect as juno1..." — **never key material. Keplr custodies the actual signing key; this app never touches
+it.**
+
+### WalletContext.tsx #4 — The extended registry, again
+`MsgGrant`/`MsgExec`/`MsgRevoke` are not in `SigningCosmWasmClient`'s default registry, **so both this file and
+`sessionKey.ts` must construct their clients with `createExtendedRegistry()`. Omitting it is a common, silent
+failure mode — the client throws "Unregistered type url" only at broadcast time, not at connection time.**
+
+### WalletContext.tsx #5 — VERSION CAVEAT (unresolved)
+The int64 fields (`Grant.expiration.seconds`, `MaxCallsLimit.remaining`) are built with plain `BigInt(...)`,
+**matching `cosmjs-types` 0.9+ which targets native `bigint` for int64. Older `cosmjs-types` represented these with
+the `Long` class from the `long` package, which would need `Long.fromNumber(value)` instead.** This file was
+written and syntax-checked **without network access to a real `node_modules`** — **confirm against the installed
+`cosmjs-types` version's generated `.d.ts` before shipping, and adjust both this file and `execViaSessionKey` if it
+is on the older `Long`-based generation.**
+
+### WalletContext.tsx F-3 — The real `ujuno` balance is a `Coin`, not a number
+Deliberately `{ denom, amount }` with `amount` a **base-denom INTEGER STRING**. Two reasons, **the second being the
+important one**: it is exactly what `getBalance` returns, so nothing is reinterpreted on the way through; and
+**`ujuno` amounts are `Uint128` on-chain, so converting to a JS number loses precision above 2^53 base units —
+which is a real balance, and the failure is silent: the UI would simply show the wrong amount of the player's own
+money.**
+
+**DISTINCT FROM VGP.** This is real spendable JUNO, which is what the lobby ante is denominated in. **The
+dashboard's existing balance figure is `player_cash` — Virtual Game Points, the in-game play money. Conflating the
+two is precisely the confusion F-3 was filed about, so they must never share a display slot or a label.**
+
+Balance query errors are **swallowed into `null` rather than surfaced through `error`: that field drives the
+connect/disconnect UI, and a transient RPC hiccup on a balance read must not make the wallet look disconnected. A
+`null` balance renders as "unavailable", which is the honest state.** No second client is needed — **
+`SigningCosmWasmClient` extends `CosmWasmClient`, which exposes `getBalance` from the Stargate bank module.**
+
+**Stale-account guard:** if Keplr's active account changes out from under the app mid-session, **every subsequent
+signature would silently be attributed to the wrong player.** Tracked in a **ref, not state**, purely so the
+`keystorechange` listener always reads the latest `disconnect` **without re-subscribing on every render.**
+
+### WalletContext.tsx F-4 — Deferred config reads
+The chain id, RPC endpoint and contract address were local copies duplicated in `sessionKey.ts`; both now read from
+`../config`. **The `require*()` accessors throw if a value is unset or still a placeholder — but only when CALLED,
+which is always inside a path about to touch the chain.** Reading raw `CONTRACT_ADDRESS` never throws and may be
+`undefined`, **which is what lets the app boot and run offline with no `.env` at all.**
+
+---
+
+## context/GameSessionContext.tsx — the provider the utilities never had
+
+**DESIGN GAP CLOSED:** Milestones 1-2 shipped only the *utilities* — key generation/caching, the authz-wrapped
+executor, and `grantSessionKey` — **never a Provider wrapping them into one piece of React state.** App.tsx needs
+that boundary to hold the key/client across re-renders and expose a single `execGameplay`.
+
+1. **`initializeSessionKey` does two things in sequence:** (a) materializes (generating if needed) the cached
+   keypair and its signing client, then (b) broadcasts the authz `MsgGrant` signed by the connected master wallet.
+   **Both must succeed before `execGameplay` works — generating the key alone grants it nothing on-chain, and a
+   grant for an address whose key was never cached would be unreachable from this browser.**
+2. **Must render INSIDE `WalletProvider`** — it calls `useWallet()` internally and throws the same
+   "must be used within a Provider" error if nested the wrong way.
+3. **Re-running `initializeSessionKey` is safe** (e.g. a mid-session reload): `getSessionWallet` reuses whatever key
+   is cached in `sessionStorage`, **and re-broadcasting the same (contract, grantee, message-key-filter) `MsgGrant`
+   simply replaces the prior grant with a fresh expiration on `x/authz` rather than stacking a duplicate.**
+4. **`execGameplay` is a thin wrapper** over `execViaSessionKey`, filling in the session client/address and the
+   master address automatically **so call sites only supply the `GameplayExecuteMsg` itself.**
+
+---
+
+## components/ConnectWalletButton.tsx — the burner-wallet checkpoint
+
+### #0 — Why a component and not a modal prop
+**There is more than one Connect Keplr button in this app** — the top bar and the lobby's own — **and a warning
+that only one of them honours is not a warning, it is a coin flip.** So the button and the modal ship as ONE
+component. **`wallet.connect` is not exported from here and no caller wires it directly; bypassing the
+recommendation means deleting this component, which is a visible change rather than an easy omission.**
+
+### #1 — This is advice, and it does not pretend otherwise
+**The modal cannot verify that the wallet a player picks in Keplr is actually a burner — nothing in the browser
+can.** It is a recommendation shown **at the one moment it is actionable, which is the moment before the extension
+opens**, and it says so plainly.
+
+**NOT dismissible-forever and no "don't show again" toggle**, unlike `TutorialModal`: **a tutorial teaches
+something once; this is a checkpoint on a security decision that is re-made every time a different wallet could be
+selected.** It is one extra click on a once-per-session action, **and Cancel is a real exit — the point is a
+considered choice, not a toll booth.**
+
+### #2 — Escape and backdrop mean Cancel
+Both dismissal paths route to Cancel, **never to Proceed. A modal that opened a wallet connection because someone
+pressed Escape would be doing the opposite of what the gesture means, and this particular modal exists to slow that
+decision down.**
+
+---
+
+## config.ts — deployment configuration (F-4)
+
+### config.ts #0 — Why this file does not throw at import
+The first version validated at module scope (`export const CONTRACT_ADDRESS = requireAddress(...)`). **That crashed
+the entire app at startup with an unset `.env` — the throw happened during `import`, before React ever mounted, so
+there was no UI left to display the error in.** `config.ts` ← `sessionKey.ts` ← `WalletContext.tsx` ← `App.tsx`:
+**one missing variable took down the whole bundle.**
+
+**It was also wrong on the merits.** This app has a real **OFFLINE MODE** — `HexGridRenderer #120`'s tile-picker
+fallback, which reads `localCatalogPlacements` and reports `status: "offline"` whenever `contractAddress` is
+`undefined`. **Offline mode needs no contract, no fee granter, no RPC endpoint and no wallet; it exists precisely
+to inspect the tile catalog without a chain. Making an unset contract address fatal made that documented mode
+unreachable.**
+
+**The rule:**
+
+| Operation | Behaviour |
+|---|---|
+| **READING** config | never throws. Unset values are `undefined`, **which is a legitimate state meaning "offline"** |
+| **REQUIRING** config | throws, **and only at the moment an operation genuinely needs a chain** — connecting a wallet, granting a session key, sending a transaction |
+
+**Still fail-loud** — the error names the exact variable — **but it fails at the point of use, where the UI is
+alive to show it and where the user has actually asked for something that needs it.** The original bug (a
+placeholder that LOOKS like an address) **is still caught by `requireAddress`; it just does it when you try to
+transact rather than when you open the page.**
+
+### config.ts #1 — Why a shared module at all
+`WalletContext.tsx` and `sessionKey.ts` each carried their own RPC endpoint and contract address, **each with a
+matching `TODO(design gap)` acknowledging the duplication.** Not merely untidy: **`sessionKey.ts`'s copy scopes the
+session key's `ContractExecutionAuthorization` while `WalletContext.tsx`'s copy signs it. Two drifting copies would
+authorize a contract the app never calls, and every session-key transaction would fail authorization at broadcast
+with no hint as to why.**
+
+### config.ts #2 — CRA substitutes `REACT_APP_*` at build time
+`react-scripts` replaces `process.env.REACT_APP_FOO` **textually**. Two consequences **worth stating rather than
+discovering:**
+
+- **The reads MUST be full literal `process.env.REACT_APP_FOO` expressions.** Destructuring
+  (`const { REACT_APP_FOO } = process.env`) or dynamic indexing (`process.env[name]`) **is NOT substituted and
+  silently yields `undefined` in a production bundle.** That is why `readOptional` **takes the already-read VALUE
+  and uses the name only for messages.**
+- **Changing a variable needs a REBUILD, not just a dev-server restart.**
+
+`readOptional` is **EXPORTED for `config/firebase.ts`**, which applies the identical deferred-read discipline to
+the `REACT_APP_FIREBASE_*` variables. **Sharing the helper rather than copying it is #1's rule applied to the
+reading policy itself: if the definition of "unset" ever changes (say, treating the literal string "undefined" as
+blank — a real hazard when a CI system interpolates a missing variable), it must change in exactly one place or the
+two config modules will disagree about whether the app is configured.**
+
+### config.ts #3 — Validation is shape-only
+Checks the bech32 **prefix, character set and length**. Deliberately does **NOT verify the bech32 checksum**: that
+would pull `@cosmjs/encoding` into this module **for no real gain, since the failure being guarded against is
+"someone shipped the placeholder" or "someone left it unset", not "someone typo'd one character of an otherwise
+real address". A checksum failure is caught by the chain with a clear error; a placeholder was not.**
+
+**NOTHING SECRET GOES HERE. Everything ships to the browser in plain text.**
+
+### config.ts — the exported values
+- **`CONTRACT_ADDRESS`** — `undefined` is a supported, meaningful state: `HexGridRenderer` takes it as the signal to
+  run its offline tile-catalog fallback. **Pass it straight through; do not coerce it to `""`.**
+- **`DEVELOPER_FEE_GRANTER_ADDRESS`** — **MUST equal the contract's own `GameConfig::developer_treasury`.** The
+  contract funds this account from a percentage of every lobby deposit, and this account then grants fees back to
+  players. **Point these at two different addresses and the treasury fills while every player's transaction fails
+  for want of a grant.**
+- **`isChainConfigured()`** — `false` means offline mode: tile catalog browsable, wallet and transactions
+  unavailable. **Use this to label the UI honestly rather than to hide errors — a user who sees "Offline" and a
+  reason is informed; one who sees a dead Connect button is not.**
+
+### config.ts — `formatNativeAmount`: integer string math only
+`"12500000"` ujuno → `"12.500000"` JUNO. **NEVER `Number(amount) / 1e6`.** This mirrors the contract's own
+no-floating-point discipline **for the same reason it holds itself to it: `ujuno` amounts are `Uint128`, and any
+balance above 2^53 base units silently loses precision the moment it becomes an IEEE-754 double. The player would
+be shown the wrong amount of their own money, which is the least acceptable place to be quietly wrong.**
+
+Returns `"0.000000"` for malformed input rather than `NaN`, **so a surprising RPC response degrades to an
+obviously-wrong-but-harmless zero instead of rendering "NaN JUNO".**
+
+`formatNativeAmountCompact` trims trailing fraction zeros (`40000000` → `"40"`, `40500000` → `"40.5"`, `1` →
+`"0.000001"`) **for places that report a POOL rather than a wallet balance.** A wallet wants fixed decimals **so
+successive balances line up in the same column; a single headline figure reading "40.000000 JUNO" is six characters
+of noise around the number the reader wanted.** Built **on** `formatNativeAmount` rather than dividing, **so the
+no-floats discipline holds here too — this only ever trims a string it was handed.**

@@ -1,65 +1,34 @@
-// frontend/src/utils/activeGame.ts
+// Which board the player is looking at -- the persisted room pointer, the three
+// viewing modes and the sandbox's reserved identifiers. Moved out of `App.tsx`.
 //
-// WHICH BOARD THE PLAYER IS LOOKING AT -- the persisted room pointer, the
-// three viewing modes and the sandbox's reserved identifiers. Moved out of
-// `App.tsx` unchanged.
-//
-// `BoardMode` is the reason this file exists rather than these constants
-// staying beside `GameRouter`. It is a type three separate layers agree on --
-// the router that picks a board, the shell that renders one, and the stored
-// pointer that survives a reload -- and `AppShell`'s own props interface
-// depends on it. A vocabulary that a component's props depend on should not
-// live inside that component's file.
-//
-// `readActiveGame` comes with it because it is the only reader of the storage
-// key and the only place that validates the stored shape, so the key, the
-// type and the parser are one unit.
+// `BoardMode` is a type three layers agree on (the router that picks a board,
+// the shell that renders one, the stored pointer that survives a reload), and
+// `AppShell`'s props depend on it -- a vocabulary a component's props depend on
+// should not live inside that component's file. `readActiveGame` comes with it
+// because the key, the type and the parser are one unit.
 
 export const ACTIVE_GAME_STORAGE_KEY = "18cosmos.active_game.v1";
 
-/* ==================================================================== */
-/*  DESIGN NOTE 24: THE THREE WAYS TO BE LOOKING AT A BOARD             */
-/* ==================================================================== */
+// Design note #24: `play` is a real on-chain game; `spectate` is somebody
+// else's, live but with no dispatch (#23); `sandbox` has NO CHAIN AT ALL.
 //
-//   play     A real on-chain game. `gameId` is the contract's, every
-//            control is live, every action signs.
-//   spectate A real on-chain game someone else is playing. Live data,
-//            no dispatch -- design note #23.
-//   sandbox  NO CHAIN AT ALL. The board, tile catalog and picker run off
-//            local mock state so the UI can be worked on without a
-//            deployed contract, a funded wallet, or a populated Firestore.
+// Sandbox exists because the lobby was a TRAP: launching needs a contract
+// address and spectating needs an existing game, so with mock addresses there
+// was no route to `HexGridRenderer` at all.
 //
-// Sandbox exists because the lobby was a TRAP. Launching needs a valid
-// contract address, spectating needs a game someone already launched, and
-// with mock addresses and a fresh Firebase neither is possible -- so there
-// was no route from the lobby to `HexGridRenderer` at all. A UI you cannot
-// open is a UI you cannot develop.
-//
-// IMPLEMENTATION NOTE, and the reason this is a mode rather than a magic
-// `gameId`. The obvious shape -- `gameId = "offline-sandbox"` -- was tried
-// and rejected: `gameId` is typed `number` because it is threaded into
-// roughly twenty `ExecuteMsg` payloads as `game_id`, which the contract
-// declares as `u64`. Widening it to `number | string` would push a
-// `string | number` into every one of those messages and delete the
-// compiler's ability to tell a real game id from a placeholder -- the exact
-// class of mistake `config.ts` design note #3 exists to catch. So the
-// sandbox's identity lives in `mode`, where it is a UI concern, and
-// `gameId` stays a number that always means "a room the contract knows
-// about". `SANDBOX_GAME_ID` is never sent anywhere; sandbox mode does not
-// dispatch.
-//
-// Sandbox is NOT spectator mode. Spectating disables the tile picker
-// (design note #23); sandbox is specifically FOR the tile picker. The two
-// are separate flags on purpose -- `spectator` gates dispatch, `sandbox`
-// gates whether there is a chain to dispatch to.
+// A MODE rather than a magic `gameId`, and the alternative was tried:
+// `gameId` is `number` because it is threaded into ~20 `ExecuteMsg` payloads as
+// a `u64` `game_id`, so widening it would delete the compiler's ability to tell
+// a real game id from a placeholder. Sandbox is NOT spectator mode -- spectating
+// disables the tile picker, sandbox is FOR it; `spectator` gates dispatch,
+// `sandbox` gates whether there is a chain to dispatch to.
 
 export type BoardMode = "play" | "spectate" | "sandbox";
 
-/** The `gameId` handed to the shell in sandbox mode. Never reaches the
- *  chain: sandbox forces `HexGridRenderer` down its offline path, and every
- *  dispatch site is gated before a message is built. `0` because the
- *  contract's `NEXT_GAME_ID` counter starts at 1, so this collides with no
- *  real room. */
+/** The `gameId` handed to the shell in sandbox mode. Never reaches the chain:
+ *  sandbox forces `HexGridRenderer` down its offline path and every dispatch site
+ *  is gated before a message is built. `0` because the contract's `NEXT_GAME_ID`
+ *  counter starts at 1, so this collides with no real room. */
 export const SANDBOX_GAME_ID = 0;
 
 /** The `roomId` handed to the shell in sandbox mode. There is no Firestore
@@ -94,12 +63,10 @@ export function readActiveGame(): ActiveGame | null {
       return {
         gameId: (parsed as ActiveGame).gameId,
         roomId: (parsed as ActiveGame).roomId,
-        // Fails CLOSED: only the three known modes are accepted, and
-        // anything else -- including an entry written before this field
-        // existed -- degrades to `spectate`, the least privileged of the
-        // three. The safe reading of "I do not know what this viewer is" is
-        // "assume they may not act"; the cost is one trip back through the
-        // lobby, versus handing a non-player a board full of live controls.
+        // Fails CLOSED: only the three known modes are accepted, and anything else --
+        // including an entry written before this field existed -- degrades to
+        // `spectate`, the least privileged. The cost is one trip back through the lobby,
+        // versus handing a non-player a board full of live controls.
         mode:
           storedMode === "play" || storedMode === "spectate" || storedMode === "sandbox"
             ? storedMode
@@ -114,50 +81,27 @@ export function readActiveGame(): ActiveGame | null {
   }
 }
 
-/**
- * The boundary between "choosing a room" and "playing in one".
+/** The boundary between "choosing a room" and "playing in one": `Lobby` with no
+ *  active game, `AppShell` with one.
  *
- * With no active game this renders `Lobby`; with one, `AppShell`. That is
- * the whole router -- there is no URL routing here on purpose, since this
- * app has exactly two screens and adding `react-router` for a single
- * boolean would be a dependency and a build-config change (see
- * `config-overrides.js`) bought for nothing.
- *
- * Rendered INSIDE both providers: `Lobby` calls `useWallet()` to sign the
- * launch transaction, so it must sit under `WalletProvider` -- the same
- * nesting requirement `GameSessionContext.tsx`'s own design note #2 records
- * for itself.
- */
+ *  No URL routing on purpose -- this app has two screens, and `react-router` for
+ *  a single boolean is a dependency and a build-config change bought for nothing.
+ *  Rendered inside both providers, because `Lobby` calls `useWallet()` to sign
+ *  the launch transaction (`GameSessionContext.tsx` design note #2). */
 
-/* ==================================================================
- *  DESIGN NOTE 551: A REFRESH MUST NOT COST YOU THE ROOM
- * ==================================================================
- *
- * REPORTED: refreshing the page in Sandbox multiplayer drops you into solo
- * Sandbox, with no clear way back into the game you were playing.
- *
- * `activeGame` was already persisted, which is why the refresh landed on the
- * Sandbox board at all rather than in the Lobby -- but the ROOM CODE was
- * ordinary React state and went with the reload. So the shell came back in
- * exactly the shape that says "solo sandbox", and the fixture's board came
- * with it. The game was still there, in Firestore, addressed by a code that
- * no longer existed anywhere in the browser.
- *
- * IT IS RESUMABLE BECAUSE THE LOG IS THE GAME. Nothing about the position
- * needs saving: the room's action log is the complete history, replayed from
- * index 0 on every join (design note #522), and a rejoin is therefore
- * identical to a first join. This stores one short string, not a snapshot --
- * a serialised board would be a second source of truth about the position,
- * and the one that goes stale silently.
- *
- * `sessionStorage`, MATCHING `localPlayerId`. That pairing is the point and
- * the two must not diverge: the id is what the room knows this browser as,
- * and both are scoped to the tab. In `localStorage` the code would outlive
- * the identity, so a new tab weeks later would rejoin a finished game as a
- * stranger. Closing the tab ends the session -- for both -- which is the
- * honest boundary. `Lobby.tsx` records the same reasoning for its own
- * active-room key.
- */
+/* Design note #551: a refresh must not cost you the room. `activeGame` was
+   persisted but the ROOM CODE was React state, so a reload came back in exactly
+   the shape that says "solo sandbox" while the game sat in Firestore addressed
+   by a code no longer in the browser.
+
+   Resumable because THE LOG IS THE GAME: the action log is replayed from index 0
+   on every join (#522), so a rejoin is identical to a first join and only one
+   short string needs storing. A serialised board would be a second source of
+   truth about the position, and the one that goes stale silently.
+
+   `sessionStorage`, MATCHING `localPlayerId` -- the two must not diverge. In
+   `localStorage` the code would outlive the identity, so a new tab weeks later
+   would rejoin a finished game as a stranger. */
 export const ACTIVE_SANDBOX_ROOM_STORAGE_KEY = "juno.activeSandboxRoom";
 
 export function readActiveSandboxRoom(): string | null {

@@ -1,21 +1,10 @@
-// frontend/src/components/TopBar.tsx
+// The slim top bar -- wallet status, session key, room controls -- moved out of
+// `App.tsx` unchanged, with its three private helpers and its one CSS string.
 //
-// THE SLIM TOP BAR -- wallet status, session key, room controls -- moved out
-// of `App.tsx` unchanged.
-//
-// A pure move: the component body, its three private helpers and its one CSS
-// string are the same text `App.tsx` carried, with the same design notes.
-//
-// WHY IT IS SELF-CONTAINED. `firstMissingEnvVar`, `nativeBalanceTitle` and
-// `statusDotColor` each have exactly one caller, and it is this component.
-// They were top-level functions in a 9,600-line file, which made them look
-// like shared utilities and meant that reading `TopBar` required scrolling
-// away from it. Travelling with their only consumer is what makes this file
-// readable on its own, and it removes three names from the module scope every
-// other declaration in `App.tsx` had to share.
-//
-// `NETA_CREDIT_CSS` likewise. It styles one link in one component; hoisting
-// it to a shared stylesheet would have been indirection, not reuse.
+// `firstMissingEnvVar`, `nativeBalanceTitle` and `statusDotColor` each have
+// exactly one caller. As top-level functions in a 9,600-line file they looked
+// like shared utilities and meant reading `TopBar` required scrolling away from
+// it. `NETA_CREDIT_CSS` likewise styles one link in one component.
 
 import React from "react";
 
@@ -36,52 +25,20 @@ const NETA_CREDIT_CSS = `
 /* Main tabs -- see design note #9                                    */
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================== */
-/*  DESIGN NOTE 28: PHASE TAB vs REFERENCE BOARDS                       */
-/* ==================================================================== */
+// Design note #28: `"phase"` is the surface the current round is PLAYED on;
+// `"map"`, `"stock"`, `"ledger"` and `"rules"` are REFERENCE boards. One tab
+// used to be both, renaming itself by round, which made the market chart
+// unreachable during the two phases where it is most worth consulting. The
+// Operating Round has no `"phase"` surface at all -- its actionable surface IS
+// the rail map -- which is why `orderedMainTabs` returns a LIST: the tab set
+// changes shape by phase, not just its order.
 //
-// `"phase"` is new, and splitting it out fixes a conflation that had been
-// there since the tabs were flattened. One tab used to be both "the thing
-// you act in" and "the stock market chart", renaming itself between
-// "Auction", "Stock Round" and "Stock Market" depending on the round. That
-// meant the 2D market chart -- a REFERENCE board a player wants to consult
-// at any time, including mid-auction to see where prices stand -- was
-// unreachable during the two phases where it is most worth consulting,
-// because the tab that would have shown it was busy being the auction.
+// Design note #41: `"corps"` is present in every phase and simply IS the Stock
+// Round's phase surface. NAMING TRAP: id `"corps"` labelled "Stocks", while a
+// different tab has id `"stock"` labelled "Stock Market"; `"stock"`/`"stocks"`
+// as siblings would be one letter apart and impossible to review.
 //
-// The split is along a real line:
-//
-//   ACTIONABLE   `"phase"`  the surface where the current round is played.
-//                           Auction dashboard, or Stock Round panel.
-//   REFERENCE    `"map"`    the rail map (also actionable in an OR).
-//                `"stock"`  the market chart. Always just a board.
-//                `"ledger"` / `"rules"`  never actionable.
-//
-// The Operating Round is the one phase with no dedicated `"phase"` surface,
-// because its actionable surface IS the rail map -- so during an OR the
-// phase tab is simply absent and `"map"` leads instead. That is why
-// `orderedMainTabs` returns a LIST rather than a fixed array with a
-// reshuffle: the tab set itself changes shape by phase, not just its order.
-//
-/* ==================================================================== */
-/*  DESIGN NOTE 41: `"corps"` -- THE PERSISTENT STOCKS TAB              */
-/* ==================================================================== */
-//
-// The corporation roster used to be reachable ONLY as the Stock Round's
-// phase surface. That made "who owns what, and what is it worth" a fact you
-// could look up during a Stock Round and nowhere else -- including during
-// the Operating Round that decides those valuations, which is precisely
-// when a player wants to check them.
-//
-// `"corps"` is therefore its own tab, present in every phase, and during a
-// Stock Round it simply IS the phase surface (there is no separate
-// `"phase"` tab that round, the same way an Operating Round has none).
-//
-// NAMING, because this is a trap worth marking: the id is `"corps"` and the
-// LABEL is "Stocks", while a DIFFERENT tab has the id `"stock"` and the
-// label "Stock Market". `"stock"`/`"stocks"` as sibling ids would be one
-// letter apart and impossible to review; the two surfaces are unrelated
-// (one is a corporation roster, one is the price chart).
+// See docs/ai_architecture/ui_shell_layout.md, TopBar.tsx #28 / #41.
 
 /** Pulls the `REACT_APP_*` name out of a `chainConfigError()` message, for
  *  the compact badge. `null` if the message names none, in which case the
@@ -124,54 +81,17 @@ function statusDotColor(
 /* Dashboard Control Bar                                              */
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================
- *  DESIGN NOTE 34: ONE TOP BAR
- * ==================================================================
- *
- * There were two full-width headers stacked above the tab bar: this one
- * (brand, Master Wallet, Session Key, JUNO balance, Cash) and the room
- * strip below it (game id, room id, Back to lobby). Three rows of chrome
- * before a single hex of the board -- and the two headers were not even
- * different subjects, both being "what am I connected to".
- *
- * They are one slim strip now: identity and room context on the left,
- * connection controls pushed right, `Connect Keplr` last. The room content
- * arrives as `roomContext` rather than being rebuilt here, because the
- * sandbox phase switcher and the spectator badge need state that lives in
- * `AppShell`; passing a node keeps this component ignorant of game state
- * it has no other reason to know about.
- *
- * WHAT WAS DELETED, AND WHY IT WAS SAFE:
- *
- *   - THE CASH READOUT. In-game cash belongs to the Game Ledger and the
- *     Player Index, not to the row that also shows a crypto balance --
- *     that adjacency was the exact confusion the old F-3 note worried
- *     about, and the honest fix is not two visual treatments of two kinds
- *     of money side by side, it is not putting them side by side.
- *   - THE FIELD LABELS ("Master Wallet", "Session Key", "Wallet"). A
- *     truncated bech32 address next to a status dot does not need a
- *     caption; the tooltips carry the full values.
- *   - THE ALWAYS-VISIBLE "Initialize Session Key" BUTTON. It now appears
- *     only while it is actionable -- wallet connected, session not ready.
- *     Once ready it collapses to a dot, because a button that has already
- *     been pressed and cannot usefully be pressed again is just width.
- *
- * The session key is NOT dropped, only condensed: it is what authorises
- * gameplay transactions, so its state stays visible at all times, and its
- * error still renders inline. */
-/* Design note #40: the phase badge is NOT in this bar.
- *
- * It was, briefly, sitting between the brand and the room context. That was
- * the wrong slot for a measurable reason rather than an aesthetic one: this
- * header is a single `flex` row, and adding two more pills to it pushed the
- * wallet cluster -- balance, address, Connect -- onto a second line, which
- * undid the entire point of design note #34's consolidation.
- *
- * The badge now lives at the far right of the Contextual Action Bar, which
- * is also the better home on the merits. The action bar already says WHAT
- * ROUND it is; the phase says which trains and tiles that round can use.
- * The two belong on the same strip, and that strip has spare width because
- * its buttons are left-aligned. */
+/* Design note #34: one slim strip, replacing two stacked full-width headers
+   that were both answering "what am I connected to". Room content arrives as a
+   `roomContext` node, so this component stays ignorant of game state. Deleted:
+   the in-game cash readout (real and virtual money must not sit side by side --
+   the F-3 confusion), the field labels, and the always-visible session-key
+   button. The session key is condensed to a dot, not dropped.
+
+   Design note #40: the phase badge is NOT here. This header is a single `flex`
+   row and two more pills pushed the wallet cluster onto a second line, undoing
+   #34. It lives at the far right of the Contextual Action Bar, which already
+   says what round it is. */
 export default function TopBar({
   roomContext,
   onLeaveGame,
@@ -184,19 +104,12 @@ export default function TopBar({
   const wallet = useWallet();
   const session = useGameSession();
 
-  // F-4 UI: WHY the wallet cannot connect, when that is a configuration
-  // problem rather than a user one.
-  //
-  // `config.ts` deliberately no longer throws at import (see its design note
-  // #0) -- an unconfigured build boots into offline mode instead of dying.
-  // The cost of that correctness is that "Connect Keplr" would otherwise look
-  // like it should work and simply fail on click. Surfacing the reason turns
-  // a dead button into an explained one, and names the exact environment
-  // variable so the fix is obvious without reading source.
-  //
-  // Computed at render, not memoised: it reads build-time constants that
-  // cannot change during a session, so there is nothing to cache and a
-  // `useMemo` here would only add indirection.
+  // F-4 UI: why the wallet cannot connect, when that is a configuration problem
+  // rather than a user one. `config.ts` deliberately no longer throws at import
+  // (its #0), so an unconfigured build boots offline and "Connect Keplr" would
+  // otherwise look like it should work and fail on click. Names the exact
+  // environment variable. Computed at render -- these are build-time constants
+  // that cannot change during a session, so there is nothing to cache.
   const configError = chainConfigError();
 
   const walletStatusLabel: Record<typeof wallet.status, string> = {
@@ -223,17 +136,12 @@ export default function TopBar({
       <style>{NETA_CREDIT_CSS}</style>
       <span style={styles.topBarBrand}>Project 18XX</span>
 
-      {/* Design note #47: the Neta DAO credit.
-          Sits with the BRAND, not with the wallet cluster. It is an
-          attribution, so it belongs next to the thing being attributed --
-          and the right-hand group is the one that already wraps first when
-          the bar gets tight (design note #34). Parking a decorative link
-          there would push a functional control onto a second line.
-
-          `flexShrink: 0` plus `nowrap` so it never becomes the thing that
-          breaks the row, and `rel="noopener noreferrer"` because
-          `target="_blank"` without it hands the new tab a `window.opener`
-          handle back into this app. */}
+      {/* Design note #47: the Neta DAO credit sits with the BRAND, not the wallet
+         cluster -- an attribution belongs next to the thing attributed, and the
+         right-hand group is the one that wraps first when the bar gets tight (#34).
+         `flexShrink: 0` plus `nowrap` so it never breaks the row, and
+         `rel="noopener noreferrer"` because `target="_blank"` without it hands the new
+         tab a `window.opener` handle back into this app. */}
       <a
         href="https://netadao.org"
         target="_blank"

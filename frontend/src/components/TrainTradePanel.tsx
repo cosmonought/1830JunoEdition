@@ -1,51 +1,24 @@
-// frontend/src/components/TrainTradePanel.tsx
-//
 // Corporation-to-corporation train sales -- the UI half of Audit G-15.
 //
-// Design notes:
-//
-// 1. THREE AUDIENCES, ONE PANEL. Every offer is visible to everyone, but what
-//    you can DO with it depends on which president you are:
-//      - the SELLER's president sees Accept / Reject;
-//      - the BUYER's president sees Rescind;
-//      - anyone else sees a read-only row.
-//    The backend resolves both presidents onto each offer
-//    (`TrainOfferEntry.seller_president` / `buyer_president`) precisely so
-//    this decision needs no cross-referencing of the company list here.
-//
-//    Read-only rows are shown rather than hidden on purpose. A pending offer
-//    is public information at the table -- everyone can see two players
-//    negotiating -- and hiding it would make the blocked turn inexplicable to
-//    the other players waiting on it.
-//
-// 2. THE BLOCKED TURN IS THE HEADLINE. While a corporation has an offer
-//    outstanding it cannot end its Operating Round turn. That is enforced
-//    on-chain (`operations::PendingTrainOfferBlocksTurn`), so if this panel
-//    said nothing the player would simply find "End Turn" failing with an
-//    error and no visible cause. The banner states the block and puts Rescind
-//    next to it, because rescinding is the one thing that clears it and it is
-//    entirely in the buyer's hands.
-//
-// 3. SAME-PRESIDENT SALES NEVER APPEAR HERE. If one player is president of
-//    both corporations the contract settles immediately and writes no offer,
-//    so there is nothing to display. The compose form still shows those
-//    corporations as sellers -- the sale just completes on submit instead of
-//    creating a row. The form says so, rather than letting the difference
-//    surprise the player after they click.
-//
-// 5. UNAVAILABLE MODELS ARE DISABLED, NOT HIDDEN, and carry counts. A
-//    corporation that owns no 4-train shows "4-train -- none owned", greyed.
-//    Hiding the row would leave the player wondering whether the model exists
-//    at all; showing it greyed answers "can I buy a 4-train from them" with a
-//    definite no. Models the seller DOES own show how many, because two
+// 1. THREE AUDIENCES, ONE PANEL. The seller's president sees Accept/Reject, the
+//    buyer's sees Rescind, everyone else a read-only row; the backend resolves
+//    both presidents onto each offer so no cross-referencing is needed here.
+//    Read-only rows are SHOWN, because a pending offer is public information and
+//    hiding it makes the blocked turn inexplicable to the players waiting on it.
+// 2. THE BLOCKED TURN IS THE HEADLINE. `operations::PendingTrainOfferBlocksTurn`
+//    enforces it on-chain, so silence here would surface as "End Turn" failing
+//    with no visible cause. Rescind sits next to the banner because it is the one
+//    thing that clears it.
+// 3. SAME-PRESIDENT SALES NEVER APPEAR HERE -- the contract settles immediately
+//    and writes no offer. The compose form says so rather than surprising the
+//    player after the click.
+// 4. PRICES ARE STRINGS ALL THE WAY THROUGH. `Uint128` on-chain; validated as a
+//    non-negative integer string and passed on unparsed, the same no-float
+//    discipline the contract holds itself to.
+// 5. UNAVAILABLE MODELS ARE DISABLED, NOT HIDDEN, and carry counts -- two
 //    2-trains and one 2-train are different negotiating positions.
 //
-// 4. PRICES ARE STRINGS ALL THE WAY THROUGH. `price` is `Uint128` on-chain
-//    and arrives as a JSON string. The input is validated as a non-negative
-//    integer string and passed on unparsed -- the same no-float discipline
-//    the contract holds itself to. A price above 2^53 is not realistic in
-//, but parsing to `Number` here would be a silent precision bug for no
-//    benefit whatsoever.
+// See docs/ai_architecture/contract_economy.md, TrainTradePanel.tsx.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
@@ -68,12 +41,11 @@ export interface TradeCompany {
   company_id: number;
   ticker: string;
   president: string | null;
-  /** Models this corporation currently owns, e.g. `["2", "2", "4"]`.
-   *  Duplicates are meaningful and drive the "(2 available)" counts.
+  /** Models this corporation currently owns, e.g. `["2", "2", "4"]`. Duplicates
+   *  are meaningful and drive the "(2 available)" counts.
    *
    *  `null`/`undefined` means UNKNOWN -- a contract predating
-   *  `PublicCompanyState.owned_trains` -- not "owns nothing". See
-   *  `ownedCounts` for why the distinction is load-bearing. */
+   *  `PublicCompanyState.owned_trains` -- not "owns nothing". */
   owned_train_models?: string[] | null;
 }
 
@@ -96,23 +68,12 @@ export interface TrainTradePanelProps {
   onAccept: (offerId: number) => void;
   onReject: (offerId: number) => void;
   onRescind: (offerId: number) => void;
-  /* ================================================================
-   *  DESIGN NOTE 6: THE COMPOSE FORM MOVED, THE LEDGER STAYED
-   * ================================================================
-   *
-   * `TrainPurchasePanel` now owns composing an offer -- see its design note
-   * #2 for why a clickable roster of real train badges replaced this file's
-   * three dropdowns. What it does NOT own is the OFFER LEDGER below: the
-   * blocked-turn banner, the pending rows, and the three-audience Accept /
-   * Reject / Rescind split that design note #1 exists for.
-   *
-   * Two panels rendering two compose forms for one action would be the
-   * classic duplicate-control bug, so this is switched off at the call site
-   * rather than deleted. Kept switchable rather than removed because the
-   * form is the only surface that works against a chain predating
-   * `owned_trains` -- the badge roster has nothing to render there (see
-   * `TradeCompany.owned_train_models`), and a build pointed at such a
-   * contract can turn this back on in one prop. */
+  /* Design note #6: `TrainPurchasePanel` now owns composing an offer (its #2: a
+     clickable roster of real train badges replaced three dropdowns). This file
+     keeps the OFFER LEDGER -- banner, pending rows, and the three-audience split.
+     Switched off at the call site rather than deleted, because the form is the
+     only surface that works against a chain predating `owned_trains`, where the
+     badge roster has nothing to render. */
   composeEnabled?: boolean;
 }
 
@@ -173,11 +134,9 @@ export function TrainTradePanel({
     selectedSeller.president === activeCompany.president;
 
   // How many of each model the selected seller owns -- design note #5.
-  //
-  // `undefined` means the CHAIN DID NOT SAY (a contract predating
-  // `owned_trains`), which is emphatically not "owns nothing". In that case
-  // every model stays selectable and the contract remains the authority;
-  // greying everything out against an older chain would make trading look
+  // `undefined` means the CHAIN DID NOT SAY, which is emphatically not "owns
+  // nothing": every model stays selectable and the contract remains the authority,
+  // since greying everything out against an older chain would make trading look
   // broken rather than unsupported.
   const ownedModels = selectedSeller?.owned_train_models ?? null;
   const ownedCounts = useMemo(() => {

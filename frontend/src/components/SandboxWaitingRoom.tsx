@@ -1,40 +1,15 @@
-// frontend/src/components/SandboxWaitingRoom.tsx
-//
 // The anteroom: who is here, what they are called, and who may start.
 //
-// ===================================================================
-//  DESIGN NOTE 529: THE GAME DOES NOT EXIST YET
-// ===================================================================
+// Design note #529: this REPLACES the board rather than sitting over it. Before
+// setup lands there is no game -- the player count is undecided, so starting
+// cash and the certificate limit are too, and showing the board underneath would
+// show a plausible, correctly-rendered game nobody is playing.
 //
-// This screen replaces the board entirely rather than sitting over it, and
-// that is the requirement's own instruction for a reason worth stating:
-// before the setup action lands there IS no game. The player count is not
-// decided, so starting cash and the certificate limit are not decided
-// either -- and those are what the ledger, the stock cards and the
-// certificate counter all render from.
+// Design note #529a: everyone gets Ready; only the host gets Start. Start is the
+// one write that DEALS the game, and two clients sending it would put two setups
+// with different shuffles in the log, each replayed by every client.
 //
-// Showing the board underneath would therefore mean showing a game dealt for
-// the fixture's roster, which is about to be replaced by one dealt for the
-// real one. Every number on it would be wrong, and wrong in the specific way
-// that looks right: a plausible board, correctly rendered, describing a game
-// nobody is playing.
-//
-// ===================================================================
-//  DESIGN NOTE 529a: READY IS A CLAIM, START IS AN ACT
-// ===================================================================
-//
-// Everyone gets "Ready to play"; only the host gets "Start game", and it is
-// enabled only when the whole room is ready. That asymmetry is deliberate.
-//
-// The start action is the one write that DEALS THE GAME -- it fixes the
-// player count, the starting cash and the turn order for everybody. If any
-// client could send it, two of them could send it twice, and the log would
-// contain two setups with different shuffles. Every client would replay both
-// and the second would silently redeal a game already in progress.
-//
-// One host, one button, one setup entry. `canStart` additionally requires
-// enough players to deal a legal 1830 game, because "everyone is ready" is
-// trivially true of a room containing one person.
+// See docs/ai_architecture/firebase_middleware.md, SandboxWaitingRoom.tsx #529.
 
 import React, { useState } from "react";
 
@@ -79,12 +54,9 @@ export function SandboxWaitingRoom({
   const allReady = players.length > 0 && players.every((player) => player.isReady);
   const canStart = isHost && enough && allReady;
 
-  /* Design note #529: the numbers this room WOULD be dealt, shown live as
-     people arrive. They are the whole consequence of the player count, and
-     a lobby that hides them makes the count feel cosmetic -- a player
-     joining a four-hander should be able to see their $600 before they
-     commit to it. `null` off the printed table, which is what the count
-     guard below is about. */
+  /* Design note #529: the numbers this room WOULD be dealt, shown live as people
+     arrive. They are the whole consequence of the player count, and a lobby that
+     hides them makes the count feel cosmetic. `null` off the printed table. */
   const cash = startingCashForPlayers(players.length);
   const certs = certLimitForPlayers(players.length);
 
@@ -125,20 +97,11 @@ export function SandboxWaitingRoom({
           </button>
         </form>
 
-        {/* ==================================================================
-             DESIGN NOTE 569a: PICK A COLOUR, OR DO NOT
-            ==================================================================
-
-            Optional by construction. A seat that never touches this gets the
-            palette by index and is never colourless, so the control is a
-            preference rather than a step -- which is what "some people have
-            favorite colors and would want to set it, others may not care"
-            asks for.
-
-            TAKEN COLOURS ARE DISABLED rather than hidden. A greyed swatch
-            with the holder's name in its tooltip says WHY it cannot be
-            chosen; removing it would make the palette a different size for
-            every player and look like a bug. */}
+        {/* Design note #569a: optional by construction -- a seat that never touches this
+           gets the palette by index and is never colourless. Taken colours are DISABLED
+           rather than hidden: a greyed swatch with the holder's name says why it cannot
+           be chosen, where removing it would make the palette a different size for every
+           player and look like a bug. */}
         <div style={styles.colorRow} role="group" aria-label="Your colour">
           <span style={styles.colorLabel}>Colour</span>
           {SEAT_COLORS.map((color) => {

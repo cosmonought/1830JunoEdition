@@ -82,6 +82,25 @@ These arguments appear across many notes and are worth reading once:
     real: `StockMarketRenderer.tsx #652` (a `false &&` game-end cell that got its own legend row),
     `ContextualActionBar.tsx #601` (forty lines of unreachable render behind two conditions that were
     one condition), `#654` (a three-column grid given two children).
+13. **A rule stated in prose and nowhere else is worse than one not stated at all**, because the game
+    teaches the player a rule and then does not keep it. `baltimorePrivate.ts #660` found both B&O
+    private rules written verbatim in `privateCatalog.ts` and on screen in the powers panel, with
+    nothing enforcing either; `StockMarketRenderer.tsx #652`'s "GAME END" tooltip on a cell that ended
+    nothing is the same defect. Copy that describes a rule is a specification, and something must
+    implement it.
+14. **Derive it; do not keep a second copy.** The repeat fix across this batch and the last:
+    `auctionEscrow.ts #1` (available cash from the bid list rather than a deducted balance kept in
+    step through six operations), `passedSeats.ts #610` (read `consecutive_passes` rather than track a
+    "who passed" set), `privateReservations.ts #1` (read the live roster rather than bake a hex list),
+    `tileSupply.ts #627` (count the board rather than mirror `REMAINING_TILES`). Where a second
+    implementation is accepted, the two conditions that make it safe are stated: it must be **total**
+    rather than incremental, so it cannot drift; and it must be **read-only**, so a wrong answer
+    mislabels a control rather than losing a piece.
+15. **A transition is noticed; a state is not.** Habituation is not a contrast problem, it is a
+    "nothing is happening" problem — a continuous animation is already running when you look back, so
+    it carries no arrival. `animations.ts #597` replaced a permanent band and a continuous pulse with
+    a one-shot sweep keyed on the acting seat, because motion that *starts* is caught peripherally and
+    motion that ends costs nothing for the rest of the turn.
 
 ## Batch status
 
@@ -94,7 +113,7 @@ These arguments appear across many notes and are worth reading once:
 | 4 | Stock market + trading UI (`StockMarketRenderer`, `StockRoundPanel`, `WaterfallAuctionDashboard`, `ContextualActionBar`) | Done |
 | 5A | JSX residue (`App.tsx`, `HexGridRenderer.tsx`) + the eight heaviest tail files (`appStyles`, `RadialTileSelector`, `TrainPurchasePanel`, `gameState`, `RulesReference`, `hexContractTypes`, `TileSelectionPopup`, `FinancialLedger`) | Done |
 | 5B | The 19 heaviest remaining frontend files (`TopTicker`, `gameSetup`, `RoutePlannerPanel`, `routeAutoTrace`, `PlayerCards`, `Lobby`, `sandboxTileLegality`, `PrivatePowerPanel`, `SeatOrderTrail`, `trackReach`, `stationTokens`, `gamePhase`, `ContextualSubPanel`, `hexTileCatalog`, `PrivateTradePanel`, `lobby`, `OperatingSubPhaseStepper`, `privateCatalog`, `trackSegments`) | Done |
-| 5C | The remaining 56 small frontend files | Pending |
+| 5C | The remaining 56 small frontend files (auction/game-over/tutorial modals, the tab strip and top bar, `context/`, `styles/`, and 27 `utils/` modules) | Done |
 | 6 | Rust contract backend | Pending |
 
 Test files (`src/tests.rs`, `frontend/src/**/*.test.ts`) are out of scope by decision — they
@@ -974,3 +993,486 @@ cross-reference: that file owns the note, and this one cites it by number.
 | `trackSegments.ts #20` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #0 — A hex is not a node |
 | `trackSegments.ts #229` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts (traversals) — `null` is the whole point |
 | `trackSegments.ts #484` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #484 — A red off-board area is a terminus, not a junction |
+
+## Anchor index — Batch 5C
+
+Every `#N` these files cite, and where it resolves. A row whose section names a **different** source file is a
+cross-reference: that file owns the note, and this one cites it by number. Files citing no numbers are omitted.
+
+### AuctionPromptModal.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `AuctionPromptModal.tsx #399` | [contract_economy.md](contract_economy.md) | AuctionPromptModal.tsx #399 (UI half) — Set the B&O's price, now |
+| `AuctionPromptModal.tsx #543` | [contract_economy.md](contract_economy.md) | AuctionPromptModal.tsx #543 — A prize is shown to whoever won it |
+| `AuctionPromptModal.tsx #547` | [contract_economy.md](contract_economy.md) | AuctionPromptModal.tsx #547 — One card, not two modals in a row |
+
+### ChatBox.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `ChatBox.tsx #0` | [firebase_middleware.md](firebase_middleware.md) | ChatBox.tsx #0 — The primary export is the hook, not the component |
+| `ChatBox.tsx #1` | [firebase_middleware.md](firebase_middleware.md) | ChatBox.tsx #1 — Chat is off-chain and carries no authority |
+| `ChatBox.tsx #2` | [firebase_middleware.md](firebase_middleware.md) | ChatBox.tsx #2 — Why ordering uses a client timestamp, not serverTimestamp |
+| `ChatBox.tsx #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `ChatBox.tsx #644` | [firebase_middleware.md](firebase_middleware.md) | ChatBox.tsx #644 — The sandbox had no chat, twice over |
+
+### ConnectWalletButton.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `ConnectWalletButton.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `ConnectWalletButton.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `ConnectWalletButton.tsx #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+
+### CorporateLogo.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `CorporateLogo.tsx #410` | [ui_shell_layout.md](ui_shell_layout.md) | CorporateLogo.tsx #410 — The historical logo, with the ticker behind it |
+| `CorporateLogo.tsx #429` | [ui_shell_layout.md](ui_shell_layout.md) | CorporateLogo.tsx #429 — A circle needs a tighter cap than a stripe |
+
+### EmergencyTrainPurchaseModal.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `EmergencyTrainPurchaseModal.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `EmergencyTrainPurchaseModal.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `EmergencyTrainPurchaseModal.tsx #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `EmergencyTrainPurchaseModal.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `EmergencyTrainPurchaseModal.tsx #6` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #6 — The static board is the authentic 93 hexes |
+
+### GameOverModal.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `GameOverModal.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `GameOverModal.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+
+### HomeStationPrompt.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `HomeStationPrompt.tsx #416` | [state_machine.md](state_machine.md) | HomeStationPrompt.tsx #416 (UI half) — Place the home station, deliberately |
+| `HomeStationPrompt.tsx #440` | [state_machine.md](state_machine.md) | HomeStationPrompt.tsx #440 — It is a map click now |
+
+### InlineQuickChat.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `InlineQuickChat.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `InlineQuickChat.tsx #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `InlineQuickChat.tsx #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `InlineQuickChat.tsx #457` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #457 — The log belongs to the chat, not to the tabs |
+
+### MainTabBar.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `MainTabBar.tsx #26` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #21 / #26 / #29 — The hover card |
+| `MainTabBar.tsx #28` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #28 / #31 — Measure the label, not just the anchor |
+| `MainTabBar.tsx #41` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #41 / #49 / #54c — Stacked dual names move to centre |
+| `MainTabBar.tsx #46` | [ui_shell_layout.md](ui_shell_layout.md) | MainTabBar.tsx #46 — Hover states need real CSS |
+| `MainTabBar.tsx #158` | [ui_shell_layout.md](ui_shell_layout.md) | MainTabBar.tsx #158 — The Tutorials front door is not a fifth tab |
+| `MainTabBar.tsx #213` | [ui_shell_layout.md](ui_shell_layout.md) | MainTabBar.tsx #213 — One answer to "which tab is this round played on" |
+| `MainTabBar.tsx #390` | [ui_shell_layout.md](ui_shell_layout.md) | MainTabBar.tsx #390 — The tabs that are not a place to act |
+| `MainTabBar.tsx #404` | [ui_shell_layout.md](ui_shell_layout.md) | MainTabBar.tsx #404 — Reference tabs get the bar too |
+
+### PresidentCrown.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `PresidentCrown.tsx #15` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #15 — Restored Boston/New York nameplates |
+| `PresidentCrown.tsx #490` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #188 / #490 / #509 — The consequence belongs to the button |
+| `PresidentCrown.tsx #552` | [ui_shell_layout.md](ui_shell_layout.md) | PresidentCrown.tsx #552 — Our own crown, drawn not typed |
+
+### PrivateCompanyPills.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `PrivateCompanyPills.tsx #423` | [contract_economy.md](contract_economy.md) | components/PrivateCompanyPills.tsx #423 (UI half) — Named pills, not numbered chips |
+
+### SandboxRoomBar.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `SandboxRoomBar.tsx #521` | [firebase_middleware.md](firebase_middleware.md) | #521 — Why not a modal |
+| `SandboxRoomBar.tsx #521a` | [firebase_middleware.md](firebase_middleware.md) | #521a — What the strip says when it cannot work |
+
+### SandboxWaitingRoom.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `SandboxWaitingRoom.tsx #528` | [firebase_middleware.md](firebase_middleware.md) | sandboxRoom.ts #528 — Who this browser is |
+| `SandboxWaitingRoom.tsx #529` | [firebase_middleware.md](firebase_middleware.md) | App.tsx #529 / App.tsx #533 — No board until there is a game |
+| `SandboxWaitingRoom.tsx #529a` | [firebase_middleware.md](firebase_middleware.md) | #529a — Ready is a claim, Start is an act |
+| `SandboxWaitingRoom.tsx #569` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #569 — A seat colour that does a job |
+
+### StationTokenRow.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `StationTokenRow.tsx #0` | [hex_tile_math.md](hex_tile_math.md) | StationTokenRow.tsx #0 — "2/4" is a count; the row is an inventory |
+| `StationTokenRow.tsx #1` | [hex_tile_math.md](hex_tile_math.md) | StationTokenRow.tsx #1 — The row sits on the corporation's own colour |
+| `StationTokenRow.tsx #362` | [hex_tile_math.md](hex_tile_math.md) | StationTokenRow.tsx #362 — The home token's caption is its hex, not its price |
+| `StationTokenRow.tsx #450` | [hex_tile_math.md](hex_tile_math.md) | StationTokenRow.tsx #450 — No slash through the home hex |
+| `StationTokenRow.tsx #487a` | [hex_tile_math.md](hex_tile_math.md) | StationTokenRow.tsx #487a — The halo was restating the order |
+
+### TopBar.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TopBar.tsx #0` | [ui_shell_layout.md](ui_shell_layout.md) | TopBar.tsx #0 — A pure move |
+| `TopBar.tsx #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `TopBar.tsx #28` | [ui_shell_layout.md](ui_shell_layout.md) | TopBar.tsx #28 — Phase tab vs reference boards |
+| `TopBar.tsx #34` | [ui_shell_layout.md](ui_shell_layout.md) | TopBar.tsx #34 — One top bar |
+| `TopBar.tsx #41` | [ui_shell_layout.md](ui_shell_layout.md) | TopBar.tsx #41 — "corps", the persistent Stocks tab |
+
+### TrainBadges.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TrainBadges.tsx #0` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #0 — Shared because the Rust rule must not fork |
+| `TrainBadges.tsx #1` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #1 — Two surfaces, because this app has two |
+| `TrainBadges.tsx #2` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #2 — Colour means one thing each |
+| `TrainBadges.tsx #3` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #3 — The empty and unknown states are chips too |
+| `TrainBadges.tsx #4` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #4 — Every chip says something, and the counts agree |
+| `TrainBadges.tsx #7` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #7 — Three places by design, not by accident |
+| `TrainBadges.tsx #370` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #370 — A chip's height was font metrics, not a number |
+| `TrainBadges.tsx #375` | [contract_economy.md](contract_economy.md) | TrainBadges.tsx #375 — A chip is a train, and a train runs a route |
+
+### TrainTradePanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TrainTradePanel.tsx #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `TrainTradePanel.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TrainTradePanel.tsx #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `TrainTradePanel.tsx #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `TrainTradePanel.tsx #6` | [contract_economy.md](contract_economy.md) | TrainTradePanel.tsx #6 — The compose form moved, the ledger stayed |
+
+### TutorialModal.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TutorialModal.tsx #0` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #0 — What this must not become |
+| `TutorialModal.tsx #1` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #1 — The preference is global and persistent |
+| `TutorialModal.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TutorialModal.tsx #4` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #4 — Page shell |
+| `TutorialModal.tsx #44` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #44 (referenced) — The Stock Market explainer |
+| `TutorialModal.tsx #158` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #158 — The tutorials had no front door |
+| `TutorialModal.tsx #159` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #159 — Forgetting is not the same as being told to stop |
+| `TutorialModal.tsx #412` | [ui_shell_layout.md](ui_shell_layout.md) | TutorialModal.tsx #412 — Tutorial mode is opt-in, and nothing else is |
+
+### config.ts
+
+| anchor | document | section |
+|---|---|---|
+| `config.ts #0` | [session_keys_wallet.md](session_keys_wallet.md) | config.ts #0 — Why this file does not throw at import |
+| `config.ts #1` | [session_keys_wallet.md](session_keys_wallet.md) | config.ts #1 — Why a shared module at all |
+| `config.ts #2` | [session_keys_wallet.md](session_keys_wallet.md) | config.ts #2 — CRA substitutes REACT_APP_* at build time |
+| `config.ts #3` | [session_keys_wallet.md](session_keys_wallet.md) | config.ts #3 — Validation is shape-only |
+| `config.ts #120` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #120 / #139 — The picker's offline path |
+
+### WalletContext.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `WalletContext.tsx #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `WalletContext.tsx #1` | [session_keys_wallet.md](session_keys_wallet.md) | WalletContext.tsx #1 — What the master signer is for |
+| `WalletContext.tsx #3` | [session_keys_wallet.md](session_keys_wallet.md) | WalletContext.tsx #3 — Only a public address is cached |
+| `WalletContext.tsx #5` | [session_keys_wallet.md](session_keys_wallet.md) | WalletContext.tsx #5 — VERSION CAVEAT (unresolved) |
+
+### ReturnToTurnBar.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `ReturnToTurnBar.tsx #427` | [ui_shell_layout.md](ui_shell_layout.md) | ReturnToTurnBar.tsx #427 — A way back from the reference tabs |
+
+### animations.ts
+
+| anchor | document | section |
+|---|---|---|
+| `animations.ts #35` | [ui_shell_layout.md](ui_shell_layout.md) | animations.ts #35 — White, not red |
+| `animations.ts #46` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #46 / #48 / #116 / #513 / #564 — Token typography and livery |
+| `animations.ts #597` | [ui_shell_layout.md](ui_shell_layout.md) | animations.ts #597 — A transition is noticed; a state is not |
+| `animations.ts #601` | [ui_shell_layout.md](ui_shell_layout.md) | animations.ts #601 — The mini-auction chaser is gone |
+
+### corporationLivery.ts
+
+| anchor | document | section |
+|---|---|---|
+| `corporationLivery.ts #46` | [ui_shell_layout.md](ui_shell_layout.md) | corporationLivery.ts #46 — The contrast maths |
+| `corporationLivery.ts #408` | [ui_shell_layout.md](ui_shell_layout.md) | corporationLivery.ts #408 — The colours the board uses |
+| `corporationLivery.ts #428` | [ui_shell_layout.md](ui_shell_layout.md) | corporationLivery.ts #428 — One palette, imported three times |
+
+### palette.ts
+
+| anchor | document | section |
+|---|---|---|
+| `palette.ts #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+
+### routeLivery.ts
+
+| anchor | document | section |
+|---|---|---|
+| `routeLivery.ts #268` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #255 → #268 — Three attempts at a route line |
+| `routeLivery.ts #373` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #373 — One route is the one being looked at |
+| `routeLivery.ts #494` | [routing_pathfinding.md](routing_pathfinding.md) | routeLivery.ts #494 — The colour was the corporation's, not the train's |
+| `routeLivery.ts #494a` | [routing_pathfinding.md](routing_pathfinding.md) | routeLivery.ts #494a — Why not the corporation's livery |
+| `routeLivery.ts #494b` | [routing_pathfinding.md](routing_pathfinding.md) | routeLivery.ts #494b — Picked for separation, not for prettiness |
+| `routeLivery.ts #495` | [routing_pathfinding.md](routing_pathfinding.md) | routeLivery.ts #495 — The highlight had both ends and no middle |
+
+### typography.ts
+
+| anchor | document | section |
+|---|---|---|
+| `typography.ts #3` | [ui_shell_layout.md](ui_shell_layout.md) | typography.ts #3 — The third pass, and why it goes the other way |
+| `typography.ts #30` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #30 — Reverted: the board is not a scroll window |
+
+### activeGame.ts
+
+| anchor | document | section |
+|---|---|---|
+| `activeGame.ts #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `activeGame.ts #23` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `activeGame.ts #24` | [firebase_middleware.md](firebase_middleware.md) | activeGame.ts #24 — The three ways to be looking at a board |
+| `activeGame.ts #551` | [firebase_middleware.md](firebase_middleware.md) | activeGame.ts #551 — A refresh must not cost you the room |
+
+### auctionEscrow.ts
+
+| anchor | document | section |
+|---|---|---|
+| `auctionEscrow.ts #0` | [contract_economy.md](contract_economy.md) | auctionEscrow.ts #0 — The money was committed and nothing said so |
+| `auctionEscrow.ts #1` | [contract_economy.md](contract_economy.md) | auctionEscrow.ts #1 — Derived, not deducted |
+| `auctionEscrow.ts #2` | [contract_economy.md](contract_economy.md) | auctionEscrow.ts #2 — What counts as committed |
+
+### baltimorePrivate.ts
+
+| anchor | document | section |
+|---|---|---|
+| `baltimorePrivate.ts #573a` | [contract_economy.md](contract_economy.md) | privateExchange.ts #573a — Exchanged is not spent |
+| `baltimorePrivate.ts #657` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #657 — The era has to move when the phase does |
+| `baltimorePrivate.ts #660` | [contract_economy.md](contract_economy.md) | utils/baltimorePrivate.ts #660 — The B&O private has two rules and had neither |
+
+### buildStamp.ts
+
+| anchor | document | section |
+|---|---|---|
+| `buildStamp.ts #640` | [ui_shell_layout.md](ui_shell_layout.md) | utils/buildStamp.ts #640 — Which build is the browser actually running |
+
+### corporationCardOrder.ts
+
+| anchor | document | section |
+|---|---|---|
+| `corporationCardOrder.ts #446` | [stock_market.md](stock_market.md) | StockRoundPanel.tsx #446 — Floated companies sorted to the front  *[superseded by #464]* |
+| `corporationCardOrder.ts #464` | [stock_market.md](stock_market.md) | utils/corporationCardOrder.ts #464 — The cards hold still while you are trading |
+
+### corporationNames.ts
+
+| anchor | document | section |
+|---|---|---|
+| `corporationNames.ts #1` | [utils_layer.md](utils_layer.md) | corporationNames.ts #1 — Why this is a frontend table and not a query |
+| `corporationNames.ts #2` | [utils_layer.md](utils_layer.md) | corporationNames.ts #2 — Ticker spelling is not consistent, so lookup normalises |
+| `corporationNames.ts #582` | [utils_layer.md](utils_layer.md) | corporationNames.ts #582 — A standing order for the eight |
+
+### dividendStep.ts
+
+| anchor | document | section |
+|---|---|---|
+| `dividendStep.ts #275` | [contract_economy.md](contract_economy.md) | App.tsx #275 — The roster, not the set of models |
+| `dividendStep.ts #486` | [stock_market.md](stock_market.md) | dividendStep.ts #486 — One answer, not three approximations |
+| `dividendStep.ts #486a` | [stock_market.md](stock_market.md) | dividendStep.ts #486a — Skip is never a declaration |
+| `dividendStep.ts #489a` | [stock_market.md](stock_market.md) | dividendStep.ts #489a — Which way the money went |
+| `dividendStep.ts #492` | [stock_market.md](stock_market.md) | dividendStep.ts #492 — One field cannot hold three trains |
+
+### endgame.ts
+
+| anchor | document | section |
+|---|---|---|
+| `endgame.ts #0` | [stock_market.md](stock_market.md) | endgame.ts #0 — The funding cascade is an order, not a total |
+| `endgame.ts #1` | [stock_market.md](stock_market.md) | endgame.ts #1 — Which shares may be sold, and why the set is small |
+| `endgame.ts #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `endgame.ts #3` | [stock_market.md](stock_market.md) | endgame.ts #3 — Scoring a game that has stopped |
+| `endgame.ts #4` | [stock_market.md](stock_market.md) | endgame.ts #4 — The payout is proportional, and it is a placeholder |
+| `endgame.ts #5` | [stock_market.md](stock_market.md) | endgame.ts #5 — Somebody still wins |
+| `endgame.ts #6` | [stock_market.md](stock_market.md) | endgame.ts #6 — The presidency can be dumped, under two conditions |
+
+### gameConstants.ts
+
+| anchor | document | section |
+|---|---|---|
+| `gameConstants.ts #250` | [ui_shell_layout.md](ui_shell_layout.md) | App.tsx #250 / #291 — Two null-not-zero cases in the Operating Round |
+| `gameConstants.ts #285` | [routing_pathfinding.md](routing_pathfinding.md) | App.tsx #285 — The stop count is the stop list |
+| `gameConstants.ts #354` | [contract_economy.md](contract_economy.md) | App.tsx #354 — The B&O private hands its winner the presidency, free |
+| `gameConstants.ts #398` | [stock_market.md](stock_market.md) | App.tsx #398 — One par selection per corporation |
+
+### logRevert.ts
+
+| anchor | document | section |
+|---|---|---|
+| `logRevert.ts #591` | [firebase_middleware.md](firebase_middleware.md) | logRevert.ts #591 (cont.) — The log is append-only, the game is not |
+| `logRevert.ts #591a` | [firebase_middleware.md](firebase_middleware.md) | logRevert.ts #591a — The last revert wins, so it is read first |
+| `logRevert.ts #592` | [firebase_middleware.md](firebase_middleware.md) | logRevert.ts #592 — Who may undo what |
+
+### mockFixtures.ts
+
+| anchor | document | section |
+|---|---|---|
+| `mockFixtures.ts #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `mockFixtures.ts #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `mockFixtures.ts #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `mockFixtures.ts #15` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #15 — Restored Boston/New York nameplates |
+| `mockFixtures.ts #198` | [routing_pathfinding.md](routing_pathfinding.md) | App.tsx #198 — The dividend was always the same $180 |
+
+### operatingCursor.ts
+
+| anchor | document | section |
+|---|---|---|
+| `operatingCursor.ts #385` | [state_machine.md](state_machine.md) | App.tsx #385 — Never open on a step that is not there |
+| `operatingCursor.ts #613` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #613 — The rule is a phase number, so say the phase number |
+| `operatingCursor.ts #642` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #642 — The round machine belongs to the reducer |
+| `operatingCursor.ts #656` | [state_machine.md](state_machine.md) | operatingCursor.ts #656 — Where the turn cursor lived |
+| `operatingCursor.ts #656a` | [state_machine.md](state_machine.md) | operatingCursor.ts #656a — The era field does not move, so do not ask it |
+
+### passedSeats.ts
+
+| anchor | document | section |
+|---|---|---|
+| `passedSeats.ts #610` | [state_machine.md](state_machine.md) | utils/passedSeats.ts #610 — Derived, not recorded |
+| `passedSeats.ts #610a` | [state_machine.md](state_machine.md) | passedSeats.ts #610a — Walking backwards is sound, and has one limit |
+
+### playerFinance.ts
+
+| anchor | document | section |
+|---|---|---|
+| `playerFinance.ts #549` | [firebase_middleware.md](firebase_middleware.md) | App.tsx #549 / #549a — The actor field held a label |
+| `playerFinance.ts #553` | [stock_market.md](stock_market.md) | App.tsx #553 — The merged state, synchronously, for the par resolvers |
+| `playerFinance.ts #559` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #559 — Two functions with one name |
+| `playerFinance.ts #562` | [stock_market.md](stock_market.md) | playerFinance.ts #562 — The arithmetic lives apart from the card |
+| `playerFinance.ts #562a` | [stock_market.md](stock_market.md) | playerFinance.ts #562a — Net worth and liquidity are different questions |
+| `playerFinance.ts #566` | [stock_market.md](stock_market.md) | playerFinance.ts #566 — Par is a price, not a guess |
+| `playerFinance.ts #582` | [utils_layer.md](utils_layer.md) | corporationNames.ts #582 — A standing order for the eight |
+
+### playerLabels.ts
+
+| anchor | document | section |
+|---|---|---|
+| `playerLabels.ts #535` | [firebase_middleware.md](firebase_middleware.md) | App.tsx #535 — The room's own names |
+| `playerLabels.ts #535b` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #535b — Module scope, so no hook depends on it |
+| `playerLabels.ts #537b` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #537b / #578 — No mock names in a real room |
+| `playerLabels.ts #559` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #559 — Two functions with one name |
+| `playerLabels.ts #569` | [ui_shell_layout.md](ui_shell_layout.md) | playerLabels.ts #569 — A seat colour that does a job |
+
+### presidencyTransfer.ts
+
+| anchor | document | section |
+|---|---|---|
+| `presidencyTransfer.ts #596` | [stock_market.md](stock_market.md) | presidencyTransfer.ts #596 — Being bought out of a presidency |
+| `presidencyTransfer.ts #596a` | [stock_market.md](stock_market.md) | presidencyTransfer.ts #596a — It is a swap, not a relabel |
+| `presidencyTransfer.ts #596b` | [stock_market.md](stock_market.md) | presidencyTransfer.ts #596b — Strictly more, and ties do not move it |
+
+### privateExchange.ts
+
+| anchor | document | section |
+|---|---|---|
+| `privateExchange.ts #444` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #444 — One veil, three errands |
+| `privateExchange.ts #573` | [contract_economy.md](contract_economy.md) | privateExchange.ts #573 — A button that says "Used" has to have done something |
+| `privateExchange.ts #573a` | [contract_economy.md](contract_economy.md) | privateExchange.ts #573a — Exchanged is not spent |
+| `privateExchange.ts #573b` | [contract_economy.md](contract_economy.md) | privateExchange.ts #573b — A refusal is not a use |
+| `privateExchange.ts #576` | [contract_economy.md](contract_economy.md) | privateExchange.ts #576 — The Camden & Amboy was never an exchange |
+
+### privateReservations.ts
+
+| anchor | document | section |
+|---|---|---|
+| `privateReservations.ts #0` | [hex_tile_math.md](hex_tile_math.md) | privateReservations.ts #0 — The reservation existed only as prose |
+| `privateReservations.ts #1` | [hex_tile_math.md](hex_tile_math.md) | privateReservations.ts #1 — Derived from ownership, not hardcoded on |
+| `privateReservations.ts #2` | [hex_tile_math.md](hex_tile_math.md) | privateReservations.ts #2 — The coordinates come from the board, not from here |
+| `privateReservations.ts #3` | [hex_tile_math.md](hex_tile_math.md) | privateReservations.ts #3 — Each badge has a fixed home |
+| `privateReservations.ts #123` | [hex_tile_math.md](hex_tile_math.md) | Anchor: hexBoardData.ts #123 — F16 had no city, and the board moved to give it one |
+| `privateReservations.ts #223` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #223 — The wild blue yonder |
+| `privateReservations.ts #312` | [contract_economy.md](contract_economy.md) | WaterfallAuctionDashboard.tsx #312 — Two privates cannot reserve one hex |
+| `privateReservations.ts #364` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #47 / #364 / #366 — The reservation badge and its tooltip line |
+| `privateReservations.ts #444` | [hex_tile_math.md](hex_tile_math.md) | privateReservations.ts #444 — The hex a private power acts on |
+
+### roundLabel.ts
+
+| anchor | document | section |
+|---|---|---|
+| `roundLabel.ts #621` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #621 — The counter was the one field nobody stamped |
+| `roundLabel.ts #643` | [firebase_middleware.md](firebase_middleware.md) | App.tsx #643 — The log is rebuilt too, not appended to |
+| `roundLabel.ts #659` | [state_machine.md](state_machine.md) | utils/roundLabel.ts #659 — Which round an entry belongs to |
+
+### routeWaypoints.ts
+
+| anchor | document | section |
+|---|---|---|
+| `routeWaypoints.ts #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `routeWaypoints.ts #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `routeWaypoints.ts #256` | [routing_pathfinding.md](routing_pathfinding.md) | App.tsx #256 — A route runs between two paying stops |
+| `routeWaypoints.ts #416` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #416 — The token is prompted, not placed |
+| `routeWaypoints.ts #474` | [routing_pathfinding.md](routing_pathfinding.md) | routeWaypoints.ts #474 — A route must CONTAIN a token, not START at one |
+
+### sessionKey.ts
+
+| anchor | document | section |
+|---|---|---|
+| `sessionKey.ts #1` | [session_keys_wallet.md](session_keys_wallet.md) | sessionKey.ts #1 — Key generation |
+| `sessionKey.ts #2` | [session_keys_wallet.md](session_keys_wallet.md) | sessionKey.ts #2 — sessionStorage, not localStorage |
+| `sessionKey.ts #4` | [session_keys_wallet.md](session_keys_wallet.md) | sessionKey.ts #4 — Wire-format correction vs. the blueprint |
+| `sessionKey.ts #5` | [session_keys_wallet.md](session_keys_wallet.md) | sessionKey.ts #5 — Any must be real protobuf bytes |
+| `sessionKey.ts #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `sessionKey.ts #54` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #50 → #54 → #78 → #82 — The shield box, four times |
+| `sessionKey.ts #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+
+### stickyCollapse.ts
+
+| anchor | document | section |
+|---|---|---|
+| `stickyCollapse.ts #480` | [ui_shell_layout.md](ui_shell_layout.md) | utils/stickyCollapse.ts #480 — "Scrolled at all" is not "pinned" |
+| `stickyCollapse.ts #480a` | [ui_shell_layout.md](ui_shell_layout.md) | stickyCollapse.ts #480a — The release needs slack, the collapse does not |
+
+### tileSupply.ts
+
+| anchor | document | section |
+|---|---|---|
+| `tileSupply.ts #411` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #411 — The operating queue has to be built by somebody |
+| `tileSupply.ts #431` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #431 — 1830's Operating Round counts |
+| `tileSupply.ts #621` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #621 — The counter was the one field nobody stamped |
+| `tileSupply.ts #627` | [hex_tile_math.md](hex_tile_math.md) | utils/tileSupply.ts #627 — Derived from the board, and why that is exact |
+
+### tokenMigration.ts
+
+| anchor | document | section |
+|---|---|---|
+| `tokenMigration.ts #0` | [hex_tile_math.md](hex_tile_math.md) | tokenMigration.ts #0 — The token moves, and nobody was told |
+| `tokenMigration.ts #1` | [hex_tile_math.md](hex_tile_math.md) | tokenMigration.ts #1 — Preserve the index, and say so |
+
+### turnGuardKey.ts
+
+| anchor | document | section |
+|---|---|---|
+| `turnGuardKey.ts #414` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #414 — There is no such thing as paying $0 |
+| `turnGuardKey.ts #433` | [contract_economy.md](contract_economy.md) | App.tsx #433 — No route, no obligation |
+| `turnGuardKey.ts #511` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #511 — The sequence locks at the start of the cycle |
+| `turnGuardKey.ts #642` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #642 — The round machine belongs to the reducer |
+| `turnGuardKey.ts #653` | [state_machine.md](state_machine.md) | utils/turnGuardKey.ts #653 — A once-per-game guard on a once-per-turn event |
+
+### undoTarget.ts
+
+| anchor | document | section |
+|---|---|---|
+| `undoTarget.ts #310` | [state_machine.md](state_machine.md) | App.tsx #310 — The snapshot has to cover every atom an action moves |
+| `undoTarget.ts #439` | [state_machine.md](state_machine.md) | undoTarget.ts #439 — The original complaint |
+| `undoTarget.ts #475` | [state_machine.md](state_machine.md) | undoTarget.ts #475 — The walk is gone; automatic actions do not snapshot |
+
+**False positive recorded:** `corporationLivery.ts` cites `#000000` and `#FFFFFF`. Those are **hex colours,
+not note references** — the same shape trap as `TileGraphics.ts #40`, which is a tile-tray number. A `#`
+followed by digits is not automatically an anchor, and both cases are worth remembering before a future
+pass tries to resolve one.
+
+**One deliberate non-replacement:** `ChatBox.tsx B9` fuses a semantic JSDoc block (`@param roomId`,
+`@param address`, `@param displayName`) with the `#644` diary block that follows it. The applier hard-fails
+on `@param` rather than paraphrasing an API contract, so only the diary half was condensed and the JSDoc
+survives byte-identical.

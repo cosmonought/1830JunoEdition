@@ -1,33 +1,12 @@
-// frontend/src/components/GameOverModal.tsx
-//
 // How the game ended, and who won.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE GAME COULD END AND NOBODY WAS TOLD
-// ===================================================================
+// 1830 stops when the bank breaks or a president goes bankrupt. Both were
+// reachable and neither had a surface. The REASON leads and the standings
+// follow (#1): a broken bank is the ordinary conclusion of a long game and a
+// bankruptcy is somebody's disaster, so a modal printing only a scoreboard would
+// leave the room arguing about which had occurred.
 //
-// 1830 stops in one of two ways -- the bank runs out of money, or a
-// president cannot fund a mandatory train and goes bankrupt. Both were
-// reachable in this app and neither had a surface. The bank breaking simply
-// showed `$0` on the Financial Ledger, and a bankruptcy could not be
-// detected at all until `utils/endgame.ts` was written.
-//
-// So the last thing that happened in a finished game was an ordinary
-// Activity Log line, and the ranking every player wants -- who actually won
-// -- was left to be worked out by reading four balances and a share
-// register.
-//
-// ===================================================================
-//  DESIGN NOTE 1: IT SAYS WHY IT ENDED, FIRST
-// ===================================================================
-//
-// The two endings mean completely different things at the table. A broken
-// bank is the ordinary, expected conclusion of a long game; a bankruptcy is
-// somebody's disaster, and it can happen on turn six. A modal that only
-// printed a scoreboard would leave the room arguing about which had
-// occurred.
-//
-// The reason leads, the standings follow.
+// See docs/ai_architecture/stock_market.md, GameOverModal.tsx #0 / #1.
 
 import React from "react";
 

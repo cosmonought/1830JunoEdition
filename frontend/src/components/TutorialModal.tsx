@@ -1,45 +1,17 @@
-// frontend/src/components/TutorialModal.tsx
+// First-Time User Experience explainers -- a small, dismissible, paged modal
+// shown on entering a phase whose rules are not guessable from the UI.
 //
-// First-Time User Experience explainers -- a small, dismissible, paged
-// modal shown on entering a phase whose rules are not guessable from the UI.
+// Design note #0: EXPLAIN CONSEQUENCES, NOT CONTROLS. The waterfall cascade is a
+// consequence, not a button, which is exactly the gap a tutorial fills; a modal
+// saying "click Buy to buy" is worse than nothing, because it trains players to
+// dismiss tutorials unread.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHAT THIS IS FOR, AND WHAT IT MUST NOT BECOME
-// ===================================================================
+// Design note #1: the off switch is GLOBAL and persists in `localStorage`
+// (wrapped -- private browsing throws). SEEN-tracking is separate and per topic,
+// because re-showing an explainer every round is what makes people switch
+// tutorials off in the first place.
 //
-// The waterfall auction is the one phase in this game whose mechanics
-// cannot be inferred by looking at it. A player can see six cards, a Buy
-// button on the cheapest and Place Bid on the rest, and still have no idea
-// what happens when the cheapest is bought -- because the cascade is a
-// consequence, not a control. That is precisely the gap a tutorial should
-// fill.
-//
-// The rule this file holds itself to: EXPLAIN CONSEQUENCES, NOT CONTROLS.
-// A modal that says "click Buy to buy" is worse than nothing -- it trains
-// players to dismiss tutorials unread, which then costs them the one that
-// mattered. Every page here describes something that HAPPENS TO YOU, not
-// something you press.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE PREFERENCE IS GLOBAL AND PERSISTENT
-// ===================================================================
-//
-// "Turn tutorials off" is deliberately a GLOBAL switch, not a per-tutorial
-// "don't show this one again". Someone who does not want to be taught the
-// auction does not want to be taught the stock round either, and making
-// them refuse each one separately is the same annoyance repeated.
-//
-// It persists in `localStorage`, not `sessionStorage`: a tutorial that
-// returns every time the tab is reopened has not really been dismissed.
-// Storage access is wrapped because private browsing throws on access --
-// in that case the preference simply does not persist, which is a
-// degraded experience rather than a crash.
-//
-// SEEN-TRACKING IS SEPARATE FROM THE OFF SWITCH. A tutorial is shown once
-// per player per topic (tracked by key) even with tutorials ON, because the
-// alternative -- re-showing the auction explainer at the start of every
-// auction -- is exactly the behaviour that makes people turn tutorials off
-// in the first place.
+// See docs/ai_architecture/ui_shell_layout.md, TutorialModal.tsx #0 / #1.
 
 import React, { useCallback, useEffect, useState } from "react";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
@@ -74,42 +46,13 @@ export function tutorialsDisabled(): boolean {
   return readFlag(TUTORIALS_OFF_KEY);
 }
 
-/* ==================================================================
- *  DESIGN NOTE 412: TUTORIAL MODE IS OPT-IN, AND NOTHING ELSE IS
- * ==================================================================
- *
- * REPORTED: clicking End Turn in an Operating Round yanks the player to the
- * Stock Market tab. It should only do that in a tutorial.
- *
- * The redirect is design note #44's, and its reasoning is sound for the
- * player it was written about: a first-time president watches their share
- * price move left, has no idea why, and reads it as their own mistake. The
- * lesson is about a number on another screen, so the tutorial navigates
- * there and opens on top of it.
- *
- * What it lacked was a way to say "I am not that player". Its three guards
- * -- is a president, first Operating Round, tutorial not already seen --
- * are all about the SITUATION, and every experienced player passes through
- * that situation exactly once per game while wanting none of it. Hijacking
- * the tab mid-turn is the most disruptive thing this app does to a player
- * who did not ask for it, which is why "they can dismiss the modal" is not
- * an answer: the navigation happens before the modal is on screen, and
- * dismissing it does not put the board back.
- *
- * THE POLARITY IS DELIBERATE. This is a THIRD flag rather than a reuse of
- * `tutorialsDisabled`, and the difference is the default. The off switch
- * defaults to false, so `!tutorialsDisabled()` is TRUE for everyone who has
- * never touched the setting -- which would leave the redirect firing for
- * exactly the standard play the requirement says to disable it for, while
- * looking as though it had been gated. Tutorial mode defaults to FALSE and
- * has to be turned on, so standard play is standard play without anyone
- * opting out of anything.
- *
- * THE MODAL ITSELF IS UNAFFECTED, and that split is the point. The
- * explainer still arms and still opens under its own existing rules; it is
- * a panel over the current screen and costs a player who does not want it
- * one click. Only the NAVIGATION is gated, because only the navigation
- * moves someone off the board they were looking at. */
+/* Design note #412: tutorial MODE is a third flag, opt-in, and only the
+   NAVIGATION is gated by it. #44's redirect to the market chart is right for a
+   first-time president and wrong for everyone else, and "they can dismiss the
+   modal" is no answer because the navigation happens first. The polarity is
+   deliberate: reusing `tutorialsDisabled` would leave the redirect firing for
+   everyone who never touched the setting, while looking as though it were gated.
+   The explainer itself still arms under its own rules. */
 export function tutorialModeEnabled(): boolean {
   return readFlag(TUTORIAL_MODE_KEY);
 }
@@ -129,34 +72,13 @@ export function resetTutorials(topicKeys: readonly string[]): void {
   for (const key of topicKeys) writeFlag(SEEN_PREFIX + key, false);
 }
 
-/* ==================================================================
- *  DESIGN NOTE 159: FORGETTING IS NOT THE SAME AS BEING TOLD TO STOP
- * ==================================================================
- *
- * REPORTED: the tutorials do not appear on the zero-state sandbox, which
- * is precisely where they should, because that scenario exists to be
- * experienced the way a new player would.
- *
- * The trigger was never broken -- `isWaterfallPhase` is true there and the
- * modal opens on it. What stops it is the SEEN flag, which persists in
- * `localStorage` across sessions by design, and which anyone who has run
- * this sandbox once has already set. The zero state resets the game and
- * had no way to reset the teaching.
- *
- * THIS DELIBERATELY DOES NOT CLEAR THE GLOBAL OFF SWITCH, which is the
- * whole reason it exists beside `resetTutorials` rather than reusing it.
- * The two flags record different things:
- *
- *   the SEEN flag   -- "I have read this one." A fact about progress
- *                      through a game, and starting a new game invalidates
- *                      it exactly as it invalidates the board.
- *   the OFF switch  -- "Stop showing me these." A standing preference
- *                      about the APPLICATION, which no in-game action
- *                      should quietly overturn.
- *
- * Clearing both would mean a player who ticked "turn tutorials off" gets
- * them back every time they open a fresh sandbox, which is the behaviour
- * that checkbox exists to prevent. */
+/* Design note #159: the zero-state sandbox resets the game and had no way to
+   reset the teaching -- the SEEN flags persist across sessions by design, so
+   anyone who had run the sandbox once never saw the tutorials there again.
+
+   This deliberately does NOT clear the global off switch. SEEN records progress
+   through a game and a new game invalidates it; the off switch is a standing
+   preference about the APPLICATION that no in-game action should overturn. */
 export function replayTutorials(topicKeys: readonly string[]): void {
   for (const key of topicKeys) writeFlag(SEEN_PREFIX + key, false);
 }
@@ -412,14 +334,14 @@ export const OPERATING_ROUND_TUTORIAL: readonly TutorialPage[] = [
   },
 ];
 
-/** The Stock Market explainer, shown on a FORCED navigation to the market
- *  chart the moment a president finishes their first Operating Round -- see
- *  `App.tsx` design note #44 for the trigger and why it is that moment.
+/** The Stock Market explainer, shown on a FORCED navigation to the market chart
+ *  the moment a president finishes their first Operating Round -- see `App.tsx`
+ *  design note #44 for the trigger.
  *
- *  Page 2 is written in the second person about something that has just
- *  happened, which is the whole reason this tutorial interrupts rather than
- *  waiting to be found: a first-time president watching their share price
- *  drop with no explanation reasonably concludes they played badly. */
+ *  Page 2 is written in the second person about something that has just happened,
+ *  which is why this tutorial interrupts rather than waiting to be found: a
+ *  first-time president watching their share price drop with no explanation
+ *  reasonably concludes they played badly. */
 export const STOCK_MARKET_TUTORIAL: readonly TutorialPage[] = [
   {
     title: "How prices move",
@@ -450,25 +372,13 @@ export const STOCK_MARKET_TUTORIAL: readonly TutorialPage[] = [
   },
 ];
 
-/** Every topic key this app registers, so `resetTutorials()` can clear the
- *  whole set without a caller having to remember the list. */
-/* ===================================================================
- *  DESIGN NOTE 158: THE TUTORIALS HAD NO FRONT DOOR
- * ===================================================================
+/** Every topic key this app registers, so `resetTutorials()` can clear the whole
+ *  set without a caller having to remember the list.
  *
- * Every tutorial in this file opens exactly once -- automatically, when its
- * phase first becomes active, if the player has not seen it and has not
- * switched tutorials off. That is a good default and a terrible only
- * option: dismiss the Operating Round explainer while you think you have
- * understood it, discover ten minutes later that you have not, and there is
- * no way back to it. The content exists and is unreachable.
- *
- * `TUTORIAL_LIBRARY` gives it a front door. It is the same four page sets,
- * addressed by name instead of by phase, and it deliberately does NOT
- * consult the "seen" flags or the global off switch -- those exist to stop
- * tutorials INTERRUPTING, and a player who clicked "Tutorials" is not being
- * interrupted, they are asking.
- */
+ *  Design note #158: `TUTORIAL_LIBRARY` gives the tutorials a front door -- the
+ *  same four page sets addressed by name instead of by phase. It deliberately
+ *  does NOT consult the seen flags or the off switch: those exist to stop
+ *  tutorials INTERRUPTING, and a player who clicked "Tutorials" is asking. */
 export interface TutorialTopic {
   topicKey: string;
   heading: string;
@@ -523,12 +433,10 @@ export interface TutorialLibraryProps {
 
 /** The Tutorials front door: pick a topic, read it, come back to the list.
  *
- *  Renders the SAME page shell `TutorialModal` does, via `TutorialPager`
- *  below, so a tutorial read from here is not a second, subtly different
- *  presentation of the same words. What differs is only how you get in and
- *  what happens when you leave: no "seen" flag is written and no
- *  "turn tutorials off" checkbox is offered, because neither applies to
- *  content the player went looking for. */
+ *  Renders the SAME page shell via `TutorialPager`, so a tutorial read from here
+ *  is not a second, subtly different presentation of the same words. No "seen"
+ *  flag is written and no off-switch checkbox is offered, because neither applies
+ *  to content the player went looking for. */
 export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
   const [topicKey, setTopicKey] = useState<string | null>(null);
 
@@ -644,12 +552,10 @@ function TutorialPager({
 
       <div style={styles.body}>
         <span style={styles.pageTitle}>{page.title}</span>
-        {/* Design note #4: bodies may carry hard line breaks. The Operating
-            Round pages are numbered step lists and bullet lists, and
-            collapsing them into one run-on paragraph would undo the only
-            structure they have. Split rather than `white-space: pre-line`
-            so blank lines cannot open ragged vertical gaps, and so each
-            line is a real block with its own spacing. */}
+        {/* Design note #4: bodies may carry hard line breaks. The Operating Round pages
+           are numbered step lists, and collapsing them into one run-on paragraph would
+           undo the only structure they have. Split into real blocks rather than
+           `white-space: pre-line`, so blank lines cannot open ragged vertical gaps. */}
         {page.body.split("\n").map((line, index) => (
           <p key={index} style={styles.pageBody}>
             {line}
@@ -763,13 +669,10 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
     >
       <div style={styles.card}>
         {/* Design note #158: the page-turner is `TutorialPager`, shared with
-            `TutorialLibrary`. It was inlined here until that note added the
-            on-demand reader, at which point keeping it inline would have
-            meant two independently-maintained copies of the same
-            dots/Back/Next shell -- two readers for one set of words.
-
-            `pageIndex` moved into the pager with it, which is why this
-            component no longer holds one. */}
+           `TutorialLibrary`. It was inlined here until that note added the on-demand
+           reader, at which point keeping it inline would have meant two
+           independently-maintained copies of one dots/Back/Next shell. `pageIndex` moved
+           into the pager with it. */}
         <TutorialPager
           heading={heading}
           pages={pages}
@@ -829,11 +732,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "6px",
-    // Design note #4: the Operating Round pages are several times longer
-    // than the auction's. A fixed height would clip them; `maxHeight` plus
-    // scroll keeps the modal a consistent size on short pages and readable
-    // on long ones, instead of the card resizing under the player's cursor
-    // every time they press Next.
+    // Design note #4: the Operating Round pages are several times longer than the
+    // auction's. `maxHeight` plus scroll keeps the modal a consistent size instead
+    // of the card resizing under the player's cursor every time they press Next.
     minHeight: "112px",
     maxHeight: "46vh",
     overflowY: "auto",

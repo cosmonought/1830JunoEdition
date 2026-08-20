@@ -1,52 +1,35 @@
-// frontend/src/utils/turnAlert.ts
+// Browser tab-title flash for active-player turn notifications. Its own small
+// hook rather than inlined in `App.tsx`, since it is a self-contained side
+// effect with its own cleanup/restore responsibility -- the same "one clear job
+// per hook" convention `useGameStatePolling` established.
 //
-// Browser Tab Title Flash for Active Player Turn Notifications -- see
-// App.tsx's own design note #18 for the dashboard-refactor pass this
-// belongs to. Split into its own small hook (rather than inlined in
-// App.tsx) since it's a self-contained side effect with its own
-// cleanup/restore responsibility -- the same "one clear job per hook"
-// convention `utils/gameState.ts`'s own `useGameStatePolling` already
-// established for this codebase's other effectful hooks.
-//
-// Design notes:
-// 1. **Exact alternation contract.** While `isMyTurn` is true, alternates
-//    `document.title` every 1000ms between `TURN_ALERT_TITLE` and
-//    `TURN_NORMAL_TITLE` -- starting on `TURN_ALERT_TITLE` immediately (not
-//    waiting a full second for the first flash) so a player who glances at
-//    a background tab sees the alert state right away. The moment
-//    `isMyTurn` goes false (the effect re-runs with a new `false`
-//    dependency, or this hook's owner unmounts entirely), the interval is
-//    cleared AND the title is explicitly restored to `TURN_NORMAL_TITLE` in
-//    that same cleanup -- so the tab title can never get stuck mid-flash on
-//    the alert string after a turn ends.
-// 2. **No dependency on which tab/page is focused.** `document.title`
-//    updates unconditionally while `isMyTurn` is true, matching a real
-//    "flash the browser tab" notification -- most browsers only actually
-//    show the alternating title to the user while the tab is unfocused/in
-//    the background (a focused tab's title isn't usually what a player is
-//    staring at anyway), which is exactly the situation this feature exists
-//    for.
+// 1. EXACT ALTERNATION CONTRACT. While `isMyTurn` is true, `document.title`
+//    alternates every 1000ms, starting on the ALERT title immediately rather
+//    than waiting a full second, so a glance at a background tab sees it. When
+//    `isMyTurn` goes false the interval is cleared AND the title explicitly
+//    restored in the same cleanup, so it can never stick mid-flash.
+// 2. NO DEPENDENCY ON WHICH TAB IS FOCUSED. The title updates unconditionally,
+//    matching a real tab-flash notification -- browsers only show the
+//    alternating title while the tab is backgrounded anyway, which is the
+//    situation this exists for.
 
 import { useEffect } from "react";
 
-// These two are the app's REAL title at runtime, and they outrank
-// `public/index.html`. `useDocumentTitleFlash` below runs on every mount and
-// assigns `document.title` unconditionally, so whatever `index.html` sets is
-// only ever visible for the instant before React mounts. Renaming the app
-// therefore means renaming BOTH, and missing this one would have left the
-// old name flashing back into the tab a moment after load -- which is worse
-// than not renaming at all, because it looks like a bug rather than an
-// oversight.
+// These two are the app's REAL title at runtime and they outrank
+// `public/index.html`. The hook runs on every mount and assigns unconditionally,
+// so whatever `index.html` sets is visible only for the instant before React
+// mounts. Renaming the app means renaming BOTH -- missing this one leaves the
+// old name flashing back a moment after load, which looks like a bug rather than
+// an oversight.
 export const TURN_ALERT_TITLE = "🚨 YOUR TURN! — Project 18XX";
 export const TURN_NORMAL_TITLE = "Project 18XX";
 
 const TURN_ALERT_INTERVAL_MS = 1000;
 
-/** See design notes above. Call once, unconditionally, from the top-level
- *  app shell -- pass the already-computed `isMyTurn` boolean (this hook has
- *  no wallet/game-state knowledge of its own, matching this codebase's
- *  established "presentational/effect hooks don't own address-resolution
- *  logic" split, e.g. Chatbox.tsx's own design note #3). */
+/** See the notes above. Call once, unconditionally, from the top-level app shell
+ *  -- pass the already-computed `isMyTurn` boolean. This hook has no wallet or
+ *  game-state knowledge of its own, matching this codebase's "presentational and
+ *  effect hooks don't own address-resolution logic" split. */
 export function useDocumentTitleFlash(isMyTurn: boolean): void {
   useEffect(() => {
     if (!isMyTurn) {

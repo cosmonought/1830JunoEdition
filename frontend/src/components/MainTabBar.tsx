@@ -1,19 +1,11 @@
-// frontend/src/components/MainTabBar.tsx
-//
-// THE TOP-LEVEL TAB STRIP and the tab-set rules behind it, moved out of
+// The top-level tab strip and the tab-set rules behind it, moved out of
 // `App.tsx` unchanged.
 //
-// The whole `MainTab` vocabulary travels together: the union, the function
-// that decides which tabs exist for a round type, the availability check, the
-// default-surface picker and the strip that renders them. These are one
-// concept in five declarations -- design note #28's central point is that the
-// tab set is COMPUTED rather than fixed, and a computed set is only coherent
-// if the rule and the renderer cannot drift apart. Splitting them across
-// files would be the first step towards exactly that drift.
-//
-// `AppShell` imports `MainTab`, `isTabAvailable` and `surfaceTabFor` from
-// here; nothing else outside this file uses `orderedMainTabs` or the hover
-// CSS, so those stay private to it.
+// The whole `MainTab` vocabulary travels together because design note #28's
+// central point is that the tab set is COMPUTED rather than fixed, and a
+// computed set is only coherent if the rule and the renderer cannot drift apart.
+// `AppShell` imports `MainTab`, `isTabAvailable` and `surfaceTabFor`; the
+// ordering function and the hover CSS stay private.
 
 import React from "react";
 
@@ -22,12 +14,9 @@ import { styles } from "../styles/appStyles";
 
 export type MainTab = "phase" | "corps" | "map" | "stock" | "ledger" | "rules";
 
-/** The tabs to show, in order, for the current round.
- *
- *  The active phase always leads. A player's attention starts at the left
- *  edge, and in a game where the legal action changes completely between
- *  rounds, the first tab should be the one they can actually act in --
- *  otherwise every phase transition begins with a hunt. */
+/** The tabs to show, in order, for the current round. The active phase always
+ *  leads: a player's attention starts at the left edge, and the first tab should
+ *  be the one they can act in, or every phase transition begins with a hunt. */
 export function orderedMainTabs(roundType: RoundType | null): { id: MainTab; label: string }[] {
   const reference: { id: MainTab; label: string }[] = [
     { id: "stock", label: "Stock Market" },
@@ -63,62 +52,17 @@ export function isTabAvailable(tab: MainTab, roundType: RoundType | null): boole
   return orderedMainTabs(roundType).some((entry) => entry.id === tab);
 }
 
-/* ==================================================================
- *  DESIGN NOTE 213: ONE ANSWER TO "WHICH TAB IS THIS ROUND PLAYED ON"
- * ==================================================================
- *
- * REPORTED BUG: leaving the auction for a Stock Round dumped the player on
- * the Rail Map instead of the Stock & Auction surface.
- *
- * The cause was two effects disagreeing, and the loser winning. The
- * transition effect correctly sent a new Stock Round to `"corps"`. The
- * availability guard right below it -- which exists because the tab SET
- * changes shape by phase, so the active tab can cease to exist under the
- * player -- then ran in the same commit, still reading `activeMainTab` as
- * `"phase"` (React has not re-rendered, so the value the first effect set is
- * not visible yet), found that `"phase"` is not in a Stock Round's tab list,
- * and redirected to a hardcoded `"map"`. Declared second, so it landed
- * second, so the Rail Map won every time.
- *
- * Reordering the effects would "fix" it by luck and break again the moment
- * anything else set a tab. The real defect is that the guard had its own
- * opinion about where to land, and that opinion was a constant. Both callers
- * now ask this one function, so whichever runs last, they agree.
- *
- * The mapping is design note #28's own split, stated once: the auction has a
- * dedicated phase surface; a Stock Round's surface IS the Stocks roster
- * (design note #41 -- there is no `"phase"` entry that round to land on);
- * an Operating Round is played on the rail map.
- */
-/**
- * Is the player looking at the surface this round is played on?
- *
- * ==================================================================
- *  DESIGN NOTE 390: THE TABS THAT ARE NOT A PLACE TO ACT
- * ==================================================================
- *
- * REPORTED: players get confused viewing the map during a Stock Round, or
- * the stock market during an Operating Round, and should be offered a way
- * back to where the action is.
- *
- * The naive check is `activeTab !== surfaceTabFor(roundType)`, and it is
- * wrong for three of the six tabs. `ledger` and `rules` are REFERENCE
- * surfaces -- a player opens the Game Ledger mid-turn precisely to check
- * something before acting, and `stock` is the market chart, which is read
- * during every round. Treating those as "the wrong tab" would replace the
- * action panel with a redirect the moment a player consulted anything,
- * which is a worse trap than the one being fixed: it makes the reference
- * material cost you your controls.
- *
- * So the redirect fires only when the player is on ANOTHER ROUND'S PLAYING
- * SURFACE -- the map during a Stock Round, the corporations during an
- * Operating Round. Those are the two cases in the report, and they are the
- * ones where a player is plausibly waiting for something to happen on a
- * screen where nothing will.
- *
- * REFERENCE TABS KEEP THE ACTION PANEL as it was. Nothing is taken away
- * from a player who is deliberately reading.
- */
+/* Design note #213: both the transition effect and the availability guard now
+   ask this one function, so whichever commits last they agree. Previously the
+   guard carried its own hardcoded `"map"` and ran in the same commit still
+   reading the pre-transition tab, so leaving the auction always landed on the
+   Rail Map.
+
+   Design note #390: `isPlayingSurface` excludes the REFERENCE tabs (`ledger`,
+   `rules`, `stock`), because treating those as "the wrong tab" would make
+   consulting the rules cost a player their controls.
+
+   See docs/ai_architecture/ui_shell_layout.md, MainTabBar.tsx #213 / #390. */
 export function isPlayingSurface(tab: MainTab): boolean {
   return tab === "phase" || tab === "corps" || tab === "map";
 }
@@ -130,34 +74,12 @@ export function misplacedSurfaceTab(
   activeTab: MainTab,
   roundType: RoundType | null,
 ): MainTab | null {
-  /* ==================================================================
-   *  DESIGN NOTE 404: REFERENCE TABS GET THE BAR TOO
-   * ==================================================================
-   *
-   * REVERSES design note #390 above, which is left standing rather than
-   * edited away.
-   *
-   * That note excluded Ledger, Rules and the market chart on the reasoning
-   * that they are surfaces a player opens MID-TURN to check something, and
-   * that replacing their action panel with a redirect would make consulting
-   * the rules cost you your controls. The reasoning was sound and the
-   * conclusion was wrong, because it assumed the alternative was leaving the
-   * FULL action bar there -- and the full bar is the actual hazard.
-   *
-   * Playtest reports what that costs: Pass and Undo sit live on a screen the
-   * player is only reading, and a turn gets spent by accident from the Game
-   * Ledger. A misclick on a reference tab should not be able to end a turn.
-   *
-   * So the exclusion goes, and the panel on those tabs carries the Return
-   * button and NOTHING ELSE -- see the panel half in
-   * `ContextualActionBar.tsx`. #390's concern is answered by that
-   * restriction rather than by the exemption: nothing is taken away from a
-   * player who is reading, because the controls they lose are controls they
-   * cannot safely use from there anyway.
-   *
-   * `isPlayingSurface` is kept and still exported -- the distinction it
-   * draws is real and the bar's copy reads differently for the two cases --
-   * but it no longer gates the redirect. */
+  /* Design note #404 REVERSES #390's exemption, which is left standing above
+     rather than edited away: #390 assumed the alternative was leaving the FULL
+     bar on a reference tab, and the full bar is the hazard -- a misclick on the
+     Game Ledger could spend a turn. Reference tabs now carry the Return button and
+     NOTHING ELSE (panel half in `ContextualActionBar.tsx`). `isPlayingSurface` is
+     still exported for the bar's copy, but no longer gates the redirect. */
   const correct = surfaceTabFor(roundType);
   return activeTab === correct ? null : correct;
 }
@@ -213,12 +135,9 @@ export default function MainTabBar({
   const tabs = orderedMainTabs(roundType);
   return (
     <div style={styles.mainTabBar}>
-      {/* Design note #46: hover states need real CSS.
-          Inline `React.CSSProperties` cannot express `:hover` (Lobby.tsx
-          design note #3), and an unselected tab that never responds to the
-          pointer is the specific thing that made these read as disabled.
-          Same `<style>`-tag escape hatch the turn pulse and the auction
-          glow already use, scoped to one class so it cannot leak. */}
+      {/* Design note #46: hover needs real CSS -- inline `React.CSSProperties` cannot
+         express `:hover` (`Lobby.tsx #3`), and an unselected tab that never responds to
+         the pointer is what made these read as disabled. Scoped to one class. */}
       <style>{MAIN_TAB_HOVER_CSS}</style>
       {tabs.map((tab) => (
         <button
@@ -236,12 +155,10 @@ export default function MainTabBar({
         </button>
       ))}
 
-      {/* Design note #158: the Tutorials front door.
-          Pinned right, past an auto margin, and deliberately NOT styled as a
-          fifth tab -- it does not change which screen you are on, it opens a
-          reader over whichever screen you are already on. Giving it the tab
-          treatment would have implied a navigation it does not perform, and
-          put a permanently-unselected tab next to four that highlight. */}
+      {/* Design note #158: the Tutorials front door, pinned right past an auto margin
+         and deliberately NOT a fifth tab -- it opens a reader over the current screen
+         rather than navigating, and tab styling would imply a navigation it does not
+         perform. */}
       <span style={{ marginLeft: "auto" }} />
       <button
         type="button"
@@ -256,13 +173,7 @@ export default function MainTabBar({
   );
 }
 
-/** Design note #46: the hover/focus half of the tab treatment.
- *
- *  Only the states inline styles cannot reach live here -- the resting and
- *  active looks stay in `styles.mainTabButton`/`mainTabButtonActive`, so
- *  there is one place to read a tab's normal appearance rather than two
- *  that have to be kept in agreement.
- *
- *  `:focus-visible` mirrors hover because a keyboard user needs the same
- *  affordance a mouse user gets, and the browser default outline is nearly
- *  invisible against this dark chrome. */
+/** Design note #46: the hover/focus half of the tab treatment. Only the states
+ *  inline styles cannot reach live here; resting and active stay in
+ *  `styles.mainTabButton`/`mainTabButtonActive`. `:focus-visible` mirrors hover
+ *  because the browser default outline is nearly invisible on this dark chrome. */

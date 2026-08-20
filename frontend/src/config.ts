@@ -1,95 +1,30 @@
-// frontend/src/config.ts
+// Deployment configuration -- the single source of truth for every chain-facing
+// address and endpoint (F-4).
 //
-// Deployment configuration -- the single source of truth for every
-// chain-facing address and endpoint (F-4).
+// Design note #0: READING config never throws; unset values are `undefined`,
+// which legitimately means "offline". REQUIRING config throws, and only at the
+// moment an operation needs a chain. The first version validated at module
+// scope, which crashed the whole bundle before React mounted on an unset `.env`
+// and made `HexGridRenderer`'s documented offline mode (#120) unreachable. The
+// bug it was aimed at -- the `"juno1...devfeegrantaddress..."` placeholder -- is
+// still caught, just at the point of use.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHY THIS FILE DOES NOT THROW AT IMPORT
-// ===================================================================
+// Design note #1: `WalletContext.tsx` and `utils/sessionKey.ts` each carried
+// their own copy. Not merely untidy: sessionKey's copy SCOPES the authz grant
+// while WalletContext's SIGNS it, so drift would authorize a contract the app
+// never calls.
 //
-// The first version of this file validated at module scope:
+// Design note #2: CRA substitutes `process.env.REACT_APP_FOO` textually, so the
+// reads must be full literal expressions -- destructuring or dynamic indexing is
+// NOT substituted and silently yields `undefined` in a production bundle.
+// Changing a variable needs a REBUILD.
 //
-//     export const CONTRACT_ADDRESS = requireAddress(...);   // WRONG
+// Design note #3: validation is SHAPE-ONLY (prefix, charset, length). No bech32
+// checksum -- the failure guarded against is a shipped placeholder or an unset
+// variable, not a one-character typo, and the chain catches the latter clearly.
+// NOTHING SECRET GOES HERE; everything ships to the browser in plain text.
 //
-// That crashed the entire app at startup with an unset `.env` -- the throw
-// happened during `import`, before React ever mounted, so there was no UI
-// left to display the error in. `config.ts` is imported by `sessionKey.ts`,
-// which is imported by `WalletContext.tsx`, which is imported by `App.tsx`:
-// one missing variable took down the whole bundle.
-//
-// It was also wrong on the merits, not just the timing. This app has a real
-// OFFLINE MODE -- `HexGridRenderer`'s design note #120 tile-picker fallback,
-// which reads `localCatalogPlacements` and reports `status: "offline"`
-// whenever `contractAddress` is `undefined`. Offline mode needs no contract,
-// no fee granter, no RPC endpoint and no wallet; it exists precisely to
-// inspect the tile catalog without a chain. Making an unset contract address
-// fatal made that documented mode unreachable.
-//
-// So the rule here is:
-//
-//   - READING config never throws. Unset values are `undefined`, which is a
-//     legitimate state meaning "offline".
-//   - REQUIRING config throws, and only at the moment an operation genuinely
-//     needs a chain: connecting a wallet, granting a session key, sending a
-//     transaction. That is still fail-loud -- the error names the exact
-//     variable -- but it fails at the point of use, where the UI is alive to
-//     show it and where the user has actually asked for something that needs
-//     it.
-//
-// The bug the original fail-loud check was aimed at is still caught. That bug
-// was a placeholder that LOOKS like an address:
-//
-//     const DEVELOPER_FEE_GRANTER_ADDRESS = "juno1...devfeegrantaddress...";
-//
-// Not valid bech32, and every gameplay transaction routes `granter:
-// feeGranter`, so every session-key transaction would have failed at
-// fee-grant resolution against a live chain -- surfacing as far from the
-// mistake as possible. `requireAddress` below still rejects exactly that, and
-// still names the variable. It just does it when you try to transact rather
-// than when you open the page.
-//
-// ===================================================================
-//  DESIGN NOTE 1: WHY A SHARED MODULE AT ALL
-// ===================================================================
-//
-// `WalletContext.tsx` and `utils/sessionKey.ts` each carried their own copy
-// of the RPC endpoint and contract address, each with a matching
-// `TODO(design gap)` acknowledging the duplication. Those are resolved here.
-//
-// The duplication was not merely untidy. `sessionKey.ts`'s copy of the
-// contract address scopes the session key's authz
-// `ContractExecutionAuthorization`, while `WalletContext.tsx`'s copy signs
-// it. Two drifting copies would authorize a contract the app never calls, and
-// every session-key transaction would fail authorization at broadcast with no
-// hint as to why.
-//
-// ===================================================================
-//  DESIGN NOTE 2: CRA SUBSTITUTES REACT_APP_* AT BUILD TIME
-// ===================================================================
-//
-// `react-scripts` replaces `process.env.REACT_APP_FOO` textually at build
-// time. Two consequences worth stating rather than discovering:
-//
-//   - the reads below MUST be full literal `process.env.REACT_APP_FOO`
-//     expressions. Destructuring (`const { REACT_APP_FOO } = process.env`) or
-//     dynamic indexing (`process.env[name]`) is NOT substituted and silently
-//     yields `undefined` in a production bundle. That is why `readOptional`
-//     takes the already-read VALUE and uses the name only for messages.
-//   - changing a variable needs a REBUILD, not just a dev-server restart.
-//
-// ===================================================================
-//  DESIGN NOTE 3: VALIDATION IS SHAPE-ONLY
-// ===================================================================
-//
-// This checks the bech32 prefix, character set and length. It deliberately
-// does NOT verify the bech32 checksum: that would pull `@cosmjs/encoding`
-// into this module for no real gain, since the failure being guarded against
-// is "someone shipped the placeholder" or "someone left it unset", not
-// "someone typo'd one character of an otherwise real address". A checksum
-// failure is caught by the chain with a clear error; a placeholder was not,
-// which is the whole reason for this check.
-//
-// NOTHING SECRET GOES HERE. Everything ships to the browser in plain text.
+// See docs/ai_architecture/session_keys_wallet.md, config.ts #0 - #3.
 
 /** Bech32 human-readable prefix for the target chain. */
 export const JUNO_PREFIX = "juno";
@@ -109,21 +44,15 @@ function looksLikeJunoAddress(value: string): boolean {
   return /^juno1[02-9ac-hj-np-z]{38,58}$/.test(value);
 }
 
-/** Reads a build-time value, normalising unset/blank to `undefined`. Never
- *  throws -- see design note #0.
+/** Reads a build-time value, normalising unset/blank to `undefined`. Never throws
+ *  -- see design note #0.
  *
- *  EXPORTED for `config/firebase.ts`, which applies the identical
- *  deferred-read discipline to the `REACT_APP_FIREBASE_*` variables. Sharing
- *  the helper rather than copying it is design note #1's rule applied to the
- *  reading policy itself: if the definition of "unset" ever changes (say,
- *  treating the literal string "undefined" as blank -- a real hazard when a
- *  CI system interpolates a missing variable), it must change in exactly one
+ *  EXPORTED for `config/firebase.ts`, which applies the identical deferred-read
+ *  discipline to the `REACT_APP_FIREBASE_*` variables. If the definition of
+ *  "unset" ever changes (say, treating the literal string "undefined" as blank --
+ *  a real hazard when CI interpolates a missing variable), it must change in one
  *  place or the two config modules will disagree about whether the app is
- *  configured.
- *
- *  Note it takes the already-read VALUE, never the variable name -- see
- *  design note #2 for why the read itself must stay a literal
- *  `process.env.REACT_APP_FOO` expression at each call site. */
+ *  configured. Takes the already-read VALUE, never the name -- design note #2. */
 export function readOptional(value: string | undefined): string | undefined {
   const trimmed = (value ?? "").trim();
   return trimmed.length === 0 ? undefined : trimmed;
@@ -135,18 +64,17 @@ export function readOptional(value: string | undefined): string | undefined {
 
 /** The deployed 18Cosmos contract, or `undefined` when unconfigured.
  *
- *  `undefined` is a supported, meaningful state: `HexGridRenderer` takes it
- *  as the signal to run its offline tile-catalog fallback rather than query a
- *  chain. Pass it straight through; do not coerce it to `""`. */
+ *  `undefined` is a supported, meaningful state: `HexGridRenderer` takes it as
+ *  the signal to run its offline tile-catalog fallback. Pass it straight through;
+ *  do not coerce it to `""`. */
 export const CONTRACT_ADDRESS = readOptional(process.env.REACT_APP_CONTRACT_ADDRESS);
 
 /** The developer treasury that pays gas for session-key transactions.
  *
- *  MUST equal the contract's own `GameConfig::developer_treasury`. The
- *  contract funds this account from a percentage of every lobby deposit, and
- *  this account then grants fees back to players. Point these at two
- *  different addresses and the treasury fills while every player's
- *  transaction fails for want of a grant. */
+ *  MUST equal the contract's own `GameConfig::developer_treasury`. The contract
+ *  funds this account from a percentage of every lobby deposit and this account
+ *  grants fees back to players -- point these at two different addresses and the
+ *  treasury fills while every player's transaction fails for want of a grant. */
 export const DEVELOPER_FEE_GRANTER_ADDRESS = readOptional(process.env.REACT_APP_FEE_GRANTER);
 
 /** Chain id for `keplr.enable` / `getOfflineSigner`. */
@@ -205,10 +133,10 @@ export function requireRpcEndpoint(): string {
 
 /** Whether every chain-facing value is present AND well-formed.
  *
- *  `false` means the app runs in offline mode: the tile catalog is browsable,
- *  wallet connection and all transactions are unavailable. Use this to label
- *  the UI honestly rather than to hide errors -- a user who sees "Offline"
- *  and a reason is informed; one who sees a dead Connect button is not. */
+ *  `false` means offline mode: the tile catalog is browsable, wallet connection
+ *  and transactions are unavailable. Use this to LABEL the UI honestly rather
+ *  than to hide errors -- a user who sees "Offline" and a reason is informed; one
+ *  who sees a dead Connect button is not. */
 export function isChainConfigured(): boolean {
   return chainConfigError() === null;
 }
@@ -234,16 +162,12 @@ export function chainConfigError(): string | null {
 /** Formats a base-denom integer string (`"12500000"` ujuno) for display
  *  (`"12.500000"` JUNO).
  *
- *  INTEGER STRING MATH ONLY -- never `Number(amount) / 1e6`. This mirrors the
- *  contract's own no-floating-point discipline for the same reason it holds
- *  itself to it: `ujuno` amounts are `Uint128`, and any balance above 2^53
- *  base units silently loses precision the moment it becomes an IEEE-754
- *  double. The player would simply be shown the wrong amount of their own
- *  money, which is the least acceptable place to be quietly wrong.
+ *  INTEGER STRING MATH ONLY -- never `Number(amount) / 1e6`. `ujuno` amounts are
+ *  `Uint128`, and any balance above 2^53 base units silently loses precision as
+ *  an IEEE-754 double, showing the player the wrong amount of their own money.
  *
- *  Returns `"0.000000"` for malformed input rather than `NaN`, so a
- *  surprising RPC response degrades to an obviously-wrong-but-harmless zero
- *  instead of rendering "NaN JUNO". */
+ *  Returns `"0.000000"` for malformed input rather than `NaN`, so a surprising
+ *  RPC response degrades to an obviously-wrong-but-harmless zero. */
 export function formatNativeAmount(baseAmount: string): string {
   const digits = baseAmount.trim();
   if (!/^\d+$/.test(digits)) return `0.${"0".repeat(NATIVE_DENOM_EXPONENT)}`;
@@ -256,15 +180,12 @@ export function formatNativeAmount(baseAmount: string): string {
 /** `formatNativeAmount` with trailing fraction zeros trimmed: `40000000` ->
  *  `"40"`, `40500000` -> `"40.5"`, `1` -> `"0.000001"`.
  *
- *  For places that report a POOL rather than a wallet balance -- the Game
- *  Ledger's ante pool, for one. A wallet wants fixed decimals so successive
- *  balances line up in the same column; a single headline figure reading
- *  "40.000000 JUNO" is just six characters of noise around the number the
- *  reader wanted.
+ *  For places reporting a POOL rather than a wallet balance. A wallet wants fixed
+ *  decimals so successive balances line up in a column; a headline figure reading
+ *  "40.000000 JUNO" is six characters of noise around the number.
  *
  *  Built on `formatNativeAmount` rather than dividing, so the no-floats
- *  discipline documented above holds here too -- this only ever trims a
- *  string it was handed. */
+ *  discipline holds -- this only ever trims a string it was handed. */
 export function formatNativeAmountCompact(baseAmount: string): string {
   const fixed = formatNativeAmount(baseAmount);
   if (!fixed.includes(".")) return fixed;

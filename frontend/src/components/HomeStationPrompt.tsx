@@ -1,65 +1,15 @@
-// frontend/src/components/HomeStationPrompt.tsx
+// Design note #416 (UI half): a floated corporation halts and the President
+// places the home token deliberately, rather than it being placed off-screen.
 //
-// ==================================================================
-//  DESIGN NOTE 416 (UI half): PLACE THE HOME STATION, DELIBERATELY
-// ==================================================================
+// Design note #440: this ANNOUNCES AND HANDS OFF -- `onPlace` means "take me
+// there", not "place it". The board is veiled to the single legal hex with the
+// cursor armed, so there is nothing to hunt for and the player is shown WHERE.
 //
-// REPORTED: stop auto-placing the Erie's home station. When it floats, halt
-// and prompt the President to place the token explicitly, even though the
-// destination hex is fixed by the rules.
+// Blocking and undismissable, safe because the condition is DERIVED:
+// `pendingHomeTokens` recomputes from the board every render. ONE AT A TIME --
+// several corporations can float on one dispatch.
 //
-// See `sandboxSession.ts` design note #416 for why the rules being
-// unambiguous does not settle this. The short version: the float is the
-// most consequential moment in a corporation's life and its most visible
-// half was happening off-screen, on a tab the player was not looking at.
-//
-// ==================================================================
-//  DESIGN NOTE 440: IT IS A MAP CLICK NOW
-// ==================================================================
-//
-// This prompt used to BE the placement: one button, one confirmation, token
-// down. The note that stood here argued for that and against the map --
-// "a map interaction that accepts exactly one hex and rejects the other
-// eighty is not a choice, it is a scavenger hunt with a modal's worth of
-// instructions attached."
-//
-// The objection was to the SEARCH, and the search turns out to be
-// avoidable. The board can be veiled down to the single legal hex with the
-// placement cursor already armed, so there is nothing to hunt for: one lit
-// hex on an otherwise dark map IS the answer, and clicking it is one
-// gesture. That turns the old objection into a description of how this is
-// implemented rather than an argument against it.
-//
-// What a confirmation could never do is show the player WHERE. A modal
-// naming "E11" hands a new president a coordinate; a map with E11 lit and
-// everything else dark shows them where their corporation stands on the
-// board they are about to operate on. This is the first thing that ever
-// happens to a corporation, and it now happens on the map.
-//
-// SO THIS COMPONENT ANNOUNCES AND HANDS OFF. `onPlace` no longer means
-// "place it" -- it means "take me there". The signature is unchanged
-// because it already carries exactly what both readings need: the
-// corporation and the hex.
-//
-// ==================================================================
-//  BLOCKING, AND WHY THAT IS SAFE HERE
-// ==================================================================
-//
-// Modal and undismissable, the same shape as `BoParPrompt` and for a
-// related reason: there is no legal state on the other side of cancelling.
-// The corporation has floated, the token is owed, and 1830 has no branch
-// where a floated company declines its home station.
-//
-// It is safe to block because the condition is DERIVED, not flagged --
-// `pendingHomeTokens` recomputes it from the board every render, so a
-// reload, a late poll or a double dispatch all land on the same answer.
-// A one-shot flag would risk the opposite failure: a modal that vanishes
-// with the token still unplaced and nothing left to ask for it.
-//
-// ONE AT A TIME. Several corporations can float on a single dispatch (a
-// waterfall cascade, or a multi-buy crossing two thresholds). The caller
-// passes the head of the queue and the next appears as soon as this one is
-// answered -- one decision per screen, in operating order.
+// See docs/ai_architecture/state_machine.md, HomeStationPrompt.tsx #416 / #440.
 
 import React from "react";
 
@@ -142,26 +92,11 @@ export function HomeStationPrompt({
           <span style={styles.hexLabel}>{pending.hexLabel}</span>
         </div>
 
-        {/* ==================================================
-             DESIGN NOTE 440: THE ROUTE SENTENCE WAS WRONG
-            ==================================================
-
-             REPORTED: remove the misleading rules text from this prompt.
-
-             It read "Every route it runs must touch a city it holds a token
-             in, starting here." Two claims, and the load-bearing half is
-             false. A route must include at least one city the corporation
-             has a token in -- it does not have to START at one, and once
-             the corporation places further tokens it need not involve THIS
-             hex at all. Told at the moment the home token goes down, the
-             sentence reads as "your trains will always run from here",
-             which is a wrong mental model handed to a player at exactly
-             the moment they are forming one.
-
-             The surviving half -- that the hex is printed and fixed -- is
-             the fact this prompt exists to convey, so it stays and the
-             route rule goes. A placement confirmation is not the place to
-             teach a routing rule, and certainly not a garbled one. */}
+        {/* Design note #440: the route sentence is GONE. It read "Every route it runs
+           must touch a city it holds a token in, starting here" -- and a route does not
+           have to START at a token, nor involve this hex at all once further tokens are
+           placed. The surviving half, that the hex is printed and fixed, is the fact
+           this prompt exists to convey. */}
         <span style={styles.consequence}>
           Printed on the board and fixed by the rules — the {pending.ticker} has no other
           legal home.

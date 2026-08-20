@@ -1,74 +1,15 @@
-// frontend/src/components/AuctionPromptModal.tsx
+// The two decisions the auction can leave behind, in one card: the B&O's par
+// price and the handoff into Stock Round 1.
 //
-// THE TWO DECISIONS THE AUCTION CAN LEAVE BEHIND, in one card.
+// Modal and undismissable -- the private is already won and the certificate
+// already owed, so there is no legal state on the other side of cancelling.
+// `parPending` and `handoffPending` are independent booleans rendering
+// independent sections, so the three cases (par only / handoff only / both)
+// merge without any internal step state. The par ladder is the Stock Round's
+// own exported constant, not a retyped copy.
 //
-// ==================================================================
-//  DESIGN NOTE 399 (UI half): SET THE B&O'S PRICE, NOW
-// ==================================================================
-//
-// REPORTED: buying the B&O private must prompt the player to select a par
-// value and award them the President's Certificate.
-//
-// The certificate half already worked (`grantBOPresidency`). The prompt half
-// was implicit -- the Stock Round panel's par ladder shows while `par_value`
-// is null, and design note #354 called that the prompt. See design note #399
-// in `sandboxSession.ts` for why that stopped being true: the B&O is won
-// during the AUCTION, on a different tab and a different round from the
-// ladder, and design note #396 has since hidden every card's controls behind
-// an active-card click. A prompt nobody encounters is not a prompt.
-//
-// SO IT IS A MODAL, and blocking, for the same reason the emergency train
-// purchase is: this is not a decision the player may defer. Until it is
-// answered the B&O has a president and no price, which design note #387
-// makes a genuinely unrenderable state -- no market token, no market figure,
-// a corporation that exists but cannot be valued.
-//
-// NO DISMISSAL, NO BACKDROP CLOSE. Every other modal in this codebase can be
-// waved away because every other modal is optional. Neither of these has a
-// cancel path because there is no legal state on the other side of
-// cancelling: the private is already won and the certificate is already
-// owed, and an auction with no companies left in it is not a round anybody
-// can keep playing.
-//
-// THE LADDER IS THE SAME SIX RUNGS the Stock Round uses, read from one
-// exported constant rather than retyped, so the price a player may set here
-// can never differ from the price they could set there.
-//
-// ==================================================================
-//  DESIGN NOTE 547: ONE CARD, NOT TWO MODALS IN A ROW
-// ==================================================================
-//
-// INSTRUCTED: "the B&O winner could set the par in their pop-up and then
-// within that same modal have a 'Proceed to Stock Round 1' button, so that
-// they don't need two modals in a row."
-//
-// Which is also why "Proceed" stopped being a button at the foot of the
-// auction panel. That banner was the last thing on a scrolling grid of six
-// cards -- exactly where a player who has finished reading stops looking --
-// and design note #306 had already noticed the deeper version of the
-// problem: "is concluding" is not a state a player can leave, so the round
-// was waiting on an action nobody could see they had to take.
-//
-// TWO INDEPENDENT SECTIONS, NOT TWO STEPS. `parPending` and `handoffPending`
-// are separate booleans and each renders its own section, which gets the
-// merge for free and without any internal step state:
-//
-//   - B&O won mid-auction  -> par only. There is no round to hand over yet.
-//   - Auction ends, no par -> handoff only.
-//   - B&O won on the last  -> both, in one card. Confirming the par flips
-//     `parPending` false while `handoffPending` stays true, so the SAME
-//     mounted card loses its ladder and keeps its Proceed button. The
-//     player sees one modal change, not a second one open.
-//
-// A step machine would have had to know which of those three it was in, and
-// would have been wrong in the case where the par is confirmed but the
-// auction still has companies left.
-//
-// WAITING IS RENDERED, NOT HIDDEN. When somebody else owes the B&O a par
-// price, the other players get the card with Proceed disabled and that
-// player named. The alternative -- showing them nothing -- is a table that
-// has visibly stopped with no explanation on screen, and the reason it
-// stopped is a fact about another player that only this modal knows.
+// See docs/ai_architecture/contract_economy.md, AuctionPromptModal.tsx #399
+// and #547.
 
 import React, { useState } from "react";
 
@@ -76,23 +17,10 @@ import { FONT_SIZE } from "../styles/typography";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
 
 export interface AuctionPromptModalProps {
-  /* ==================================================================
-   *  DESIGN NOTE 543: A PRIZE IS SHOWN TO WHOEVER WON IT
-   * ==================================================================
-   *
-   * REPORTED: at the end of the auction BOTH players were told they had won
-   * the B&O and both could set its par price.
-   *
-   * The prompt is raised wherever the winning action is APPLIED, and in a
-   * room every client applies every action -- that is the whole design
-   * (design note #522). So it was raised on both screens, correctly, and
-   * then rendered on both because the open test asked only whether a prompt
-   * existed and not whose it was.
-   *
-   * The identity test lives in `App.tsx` with the identity, and arrives here
-   * already resolved: `parPending` means "THIS viewer sets the par", never
-   * "a par is outstanding somewhere". `awaitingParFrom` carries the other
-   * half for everybody else. */
+  /* Design note #543: `parPending` means "THIS viewer sets the par", never "a
+     par is outstanding somewhere". Every client applies every action (#522), so
+     the prompt is raised on all screens; the identity test lives in `App.tsx` and
+     arrives here already resolved. `awaitingParFrom` carries the other half. */
   parPending: boolean;
   /** The winner's name, for the heading. Only read when `parPending`. */
   parWinnerLabel: string;

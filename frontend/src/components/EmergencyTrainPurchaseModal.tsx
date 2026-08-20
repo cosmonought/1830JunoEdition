@@ -1,70 +1,18 @@
-// frontend/src/components/EmergencyTrainPurchaseModal.tsx
-//
 // The president pays the difference.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE RULE THIS SURFACE IS FOR
-// ===================================================================
+// 1830: a corporation owning NO trains must buy one; treasury first, then the
+// president's personal cash, then forced share sales, then bankruptcy.
+// `utils/endgame.ts` owns the cascade (#0) and the legality of each sale (#1);
+// this renders those two IN ORDER, because the sequence is the sentence a
+// president needs and cannot be recovered from a total.
 //
-// 1830: a corporation that owns NO trains must buy one, and if its treasury
-// cannot cover the cheapest train in the Bank Depot, its PRESIDENT makes up
-// the shortfall out of their own pocket. If their personal cash is not
-// enough either, they must sell shares until it is -- and if even that
-// cannot raise the money, the corporation is bankrupt and the game ends.
+// UNSKIPPABLE (#3): "enforced elsewhere" is not enforcement, and the deadlock in
+// the bankrupt case is the rule rather than a UI failure to route around. Sale
+// controls remain sandbox-only -- `ExecuteMsg` has no variant marking a sale as
+// funding a mandatory buy.
 //
-// `App.tsx` design note #232 already enforces the first half: `mustBuyTrain`
-// blocks End Turn while the roster is reported and empty. What it could not
-// do is tell the president HOW MUCH of their own money the obligation is
-// about to cost them, which is the entire decision. The player was left to
-// subtract a treasury figure on one panel from a train price on another.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE CASCADE IS ENFORCED, NOT SUMMARISED
-// ===================================================================
-//
-// An earlier pass computed the shortfall and listed the president's
-// holdings beside it, with the per-row Sell disabled. That was honest about
-// what it could not do and wrong about the model underneath: it treated
-// cash and shares as one pool of resources, which gives the right TOTAL and
-// cannot answer the questions a president actually has -- which shares must
-// go, how many, and whether any of them may legally be sold at all.
-//
-// `utils/endgame.ts` design note #0 now owns the three-stage cascade
-// (treasury, then personal cash, then forced sales) and design note #1 owns
-// the legality of each sale. This renders those two, in order.
-//
-// THE SALE CONTROLS ARE STILL SANDBOX-ONLY, and for the reason they always
-// were: `ExecuteMsg` has no variant marking a sale as funding a mandatory
-// buy, so on chain there is nothing to dispatch. What changed is that the
-// sandbox now HAS somewhere for the click to go, and the rows say which of
-// the two situations they are in rather than being uniformly dead.
-//
-// ===================================================================
-//  DESIGN NOTE 3: UNSKIPPABLE, AND THE EARLIER REASONING WAS WRONG
-// ===================================================================
-//
-// REPORTED: the modal has an 'X' to close it, which lets a player skip the
-// mandatory purchase.
-//
-// It did, and the note that stood here defended it: the obligation is
-// enforced elsewhere (`mustBuyTrain` disables End Turn), so dismissing was
-// argued to be harmless, and a modal with a disabled confirm was argued to
-// be a deadlock.
-//
-// Both halves were wrong.
-//
-// "ENFORCED ELSEWHERE" IS NOT ENFORCEMENT. A dismissed modal left the
-// player on a board where the only blocked control was End Turn, with no
-// standing indication of why -- so the actual experience of the bug was a
-// game that had quietly stopped working, which is worse than a modal you
-// cannot close.
-//
-// THE DEADLOCK IS THE POINT. In the bankrupt case there IS no legal action:
-// the game is over. That is not a UI failure to route around, it is the
-// rule, and requirement 3 asks for the Game Over modal that follows it.
-// Escaping to look at the board is what the bankruptcy check is for -- if
-// the money can be raised, the controls to raise it are in this modal; if
-// it cannot, the game ends.
+// See docs/ai_architecture/stock_market.md, EmergencyTrainPurchaseModal.tsx
+// #0 / #1 / #3.
 
 import React from "react";
 

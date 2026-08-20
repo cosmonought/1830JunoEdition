@@ -1,83 +1,14 @@
-// frontend/src/components/ChatBox.tsx
+// Real-time chat transport over `games/{roomId}/chat`, plus one standalone view
+// for the pre-game staging room.
 //
-// Real-time chat transport over `games/{roomId}/chat` (Step 4: Firebase
-// Real-Time Integration), plus one small standalone view for the pre-game
-// staging room.
+// The primary export is `useFirestoreChat`, NOT the component: the dashboard's
+// chat surface is `TopTicker`'s accordion fed by `mergeFeedItems`. Chat is
+// off-chain and carries NO AUTHORITY -- no code path in this app parses a chat
+// message. Ordering uses `clientCreatedAtMs` rather than `serverTimestamp()`,
+// which resolves to `null` in the local snapshot and would sort a pending
+// message out of a `limit(N)` window entirely.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THIS FILE IS MOSTLY A TRANSPORT, NOT A PANEL
-// ===================================================================
-//
-// The primary export is `useFirestoreChat`, NOT the component underneath
-// it. The dashboard deliberately does not gain a chat panel: it already has
-// one chat surface -- `TopTicker`'s in-place accordion fed by
-// `utils/feed.ts`'s `mergeFeedItems`, composed in `InlineQuickChat` -- and
-// `feed.ts`'s own header records that the previous `Chatbox.tsx` component
-// was DELETED precisely because hoisting state into `App.tsx` had left it
-// unreachable. Re-adding a second chat panel would recreate that mistake
-// and give players two inboxes with different contents.
-//
-// So this pass changes chat's TRANSPORT and nothing else. `App.tsx` swaps
-// `useState<ChatMessage[]>` for `useFirestoreChat(roomId)`; `TopTicker` and
-// `InlineQuickChat` are untouched and become multiplayer for free, because
-// both already read from the merged feed rather than owning any chat state
-// themselves. The hook returns `ChatMessage[]` -- `feed.ts`'s existing type
-// -- specifically so that substitution is a one-line change at the call
-// site.
-//
-// The `<ChatBox>` component at the bottom exists for exactly one place the
-// ticker does not reach: the staging room in `Lobby.tsx`, which renders
-// before the dashboard (and therefore before `TopTicker`) exists. It points
-// at the SAME collection, so the transcript is continuous -- what players
-// said while waiting is still there once the board loads, rather than
-// resetting at launch.
-//
-// ===================================================================
-//  DESIGN NOTE 1: CHAT IS OFF-CHAIN AND CARRIES NO AUTHORITY
-// ===================================================================
-//
-// Nothing here may be read as game state. A message saying "I pass" is a
-// social utterance; only `PassTurn` on the contract passes a turn. This
-// matters more than it sounds: Firestore is in Test Mode, so any client can
-// write any message claiming to be from any address. `firestore.rules`
-// tightens that (author must match, messages are immutable and
-// append-only), but even fully locked down, chat is testimony, never
-// evidence. No code path anywhere in this app parses a chat message.
-//
-// ===================================================================
-//  DESIGN NOTE 2: WHY ORDERING USES A CLIENT TIMESTAMP, NOT serverTimestamp
-// ===================================================================
-//
-// This is the subtle one, and getting it wrong produces two bugs that are
-// easy to ship and unpleasant to debug.
-//
-// `serverTimestamp()` resolves to `null` in the local snapshot -- the SDK
-// applies your write optimistically before the server has assigned a time
-// (`snapshot.metadata.hasPendingWrites` is `true` during that window).
-// Firestore sorts `null` as the smallest possible value. So if the query
-// were `orderBy("createdAt", "desc"), limit(N)`:
-//
-//   1. A message you just sent sorts LAST in the descending order, i.e. it
-//      appears at the OLDEST end of the reversed list -- your own message
-//      jumps to the top of the history, then snaps to the bottom a moment
-//      later when the server timestamp lands.
-//   2. Worse, with `limit(N)` and N or more confirmed messages already
-//      present, your pending message is CUT BY THE LIMIT entirely. You type,
-//      press send, and your message simply does not appear until the server
-//      round-trip completes. On a slow connection that reads as a broken
-//      chat box.
-//
-// Both are fixed by ordering on `clientCreatedAtMs`, a plain number written
-// at the same instant, which is therefore never null and never reorders.
-//
-// The cost is that ordering now trusts the sender's clock, and a client with
-// a badly wrong clock would place its messages wrongly for everyone.
-// `firestore.rules` bounds that: a write whose `clientCreatedAtMs` is more
-// than a few minutes from the server's own `request.time` is rejected, so a
-// broken or malicious clock cannot pin a message to the top of the room's
-// history permanently. `createdAt` is still written on every message and is
-// still the tamper-resistant record -- it is what gets DISPLAYED whenever it
-// has resolved; `clientCreatedAtMs` only ever decides sort position.
+// See docs/ai_architecture/firebase_middleware.md, ChatBox.tsx #0 / #1 / #2.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -173,40 +104,23 @@ export interface FirestoreChatResult {
  *                who later renames themselves should not retroactively
  *                rewrite the byline on things they already said.
  */
-/* ==================================================================
- *  DESIGN NOTE 644: THE SANDBOX HAD NO CHAT, TWICE OVER
- * ==================================================================
- *
- * REPORTED: "the Send button on the chatbox does not actually send a message.
- * The chat log records 'No activity yet'."
- *
- * Two independent gates, either of which alone was enough:
- *
- *   THE ROOM WAS `null`. `App.tsx` passed `sandbox ? null : roomId`, on
- *   design note #24's reasoning that subscribing would CREATE a Firestore
- *   document "from what is supposed to be a local, chain-free scratchpad".
- *   That was true when written and stopped being true at design note #578:
- *   the sandbox is now the multiplayer mode, it already has a real room
- *   (`sandboxRoomCode`) and already writes an action log to it. There is no
- *   junk document to avoid -- the room exists.
- *
- *   THERE IS NO WALLET. `sendMessage` refuses when `address` is null, which
- *   in a sandbox it always is. So even a correctly-roomed sandbox chat would
- *   have answered "Connect a wallet before sending a message" -- to a mode
- *   whose entire premise is playing without one.
- *
- * AND A THIRD CASE THE FIX HAS TO COVER: a sandbox with no Firebase config at
- * all, which is a supported way to run this app (`config/firebase.ts` design
- * note #1). There is no transport there and there never will be, and a Send
- * button that silently does nothing is the worst of the three outcomes. So
- * the hook falls back to keeping messages in memory -- which is exactly what
- * chat was before design note #22 moved it to Firestore, and is honest for a
- * session that is local by construction.
- *
- * THE ERROR STATE IS NOT THE FALLBACK. A configured Firestore that REFUSES a
- * write still reports the failure; it does not quietly divert to local state
- * and leave a player believing the table saw their message. Local is for
- * "there is no transport", never for "the transport said no". */
+/* Design note #644: the sandbox had no chat, twice over. Two independent gates,
+   either enough on its own: `App.tsx` passed `sandbox ? null : roomId` on design
+   note #24 reasoning that has not been true since #578 (the sandbox is the
+   multiplayer mode and already has a real room writing an action log); and
+   `sendMessage` refuses when `address` is null, which in a sandbox it always is.
+
+   AND A THIRD CASE THE FIX HAS TO COVER: a sandbox with no Firebase config at
+   all, which is a supported way to run this app (`config/firebase.ts` design
+   note #1). There is no transport there and a Send button that silently does
+   nothing is the worst of the three outcomes, so the hook falls back to keeping
+   messages in memory -- what chat was before design note #22 moved it to
+   Firestore, and honest for a session that is local by construction.
+
+   THE ERROR STATE IS NOT THE FALLBACK. A configured Firestore that REFUSES a
+   write still reports the failure; it does not quietly divert to local state and
+   leave a player believing the table saw their message. Local is for "there is
+   no transport", never for "the transport said no". */
 let nextLocalChatId = 1;
 
 export function useFirestoreChat(
@@ -429,14 +343,9 @@ export function ChatBox({ roomId, address, displayName, title = "Room chat" }: C
 
 export default ChatBox;
 
-/* ------------------------------------------------------------------ */
-/* Inline styles                                                       */
-/* ------------------------------------------------------------------ */
-//
-// Plain inline styles, matching this codebase's established escape hatch
-// (see `TopTicker.tsx`/`InlineQuickChat.tsx`), and the same #0F172A /
-// #1E293B recessed-surface palette so the staging room reads as part of
-// the same application as the dashboard it hands off to.
+// Inline styles, matching this codebase's escape hatch (`TopTicker`,
+// `InlineQuickChat`), on the same #0F172A / #1E293B recessed-surface palette so
+// the staging room reads as part of the same application as the dashboard.
 
 const styles: Record<string, React.CSSProperties> = {
   root: {

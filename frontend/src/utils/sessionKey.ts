@@ -1,52 +1,30 @@
-// frontend/src/utils/sessionKey.ts
-//
 // Milestone 2: the ephemeral browser session key -- generation, safe
-// sessionStorage caching, and the authz-wrapped executor that routes every
-// in-game gameplay message through it with gas paid by the developer
-// FeeGrant address. See ../context/WalletContext.tsx for the master-wallet
-// side of the same handshake (the MsgGrant this key depends on).
+// `sessionStorage` caching, and the authz-wrapped executor that routes every
+// in-game gameplay message through it with gas paid by the developer FeeGrant
+// address. See ../context/WalletContext.tsx for the MsgGrant side.
 //
-// Design notes:
-// 1. Key generation uses @cosmjs/crypto's `Random`/`Secp256k1` (a CSPRNG
-//    wrapper + curve validation), then wraps the raw scalar in a
-//    @cosmjs/proto-signing `DirectSecp256k1Wallet` for actual tx signing.
-//    @cosmjs/amino's `Secp256k1Wallet` is the equivalent choice for
-//    amino-style signing (what Keplr's own injected signer typically uses)
-//    -- direct (protobuf) signing was chosen here instead because it's the
-//    simpler, more standard path for a locally generated key that never
-//    touches Keplr's UI, and CosmWasm's MsgExecuteContract/MsgExec are
-//    natively protobuf messages either way.
-// 2. The private key lives in `sessionStorage`, not `localStorage`: it
-//    should not survive a browser restart or be shared across tabs once
-//    this tab closes. A stolen session key can only ever do what its authz
-//    grant allows (see WalletContext.tsx's ContractExecutionAuthorization +
-//    AcceptedMessageKeysFilter scoping) and spend whatever the developer
-//    FeeGrant is willing to cover -- never move the player's real JUNO --
-//    which is the whole point of keeping it this narrowly scoped.
-// 3. `GAMEPLAY_MESSAGE_KEYS` below is the single source of truth for which
-//    `ExecuteMsg` variants the session key is allowed to submit.
-//    WalletContext.tsx imports this exact array into the on-chain grant's
-//    `AcceptedMessageKeysFilter` so the client-side allow-list and the
-//    on-chain enforcement can never drift apart. `execViaSessionKey` also
-//    asserts against it locally, so a coding mistake fails fast in the
+// 1. Generation uses `@cosmjs/crypto`'s `Random`/`Secp256k1`, wrapped in a
+//    `DirectSecp256k1Wallet`. Direct (protobuf) signing rather than amino: the
+//    simpler path for a key that never touches Keplr's UI, and
+//    `MsgExecuteContract`/`MsgExec` are natively protobuf either way.
+// 2. The private key lives in `sessionStorage`, not `localStorage`. A stolen
+//    session key can only do what its authz grant allows and spend what the
+//    FeeGrant covers -- never move the player's real JUNO.
+// 3. `GAMEPLAY_MESSAGE_KEYS` is the single source of truth for which variants
+//    the key may submit; `WalletContext.tsx` imports this exact array into the
+//    on-chain `AcceptedMessageKeysFilter`, so client and chain cannot drift.
+//    `execViaSessionKey` also asserts locally, so a mistake fails fast in the
 //    browser instead of as an opaque on-chain rejection.
-// 4. IMPORTANT wire-format correction vs. frontend_blueprint.md Section 2:
-//    `msg.rs`'s `ExecuteMsg` has no `#[serde(rename_all = ...)]`, so it
-//    serializes with serde's default *externally tagged* representation --
-//    the JSON key is the exact Rust variant name, e.g. `{"BuyStock": {...}}`,
-//    NOT `{"buy_stock": {...}}`. `SharePurchaseSource` is the same story:
-//    `{"Ipo"}`/`{"Bank"}`, not lowercase. The blueprint's inline call-site
-//    examples used the wrong casing; `GameplayExecuteMsg` below is the
-//    corrected, exact-cased type, and it's what should be used going
-//    forward instead of those examples.
-// 5. `MsgExec`'s `msgs` field is `repeated google.protobuf.Any`, and `Any`
-//    is a real protobuf wrapper (`{ typeUrl, value: Uint8Array }`) -- the
-//    inner `MsgExecuteContract` MUST be encoded to bytes with
-//    `.encode(...).finish()` before being placed in that array. Passing a
-//    decoded/plain object as `Any.value` (as an earlier sketch did) encodes
-//    successfully client-side but fails to decode on-chain, since the
-//    chain's Any unpacking expects real protobuf bytes, not JSON. Every
-//    inner message in this file's `execViaSessionKey` is encoded this way.
+// 4. WIRE FORMAT vs. frontend_blueprint.md Section 2: `msg.rs`'s `ExecuteMsg`
+//    has no `#[serde(rename_all)]`, so it is EXTERNALLY TAGGED with the exact
+//    Rust variant name -- `{"BuyStock": {...}}`, not `{"buy_stock": {...}}`.
+//    `SharePurchaseSource` likewise: `{"Ipo"}`/`{"Bank"}`. The blueprint's
+//    examples used the wrong casing; `GameplayExecuteMsg` is the corrected type.
+// 5. `MsgExec.msgs` is `repeated Any`, so the inner `MsgExecuteContract` MUST be
+//    `.encode(...).finish()`-ed to bytes first. Passing a plain object as
+//    `Any.value` encodes fine client-side and fails to decode on-chain.
+//
+// See docs/ai_architecture/session_keys_wallet.md, sessionKey.ts #1 - #5.
 
 import { Random, Secp256k1 } from "@cosmjs/crypto";
 import { DirectSecp256k1Wallet, Registry } from "@cosmjs/proto-signing";
@@ -62,23 +40,17 @@ import { MsgExec, MsgGrant, MsgRevoke } from "cosmjs-types/cosmos/authz/v1beta1/
 import { MsgExecuteContract } from "cosmjs-types/cosmwasm/wasm/v1/tx";
 import type { Any } from "cosmjs-types/google/protobuf/any";
 
-// --- Deployment config -------------------------------------------------
-// F-4: the TODO that stood here is RESOLVED, and so is the placeholder that
-// was the actual bug. `DEVELOPER_FEE_GRANTER_ADDRESS` used to be the literal
-// string "juno1...devfeegrantaddress...", which is not valid bech32 -- and
-// since every gameplay transaction below routes `granter: feeGranter`, EVERY
-// session-key transaction would have failed at fee-grant resolution the
-// moment this pointed at a live chain. Nothing caught it earlier because
-// nothing validated it: the failure surfaced at broadcast, as far from the
-// mistake as it is possible to get.
+// Deployment config. F-4: `DEVELOPER_FEE_GRANTER_ADDRESS` used to be the literal
+// `"juno1...devfeegrantaddress..."`, which is not valid bech32 -- and since every
+// gameplay transaction routes `granter: feeGranter`, EVERY session-key
+// transaction would have failed at fee-grant resolution against a live chain,
+// surfacing at broadcast, as far from the mistake as possible.
 //
-// `../config` now reads all four from the environment and throws at import
-// on anything that is not a plausible address, so the app cannot start in
-// that state. It is also the single definition shared with
-// `../context/WalletContext.tsx`, which matters specifically for
-// `CONTRACT_ADDRESS`: this file's copy scopes the authz grant's
-// `ContractExecutionAuthorization` while that file's copy signs it, and two
-// drifting copies would authorize a contract the app never calls.
+// `../config` now reads all four from the environment and is the single
+// definition shared with `WalletContext.tsx` -- which matters specifically for
+// `CONTRACT_ADDRESS`: this file's copy SCOPES the authz grant while that file's
+// copy SIGNS it, and two drifting copies would authorize a contract the app
+// never calls.
 import {
   JUNO_PREFIX,
   requireContractAddress,
@@ -88,12 +60,11 @@ import {
 
 const SESSION_STORAGE_KEY = "18cosmos.session_key.v1";
 
-// --- Gameplay message allow-list ---------------------------------------
-// Deliberately EXCLUDES CreateGameRoom, JoinGameRoom, and
-// EndGameAndDistribute -- those move real JUNO and stay Keplr-signed
-// through WalletContext.tsx's `signingClient`, per frontend_blueprint.md
-// Section 0. Every other `ExecuteMsg` variant is pure VGP/gameplay state
-// and is safe to delegate to the session key.
+// Gameplay message allow-list. Deliberately EXCLUDES `CreateGameRoom`,
+// `JoinGameRoom` and `EndGameAndDistribute` -- those move real JUNO and stay
+// Keplr-signed through `WalletContext.tsx`'s `signingClient`, per
+// frontend_blueprint.md Section 0. Every other variant is pure VGP/gameplay
+// state and is safe to delegate.
 export const GAMEPLAY_MESSAGE_KEYS = [
   "BuyStock",
   "SellStock",
@@ -143,23 +114,16 @@ export interface PublicCompanyPayoutChoiceDto {
 /** One stop on a manually-declared route -- the exact mirror of `msg.rs`'s
  *  `RouteWaypoint` (Step 4.5 Batch 3, item 1).
  *
- *  **The unit of a route is a STATION, not a hex.** That distinction became
- *  load-bearing when the contract's pathfinder moved its own path history to
- *  `(hex, city_node)` keys, so a route can legally serve BOTH stations of a
- *  two-city hex -- New York's brown tile (#62) and every OO tile carry two
- *  independent cities on physically separate track. The old payload was
- *  `hex_path: string[]`, which could not say which of the two a stop meant,
- *  so the contract had to refuse any repeated hex label outright rather than
- *  guess and risk paying for a stop the train never reached.
+ *  THE UNIT OF A ROUTE IS A STATION, NOT A HEX. That became load-bearing when the
+ *  contract's pathfinder moved its path history to `(hex, city_node)` keys: a
+ *  route can legally serve BOTH stations of a two-city hex (New York's #62, every
+ *  OO tile). The old `hex_path: string[]` could not say which of the two a stop
+ *  meant, so the contract had to refuse any repeated hex label outright.
  *
- *  `city_node` is OPTIONAL and omitting it is the normal case: it means "this
- *  hex has one stop, or none" -- a town, plain connector track, or a
- *  single-city tile, which is almost the whole board. Only name a city when
- *  the hex genuinely has more than one.
- *
- *  Indexed exactly like the contract's own city registries: `0` is the first
- *  city on the tile, `1` the second. Naming a city the hex does not have is
- *  rejected on-chain with `NoSuchCityOnHex` rather than silently coerced. */
+ *  `city_node` is OPTIONAL and omitting it is the normal case -- "this hex has
+ *  one stop, or none", which is almost the whole board. Indexed like the
+ *  contract's own city registries (`0` first, `1` second); naming a city the hex
+ *  does not have is rejected with `NoSuchCityOnHex` rather than coerced. */
 export interface RouteWaypointDto {
   hex: string;
   city_node?: number;
@@ -170,19 +134,17 @@ export interface RouteWaypointDto {
  *  names under serde's default externally-tagged representation. */
 export type PayoutStrategyDto = "DeclareDividends" | "Withhold";
 
-/** Exact-cased TypeScript mirror of `msg.rs`'s `ExecuteMsg`, restricted to
- *  the session-key-eligible (non-JUNO-moving) variants in
- *  `GAMEPLAY_MESSAGE_KEYS`. See design note #4 above for why the variant
- *  keys are PascalCase while their fields stay snake_case (fields are
- *  serialized as literally named in the Rust struct, which is already
- *  snake_case in `msg.rs`; only the enum's own externally-tagged variant
- *  name follows serde's PascalCase default). */
+/** Exact-cased TypeScript mirror of `msg.rs`'s `ExecuteMsg`, restricted to the
+ *  session-key-eligible (non-JUNO-moving) variants in `GAMEPLAY_MESSAGE_KEYS`.
+ *  See design note #4 for why the variant keys are PascalCase while their fields
+ *  stay snake_case -- fields serialize as literally named in the Rust struct;
+ *  only the enum's externally-tagged variant name follows serde's default. */
 export type GameplayExecuteMsg =
-  // Audit G-14: advances a corporation past its current Operating Round
-  // sub-phase without acting in it. The six OR actions are gated on-chain
-  // against a persisted cursor, so this is the only way to get past a phase
-  // the corporation has nothing to do in -- and every skip is a recorded,
-  // replayable event rather than a client-side jump.
+  // Audit G-14: advances a corporation past its current Operating Round sub-phase
+  // without acting in it. The six OR actions are gated on-chain against a
+  // persisted cursor, so this is the only way past a phase the corporation has
+  // nothing to do in -- and every skip is a recorded, replayable event rather than
+  // a client-side jump.
   | { AdvanceOperatingSubPhase: { game_id: number; protocol_id: number } }
   // Audit G-15: corporation-to-corporation train sales. `price` is a STRING
   // for the same big-int-safety reason every other `Uint128` field here is.
@@ -216,11 +178,10 @@ export type GameplayExecuteMsg =
       };
     }
   | { BidOnPrivate: { game_id: number; private_id: number; bid_amount: string } }
-  // Phase-Gated Corporate Purchase Protocol (`trading.rs` module doc
-  // comment #17): a corporation buying a player-owned private company's
-  // wrapper into its own treasury, once Phase 3 (the 3-train era) has
-  // launched. `price` is a string for the same big-int-safety reason every
-  // other `Uint128` field here is (`bid_amount`, `revenue_amount`, etc.).
+  // Phase-Gated Corporate Purchase Protocol (`trading.rs` module doc #17): a
+  // corporation buying a player-owned private company's wrapper into its own
+  // treasury, once Phase 3 has launched. `price` is a string for the same
+  // big-int-safety reason as every other `Uint128` field here.
   | {
       BuyPrivateCompany: {
         game_id: number;
@@ -236,14 +197,12 @@ export type GameplayExecuteMsg =
       };
     }
   | { BeginOperatingRound: { game_id: number } }
-  // STRUCTURAL FIX: `orientation` is now a required, explicit, player-chosen
-  // field (mirrors `msg.rs`'s `ExecuteMsg::LayTile`, updated the same pass)
-  // -- a prior version of this contract auto-picked the lowest legal
-  // rotation server-side and took no `orientation` input at all, which
-  // silently removed a real 1830 strategic choice (which direction a route
-  // extends). `TileSelectionPopup.tsx` is the only caller and always sends
-  // the player's actually-selected orientation, not just the lowest legal
-  // one.
+  // STRUCTURAL FIX: `orientation` is a required, explicit, player-chosen field
+  // (mirroring `msg.rs`'s `ExecuteMsg::LayTile`). A prior contract version
+  // auto-picked the lowest legal rotation server-side and took no `orientation`
+  // input at all, silently removing a real 1830 strategic choice -- which
+  // direction a route extends. `TileSelectionPopup.tsx` is the only caller and
+  // always sends the player's actual selection.
   | {
       LayTile: {
         game_id: number;
@@ -255,10 +214,10 @@ export type GameplayExecuteMsg =
       };
     }
   // Step 4.5 Batch 3, item 1: Manual Route Validation. `path` replaced the
-  // deprecated `hex_path: string[]` -- see `RouteWaypointDto` for why a bare
-  // label was not enough. Only `protocol_id`'s registered President may send
-  // this, and it requires `BeginOperatingRound` to have populated the
-  // Operating Round Corporation Turn Queue first.
+  // deprecated `hex_path: string[]` -- see `RouteWaypointDto` for why a bare label
+  // was not enough. Only `protocol_id`'s registered President may send this, and
+  // it requires `BeginOperatingRound` to have populated the Operating Round
+  // Corporation Turn Queue first.
   | {
       RunManualRoute: {
         game_id: number;
@@ -268,11 +227,10 @@ export type GameplayExecuteMsg =
       };
     }
   // Station Tokens. `city_index` is OPTIONAL and additive: a hex carrying two
-  // separate cities (New York #54/#62, the OO tiles) needs it to be
-  // answerable at all, while on a single-city hex the only valid value is
-  // `0`. Omitting the key entirely makes the contract resolve the
-  // lowest-indexed city with a free slot -- always a legal placement rather
-  // than a rejection.
+  // separate cities (New York #54/#62, the OO tiles) needs it to be answerable at
+  // all, while on a single-city hex the only valid value is `0`. Omitting the key
+  // makes the contract resolve the lowest-indexed city with a free slot -- always
+  // a legal placement rather than a rejection.
   | {
       PlaceStationToken: {
         game_id: number;
@@ -301,17 +259,15 @@ export type GameplayExecuteMsg =
   | { WaterfallMiniAuctionRaise: { game_id: number; bid_amount: string } }
   | { WaterfallMiniAuctionPass: { game_id: number } };
 
-/** Extends CosmWasm's default message registry with the full set of
- *  `x/authz` message types used across the wallet/session-key layer:
- *  `MsgExec` (session key, this file) and `MsgGrant`/`MsgRevoke` (master
- *  wallet, WalletContext.tsx). Neither client works without this -- a
- *  `SigningCosmWasmClient` built with the plain default registry throws
- *  "Unregistered type url" the moment it tries to encode any of these,
- *  which only surfaces at broadcast time, not at connection time. Both
- *  signing clients in this codebase MUST be constructed with this same
- *  factory rather than two independently-assembled registries, precisely
- *  so this list can't drift out of sync with what each client actually
- *  needs to send. */
+/** Extends CosmWasm's default message registry with the full `x/authz` set used
+ *  across the wallet/session-key layer: `MsgExec` (this file) and
+ *  `MsgGrant`/`MsgRevoke` (WalletContext.tsx).
+ *
+ *  Neither client works without this -- a `SigningCosmWasmClient` built with the
+ *  plain default registry throws "Unregistered type url" the moment it encodes
+ *  any of these, and that only surfaces at broadcast time, not at connection
+ *  time. Both signing clients MUST use this same factory rather than two
+ *  independently-assembled registries, so the list cannot drift. */
 export function createExtendedRegistry(): Registry {
   const registry = new Registry([...defaultRegistryTypes, ...wasmTypes]);
   registry.register("/cosmos.authz.v1beta1.MsgExec", MsgExec);
@@ -354,11 +310,10 @@ export function hasCachedSessionKey(): boolean {
   return sessionStorage.getItem(SESSION_STORAGE_KEY) !== null;
 }
 
-/** Discards the cached session key. Callers should also broadcast a
- *  `MsgRevoke` (see WalletContext.tsx's `revokeSessionKey`) if the
- *  corresponding authz grant should stop working immediately -- clearing
- *  the cache alone only forgets the key locally, it doesn't invalidate
- *  the on-chain grant. */
+/** Discards the cached session key. Callers should also broadcast a `MsgRevoke`
+ *  (`WalletContext.tsx`'s `revokeSessionKey`) if the corresponding authz grant
+ *  should stop working immediately -- clearing the cache alone only forgets the
+ *  key locally. */
 export function clearSessionKey(): void {
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
 }
@@ -398,27 +353,23 @@ export interface ExecViaSessionKeyOptions {
   masterAddress: string;
   msg: GameplayExecuteMsg;
   funds?: Coin[];
-  /** Defaults to `DEVELOPER_FEE_GRANTER_ADDRESS`. Overridable per-call in
-   *  case a different subsidy pool is ever wired up (e.g. a per-tournament
-   *  sponsor address), but every gameplay tx should set *some* feeGranter
-   *  -- the session key itself is never expected to hold JUNO to pay gas
-   *  with. */
+  /** Defaults to `DEVELOPER_FEE_GRANTER_ADDRESS`. Overridable per-call in case a
+   *  different subsidy pool is ever wired up, but every gameplay tx should set
+   *  *some* feeGranter -- the session key itself is never expected to hold JUNO to
+   *  pay gas with. */
   feeGranter?: string;
   gasLimit?: string;
   gasFeeAmount?: Coin;
   memo?: string;
 }
 
-/**
- * Executes a gameplay `ExecuteMsg` against the 18Cosmos contract, signed by
- * the browser session key but authorized on behalf of `masterAddress` via
- * `authz.MsgExec`, with gas covered by `feeGranter` (the developer subsidy
- * tank) instead of the session key's own -- deliberately empty -- balance.
+/** Executes a gameplay `ExecuteMsg` against the 18Cosmos contract, signed by the
+ *  browser session key but authorized on behalf of `masterAddress` via
+ *  `authz.MsgExec`, with gas covered by `feeGranter` (the developer subsidy tank)
+ *  instead of the session key's own -- deliberately empty -- balance.
  *
- * See this file's design note #5 for why the inner `MsgExecuteContract` is
- * manually protobuf-encoded before being wrapped as `Any`, rather than
- * handed to `MsgExec.fromPartial` as a plain decoded object.
- */
+ *  See design note #5 for why the inner `MsgExecuteContract` is manually
+ *  protobuf-encoded before being wrapped as `Any`. */
 export async function execViaSessionKey(
   options: ExecViaSessionKeyOptions,
 ): Promise<DeliverTxResponse> {
@@ -461,12 +412,9 @@ export async function execViaSessionKey(
     ).finish(),
   };
 
-  // Unlike `innerAny` above, this OUTER message is passed to
-  // `signAndBroadcast` as a plain typeUrl/value EncodeObject -- the
-  // extended registry (see `createExtendedRegistry`) encodes it
-  // automatically. Only nested `Any` fields (like `MsgExec.msgs` here)
-  // need to be pre-encoded to bytes by hand; the top-level message never
-  // does.
+  // Unlike `innerAny` above, this OUTER message is passed to `signAndBroadcast` as
+  // a plain typeUrl/value `EncodeObject` -- the extended registry encodes it
+  // automatically. Only nested `Any` fields need pre-encoding by hand.
   const execEncodeObject = {
     typeUrl: "/cosmos.authz.v1beta1.MsgExec",
     value: MsgExec.fromPartial({

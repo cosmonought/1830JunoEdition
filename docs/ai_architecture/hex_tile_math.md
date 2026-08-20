@@ -1915,3 +1915,222 @@ hex playable", and getting that backwards would forbid every connection to the m
 **What this deliberately does NOT check, because it cannot without becoming the rules engine the project brief rules
 out:** network connectivity to the corporation, city reservation for unfloated home hexes, and tray depletion. **The
 tray is narrowed to plausible, not proven.**
+
+---
+
+# Batch 5C — Tile supply, token migration, hex reservations and the token row
+
+## utils/tileSupply.ts #627 — Derived from the board, and why that is exact
+
+**The contract owns this figure:** `state::REMAINING_TILES` is seeded per game at each tile's printed quantity and
+decremented as tiles are laid. **No `QueryMsg` exposes it, so the frontend cannot read it back.**
+
+**IT CAN BE DERIVED WITHOUT GUESSING, because of a rule that makes the arithmetic closed: a tile is either on the
+board or in the tray, and nothing else can hold one. Upgrading does not consume the tile underneath — 1830 returns
+it to the tray — so a yellow tile replaced by a green one stops being on the map and becomes available again, which
+is exactly what counting the CURRENT map says. There is no third place for a tile to be and no history to replay:**
+
+```
+remaining(id) = printed(id) - (tiles with that id currently on the map)
+```
+
+**THIS IS STILL A SECOND IMPLEMENTATION OF A FACT THE CONTRACT OWNS**, and this codebase has been bitten repeatedly
+by exactly that shape (`#411`, `#431`, `#621`). **Accepted here for two reasons that do not apply to those:**
+
+- **the derivation is TOTAL rather than incremental** — it reads the whole board every time, **so it cannot drift
+  out of step the way a counter can**; and
+- **it is READ-ONLY.** Nothing dispatches on this number; **the contract still refuses an unavailable tile on its
+  own. The worst a wrong answer can do is mislabel a candidate, not lose a tile.**
+
+**THE RIGHT EVENTUAL SHAPE IS A QUERY.** `GetTileSupply` would make this a read rather than a re-derivation, **and
+this module would become its parser. Until then the note above is the argument for why the interim is sound.**
+
+---
+
+## utils/tokenMigration.ts — where a station token ends up when the tile changes
+
+### tokenMigration.ts #0 — The token moves, and nobody was told
+**REPORTED:** upgrading a single-city hex (E11, ERIE's home) to a tile with several separate cities places the
+station token arbitrarily, and the player has no control or visibility over which city it lands on.
+
+**Both halves are true and they have different causes.**
+
+- **THE VISIBILITY HALF is a straightforward omission.** The radial confirm ring shows a ghost of the tile about to
+  be laid **and says nothing about the pieces already standing on the hex. A president upgrading their own home
+  city is moving their own token and finding out where it went by looking at the board afterwards.**
+- **THE CONTROL HALF is more interesting**, and the earlier note in `sandboxState.ts` was written when it was still
+  true: *"`station_token_hexes` is a list of `(q, r)` pairs with no slot index, so the shape cannot express the
+  answer even if the UI asked".* **That stopped being true at Audit G-12, which added `station_tokens` as
+  `(q, r, city_index)`. The destination IS expressible now.**
+
+### tokenMigration.ts #1 — Preserve the index, and say so
+**What this does NOT do is invent a choice the contract will not honour.** `LayTile` carries a tile and an
+orientation; **it does not carry "and put my token in city 1". So a UI that let the president pick would be
+collecting an answer it cannot send, and the contract would apply its own rule regardless — which is the worst
+outcome of the three, because the player would have been asked.**
+
+The mapping is therefore **DECLARED rather than chosen: a token in city `i` stays in city `i`.** That is the
+ordinary 18xx upgrade rule (an OO tile's two stations are the two stations of the hex it replaced, in order), **it
+is deterministic, and it is what `tileCityAnchors` already draws against — so the preview shows the marker the
+token will actually occupy rather than a promise about one.**
+
+**WHERE THE MAPPING IS GENUINELY AMBIGUOUS** — a one-city hex becoming a two-city tile, **where index 0 is a real
+choice a president would want to make** — this **reports it as ambiguous rather than pretending index 0 was
+selected. The ring says which city the token will take AND that the alternative exists, which is the honest state
+of a UI whose message format cannot yet carry the answer. Closing it needs `LayTile` to accept a token destination,
+which is a contract change.**
+
+The migration query returns **`null` when nothing is standing on the hex, which is the common case and the one
+where the ring should say nothing at all — a caption about token migration on an empty hex is noise on every
+ordinary tile lay.** The caption is **phrased as a statement of where the piece goes, because that is the question
+a president has when they see their own token on the hex they are about to rebuild.**
+
+---
+
+## utils/privateReservations.ts — which hexes a private is holding
+
+### privateReservations.ts #0 — The reservation existed only as prose
+**REPORTED:** the map gives no indication that a hex is reserved by a private company — Burlington by the Champlain
+& St. Lawrence, Scranton by the Delaware & Hudson.
+
+**The reservation was real and stated in three places, all of them text:** the auction card's ability line,
+`PrivatePowerPanel`'s description, and the rules reference. **None of them is on screen while a president is
+choosing where to lay track, which is the one moment the fact matters. A player discovers the block by having a
+placement refused.**
+
+### privateReservations.ts #1 — Derived from ownership, not hardcoded on
+**The badge has to CLEAR, and the two ways it clears are different:**
+
+| State | Meaning |
+|---|---|
+| **CLOSED** | the private leaves the game at Phase 5 and its hold goes with it — `PrivateCompanyState.closed` says so directly |
+| **ABSENT** | a room that does not report the private at all — an older contract, or a variant without it. **No claim, no badge.** |
+
+So this **reads the live roster every time rather than baking a static list of blocked hexes into the renderer. A
+badge that cannot turn off would be worse than no badge by the middle of the game: it would be marking a
+restriction that no longer exists, on the board a player is planning against.**
+
+**UNOWNED STILL COUNTS.** During the auction nobody holds the C&SL yet **and the hex is still spoken for — no
+corporation may build there. The badge is about the HEX's availability, which the private's existence decides; who
+owns it changes only the tooltip.**
+
+### privateReservations.ts #2 — The coordinates come from the board, not from here
+The table stores hex **LABELS** ("B20") and `HEX_LABEL_TO_AXIAL` resolves them. **Storing `(q, r)` pairs here would
+be a second copy of the board's own geometry, free to drift from it — and `hexBoardData.ts` already had to move F16
+once (`#123`, the missed Scranton city). A label that no longer resolves yields no reservation rather than a badge
+floating at (0, 0).**
+
+See `WaterfallAuctionDashboard.tsx #312` for **why D&H holds F16 and M&H holds nothing, and for the divergence from
+`auction.rs` that follows from it.**
+
+### privateReservations.ts #3 — Each badge has a fixed home
+The 13-slot numbering from `hexGeometry.ts` (1-6 edge midpoints, 7-12 corner vertices). **These two are PINNED
+rather than negotiated through the shared claiming ledger, because there are exactly two of them on two known hexes
+and both had to be placed where they cannot reach a neighbour — the overflow bug `#364` records. A claimed slot is
+the right answer when passes compete; a chosen one is the right answer when the position itself is the fix.**
+
+`activeReservations` is **empty once both privates have closed, which is the state the badge exists to stop
+misrepresenting.** The tooltip **names the holder when there is one, because "reserved by the D&H" and "reserved by
+the D&H, which Carol owns" lead to different decisions: the second tells a president whether the block is theirs to
+use.**
+
+### privateReservations.ts #444 — The hex a private power acts on
+`activeReservations` answers **"which hexes are currently spoken for"** — a question about the live game, filtering
+on ownership and closure **because a badge must not mark a hex nothing protects.**
+
+This answers a different and simpler question: **WHERE does this private's power act? That is a printed property of
+the board and true whether the private is owned, unowned or closed, so it consults the rules table and nothing
+else.**
+
+**Separate rather than a flag on the function above, because conflating them is how a power would silently stop
+being executable at the moment the badge stopped drawing — two different conditions that happen to involve the same
+table.** `null` for the four privates that hold no ground, **and for a rule whose label the board does not carry
+(the same guard `activeReservations` makes, for the same reason).**
+
+---
+
+## components/StationTokenRow.tsx — an inventory, not a fraction
+
+### StationTokenRow.tsx #0 — "2/4" is a count; the row is an inventory
+The Operating Round bar reported stations as `2/4 - $40 ea`. **Three things wrong with that, and only the first is
+cosmetic:**
+
+- **IT PRICED THEM ALL THE SAME.** "$40 ea" is **false for every token after the second, which costs $100**
+  (`utils/stationTokens.ts #0`). **The one number a president needs before deciding to place is the one the readout
+  got wrong.**
+- **IT COUNTED FORWARDS WHILE THE PRICE COUNTS BACKWARDS.** "2 of 4 left" says **nothing about WHICH two are left,
+  and the two remaining are not interchangeable — one costs $40 and the next $100.**
+- **IT DID NOT LOOK LIKE THE THING IT DESCRIBES. Tokens are circles on the map. A fraction is not.**
+
+So the row draws the whole allowance, **one circle per token, in placement order, each captioned with what it
+costs. Spent tokens grey out IN PLACE — the row does not shrink — so "two placed, next one $100" is one glance
+rather than an inference.**
+
+### StationTokenRow.tsx #1 — The row sits on the corporation's own colour
+The bar is painted with the corporation's brand colour (`App.tsx #236`), **which creates a problem specific to this
+component: a token drawn in that same colour on that same background is invisible by construction.**
+
+Two fixes that keep the brand link: **the row sits in its own slightly darkened inset**, so tokens have a surface
+to read against; **and each token carries a ring in the bar's own derived ink**, which separates it from that
+surface whatever hue the corporation is.
+
+**PLACED TOKENS DESATURATE RATHER THAN FADE. Alpha alone on a coloured bar makes a token look like the background
+rather than like a spent piece; a neutral grey fill reads as "used" against any hue.**
+
+### StationTokenRow.tsx #362 — The home token's caption is its hex, not its price
+**REPORTED:** the first station marker slot displays "$0", which is unhelpful.
+
+**It was accurate and useless in the same breath. Every other slot's caption is a DECISION — $40, then $100, the
+money the next placement will cost — and the home token has no decision attached: it is granted free at float and
+goes on a hex printed on the board. So the one slot that could not be priced was captioned with a price, and "$0"
+beside a circle reads as "worth nothing" rather than "already yours".**
+
+The hex label **answers where the corporation starts, which is the question the home token exists to represent, and
+on the Operating Round strip it is the only place that answer appears at all.** `null` falls back to the price:
+**one core company (NNH) has no home hex assigned on this board, and inventing a label for it would be worse than
+the "$0" this replaces.**
+
+### StationTokenRow.tsx #487a — The halo was restating the order
+**REPORTED:** subsequent tokens carry a strange ring border that makes them look non-uniform next to the home token.
+
+`tokenNext` was `boxShadow: 0 0 0 2px rgba(255,255,255,0.55)` — **a second, offset white ring on whichever slot was
+next to be bought. It did make that slot obvious, and it made it obvious by making one circle in a row of identical
+circles look like a different component.**
+
+**WHAT IT SAID IS ALREADY SAID BY POSITION.** `stationTokenSlots` sets `isNext: index === placedCount` — **so the
+next token is, always and by construction, the leftmost circle that has not greyed out. The halo was a second
+rendering of the row's own ordering, and it cost the row its uniformity to say something the row was already
+saying.**
+
+**`isNext` SURVIVES ON THE DATA** and is still what the placement button reads for its price. **Only the ring is
+gone; nothing downstream loses the fact.**
+
+### StationTokenRow.tsx #450 — No slash through the home hex
+**REPORTED:** remove the diagonal slash through the home hex text — graying it out is enough.
+
+**The strikethrough was added for PRICES, and the reasoning held for them: "$40" on a spent slot is an amount the
+player will never pay, so striking it says historical rather than payable.**
+
+**`#362` then changed what the first slot CONTAINS.** The home token has no price, so its caption became the hex
+label, "E11". **A strikethrough through a place name says something quite different from one through a price: it
+reads as cancelled, removed, or no longer valid, when the truth is the opposite — that hex is where the corporation
+permanently sits. The one slot whose caption is a FACT rather than an OFFER was the one being crossed out.**
+
+**Dimming already carries "spent" on every slot, and it carries it without asserting anything about the text's
+validity.** So the strikethrough goes **for the prices too, rather than being made conditional: `fontWeight` plus
+the inherited muted ink is a legible "already used", and one rule for the row beats two that have to be kept in
+step with which slot holds which kind of caption.**
+
+---
+
+## Anchor: hexBoardData.ts #123 — F16 had no city, and the board moved to give it one
+
+Referenced by `privateReservations.ts` and by the marker-placement rule quoted near the top of this file.
+
+**F16 (Scranton) was missing its revenue centre on the printed board data**, so the D&H's reserved hex resolved to
+a tile with nothing to reserve. Fixing it **moved the hex's own definition** — which is exactly why
+`privateReservations.ts` stores hex LABELS and resolves them through `HEX_LABEL_TO_AXIAL` rather than storing
+`(q, r)` pairs: **the board's geometry has already changed under a hardcoded coordinate once.**
+
+**The rule the fix generalised: the markers move around the geometry, the geometry never moves around the
+markers.**

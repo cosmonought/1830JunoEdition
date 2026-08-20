@@ -1521,3 +1521,364 @@ than a nameless card.**
 Treasury has carried one since it joined this row (`#489`) and Market and Last Run did not, so one line
 held three figures in dollars of which only the rightmost said so. **The dash keeps its bare form
 deliberately — "$--" would put a currency on an absent value.**
+
+---
+
+# Batch 5C — Presidency, net worth, dividends and the end of the game
+
+## utils/presidencyTransfer.ts — the crown moves
+
+### presidencyTransfer.ts #596 — Being bought out of a presidency
+**REPORTED:** "P1 was President of a corporation with 1 share (President's 20%). P2 owned two shares and purchased
+a third. The card then showed: P2, 3 certificates, 30%, and P1 (president's crown), 1 certificate, 20%... P1 must
+transfer the President's share to P2, so that the resulting card should read: P2 (crown), 2 certificates, 30%, and
+P1, 2 certificates, 20%."
+
+**Exactly right, and the reducer had no notion of it.** `BuyStock` moved percentages and set `president` **only on
+the FOUNDING purchase; after that the crown never moved again, however the holdings changed. So a corporation could
+be majority-owned by one player and presided over by another indefinitely — which in 1830 decides who lays its
+track, runs its trains and spends its treasury.**
+
+### presidencyTransfer.ts #596a — It is a swap, not a relabel
+**The presidency is not a flag on a player — it is a PHYSICAL CERTIFICATE worth 20%, and there is exactly one.** So
+a takeover is an exchange: **the new president hands back two ordinary 10% certificates and receives the
+president's card; the outgoing president hands back the president's card and receives those two 10% certificates.**
+
+**NOBODY'S PERCENTAGE MOVES.** P2 held 30% before and holds 30% after; P1 held 20% and holds 20%. **What changes is
+how many CARDS each holds — P2 goes from three to two, P1 from one to two — because the certificate LIMIT counts
+cards, not percentages. Modelling this as "set `president` to P2" would leave both players' certificate counts
+wrong for the rest of the game, and the limit is a real constraint players plan around.**
+
+This file therefore **changes no `percentage` at all.** The whole transfer is expressed by moving `president`, and
+**`certificateCount` (`gameState.ts`) already derives the card count from that — one certificate for the 20% block
+plus one per 10% beyond it. The swap is real; it is simply already implied by the one field.**
+
+### presidencyTransfer.ts #596b — Strictly more, and ties do not move it
+**1830: the presidency passes when another player holds MORE than the president. An equal holding leaves it where
+it is — the incumbent keeps it, which is what stops the crown flickering between two players who buy alternately to
+30% each.**
+
+**ONLY ONE CHALLENGER CAN WIN**, and when several are tied above the president the rule is "the one who most
+recently reached that level". **This module cannot see history, so it takes the first in seating order and says so
+here rather than pretending the tie cannot arise — it can, when a sale drops the president below two players at
+once.**
+
+`presidentFor` returns `null` **when nobody qualifies** (an unstarted company, or one whose shares are all in the
+pool). **Returning the INCUMBENT when they still lead is deliberate: the caller compares against
+`company.president` and does nothing when they match, so "no change" and "no president" stay distinct.**
+`settlePresidencies` **returns the state unchanged when no crown moves, so a caller can use identity to decide
+whether anything happened — and so this is safe to run after every holding change rather than only where a takeover
+is expected.**
+
+---
+
+## utils/playerFinance.ts — one player's position
+
+### playerFinance.ts #562 — The arithmetic lives apart from the card
+The Stock Round player cards need Cash, Net Worth, Liquidity, Certs and Shares plus two breakdowns. **All of it is
+derivable from `GameStateResponse` and the market, and none of it is a rendering concern — so it is computed here,
+where it can be tested against a fixture instead of against a screenshot.**
+
+**IT REUSES, IT DOES NOT REDERIVE.** `estimatePlayerNetWorth` and `sellableHoldings` are already the app's answers
+to two of these questions. **A card that recomputed either would be a second opinion, and the two would eventually
+differ — which is the failure this codebase keeps finding (`#549`, `#553`, `#559`: one fact, two places, one
+updated).**
+
+### playerFinance.ts #562a — Net worth and liquidity are different questions
+They look like the same number and **answer opposite questions**, so the card shows both:
+
+| Figure | Definition |
+|---|---|
+| **NET WORTH** | what the player is **WORTH** — cash plus every share at market price. **It is the score.** Counts the presidency, **because at the end of the game the presidency is worth its market value like anything else.** |
+| **LIQUIDITY** | what the player could actually **RAISE** right now — cash plus only the shares 1830 would let them sell. A president's 20% block **cannot be sold unless some OTHER single player already holds 20%**; the bank pool's **50% cap** can refuse the rest; **and a corporation with no position on the chart has nowhere for its shares to be sold at all.** |
+
+**NOT "unfloated" — that was the first wording here and it is wrong about 1830. A started-but-unfloated corporation
+sits at its par position and its shares sell perfectly well. The test is whether the chart can price them.**
+
+**The gap between them is the interesting part: a player with $2,000 of net worth and $200 of liquidity is one bad
+train purchase from bankruptcy, and the ledger's single Net Worth column has never been able to say so.**
+
+**`null` PROPAGATES rather than degrading to zero**, exactly as `estimatePlayerNetWorth` does: **no cash record is
+not the same as no cash, and a card that prints $0 for a missing figure is stating something false about a player's
+position.**
+
+### playerFinance.ts #566 — Par is a price, not a guess
+**REPORTED:** some Net Worth entries render as a dash rather than a value.
+
+`estimateStockPortfolioValue` returns `null` the moment ANY held corporation has no market price, and its own note
+defends that hard: skipping the company *"would under-report the portfolio by however much it is worth, and an
+under-report is indistinguishable from a correct smaller number"*. **Right, and it leaves a third option
+unconsidered.**
+
+**A corporation whose president has set a par but whose token is not yet on the chart is not unpriced. Its shares
+sell from the IPO at par, that is the figure a player would pay for the next one, and it is on
+`PublicCompanyState` already. Reaching for it is not estimating — it is reading the price the game is currently
+charging.**
+
+**SO THE DASH IS RESERVED for a corporation with NO price of any kind**, which is the case the original note was
+actually protecting. **The distinction is between "we do not know" and "we know, from the other one of the two
+places a share price lives".**
+
+**ONLY THE CARD, deliberately. The Ledger's column keeps the stricter reading — it sits beside the contract's own
+`PlayerNetWorth` answer and should not quietly diverge from what the chain would say.**
+
+Liquidity delegates to `sellableHoldings`, **which owns the presidency and pool-cap rules, so the two surfaces that
+ask "what can this player pay with" (the emergency-funding modal and this card) get the same number by construction
+rather than by agreement.**
+
+---
+
+## utils/dividendStep.ts — what the Dividends step is worth
+
+### dividendStep.ts #486 — One answer, not three approximations
+**REPORTED:** a corporation that cannot run is walked through Run Routes and Dividends by hand, and Dividends
+offers Skip at $0 revenue.
+
+**Three separate pieces of code were answering "what does this corporation declare this turn", and they disagreed:**
+
+- **THE DISPATCH** (`declareDividendsChoice`) read `last_route_revenue` straight off the corporation and sent it.
+  **For a corporation that had skipped Routes that is a PREVIOUS turn's figure, so the forced $0 withhold could
+  move real money into a treasury for a run that did not happen this turn.**
+- **THE BUTTONS** gated Pay on `dividendRevenue > 0 && dividendRevenueIsThisTurn` — correct — **and then wrote the
+  Withhold label, the Withhold tooltip and the payout table's heading from the raw figure, which is the same stale
+  number the dispatch was using.**
+- **THE SKIP BUTTON** was gated on `dividendRevenueIsThisTurn`, **which is FALSE exactly when the corporation
+  skipped Routes. So the one corporation guaranteed to have nothing to declare was the one Skip stayed alive for —
+  the reported bug, arrived at by a clause that was right about staleness and wrong about what to do with it.**
+
+The three now read this. **Deliberately a pure function of two facts rather than a hook: the dispatch path and the
+render path both have those two facts, and a shared derivation is the only way they cannot drift.**
+
+### dividendStep.ts #486a — Skip is never a declaration
+**`maySkip` is not a field.** There is no state of an Operating Round in which stepping past Dividends is legal:
+**1830 requires a declaration every turn, and $0 withheld is what steps the share price one cell LEFT.**
+`AdvanceOperatingSubPhase` **moves a cursor and settles nothing, so offering it here offers a way to omit a
+mandatory market move — which is how a corporation's price survives a round it should have fallen in.**
+
+**Recorded as a note rather than a `maySkip: false` constant, because a field that is always false is an invitation
+to make it sometimes true.**
+
+### dividendStep.ts #492 — One field cannot hold three trains
+**REPORTED:** a corporation running several trains arrives at Dividends showing a single train's revenue.
+
+**The auto-router was NOT the cause, and that is worth recording because it is where the search naturally starts.**
+`assignRouteSet` drafts every train — three strategies plus a fill pass, verified on a connected board patch: two
+trains, two routes, the combined total. **The multi-train draft was correct all along and the planner panel
+displayed it correctly.**
+
+**THE LOSS IS AT THE DISPATCH SEAM.** `RunManualRoute` declares ONE train's run (`#275`), **so a three-train
+corporation sends three messages — and each one WRITES `last_route_revenue`. The field is singular; the run is not.
+Three writes leave the third train's figure standing, so Dividends read one train's revenue and the other two
+evaporated between the panel that priced them and the step that spends them.**
+
+**That is also why the report reads as an auto-router bug.** The player sees a correct multi-train plan, runs it,
+**and is then shown one train's money; "it only routed one train" is the reasonable conclusion from the outside.**
+
+**SO THE COMMITTED TOTAL IS CARRIED SEPARATELY.** `App.handleRunTrains` knows exactly what it dispatched, **so it
+records their sum, and that sum is what this step spends. It is the figure the player watched being assembled,
+which is the one they are entitled to have declared.**
+
+**`undefined` MEANS "NOT OBSERVED", not zero, and falls back to the field.** A page reloaded mid-turn, or a chain
+whose routes were run in an earlier session, **has no local record of the commitment — and one train's revenue is a
+far better answer there than none.** Checked against `null`/`undefined` rather than truthiness: **a committed $0 is
+a real observation (every drafted route was invalid and none ran) and must not fall through to a stale field that
+still remembers a previous turn's earnings.**
+
+### dividendStep.ts #489a — Which way the money went
+The Market Move line's colour, **as a value rather than as a branch inside a component**, because **the case it
+exists to get right is invisible from the render code.**
+
+**THE CASE:** `ContextualActionBar` computed this as `direction === "pay"`, i.e. "paying out means the price
+rises". **That is true everywhere except the end of a row, where the token cannot advance and the projected price
+EQUALS the current one. There the old code printed a green up-arrow between two identical numbers — a gain reported
+for a move that did not happen, on the one line the payout decision is read from.**
+
+So the answer comes from the two prices. **`"flat"` is a first-class result rather than folded into either side: a
+ceiling is not a small gain.** Unknown on either side is **FLAT, not a guess** — a missing price means the
+corporation is not on the chart, and the caller renders "not on the market chart" instead of a comparison, **but a
+neutral glyph is the honest fallback and a coloured one would be an assertion about a number nobody has.**
+
+---
+
+## utils/endgame.ts — forced sales, bankruptcy and scoring
+
+### endgame.ts #0 — The funding cascade is an order, not a total
+1830's emergency train purchase draws money in a **RIGID sequence, and the order is the rule rather than an
+implementation detail:**
+
+1. **THE CORPORATION'S ENTIRE TREASURY.** All of it, not a share — **the company spends itself dry before its
+   president is touched.**
+2. **THE PRESIDENT'S PERSONAL CASH.**
+3. **FORCED STOCK SALES, until the balance is met.**
+
+A previous pass computed the SHORTFALL correctly and then **treated cash and shares as one pool of "resources".
+That is the right total and the wrong model: it cannot say which shares must be sold, or how many, and those are
+the decisions the president actually faces. Stages, not a sum.** Every figure is derived in the cascade's order
+**so the UI can print the sequence rather than a total — "the company pays $40, you pay $200, you must raise $60
+more" is the sentence a president needs, and it cannot be recovered from a sum.**
+
+### endgame.ts #1 — Which shares may be sold, and why the set is small
+Two restrictions bound the forced sale **and they bite in different ways:**
+
+- **THE PRESIDENT'S CERTIFICATE IS CONDITIONAL, not banned** (`#6`). It may go if the presidency has somewhere to
+  go, **and it goes whole.**
+- **THE BANK POOL CAPS AT 50%.** No corporation may have more than half its shares in the pool, **so what a player
+  can sell depends on what OTHER players have already dumped there. A company already at 40% in the pool accepts
+  one more certificate from anybody, no matter who holds what.**
+
+**The two combine per company, and the tighter one wins.** Both are real 1830 rules with real consequences — **a
+president can be bankrupted while holding a fortune in unsellable paper, which is exactly the position the Game
+Over modal exists to detect.**
+
+`sellableHoldings`'s `excludeCompanyId` drops the corporation being rescued: **its president cannot sell its shares
+to fund its own train, and the presidency question makes the general case a contract matter rather than a UI one.**
+
+### endgame.ts #6 — The presidency can be dumped, under two conditions
+**REPORTED:** the blanket ban on selling President's Certificates is overly restrictive.
+
+**It was.** `#1` originally reasoned that a presidency TRANSFER "needs a buyer who already holds 20% — not
+something an emergency can conjure", and concluded the certificate could never move. **The first half is right and
+the second does not follow: the buyer does not have to be conjured, they either already exist at the table or they
+do not. 1830 lets a president dump the certificate precisely when somebody can take it, and a president forced into
+bankruptcy while a legal successor sat on 30% is a rule this UI was inventing.**
+
+**TWO CONDITIONS, both required:**
+
+- **A SUCCESSOR EXISTS.** Some OTHER **single** player holds at least 20%. **"Single" matters: two players on 10%
+  each cannot between them take a 20% certificate, so the test is per player and never a sum.**
+- **THE POOL HAS ROOM FOR THE WHOLE BLOCK.** A President's Certificate is **ONE certificate worth 20%, not two 10%
+  ones, so it cannot be split to fit. With 10% of room left it does not go at all — which is the case a naive
+  `min(held, poolRoom)` gets wrong by reporting 10% of a thing that only exists in one piece.**
+
+**THE CEILING FOLLOWS.** Whatever this decides is sellable is what the bankruptcy check counts (`#2`), **so a
+president with a legal successor is no longer declared bankrupt over a certificate they were always allowed to
+sell.**
+
+### endgame.ts #3 — Scoring a game that has stopped
+1830 ranks players by **NET WORTH: personal cash plus the market value of every certificate they hold.** Two things
+it deliberately does not count, **and both are worth stating because both look like money:**
+
+- **CORPORATE TREASURIES are the company's, not the president's. A president sitting on a $900 treasury scores
+  nothing for it.**
+- **UNFLOATED SHARES have no market price. Counted at zero rather than at par — par is what they COST, not what
+  they are worth, and a company that never floated is not going to pay it back.**
+
+**PRIVATE COMPANIES count at their face value, which is the one asset here whose value is printed rather than
+derived.**
+
+### endgame.ts #4 — The payout is proportional, and it is a placeholder
+The brief asks for an "Expected Payout" column against a dummy $100 ante. **Split in proportion to net worth, which
+is the obvious reading and the one that degrades sensibly: it needs no rules about places, it sums to the ante by
+construction, and a bankrupt player with nothing gets nothing without a special case.**
+
+**IT IS NOT THE CONTRACT'S ANSWER.** `total_juno_pool` is real money held by `lobby.rs`, **and how it is
+distributed is a payout policy this file has no access to — winner-takes-all and proportional are both defensible
+and the contract has not said which.** The column is labelled an estimate and the constant is named `PLACEHOLDER_*`
+**so nobody mistakes it for a figure that came off the chain.**
+
+### endgame.ts #5 — Somebody still wins
+The first cut expressed "the bankrupt player cannot win" as `rank === 1 && not bankrupt` — **which quietly produced
+games with NO winner at all whenever the bankrupt president also happened to hold the largest portfolio.**
+
+**That is not a rare corner: bankruptcy is about LIQUIDITY (`#1`), and the player most likely to be caught by a
+mandatory train is the one who spent everything on shares. So the most common bankruptcy is precisely the one where
+the loser ranks first, and the modal would have announced an ending with nobody having won it.**
+
+**The title passes to the highest-ranked player who is NOT bankrupt.** Found by **a harness assertion counting the
+WINNER and BANKRUPT tags in the rendered table and getting one where it expected two.** Ranking a bankrupt player
+first **and also telling them they lost would be two contradictory sentences in one modal.**
+
+---
+
+## utils/corporationCardOrder.ts #464 — The cards hold still while you are trading
+
+**REPORTED:** the corporation cards re-sort the moment a company floats, disrupting the player's rhythm during a
+Stock Round.
+
+**`#446` sorted floated companies to the front, and it was right about the ORDER and wrong about the MOMENT. A
+Stock Round is eight cards a player buys from repeatedly, and buying is what causes floats — so the act of using
+the screen rearranged it. A player reaching for the card they just looked at found something else there, caused by
+their own last click.**
+
+**WHY THE ORDER IS RECOMPUTED AT A ROUND BOUNDARY.** The ordering is genuinely useful: **an Operating Round runs
+corporations in market-price order, so a roster in that order is a preview of the round about to happen. What makes
+it disruptive is recomputing it CONTINUOUSLY, during the one round where the player is interacting with the cards
+themselves.**
+
+So the sort happens **once, when an Operating Round begins**, and is held through that OR and the Stock Round that
+follows. **The player's mental map of the screen changes only at a moment when the screen was going to change
+anyway.**
+
+**MARKET VALUE, DESCENDING — 1830's operating order.** An unfloated corporation **has no market position at all
+(`sandboxMarketPositions` refuses to give one), so it cannot be ranked among companies that do — it sorts after all
+of them rather than being treated as price zero and interleaved by accident.** Ties break on `company_id`: **an
+arbitrary but STABLE tiebreak, which is the property that matters. Two corporations at the same price must not swap
+places on an unrelated re-render.**
+
+Returns **`company_id`s rather than the companies themselves, so a caller can hold the answer across renders
+without pinning stale company objects** — the roster is refreshed on every poll. **NEW COMPANIES GO TO THE END**
+rather than being dropped or forcing a re-sort: **appending shows it without disturbing the positions the player
+has learned, and the next Operating Round files it properly.** `null` or an empty order returns the roster
+untouched — **the honest answer before any Operating Round has established one.**
+
+---
+
+## components/EmergencyTrainPurchaseModal.tsx — the president pays the difference
+
+### #0 — The rule this surface is for
+1830: **a corporation that owns NO trains must buy one, and if its treasury cannot cover the cheapest train in the
+Bank Depot, its PRESIDENT makes up the shortfall out of their own pocket. If their personal cash is not enough
+either, they must sell shares until it is — and if even that cannot raise the money, the corporation is bankrupt
+and the game ends.**
+
+`App.tsx #232` already enforces the first half (`mustBuyTrain` blocks End Turn while the roster is reported and
+empty). **What it could not do is tell the president HOW MUCH of their own money the obligation is about to cost
+them, which is the entire decision. The player was left to subtract a treasury figure on one panel from a train
+price on another.**
+
+### #1 — The cascade is enforced, not summarised
+An earlier pass listed the president's holdings beside the shortfall with per-row Sell disabled. **That was honest
+about what it could not do and wrong about the model underneath: it treated cash and shares as one pool of
+resources, which gives the right TOTAL and cannot answer the questions a president actually has — which shares must
+go, how many, and whether any of them may legally be sold at all.**
+
+`endgame.ts #0` now owns the three-stage cascade and `#1` owns the legality of each sale. This renders those two,
+in order.
+
+**THE SALE CONTROLS ARE STILL SANDBOX-ONLY**, for the reason they always were: **`ExecuteMsg` has no variant
+marking a sale as funding a mandatory buy, so on chain there is nothing to dispatch.** What changed is that the
+sandbox now HAS somewhere for the click to go, **and the rows say which of the two situations they are in rather
+than being uniformly dead.**
+
+### #3 — Unskippable, and the earlier reasoning was wrong
+**REPORTED:** the modal has an 'X' to close it, which lets a player skip the mandatory purchase.
+
+It did, **and the note that stood here defended it**: the obligation is enforced elsewhere (`mustBuyTrain` disables
+End Turn), so dismissing was argued harmless, and a modal with a disabled confirm was argued to be a deadlock.
+**Both halves were wrong.**
+
+- **"ENFORCED ELSEWHERE" IS NOT ENFORCEMENT.** A dismissed modal left the player on a board where **the only
+  blocked control was End Turn, with no standing indication of why — so the actual experience of the bug was a game
+  that had quietly stopped working, which is worse than a modal you cannot close.**
+- **THE DEADLOCK IS THE POINT.** In the bankrupt case **there IS no legal action: the game is over. That is not a
+  UI failure to route around, it is the rule.** Escaping to look at the board is what the bankruptcy check is for —
+  **if the money can be raised, the controls to raise it are in this modal; if it cannot, the game ends.**
+
+---
+
+## components/GameOverModal.tsx — how the game ended, and who won
+
+### #0 — The game could end and nobody was told
+**1830 stops in one of two ways — the bank runs out of money, or a president cannot fund a mandatory train and goes
+bankrupt. Both were reachable in this app and neither had a surface.** The bank breaking simply showed `$0` on the
+Financial Ledger, **and a bankruptcy could not be detected at all until `utils/endgame.ts` was written.**
+
+So the last thing that happened in a finished game **was an ordinary Activity Log line, and the ranking every
+player wants — who actually won — was left to be worked out by reading four balances and a share register.**
+
+### #1 — It says why it ended, first
+**The two endings mean completely different things at the table. A broken bank is the ordinary, expected conclusion
+of a long game; a bankruptcy is somebody's disaster, and it can happen on turn six. A modal that only printed a
+scoreboard would leave the room arguing about which had occurred.**
+
+**The reason leads, the standings follow.**

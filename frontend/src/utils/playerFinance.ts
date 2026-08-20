@@ -1,56 +1,24 @@
-// frontend/src/utils/playerFinance.ts
+// One player's position, as five figures and three lists.
 //
-// ONE PLAYER'S POSITION, as five figures and three lists.
+// Design note #562: computed here rather than in the card, where it can be
+// tested against a fixture instead of a screenshot. IT REUSES, IT DOES NOT
+// REDERIVE -- `estimatePlayerNetWorth` and `sellableHoldings` are already the
+// app's answers, and a card that recomputed either would be a second opinion
+// (design notes #549, #553, #559: one fact, two places, one updated).
 //
-// ==================================================================
-//  DESIGN NOTE 562: THE ARITHMETIC LIVES APART FROM THE CARD
-// ==================================================================
+// Design note #562a: NET WORTH is what a player is WORTH -- cash plus every
+// share at market price, counting the presidency, and it is the score. LIQUIDITY
+// is what they could actually RAISE -- cash plus only the shares 1830 would let
+// them sell, bounded by the successor rule and the pool's 50% cap. NOT
+// "unfloated": a started-but-unfloated corporation sits at its par position and
+// its shares sell perfectly well; the test is whether the chart can price them.
 //
-// The Stock Round player cards need Cash, Net Worth, Liquidity, Certs and
-// Shares, plus a per-corporation breakdown and a private-company table. All
-// of that is derivable from `GameStateResponse` and the market, and none of
-// it is a rendering concern -- so it is computed here, where it can be
-// tested against a fixture instead of against a screenshot.
+// The gap between the two is the interesting part -- $2,000 of net worth against
+// $200 of liquidity is one bad train purchase from bankruptcy, and a single Net
+// Worth column has never been able to say so. `null` PROPAGATES rather than
+// degrading to zero.
 //
-// IT REUSES, IT DOES NOT REDERIVE. `estimatePlayerNetWorth` and
-// `sellableHoldings` already exist and are already the app's answers to two
-// of these questions. A card that recomputed either would be a second
-// opinion, and the two would eventually differ -- which is the failure this
-// codebase keeps finding (design notes #549, #553, #559: one fact, two
-// places, one updated).
-//
-// ==================================================================
-//  DESIGN NOTE 562a: NET WORTH AND LIQUIDITY ARE DIFFERENT QUESTIONS
-// ==================================================================
-//
-// They look like the same number and they answer opposite questions, so the
-// card shows both:
-//
-//   NET WORTH  is what the player is WORTH -- cash plus every share at its
-//              market price. It is the score. It counts the presidency,
-//              because at the end of the game the presidency is worth its
-//              market value like anything else.
-//
-//   LIQUIDITY  is what the player could actually RAISE right now -- cash
-//              plus only the shares 1830 would let them sell. A president's
-//              20% block cannot be sold unless some OTHER single player
-//              already holds 20% and can take over; the bank pool's 50% cap
-//              can refuse the rest; and a corporation with no position on
-//              the chart has nowhere for its shares to be sold at all.
-//
-//              NOT "unfloated" -- that was the first wording here and it is
-//              wrong about 1830. A started-but-unfloated corporation sits at
-//              its par position and its shares sell perfectly well. The test
-//              is whether the chart can price them.
-//
-// The gap between them is the interesting part: a player with $2,000 of net
-// worth and $200 of liquidity is one bad train purchase from bankruptcy, and
-// the ledger's single Net Worth column has never been able to say so.
-//
-// `null` PROPAGATES rather than degrading to zero, exactly as
-// `estimatePlayerNetWorth` already does: no cash record is not the same as
-// no cash, and a card that prints $0 for a missing figure is stating
-// something false about a player's position.
+// See docs/ai_architecture/stock_market.md, playerFinance.ts #562 / #562a.
 
 import {
   certificateCount,
@@ -116,32 +84,18 @@ export function playerFinances(
   const cashRaw = Number(cashEntry?.cash_vgp ?? NaN);
   const cash = Number.isFinite(cashRaw) ? cashRaw : null;
 
-  /* ==================================================================
-   *  DESIGN NOTE 566: PAR IS A PRICE, NOT A GUESS
-   * ==================================================================
-   *
-   * REPORTED: some Net Worth entries render as a dash rather than a value.
-   *
-   * `estimateStockPortfolioValue` returns `null` the moment ANY held
-   * corporation has no market price, and its own note defends that hard:
-   * skipping the company "would under-report the portfolio by however much
-   * it is worth, and an under-report is indistinguishable from a correct
-   * smaller number". Right, and it leaves a third option unconsidered.
-   *
-   * A corporation whose president has set a par but whose token is not yet
-   * on the chart is not unpriced. Its shares sell from the IPO at par, that
-   * is the figure a player would pay for the next one, and it is on
-   * `PublicCompanyState` already. Reaching for it is not estimating -- it is
-   * reading the price the game is currently charging.
-   *
-   * SO THE DASH IS RESERVED for a corporation with NO price of any kind,
-   * which is the case the original note was actually protecting, and which
-   * cannot be valued by anyone. The distinction is between "we do not know"
-   * and "we know, from the other one of the two places a share price lives".
-   *
-   * ONLY THE CARD, deliberately. The Ledger's column keeps the stricter
-   * reading -- it sits beside the contract's own `PlayerNetWorth` answer and
-   * should not quietly diverge from what the chain would say. */
+  /* Design note #566: PAR IS A PRICE, NOT A GUESS. `estimateStockPortfolioValue`
+     returns `null` the moment any held corporation has no market price, and
+     defends that hard because an under-report is indistinguishable from a correct
+     smaller number -- correct, and it leaves a third option unconsidered.
+
+     A corporation whose president has set a par but whose token is not yet on the
+     chart is not unpriced: its shares sell from the IPO at par, and that figure is
+     on `PublicCompanyState` already. Reading it is not estimating.
+
+     SO THE DASH IS RESERVED for a corporation with NO price of any kind. ONLY THE
+     CARD, deliberately -- the Ledger's column keeps the stricter reading, since it
+     sits beside the contract's own `PlayerNetWorth` answer. */
   const pricesWithPar: Record<number, number | null> = { ...marketPrices };
   for (const company of state.public_companies) {
     const known = pricesWithPar[company.company_id];
@@ -174,10 +128,9 @@ export function playerFinances(
      and two cards sorting independently is how they would come to differ. */
   holdings.sort((a, b) => corporationDisplayRank(a.ticker) - corporationDisplayRank(b.ticker));
 
-  /* Design note #562a: what could actually be raised. `sellableHoldings`
-     owns the presidency and pool-cap rules, so this only has to add up its
-     answer -- and the two surfaces that ask "what can this player pay with"
-     (the emergency-funding modal and this card) get the same number by
+  /* Design note #562a: what could actually be raised. `sellableHoldings` owns the
+     presidency and pool-cap rules, so this only adds up its answer -- and the two
+     surfaces that ask "what can this player pay with" get the same number by
      construction rather than by agreement. */
   const liquid = cash === null
     ? null

@@ -1,44 +1,26 @@
-// frontend/src/context/WalletContext.tsx
-//
 // Milestone 1: the master Keplr wallet connection, plus the one-time authz
-// grant that hands the ephemeral session key (see ../utils/sessionKey.ts)
-// permission to act on this wallet's behalf against the 18Cosmos contract.
+// grant that lets the ephemeral session key act on this wallet's behalf.
 //
-// Design notes:
-// 1. The master wallet's `OfflineSigner`/`SigningCosmWasmClient` here are
-//    used for exactly the things Section 0 of frontend_blueprint.md scopes
-//    to Keplr: `CreateGameRoom` / `JoinGameRoom` / `EndGameAndDistribute`
-//    (real JUNO movement) and issuing/revoking the session key's authz
-//    grant. Every in-game gameplay message goes through
-//    ../utils/sessionKey.ts's `execViaSessionKey` instead.
-// 2. The grant is scoped with `ContractExecutionAuthorization` +
-//    `AcceptedMessageKeysFilter`, restricted to this one CONTRACT_ADDRESS
-//    and to `GAMEPLAY_MESSAGE_KEYS` (imported from sessionKey.ts, which is
-//    the single source of truth for that list, since the two files must
-//    never drift). This corrects and supersedes the broader
-//    `GenericAuthorization` sketch in frontend_blueprint.md Section 2.1,
-//    which that document already flagged as a pre-mainnet gap.
-// 3. Only the master wallet's public `juno...` address is ever cached to
-//    `sessionStorage` (purely so the UI can show "reconnect as juno1..."
-//    without re-deriving anything) -- never key material. Keplr itself
-//    custodies the actual signing key; this app never touches it.
-// 4. `MsgGrant`/`MsgExec`/`MsgRevoke` are not part of
-//    `SigningCosmWasmClient`'s default message registry, so both this file
-//    and sessionKey.ts must construct their signing clients with the
-//    extended registry from `createExtendedRegistry()` -- omitting it is a
-//    common, silent failure mode (the client throws "Unregistered type url"
-//    only at broadcast time, not at connection time).
-// 5. VERSION CAVEAT: the int64 fields below (`Grant.expiration.seconds`,
-//    `MaxCallsLimit.remaining`) are built with plain `BigInt(...)`, which
-//    matches recent `cosmjs-types` releases (0.9+) that target native
-//    `bigint` for int64. Older `cosmjs-types` versions represented these
-//    with the `Long` class from the `long` package instead, which would
-//    need `Long.fromNumber(value)` here instead of `BigInt(value)`. This
-//    file was written and syntax-checked without network access to a real
-//    `node_modules` (sandbox constraint) -- confirm against your installed
-//    `cosmjs-types` version's generated `.d.ts` before shipping, and adjust
-//    both this file and sessionKey.ts's `execViaSessionKey` if it's on the
-//    older `Long`-based generation.
+// 1. This signer is scoped to what blueprint Section 0 gives Keplr:
+//    `CreateGameRoom` / `JoinGameRoom` / `EndGameAndDistribute` (real JUNO) and
+//    issuing/revoking the grant. Gameplay goes through `execViaSessionKey`.
+// 2. The grant is `ContractExecutionAuthorization` + `AcceptedMessageKeysFilter`,
+//    restricted to this CONTRACT_ADDRESS and to `GAMEPLAY_MESSAGE_KEYS` imported
+//    from `sessionKey.ts` -- the single source of truth, since the two must
+//    never drift. Supersedes the blueprint's broader `GenericAuthorization`.
+// 3. Only the public `juno...` address is cached to `sessionStorage`, never key
+//    material; Keplr custodies the signing key.
+// 4. `MsgGrant`/`MsgExec`/`MsgRevoke` are not in the default registry, so both
+//    this file and `sessionKey.ts` must build clients from
+//    `createExtendedRegistry()` -- omitting it throws "Unregistered type url"
+//    only at broadcast time, not at connection time.
+// 5. VERSION CAVEAT (unresolved): the int64 fields below use plain `BigInt(...)`,
+//    matching `cosmjs-types` 0.9+. Older releases used the `Long` class and would
+//    need `Long.fromNumber(value)` here and in `execViaSessionKey`. Written
+//    without network access to a real `node_modules` -- confirm against the
+//    installed version's generated `.d.ts` before shipping.
+//
+// See docs/ai_architecture/session_keys_wallet.md, WalletContext.tsx #1 - #5.
 
 import React, {
   createContext,
@@ -71,17 +53,13 @@ import {
   requireRpcEndpoint,
 } from "../config";
 
-// --- Deployment config -------------------------------------------------
-// F-4: the TODO that stood here is RESOLVED. The chain id, RPC endpoint and
-// contract address were local copies duplicated in `../utils/sessionKey.ts`;
-// both files now read them from `../config`.
+// F-4: the chain id, RPC endpoint and contract address were local copies
+// duplicated in `../utils/sessionKey.ts`; both files now read `../config`.
 //
-// The `require*()` accessors throw if a value is unset or is still a
-// placeholder -- but only when CALLED, which is always inside a path that is
-// about to touch the chain (`connect`, `grantSessionKey`, `revokeSessionKey`).
-// Reading the raw `CONTRACT_ADDRESS` never throws and may be `undefined`,
-// which is what lets the app boot and run offline with no `.env` at all. See
-// `config.ts` design note #0.
+// The `require*()` accessors throw on an unset or placeholder value, but only
+// when CALLED, which is always inside a path about to touch the chain. Reading
+// the raw `CONTRACT_ADDRESS` never throws and may be `undefined`, which is what
+// lets the app boot and run offline with no `.env` at all (`config.ts #0`).
 export { CONTRACT_ADDRESS };
 
 const SESSION_GRANT_DURATION_SECONDS = 60 * 60 * 6; // 6 hours; renew before expiry
@@ -108,25 +86,18 @@ interface WalletContextValue {
   address: string | null;
   signer: OfflineSigner | null;
   signingClient: SigningCosmWasmClient | null;
-  /** F-3: the connected wallet's REAL on-chain `ujuno` balance, or `null`
-   *  when disconnected or not yet fetched.
+  /** F-3: the connected wallet's REAL on-chain `ujuno` balance, or `null` when
+   *  disconnected or not yet fetched.
    *
-   *  Deliberately a `Coin` (`{ denom, amount }` with `amount` a base-denom
-   *  INTEGER STRING) rather than a number. Two reasons, and the second is the
-   *  important one:
-   *    - it is exactly what `getBalance` returns, so nothing is lost or
-   *      reinterpreted on the way through; and
-   *    - `ujuno` amounts are `Uint128` on-chain. Converting to a JS number
-   *      loses precision above 2^53 base units, which is a real balance, and
-   *      the failure is silent -- the UI would simply show the wrong amount
-   *      of the player's own money. `config.formatNativeAmount` renders this
-   *      for display using integer string math only.
+   *  A `Coin` rather than a number: it is exactly what `getBalance` returns, and
+   *  `ujuno` amounts are `Uint128` on-chain -- converting to a JS number loses
+   *  precision above 2^53 base units and the failure is silent, showing the wrong
+   *  amount of the player's own money. `config.formatNativeAmount` renders it.
    *
-   *  DISTINCT FROM VGP. This is the player's real spendable JUNO, which is
-   *  what the lobby ante is denominated in. The dashboard's existing balance
-   *  figure is `player_cash` -- Virtual Game Points, the in-game play money.
-   *  Conflating the two is precisely the confusion F-3 was filed about, so
-   *  they must never share a display slot or a label. */
+   *  DISTINCT FROM VGP. This is real spendable JUNO, what the lobby ante is
+   *  denominated in; the dashboard's balance is `player_cash`, the in-game play
+   *  money. Conflating them is the confusion F-3 was filed about, so the two must
+   *  never share a display slot or a label. */
   nativeBalance: Coin | null;
   /** Re-queries `nativeBalance`. Safe to call when disconnected (no-op).
    *  Call after any real-JUNO movement -- creating or joining a room, or
@@ -159,11 +130,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [sessionGrantStatus, setSessionGrantStatus] = useState<SessionGrantStatus>("none");
   const [sessionGrantError, setSessionGrantError] = useState<string | null>(null);
 
-  // Guards against a stale account switch: if Keplr's active account
-  // changes out from under us mid-session, every subsequent signature
-  // would silently be attributed to the wrong player. Tracked in a ref
-  // (not state) purely so the keystorechange listener below always reads
-  // the latest `disconnect` without re-subscribing on every render.
+  // Guards against a stale account switch: if Keplr's active account changes
+  // mid-session, every subsequent signature would silently be attributed to the
+  // wrong player. Tracked in a ref, not state, so the keystorechange listener
+  // always reads the latest `disconnect` without re-subscribing on every render.
   const disconnectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(async () => {
@@ -364,14 +334,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   );
 
   // F-3: the real `ujuno` bank balance. `SigningCosmWasmClient` extends
-  // `CosmWasmClient`, which exposes `getBalance` from the underlying
-  // Stargate bank module -- so this needs no second client and no new
-  // dependency.
+  // `CosmWasmClient`, which exposes `getBalance` from the Stargate bank module --
+  // no second client, no new dependency.
   //
-  // Swallows query errors into `null` rather than surfacing them through
-  // `error`: that field drives the connect/disconnect UI, and a transient RPC
-  // hiccup on a balance read must not make the wallet look disconnected. A
-  // `null` balance renders as "unavailable", which is the honest state.
+  // Swallows query errors into `null` rather than surfacing them through `error`:
+  // that field drives the connect/disconnect UI, and a transient RPC hiccup on a
+  // balance read must not make the wallet look disconnected.
   const refreshNativeBalance = useCallback(async () => {
     if (!signingClient || !address) {
       setNativeBalance(null);

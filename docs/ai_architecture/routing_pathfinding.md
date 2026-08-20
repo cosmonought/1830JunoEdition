@@ -762,3 +762,145 @@ generic "worth nothing", **because a route that misses the corporation's tokens 
 in the wrong place — the player has drawn something valid-looking and needs to be told which rule it misses
 rather than that it is worthless.** One sentence rather than one per train: **three broken routes usually have
 the same problem, and three copies of it is the clutter `#3` removed in the first place.**
+
+---
+
+# Batch 5C — The waypoint vocabulary and the per-train inks
+
+## utils/routeWaypoints.ts — the manual route-point vocabulary
+
+### routeWaypoints.ts #0 — Why the group travels together
+`RoutePoint` is the shape the map hands back when a player clicks a hex; `routePointsToWaypoints` converts a list
+into the DTO the contract takes; `axialHexDistance` decides whether two clicked points are adjacent. **One type and
+the two functions that read it.** None of it depends on `HexGridRenderer`'s pixel geometry — **only on `{ q, r }`
+being a conventional axial pair. That independence is what makes the group safe to lift out on its own.**
+
+`axialHexDistance` is the standard axial hex distance. **The formula depends only on `(q, r)` being a conventional
+axial pair (which `pixelToAxial` already produces, `#11`), not on that file's pointy-top pixel
+geometry/edge-numbering internals — so this file can validate route-point adjacency without importing anything from
+that component beyond the plain `{ q, r }` values `onHexClick` already reports.**
+
+### routeWaypoints.ts — `city_node` on a `RoutePoint`
+`undefined` — **the normal case — means "this hex has one stop, or none": a town, plain connector track, or a
+single-city tile. Only a genuinely multi-city hex (New York's #62, the OO tiles) needs it, and the map has no
+two-city picker yet, so nothing sets it today.** It is carried **on the point rather than bolted on at dispatch
+time so that `routePointsToWaypoints` stays a pure rename of fields, and so adding that picker later is a change to
+ONE click handler rather than to the payload shape.**
+
+`routePointsToWaypoints` is **the single place the UI's route representation becomes the wire format, so the
+deprecated `hex_path: string[]` shape cannot survive anywhere by accident.** `city_node` is **omitted entirely
+(rather than sent as `null`) when a point names no station: the field is `Option<usize>` with `#[serde(default)]`-
+style optionality on the Rust side, and an absent key is the cleaner encoding of "unspecified".**
+
+### routeWaypoints.ts #474 — A route must CONTAIN a token, not START at one
+**REPORTED (critical):** the Run Routes validator requires a route to begin at, or contain, the corporation's HOME
+station token.
+
+**The audit found something slightly different from the report and worse: the manual validator checked no token at
+all.** `handleRunTrains` filtered drafts on revenue, train distance and terminus **and nothing else — so a player
+could draw a run across somebody else's network entirely, price it, and dispatch it for the contract to refuse.**
+
+**Where the HOME hex genuinely was load-bearing is the auto-router** (`assignRouteSet`), which starts its search
+from `station_token_hexes`. **That is correct as a search strategy and would be wrong as a rule, and it is easy to
+mistake one for the other — the two arms it builds through a token put that token in the MIDDLE of the route, which
+is exactly what 1830 requires.**
+
+**THE RULE, stated once so both halves agree: a route is legal if at least one hex on it carries a station token
+belonging to the running corporation. Not the first hex. Not the home hex. Any hex, any token.**
+
+**WHY "ANY TOKEN" MATTERS IN PLAY.** A corporation that has placed a second or third token **can run routes nowhere
+near where it started — that is most of what the extra tokens are FOR. Requiring the home hex would forbid the
+ordinary mid-game run and get more wrong as the game went on, which is the shape of bug that looks fine in testing
+and breaks a real session.**
+
+**COMPARED BY COORDINATE, never by label.** `hexLabel` on a `RoutePoint` is a display name ("New York (G19)")
+per `boardHexLabel #242`, and `station_token_hexes` is `(q, r)` pairs. **Matching on the human string would work
+until the first hex whose name has a place in it.**
+
+The block reason is **phrased for the player rather than as a boolean, because the two failing cases call for
+different actions and the difference is not obvious from the board:**
+
+- **NO TOKENS AT ALL** — the corporation has not placed its home station yet, **which since `#416` is a thing the
+  president must do deliberately. The route is fine; the corporation is not ready.**
+- **TOKENS, BUT NOT ON THIS ROUTE** — the run is somewhere the corporation does not reach. **That is a routing
+  mistake, and the fix is to redraw.**
+
+**A route SHORTER THAN TWO HEXES is not judged here at all: it is not yet a route, and `#256`'s own message already
+covers it.**
+
+---
+
+## styles/routeLivery.ts — one colour per train
+
+### routeLivery.ts #494 — The colour was the corporation's, not the train's
+**REPORTED:** when several routes start at the same city or overlap, they are visually indistinguishable.
+
+**They were identical, and the cause is one line in `App.manualRouteOverlay`:**
+
+```ts
+const color = glowColorFor(stationTickerColor(actingProtocolId));
+```
+
+**declared ONCE, outside the loop that builds the overlays, and handed to every train. So a corporation running
+three trains drew three routes in exactly the same colour — and where they shared a city or a stretch of rail there
+was nothing to tell them apart, because there was nothing different about them.**
+
+**`RouteOverlay.color`'s own doc comment has claimed the opposite the whole time:** *"One distinct colour per
+train, so overlapping routes stay tellable apart — which is the entire point of drawing more than one."* **That is
+the requirement, stated correctly, next to a field that was never given a distinct value.** `#373` then built a
+highlight mechanism on top and said the colours *"were always per-train (`#254`), which is what makes the
+connection RECOVERABLE"* — **reasoning from a property the data did not have.**
+
+### routeLivery.ts #494a — Why not the corporation's livery
+**Losing the corporate colour here costs nothing, and that is worth stating because it looks like a regression.**
+
+**Exactly one corporation operates at a time. Every route on the board during Run Routes belongs to it, so
+colouring them all in its livery encodes a fact that is already true of everything on screen — and spends the only
+visual channel available on it. The trains are the thing that differs, so the trains are what the colour should
+say.**
+
+The corporate association does not disappear: **`StationTokenRow`, the action bar's corporation badge and every
+token on the map are all still in livery, and the routes emanate from that corporation's own tokens.**
+
+### routeLivery.ts #494b — Picked for separation, not for prettiness
+**Six hues, spread around the wheel rather than sampled from a gradient, so adjacent entries are far apart and not
+merely different.** A 1830 corporation holds **at most four trains (four through Phases 2-3, three in Phase 4, two
+from Phase 5), so four is the real ceiling and six is headroom — the index wraps rather than running out.**
+
+**ALL SIX ARE LIGHT.** The board is dark and the route line is **a third of the rail's width (`hexCanvasPrimitives
+#268`), so a dark hue would vanish into the track ink it is drawn inside.** Same constraint `glowColorFor` was
+applied for; **these are chosen above the threshold instead of lifted to it, which keeps the hue rather than
+washing it toward white.**
+
+**THEY ARE NOT THE CORPORATION PALETTE, and must not be merged with it.** `corporationLivery.ts` answers "which
+company is this"; this answers "which of one company's trains is this". **A shared table would make the two
+questions look like one, and the first thing to go would be the separation guarantee — the corporate eight are
+chosen for brand fidelity, and three of them are close enough to each other that TD-1's contrast audit had to be
+done by hand.**
+
+**THE SIXTH ENTRY WAS ORANGE (`#fb923c`) AND FAILED ITS OWN HARNESS.** It sat **51 units from amber in RGB — under
+the 60 the pairwise test demands, and the closest pair in the table by a wide margin. Two warm yellows on a thin
+line at low zoom is the exact indistinguishability this palette exists to fix, reintroduced at the far end of it.**
+
+**Lime replaces it because that is where the gap actually was.** Ordering the other five by hue — **amber 43, green
+142, azure 199, violet 258, magenta 330 — leaves 99 degrees between amber and green and under 75 everywhere else,
+so the sixth hue belongs in the middle of that span. It is a measured slot rather than a colour that looked free.**
+
+The lookup **WRAPS rather than returning a fallback.** A corporation cannot legally hold more trains than the
+palette has entries, **so the modulo is unreachable in a real game — but a wrap keeps every route coloured if the
+rules ever change or a chain reports an over-limit roster, where a single fallback colour would make two trains
+identical again, which is the bug this file exists to fix.** A negative or non-integer index takes entry 0 **rather
+than throwing: this is a rendering decision, and no colour at all is worse than the first one.**
+
+### routeLivery.ts #495 — The highlight had both ends and no middle
+**REPORTED:** clicking a train chip should highlight only that train's route and dim the others.
+
+**Every piece of that already existed and none of them were joined.** `drawRouteOverlays` has honoured `emphasis`
+since `#373` — a 2.2x pen for `primary`, 0.32 alpha for `muted`, a 1.6x glow — **and `highlightedTrainIndex` has
+been raised by the planner rows and the train chips for just as long. `App.manualRouteOverlay` built the overlays
+between them and never set the field, so hovering a chip lit its own row and the map did not move.**
+
+**A pure function rather than a ternary inside the memo, for the reason `marketMoveDirection` is one: the
+interesting case is invisible from the call site. `null` must mean "nothing is highlighted, draw everything
+normally" and NOT "highlight nothing, mute everything" — the second dims the entire board whenever the pointer
+leaves the panel, which is most of the time.**

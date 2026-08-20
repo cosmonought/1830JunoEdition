@@ -1823,3 +1823,421 @@ endpoints and the diagonal **happen to agree in DIRECTION while disagreeing in D
 **Two functions answering one question, one of them fixed — the pattern this codebase keeps finding, and the reason the
 fix is to consult the same source rather than to copy the same maths.** The old guesses survive **only as the fallback
 for a hex with no authored artwork at all, which is the one case they were ever right about.**
+
+---
+
+# Batch 5C — Auction escrow, the two private-company rules, and the train market
+
+## components/AuctionPromptModal.tsx — the two decisions the auction leaves behind
+
+### AuctionPromptModal.tsx #399 (UI half) — Set the B&O's price, now
+**REPORTED:** buying the B&O private must prompt the player to select a par value and award them the President's
+Certificate.
+
+**The certificate half already worked** (`grantBOPresidency`). **The prompt half was implicit** — the Stock Round
+panel's par ladder shows while `par_value` is null, and `#354` called that the prompt. **That stopped being true:
+the B&O is won during the AUCTION, on a different tab and a different round from the ladder, and `#396` has since
+hidden every card's controls behind an active-card click. A prompt nobody encounters is not a prompt.**
+
+**SO IT IS A MODAL, AND BLOCKING**, for the same reason the emergency train purchase is: **this is not a decision
+the player may defer. Until it is answered the B&O has a president and no price, which `#387` makes a genuinely
+unrenderable state — no market token, no market figure, a corporation that exists but cannot be valued.**
+
+**NO DISMISSAL, NO BACKDROP CLOSE.** Every other modal in this codebase can be waved away **because every other
+modal is optional. Neither of these has a cancel path because there is no legal state on the other side of
+cancelling: the private is already won and the certificate is already owed, and an auction with no companies left
+in it is not a round anybody can keep playing.**
+
+**THE LADDER IS THE SAME SIX RUNGS the Stock Round uses, read from one exported constant rather than retyped, so
+the price a player may set here can never differ from the price they could set there.**
+
+### AuctionPromptModal.tsx #547 — One card, not two modals in a row
+**INSTRUCTED:** "the B&O winner could set the par in their pop-up and then within that same modal have a 'Proceed
+to Stock Round 1' button, so that they don't need two modals in a row."
+
+Which is also why **"Proceed" stopped being a button at the foot of the auction panel.** That banner was the last
+thing on a scrolling grid of six cards — **exactly where a player who has finished reading stops looking** — and
+`#306` had already noticed the deeper version: **"is concluding" is not a state a player can leave, so the round
+was waiting on an action nobody could see they had to take.**
+
+**TWO INDEPENDENT SECTIONS, NOT TWO STEPS.** `parPending` and `handoffPending` are separate booleans, each
+rendering its own section, **which gets the merge for free and without any internal step state:**
+
+| Case | Renders |
+|---|---|
+| B&O won mid-auction | par only — **there is no round to hand over yet** |
+| Auction ends, no par | handoff only |
+| B&O won on the last | **both, in one card.** Confirming the par flips `parPending` false while `handoffPending` stays true, **so the SAME mounted card loses its ladder and keeps its Proceed button. The player sees one modal change, not a second one open.** |
+
+**A step machine would have had to know which of those three it was in, and would have been wrong in the case where
+the par is confirmed but the auction still has companies left.**
+
+**WAITING IS RENDERED, NOT HIDDEN.** When somebody else owes the B&O a par price, **the other players get the card
+with Proceed disabled and that player named. The alternative — showing them nothing — is a table that has visibly
+stopped with no explanation on screen, and the reason it stopped is a fact about another player that only this
+modal knows.**
+
+### AuctionPromptModal.tsx #543 — A prize is shown to whoever won it
+**REPORTED:** at the end of the auction BOTH players were told they had won the B&O and both could set its par.
+
+**The prompt is raised wherever the winning action is APPLIED, and in a room every client applies every action —
+that is the whole design (`#522`). So it was raised on both screens, correctly, and then rendered on both because
+the open test asked only whether a prompt existed and not whose it was.**
+
+The identity test **lives in `App.tsx` with the identity** and arrives here already resolved: **`parPending` means
+"THIS viewer sets the par", never "a par is outstanding somewhere". `awaitingParFrom` carries the other half for
+everybody else.**
+
+---
+
+## utils/auctionEscrow.ts — what a player can still spend
+
+### auctionEscrow.ts #0 — The money was committed and nothing said so
+**REPORTED:** placing a bid does not deduct or escrow the cash, so a player can bid money they have already
+committed elsewhere.
+
+**True, and visibly so: a player with $600 could stand $400 on the D&H and $400 on the M&H, and every panel on
+screen would still read $600.** In 1830 **a bid is CASH ON THE CARD — the note physically leaves your hand and sits
+under the certificate until the private is either won by somebody else (refund) or won by you (payment). Two bids
+totalling more than you hold is not a rule violation the contract has to catch; it is a move you cannot physically
+make.**
+
+### auctionEscrow.ts #1 — Derived, not deducted
+**The tempting implementation is to subtract the bid from `player_cash` on dispatch and add it back on a loss.**
+`sandboxSession.ts` explicitly declined:
+
+> "A waterfall bid is ESCROWED rather than spent... Charging on the bid and refunding on a loss would be this file
+> modelling a rule it has no business owning."
+
+**It is also the fragile version. A deducted balance has to be kept in step with the bid list through every raise,
+drop-out, settle, all-pass markdown and UNDO — six places that can each drift**, and `App.tsx #310` is a fresh
+reminder of what drift costs. **The bid list already records every commitment; subtracting from it is arithmetic
+over state that exists rather than a second copy of the same fact.**
+
+So `player_cash` holds the player's **TOTAL, exactly as the contract reports it**, and available cash is computed
+on demand. **A refund is then not an operation at all: when a bid leaves the list — because its bidder dropped out,
+or because the private was won and left the offer list with every bid on it — the money is free again on the very
+next render, with nothing to remember to do.**
+
+### auctionEscrow.ts #2 — What counts as committed
+**Every standing bid on every STILL-UNOWNED private**, which is exactly what `GetWaterfallState.privates` reports.
+**Bids on a private that has been won are gone from the response along with the private, which is correct: that
+contest is over and the losers' money came back.**
+
+**One bid per player per private is the rule the reducer enforces (a raise REPLACES rather than stacks), so this
+sums the list as it stands rather than trying to deduplicate it.**
+
+Available cash is **floored at zero. A negative would mean the state carries bids the player could never have made,
+which is a contract-side inconsistency rather than something a UI should render as a negative balance; the floor
+keeps the gates behaving (nothing is affordable) without inventing a figure.** `null` propagates from `totalCash`:
+**unknown stays unknown.**
+
+### auctionEscrow.ts — the block reason returns a sentence, not a boolean
+**A gate that only says "no" makes the player guess which of the two limits they hit, and the two have opposite
+remedies: bid more, or drop a bid elsewhere.**
+
+`raisingFrom` is this player's bid already standing in the contest they are raising within. **That money is ALREADY
+escrowed, so a raise only needs to cover the difference — charging the full raise against available cash would make
+a player who is winning unable to defend their own bid, which is the exact opposite of the position they are in.**
+
+---
+
+## utils/baltimorePrivate.ts #660 — The B&O private has two rules and had neither
+
+**REPORTED:** "the rules prohibit B&O (private company) being sold to a corporation and does not change hands if
+the owner loses the Presidency of the B&O (the corporation) ... B&O (private company) closes as soon as B&O
+(corporation) purchases its first train, and in my playthrough B&O (corp) has purchased a train and is still
+appearing in this modal and the Player card on multiple screens and Player Assets in Game Ledger."
+
+**Both rules were already WRITTEN DOWN, in `privateCatalog.ts`, in this codebase's own words:** *"It can never be
+sold to a corporation, and it stays with its owner even if they later lose the B&O presidency. It closes the moment
+the B&O buys its first train."* **That text has been on screen in the powers panel the whole time. Nothing enforced
+any of it.**
+
+**A rule stated in prose and nowhere else is worse than one not stated at all, because the game teaches the player
+a rule and then does not keep it.** Same complaint as the "GAME END" tooltip on a cell that ended nothing (`#652`).
+
+**THE THIRD RULE NEEDS NO CODE.** "It stays with its owner even if they later lose the B&O presidency" is **true by
+construction: `owner` is a wallet and nothing in the reducer reassigns a private's owner on a presidency change.
+Recorded here so that a later pass adding presidency-transfer side effects finds out that this is deliberate,
+rather than discovering it as a gap.**
+
+**WHY A MODULE FOR TWO PREDICATES.** Both answers are needed in three places each — the reducer, the offer list and
+the tests — **and the one thing that must not happen is the modal and the reducer disagreeing about whether a sale
+is legal. A player offered a purchase the reducer then refuses has been lied to by the UI; a player refused one the
+reducer would have allowed has lost a legal move. One source for both.**
+
+**The two B&Os are named as separate constants** (private `#6`, corporation `company_id` 4): **they share a name
+and nothing else, which is the whole reason the rules are easy to state and easy to get wrong.**
+
+- **`corporationMayBuyPrivate`** — everything except the B&O, which 1830 forbids outright. **The rule has no
+  conditions — not a price, not a phase, not a presidency — so it is a property of the certificate rather than of
+  the situation.**
+- **`shouldCloseBaoPrivate`** — the test is simply **whether the B&O corporation owns any train at all. Not "did a
+  purchase happen", which would need an event; the FLEET is the evidence, and a state whose B&O has a train and
+  whose B&O private is open is wrong however it got there.** `owned_trains == null` is **"not reported" rather than
+  "no trains"** (the distinction `gamePhase.ts` draws) and returns `false` — **a board we know nothing about must
+  not close a company on suspicion.**
+- **`settleBaoPrivate`** — returned by identity when nothing changes, **so this can be applied after every action
+  without churning references** — the settle pattern `#657` used for `current_global_era`, **and for the same
+  reason: the rule is a FUNCTION of the board, so recomputing it means no message can change the fleet and forget
+  the closure.** `owner` and `owner_protocol_id` are **released with it**, matching `applyPrivateExchange`
+  (`#573a`): **a closed private with an owner still attached shows up in certificate counts and player assets,
+  which is half the reported symptom.**
+- **`privatePurchaseCertificateBlockReason`** sits **beside** `PrivateTradePanel`'s `privatePurchaseBlockReason`
+  rather than replacing it: **that one answers about the SITUATION (unsold, already corporate-owned), this one
+  about the CERTIFICATE. Kept apart because a reason that can never change should not be re-evaluated as though it
+  might.**
+
+**PHASE 5 CLOSES EVERY PRIVATE and is a different rule with a different trigger; it is not implemented here and
+this does not implement it. The B&O's closure is earlier and specific, and the two must not be conflated — a game
+that reaches Phase 5 with the B&O still open has a second bug, not this one.** The Phase-5 predicate is **exported
+unused by the reducer today, and deliberately: it is the check a future Phase 5 closure needs, and writing it
+beside the B&O's own rule is how the two stay distinguishable.**
+
+---
+
+## utils/privateExchange.ts — the private that turns into a share
+
+### privateExchange.ts #573 — A button that says "Used" has to have done something
+**REPORTED:** clicking "Exchange for PRR" greyed the button to "Used" and did not grant the share. Same for the
+Mohawk & Hudson's NYC exchange.
+
+**Neither ever could.** `handleUsePrivateAbility`'s fallback branch **added the action to `usedPrivateAbilities` and
+wrote a log line, and that was the whole implementation** — exactly the failure `#444` records for the D&H's Place
+Station button: *"this handler marked the ability spent and wrote a log line. There was no dispatch, no placement
+and no navigation — the button reported an action it had not performed."*
+
+The two hex-targeting powers were fixed then. **The two EXCHANGES were left on the fallback, so the same bug
+survived in the two places that were hardest to notice: a share arriving silently is easy to miss, and the private
+staying in the panel looks like it is merely spent rather than like nothing happened.**
+
+### privateExchange.ts #573a — Exchanged is not spent
+**"Used" was also the wrong VOCABULARY**, and the report says so precisely: *"since the private company is
+EXCHANGED, it should be removed from the player's Private Powers (not simply 'Used') as well as their
+certificates/inventory."*
+
+**The D&H's two powers are spent — the company stays, the ability is gone, and a greyed row is the honest
+rendering. An exchange consumes the COMPANY: it is handed back and becomes a share certificate. A closed private
+that goes on sitting in the panel greyed out is claiming the player still owns something they traded away, and it
+goes on counting toward their certificate total and their assets.**
+
+So **`closed` is set, which every reader already honours** — the panel filters on it, the ledger drops it, and
+`playerPrivateCompanies` stops returning it. **One field, and the company leaves every surface at once.**
+
+### privateExchange.ts #573b — A refusal is not a use
+**REPORTED**, as a hypothesis: "this might be because the player is already at the ownership limit (60%), but in
+that case the Exchange button should return an error that they are at the limit and the power should be maintained
+for a subsequent round."
+
+**That is the right shape whatever the cause, and it is the half a mark-it-used implementation can never get right:
+the power is not spent by ATTEMPTING it. A player at 60% now may be under it next round, and burning the ability on
+a refused click destroys a real asset.**
+
+So **legality is decided BEFORE anything is written**, the reason comes back as a sentence the panel can show, and
+**nothing is marked on a refusal.** The predicate is **PURE and separate from the state change on purpose: the
+panel wants the reason on a disabled button BEFORE the click, and the dispatch wants the same answer at the moment
+it fires. One function asked twice cannot drift the way a disabled-check and a guard would.**
+
+### privateExchange.ts #576 — The Camden & Amboy was never an exchange
+**REPORTED:** "Private Company 5 is supposed to come with a 10% share of a corporation; however, the winner of that
+auction does not receive anything."
+
+**Correct, and this table was mine and wrong.** The previous pass built the exchange machinery for **BOTH** the
+Mohawk & Hudson and the Camden & Amboy, on the strength of `PrivatePowerPanel #350`.
+
+**`privateCatalog.ts` said the opposite, in a line THIS SAME AUTHOR had rewritten two passes earlier (`#548`):**
+*"Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered
+and the company stays open."* **That is 1830's actual rule**, and `#360` had recorded it explicitly as one of four
+things an older paraphrase got wrong: *"C&A was described as an ability the owner triggers. It is not: the share
+arrives on PURCHASE and the private stays open."*
+
+**So the fact existed in two places, the two disagreed, and the build followed the wrong one — the TD-1 failure
+this codebase keeps recording, committed while writing a note about it.** Two consequences: **the share never
+arrived** (the panel's button was in a round the auction had already left), **and had it ever fired it would have
+CLOSED a company 1830 keeps open and paying $25 a round.**
+
+**ONE ENTRY NOW.** The M&H genuinely is an exchange — the player trades the company away for the certificate, and
+it closes. **The C&A is a purchase bonus and is granted where the auction resolves, not from a button.**
+`keepOpen` marks it: **closing it would cost its owner $25 an Operating Round for the rest of the game.**
+
+---
+
+## components/PrivateCompanyPills.tsx #423 (UI half) — Named pills, not numbered chips
+
+**REPORTED:** replace the generic numerical chips for private companies with named acronym pills, laid out
+horizontally so row height is preserved, and make them clickable to reveal their full rules text inline. Wanted in
+both the auction's seating table and the Ledger's Player Assets table.
+
+See `privateCatalog.ts #423` for why `1`..`6` was never the company's identity.
+
+**WHY ONE COMPONENT FOR TWO TABLES.** The two surfaces had independently-grown chip renderers — the auction's
+`seatingPrivateChip` and the Ledger's `holdingChipPrivate` — **which is how they came to disagree about what a
+private looks like in the first place (one showed a number, the other a full name and a revenue figure). A third
+hand-rolled pill would have been the third opinion.** The two callers differ only in `surface`.
+
+**ROW HEIGHT IS THE CONSTRAINT, AND IT IS WHY EXPANSION GOES BELOW.** Both tables are dense and **both have already
+been bitten by a cell that grows** — the auction's `seatingPrivates` carries a fixed `0 0 128px` basis **precisely
+so a player winning their first private cannot shove the columns sideways (`#341`)**, and `#323` reserves the turn
+slot for the same reason.
+
+So the pills **never wrap and never grow: they scroll horizontally within their cell** (`overflowX: auto` rather
+than `hidden` — **a player holding more privates than the cell can show must still be able to reach them, and a
+scrollbar in a 128px cell is a better answer than a hidden asset**). **The rules text opens BELOW the pill row
+rather than beside it, where it can take the height it needs without moving any neighbouring column.**
+
+**ONE OPEN AT A TIME, per component instance. Two open panels in a table row is a row that has become a paragraph,
+and the question a player asks here is about one company at a time.**
+
+**A BUTTON, NOT A DIV WITH AN ONCLICK.** These are interactive **and they are in a table, which is exactly the
+combination where a `div` with a click handler becomes unreachable by keyboard and invisible to a screen reader.**
+`<button>` gets focus, Enter and Space for free, and `aria-expanded` tells a reader what the press will do. **The
+`title` stays for the hover case but is no longer the only way to get the information — which was the real
+limitation of the chips this replaces: their full name lived exclusively in a tooltip.**
+
+An id outside the six yields `null` and **the pill falls back to the full NAME rather than to the number this
+component exists to remove. An unrecognised private is a data problem; showing its name is the most useful thing to
+do about it and the least likely to be mistaken for a working acronym.**
+
+---
+
+## components/TrainTradePanel.tsx — corporation-to-corporation train sales (Audit G-15)
+
+1. **THREE AUDIENCES, ONE PANEL.** Every offer is visible to everyone, **but what you can DO with it depends on
+   which president you are:** the SELLER's president sees Accept / Reject; the BUYER's president sees Rescind;
+   anyone else sees a read-only row. The backend resolves both presidents onto each offer
+   (`TrainOfferEntry.seller_president` / `buyer_president`) **precisely so this decision needs no cross-referencing
+   of the company list here.**
+   **Read-only rows are shown rather than hidden on purpose. A pending offer is public information at the table —
+   everyone can see two players negotiating — and hiding it would make the blocked turn inexplicable to the other
+   players waiting on it.**
+2. **THE BLOCKED TURN IS THE HEADLINE.** While a corporation has an offer outstanding it cannot end its OR turn.
+   **That is enforced on-chain (`operations::PendingTrainOfferBlocksTurn`), so if this panel said nothing the player
+   would simply find "End Turn" failing with an error and no visible cause.** The banner states the block and puts
+   Rescind next to it, **because rescinding is the one thing that clears it and it is entirely in the buyer's
+   hands.**
+3. **SAME-PRESIDENT SALES NEVER APPEAR HERE.** If one player is president of both corporations **the contract
+   settles immediately and writes no offer, so there is nothing to display.** The compose form still shows those
+   corporations as sellers — **the sale just completes on submit instead of creating a row. The form says so, rather
+   than letting the difference surprise the player after they click.**
+4. **PRICES ARE STRINGS ALL THE WAY THROUGH.** `price` is `Uint128` on-chain and arrives as a JSON string. **The
+   input is validated as a non-negative integer string and passed on unparsed — the same no-float discipline the
+   contract holds itself to. A price above 2^53 is not realistic, but parsing to `Number` here would be a silent
+   precision bug for no benefit whatsoever.**
+5. **UNAVAILABLE MODELS ARE DISABLED, NOT HIDDEN, and carry counts.** A corporation that owns no 4-train shows
+   "4-train — none owned", greyed. **Hiding the row would leave the player wondering whether the model exists at
+   all; showing it greyed answers "can I buy a 4-train from them" with a definite no.** Models the seller DOES own
+   show how many, **because two 2-trains and one 2-train are different negotiating positions.**
+
+### TrainTradePanel.tsx #6 — The compose form moved, the ledger stayed
+`TrainPurchasePanel` now owns composing an offer (**a clickable roster of real train badges replaced three
+dropdowns**). What it does **NOT** own is the OFFER LEDGER: the blocked-turn banner, the pending rows and the
+three-audience split.
+
+**Two panels rendering two compose forms for one action would be the classic duplicate-control bug**, so this is
+**switched off at the call site rather than deleted. Kept switchable rather than removed because the form is the
+only surface that works against a chain predating `owned_trains` — the badge roster has nothing to render there,
+and a build pointed at such a contract can turn this back on in one prop.**
+
+**`owned_trains` `undefined` means the CHAIN DID NOT SAY, which is emphatically not "owns nothing".** In that case
+**every model stays selectable and the contract remains the authority; greying everything out against an older
+chain would make trading look broken rather than unsupported.** Duplicates in the model list **are meaningful and
+drive the "(2 available)" counts.**
+
+---
+
+## components/TrainBadges.tsx — chips, capacity and payout
+
+### TrainBadges.tsx #0 — Shared because the Rust rule must not fork
+These started inside `ContextualSubPanel.tsx`. The Stock Round card front now needs the same three readouts, and
+**copying them would have duplicated the part that is easy to get subtly wrong: which tier is vulnerable, and how
+loud the warning should be. A second copy that drifted by one phase would show a player green chips on trains that
+rust on the very next purchase.**
+
+So the rule lives once, reading `GamePhase` (`utils/gamePhase.ts`). **Both callers pass the same derived phase
+object and get the same answer by construction rather than by discipline.**
+
+### TrainBadges.tsx #1 — Two surfaces, because this app has two
+The OR table sits on dark chrome (`#1b2130`-ish); the Stock Round cards are linen white (`CARD_SURFACE`,
+`#f7f5f0`). **A single chip palette cannot serve both — the dark chip's `#232936` fill on a white card reads as a
+hole punched in the paper.**
+
+`surface` is a **REQUIRED prop rather than one defaulting to `"dark"`. A caller that forgets it should fail to
+compile, not render invisible text on the surface the default did not anticipate.**
+
+### TrainBadges.tsx #2 — Colour means one thing each
+
+| Colour | Meaning |
+|---|---|
+| amber/orange | this train tier rusts in **two** more purchases |
+| red/crimson | this train tier rusts on the **very next** purchase |
+| purple | this corporation is at its **train limit** |
+
+**Purple for the capacity pill specifically because the first two are warnings about DESTRUCTION and the third is a
+statement about CAPACITY. The pill was briefly amber, which put "you are full" in the same colour as "your trains
+are about to be destroyed" — two unrelated facts, one signal, sitting in adjacent columns of the same row.**
+
+### TrainBadges.tsx #4 — Every chip says something, and the counts agree
+**Two different questions a chip can answer, and it used to answer neither for most tiers:**
+
+- **ESCALATION (colour)** — am I in the danger window right now? **Amber at one train left in the current depot
+  tier, red at zero. Deliberately driven by the DEPOT rather than the tier, so the warning does not shout from the
+  moment a phase begins.**
+- **OUTLOOK (tooltip)** — what will eventually destroy this train, and how far off is it? **Every tier gets this,
+  including permanent ones, which say so plainly. A 5-train with no tooltip is indistinguishable from a 5-train
+  whose tooltip failed to load.**
+
+The counts come from `rustOutlook`, **which the action bar's phase tag also reads (`gamePhase.ts #5`/`#6`). That
+shared source is the fix for the mismatch this pass was raised for: the tag claimed "next buy" while the chip said
+two purchases, and the chip was right.**
+
+Severity comes from **the SHARED countdown, not from a second reading of `depotRemaining`** (`gamePhase.ts #7`) —
+same two thresholds as before, **but the action bar now reads the identical helper, so the chip and the badge
+cannot escalate at different moments.** **Amber became ORANGE here specifically because amber is already spent
+twice over — on "look here" and on the Yellow ERA — which made an amber rust warning during the Yellow phase
+near-invisible against the phase badge sitting beside it.**
+
+### TrainBadges.tsx #3 — The empty and unknown states are chips too
+These used to be bare text while the populated state rendered pills, **so an unfloated corporation's row read as
+plain words sitting next to a floated one's badges — the two looked like different KINDS of readout rather than the
+same readout with different contents.** Same chip shell, muted ink, **so a column of cards lines up whatever each
+holds.** `undefined`/`null` `owned_trains` means **UNKNOWN — a contract predating the field — and renders "?",
+never "none".** The prop is `readonly` **because requiring a mutable array forced callers holding a frozen roster
+to copy or cast — a widening of the type, not a loosening of it.**
+
+### TrainBadges.tsx #375 — A chip is a train, and a train runs a route
+**THE INDEX IS THE POSITION IN `trains`**, the same key the Route Planner's rows and the map overlays use.
+`RoutePlannerPanel #5` established that **two 3-trains are two different trains and get two rows; this is the other
+half — two 3-trains are two different chips and highlight independently.**
+
+**ALL THREE CURSOR PROPS OPTIONAL, because this component renders in four places and only one of them — the OR
+corporation strip during Run Routes — has a cursor to share. The Round Detail table and the depot want a chip that
+does nothing on hover, and forcing them to pass nulls would be plumbing a feature they do not have.**
+
+### TrainBadges.tsx — `last_route_revenue` is now live
+The comment that stood here said it was *"ALWAYS `undefined` TODAY... no query returns it and there is no field to
+reconstruct it from"*, **and that was true when written. The contract since gained `last_route_revenue`, written on
+every route run and returned by `GetGameState`.**
+
+**`undefined` still has a distinct meaning and is still rendered differently: it is what a contract predating the
+field returns, i.e. "this build cannot tell you". A real `"0"` means the corporation ran and earned nothing, which
+is a fact rather than an absence.**
+
+### TrainBadges.tsx #370 — A chip's height was font metrics, not a number
+**REPORTED:** the train chips in the Corporation card are clipped at the bottom.
+
+**The chip had no height of its own.** Its box came out of `lineHeight: 1.25` on the inherited font — **15px × 1.25
+= 18.75px — plus 2px padding and a 1px border each side, so 24.75px.** Three things then conspire:
+
+- **IT IS FRACTIONAL.** A 24.75px box on a display that snaps to device pixels rounds, **and which way it rounds
+  depends on the zoom and the element's subpixel offset. Round down and the 1px bottom border — the curved part of
+  a 5px radius — is the row that goes.**
+- **`inline-flex` SITS ON A BASELINE.** The chip row is an inline-level box inside a text flow, aligned by the
+  baseline of its first item, **so its descent has to fit under the baseline in whatever line box the parent built
+  from the SAME font metrics. A chip taller than its own line box overhangs.**
+- **THE CARD HAD 3px TO GIVE.** `#299` cut `orContextCard`'s vertical padding to 3px and removed its 44px floor —
+  **correct for the space it reclaimed, and it left nothing absorbing the overhang.**
+
+**`minHeight` states the box in whole pixels instead of deriving it from a font, and `alignSelf: flex-start` stops
+the baseline alignment stretching it.** `App.tsx #371` gives the card back the two pixels the row needs. **Both
+halves: an unclipped chip in a card too short for it is still clipped.**

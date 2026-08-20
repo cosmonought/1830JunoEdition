@@ -1,60 +1,22 @@
-// frontend/src/utils/auctionEscrow.ts
-//
 // What a player can still spend during the Waterfall Auction.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE MONEY WAS COMMITTED AND NOTHING SAID SO
-// ===================================================================
+// Design note #0: a bid is CASH ON THE CARD. Nothing deducted the money, so a
+// player with $600 could stand $400 on two privates and every panel still read
+// $600 -- not a rule violation the contract has to catch, but a move you cannot
+// physically make.
 //
-// REPORTED: placing a bid does not deduct or escrow the cash, so a player
-// can bid money they have already committed elsewhere.
+// Design note #1: DERIVED, NOT DEDUCTED. `player_cash` keeps the contract's own
+// TOTAL and available cash is computed on demand, so a refund is not an
+// operation at all -- when a bid leaves the list the money is free on the next
+// render. Deducting would need keeping a balance in step through every raise,
+// drop-out, settle, markdown and UNDO.
 //
-// True, and visibly so: a player with $600 could stand $400 on the D&H and
-// $400 on the M&H, and every panel on screen would still read $600. In
-// 1830 a bid is CASH ON THE CARD -- the note physically leaves your hand
-// and sits under the certificate until the private is either won by
-// somebody else (refund) or won by you (payment). Two bids totalling more
-// than you hold is not a rule violation the contract has to catch; it is a
-// move you cannot physically make.
+// Design note #2: committed means every standing bid on every STILL-UNOWNED
+// private, exactly what `GetWaterfallState.privates` reports. One bid per player
+// per private is the reducer's rule (a raise REPLACES rather than stacks), so
+// this sums the list as it stands.
 //
-// ===================================================================
-//  DESIGN NOTE 1: DERIVED, NOT DEDUCTED
-// ===================================================================
-//
-// The tempting implementation is to subtract the bid from `player_cash` on
-// dispatch and add it back on a loss. `sandboxSession.ts` explicitly
-// declined to do that, and its reasoning holds:
-//
-//     "A waterfall bid is ESCROWED rather than spent... Charging on the bid
-//     and refunding on a loss would be this file modelling a rule it has no
-//     business owning."
-//
-// It is also the fragile version. A deducted balance has to be kept in step
-// with the bid list through every raise, drop-out, settle, all-pass markdown
-// and UNDO -- six places that can each drift, and design note #310 in
-// `App.tsx` is a fresh reminder of what drift costs. The bid list already
-// records every commitment; subtracting from it is arithmetic over state
-// that exists rather than a second copy of the same fact.
-//
-// So `player_cash` continues to hold the player's TOTAL, exactly as the
-// contract reports it, and available cash is computed from it on demand.
-// A refund is then not an operation at all: when a bid leaves the list --
-// because its bidder dropped out, or because the private was won and left
-// the offer list with every bid on it -- the money is free again on the
-// very next render, with nothing to remember to do.
-//
-// ===================================================================
-//  DESIGN NOTE 2: WHAT COUNTS AS COMMITTED
-// ===================================================================
-//
-// Every standing bid on every STILL-UNOWNED private, which is exactly what
-// `GetWaterfallState.privates` reports. Bids on a private that has been won
-// are gone from the response along with the private, which is correct: that
-// contest is over and the losers' money came back.
-//
-// One bid per player per private is the rule the reducer enforces (a raise
-// REPLACES rather than stacks), so this sums the list as it stands rather
-// than trying to deduplicate it.
+// See docs/ai_architecture/contract_economy.md, auctionEscrow.ts #0 - #2.
 
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 
@@ -85,17 +47,12 @@ export function totalCash(
   return Number.isFinite(value) ? value : null;
 }
 
-/**
- * Total cash minus everything already bid -- what this player can actually
- * commit to a new bid.
+/** Total cash minus everything already bid -- what this player can actually
+ *  commit to a new bid.
  *
- * Floored at zero. A negative would mean the state carries bids the player
- * could never have made, which is a contract-side inconsistency rather than
- * something a UI should render as a negative balance; the floor keeps the
- * gates behaving (nothing is affordable) without inventing a figure.
- *
- * `null` propagates from `totalCash`: unknown stays unknown.
- */
+ *  Floored at zero: a negative would mean the state carries bids the player could
+ *  never have made, which is a contract-side inconsistency rather than something
+ *  a UI should render as a balance. `null` propagates from `totalCash`. */
 export function availableCash(
   gameState: GameStateResponse | null,
   waterfall: WaterfallStateResponse | null,
@@ -126,20 +83,16 @@ export function auctionFunds(
   return { total, escrowed, available: Math.max(0, total - escrowed) };
 }
 
-/**
- * Why `amount` cannot be bid, or `null` when it can.
+/** Why `amount` cannot be bid, or `null` when it can.
  *
- * Returns the REASON rather than a boolean so the caller can put it in the
- * disabled button's tooltip. A gate that only says "no" makes the player
- * guess which of the two limits they hit, and the two have opposite
- * remedies: bid more, or drop a bid elsewhere.
+ *  Returns the REASON rather than a boolean so the caller can put it in the
+ *  disabled button's tooltip: a gate that only says "no" makes the player guess
+ *  which of the two limits they hit, and the two have opposite remedies.
  *
- * `raisingFrom` is this player's bid already standing in the contest they
- * are raising within. That money is ALREADY escrowed, so a raise only needs
- * to cover the difference -- charging the full raise against available cash
- * would make a player who is winning unable to defend their own bid, which
- * is the exact opposite of the position they are in.
- */
+ *  `raisingFrom` is this player's bid already standing in the contest they are
+ *  raising within. That money is ALREADY escrowed, so a raise only needs to cover
+ *  the difference -- charging the full raise would make a player who is winning
+ *  unable to defend their own bid. */
 export function bidRejectionReason(
   funds: PlayerAuctionFunds | null,
   amount: number,

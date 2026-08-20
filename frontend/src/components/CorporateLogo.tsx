@@ -1,80 +1,14 @@
-// frontend/src/components/CorporateLogo.tsx
+// Design note #410: the historical logo, with the ticker as `onError` fallback.
+// One component for both the livery stripe and the Operating Round card.
 //
-// ==================================================================
-//  DESIGN NOTE 410: THE HISTORICAL LOGO, WITH THE TICKER BEHIND IT
-// ==================================================================
+// Three asset traps, all recorded in the docs because each fails invisibly:
+// the directory is `Logos` with a capital L (case-insensitive dev filesystem,
+// case-sensitive production host); the files are WEBP with a `.svg` name, so a
+// host serving `image/svg+xml` makes every logo silently degrade to text; and
+// `B&O`/`C&O` carry an ampersand, so the FILENAME (not the separator) is
+// `encodeURIComponent`d.
 //
-// REPORTED: the Stock Cards use plain text abbreviations, which lacks
-// visual immersion. Replace the abbreviation in the coloured header stripe
-// with the corporation's logo, sized to fit, with an `onError` fallback to
-// the text.
-//
-// ONE COMPONENT, TWO SURFACES. The stripe is the requirement's subject and
-// the Operating Round's corporation card is the other place a corporation
-// announces itself. Both render this, so a corporation cannot be a logo on
-// one screen and an acronym on the other -- the same reasoning the palette
-// mirrors carry in design note #408.
-//
-// ==================================================================
-//  THE DIRECTORY IS `Logos`, NOT `logos`
-// ==================================================================
-//
-// The requirement specifies `/logos/${abbreviation}.svg`. The files are in
-// `public/Logos/` with a capital L, and this points at the real name.
-//
-// It matters in exactly one place, and it is the place that is hard to test
-// for: the dev server runs on a case-INSENSITIVE filesystem, where
-// `/logos/PRR.svg` and `/Logos/PRR.svg` are the same file and both work.
-// Most production static hosts are case-SENSITIVE, where the lowercase path
-// is a 404 against a directory that plainly exists. The failure would
-// therefore never appear in development and every logo would silently
-// degrade to the text fallback in production -- which, because the fallback
-// is graceful, would look like a feature that was never built rather than
-// one that broke.
-//
-// Changing one string here is cheaper than renaming eight asset files, and
-// far cheaper than the bug. If the folder is ever renamed to lowercase,
-// this is the single line to follow it.
-//
-// ==================================================================
-//  THE FILES ARE WEBP, NOT SVG
-// ==================================================================
-//
-// The requirement specified `/logos/${abbreviation}.svg`, and the eight
-// files were named `.svg`. They are not SVGs: every one carries the
-// `RIFF....WEBP` magic number and not one contains an `<svg>` element. They
-// are raster images that were given a vector extension.
-//
-// That combination fails in a way worth spelling out, because it would have
-// looked like nothing was wrong. A static host maps `.svg` to
-// `Content-Type: image/svg+xml`; a browser handed that type parses the body
-// as XML rather than sniffing it; WebP bytes are not XML, so the decode
-// fails and `onError` fires. The graceful fallback below would then have
-// rendered the text ticker on every card -- which is exactly what the cards
-// looked like BEFORE this feature, so the feature would have appeared
-// unbuilt rather than broken, on every host, forever.
-//
-// So the extension follows the actual format. The files were renamed to
-// `.webp` (bytes untouched) and this builds `.webp` paths. Confirmed by the
-// harness, which reads the magic number of each file rather than trusting
-// its name -- the check that would have caught this in the first place.
-//
-// IF REAL VECTOR LOGOS ARRIVE LATER, this constant is the one line to
-// change, and the harness's format check will start demanding `<svg>`.
-//
-// ==================================================================
-//  THE AMPERSAND
-// ==================================================================
-//
-// `B&O` and `C&O` carry an ampersand. In a URL path segment `&` is a legal
-// sub-delimiter, so a browser would usually fetch it unescaped -- but
-// "usually" is doing real work in that sentence: it is the query-string
-// separator, and any proxy, CDN rewrite rule or logging layer between the
-// app and the file is entitled to treat it as one. `encodeURIComponent`
-// makes the path unambiguous everywhere for the cost of two characters.
-//
-// It encodes the FILENAME only, not the directory separator -- which is why
-// the base path is concatenated rather than run through the same call.
+// See docs/ai_architecture/ui_shell_layout.md, CorporateLogo.tsx #410.
 
 import React, { useEffect, useState } from "react";
 
@@ -86,13 +20,9 @@ export const LOGO_BASE_PATH = "/Logos";
  *  tracks what the bytes ARE, not what they were once named. */
 export const LOGO_EXTENSION = "webp";
 
-/**
- * The URL for one corporation's logo.
- *
- * Pure and exported so the encoding can be tested without a DOM: the two
- * tickers that need it are exactly the two the requirement names, and a
- * regression here is invisible on a case-insensitive dev machine.
- */
+/** The URL for one corporation's logo. Pure and exported so the encoding can be
+ *  tested without a DOM -- a regression here is invisible on a case-insensitive
+ *  dev machine. */
 export function logoSrcFor(ticker: string): string {
   return `${LOGO_BASE_PATH}/${encodeURIComponent(ticker)}.${LOGO_EXTENSION}`;
 }
@@ -111,22 +41,11 @@ export interface CorporateLogoProps {
   /** Style applied to the TEXT fallback only, so a caller can keep its
    *  existing typography when the image is unavailable. */
   fallbackStyle?: React.CSSProperties;
-  /* ==================================================================
-   *  DESIGN NOTE 429: A CIRCLE NEEDS A TIGHTER CAP THAN A STRIPE
-   * ==================================================================
-   *
-   * The default width cap is `size * 2.4`, chosen for the livery STRIPE --
-   * a wide horizontal band where the NYC oval is welcome to be twice as
-   * wide as it is tall.
-   *
-   * The market chart's occupant tokens are CIRCLES. A herald at 2.4x the
-   * circle's height would run out of both sides of it, and the badge's
-   * `overflow: hidden` would then crop the mark rather than fit it --
-   * which is worse than the text fallback, because a cropped herald looks
-   * like a rendering fault while an acronym looks like a decision.
-   *
-   * So the cap is overridable, in pixels. `undefined` keeps the ratio every
-   * existing caller was built against, so this is a pure addition. */
+  /* Design note #429: the default width cap (`size * 2.4`) is for the livery
+     STRIPE. Market-chart occupant tokens are CIRCLES, where a 2.4x herald runs out
+     of both sides and `overflow: hidden` crops it -- worse than the text fallback,
+     since a cropped herald looks like a fault and an acronym looks like a
+     decision. `undefined` keeps the existing ratio, so this is a pure addition. */
   maxWidth?: number;
 }
 
@@ -140,11 +59,10 @@ export function CorporateLogo({
 }: CorporateLogoProps) {
   const [failed, setFailed] = useState(false);
 
-  /* A different corporation is a different file, and a file that has not
-     been tried yet has not failed. Without this, one missing logo would
-     poison the slot for every corporation rendered through the same element
-     afterwards -- React reuses the component instance when only the props
-     change, so `failed` would persist across the swap. */
+  /* A different corporation is a different file, and a file that has not been
+     tried yet has not failed. React reuses the component instance when only the
+     props change, so without this one missing logo would poison the slot for every
+     corporation rendered through the same element afterwards. */
   useEffect(() => setFailed(false), [ticker]);
 
   if (failed) {
@@ -166,11 +84,9 @@ export function CorporateLogo({
       onError={() => setFailed(true)}
       style={{
         height: `${size}px`,
-        /* Capped rather than fixed square. These are historical heralds with
-           wildly different aspect ratios -- the NYC oval is far wider than
-           the PRR keystone -- so a square box would letterbox some and crop
-           none, while an uncapped width lets the widest one shove the float
-           badge off the end of the stripe. */
+        /* Capped rather than fixed square. Historical heralds have wildly different
+           aspect ratios -- a square box would letterbox some, and an uncapped width lets
+           the widest one shove the float badge off the end of the stripe. */
         maxWidth: `${maxWidth ?? Math.round(size * 2.4)}px`,
         /* Never distort a herald. `contain` fits the whole mark inside the
            box and leaves the spare axis empty. */

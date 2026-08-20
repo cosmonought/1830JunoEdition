@@ -779,3 +779,284 @@ So this component **renders no button of its own:** it renders the strip and a `
 both controls in their new homes. `onAdvance` is **gone from the props rather than left unused: a callback nothing
 calls is a callback somebody re-wires.** A slot rather than a prop pair, **because this component has no opinion about
 what belongs there beyond WHERE it goes.**
+
+---
+
+# Batch 5C — The turn cursor, the guards, and undo
+
+## utils/operatingCursor.ts — the cursor is game state
+
+### operatingCursor.ts #656 — Where the turn cursor lived
+**REPORTED:** "the game stayed in OR 1.1 and returned to C&O's turn, starting at step 3 (Station Tokens). Last time
+I ended OR 1.1 with a corporation purchasing a 3-train, it looped back to step 2 (Lay Track). It should not be
+looping at all."
+
+`orSubPhase` was `useState` in `App.tsx`, **seeded and re-seeded by an effect whose dependency array named
+`current_global_era`, `currentPhase.known`, `currentPhase.tier` and `private_companies`.** `derivePhase` reads the
+tier off the highest train anybody owns, **so buying the first 3-train moves it from "2" to "3" DURING the Buy
+Trains step of the corporation that bought it — and the effect re-ran with `active_corporation_index` unmoved and
+set the cursor to `visibleSubPhases[0]`: `Track` when Buy Private is hidden, `BuyPrivate` when it is not, which is
+why the same bug landed on step 2 in one playthrough and step 3 in the next.**
+
+**The effect was not wrong about anything it was written to do.** Its job was "open a new turn on the right step",
+and every dependency it names is a genuine input to THAT question. **What it could not express is that opening a
+turn is an EVENT and not a condition — and a `useEffect` can only watch conditions.**
+
+**THIS IS #642 ONE LAYER DOWN.** That note found round transitions split between the reducer and the shell, and the
+diagnosis applies verbatim: *"applying a message was split across two places, so replays run the reducer but not the
+shell, and corporate state rebuilt exactly while round state did not."* **Same split, same consequence — a client
+that joins or undoes mid-turn rebuilt every treasury and every train and then showed whichever step its own effect
+happened to seed.**
+
+**SO THE CURSOR MOVES INTO THE LOG.** The rules were already written down (`initialOrSubPhase` and
+`visibleSubPhases` in `OperatingSubPhaseStepper.tsx`, plus the "hold at the last step rather than wrapping" rule
+that lived inside `skipSubPhase`'s callback). **Nothing here is a new rule. What is new is that all of them are
+reachable from the reducer and none of them is reachable only from a React callback.**
+
+**WHY A SEPARATE MODULE** rather than inlining into `sandboxSession.ts`: the reducer is already the largest file in
+`utils/`, these rules have **exactly one input each and no dependence on the reducer's vocabulary**, and **they are
+the rules most likely to be read by someone asking "why did the turn open there" — a question that specific
+deserves a file it can be answered in.**
+
+### operatingCursor.ts #656a — The era field does not move, so do not ask it
+Found while **mutation-testing this chunk.** `openingSubPhase` first read `initialOrSubPhase(state.current_global_era)`
+— the same expression the App's effect used — **and the mutation that should have failed these tests did not,
+because `current_global_era` NEVER CHANGES in a sandbox game. `sandboxSession.ts` does not contain a single
+`current_global_era:` write; the field is stamped at seed time and holds that value for the whole game.**
+
+So the era test answers "Yellow" in a Phase 4 game, `initialOrSubPhase` answers `Track`, **and a turn could never
+open on `BuyPrivate` — precisely the rule-not-applied that `#574` removed the sandbox shortcut to prevent. The
+shortcut went; the outcome stayed, because a second route to it was never noticed.** *"A step the game silently
+walks past is a trade nobody gets to make."*
+
+**`derivePhase` is the maintained answer.** It reads the highest train tier anybody owns, which is what actually
+advances a phase, and it is already what `stepsFor` asks. **Two questions about the same phase should not be put to
+two different fields.**
+
+**THE ERA FIELD ITSELF IS STILL WRONG and is a bigger problem than this module: `App.tsx` passes it to the map as
+`currentGlobalEra`, where it governs which tile colours may be laid.** Not a cursor question, so **flagged rather
+than fixed here.**
+
+### operatingCursor.ts — the four rules
+- **`stepsFor`** — the steps this game currently HAS. `visibleSubPhases` drops `Buy Private` outside Phases 3-4
+  (`#613`) and once nothing is left to buy (`#385`). **Asked rather than re-derived, so the cursor and the strip
+  the player is reading cannot disagree about which steps exist.**
+- **`openingSubPhase`** — `initialOrSubPhase` answers in the abstract (`Track` before Phase 3, `BuyPrivate` from
+  Phase 3 on, mirroring `or_phase::initial_sub_phase`). **It can name a step this particular game does not have, so
+  the answer is filtered through `stepsFor` before use — `#385`: a cursor on a hidden step reads as an empty action
+  panel with no way forward but Skip.**
+- **`advance`** — **HOLDS RATHER THAN WRAPS. Past the last step the turn is over, and wrapping to the front would
+  let a corporation lay a second tile.** A `current` not in `steps` also holds: that happens **when the step list
+  shrinks under a cursor sitting on the step that vanished** (the last private bought while a corporation is on
+  `BuyPrivate`). **Holding is the conservative answer; `settleSubPhase` resolves it by moving forward rather than
+  by guessing an index.**
+- **`settleSubPhase`** — keeps the cursor on a step that exists. **The one case the old effect handled that a pure
+  event model does not get for free.** Called **after every action rather than watched for, which is the whole point
+  of the move: it runs when the game changes rather than when React notices the game changed, so a replay produces
+  it too.** **MOVES FORWARD, never back** — the step disappeared because it was completed or became impossible, and
+  **sending the cursor to `steps[0]` is precisely the reported bug.**
+
+---
+
+## utils/turnGuardKey.ts #653 — A once-per-game guard on a once-per-turn event
+
+**REPORTED:** "C&O has no legal routes despite owning trains, but this Run Routes action has no Skip button, so the
+game is now bricked."
+
+**There IS an auto-skip for exactly that case** — `#414` built it and `#433` states the rule (no route, no
+obligation). **It did not fire, and the reason was the loop guard rather than the skip.**
+
+`autoSkippedRef` keyed on `${actingProtocolId}:${orSubPhase}` and `forcedWithholdRef` on
+`${actingProtocolId}:withhold`. **Neither key says WHEN. Both Sets are cleared only by a full sandbox rebuild, so
+the first time C&O auto-skips Routes the pair `3:Routes` is remembered for the rest of the game — and every later
+turn where C&O again has no route reaches a step that will not skip itself and offers no button that would.**
+
+**WHAT THE GUARD IS FOR is a re-entrancy window a few milliseconds wide:** `autoSkipReason` is derived, **so it
+stays truthy for the render between dispatching the skip and the cursor moving off the step, and without a guard
+the effect fires again on that render. That is a WITHIN-TURN problem, and the key was scoped to the whole game.**
+
+**SO THE KEY GAINS THE TURN**, and it lives in a module rather than inline in an effect: **a template literal
+inside a `useEffect` is not reviewable and not testable, and the property that matters — two different turns must
+not share a key — is exactly the kind of thing that reads as obviously true and stops being true when a field is
+added or renamed.**
+
+`turnKey` names one corporation's one turn from **`macro_round_number` + `sub_round_index`** (the "OR 2.1" identity,
+`#511`) **+ `active_corporation_index`.** All three are **read off game state rather than counted locally: a replay
+rebuilds state and therefore rebuilds the same key, where a parallel local tally could disagree with the log it is
+supposed to describe. That is #642's lesson applied to a guard rather than to the round machine.**
+
+The full guard key adds the step. **The corporation is already implied by `active_corporation_index`, and is kept
+anyway: the index is a position in `active_operating_order` and the protocol id is the corporation itself; if a
+rebuilt queue ever reorders mid-cycle, the pair disagreeing is preferable to the key silently matching a different
+corporation's earlier skip.**
+
+---
+
+## utils/undoTarget.ts — undo rewinds to a decision
+
+### undoTarget.ts #439 — The original complaint
+**REPORTED:** pressing Undo after the game has auto-skipped a sub-phase drops the player into the sub-phase that
+was skipped.
+
+The undo stack recorded one snapshot per dispatch, **and the auto-skip and forced-withhold effects dispatch real
+messages.** A turn that ran `Track → (skip Tokens) → (skip Routes) → (withhold $0)` **left four snapshots, three of
+them recording moves the player never made. One press landed on the Dividends step — and landed there STUCK,
+because the auto-skip guard is keyed by `(corporation, step)` and had already recorded that step as handled.**
+
+**WHY THIS IS A MODULE AND NOT THREE LINES IN THE HANDLER.** It is **index arithmetic over a stack whose entries
+mean "the state BEFORE this action", which is the kind of off-by-one that reads correctly and behaves wrongly.**
+Extracted so the walk can be tested against the exact sequences that produced the bug, **without a React tree, a
+sandbox reducer or a rendered board.** The shell keeps the restore — which atoms to write, in what order — **because
+that is genuinely its business (`#310`). This owns only "how far back is the last thing the player chose".**
+
+### undoTarget.ts #475 — The walk is gone; automatic actions do not snapshot
+**REPORTED:** Undo reverts entire turns — pushing a player back to the start of a sub-phase, or undoing the
+PREVIOUS player's turn outright.
+
+**#439 fixed the opposite complaint by pushing a snapshot for every dispatch and then WALKING PAST the automatic
+ones. That walk is what produces this complaint**, and the mechanism is exact:
+
+> A corporation's turn opens. It has no trains, so the game auto-skips Routes, auto-skips Tokens and forces a $0
+> withhold — **three automatic snapshots on top of the previous player's `PassTurn`.** The player, who has not yet
+> done anything, presses Undo. **The walk steps down past all three, finds the `PassTurn` as the last PLAYER
+> action, and reverts it — landing them in the previous corporation's turn.**
+
+**Both notes were solving the same problem from the wrong end. If an automatic action never enters the history at
+all, there is nothing to walk past AND nothing to land on: the stack contains only decisions the player made, and
+Undo pops exactly one.**
+
+| Bug | Why it cannot occur |
+|---|---|
+| **#439's** | no snapshot exists for a skipped step, so Undo cannot restore one |
+| **#475's** | Undo never reaches past the top entry, so it cannot cross a turn boundary the player did not create |
+
+**THE CONSEQUENCES RE-RUN, which is what makes this safe rather than lossy.** Restoring the state before a player's
+action also restores the sub-phase cursor, **and the auto-skip effects recompute from there — the caller clears
+their once-per-(corporation, step) guards on undo so they are free to fire again. Undo returns the player to the
+decision; the game re-derives what followed from it.**
+
+**WHAT SURVIVES of #439 is the `automatic` flag itself, now read at PUSH time instead of at pop time.** Its two
+producers are unchanged — the sub-phase auto-skip and the forced $0 withhold — **each with its own named entry
+point so an `onClick` event object can never be mistaken for the flag (that hazard is recorded in the caller and
+has not gone away).**
+
+`undoTargetIndex` returns **THE TOP ENTRY, always. One press, one action — which is what "Undo" means everywhere
+else.** The `automatic` guard is **a SAFETY NET, not the mechanism: automatic dispatches do not push, so a stack
+should never contain one; if the dispatch path ever regresses, skipping it here is better than restoring a state
+the player never chose.** It is **deliberately not #439's walk** — it steps over automatic entries only to reach
+the nearest player action, **and cannot cross a turn boundary because `PassTurn` is itself a player action and
+stops it.** The discard count is **normally `0`; a non-zero value means the safety net caught something the
+dispatch path should not have pushed, and the caller says so in the log rather than reverting several steps
+silently.**
+
+---
+
+## utils/roundLabel.ts #659 — Which round an entry belongs to
+
+**REPORTED:** "it labels the last action of OR 1.1 as the first action of SR2, i.e., it printed '[SR2] PRR passed
+Buy Trains.' This should read [OR1.1] and then a second entry for [SR2] Announcing the stock round and who has
+Priority Deal."
+
+**Moved out of `App.tsx` to be tested. The function itself is unchanged and was never wrong — what was wrong is
+which STATE it was asked about, and that is a distinction a 10,000-line component cannot hold a test for.**
+
+**THE RULE:**
+
+- An **ACTION** is tagged with the round it was taken in — **`before`**.
+- An **ANNOUNCEMENT** is tagged with the round it announces — **`after`**.
+
+**Every round-closing action makes those two different, and it is the only time they differ, which is why this went
+unnoticed until a game reached the end of an Operating Round with somebody reading the log.**
+
+**#643 had already been here once.** It replaced a ref read with `roundLabelFor(after)`, **correctly reasoning that
+"on a replay the ref is the present and the action is the past" — and then took the wrong end of the action.
+`after` is the state the action RESOLVED TO. For every action but one that is the same round it happened in, so the
+fix looked complete and was 99% right, which is the hardest kind of wrong to see.**
+
+`roundLabelFor` produces `Auction`, `SR2`, `OR 3.1`. **The Operating Round's suffix is dropped when
+`sub_round_index` is 0, which is the state between rounds — `#621` zeroes it on close and `beginOperatingRound`
+stamps it back to 1.**
+
+---
+
+## utils/passedSeats.ts #610 — Derived, not recorded
+
+**INSTRUCTED:** "when a player passes in the Stock or Auction round, what if we stamped a 'PASSED' over their
+player name in the action bar?" — with the reservation that new players might read it as a permanent withdrawal,
+and the mitigation: "if we remove the stamp on the player's next turn that might mitigate it."
+
+**THE MITIGATION IS NOT AN EXTRA RULE, IT IS THE DEFINITION.** State already carries `consecutive_passes`, **which
+resets to zero the moment any seat does something other than pass. So "the passes since the last real action" is a
+window that slides forward on its own, and the stamp clearing on a player's next turn is what falls out of reading
+it — there is nothing to expire, nothing to time out, and no way for a stale stamp to survive an action that should
+have cleared it.**
+
+**WHICH IS WHY THIS IS DERIVED RATHER THAN TRACKED.** The alternative is a set of "who has passed" in component
+state fed by watching the log. **That duplicates a fact the reducer already owns, and the copy would be wrong in
+exactly the cases that matter: a late-joining client, a refresh mid-round, an undo. This is a pure read of state
+every client already has, so five browsers cannot disagree about who passed.**
+
+### passedSeats.ts #610a — Walking backwards is sound, and has one limit
+Seats act in a fixed rotation, **so N consecutive passes ending at seat `i` means seats `i-1 … i-N` passed,
+wrapping. That is exact for the Stock Round and for the main waterfall rotation.**
+
+**IT IS NOT EXACT INSIDE A MINI-AUCTION, where only the contesting seats take turns — walking back through the full
+roster would step over seats that were never asked and stamp them.** Callers pass `enabled: false` there **rather
+than this function guessing, because whether a subset rotation is running is the caller's fact, not this module's.**
+
+The walk is **capped at `seatCount - 1`, which is not a defensive clamp but a rule: a full rotation of passes ENDS
+the round, so a count at or above the seat total is a state the bar is about to stop rendering — and without the
+cap the walk would lap and stamp the seat that is currently on turn, which is the one seat that provably has not
+passed yet.**
+
+---
+
+## components/HomeStationPrompt.tsx — the first thing that happens to a corporation
+
+### HomeStationPrompt.tsx #416 (UI half) — Place the home station, deliberately
+**REPORTED:** stop auto-placing the Erie's home station. When it floats, halt and prompt the President to place the
+token explicitly, **even though the destination hex is fixed by the rules.**
+
+See `sandboxSession.ts #416` for why the rules being unambiguous does not settle this. **The short version: the
+float is the most consequential moment in a corporation's life and its most visible half was happening off-screen,
+on a tab the player was not looking at.**
+
+### HomeStationPrompt.tsx #440 — It is a map click now
+This prompt used to BE the placement: one button, one confirmation, token down. **The note that stood here argued
+against the map — "a map interaction that accepts exactly one hex and rejects the other eighty is not a choice, it
+is a scavenger hunt with a modal's worth of instructions attached."**
+
+**The objection was to the SEARCH, and the search turns out to be avoidable.** The board can be **veiled down to
+the single legal hex with the placement cursor already armed, so there is nothing to hunt for: one lit hex on an
+otherwise dark map IS the answer, and clicking it is one gesture.** That turns the old objection into **a
+description of how this is implemented rather than an argument against it.**
+
+**What a confirmation could never do is show the player WHERE.** A modal naming "E11" hands a new president a
+coordinate; **a map with E11 lit and everything else dark shows them where their corporation stands on the board
+they are about to operate on.**
+
+**SO THIS COMPONENT ANNOUNCES AND HANDS OFF.** `onPlace` no longer means "place it" — **it means "take me there".
+The signature is unchanged because it already carries exactly what both readings need: the corporation and the hex.**
+
+**BLOCKING, AND WHY THAT IS SAFE.** Modal and undismissable, the same shape as `BoParPrompt`: **there is no legal
+state on the other side of cancelling — the corporation has floated, the token is owed, and 1830 has no branch
+where a floated company declines its home station.** Safe to block because **the condition is DERIVED, not flagged:
+`pendingHomeTokens` recomputes it from the board every render, so a reload, a late poll or a double dispatch all
+land on the same answer. A one-shot flag would risk the opposite failure — a modal that vanishes with the token
+still unplaced and nothing left to ask for it.**
+
+**ONE AT A TIME.** Several corporations can float on a single dispatch (a waterfall cascade, or a multi-buy
+crossing two thresholds). **The caller passes the head of the queue and the next appears as soon as this one is
+answered — one decision per screen, in operating order.**
+
+### HomeStationPrompt.tsx #440 (JSX half) — The route sentence was wrong
+**REPORTED:** remove the misleading rules text from this prompt.
+
+It read *"Every route it runs must touch a city it holds a token in, starting here."* **Two claims, and the
+load-bearing half is false. A route must include at least one city the corporation has a token in — it does not
+have to START at one, and once the corporation places further tokens it need not involve THIS hex at all.** Told at
+the moment the home token goes down, the sentence reads as "your trains will always run from here", **which is a
+wrong mental model handed to a player at exactly the moment they are forming one.**
+
+The surviving half — **that the hex is printed and fixed** — is the fact this prompt exists to convey. **A
+placement confirmation is not the place to teach a routing rule, and certainly not a garbled one.**

@@ -1,50 +1,19 @@
-// frontend/src/components/TrainBadges.tsx
+// Train chips, capacity pill and last-route-payout readout, shared by the
+// Operating Round corporations table and the Stock Round card fronts.
 //
-// The train chips, capacity pill and last-route-payout readout, shared by
-// the Operating Round corporations table and the Stock Round card fronts.
+// Design note #0: SHARED because the rust rule must not fork. A second copy that
+// drifted by one phase would show green chips on trains that rust on the very
+// next purchase. The rule reads `GamePhase` (`utils/gamePhase.ts`) once.
 //
-// ===================================================================
-//  DESIGN NOTE 0: SHARED BECAUSE THE RUST RULE MUST NOT FORK
-// ===================================================================
+// Design note #1: `surface` selects a palette and is REQUIRED, not defaulted --
+// the dark chip's fill on a linen card reads as a hole punched in the paper, and
+// a caller that forgets should fail to compile rather than render invisibly.
 //
-// These started life inside `ContextualSubPanel.tsx`. The Stock Round card
-// front now needs the same three readouts, and copying them would have
-// duplicated the part that is easy to get subtly wrong: which tier is
-// vulnerable, and how loud the warning should be. A second copy that
-// drifted by one phase would show a player green chips on trains that rust
-// on the very next purchase.
+// Design note #2: amber = rusts in two purchases, red = rusts next purchase,
+// purple = at the train limit. Purple because the first two warn about
+// DESTRUCTION and the third states CAPACITY.
 //
-// So the rule lives once, here, reading `GamePhase` (`utils/gamePhase.ts`).
-// Both callers pass the same derived phase object and get the same answer
-// by construction rather than by discipline.
-//
-// ===================================================================
-//  DESIGN NOTE 1: TWO SURFACES, BECAUSE THIS APP HAS TWO
-// ===================================================================
-//
-// The Operating Round table sits on the dark chrome (`#1b2130`-ish); the
-// Stock Round cards are linen white (`CARD_SURFACE`, `#f7f5f0`). A single
-// chip palette cannot serve both -- the dark chip's `#232936` fill on a
-// white card reads as a hole punched in the paper.
-//
-// `surface` therefore selects a palette, and it is a REQUIRED prop rather
-// than one defaulting to `"dark"`. A caller that forgets it should fail to
-// compile, not render invisible text on the surface the default did not
-// anticipate.
-//
-// ===================================================================
-//  DESIGN NOTE 2: COLOUR MEANS ONE THING EACH
-// ===================================================================
-//
-//   amber  -> this train tier rusts in two more purchases
-//   red    -> this train tier rusts on the very next purchase
-//   purple -> this corporation is at its train limit
-//
-// Purple for the capacity pill specifically because the first two are
-// warnings about DESTRUCTION and the third is a statement about CAPACITY.
-// The pill was briefly amber, which put "you are full" in the same colour
-// as "your trains are about to be destroyed" -- two unrelated facts, one
-// signal, sitting in adjacent columns of the same row.
+// See docs/ai_architecture/contract_economy.md, TrainBadges.tsx #0 / #1 / #2.
 
 import React from "react";
 
@@ -84,12 +53,10 @@ export interface TrainBadgeCommonProps {
 /* ------------------------------------------------------------------ */
 
 export interface TrainChipsProps extends TrainBadgeCommonProps {
-  /** `undefined`/`null` means UNKNOWN -- a contract predating the field --
-   *  and renders "?", never "none". See `PublicCompanyState.owned_trains`.
-   *
-   *  `readonly` because this component only reads it, and requiring a
-   *  mutable array forced callers holding a frozen roster to copy or cast --
-   *  a widening of the type, not a loosening of it. */
+  /** `undefined`/`null` means UNKNOWN -- a contract predating the field -- and
+   *  renders "?", never "none". See `PublicCompanyState.owned_trains`. `readonly`
+   *  because requiring a mutable array forced callers holding a frozen roster to
+   *  copy or cast, which widens the type rather than loosening it. */
   trains?: readonly string[] | null;
   phase: GamePhase | null;
   /** Per-tier rust countdown (`rustOutlook`). Optional: without it a chip
@@ -97,24 +64,11 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    *  will destroy it, just without the "(N purchases away)" figure -- a
    *  number we cannot stand behind is worse than no number. */
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
-  /* ==================================================================
-   *  DESIGN NOTE 375: A CHIP IS A TRAIN, AND A TRAIN RUNS A ROUTE
-   * ==================================================================
-   *
-   * `hexCanvasPrimitives.ts` design note #373 explains the shared cursor.
-   * This is the chip's end of it.
-   *
-   * THE INDEX IS THE POSITION IN `trains`, which is the same key the Route
-   * Planner's rows and the map overlays use -- design note #5 in
-   * `RoutePlannerPanel` established that two 3-trains are two different
-   * trains and get two rows, and this is the other half of that: two
-   * 3-trains are two different chips and highlight independently.
-   *
-   * ALL THREE PROPS OPTIONAL, because this component renders in four
-   * places and only one of them -- the Operating Round corporation strip
-   * during Run Routes -- has a cursor to share. The Round Detail table and
-   * the depot want a chip that does nothing on hover, and forcing them to
-   * pass nulls would be plumbing a feature they do not have. */
+  /* Design note #375: the index is the position in `trains`, the same key the
+     Route Planner rows and map overlays use -- two 3-trains are two different
+     trains, get two rows and highlight independently (`RoutePlannerPanel #5`).
+     All three cursor props are optional because this renders in four places and
+     only the Operating Round strip during Run Routes has a cursor to share. */
   highlightedTrainIndex?: number | null;
   onHighlightTrain?: (trainIndex: number | null) => void;
   /** Design note #375: only the surface that shares a cursor makes its
@@ -122,28 +76,13 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
   interactive?: boolean;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 4: EVERY CHIP SAYS SOMETHING, AND THE COUNTS AGREE
- * ==================================================================
- *
- * There are two different questions a chip can answer, and it used to
- * answer neither for most tiers:
- *
- *   ESCALATION (colour) -- am I in the danger window right now? Amber at
- *   one train left in the current depot tier, red at zero. Unchanged, and
- *   deliberately still driven by the DEPOT rather than the tier, so the
- *   warning does not shout from the moment a phase begins.
- *
- *   OUTLOOK (tooltip) -- what will eventually destroy this train, and how
- *   far off is it? Every tier gets this, including permanent ones, which
- *   say so plainly. A 5-train with no tooltip is indistinguishable from a
- *   5-train whose tooltip failed to load.
- *
- * The counts come from `rustOutlook`, which the action bar's phase tag also
- * reads (`gamePhase.ts` design notes #5 and #6). That shared source is the
- * fix for the mismatch this pass was raised for: the tag claimed "next buy"
- * while the chip said two purchases, and the chip was right.
- */
+/* Design note #4: two questions, both now answered for every tier. ESCALATION
+   is the chip's COLOUR, driven by the DEPOT rather than the tier so the warning
+   does not shout from the moment a phase begins. OUTLOOK is the TOOLTIP, present
+   even on permanent tiers -- a 5-train with no tooltip is indistinguishable from
+   one whose tooltip failed to load. Counts come from `rustOutlook`, which the
+   action bar's phase tag also reads (`gamePhase.ts #5` / `#6`), which is the fix
+   for the tag and the chip disagreeing about how many purchases were left. */
 function rustTooltip(
   tier: TrainTier | null,
   phase: GamePhase | null,
@@ -194,12 +133,9 @@ export function TrainChips({
   const ink = surface === "light" ? lightInk : darkInk;
   const size = compact ? FONT_SIZE.small : FONT_SIZE.strong;
 
-  // Design note #3: THE EMPTY AND UNKNOWN STATES ARE CHIPS TOO.
-  //
-  // These used to be bare text while the populated state rendered pills, so
-  // an unfloated corporation's row read as plain words sitting next to a
-  // floated one's badges -- the two looked like different KINDS of readout
-  // rather than the same readout with different contents. Same chip shell,
+  // Design note #3: the empty and unknown states are chips too. They used to be
+  // bare text beside a floated corporation's pills, so the two read as different
+  // KINDS of readout rather than the same one with different contents. Same shell,
   // muted ink, so a column of cards lines up whatever each holds.
   const placeholderChip = (label: string) => (
     <span style={styles.chipRow}>
@@ -228,14 +164,11 @@ export function TrainChips({
   if (trains.length === 0) return placeholderChip("none");
 
   const doomed = phase?.rustingTier ?? null;
-  // Design note #7 (`gamePhase.ts`): severity comes from the SHARED
-  // countdown, not from a second reading of `depotRemaining`. Same two
-  // thresholds as before -- one purchase out is `doomed`, two is `atRisk`
-  // -- but the action bar now reads the identical helper, so the chip and
-  // the badge cannot escalate at different moments.
-  //
-  // Still untinted until the countdown reaches two, so the warning is not
-  // shouting from the instant a phase begins.
+  // Design note #7 (`gamePhase.ts`): severity comes from the SHARED countdown, not
+  // a second reading of `depotRemaining`. Same two thresholds -- one purchase out
+  // is `doomed`, two is `atRisk` -- but the action bar reads the identical helper,
+  // so the chip and the badge cannot escalate at different moments. Untinted until
+  // the countdown reaches two.
   const alert = phaseAlertLevel(phase);
   const severity = alert === "critical" ? "doomed" : alert === "warn" ? "atRisk" : null;
 
@@ -328,19 +261,13 @@ export function CapacityPill({ trains, phase, surface, compact }: CapacityPillPr
 /* ------------------------------------------------------------------ */
 
 export interface LastRoutePayoutProps extends TrainBadgeCommonProps {
-  /** The corporation's most recent route revenue --
-   *  `PublicCompanyState.last_route_revenue`.
+  /** The corporation's most recent route revenue -- `PublicCompanyState.
+   *  last_route_revenue`. THIS IS NOW LIVE: the contract gained the field, writes
+   *  it on every route run and returns it from `GetGameState`.
    *
-   *  THIS IS NOW LIVE. The comment that stood here said it was "ALWAYS
-   *  `undefined` TODAY... no query returns it and there is no field to
-   *  reconstruct it from", and that was true when written. The contract
-   *  since gained `last_route_revenue`, written on every route run and
-   *  returned by `GetGameState`, so callers pass the real figure.
-   *
-   *  `undefined` still has a distinct meaning and is still rendered
-   *  differently: it is what a contract predating the field returns, i.e.
-   *  "this build cannot tell you". A real `"0"` means the corporation ran
-   *  and earned nothing, which is a fact rather than an absence. */
+   *  `undefined` still means "this build cannot tell you" and renders differently.
+   *  A real `"0"` means the corporation ran and earned nothing, which is a fact
+   *  rather than an absence. */
   revenue?: string | number | null;
 }
 
@@ -370,12 +297,11 @@ export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutPr
 
 const darkInk = {
   chip: { borderColor: "#3a4150", backgroundColor: "#232936", color: "#e2e6ee" },
-  // Design note #7 (`gamePhase.ts`): these are the SAME two constants the
-  // action bar's phase-shift badge uses, so the chip and the badge escalate
-  // together by construction. Amber became orange here specifically because
-  // amber is already spent twice over -- on "look here" and on the Yellow
-  // ERA -- which made an amber rust warning during the Yellow phase
-  // near-invisible against the phase badge sitting beside it.
+  // Design note #7 (`gamePhase.ts`): the SAME two constants the action bar's
+  // phase-shift badge uses, so chip and badge escalate together by construction.
+  // Amber became orange here because amber is already spent on "look here" and on
+  // the Yellow ERA, which made an amber rust warning near-invisible against the
+  // phase badge beside it.
   atRisk: {
     borderColor: ALERT_WARN_BORDER,
     backgroundColor: ALERT_WARN_BG,
@@ -408,38 +334,14 @@ const lightInk = {
 } as const;
 
 const styles: Record<string, React.CSSProperties> = {
-  /* ==================================================================
-   *  DESIGN NOTE 370: A CHIP'S HEIGHT WAS FONT METRICS, NOT A NUMBER
-   * ==================================================================
-   *
-   * REPORTED: the train chips in the Corporation card are clipped at the
-   * bottom.
-   *
-   * The chip had no height of its own. Its box came out of `lineHeight:
-   * 1.25` on the inherited font -- 15px * 1.25 = 18.75px -- plus 2px of
-   * padding and a 1px border each side, so 24.75px. Three things then
-   * conspire:
-   *
-   *   IT IS FRACTIONAL. A 24.75px box on a display that snaps to device
-   *   pixels rounds, and which way it rounds depends on the zoom and the
-   *   element's subpixel offset. Round down and the 1px bottom border --
-   *   the curved part of a 5px radius -- is the row that goes.
-   *
-   *   `inline-flex` SITS ON A BASELINE. The chip row is an inline-level box
-   *   inside a text flow, aligned by the baseline of its first item, so its
-   *   descent has to fit under the baseline in whatever line box the parent
-   *   built from the SAME font metrics. A chip taller than its own line
-   *   box overhangs.
-   *
-   *   THE CARD HAD 3px TO GIVE. Design note #299 cut `orContextCard`'s
-   *   vertical padding to 3px and removed its 44px floor -- correct for the
-   *   space it reclaimed, and it left nothing absorbing the overhang.
-   *
-   * `minHeight` states the box in whole pixels instead of deriving it from
-   * a font, and `alignSelf: flex-start` stops the baseline alignment
-   * stretching it. `App.tsx` design note #371 gives the card back the two
-   * pixels the row needs. Both halves: an unclipped chip in a card too
-   * short for it is still clipped. */
+  /* Design note #370: the chip had no height of its own -- `lineHeight: 1.25` on a
+     15px font plus padding and borders gave a FRACTIONAL 24.75px box, which rounds
+     unpredictably by zoom and subpixel offset and drops the 1px bottom border.
+     `inline-flex` also sits on a baseline, so a chip taller than its own line box
+     overhangs, and #299 had cut `orContextCard`'s padding to 3px with nothing left
+     to absorb it. `minHeight` states the box in whole pixels and
+     `alignSelf: flex-start` stops baseline alignment stretching it; `App.tsx #371`
+     gives the card back the two pixels the row needs. Both halves are required. */
   chipRow: {
     display: "inline-flex",
     gap: "4px",

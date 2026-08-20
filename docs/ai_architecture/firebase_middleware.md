@@ -871,3 +871,287 @@ base style set the SHORTHAND while the active variant overrode only the `borderB
 React removes the longhand from the outgoing element while the shorthand is still present, and the order in which a
 browser applies that combination is not guaranteed.** Expressing all three parts as longhands **means the active
 variant overrides exactly one property that was already there, with nothing to reconcile.**
+
+---
+
+# Batch 5C — Chat transport, room bars, the persisted pointer and undo
+
+## components/ChatBox.tsx — mostly a transport
+
+### ChatBox.tsx #0 — The primary export is the hook, not the component
+`useFirestoreChat`, not `<ChatBox>`. **The dashboard deliberately does not gain a chat panel: it already has one
+chat surface — `TopTicker`'s in-place accordion fed by `mergeFeedItems`, composed in `InlineQuickChat` — and
+`feed.ts`'s own header records that the previous `Chatbox.tsx` component was DELETED precisely because hoisting
+state into `App.tsx` had left it unreachable. Re-adding a second chat panel would recreate that mistake and give
+players two inboxes with different contents.**
+
+So this pass changed chat's **TRANSPORT and nothing else.** `App.tsx` swaps `useState<ChatMessage[]>` for
+`useFirestoreChat(roomId)`; **`TopTicker` and `InlineQuickChat` are untouched and become multiplayer for free,
+because both already read from the merged feed rather than owning any chat state.** The hook returns
+`ChatMessage[]` — `feed.ts`'s existing type — **specifically so the substitution is a one-line change.**
+
+The `<ChatBox>` component exists for **exactly one place the ticker does not reach: the staging room in
+`Lobby.tsx`, which renders before the dashboard (and therefore before `TopTicker`) exists.** It points at the SAME
+collection, **so the transcript is continuous — what players said while waiting is still there once the board
+loads, rather than resetting at launch.**
+
+### ChatBox.tsx #1 — Chat is off-chain and carries no authority
+**Nothing here may be read as game state. A message saying "I pass" is a social utterance; only `PassTurn` on the
+contract passes a turn.** Firestore is in Test Mode, **so any client can write any message claiming to be from any
+address.** `firestore.rules` tightens that (author must match, messages immutable and append-only), **but even
+fully locked down, chat is testimony, never evidence. No code path anywhere in this app parses a chat message.**
+
+### ChatBox.tsx #2 — Why ordering uses a client timestamp, not `serverTimestamp`
+**`serverTimestamp()` resolves to `null` in the local snapshot** — the SDK applies your write optimistically before
+the server assigns a time (`snapshot.metadata.hasPendingWrites` is `true` during that window) — **and Firestore
+sorts `null` as the smallest possible value.** With `orderBy("createdAt", "desc"), limit(N)`:
+
+1. **A message you just sent sorts LAST in the descending order**, i.e. at the OLDEST end of the reversed list —
+   **your own message jumps to the top of the history, then snaps to the bottom when the server timestamp lands.**
+2. **Worse: with N or more confirmed messages already present, your pending message is CUT BY THE LIMIT entirely.**
+   You type, press send, **and your message simply does not appear until the round-trip completes. On a slow
+   connection that reads as a broken chat box.**
+
+Both are fixed by ordering on **`clientCreatedAtMs`, a plain number written at the same instant, which is therefore
+never null and never reorders.**
+
+**The cost is that ordering now trusts the sender's clock.** `firestore.rules` bounds it: **a write whose
+`clientCreatedAtMs` is more than a few minutes from the server's own `request.time` is rejected, so a broken or
+malicious clock cannot pin a message to the top of the room's history permanently.** `createdAt` is still written
+and is still the tamper-resistant record — **it is what gets DISPLAYED whenever it has resolved; `clientCreatedAtMs`
+only ever decides sort position.**
+
+### ChatBox.tsx — `useFirestoreChat` parameters
+- **`roomId`** is the FIRESTORE room id (`RoomDoc.id`), **not the on-chain `chainGameId`. Chat is an off-chain
+  concern keyed to the off-chain room, which is what lets a staging room have a transcript before it has any
+  on-chain identity at all.** `null` subscribes to nothing.
+- **`address`** stamps outgoing messages; `null` disables **sending but not reading.**
+- **`displayName` is denormalised onto each message on purpose: a player who later renames themselves should not
+  retroactively rewrite the byline on things they already said.**
+
+### ChatBox.tsx #644 — The sandbox had no chat, twice over
+**REPORTED:** the Send button does not send; the chat log records "No activity yet".
+
+**Two independent gates, either of which alone was enough:**
+
+- **THE ROOM WAS `null`.** `App.tsx` passed `sandbox ? null : roomId`, on `#24`'s reasoning that subscribing would
+  CREATE a Firestore document "from what is supposed to be a local, chain-free scratchpad". **True when written and
+  false since `#578`: the sandbox is now the multiplayer mode, it already has a real room (`sandboxRoomCode`) and
+  already writes an action log to it. There is no junk document to avoid — the room exists.**
+- **THERE IS NO WALLET.** `sendMessage` refuses when `address` is null, **which in a sandbox it always is. So even
+  a correctly-roomed sandbox chat would have answered "Connect a wallet before sending a message" — to a mode whose
+  entire premise is playing without one.**
+
+**AND A THIRD CASE THE FIX HAS TO COVER:** a sandbox with **no Firebase config at all**, which is a supported way
+to run this app (`config/firebase.ts #1`). **There is no transport there and there never will be, and a Send button
+that silently does nothing is the worst of the three outcomes.** So the hook **falls back to keeping messages in
+memory** — exactly what chat was before `#22` moved it to Firestore, **and honest for a session that is local by
+construction.**
+
+**THE ERROR STATE IS NOT THE FALLBACK.** A configured Firestore that REFUSES a write **still reports the failure;
+it does not quietly divert to local state and leave a player believing the table saw their message. Local is for
+"there is no transport", never for "the transport said no".**
+
+### ChatBox.tsx — Inline styles
+Plain inline styles, **matching this codebase's established escape hatch** (`TopTicker`/`InlineQuickChat`), and the
+same `#0F172A`/`#1E293B` recessed-surface palette **so the staging room reads as part of the same application as
+the dashboard it hands off to.**
+
+---
+
+## components/InlineQuickChat.tsx — the one composer
+
+Rendered directly below `TopTicker`'s ticker row (collapsed) or its expanded history body, **so it always stays
+anchored at the bottom of that same accordion module.**
+
+1. **Shares one draft with the accordion's own composer.** `draft`/`onDraftChange`/`onSend` are the same props
+   `App.tsx` already threads. **There is now only ONE composer in the whole app** — `FeedOverlay.tsx`'s separate
+   expanded composer was removed with the rest of that modal (`App.tsx #20`) — **so this is simply the single
+   source of truth for `chatDraft`.**
+2. **Presentational only**, no state of its own — the "App.tsx owns state, child components render it" split
+   `TopTicker #1` established.
+3. **Always mounted, independent of the accordion's expand/collapse state.** It sits directly below `TopTicker` in
+   the render tree, **so expanding/collapsing the history above it never unmounts or re-mounts this strip and
+   nothing here is ever lost or re-focused.**
+4. **Filter pills.** `filter`/`onFilterChange` drive the same `feedFilter` state `App.tsx` threads into both
+   `TopTicker`'s `items` and `latestItem`, **which is why clicking a pill instantly filters both the single-line
+   preview and the expanded history with no extra plumbing.**
+5. **Streamlined layout (#21).** This is now the ONLY control surface in the ticker module —
+   `[ chat input ] [ Send ] | [ ALL ] [ CHAT ] [ LOG ]`. A thin vertical divider between Send and the pill group is
+   the only addition; **the composer and pills are unchanged from the prior pass.**
+
+---
+
+## components/SandboxRoomBar.tsx — a bar, not a gate
+
+### #521 — Why not a modal
+**The obvious shape for "Host Game / Join Game" is a modal that blocks the board until one is chosen. That would be
+wrong here, and the reason is what the sandbox is FOR.** Offline Sandbox Mode is **the one place this app runs end
+to end with no wallet, no chain and no second player — it is how the rail map, the tile picker and the whole
+Operating Round get exercised at all.** A blocking modal **would put a multiplayer decision in front of the
+single-player mode's front door, and every solo session would begin by dismissing it.**
+
+So it is a strip above the board that **offers the two actions without demanding either.**
+
+### #521a — What the strip says when it cannot work
+Firestore is optional by construction (`config/firebase.ts #1`: **losing the rail map because nobody configured a
+chat backend is an absurd failure mode**), so an unconfigured build reaches this component. **The honest thing is
+to say so once rather than to offer two buttons that fail on click.**
+
+**Controls are HIDDEN rather than disabled in that state. A disabled control invites the player to work out how to
+enable it; this is a deployment fact they cannot act on from inside the game.**
+
+---
+
+## components/SandboxWaitingRoom.tsx — the anteroom
+
+### #529 — The game does not exist yet
+This screen **replaces the board entirely rather than sitting over it.** Before the setup action lands **there IS
+no game: the player count is not decided, so starting cash and the certificate limit are not decided either — and
+those are what the ledger, the stock cards and the certificate counter all render from.**
+
+Showing the board underneath **would mean showing a game dealt for the fixture's roster, about to be replaced by
+one dealt for the real one. Every number on it would be wrong, and wrong in the specific way that looks right: a
+plausible board, correctly rendered, describing a game nobody is playing.**
+
+The room shows **the numbers it WOULD be dealt, live as people arrive** — **they are the whole consequence of the
+player count, and a lobby that hides them makes the count feel cosmetic. A player joining a four-hander should be
+able to see their $600 before they commit to it.** `null` off the printed table.
+
+### #529a — Ready is a claim, Start is an act
+Everyone gets "Ready to play"; **only the host gets "Start game", enabled only when the whole room is ready.**
+
+**The start action is the one write that DEALS THE GAME** — it fixes the player count, starting cash and turn order
+for everybody. **If any client could send it, two of them could send it twice, and the log would contain two setups
+with different shuffles. Every client would replay both and the second would silently redeal a game already in
+progress.**
+
+**One host, one button, one setup entry.** `canStart` additionally requires enough players to deal a legal 1830
+game, **because "everyone is ready" is trivially true of a room containing one person.**
+
+### #569a — Pick a colour, or do not
+**Optional by construction.** A seat that never touches this **gets the palette by index and is never colourless,
+so the control is a preference rather than a step** — which is what "some people have favorite colors and would
+want to set it, others may not care" asks for.
+
+**TAKEN COLOURS ARE DISABLED rather than hidden. A greyed swatch with the holder's name in its tooltip says WHY it
+cannot be chosen; removing it would make the palette a different size for every player and look like a bug.**
+
+---
+
+## utils/activeGame.ts — which board the player is looking at
+
+### activeGame.ts #0 — Why the vocabulary is its own file
+`BoardMode` is **a type three separate layers agree on — the router that picks a board, the shell that renders one,
+and the stored pointer that survives a reload — and `AppShell`'s own props interface depends on it. A vocabulary
+that a component's props depend on should not live inside that component's file.** `readActiveGame` comes with it
+**because it is the only reader of the storage key and the only place that validates the stored shape, so the key,
+the type and the parser are one unit.**
+
+### activeGame.ts #24 — The three ways to be looking at a board
+
+| Mode | Meaning |
+|---|---|
+| `play` | A real on-chain game. `gameId` is the contract's, every control is live, every action signs. |
+| `spectate` | A real on-chain game someone else is playing. Live data, **no dispatch** (`#23`). |
+| `sandbox` | **NO CHAIN AT ALL.** Board, tile catalog and picker run off local mock state. |
+
+**Sandbox exists because the lobby was a TRAP.** Launching needs a valid contract address, spectating needs a game
+someone already launched, **and with mock addresses and a fresh Firebase neither is possible — so there was no
+route from the lobby to `HexGridRenderer` at all. A UI you cannot open is a UI you cannot develop.**
+
+**WHY A MODE RATHER THAN A MAGIC `gameId`.** The obvious shape — `gameId = "offline-sandbox"` — **was tried and
+rejected: `gameId` is typed `number` because it is threaded into roughly twenty `ExecuteMsg` payloads as `game_id`,
+which the contract declares as `u64`. Widening it to `number | string` would push a `string | number` into every
+one of those messages and delete the compiler's ability to tell a real game id from a placeholder** — the exact
+class of mistake `config.ts #3` exists to catch. **So the sandbox's identity lives in `mode`, where it is a UI
+concern, and `gameId` stays a number that always means "a room the contract knows about".**
+
+**Sandbox is NOT spectator mode.** Spectating disables the tile picker (`#23`); **sandbox is specifically FOR the
+tile picker. `spectator` gates dispatch, `sandbox` gates whether there is a chain to dispatch to.**
+
+`SANDBOX_GAME_ID` is **`0` because the contract's `NEXT_GAME_ID` counter starts at 1, so this collides with no real
+room.** It **never reaches the chain** — sandbox forces `HexGridRenderer` down its offline path and every dispatch
+site is gated before a message is built.
+
+### activeGame.ts — the parser FAILS CLOSED
+Only the three known modes are accepted, **and anything else — including an entry written before this field existed
+— degrades to `spectate`, the least privileged of the three.** The safe reading of "I do not know what this viewer
+is" is "assume they may not act"; **the cost is one trip back through the lobby, versus handing a non-player a
+board full of live controls.**
+
+### activeGame.ts — `GameRouter` is the whole router
+With no active game it renders `Lobby`; with one, `AppShell`. **There is no URL routing here on purpose, since this
+app has exactly two screens and adding `react-router` for a single boolean would be a dependency and a build-config
+change (`config-overrides.js`) bought for nothing.** Rendered INSIDE both providers, **because `Lobby` calls
+`useWallet()` to sign the launch transaction** — the same nesting requirement `GameSessionContext #2` records.
+
+### activeGame.ts #551 — A refresh must not cost you the room
+**REPORTED:** refreshing the page in Sandbox multiplayer drops you into solo Sandbox, with no clear way back.
+
+`activeGame` was already persisted, **which is why the refresh landed on the Sandbox board at all rather than in
+the Lobby — but the ROOM CODE was ordinary React state and went with the reload. So the shell came back in exactly
+the shape that says "solo sandbox", and the fixture's board came with it. The game was still there, in Firestore,
+addressed by a code that no longer existed anywhere in the browser.**
+
+**IT IS RESUMABLE BECAUSE THE LOG IS THE GAME.** Nothing about the position needs saving: **the room's action log
+is the complete history, replayed from index 0 on every join (`#522`), and a rejoin is therefore identical to a
+first join.** This stores **one short string, not a snapshot — a serialised board would be a second source of truth
+about the position, and the one that goes stale silently.**
+
+**`sessionStorage`, MATCHING `localPlayerId`. That pairing is the point and the two must not diverge:** the id is
+what the room knows this browser as, and both are scoped to the tab. **In `localStorage` the code would outlive the
+identity, so a new tab weeks later would rejoin a finished game as a stranger. Closing the tab ends the session —
+for both — which is the honest boundary.**
+
+---
+
+## utils/logRevert.ts — which actions still count
+
+### logRevert.ts #591 (cont.) — The log is append-only, the game is not
+`RevertTo { index }` says "everything from `index` onward did not happen". This turns the raw log into the list a
+client should actually apply, and it is **deliberately the ONLY place that decision is made — the drain, the undo
+controls and the tests all ask this one function, so no two of them can disagree about what has been undone.**
+
+**PURE, so it can be tested exhaustively. The hard part of undo in an event-sourced system is not the state change,
+it is agreeing on the history; the state change is then just a replay.**
+
+A corrupt `RevertTo` payload **reads as an ordinary action rather than throwing: a log entry nobody can parse must
+not be able to erase the game, which is the worst thing an unreadable revert could be allowed to mean.**
+
+### logRevert.ts #591a — The last revert wins, so it is read first
+The first version **walked FORWARD and popped a kept-list, and its comment claimed that undoing an undo "falls out
+of the rule rather than needing a special case". A test written against that claim failed immediately**, and the
+claim was wrong **for a reason worth keeping: a revert that has been popped is no longer in the kept-list, so a
+LATER revert reaching back over it has nothing to cancel. Redo was silently impossible, and the comment asserted
+the opposite.**
+
+**SO IT READS BACKWARD.** The last revert is authoritative — **nothing can cancel it, because nothing follows it.**
+It kills every entry in `[target, its own index)`, **INCLUDING earlier reverts; and an earlier revert that has been
+killed no longer takes anything back, which is precisely "undo the undo". One pass, no redo stack, and the property
+is real this time rather than asserted.**
+
+`actions` **MUST already be sorted by index**, which `subscribeSandboxLog` guarantees. **Sorting here would hide a
+caller that had stopped guaranteeing it.**
+
+### logRevert.ts #592 — Who may undo what
+**INSTRUCTED:** "while individual players should be able to undo their own turns, it may be useful for the Host to
+be able to Undo through all players' turns if necessary" — with the abuse case named and dismissed: **"this could
+be abused if a Host is petulant, but in that case players would presumably stop playing".**
+
+**That is the right call and worth recording as a principle, because the alternative is a voting mechanism nobody
+wants in a two-player test game. The protection against a bad host is social, and the log makes it legible: every
+revert is a permanent entry naming who asked for it, so a host who rewinds other people's turns leaves a record of
+having done so.**
+
+**TWO REACHES:**
+
+- **ANY PLAYER** may undo back to just after their own last action — in practice "undo my accidental buy", the
+  reported case. **They may not reach past it, because the actions after it are other people's and undoing those is
+  not theirs to do.**
+- **THE HOST** may undo to any point, **which is what makes "back to the start of the round" possible when the
+  mistake was three players ago.** The host's reach takes a `boundaryIndex` — **the caller knows which action opened
+  the current round, because it knows what a round boundary looks like and this module deliberately does not.**
+
+`describe` turns an action into the sentence the log already used for it, **so the undo button quotes the move
+rather than describing it a second way.**

@@ -1,55 +1,26 @@
-// frontend/src/utils/tokenMigration.ts
-//
 // Where a station token ends up when the tile under it changes.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE TOKEN MOVES, AND NOBODY WAS TOLD
-// ===================================================================
+// Design note #0: the report has two halves with different causes. THE
+// VISIBILITY HALF is an omission -- the radial confirm ring ghosts the tile and
+// says nothing about the pieces already standing on the hex. THE CONTROL HALF
+// was blocked by a shape that no longer exists: `sandboxState.ts` noted that
+// `station_token_hexes` had no slot index, and Audit G-12 added `station_tokens`
+// as `(q, r, city_index)`. The destination IS expressible now.
 //
-// REPORTED: upgrading a single-city hex (E11, ERIE's home) to a tile with
-// several separate cities places the station token arbitrarily, and the
-// player has no control or visibility over which city it lands on.
+// Design note #1: PRESERVE THE INDEX, AND SAY SO. `LayTile` carries a tile and
+// an orientation and nothing else, so a UI letting the president pick would
+// collect an answer it cannot send and the contract would apply its own rule
+// regardless -- the worst of the three outcomes, because the player would have
+// been asked. So the mapping is DECLARED: a token in city `i` stays in city `i`,
+// which is the ordinary 18xx upgrade rule and what `tileCityAnchors` already
+// draws against.
 //
-// Both halves of that are true and they have different causes.
+// WHERE THE MAPPING IS GENUINELY AMBIGUOUS -- a one-city hex becoming a two-city
+// tile -- this reports it as ambiguous rather than pretending index 0 was
+// chosen. Closing that needs `LayTile` to accept a token destination, which is a
+// contract change.
 //
-// THE VISIBILITY HALF is a straightforward omission. The radial confirm
-// ring shows a ghost of the tile about to be laid, and says nothing about
-// the pieces already standing on the hex. A president upgrading their own
-// home city is moving their own token and finding out where it went by
-// looking at the board afterwards.
-//
-// THE CONTROL HALF is more interesting, and the earlier note about it in
-// `sandboxState.ts` was written when it was still true: "`station_token_
-// hexes` is a list of `(q, r)` pairs with no slot index, so the shape
-// cannot express the answer even if the UI asked". That stopped being true
-// at Audit G-12, which added `station_tokens` as `(q, r, city_index)`. The
-// destination IS expressible now.
-//
-// ===================================================================
-//  DESIGN NOTE 1: PRESERVE THE INDEX, AND SAY SO
-// ===================================================================
-//
-// What this does NOT do is invent a choice the contract will not honour.
-// `LayTile` carries a tile and an orientation; it does not carry "and put
-// my token in city 1". So a UI that let the president pick would be
-// collecting an answer it cannot send, and the contract would apply its own
-// rule regardless -- which is the worst outcome of the three, because the
-// player would have been asked.
-//
-// The mapping is therefore DECLARED rather than chosen: a token in city `i`
-// stays in city `i`. That is the ordinary 18xx upgrade rule (an OO tile's
-// two stations are the two stations of the hex it replaced, in order), it
-// is deterministic, and it is what `tileCityAnchors` already draws against
-// -- so the preview shows the marker the token will actually occupy rather
-// than a promise about one.
-//
-// WHERE THE MAPPING IS GENUINELY AMBIGUOUS -- a one-city hex becoming a
-// two-city tile, where index 0 is a real choice a president would want to
-// make -- this reports it as ambiguous rather than pretending index 0 was
-// selected. The ring says which city the token will take AND that the
-// alternative exists, which is the honest state of a UI whose message
-// format cannot yet carry the answer. Closing it needs `LayTile` to accept
-// a token destination, which is a contract change.
+// See docs/ai_architecture/hex_tile_math.md, tokenMigration.ts #0 / #1.
 
 import { archetypeForHex } from "../components/hexGeometry";
 import { tileCitySlotCounts } from "../components/TileGraphics";
@@ -93,13 +64,11 @@ function currentCityCount(mapGrid: MapGridResponse, q: number, r: number): numbe
   }
 }
 
-/**
- * Where every token on `(q, r)` lands if `tileId` is laid there.
+/** Where every token on `(q, r)` lands if `tileId` is laid there.
  *
- * `null` when nothing is standing on the hex, which is the common case and
- * the one where the ring should say nothing at all -- a caption about token
- * migration on an empty hex is noise on every ordinary tile lay.
- */
+ *  `null` when nothing is standing on the hex, which is the common case and the
+ *  one where the ring should say nothing at all -- a caption about token
+ *  migration on an empty hex is noise on every ordinary tile lay. */
 export function previewTokenMigration(
   mapGrid: MapGridResponse,
   q: number,
@@ -147,12 +116,10 @@ export function previewTokenMigration(
   };
 }
 
-/** One line for the radial confirm ring, or `null` when there is nothing
- *  worth saying.
- *
- *  Phrased as a statement of where the piece goes, because that is the
- *  question a president has when they see their own token on the hex they
- *  are about to rebuild. */
+/** One line for the radial confirm ring, or `null` when there is nothing worth
+ *  saying. Phrased as a statement of where the piece goes, because that is the
+ *  question a president has when they see their own token on the hex they are
+ *  about to rebuild. */
 export function describeTokenMigration(preview: TokenMigrationPreview | null): string | null {
   if (!preview) return null;
   const { migrations, ambiguous, toCityCount } = preview;

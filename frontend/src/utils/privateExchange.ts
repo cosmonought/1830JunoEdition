@@ -1,63 +1,22 @@
-// frontend/src/utils/privateExchange.ts
+// The private that turns into a share, and the one that arrives as one.
 //
-// THE PRIVATE THAT TURNS INTO A SHARE, and the one that arrives as one.
+// Design note #573: `handleUsePrivateAbility`'s fallback branch marked the
+// ability spent and wrote a log line, and that was the whole implementation --
+// the same failure design note #444 records for the D&H's Place Station button.
+// The two hex-targeting powers were fixed then; the two EXCHANGES were left on
+// the fallback, surviving in the two places hardest to notice.
 //
-// ==================================================================
-//  DESIGN NOTE 573: A BUTTON THAT SAYS "USED" HAS TO HAVE DONE SOMETHING
-// ==================================================================
+// Design note #573a: EXCHANGED IS NOT SPENT. The D&H's powers are spent -- the
+// company stays and a greyed row is honest. An exchange consumes the COMPANY, so
+// `closed` is set and it leaves the powers panel, the ledger and the certificate
+// count in one write.
 //
-// REPORTED: clicking "Exchange for PRR" greyed the button to "Used" and did
-// not grant the share. Same for the Mohawk & Hudson's NYC exchange.
+// Design note #573b: A REFUSAL IS NOT A USE. The power is not spent by
+// ATTEMPTING it -- a player at 60% now may be under it next round, and burning
+// the ability on a refused click destroys a real asset. Legality is decided
+// BEFORE anything is written and nothing is marked on a refusal.
 //
-// Neither ever could. `handleUsePrivateAbility`'s fallback branch added the
-// action to `usedPrivateAbilities` and wrote a log line, and that was the
-// whole implementation -- exactly the failure design note #444 records for
-// the D&H's Place Station button: "this handler marked the ability spent and
-// wrote a log line. There was no dispatch, no placement and no navigation --
-// the button reported an action it had not performed."
-//
-// The two hex-targeting powers were fixed then. The two EXCHANGES were left
-// on the fallback, so the same bug survived in the two places that were
-// hardest to notice: a share arriving silently is easy to miss, and the
-// private staying in the panel looks like it is merely spent rather than
-// like nothing happened.
-//
-// ==================================================================
-//  DESIGN NOTE 573a: EXCHANGED IS NOT SPENT
-// ==================================================================
-//
-// "Used" was also the wrong VOCABULARY, and the report says so precisely:
-// "since the private company is EXCHANGED, it should be removed from the
-// player's Private Powers (not simply 'Used') as well as their
-// certificates/inventory."
-//
-// The D&H's two powers are spent -- the company stays, the ability is gone,
-// and a greyed row is the honest rendering. An exchange consumes the COMPANY:
-// it is handed back and becomes a share certificate. A closed private that
-// goes on sitting in the panel greyed out is claiming the player still owns
-// something they traded away, and it goes on counting toward their
-// certificate total and their assets.
-//
-// So `closed` is set, which every reader already honours -- the panel filters
-// on it, the ledger drops it, and `playerPrivateCompanies` stops returning
-// it. One field, and the company leaves every surface at once.
-//
-// ==================================================================
-//  DESIGN NOTE 573b: A REFUSAL IS NOT A USE
-// ==================================================================
-//
-// REPORTED, as a hypothesis for why nothing happened: "this might be because
-// the player is already at the ownership limit (60%), but in that case the
-// Exchange button should return an error that they are at the limit and the
-// power should be maintained for a subsequent round."
-//
-// That is the right shape whatever the cause, and it is the half a
-// mark-it-used implementation can never get right: the power is not spent by
-// ATTEMPTING it. A player at 60% now may be under it next round, and burning
-// the ability on a refused click destroys a real asset.
-//
-// So legality is decided BEFORE anything is written, the reason comes back
-// as a sentence the panel can show, and nothing is marked on a refusal.
+// See docs/ai_architecture/contract_economy.md, privateExchange.ts #573.
 
 import type { GameStateResponse } from "./gameState";
 
@@ -66,40 +25,18 @@ export const PLAYER_HOLDING_CAP_PERCENT = 60;
 /** One certificate. */
 export const EXCHANGE_SHARE_PERCENT = 10;
 
-/* ==================================================================
- *  DESIGN NOTE 576: THE CAMDEN & AMBOY WAS NEVER AN EXCHANGE
- * ==================================================================
- *
- * REPORTED: "Private Company 5 is supposed to come with a 10% share of a
- * corporation; however, the winner of that auction does not receive
- * anything."
- *
- * Correct, and this table was mine and wrong. The previous pass built the
- * exchange machinery for BOTH the Mohawk & Hudson and the Camden & Amboy,
- * on the strength of `PrivatePowerPanel`'s design note #350 -- "the owner
- * may exchange this private for a 10% share of the PRR. The exchange closes
- * this private permanently."
- *
- * `privateCatalog.ts` said the opposite, in a line THIS SAME AUTHOR had
- * rewritten two passes earlier (design note #548): "Whoever buys it out of
- * the auction is handed a 10% PRR share at once and at no further cost.
- * Nothing is triggered and the company stays open." That is 1830's actual
- * rule, and design note #360 had recorded it explicitly as one of the four
- * things an older paraphrase got wrong: "C&A was described as an ability
- * the owner triggers. It is not: the share arrives on PURCHASE and the
- * private stays open."
- *
- * So the fact existed in two places, the two disagreed, and the build
- * followed the wrong one -- the TD-1 failure this codebase keeps recording,
- * committed while writing a note about it. Two consequences worth naming:
- * the share never arrived (the panel's button was in a round the auction
- * had already left), and had it ever fired it would have CLOSED a company
- * 1830 keeps open and paying $25 a round.
- *
- * ONE ENTRY NOW. The M&H genuinely is an exchange -- a player trades the
- * company away for the certificate, and it closes. The C&A is a purchase
- * bonus and is granted where the auction resolves, not from a button.
- */
+/* Design note #576: the Camden & Amboy was never an exchange. The previous pass
+   built exchange machinery for both it and the Mohawk & Hudson on the strength
+   of `PrivatePowerPanel`'s design note #350, while `privateCatalog.ts` said the
+   opposite in a line this same author had rewritten two passes earlier (#548):
+   the C&A's 10% PRR share "arrives on PURCHASE and the private stays open"
+   (#360). The fact existed in two places, the two disagreed, and the build
+   followed the wrong one.
+
+   Two consequences: the share never arrived, and had the button ever fired it
+   would have CLOSED a company 1830 keeps open and paying $25 a round. ONE ENTRY
+   NOW -- the M&H genuinely is an exchange; the C&A is a purchase bonus granted
+   where the auction resolves. */
 export const PRIVATE_EXCHANGES: Readonly<
   Record<number, { ticker: string; corporationName: string }>
 > = {
@@ -134,10 +71,10 @@ export type ExchangeOutcome = ExchangeRefusal | ExchangeGrant;
 
 /** Can this player exchange this private right now, and for what?
  *
- *  PURE, and separate from the state change on purpose: the panel wants to
- *  show the reason on a disabled button BEFORE the click, and the dispatch
- *  wants the same answer at the moment it fires. One function asked twice
- *  cannot drift the way a disabled-check and a guard would. */
+ *  PURE, and separate from the state change on purpose: the panel wants the
+ *  reason on a disabled button BEFORE the click, and the dispatch wants the same
+ *  answer at the moment it fires. One function asked twice cannot drift the way a
+ *  disabled-check and a guard would. */
 export function resolvePrivateExchange(
   state: GameStateResponse | null,
   privateId: number,
@@ -242,13 +179,12 @@ export function applyPrivateExchange(
             : company.bank_pool_percentage,
       };
     }),
-    /* Design note #573a: CLOSED, and the owner released with it. Every
-       reader already honours `closed`, so the company leaves the powers
-       panel, the ledger and the certificate count in one write. */
-    /* Design note #576: `keepOpen` is the Camden & Amboy, whose share is a
-       purchase bonus rather than a trade -- closing it would cost its owner
-       $25 an Operating Round for the rest of the game. Everything else is
-       the Mohawk & Hudson's exchange, which does consume the company. */
+    /* Design note #573a: CLOSED, and the owner released with it -- every reader
+       already honours `closed`, so the company leaves the powers panel, the ledger
+       and the certificate count in one write.
+       Design note #576: `keepOpen` is the Camden & Amboy, whose share is a purchase
+       bonus rather than a trade -- closing it would cost its owner $25 an Operating
+       Round for the rest of the game. */
     private_companies: grant.keepOpen
       ? state.private_companies
       : state.private_companies.map((entry) =>

@@ -1,44 +1,23 @@
-// frontend/src/styles/animations.ts
-//
-// THE KEYFRAME STRINGS, moved out of `App.tsx` verbatim.
+// The keyframe strings, moved out of `App.tsx` verbatim.
 //
 // These are the `<style>`-tag escape hatch design note #46 describes: inline
-// `React.CSSProperties` cannot express `:hover` or `@keyframes`, so the few
-// effects that genuinely need real CSS are carried as template strings and
-// injected next to the element that uses them. They are grouped here because
-// they are the same KIND of thing -- raw CSS text, not a style object -- and
-// keeping them beside `appStyles.ts` means someone looking for "how is this
-// styled" finds both halves in one directory.
-//
-// Each string keeps the design note that justifies it. `NETA_CREDIT_CSS` and
-// `MAIN_TAB_HOVER_CSS` travel with their own components instead, since each
-// has exactly one consumer and would only be indirection here.
+// `React.CSSProperties` cannot express `:hover` or `@keyframes`. Grouped because
+// they are the same KIND of thing -- raw CSS text, not style objects.
+// `NETA_CREDIT_CSS` and `MAIN_TAB_HOVER_CSS` travel with their own components,
+// since each has exactly one consumer.
 
 import { TURN_PULSE_INK_RGB } from "./palette";
 
-/* ------------------------------------------------------------------ */
-/* Active Player Turn Notifications -- CSS pulse keyframes, see design    */
-/* note #18/item 4. `document.title` flashing (the other half of this    */
-/* notification) lives in utils/turnAlert.ts instead -- no DOM footprint */
-/* to inject here. Same `<style>`-tag keyframes escape hatch Chatbox.tsx */
-/* already established (that file's own design note #2) for this        */
-/* codebase's plain-inline-style convention, which cannot express a      */
-/* `@keyframes` rule at all.                                             */
-/* ------------------------------------------------------------------ */
+/* Active Player Turn Notifications -- the CSS pulse. The other half of this
+   notification, `document.title` flashing, lives in `utils/turnAlert.ts`: it has
+   no DOM footprint to inject here. */
 
-/* Design note #35: WHITE, not red.
- *
- * This pulse used to be red, and so did the mini-auction ring in
- * `WaterfallAuctionDashboard.tsx`. Two red pulses on screen simultaneously
- * read as one effect, which is worst exactly when both are firing: your
- * turn, during a contested mini-auction.
- *
- * The turn indicator is the one that moved, because it is the one drawn
- * over EVERYTHING. It sits on the dark chrome, the linen-white cards and
- * the map canvas in turn, and white/crisp silver is the only ink that keeps
- * a consistent weight across all three -- red read as urgent on the dark
- * shell and as a smudge over the cards. Red is now exclusively the
- * auction's "contested" colour. */
+/* Design note #35: WHITE, not red. Two red pulses on screen simultaneously read
+   as one effect, which is worst exactly when both fire -- your turn, during a
+   contested mini-auction. The turn indicator moved because it is the one drawn
+   over EVERYTHING (dark chrome, linen cards, map canvas), and white/silver is
+   the only ink that keeps a consistent weight across all three. Red is now
+   exclusively the auction's "contested" colour. */
 export const TURN_PULSE_KEYFRAMES_CSS = `
 @keyframes app-turn-pulse-glow {
   0%, 100% {
@@ -53,45 +32,13 @@ export const TURN_PULSE_KEYFRAMES_CSS = `
 `;
 
 /* The phase-shift badge's CRITICAL step -- one purchase from the shift.
- *
- * Opacity rather than the box-shadow glow the other two pulses use. This
- * badge sits inline in a crowded action bar, where a spreading glow would
- * bleed over the controls either side of it; the turn overlay and the
- * auction card both own their whitespace and can afford one.
- *
- * The pulse bottoms out at 0.55, not 0. A warning that blinks fully out is
- * unreadable for half its cycle, and this one carries text the player needs
- * to actually read.
- *
- * Reduced motion drops the animation and keeps the static crimson, exactly
- * as `WaterfallAuctionDashboard.tsx` does: the player still sees WHICH step
- * of the countdown they are on, just without the movement. Escalation must
- * survive the animation being switched off, which is the other reason the
- * two steps differ in colour and not merely in whether they pulse. */
-/** `GamePhase.tint` -> the tile tier that phase has unlocked.
- *
- *  `tint` is already the exact three-value era `gamePhase.ts`'s
- *  `TIER_PRESENTATION` assigns (Phase 2 yellow; Phases 3-4 green; Phases
- *  5/6/D brown), so this is a case change rather than a second opinion about
- *  which era it is. Written as a table anyway rather than a string cast, so
- *  a fourth `PhaseTint` would fail to compile here instead of silently
- *  producing a `TileColorTier` that does not exist. */
-/* The phase-shift badge's CRITICAL step -- one purchase from the shift.
- *
- * Opacity rather than the box-shadow glow the other two pulses use. This
- * badge sits inline in a crowded action bar, where a spreading glow would
- * bleed over the controls either side of it; the turn overlay and the
- * auction card both own their whitespace and can afford one.
- *
- * The pulse bottoms out at 0.55, not 0. A warning that blinks fully out is
- * unreadable for half its cycle, and this one carries text the player needs
- * to actually read.
- *
- * Reduced motion drops the animation and keeps the static crimson, exactly
- * as `WaterfallAuctionDashboard.tsx` does: the player still sees WHICH step
- * of the countdown they are on, just without the movement. Escalation must
- * survive the animation being switched off, which is the other reason the
- * two steps differ in colour and not merely in whether they pulse. */
+
+   Opacity rather than a box-shadow glow: this badge sits inline in a crowded
+   action bar, where a spreading glow would bleed over the controls either side.
+   The pulse bottoms out at 0.55, not 0 -- a warning that blinks fully out is
+   unreadable for half its cycle, and this one carries text. Reduced motion drops
+   the animation and keeps the static crimson, which is why the two countdown
+   steps differ in COLOUR and not merely in whether they pulse. */
 export const PHASE_SHIFT_PULSE_CSS = `
 @keyframes app-phase-shift-pulse {
   0%, 100% { opacity: 1; }
@@ -103,74 +50,30 @@ export const PHASE_SHIFT_PULSE_CSS = `
 `;
 
 
-/* ==================================================================
- *  DESIGN NOTE 601: THE MINI-AUCTION CHASER IS GONE
- * ==================================================================
- *
- * `ROSTER_CONTEST_CHASE_CSS` lived here and dressed the action bar's
- * roster pills, which turned out to be unreachable -- design note #601 in
- * `ContextualActionBar.tsx` has the why. Deleting the pills left this with
- * no consumer, so it goes with them rather than sitting here looking like
- * a shared animation.
- *
- * WHAT IT MEANT IS WORTH KEEPING FINDABLE. Design note #545 chose the
- * multicolour chaser for a running mini-auction because green is reserved
- * for "on turn in the ordinary rotation", and a mini-auction SUSPENDS that
- * rotation -- so painting a contestant green would assert the one thing
- * that is not true. The chaser itself is not lost: it still rings the
- * contested card in `WaterfallAuctionDashboard.tsx` (design notes
- * #320/#344), which is where it came from and where it is still read.
- *
- * SO THE BAR NO LONGER MARKS A CONTEST. `SeatOrderTrail` draws the seat
- * queue and says nothing about mini-auction membership. If that turns out
- * to matter, this note and #545 are the two to read before reinventing
- * it. */
+/* Design note #601: `ROSTER_CONTEST_CHASE_CSS` is GONE with the action bar's
+   roster pills, which were unreachable (`ContextualActionBar.tsx #601`).
 
-/* ==================================================================
- *  DESIGN NOTE 597: A TRANSITION IS NOTICED; A STATE IS NOT
- * ==================================================================
- *
- * REPORTED: the acting seat's colour "is still too subtle for most people
- * since it currently sits as a very slim border on the left edge... If it
- * were a little more dynamic somehow, players would notice 'for sure' when
- * their turn has come back around."
- *
- * TWO SEPARATE PROBLEMS, and the report names both without separating them.
- *
- *   THE BAND IS TOO SMALL. A 6px vertical sliver on the left edge is the
- *   least visible place a colour can be put on a wide panel -- it is in
- *   peripheral vision only if you happen to be looking at the left margin.
- *   It becomes a full-width bar along the top edge, which is the widest
- *   dimension the panel has.
- *
- *   THE CUE NEVER CHANGES. This is the deeper half. Design note #570 made
- *   the colour a STATE -- "this bar belongs to whoever is up" -- and a state,
- *   however bold, stops being seen within a few minutes. Habituation is not
- *   a matter of contrast; it is a matter of nothing happening. The existing
- *   my-turn pulse has the same flaw for the same reason: it is a CONTINUOUS
- *   animation, so it is running when you look away and still running when
- *   you look back, and carries no arrival.
- *
- * SO THE SIGNAL IS THE CHANGE ITSELF. A one-shot sweep runs across the band
- * whenever the acting seat changes, and stops. Motion that starts is caught
- * peripherally in a way that motion which has always been running is not --
- * and because it ends, it costs nothing for the rest of the turn.
- *
- * TWO INTENSITIES, because "somebody's turn began" and "YOUR turn began" are
- * different news. Everyone gets the sweep; the seat holder gets a brighter,
- * longer one with a soft bloom under the bar. The stronger version is the
- * one the report is actually asking for.
- *
- * REPLAYED BY REMOUNTING, not by a timer. The band carries `key={acting
- * seat}`, so React replaces the element on every change and the browser
- * starts the animation fresh. A JS-driven restart would need a class toggle,
- * a reflow read and a cleanup, all to reproduce what a changed key does for
- * free.
- *
- * REDUCED MOTION keeps the band and drops the sweep, the same bargain every
- * other animation here makes: the colour still says whose turn it is, which
- * is the information. Only the arrival cue is lost, and an arrival cue that
- * cannot be switched off is an accessibility problem. */
+   What it MEANT is worth keeping findable: design note #545 chose a multicolour
+   chaser for a running mini-auction because green means "on turn in the ordinary
+   rotation", and a mini-auction SUSPENDS that rotation. The chaser still rings
+   the contested card in `WaterfallAuctionDashboard.tsx` (#320 / #344). The bar
+   no longer marks a contest at all. */
+
+/* Design note #597: a TRANSITION is noticed; a STATE is not.
+
+   Two problems in one report. The 6px left-edge sliver is the least visible
+   place a colour can go on a wide panel, so it becomes a full-width top bar. And
+   the cue never CHANGED -- design note #570 made the colour a state, and a
+   state, however bold, stops being seen within minutes; the continuous my-turn
+   pulse has the same flaw, since it is running before you look and after.
+
+   So the signal is the change itself: a one-shot sweep on every acting-seat
+   change, in two intensities (somebody's turn began vs. YOURS). Replayed by
+   REMOUNTING -- the band carries `key={acting seat}`, so a changed key restarts
+   the animation for free where a JS restart needs a class toggle, a reflow read
+   and a cleanup. Reduced motion keeps the band and drops the sweep.
+
+   See docs/ai_architecture/ui_shell_layout.md, animations.ts #597. */
 export const TURN_HANDOFF_SWEEP_CSS = `
 @keyframes app-turn-band-sweep {
   0%   { background-position: -140% 0; }

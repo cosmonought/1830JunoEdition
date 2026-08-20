@@ -1,48 +1,18 @@
-// frontend/src/panels/ReturnToTurnBar.tsx
+// Design note #427: a way back from the reference tabs.
 //
-// ==================================================================
-//  DESIGN NOTE 427: A WAY BACK FROM THE REFERENCE TABS
-// ==================================================================
+// The Ledger and the Rules carry no controls, so `ContextualActionBar` simply
+// vanished there -- and with it the only persistent thing on screen saying a
+// turn was in progress. A player checks the Ledger, gets absorbed, and has to
+// remember both that they were mid-turn and which tab they came from.
 //
-// REPORTED: add an action bar to the Game Ledger and Rules tabs containing
-// only a "Return to [relevant tab]" button, during a player's active turn.
+// NOT the real action bar: every control on it acts on the acting corporation
+// or seat, and skipping the Track step from inside the Rules tab dispatches a
+// real message while showing the player a rulebook. ONLY during the player's
+// turn, which is what stops this becoming a permanent banner that means nothing.
+// The destination is DERIVED from `surfaceTabFor`, the same lookup the round
+// transitions use.
 //
-// The Ledger and the Rules are the app's two REFERENCE surfaces: a player
-// opens them mid-turn to check a holding or look up a rule, and neither
-// carries a single control. Every other tab renders `ContextualActionBar`
-// at the top, so on these two the bar simply vanished -- and with it the
-// only persistent thing on screen that said a turn was in progress.
-//
-// The failure that produces is small and repeated: a player checks the
-// Ledger, gets absorbed in the numbers, and has to remember both that they
-// were mid-turn and which tab they came from. The tab bar can take them
-// back, but it does not tell them they need to go.
-//
-// ==================================================================
-//  WHY IT IS NOT `ContextualActionBar`
-// ==================================================================
-//
-// The obvious implementation is to render the real bar here too. It is the
-// wrong one, and the requirement is right to say "containing only" a return
-// button.
-//
-// Every control on that bar acts on the ACTING corporation or seat -- Pass
-// Turn, Skip, Undo, Buy Train. Those actions belong to the surface where
-// their consequences are visible: skipping the Track step from inside the
-// Rules tab dispatches a real message and shows the player a rulebook. So
-// the reference tabs get the one control that is honestly available on
-// them, which is the way out.
-//
-// ONLY DURING THE PLAYER'S TURN, per the requirement, and the restriction
-// is what stops this becoming chrome. A player browsing the rules between
-// turns is not being kept from anything and needs no prompt; a bar that
-// rendered always would be a permanent banner that means nothing, which is
-// how persistent UI stops being read at all.
-//
-// THE DESTINATION IS DERIVED, NOT NAMED. `surfaceTabFor` is the same lookup
-// the round transitions use, so "the relevant tab" is the round's own home
-// surface and cannot drift from where the game actually sends a player when
-// the round changes.
+// See docs/ai_architecture/ui_shell_layout.md, ReturnToTurnBar.tsx #427.
 
 import React from "react";
 

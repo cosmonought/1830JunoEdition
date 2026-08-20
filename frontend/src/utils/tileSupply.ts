@@ -1,37 +1,23 @@
-// frontend/src/utils/tileSupply.ts
+// How many copies of a tile are still in the tray.
 //
-// HOW MANY COPIES OF A TILE ARE STILL IN THE TRAY.
-//
-// ===================================================================
-//  DESIGN NOTE 627: DERIVED FROM THE BOARD, AND WHY THAT IS EXACT
-// ===================================================================
-//
-// The contract owns this figure: `state::REMAINING_TILES` is seeded per game
-// at each tile's printed quantity and decremented as tiles are laid. No
-// `QueryMsg` exposes it, so the frontend cannot read it back.
-//
-// IT CAN BE DERIVED WITHOUT GUESSING, because of a rule that makes the
-// arithmetic closed: a tile is either on the board or in the tray, and
-// nothing else can hold one. Upgrading does not consume the tile underneath
-// -- 1830 returns it to the tray -- so a yellow tile replaced by a green one
-// stops being on the map and becomes available again, which is exactly what
-// counting the CURRENT map says. There is no third place for a tile to be
-// and no history to replay:
+// Design note #627: the contract owns this figure (`state::REMAINING_TILES`) and
+// no `QueryMsg` exposes it. It can be derived without guessing because the
+// arithmetic is CLOSED: a tile is either on the board or in the tray, and
+// upgrading returns the tile underneath to the tray rather than consuming it.
 //
 //     remaining(id) = printed(id) - (tiles with that id currently on the map)
 //
-// THIS IS STILL A SECOND IMPLEMENTATION OF A FACT THE CONTRACT OWNS, and
-// this codebase has been bitten repeatedly by exactly that shape (design
-// notes #411, #431, #621). It is accepted here for two reasons that do not
-// apply to those: the derivation is total rather than incremental -- it reads
-// the whole board every time, so it cannot drift out of step the way a
-// counter can -- and it is READ-ONLY. Nothing dispatches on this number; the
-// contract still refuses an unavailable tile on its own. The worst a wrong
-// answer can do is mislabel a candidate, not lose a tile.
+// THIS IS STILL A SECOND IMPLEMENTATION OF A FACT THE CONTRACT OWNS, which has
+// bitten this codebase repeatedly (design notes #411, #431, #621). Accepted here
+// for two reasons that do not apply to those: the derivation is TOTAL rather
+// than incremental, so it cannot drift the way a counter can; and it is
+// READ-ONLY -- nothing dispatches on this number and the contract still refuses
+// an unavailable tile, so the worst a wrong answer does is mislabel a candidate.
 //
-// THE RIGHT EVENTUAL SHAPE IS A QUERY. `GetTileSupply` would make this a
-// read rather than a re-derivation, and this module would become its parser.
-// Until then the note above is the argument for why the interim is sound.
+// THE RIGHT EVENTUAL SHAPE IS A QUERY. `GetTileSupply` would make this a read
+// rather than a re-derivation, and this module would become its parser.
+//
+// See docs/ai_architecture/hex_tile_math.md, tileSupply.ts #627.
 
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import type { MapGridResponse } from "../components/hexContractTypes";

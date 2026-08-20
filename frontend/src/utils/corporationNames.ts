@@ -1,37 +1,19 @@
-// frontend/src/utils/corporationNames.ts
-//
 // The eight 1830 corporations' canonical full names, keyed by ticker.
 //
-// ===================================================================
-//  DESIGN NOTE 1: WHY THIS IS A FRONTEND TABLE AND NOT A QUERY
-// ===================================================================
+// Design note #1: a frontend table, not a query. `PublicCompanyState` carries
+// `ticker` and nothing else, and these names are FIXED -- 1830 ships the same
+// eight railroads every game, so this is the correct place for a board constant
+// rather than a stopgap. The alternative is four components disagreeing about
+// whether the Erie is "Erie Railroad" or "Erie RR".
 //
-// `PublicCompanyState` (see `utils/gameState.ts`) carries `ticker` and
-// nothing else -- there is no `name` field on the contract response, and
-// adding one is a Rust change. These names are also FIXED: 1830 ships the
-// same eight railroads every game, so a static table is not a stopgap
-// standing in for real data, it is the correct place for a board constant.
+// Design note #2: ticker spelling is not consistent in this codebase
+// (`sandboxState.ts` uses `NNH`/`ERIE`; the canonical labels are `NYNH`/`Erie`),
+// so `corporationFullName()` upper-cases and resolves through an alias table.
+// UNKNOWN TICKERS RETURN `null`, NOT THE TICKER BACK -- callers decide the
+// fallback, and returning the ticker would make "PRR - PRR" the failure mode,
+// which reads as data corruption rather than a missing name.
 //
-// The alternative -- writing "Pennsylvania Railroad" inline wherever a
-// ticker is displayed -- is how four components end up disagreeing about
-// whether the Erie is "Erie Railroad" or "Erie RR". One table, imported.
-//
-// ===================================================================
-//  DESIGN NOTE 2: TICKER SPELLING IS NOT CONSISTENT, SO LOOKUP NORMALISES
-// ===================================================================
-//
-// This codebase already spells the same two companies more than one way.
-// `utils/sandboxState.ts` uses `NNH` and `ERIE`; the canonical labels are
-// `NYNH` and `Erie`. Rather than rename mock data and hope every future
-// caller matches the casing, `corporationFullName()` upper-cases its input
-// and resolves through an alias table, so `Erie`, `ERIE` and `erie` all
-// land on the same entry.
-//
-// UNKNOWN TICKERS RETURN `null`, NOT THE TICKER BACK. Callers decide what
-// an unrecognised company should look like -- a tooltip wants to fall back
-// to no tooltip, a table cell wants to fall back to a dash. Returning the
-// ticker would make "PRR - PRR" the failure mode, which reads as data
-// corruption rather than as a missing name.
+// See docs/ai_architecture/utils_layer.md, corporationNames.ts #1 / #2.
 
 /** Ticker -> canonical full name. Keys are UPPERCASE; look up through
  *  `corporationFullName()` rather than indexing this directly. */
@@ -80,31 +62,14 @@ export function corporationTitle(ticker: string | null | undefined): string | un
 }
 
 
-/* ==================================================================
- *  DESIGN NOTE 582: A STANDING ORDER FOR THE EIGHT
- * ==================================================================
- *
- * REPORTED: "There should be a standard/canonical order to list the
- * Corporations in on the player cards/tiles, and simply skip the ones the
- * player doesn't have any shares in."
- *
- * The player card listed them in `public_companies` order, which is the
- * order the state happens to hold and therefore not an order at all from the
- * reader's side: two cards side by side could list the same two
- * corporations the other way round, and a player checking who holds what has
- * to re-find each row on every card.
- *
- * ALPHABETICAL BY TICKER, deliberately, over the two alternatives:
- *
- *   NOT market price -- that reorders the rows every time a token moves,
- *   which is the one thing a reference column must not do.
- *   NOT the board's own numbering, which no player can see and which
- *   `company_id` only implies.
- *
- * A player memorises a stable order after two rounds and stops reading the
- * labels. That only works if it never changes, so the order is a printed
- * table rather than a sort over live data.
- */
+/* Design note #582: a standing order for the eight, so a player can memorise it
+   and stop reading the labels. `public_companies` order is the order the state
+   happens to hold, so two cards side by side could list the same corporations
+   the other way round.
+
+   ALPHABETICAL BY TICKER, over the two alternatives: NOT market price, which
+   reorders the rows every time a token moves; NOT the board's own numbering,
+   which no player can see. A printed table rather than a sort over live data. */
 export const CORPORATION_DISPLAY_ORDER: readonly string[] = [
   "B&M",
   "B&O",

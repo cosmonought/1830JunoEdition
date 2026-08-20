@@ -1,41 +1,21 @@
-// frontend/src/context/GameSessionContext.tsx
+// The GameSessionProvider: the React boundary Milestones 1-2 never shipped.
+// `WalletContext.tsx` and `utils/sessionKey.ts` only ever provided the
+// utilities; App.tsx needs a provider to hold the session key/client across
+// re-renders and expose one `execGameplay` call.
 //
-// The "GameSessionProvider" sketched in frontend_blueprint.md Section 1
-// ("managing the ephemeral browser session key generation and local cache
-// storage"), built here as App.tsx's second context boundary. DESIGN GAP
-// being closed: Milestones 1-2 (WalletContext.tsx / ../utils/sessionKey.ts)
-// only ever shipped the underlying *utilities* -- key generation/caching,
-// the authz-wrapped executor, and the master wallet's `grantSessionKey`
-// call -- never a Provider wrapping them into one piece of React state.
-// App.tsx (Milestone 4) needs exactly that boundary to hold the session
-// key/client across re-renders and expose a single `execGameplay` call
-// its sidebar action buttons can use, so this file is that provider.
+// 1. `initializeSessionKey` does two things in sequence: materialize (generating
+//    if needed) the cached keypair and its signing client, then broadcast the
+//    authz `MsgGrant` signed by the master wallet. BOTH must succeed -- a key
+//    alone is granted nothing on-chain, and a grant for an uncached key is
+//    unreachable from this browser.
+// 2. Must render INSIDE `WalletProvider`; it calls `useWallet()` internally.
+// 3. Safe to re-run (e.g. a mid-session reload): the key is reused from
+//    `sessionStorage`, and re-broadcasting the same grant REPLACES the prior one
+//    with a fresh expiration on `x/authz` rather than stacking a duplicate.
+// 4. `execGameplay` fills in the session client/address and master address so
+//    call sites only supply the `GameplayExecuteMsg`.
 //
-// Design notes:
-// 1. `initializeSessionKey` does two things in sequence: (a) materializes
-//    (generating if needed) the cached ephemeral session keypair and its
-//    signing client via `sessionKey.ts`'s `createSessionSigningClient`,
-//    then (b) broadcasts the authz `MsgGrant` that actually authorizes it,
-//    signed by the connected master wallet via `useWallet().grantSessionKey`.
-//    Both steps must succeed before `execGameplay` can work -- generating
-//    the key alone grants it nothing on-chain, and a grant for an address
-//    whose key was never generated/cached would be unreachable from this
-//    browser.
-// 2. This provider must render *inside* `WalletProvider` (see App.tsx) --
-//    it calls `useWallet()` internally, and throws the same style of
-//    "must be used within a Provider" error `useWallet`/`useGameSession`
-//    each throw if nested the wrong way.
-// 3. Re-running `initializeSessionKey` is safe to call again (e.g. the
-//    player reloads mid-session): `getSessionWallet` reuses whatever key is
-//    already cached in `sessionStorage` rather than generating a new one,
-//    and re-broadcasting the same (contract, grantee, message-key-filter)
-//    `MsgGrant` simply replaces the prior grant with a fresh expiration on
-//    the Cosmos SDK's `x/authz` module rather than stacking a duplicate.
-// 4. `execGameplay` is a thin wrapper over `sessionKey.ts`'s
-//    `execViaSessionKey`, filling in the session client/address and the
-//    connected master wallet's address automatically so call sites (see
-//    App.tsx's sidebar handlers) only ever need to supply the
-//    `GameplayExecuteMsg` itself.
+// See docs/ai_architecture/session_keys_wallet.md, GameSessionContext.tsx.
 
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { SigningCosmWasmClient } from "@cosmjs/cosmwasm-stargate";

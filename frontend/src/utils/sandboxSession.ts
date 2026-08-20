@@ -80,6 +80,8 @@ import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCat
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
 import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
 import { stationTokenPrice } from "./stationTokens";
+// Design note #660: the B&O private's two rules, in one place.
+import { isSellableToCorporation, settleBaoPrivate } from "./baltimorePrivate";
 // Design note #656: the cursor's rules, in a module the reducer can reach.
 import {
   nextSubPhase,
@@ -2307,7 +2309,11 @@ export function applySandboxAction(
 ): GameStateResponse {
   return settleOperatingCursor(
     state,
-    settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx)),
+    /* Design note #660: the B&O private closes the moment the B&O
+       corporation owns a train. Settled here beside the era for the same
+       reason (#657) -- it is a function of the board, so no message can
+       change the fleet and forget it. */
+    settleBaoPrivate(settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx))),
     msg,
   );
 }
@@ -2983,6 +2989,25 @@ function applyOneAction(
     // the sub-phase cursor, the president check, the 50-200% band -- stays
     // entirely with `trading.rs::execute_buy_private_company`.
     const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
+    /* ==================================================================
+     *  DESIGN NOTE 660: THE B&O IS NOT FOR SALE TO A CORPORATION
+     * ==================================================================
+     *
+     * REPORTED: "the rules prohibit B&O (private company) being sold to a
+     * corporation ... the first we need to implement."
+     *
+     * `privateCatalog.ts` has said "It can never be sold to a corporation"
+     * since the powers panel was written, and nothing checked it. The offer
+     * list is filtered too, so this arm should be unreachable -- and it is
+     * enforced anyway, because a rule guarded only by a UI filter is one
+     * replayed log entry away from being no rule at all. A remote client
+     * replays MESSAGES, not button states.
+     *
+     * A NO-OP rather than a thrown error, matching `buyDepotTrain`'s empty
+     * depot: "not an error to throw at a sandbox tester; it is a purchase
+     * with nothing to buy, so nothing moves." Throwing would take down a
+     * replay over a message that should never have been written. */
+    if (!isSellableToCorporation(private_id)) return state;
     const paid = Number(price) || 0;
     const target = state.private_companies.find((entry) => entry.private_id === private_id);
     const seller = target?.owner ?? null;

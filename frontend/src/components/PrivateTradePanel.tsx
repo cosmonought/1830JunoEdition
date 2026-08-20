@@ -63,6 +63,8 @@ import React, { useMemo, useState } from "react";
 
 import type { PrivateCompanyState } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
+import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
+import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -94,19 +96,35 @@ export function privatePriceBounds(faceValue: number): { min: number; max: numbe
   };
 }
 
-/** Privates a corporation may propose for.
+/* ==================================================================
+ *  DESIGN NOTE 660a: `eligiblePrivatesForPurchase` DELETED
+ * ==================================================================
  *
- *  A private qualifies only if a PLAYER holds it: `trading.rs` reads
- *  `private.owner` and fails with no seller when it is absent, so one
- *  already bought by a corporation (`owner_protocol_id`) or closed is not a
- *  candidate. */
-export function eligiblePrivatesForPurchase(
-  privates: readonly PrivateCompanyState[],
-): PrivateCompanyState[] {
-  return privates.filter(
-    (entry) => !entry.closed && entry.owner !== null && entry.owner_protocol_id === null,
-  );
-}
+ * Found while adding the B&O sale ban to it. Nothing called it. The modal
+ * renders from `purchasablePrivatesInPlay` -- the LOOSE list, which shows an
+ * unsold or unbuyable private as an inert row -- and decides what may
+ * actually be proposed by resolving the selection against
+ * `privatePurchaseBlockReason`. This function was a third answer to a
+ * question already answered twice, and the ban had been added to the one
+ * copy no player could reach.
+ *
+ * Which is the exact failure this codebase keeps rediscovering, caught this
+ * time by asking who the caller was before trusting the fix: a rule can be
+ * written, tested, and enforced in a function that never runs. `tsc` and
+ * ESLint are both content -- the export is used, by the test that was
+ * written to prove the rule.
+ *
+ * THE RULE STILL HOLDS, in the two places that matter.
+ * `privatePurchaseBlockReason` refuses the selection so the price field and
+ * the propose button never address the B&O, and `applySandboxAction` refuses
+ * the message even if one is somehow written. UI and reducer, which is where
+ * design note #660 said it should be.
+ *
+ * THE B&O IS STILL SHOWN, inert, with its reason and its power text. Design
+ * note #386's argument for rendering an unbuyable row -- "the whole point of
+ * showing it is that the player learns the private exists" -- applies more
+ * strongly to a certificate no corporation may ever buy, not less. Hiding it
+ * would leave a player wondering where it went. */
 
 /**
  * Privates the step is ABOUT -- everything still in play.
@@ -148,6 +166,12 @@ export function purchasablePrivatesInPlay(
 /** Why this private cannot be proposed for, or `null` when it can be.
  *  One sentence per reason, at the row that carries it. */
 export function privatePurchaseBlockReason(entry: PrivateCompanyState): string | null {
+  /* Design note #660: checked FIRST, because it is the reason that cannot
+     change. "Still unsold" describes a moment; the B&O ban describes the
+     certificate, and telling a player to wait for an owner on a private no
+     corporation may ever buy would be worse than saying nothing. */
+  const corporateBan = corporateSaleBlockReason(entry);
+  if (corporateBan) return corporateBan;
   if (entry.owner === null) {
     return "Still unsold in the private auction — no owner to sell it yet.";
   }
@@ -185,6 +209,11 @@ export function ProposePrivatePurchase({
   const eligible = useMemo(() => purchasablePrivatesInPlay(privates), [privates]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [priceText, setPriceText] = useState("");
+  /* Design note #661: which rows have their full power text open. A SET, not
+     a single id, because comparing two privates is the reason a player opens
+     one at all -- an accordion that closes the D&H to show the C&StL defeats
+     the comparison it was opened for. */
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<number>>(() => new Set());
 
   /* Design note #386: a row that cannot be proposed for cannot be the
      selection either. Resolving `selected` against the STRICT list means an
@@ -252,44 +281,109 @@ export function ProposePrivatePurchase({
               // Design note #386: shown either way, inert when it cannot be
               // bought, and captioned with the reason.
               const blocked = privatePurchaseBlockReason(entry);
+              const catalog = PRIVATE_COMPANY_CATALOG[entry.private_id];
+              const isExpanded = expandedIds.has(entry.private_id);
+              const detailId = `private-power-${entry.private_id}`;
               return (
-                <button
+                /* ==================================================
+                     DESIGN NOTE 661: THE ROW IS A GROUP, NOT A BUTTON
+                    ==================================================
+
+                   The whole row used to BE the `<button>`, which was fine
+                   while selecting was the only thing it did. It now carries
+                   a second control -- the power disclosure -- and a button
+                   inside a button is invalid markup that browsers repair by
+                   unnesting, which would have put the toggle outside the row
+                   it belongs to.
+
+                   So the row is a container with two real buttons in it: the
+                   selectable face, and the disclosure. A player can read what
+                   a private DOES without selecting it, which is the point --
+                   the old row made "tell me more" and "I choose this" the
+                   same click. */
+                <div
                   key={entry.private_id}
-                  type="button"
-                  disabled={blocked !== null}
-                  title={blocked ?? undefined}
-                  onClick={() => {
-                    setSelectedId(entry.private_id);
-                    // Seed at face value: the neutral offer, and the one a
-                    // player most often wants. Starting blank makes them
-                    // type a number before they can see whether it is in
-                    // range.
-                    setPriceText(String(entry.cost));
-                  }}
                   style={{
-                    ...styles.row,
-                    ...(isSelected && blocked === null ? styles.rowSelected : {}),
-                    ...(blocked !== null ? styles.rowBlocked : {}),
+                    ...styles.rowGroup,
+                    ...(isSelected && blocked === null ? styles.rowGroupSelected : {}),
+                    ...(blocked !== null ? styles.rowGroupBlocked : {}),
                   }}
                 >
-                  <span style={styles.rowName}>{entry.name}</span>
-                  <span style={styles.rowMeta}>
-                    face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
-                  </span>
-                  {/* Design note #386: WHO HOLDS IT, named. This is the
-                      requirement's "clearly marking which player currently
-                      owns them" -- and for an unsold private it is also the
-                      explanation for why the row is inert, so the two facts
-                      are one line rather than two. */}
-                  <span style={styles.rowOwner}>
-                    {entry.owner
-                      ? `held by ${labelForAddress(entry.owner)}`
-                      : "unsold in the auction"}
-                  </span>
-                  <span style={styles.rowBand}>
-                    {blocked === null ? `$${entryBounds.min} - $${entryBounds.max}` : "not for sale"}
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={blocked !== null}
+                    title={blocked ?? undefined}
+                    onClick={() => {
+                      setSelectedId(entry.private_id);
+                      // Seed at face value: the neutral offer, and the one a
+                      // player most often wants. Starting blank makes them
+                      // type a number before they can see whether it is in
+                      // range.
+                      setPriceText(String(entry.cost));
+                    }}
+                    style={{
+                      ...styles.row,
+                      ...(blocked !== null ? styles.rowBlocked : {}),
+                    }}
+                  >
+                    <span style={styles.rowName}>
+                      {entry.name}
+                      {catalog && <span style={styles.rowAcronym}>{catalog.acronym}</span>}
+                    </span>
+                    <span style={styles.rowBand}>
+                      {blocked === null
+                        ? `$${entryBounds.min} - $${entryBounds.max}`
+                        : "not for sale"}
+                    </span>
+                    <span style={styles.rowMeta}>
+                      face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
+                    </span>
+                    {/* Design note #386: WHO HOLDS IT, named. This is the
+                        requirement's "clearly marking which player currently
+                        owns them" -- and for an unsold private it is also the
+                        explanation for why the row is inert, so the two facts
+                        are one line rather than two. */}
+                    <span style={styles.rowOwner}>
+                      {entry.owner
+                        ? `held by ${labelForAddress(entry.owner)}`
+                        : "unsold in the auction"}
+                    </span>
+                    {/* Design note #661: the POWER, on the face of the row.
+                        A player choosing between six privates is choosing
+                        between six powers, and the face of the row named
+                        every other attribute -- price, revenue, owner, band
+                        -- except the one the decision turns on. */}
+                    {catalog && (
+                      <span style={styles.rowPower}>{catalog.abilitySummary}</span>
+                    )}
+                  </button>
+                  {catalog && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedIds((open) => {
+                          const next = new Set(open);
+                          if (!next.delete(entry.private_id)) next.add(entry.private_id);
+                          return next;
+                        })
+                      }
+                      aria-expanded={isExpanded}
+                      aria-controls={detailId}
+                      style={styles.rowDisclosure}
+                    >
+                      {/* Not gated on `blocked`. An unsold private, or the
+                          B&O a corporation may never buy, still has a power
+                          worth reading -- design note #386's reason for
+                          showing the row at all applies to its rules too. */}
+                      {isExpanded ? "\u25B4 Less" : "\u25BE Full rules"}
+                    </button>
+                  )}
+                  {catalog && isExpanded && (
+                    <p id={detailId} style={styles.rowDetail}>
+                      {catalog.ability}
+                    </p>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -486,42 +580,139 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  body: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.5 },
-  empty: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.5 },
-  list: { display: "flex", flexDirection: "column", gap: "6px" },
-  row: {
-    display: "grid",
-    gridTemplateColumns: "1fr auto",
-    gap: "2px 12px",
-    textAlign: "left",
-    padding: "9px 12px",
+  /* Design note #661: `small` -> `body`. This paragraph states the 50-200%
+     rule and that the owner must agree -- both load-bearing, and both were
+     set at the size used for timestamps. */
+  body: { margin: 0, fontSize: FONT_SIZE.body, color: "#aab0bc", lineHeight: 1.55 },
+  empty: { margin: 0, fontSize: FONT_SIZE.body, color: "#c9b98a", lineHeight: 1.55 },
+  list: { display: "flex", flexDirection: "column", gap: "8px" },
+  /* ==================================================================
+   *  DESIGN NOTE 661: A ROW PER PRIVATE, AT A READABLE SIZE
+   * ==================================================================
+   *
+   * INSTRUCTED: "the fonts are very small, and everything is listed in a
+   * string whereas I think it might be a little more digestible with some
+   * styling."
+   *
+   * Both halves were true and they had one cause: every secondary fact on
+   * the row was `micro` (11px), the size the type scale reserves for "tiny
+   * status pills and inline tags". Face value, revenue, owner and price band
+   * are not tags, they are the DATA the decision is made from -- and four
+   * 11px runs sitting on one line read as a single grey string however they
+   * are marked up. Nothing was concatenating them; they just all looked the
+   * same and none was big enough to anchor the eye.
+   *
+   * `small` (12px) for the facts and `body` (13px) for the power summary,
+   * with the row laid out as an explicit two-column grid so each fact lands
+   * in a fixed place. A player scanning six rows can now read down a column
+   * rather than across a paragraph, which is the actual difference between
+   * a list and a string.
+   *
+   * THE GROUP CARRIES THE CHROME, THE FACE CARRIES THE CLICK. Border,
+   * background and selected state moved to `rowGroup` because the row now
+   * holds two buttons and a paragraph, and a border drawn on one of the
+   * three would frame part of a row. */
+  rowGroup: {
+    display: "flex",
+    flexDirection: "column",
     borderRadius: "8px",
     border: "1px solid #3a4150",
     backgroundColor: "#1b2130",
+    overflow: "hidden",
+  },
+  rowGroupSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
+  /* Design note #386: present but plainly not actionable. Recedes rather
+     than disappears -- the whole point of showing it is that the player
+     learns the private exists and where it is. */
+  rowGroupBlocked: {
+    opacity: 0.62,
+    borderStyle: "dashed",
+    backgroundColor: "#171c27",
+  },
+  row: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    gap: "3px 12px",
+    textAlign: "left",
+    padding: "10px 12px 8px",
+    border: "none",
+    background: "none",
     color: "#e2e6ee",
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  rowSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
-  /* Design note #386: present but plainly not actionable. Recedes rather
-     than disappears -- the whole point of showing it is that the player
-     learns the private exists and where it is. `not-allowed` over the
-     usual pointer so the refusal is felt before it is clicked. */
-  rowBlocked: {
-    opacity: 0.55,
-    cursor: "not-allowed",
-    borderStyle: "dashed",
-    backgroundColor: "#171c27",
+  /* `not-allowed` over the usual pointer, so the refusal is felt before it
+     is clicked -- design note #386. */
+  rowBlocked: { cursor: "not-allowed" },
+  rowName: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "7px",
+    minWidth: 0,
   },
-  rowName: { fontSize: FONT_SIZE.strong, fontWeight: 700 },
-  rowBand: {
+  /* The acronym beside the name. Every other surface in this app identifies
+     a private by acronym (`PrivateCompanyPills`, the powers panel), and this
+     modal was the one place a player had to translate. */
+  rowAcronym: {
     fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    color: "#8f98a8",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  rowBand: {
+    fontSize: FONT_SIZE.small,
     color: "#7ee0a1",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "right",
+    whiteSpace: "nowrap",
   },
-  rowMeta: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
-  rowOwner: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", textAlign: "right" },
+  rowMeta: { fontSize: FONT_SIZE.small, color: "#aab0bc" },
+  rowOwner: {
+    fontSize: FONT_SIZE.small,
+    color: "#aab0bc",
+    textAlign: "right",
+    whiteSpace: "nowrap",
+  },
+  /* Design note #661: the power summary spans BOTH columns and sits under
+     the facts. It is the longest line on the row and the one most likely to
+     wrap, so giving it the full width keeps it from squeezing the price band
+     into two lines beside it. */
+  rowPower: {
+    gridColumn: "1 / -1",
+    fontSize: FONT_SIZE.body,
+    color: "#d3d8e2",
+    lineHeight: 1.45,
+    marginTop: "2px",
+  },
+  /* A quiet control. It reveals reference text rather than doing anything to
+     the game, so it must not compete with the row it hangs off -- design
+     note #235's distinction between a turn action and a utility, applied to
+     a disclosure. */
+  rowDisclosure: {
+    alignSelf: "flex-start",
+    margin: "0 12px 8px",
+    padding: "2px 7px",
+    borderRadius: "6px",
+    border: "1px solid #39414f",
+    backgroundColor: "transparent",
+    color: "#9aa0ac",
+    fontFamily: "inherit",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  rowDetail: {
+    margin: "0 12px 10px",
+    padding: "8px 10px",
+    borderRadius: "6px",
+    backgroundColor: "#151a25",
+    fontSize: FONT_SIZE.small,
+    color: "#c1c7d3",
+    lineHeight: 1.5,
+  },
   priceRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
   priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
   priceInput: {

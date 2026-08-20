@@ -24,6 +24,34 @@
 /** One private company's display data -- revenue yield and canonical power. */
 export interface PrivateCatalogEntry {
   revenue: number;
+  /* ==================================================================
+   *  DESIGN NOTE 661: THE POWER, IN ONE LINE, BEFORE THE PARAGRAPH
+   * ==================================================================
+   *
+   * INSTRUCTED: "none of the Privates are listed with their special powers,
+   * which makes knowing what to buy somewhat difficult ... we need to add a
+   * short summary of each of their powers (e.g., Free lay track action on H,
+   * or Second track lay on H (paying costs) and then free station on H, etc)
+   * that can be clicked to expand to the full description."
+   *
+   * `ability` already exists and is exactly right for the powers panel,
+   * where a player has gone to LEARN the piece. It is the wrong length for a
+   * buying decision: six paragraphs in a modal is not a comparison, it is a
+   * reading assignment, and a player deciding between the D&H and the C&StL
+   * needs the difference between them in the same glance.
+   *
+   * SO THE SUMMARY LIVES HERE, beside the paragraph it summarises, rather
+   * than in the modal that renders it. Two descriptions of one power kept in
+   * two files is the arrangement that drifts -- and this pair is unusually
+   * exposed to it, because the long text is the one that gets corrected when
+   * a rule is found wrong. Together, an edit to one is an edit in front of
+   * the other.
+   *
+   * WRITTEN TO BE SCANNED, not to be complete. It names the hex, says
+   * whether the action is free, and says whether it costs the corporation
+   * its ordinary lay -- the three things that decide a purchase. Everything
+   * else is one click away and stays in `ability`. */
+  abilitySummary: string;
   /** The private's special power, described in this codebase's own words
    *  (design note #548), one line.
    *
@@ -167,6 +195,9 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   1: {
     acronym: "SV",
     revenue: 5,
+    // Said plainly. A blank here would read as missing data rather than as
+    // the answer, which is the same reasoning `ability` gives below.
+    abilitySummary: "No special power \u2014 revenue only.",
     // Canonically correct: Schuylkill Valley is the one 1830 private with
     // NO special ability. Said outright rather than left blank, because a
     // blank slot reads as missing data.
@@ -175,30 +206,37 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   2: {
     acronym: "C&StL",
     revenue: 10,
+    abilitySummary: "Free extra tile lay on B-20, connected to nothing. Keeps the corporation\u2019s normal lay.",
     ability:
       "Its owning corporation may tile hex B-20 even where nothing connects to it \u2014 no station of its own, no track at all. The lay is a bonus rather than a substitute: the corporation still gets its ordinary tile placement that turn, so it may lay two.",
   },
   3: {
     acronym: "D&H",
     revenue: 15,
+    abilitySummary: "Tile F-16 (pay the $120 mountain) plus a free station there. Uses the corporation\u2019s lay.",
     ability:
       "Its owning corporation may tile hex F-16 and drop a station there in one go, connected to nothing. The token is free; the mountain still charges its usual $120 for the tile. Unlike the C&StL this uses up the corporation\u2019s tile placement for the turn. Decline the token then and it can only be placed later under the ordinary connection rules. The power lapses entirely once any other corporation tiles F-16 first.",
   },
   4: {
     acronym: "M&H",
     revenue: 20,
+    abilitySummary: "Owner may trade it for a 10% NYC share at any time. The trade closes it.",
     ability:
       "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the bank or the pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
   },
   5: {
     acronym: "C&A",
     revenue: 25,
+    abilitySummary: "Its auction buyer received a 10% PRR share. Nothing further \u2014 the company stays open.",
     ability:
       "Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
   },
   6: {
     acronym: "B&O",
     revenue: 30,
+    // Design note #660: both halves are enforced now, so the summary can
+    // state them as facts about the board rather than as flavour.
+    abilitySummary: "Came with the B&O presidency. Never sellable to a corporation; closes on the B&O\u2019s first train.",
     ability:
       "Its owner takes the B&O president\u2019s certificate free on purchase and sets the corporation\u2019s par price immediately. It can never be sold to a corporation, and it stays with its owner even if they later lose the B&O presidency. It closes the moment the B&O buys its first train.",
   },

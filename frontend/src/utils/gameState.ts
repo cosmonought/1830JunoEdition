@@ -223,6 +223,23 @@ export interface PrivateCompanyState {
   closed: boolean;
 }
 
+/** A corporation's standing offer for a private company -- design note #662.
+ *
+ *  Snake_case to match everything else on `GameStateResponse`, even though
+ *  no contract sends it: a reader scanning this object should not have to
+ *  work out which fields came off the wire from their casing. */
+export interface PrivatePurchaseOffer {
+  private_id: number;
+  /** Carried, not re-derived, so every client's prompt names what the buyer
+   *  was looking at. */
+  private_name: string;
+  /** The wallet whose consent is required. */
+  owner: string;
+  buyer_protocol_id: number;
+  buyer_ticker: string;
+  price: number;
+}
+
 export interface GameStateResponse {
   game_id: number;
   creator: string;
@@ -283,6 +300,19 @@ export interface GameStateResponse {
    *  client disagrees). Readers treat `undefined` as "ask the opening rule",
    *  never as a step. */
   operating_sub_phase?: OperatingSubPhase;
+  /** Design note #662: the private-company purchase awaiting its owner's
+   *  answer, or `null`/absent when none is.
+   *
+   *  On the STATE rather than in a React ref because a proposal is something
+   *  the other player has to see, and the sandbox's shared state is the only
+   *  thing both clients hold. It was `privateProposal` in `App.tsx` -- so the
+   *  seller was never asked and the buyer answered their own offer.
+   *
+   *  Sandbox-only, like the fields above. The contract's `BuyPrivateCompany`
+   *  is single-party: it reads `private.owner` and never consults them
+   *  (`PrivateTradePanel` design note #0), so there is no chain-side offer
+   *  for this to mirror and a live room leaves it undefined. */
+  private_purchase_offer?: PrivatePurchaseOffer | null;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */

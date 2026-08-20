@@ -377,6 +377,65 @@ export interface PlaceHomeStationMsg {
   };
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 662: AN OFFER NOBODY ELSE COULD SEE
+ * ==================================================================
+ *
+ * REPORTED: "P1 sent an offer to buy P2's Private Company, but the decision
+ * modal appeared on P1's screen and allowed them to accept it."
+ *
+ * Both halves were the same cause. The proposal was `privateProposal`, React
+ * state in `App.tsx`, and design note #205 says exactly why: the local
+ * stand-in exists "for exactly ONE deployment: the offline sandbox, which
+ * has no chain to record an offer in and no second client to show it to."
+ *
+ * THAT PREMISE EXPIRED. Design note #578 removed solo mode and the sandbox
+ * became the multiplayer mode; #536 settled that "a room is not a hotseat".
+ * There IS a second client now. The offer stayed on the buyer's machine, so
+ * the seller was never asked -- and `viewerIsOwner={sandbox || ...}` forced
+ * the consent check open for the same expired reason, which is why the buyer
+ * could answer their own offer.
+ *
+ * TWO MESSAGES, not one. A proposal and its answer are separate events with
+ * different authors, and collapsing them into a single "sale" message would
+ * lose the interval in which the offer is pending -- which is the only part
+ * of this flow the other player experiences.
+ *
+ * SANDBOX-ONLY, alongside `ExchangePrivate` and for the same reason: the
+ * contract's `BuyPrivateCompany` is single-party. It reads `private.owner`
+ * and never asks them (`PrivateTradePanel` design note #0). Until the
+ * contract grows an accept step, consent is a rule this frontend keeps by
+ * itself, and a rule kept by one client is not kept at all.
+ */
+export interface ProposePrivatePurchaseMsg {
+  ProposePrivatePurchase: {
+    private_id: number;
+    /** Carried rather than re-derived, so every client's prompt names the
+     *  private the buyer was looking at -- the same reasoning
+     *  `PlaceHomeStation` gives for carrying `hex_label`. */
+    private_name: string;
+    /** The wallet whose consent 1830 requires. */
+    owner: string;
+    buyer_protocol_id: number;
+    buyer_ticker: string;
+    /** Whole VGP. A string would match the contract's convention, but this
+     *  message has no contract to match and an integer price is what every
+     *  reader wants. */
+    price: number;
+  };
+}
+
+/** The owner's answer. Rejecting is a real event, not the absence of one:
+ *  it clears the offer on every client and it belongs in the log so the
+ *  Activity Log can say the sale was declined rather than silently dropping
+ *  it. */
+export interface AnswerPrivatePurchaseMsg {
+  AnswerPrivatePurchase: {
+    private_id: number;
+    accept: boolean;
+  };
+}
+
 /** Everything the sandbox log can carry -- the contract's own message set,
  *  plus the sandbox-only round events. A PRECISE union rather than an
  *  index signature: a loose type here would let any object into the replay
@@ -388,7 +447,17 @@ export type SandboxLogMsg =
   | SetBoParMsg
   | PlaceHomeStationMsg
   | ExchangePrivateMsg
+  | ProposePrivatePurchaseMsg
+  | AnswerPrivatePurchaseMsg
   | RevertToMsg;
+
+export function isProposePrivatePurchaseMsg(msg: unknown): msg is ProposePrivatePurchaseMsg {
+  return typeof msg === "object" && msg !== null && "ProposePrivatePurchase" in msg;
+}
+
+export function isAnswerPrivatePurchaseMsg(msg: unknown): msg is AnswerPrivatePurchaseMsg {
+  return typeof msg === "object" && msg !== null && "AnswerPrivatePurchase" in msg;
+}
 
 export function isSetupGameMsg(msg: unknown): msg is SetupGameMsg {
   return typeof msg === "object" && msg !== null && "SetupGame" in msg;
@@ -426,6 +495,10 @@ export function isSandboxOnlyMsg(
     | SetBoParMsg
     | PlaceHomeStationMsg
     | ExchangePrivateMsg
+    // Design note #662: the private-purchase negotiation. Added HERE and
+    // nowhere else, which is the point of this predicate existing (#546).
+    | ProposePrivatePurchaseMsg
+    | AnswerPrivatePurchaseMsg
     | RevertToMsg {
   return (
     isSetupGameMsg(msg) ||
@@ -433,6 +506,8 @@ export function isSandboxOnlyMsg(
     isSetBoParMsg(msg) ||
     isPlaceHomeStationMsg(msg) ||
     isExchangePrivateMsg(msg) ||
+    isProposePrivatePurchaseMsg(msg) ||
+    isAnswerPrivatePurchaseMsg(msg) ||
     isRevertToMsg(msg)
   );
 }

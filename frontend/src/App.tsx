@@ -573,6 +573,8 @@ import {
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
   isExchangePrivateMsg,
+  isProposePrivatePurchaseMsg,
+  isAnswerPrivatePurchaseMsg,
   isRevertToMsg,
   isSetBoParMsg,
   isSandboxOnlyMsg,
@@ -693,6 +695,7 @@ import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
+import { roundLabelFor } from "./utils/roundLabel";
 
 import {
   EmergencyTrainPurchaseModal,
@@ -862,16 +865,9 @@ import {
 
 /** Design note #643: "Auction" / "SR2" / "OR 1.1", from a state rather than
  *  from whatever the browser is showing. `null` before the first poll. */
-function roundLabelFor(state: GameStateResponse | null | undefined): string | null {
-  if (!state) return null;
-  // Pre-Game Waterfall Auction: every room genesis-starts here, before
-  // `macro_round_number`'s numbering means anything.
-  if (state.current_round_type === "WaterfallAuction") return "Auction";
-  if (state.current_round_type === "StockRound") return `SR${state.macro_round_number}`;
-  const suffix = state.sub_round_index > 0 ? `.${state.sub_round_index}` : "";
-  return `OR ${state.macro_round_number}${suffix}`;
-}
-
+/* Design note #659: `roundLabelFor` moved to `utils/roundLabel.ts` so the
+   rule about WHICH state it is asked about can carry a test. Imported above;
+   nothing about the function changed. */
 let nextLogEntryId = 1;
 
 // Design note #18/item 3's `nextChatMessageId` counter is REMOVED (design
@@ -3498,7 +3494,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * counterparty agreed.
    */
   const [privateTradeOpen, setPrivateTradeOpen] = useState(false);
-  const [privateProposal, setPrivateProposal] = useState<PrivateTradeProposal | null>(null);
+  /* Design note #662: DERIVED from the shared sandbox state, not held here.
+     `useState` was the bug: an offer only the buyer's browser knew about,
+     which is why the seller was never asked and the buyer could accept on
+     their behalf. The shape the prompt wants differs from the shape the log
+     carries -- the prompt needs a display label for the owner and the log
+     must not carry one, because a label is this client's rendering of a
+     wallet and two clients may resolve it differently. So the label is added
+     here, at the edge, and the wallet is what travels. */
+  const privateProposal = useMemo<PrivateTradeProposal | null>(() => {
+    const offer = gameState?.private_purchase_offer ?? null;
+    if (!offer) return null;
+    return {
+      privateId: offer.private_id,
+      privateName: offer.private_name,
+      ownerAddress: offer.owner,
+      ownerLabel: sandboxPlayerLabel(offer.owner) ?? truncateAddress(offer.owner),
+      buyerProtocolId: offer.buyer_protocol_id,
+      buyerTicker: offer.buyer_ticker,
+      price: offer.price,
+    };
+  }, [gameState?.private_purchase_offer]);
 
   /* ===================================================================
    *  DESIGN NOTE 205: TWO CONSENT FLOWS, ONE SHAPE, DIFFERENT BACKENDS
@@ -4718,12 +4734,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [actingProtocolId, activeMainTab],
   );
 
-  const logInfo = useCallback((label: string, detail: string) => {
+  /* Design note #659: `round` is an OPTIONAL override, and the default stays
+     the ref. Most `logInfo` callers report something about the round the game
+     is already in -- an auto-skip, a float, a station block -- and for those
+     the ref is right and asking them all to pass a round would be noise. The
+     one caller that needs the override is the round TRANSITION, which is
+     announcing a round the ref does not know about yet: the ref is fed by an
+     effect off `gameState`, and no effect has run at the moment the reducer's
+     answer comes back. */
+  const logInfo = useCallback((label: string, detail: string, round?: string | null) => {
     const id = nextLogEntryId++;
     const timestamp = new Date().toLocaleTimeString();
     const timestampMs = Date.now();
     setActionLog((log) => [
-      { id, label, status: "info", detail, timestamp, timestampMs, round: roundLabelRef.current ?? undefined },
+      {
+        id,
+        label,
+        status: "info",
+        detail,
+        timestamp,
+        timestampMs,
+        round: (round ?? roundLabelRef.current) ?? undefined,
+      },
       ...log,
     ]);
   }, []);
@@ -5180,6 +5212,95 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           logInfo(
             "B&O Presidency",
             `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives the B&O President's Certificate and pars it at $${parValue}.`,
+          );
+          return;
+        }
+
+        /* ==============================================================
+         *  DESIGN NOTE 662: THE OFFER ARRIVES ON THE OWNER'S SCREEN
+         * ==============================================================
+         *
+         * REPORTED: "P1 sent an offer to buy P2's Private Company, but the
+         * decision modal appeared on P1's screen and allowed them to accept
+         * it."
+         *
+         * The proposal was `privateProposal`, React state in this file, and
+         * design note #205 states the premise it rested on: the local
+         * stand-in exists "for exactly ONE deployment: the offline sandbox,
+         * which has no chain to record an offer in and no second client to
+         * show it to." That premise expired when #578 removed solo mode and
+         * the sandbox became the multiplayer mode.
+         *
+         * Handled HERE, in the drain, beside `ExchangePrivate` and for the
+         * same reason: the drain is the path every client runs, so writing
+         * the offer here is what makes the seller see it. Then the answer
+         * clears it on both screens rather than on whichever one clicked --
+         * exactly the correction design note #565 made for the B&O par
+         * prompt, which was this same bug on a different modal. */
+        if (isProposePrivatePurchaseMsg(msg)) {
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const { private_id, private_name, owner, buyer_protocol_id, buyer_ticker, price } =
+            msg.ProposePrivatePurchase;
+          const next: GameStateResponse = {
+            ...base,
+            private_purchase_offer: {
+              private_id,
+              private_name,
+              owner,
+              buyer_protocol_id,
+              buyer_ticker,
+              price,
+            },
+          };
+          sandboxStateRef.current = next;
+          setSandboxState(next);
+          logInfo(
+            "Private Offer",
+            `${buyer_ticker} offers $${price} for ${private_name}. ${
+              sandboxPlayerLabel(owner) ?? truncateAddress(owner)
+            } must answer.`,
+          );
+          return;
+        }
+
+        if (isAnswerPrivatePurchaseMsg(msg)) {
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const { private_id, accept } = msg.AnswerPrivatePurchase;
+          const offer = base.private_purchase_offer ?? null;
+          /* An answer to an offer that is not on the board is not an error
+             worth stopping a replay for -- two clients can answer the same
+             offer before either sees the other. The first answer settles it
+             and the second finds nothing to settle, which is the right
+             outcome rather than a crash. */
+          if (!offer || offer.private_id !== private_id) return;
+          const cleared: GameStateResponse = { ...base, private_purchase_offer: null };
+          sandboxStateRef.current = cleared;
+          setSandboxState(cleared);
+          const ownerLabel = sandboxPlayerLabel(offer.owner) ?? truncateAddress(offer.owner);
+          if (!accept) {
+            logInfo(
+              "Private Offer",
+              `${ownerLabel} declined $${offer.price} for ${offer.private_name}.`,
+            );
+            return;
+          }
+          /* ACCEPTED, so the sale itself goes through the ordinary message.
+             `BuyPrivateCompany` is what moves the certificate and the money,
+             and it is the message design note #660 enforces the B&O ban in
+             -- routing the accept through it means consent and legality are
+             checked by the same code every other purchase uses. */
+          void runGameplayActionRef.current?.(
+            `BuyPrivateCompany: ${offer.private_name} @ $${offer.price}`,
+            {
+              BuyPrivateCompany: {
+                game_id: gameId,
+                protocol_id: offer.buyer_protocol_id,
+                private_id: offer.private_id,
+                price: String(offer.price),
+              },
+            },
           );
           return;
         }
@@ -5861,27 +5982,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            * own surface; doing it here as well was a second opinion about one
            * transition, and on a replay it would yank the tab once per
            * replayed round. */
-          if (
-            before !== null &&
-            before.current_round_type !== after.current_round_type &&
-            options?.isRemoteReplay !== true
-          ) {
-            if (after.current_round_type === "OperatingRound") {
-              const holder = after.player_addresses[after.priority_deal_index];
-              const holderLabel = holder
-                ? (sandboxPlayerLabel(holder) ?? truncateAddress(holder))
-                : "the next player";
-              logInfo("Round", `Stock Round ends. Priority Deal shifts to ${holderLabel}.`);
-            } else if (after.current_round_type === "StockRound") {
-              logInfo(
-                "Round",
-                "Operating Round ends — every corporation has operated. Opening the next Stock Round.",
-              );
-            }
-          }
-        }
-
-        // Design note #265: described against the RESOLVED state.
         label =
           describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
 
@@ -5898,10 +5998,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                now. On a replay the ref is the present and the action is the
                past, which is how an auction entry came to be tagged
                "OR 1.1". */
-            round: roundLabelFor(after) ?? undefined,
+            /* ==========================================================
+                 DESIGN NOTE 659: AN ACTION BELONGS TO THE ROUND IT WAS TAKEN IN
+               ==========================================================
+
+               REPORTED: "it labels the last action of OR 1.1 as the first
+               action of SR2, i.e. it printed '[SR2] PRR passed Buy Trains.'"
+
+               This read `roundLabelFor(after)`. Design note #643 put it there
+               and its reasoning was right as far as it went: the round must
+               come from THIS action's own state rather than from a ref
+               holding whatever round the browser is looking at now, "because
+               on a replay the ref is the present and the action is the past."
+               It then took the wrong end of the action. `after` is the state
+               the action RESOLVED TO, and for the one action that closes a
+               round that is the next round -- so the entry is stamped with a
+               round that did not exist when the player clicked.
+
+               `before` is the round the action was taken IN, which is what a
+               log entry is for. It satisfies #643's actual requirement
+               identically: still the action's own state, still not a ref. */
+            round: roundLabelFor(before) ?? undefined,
           },
           ...log,
         ]);
+          if (
+            before !== null &&
+            before.current_round_type !== after.current_round_type &&
+            options?.isRemoteReplay !== true
+          ) {
+            /* Design note #659: tagged with the round being ANNOUNCED, and
+               explicitly, because `logInfo`'s default is a ref fed by an
+               effect off `gameState` -- and no effect has run yet at this
+               point in the dispatch. Left to the default, the line opening
+               SR 2 was stamped `OR 1.1`: the exact inverse of the action
+               entry above it, which is why the pair read as one entry filed
+               under the wrong round rather than as two mislabelled ones. */
+            const announcing = roundLabelFor(after) ?? undefined;
+            const priorityHolder = after.player_addresses[after.priority_deal_index];
+            const priorityLabel = priorityHolder
+              ? (sandboxPlayerLabel(priorityHolder) ?? truncateAddress(priorityHolder))
+              : "the next player";
+            if (after.current_round_type === "OperatingRound") {
+              logInfo(
+                "Round",
+                `Stock Round ends. Priority Deal shifts to ${priorityLabel}.`,
+                announcing,
+              );
+            } else if (after.current_round_type === "StockRound") {
+              /* INSTRUCTED: "a second entry for [SR2] Announcing the stock
+                 round and who has Priority Deal."
+
+                 The Priority Deal was named on the OTHER transition and not
+                 on this one, which is the wrong way round for the reader: it
+                 was announced when the Stock Round ENDED, a round before it
+                 mattered, and withheld at the moment it decides who acts
+                 first. Said in both places now -- it costs a clause, and the
+                 player opening a Stock Round should not have to remember a
+                 line from two rounds ago to know whether they lead. */
+              logInfo(
+                "Round",
+                `Operating Round ends — every corporation has operated. ${
+                  roundLabelFor(after) ?? "The next Stock Round"
+                } opens; ${priorityLabel} holds the Priority Deal and acts first.`,
+                announcing,
+              );
+            }
+          }
+        }
+
+        // Design note #265: described against the RESOLVED state.
         return;
       }
 
@@ -5985,6 +6151,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       currentPhase,
       orSubPhase,
       logInfo,
+      /* Design note #662: the drain now dispatches `BuyPrivateCompany` when
+         an offer is accepted, and that dispatch names the game. Listed
+         rather than read off a ref because `gameId` is a prop and a prop
+         that changed would mean a different room -- the one case where the
+         stale closure would be silently wrong rather than merely late. */
+      gameId,
       // Design note #262: the label is derived from live state, so a stale
       // closure here would name the corporation that WAS acting and quote
       // the price the chart HAD -- a log that is wrong in exactly the way
@@ -7117,19 +7289,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
 
-      setPrivateProposal({
-        privateId,
-        privateName: target.name,
-        ownerAddress: target.owner,
-        ownerLabel,
-        buyerProtocolId: actingProtocolId,
-        buyerTicker,
-        price,
+      /* Design note #662: appended to the log so the OWNER sees it. This
+         was a local `setPrivateProposal`, which is why the prompt only ever
+         appeared on the buyer's screen. */
+      runGameplayAction(`Offered $${price} for ${target.name}`, {
+        ProposePrivatePurchase: {
+          private_id: privateId,
+          private_name: target.name,
+          owner: target.owner,
+          buyer_protocol_id: actingProtocolId,
+          buyer_ticker: buyerTicker,
+          price,
+        },
       });
-      logInfo(
-        "Propose Purchase",
-        `Offered $${price} for ${target.name}. Awaiting ${ownerLabel}'s answer.`,
-      );
+      /* The Activity Log line is written by the DRAIN now, from the message
+         itself, so every client reads the same sentence. Writing it here as
+         well would give the buyer two entries and the seller one. */
     },
     [gameState, logInfo, actingProtocolId, runGameplayAction, gameId],
   );
@@ -7138,28 +7313,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  has always had, now sent only after both sides have said yes (in
    *  sandbox) or after the buyer has confirmed knowing the seller was not
    *  asked (in a live room). */
+  /* Design note #662: the ANSWER is a log entry, not a local dismissal.
+     Both of these used to clear `privateProposal` on the answering browser,
+     which closed the prompt on exactly one of the two screens showing it --
+     the same defect design note #565 fixed for the B&O par prompt. The drain
+     clears it now, on every client, and dispatches the purchase when the
+     answer is yes. */
   const handleAcceptPrivateOffer = useCallback(() => {
     if (!privateProposal) return;
-    const { privateId, privateName, price, buyerProtocolId } = privateProposal;
-    runGameplayAction(`BuyPrivateCompany: ${privateName} @ $${price}`, {
-      BuyPrivateCompany: {
-        game_id: gameId,
-        protocol_id: buyerProtocolId,
-        private_id: privateId,
-        price: String(price),
-      },
-    });
-    setPrivateProposal(null);
-  }, [privateProposal, runGameplayAction, gameId]);
+    runGameplayAction(
+      `Accepted $${privateProposal.price} for ${privateProposal.privateName}`,
+      { AnswerPrivatePurchase: { private_id: privateProposal.privateId, accept: true } },
+    );
+  }, [privateProposal, runGameplayAction]);
 
   const handleRejectPrivateOffer = useCallback(() => {
     if (!privateProposal) return;
-    logInfo(
-      "Offer Rejected",
-      `${privateProposal.ownerLabel} declined $${privateProposal.price} for ${privateProposal.privateName}.`,
+    runGameplayAction(
+      `Declined $${privateProposal.price} for ${privateProposal.privateName}`,
+      { AnswerPrivatePurchase: { private_id: privateProposal.privateId, accept: false } },
     );
-    setPrivateProposal(null);
-  }, [privateProposal, logInfo]);
+  }, [privateProposal, runGameplayAction]);
 
   // Pre-Game Waterfall Auction Action Tray (`WaterfallAuctionDashboard.tsx`)
   // -- five real `ExecuteMsg` dispatches, `waterfall.rs`'s own five turn
@@ -10424,11 +10598,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       />
       <PrivateTradePrompt
         proposal={privateProposal}
-        // Design note #2 in that file: sandbox is one human at one wallet,
-        // so the prompt is answerable by whoever is looking -- otherwise the
-        // only place this flow can run end to end is the one place it
-        // cannot be tested. Online, only the actual owner may accept.
-        viewerIsOwner={sandbox || privateProposal?.ownerAddress === viewerAddress}
+        /* ==========================================================
+             DESIGN NOTE 662: THE OWNER ANSWERS, IN EVERY MODE
+           ==========================================================
+
+           REPORTED: "the decision modal appeared on P1's screen and allowed
+           them to accept it."
+
+           This read `sandbox || ...`, and design note #2 in that file gave
+           the reason: "sandbox is one human at one wallet, so the prompt is
+           answerable by whoever is looking -- otherwise the only place this
+           flow can run end to end is the one place it cannot be tested."
+
+           True when written, and false since design note #578 removed solo
+           mode. A sandbox room is several humans at several wallets, and the
+           bypass turned "the owner must consent" into "whoever proposed it
+           may consent on their behalf". The flow can be tested end to end
+           precisely because there is now a second player to test it with.
+
+           Same wallet comparison in both modes now, which also means the
+           prompt's own "This is X's decision" caption is finally true on the
+           screen that cannot act on it. */
+        viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}
         // Design note #0 in that file: `BuyPrivateCompany` has no accept
         // step, so outside sandbox this is a confirmation and says so.
         consentIsBinding={sandbox}

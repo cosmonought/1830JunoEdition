@@ -1,341 +1,43 @@
-//! Stock trading mechanics for the 1830-style Stock Round: buying and
-//! selling protocol shares against the open-market/IPO pool, and declaring
-//! Operating Round dividends. See `rules.md` sections 2-3 for the source
-//! rules and `src/market.rs` for the grid-movement primitives this module
-//! drives.
+//! Stock trading for the 1830-style Stock Round: buying and selling shares
+//! against the IPO and Bank pools, and declaring Operating Round dividends.
 //!
-//! Design notes / assumptions, since several pieces aren't fully pinned
-//! down by the existing message/state definitions:
+//! The rules this module owns:
 //!
-//! 1. **Certificate size.** rules.md's Stock Round rule ("a player may sell
-//!    any amount... then purchase exactly 1 token/share") is modeled as a
-//!    fixed `PERCENT_PER_SHARE` = 10% certificate: `BuyStock` always buys
-//!    exactly one certificate; `SellStock` accepts any multiple of it.
-//! 2. **60% ownership cap.** Per-player holdings in a single protocol are
-//!    capped at `CERTIFICATE_LIMIT_PERCENTAGE` (60%, the standard 18xx
-//!    cap), *unless* the protocol's current market cell is an `OrangeZone`
-//!    or `BrownZone` (per `state::ZoneType`'s doc comment) -- real 1830's
-//!    "a single player may hold more than 60%" rule, which only the Orange
-//!    and Brown bands grant (Yellow alone does not). This check is
-//!    genuinely the *ownership cap*, not the separate *certificate/hand
-//!    limit* (the total-certificates-across-every-corporation cap,
-//!    `CERT_LIMIT_BY_PLAYERS` in the frontend's `RulesReference.tsx`) --
-//!    see module doc comment #12 for that check, including its OWN,
-//!    broader Yellow/Orange/Brown zone exemption (Yellow alone exempts a
-//!    certificate from the hand limit, even though it does not exempt a
-//!    holding from this narrower 60% ownership cap -- the two exemption
-//!    rules are related but not identical in scope). A prior pass of this
-//!    note said the certificate/hand limit had "no backend enforcement... at
-//!    all" -- that's no longer accurate; #12 below now covers it. See
-//!    `state::ZoneType`'s own doc comment for the Brown zone's additional
-//!    Multiple-Buy exception, handled separately below (#15).
-//! 3. **Where the money lives.** Trading against the pool is modeled as
-//!    trading against the game's existing `GameSession::virtual_bank_vgp`
-//!    field (buying pays VGP into it, selling draws VGP out of it) rather
-//!    than inventing a separate per-protocol IPO cash account. Each
-//!    player's own spendable cash is tracked in `state::PLAYER_CASH_VGP`,
-//!    provisioned by `contract::execute_join_game_room` when a player
-//!    joins.
-//! 4. **Dividends.** `DeclareDividends` splits `revenue_amount` across
-//!    *all* of a protocol's shares, not just player-held ones: each
-//!    player's cut is credited to `PLAYER_CASH_VGP`, and the pool's
-//!    (bank's) share -- plus any integer-division dust -- is credited to
-//!    `GameSession::virtual_bank_vgp` so nothing is ever left stranded.
-//!    Only the protocol's registered `PROTOCOL_PRESIDENT` may call it.
-//! 5. **Presidency.** After every `BuyStock`/`SellStock`, whoever holds the
-//!    largest share of a protocol among its registered players -- at or
-//!    above `PRESIDENT_MIN_PERCENTAGE` -- is (re)assigned as
-//!    `PROTOCOL_PRESIDENT`, per rules.md ("The player holding the highest
-//!    percentage of shares (minimum 20%) is designated the 'Validator'").
-//!    Ties keep the incumbent if they're part of the tied group, otherwise
-//!    fall back to address ordering for a deterministic pick -- real 1830
-//!    breaks ties by stock-round turn order, which isn't modeled here.
-//! 6. **Market movements**, per the mapping given for this feature:
-//!    - `BuyStock` that empties both pools (0% remaining in IPO *and* Bank)
-//!      triggers `move_up` (sold-out bonus).
-//!    - `SellStock` triggers one `move_down` per certificate sold. **All
-//!      certificates in a single sale transact at the price the marker sat
-//!      on when the sale began** (Audit G-4); the marker only walks down
-//!      afterward, one row per certificate. A previous version of this note
-//!      claimed the opposite -- that later certificates in the same sale
-//!      settle at the new, lower price, "matching the physical 18xx board"
-//!      -- and the code did exactly that. Both were wrong: 1830 fixes the
-//!      sale price at the start of the transaction, and every reference
-//!      implementation does the same. See `execute_sell_stock`.
-//!    - `DeclareDividends { distribute: true }` triggers `move_right`.
-//!    - `DeclareDividends { distribute: false }` (withheld) triggers
-//!      `move_left`.
-//! 7. **General flotation.** Every `BuyStock` now checks, right after the
-//!    purchase is recorded, whether `protocol_id`'s total real-player-owned
-//!    stake (summed across every registered player, excluding whatever
-//!    still sits in `IPO_POOL_SHARES`/`BANK_POOL_SHARES`) has reached
-//!    `FLOAT_THRESHOLD_PERCENTAGE` (60%). The first purchase that crosses
-//!    that line flips `PublicCompany::is_floated` to `true` and capitalizes
-//!    its treasury at `FLOAT_CAPITALIZATION_MULTIPLIER` (10x) times its Par
-//!    Value -- the classic 1830 "treasury = 10x par" rule (see #8: this is
-//!    always Par Value specifically, never a Bank/Market price, even on the
-//!    rare purchase that crosses the float line via a Bank buy). This
-//!    closes the gap flagged in `public_company.rs`: previously only
-//!    Baltimore & Ohio could ever float (for free, the moment its private
-//!    company was won -- see `auction::award_bo_president_share`), so
-//!    ordinary corporations like PRR had no path to `is_floated: true` at
-//!    all. Shares can still be bought out of a company's IPO pool before it
-//!    floats (matching the real game's pre-flotation Stock Round), and a
-//!    company that already floated by some other path (B&O) is simply
-//!    skipped here since `is_floated` is already `true`.
-//! 8. **Par Value Selection.** `BuyStock` now takes a `source`
-//!    (`SharePurchaseSource::Ipo` or `::Bank`) and an optional `par_value`.
-//!    Buying from the IPO pool pays the protocol's fixed Par Value, chosen
-//!    from `market::PAR_VALUE_LADDER` on the very first-ever IPO purchase
-//!    of that protocol (which also pins its starting `MARKET_GRID`
-//!    position to that par price's cell) and stored durably in
-//!    `PROTOCOL_PAR_VALUE`; every later IPO purchase pays that same fixed
-//!    amount regardless of where the market marker has since moved. Buying
-//!    from the Bank pool always pays the protocol's live, floating
-//!    `MARKET_GRID` price instead -- the two pools and the two prices are
-//!    intentionally decoupled, matching the real 18xx distinction between
-//!    "buying at the IPO price" and "buying off the open market".
-//! 9. **Turn Pacing.** `SellStock` is turn-gated (`ensure_active_player`)
-//!    exactly like `BuyStock`, but deliberately does NOT advance
-//!    `GameSession::active_player_index` -- only `reset_pass_streak`'s
-//!    `consecutive_passes = 0` half runs, matching the real 1830 Stock
-//!    Round rule that a player may sell any number of blocks on their turn
-//!    before the one `BuyStock`-or-`PassTurn` action that actually ends it.
-//!    `execute_buy_stock`/`auction::execute_bid_on_private` still call the
-//!    full `advance_turn` (pointer + streak reset).
-//! 10. **50% Bank Pool Cap.** `SellStock` rejects a sale
-//!     (`BankPoolCapExceeded`) if it would push `BANK_POOL_SHARES` for that
-//!     protocol above `BANK_POOL_CAP_PERCENTAGE` (50%) -- the classic 18xx
-//!     constraint that the market can only absorb so many dumped shares of
-//!     a single company before it's illiquid. Checked before any state is
-//!     touched.
-//! 11. **President/Validator Transfer -- true stock dumping (Audit G-7).**
-//!     `SellStock` simulates the holdings its sale would leave behind and
-//!     rejects it only when NOBODY -- seller included -- would still hold
-//!     `PRESIDENT_MIN_PERCENTAGE` (20%) afterward
-//!     (`NoEligiblePresidentSuccessor`). A floated corporation must always
-//!     have someone able to hold its President's certificate; that single
-//!     condition is the whole rule, and everything else is legal.
+//!   Certificate size   a fixed 10% block. `BuyStock` buys one (or a Brown-Zone
+//!                      multi-buy); `SellStock` accepts any multiple.
+//!   60% ownership cap  per player per corporation, waived in the Orange and
+//!                      Brown bands only, with a hard 100% backstop.
+//!   Global cert limit  total cards across the whole game, by player count,
+//!                      waived in Yellow, Orange AND Brown -- deliberately
+//!                      broader than the ownership cap's exemption.
+//!   Flotation          the first purchase crossing 60% real-player ownership
+//!                      floats the company and capitalizes its treasury at 10x
+//!                      PAR -- always par, never a market price.
+//!   Presidency         re-derived after every trade; ties keep the incumbent,
+//!                      else lowest address. Real 1830 breaks ties by turn
+//!                      order, which is not modelled.
+//!   Buyback lockout    no re-buying a corporation you sold this Stock Round.
+//!   Round gating       no sales in SR1; no trading outside a Stock Round.
 //!
-//!     This replaced a blanket pre-check that rejected ANY sale by a
-//!     sitting President unless some *other* player already held 20%. That
-//!     version was stricter than real 1830 and **blocked legal moves**: a
-//!     President on 60% could not sell one 10% certificate even though they
-//!     would still hold 50% and still be President afterward. It also meant
-//!     the actual dump -- selling out from under the presidency and handing
-//!     it off -- was never executed, only refused.
+//! Market movements: sold-out bonus moves up, each certificate sold moves down,
+//! Distribute moves right, Withhold moves left.
 //!
-//!     **On "transferring the 20% President's certificate."** This engine
-//!     stores ownership as a raw PERCENTAGE per player (`PLAYER_SHARES`),
-//!     not as discrete certificate objects, so there is no 20% card to
-//!     physically move and no pair of 10% cards to hand back to the
-//!     outgoing President -- the percentages are already correct the
-//!     instant the sale settles. The certificate SEMANTICS are preserved
-//!     entirely through `PROTOCOL_PRESIDENT` plus
-//!     `state::count_player_certificates`, which counts the first 20% of
-//!     whoever currently holds the seat as exactly ONE physical card and
-//!     everything else in ordinary 10% blocks. So when
-//!     `recalculate_president` moves the seat, the incoming President's
-//!     first 20% automatically starts counting as one certificate and the
-//!     outgoing President's remaining 20% automatically reverts to counting
-//!     as two -- which is precisely the "hand back 2x10%" rule, achieved by
-//!     re-derivation rather than by shuffling stored cards. Writing an
-//!     explicit swap here would either be a no-op or corrupt the
-//!     percentages.
-//! 12. **Global Certificate Limit -- a STRICT hard block, not a warning.**
-//!     `execute_buy_stock` and `auction::execute_bid_on_private` both reject
-//!     a purchase outright (`TradingError::ExceededCertificateLimit` here;
-//!     `auction::AuctionError::GlobalCertificateLimitExceeded` there -- two
-//!     separate error enums that happened to share one name before this
-//!     pass renamed only this module's variant, to read unambiguously
-//!     distinct from the *other*, ownership-cap `CertificateLimitExceeded`
-//!     just above) if it would push the buyer/bidder's total certificate
-//!     count past the standard 1830 limit for `GameSession::max_players`
-//!     (`CERTIFICATE_LIMIT_BY_PLAYER_COUNT`) -- there is no partial/soft
-//!     path here: the transaction fails and no state is touched. The count
-//!     itself (`state::count_player_certificates`) is every private company
-//!     owned, plus every physical stock card held across public companies --
-//!     with the President's 20% card counting as exactly ONE certificate,
-//!     not two (a naive `held_pct / PERCENT_PER_SHARE` would double-count
-//!     it; see that function's own doc comment for the three-source
-//!     re-verification this matches). **Zone exemption**, added this pass:
-//!     `execute_buy_stock` skips this check entirely when the company being
-//!     purchased currently sits on a Yellow, Orange, or Brown market cell
-//!     (`certificate_limit_exempt`, resolved from the same `zone_type` the
-//!     60% ownership check above already reads) -- broader than that
-//!     ownership check's own Orange/Brown-only exemption, matching the real
-//!     1830 rule that Yellow alone already exempts a certificate from the
-//!     hand limit (see module doc comment #2). `auction::execute_bid_on_private`
-//!     has no market-cell concept for a *private* company, so its own check
-//!     stays unconditional. Not enforced on `SellStock` (selling only ever
-//!     lowers a player's count) or `DeclareDividends`/`LayTile`/
-//!     `BuyHardwareFromPool` (neither changes certificate ownership).
-//! 13. **Checks-Effects-Interactions.** `execute_buy_stock` resolves *every*
-//!     validation check -- turn order, the 60% `CertificateLimitExceeded`
-//!     ownership cap, the Global Certificate Limit (module doc comment #12,
-//!     checked right after it since both need `zone_type` resolved first),
-//!     and pool liquidity/Par Value legality -- purely by reading state,
-//!     before writing anything. The price/
-//!     pool-percentage/zone-type resolution that used to live inside the
-//!     `source` match (and used to write `IPO_POOL_SHARES`/
-//!     `BANK_POOL_SHARES`/`PROTOCOL_PAR_VALUE` mid-computation) instead
-//!     returns a `PoolEffect` describing what *would* be written; only the
-//!     very end of the function -- once every `Err` path has already
-//!     returned -- actually applies it, alongside every other storage write
-//!     (`PLAYER_CASH_VGP`, `PLAYER_SHARES`, `SESSIONS`, and the market
-//!     marker pin on a protocol's first-ever IPO purchase). Two small,
-//!     behavior-preserving consequences of resolving the first-IPO-purchase
-//!     par cell and the Bank-purchase market cell without writing:
-//!     - The first-ever-IPO-purchase case reads its target cell straight out
-//!       of the shared `MARKET_GRID` template at the chosen par value's
-//!       coordinates (`market::par_value_coords`), rather than calling
-//!       `market::set_protocol_position` and then reading it back -- the
-//!       same cell, just without the write.
-//!     - The Bank-purchase case now calls `market::current_cell` directly
-//!       instead of `market::ensure_protocol_position` first. Every
-//!       `CORE_PUBLIC_COMPANIES` protocol already has a market position
-//!       seeded at room-creation time (`market::initialize_game_market`), so
-//!       `ensure_protocol_position` was already documented as "a defensive
-//!       fallback, not the primary path" here -- this now surfaces that
-//!       (unreachable in practice) missing-position case as a clean
-//!       `TradingError::Market` error instead of silently seeding a
-//!       `(0, 0)` position mid-check.
-//!     `execute_sell_stock` and `auction::execute_bid_on_private` already
-//!     followed this pattern (module doc comments #10/#11 and `auction.rs`'s
-//!     own doc comment #5); this brings `execute_buy_stock` in line with the
-//!     other two.
-//! 14. **Operating Round Corporation Turn Queue gating.** Layered on top of
-//!     `execute_declare_dividends`'s existing President-only authorization:
-//!     whenever `GameSession::active_operating_order` is non-empty,
-//!     `protocol_id` must be whichever corporation `active_corporation_index`
-//!     currently points to, or the call is rejected with
-//!     `NotYourOperatingTurn` (see `hexmap.rs`'s module doc comment #13 for
-//!     the shared design and `operations.rs` for how the queue itself is
-//!     computed). `BuyStock`/`SellStock`/`BidOnPrivate` are unaffected --
-//!     they're Stock Round actions gated by `active_player_index` (module
-//!     doc comment #9), a different turn structure entirely.
-//! 15. **Brown Zone Multiple-Buy.** A `SharePurchaseSource::Bank` purchase
-//!     made while the protocol's marker sits on a `ZoneType::BrownZone`
-//!     cell does NOT advance the turn pointer (contrast the unconditional
-//!     `advance_turn` every other `BuyStock` call makes) -- the real 1830
-//!     rule that a player may buy more than one certificate of a
-//!     Brown-zone corporation from the open market in the same turn. Every
-//!     other purchase (any IPO purchase regardless of zone, or a Bank
-//!     purchase outside a Brown cell) still advances the turn exactly as
-//!     before.
-//! 16. **$350 Game-End Trigger.** Immediately after any *ascending* market
-//!     movement this module triggers (the sold-out bonus in `BuyStock`, or
-//!     Distribute Yield's `move_right` in `DeclareDividends`), if the
-//!     landed-on cell's price has reached `market::GAME_END_PRICE_TRIGGER`
-//!     ($350), the room closes out automatically via
-//!     `contract::finalize_and_distribute_payouts` -- see that function's
-//!     doc comment, and `market.rs`'s module doc comment for why this is an
-//!     explicit, user-requested house rule rather than verbatim-sourced
-//!     engine behavior. The triggering action's own bookkeeping (the
-//!     purchase itself, the dividend payout) completes normally first --
-//!     only what would have been the *next* turn is what "halt all further
-//!     player turns" actually prevents, enforced by `GameSession::is_active`
-//!     being checked at the top of every gameplay handler.
-//! 17. **Phase-Gated Corporate Purchase Protocol.** `execute_buy_private_company`
-//!     implements the real 1830 rule that once Phase 3 (the 3-train era)
-//!     begins, an operating corporation may buy a private company directly
-//!     off its player-owner, at a price the corporation's President
-//!     chooses -- bounded to 50%-200% of the private's printed face value,
-//!     inclusive, checked by cross-multiplication (`price * 2 >= face_value`
-//!     and `price <= face_value * 2`) rather than dividing `face_value` by
-//!     2, so an odd-valued face value's exact half is never silently
-//!     rounded away. This engine has no separate `Phase` type (see
-//!     `hexmap.rs`'s module doc comment #24 for the full mapping); Phase 3
-//!     is modeled as `TileColor::Green`, matching `hardware.rs`'s own
-//!     `ERA_UNLOCK_TRIGGERS` ("3" unlocks Green). Authorization mirrors
-//!     `execute_declare_dividends` exactly: only `protocol_id`'s registered
-//!     President may call this, gated by the same soft Operating Round
-//!     Corporation Turn Queue check (enforced only once the room actually
-//!     has a non-empty `active_operating_order`). On success, `price`
-//!     moves from the buying corporation's own `PublicCompany::treasury`
-//!     straight into the selling player's `PLAYER_CASH_VGP`, and
-//!     `PrivateCompany::owner`/`owner_protocol_id` flip from
-//!     player-ownership to corporate-ownership (see that struct's own doc
-//!     comment in `state.rs` for the full invariant) -- from that point on,
-//!     `operations.rs`'s Automatic Pre-OR Revenue Payout (module doc
-//!     comment #14 there) pays this private's revenue into the
-//!     corporation's treasury instead of a player's wallet, and
-//!     `hexmap.rs`'s Private-Company-Reserved-Hex gate (module doc comment
-//!     #24) recognizes the corporation, not the former player-owner, as
-//!     entitled to build on that private's reserved hex (if it has one).
-//!     There's no separate player-side accept/reject message -- this is a
-//!     unilateral, price-bounded corporate purchase, not a true two-party
-//!     negotiation, matching this message's own scoped request.
-//! 18. **Round-phase gating (Audit G-6).** Two related restrictions this
-//!     module previously had NO enforcement for at all -- there were zero
-//!     references to `GameSession::macro_round_number` or
-//!     `current_round_type` anywhere in this file:
+//! Sale pricing is fixed when the sale BEGINS (Audit G-4) -- every certificate
+//! transacts at the price the marker sat on, and the marker walks down only
+//! afterwards. A previous pass did the opposite and paid a seller a
+//! progressively worse price the deeper into their own sale they got.
 //!
-//!     - **Stock Round 1 is buy-or-pass only.** `execute_sell_stock`
-//!       rejects every sale while `macro_round_number == 1` and the room is
-//!       in a Stock Round (`SalesProhibitedInFirstStockRound`) -- the
-//!       classic 1830 rule that no share may be sold in the opening Stock
-//!       Round. The ban lifts automatically once Macro Round Loop
-//!       Advancement (`operations::execute_end_operating_round_turn`,
-//!       `operations.rs` module doc comment #12) bumps `macro_round_number`
-//!       to `2`, i.e. at the start of SR2. Players could previously
-//!       pump-and-dump on turn one.
-//!     - **`BuyStock`/`SellStock` are Stock Round actions.** Both now call
-//!       `ensure_stock_round`, rejecting the message with
-//!       `StockActionOutsideStockRound` whenever `current_round_type` isn't
-//!       `RoundType::StockRound` -- most importantly during an Operating
-//!       Round, where trading used to be silently legal. This closes the
-//!       LIMITATION `operations.rs`'s own module doc comment #12 flagged
-//!       ("`current_round_type` is currently informational/display-oriented
-//!       rather than itself an enforcement gate on trading messages;
-//!       wiring that up is future work"). That future work is this note.
+//! Turn pacing: `SellStock` resets the pass streak but does NOT advance the
+//! turn -- a player may sell any number of blocks before the one Buy-or-Pass
+//! that ends their turn. A Brown-Zone Bank purchase likewise does not advance.
 //!
-//!     Both checks run AFTER each handler's existing
-//!     `waterfall_auction_active` check, so a player acting during the
-//!     Waterfall Auction still gets that phase's own, more specific
-//!     `WaterfallAuctionInProgress` error pointing them at `waterfall.rs`'s
-//!     five dedicated messages.
-//! 19. **Step 4.5 Batch 1, item 1 -- Atomic Multi-Buy.** `BuyStock` gained a
-//!     `quantity: Option<u32>` field. `None` means one certificate, which is
-//!     exactly the pre-Batch-1 behavior, so every existing caller is
-//!     unaffected. A quantity above 1 is legal only from the Bank pool and
-//!     only while the corporation's marker sits in the Brown band
-//!     (`MultiBuyNotPermitted` otherwise), and settles as a single atomic
-//!     transaction: one debit of `quantity * price`, one share write, one
-//!     pool write, all after every validation has already passed. Note this
-//!     is a SECOND expression of the Brown-Zone privilege, alongside the
-//!     turn-pacing exception in #15 -- both are real, and both remain legal.
-//! 20. **Step 4.5 Batch 1, item 2 -- the two limits, separated.** The 60%
-//!     ownership cap and the Global Certificate Limit now live in named,
-//!     independently testable functions (`check_holding_limit`,
-//!     `check_cert_limit`) instead of being open-coded inside
-//!     `execute_buy_stock`. The behavioral change is in the certificate
-//!     limit: the Yellow/Orange/Brown exemption now filters the player's
-//!     ALREADY-HELD certificates out of the running total too, not just the
-//!     certificate being bought. See `check_cert_limit`'s doc comment for
-//!     why the old asymmetry was wrong in both directions. The ownership cap
-//!     additionally gained a hard 100% backstop
-//!     (`HoldingExceedsTotalIssue`): "unlimited" in the Orange/Brown bands
-//!     means "no 60% cap", never "more of a corporation than exists".
-//! 21. **Step 4.5 Batch 1, item 3 -- Stock Round Buyback Lockout.**
-//!     `execute_sell_stock` records the corporation into
-//!     `state::PLAYER_SR_SALES`; `execute_buy_stock` rejects any purchase of
-//!     a corporation in the caller's list with `StockBuybackLockout`. The
-//!     list clears at the Stock-Round-to-Operating-Round boundary, from both
-//!     `conclude_stock_round` and `operations::execute_begin_operating_round`.
-//!     This closes a wash-trade hole: a player could previously dump a
-//!     rival's stock to crater the price and immediately re-buy it cheaper in
-//!     the same round.
-//! 22. **Step 4.5 Batch 1, items 4 and 6 -- round conclusion and corporation
-//!     opening.** `conclude_stock_round` is this module's new
-//!     end-of-Stock-Round hook, fired by `gamelog::execute_pass_turn` the
-//!     moment every player has passed consecutively; it applies the
-//!     100%-sold-out price rise to every fully-held floated corporation and
-//!     clears the lockout. `execute_buy_stock`'s opening-purchase branch
-//!     enforces that the first certificate out of any corporation is the 20%
-//!     President's Certificate at exactly twice par -- see that function's
-//!     own doc comment, and note that Baltimore & Ohio is naturally exempt
-//!     because `auction::award_bo_president_share` has already granted it.
+//! Checks-Effects-Interactions throughout: every validation resolves by reading
+//! state, and a `PoolEffect` carries what WOULD be written until the Effects
+//! section at the end.
+//!
+//! Full design history -- all 22 module notes, the G-4/G-6/G-7 corrections and
+//! the reasoning behind each -- is in
+//! docs/ai_architecture/rust_contract_architecture.md.
 
 use cosmwasm_std::{
     Addr, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
@@ -375,14 +77,12 @@ pub const CERTIFICATE_LIMIT_PERCENTAGE: u8 = 60;
 /// (minimum 20%)").
 pub const PRESIDENT_MIN_PERCENTAGE: u8 = 20;
 
-/// **Step 4.5 Batch 1, item 6.** The size of the President's Certificate --
-/// the single physical 20% card that opens a corporation. Numerically equal
-/// to `PRESIDENT_MIN_PERCENTAGE`, but a deliberately separate constant: that
-/// one is a *threshold* asked of any holding ("do you hold enough to preside
-/// at all"), this one is the *size of one specific card*. They coincide in
-/// 1830 and diverge in other 18xx titles, and conflating them would make the
-/// opening-purchase rule silently follow any future change to the presidency
-/// threshold.
+/// The size of the President's Certificate -- the single 20% card that opens a
+/// corporation. Numerically equal to `PRESIDENT_MIN_PERCENTAGE` but a deliberately
+/// separate constant: that one is a THRESHOLD asked of any holding, this is the
+/// SIZE OF ONE CARD. They coincide in 1830 and diverge in other 18xx titles, and
+/// conflating them would make the opening-purchase rule silently follow any
+/// future change to the presidency threshold.
 pub const PRESIDENT_CERTIFICATE_PERCENTAGE: u8 = 20;
 
 /// **Step 4.5 Batch 1, item 6.** The President's Certificate costs exactly
@@ -429,14 +129,11 @@ pub const FLOAT_CAPITALIZATION_MULTIPLIER: u128 = 10;
 /// module doc comment #10).
 pub const BANK_POOL_CAP_PERCENTAGE: u8 = 50;
 
-/// Standard 1830 Global Certificate Limit, by declared `GameSession::max_players`:
-/// the total number of certificates (every private company owned, plus
-/// every `PERCENT_PER_SHARE` block of public stock held) a single player
-/// may hold across the whole game. `max_players` is always validated to
-/// 2-6 at `CreateGameRoom` time (`ContractError::InvalidMaxPlayers`); the
-/// 2- and 3-player entries (28/20) are the standard 1830 values, filled in
-/// here since this feature's request only specified the 4/5/6-player caps.
-/// See `certificate_limit_for_player_count` and module doc comment #12.
+/// Standard 1830 Global Certificate Limit by `max_players` -- every private
+/// owned plus every 10% block of public stock held, across the whole game.
+/// `max_players` is validated to 2-6 at room creation. The 2- and 3-player
+/// entries are the standard values, filled in here since the original request
+/// only specified the 4/5/6-player caps.
 pub const CERTIFICATE_LIMIT_BY_PLAYER_COUNT: &[(u8, u32)] =
     &[(2, 28), (3, 20), (4, 16), (5, 13), (6, 11)];
 
@@ -730,29 +427,18 @@ pub enum TradingError {
     InsufficientTreasuryFunds { protocol_id: u32 },
 }
 
-/// Re-derives who should hold the President/Validator seat for
-/// `protocol_id` from the current `PLAYER_SHARES` holdings of every
-/// registered player in the game, persisting any change to
-/// `PROTOCOL_PRESIDENT` and returning the (possibly unchanged) result.
+/// Re-derives who holds the President seat for `protocol_id` from current
+/// holdings, persisting any change. Ties keep the incumbent if they are in the
+/// tied group (so a trade that does not change the leader causes no churn),
+/// otherwise the lexicographically-lowest address -- a simplification, since real
+/// 1830 breaks ties by stock-round turn order.
 ///
-/// Ties are broken by keeping the incumbent if they're part of the tied
-/// group (so a trade that doesn't change the leader never causes
-/// unnecessary churn), otherwise by the lexicographically-lowest address --
-/// a simplification, since real 1830 breaks ties by stock-round turn
-/// order, which isn't modeled here. If no one meets
-/// `PRESIDENT_MIN_PERCENTAGE`, the seat is cleared.
-///
-/// **This IS the President's-certificate transfer** (Audit G-7). Called at
-/// the end of every `execute_buy_stock`/`execute_sell_stock`, it is the
-/// single point where the seat moves -- including on a stock dump, where
-/// the outgoing President has just sold below the new leader. Because
-/// ownership is stored as a percentage rather than as discrete cards, no
-/// certificate objects need to change hands: writing the new holder here is
-/// sufficient, and `state::count_player_certificates` immediately
-/// re-derives both players' physical card counts from the new seat (the
-/// incoming President's first 20% collapses to one card; the outgoing
-/// President's 20% expands back to two ordinary 10% cards). See module doc
-/// comment #11 for the full reasoning.
+/// THIS IS THE PRESIDENT'S-CERTIFICATE TRANSFER (Audit G-7). Because ownership is
+/// stored as a percentage rather than discrete cards, no certificate objects need
+/// to change hands: writing the new holder here is sufficient, and
+/// `count_player_certificates` immediately re-derives both players' card counts
+/// -- the incoming President's first 20% collapses to one card, the outgoing
+/// President's 20% expands back to two.
 fn recalculate_president(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -810,14 +496,9 @@ fn recalculate_president(
     Ok(new_president)
 }
 
-/// Verifies `sender` is the player currently sitting at
-/// `session.active_player_index` -- the Turn Priority Queue guardrail
-/// `execute_buy_stock`/`execute_sell_stock` enforce before touching any
-/// state (per-module, like `auction::ensure_active_player` mirrors for
-/// `execute_bid_on_private` -- kept as separate small copies rather than a
-/// shared cross-module helper since each module has its own error enum).
-/// See `gamelog.rs`'s module doc comment #4 for how far turn-order
-/// enforcement reaches beyond these three actions.
+/// Verifies `sender` is the player at `active_player_index` -- the Turn Priority
+/// Queue guardrail. A per-module copy rather than a shared cross-module helper,
+/// since each module has its own error enum.
 fn ensure_active_player(
     session: &GameSession,
     game_id: u64,
@@ -838,17 +519,13 @@ fn ensure_active_player(
     Ok(())
 }
 
-/// Audit G-6, second half (module doc comment #18): rejects
-/// `BuyStock`/`SellStock` unless the room is actually in a Stock Round.
-/// Shared by both handlers so the two can never disagree about what "a
-/// Stock Round is in progress" means.
+/// Audit G-6: rejects `BuyStock`/`SellStock` unless the room is actually in a
+/// Stock Round. Shared by both handlers so the two can never disagree about what
+/// "a Stock Round is in progress" means.
 ///
-/// Deliberately called AFTER each handler's own `waterfall_auction_active`
-/// check, so the Waterfall Auction keeps reporting its own, more specific
-/// `WaterfallAuctionInProgress` error (which names the five dedicated
-/// `waterfall.rs` actions a player should be using instead) rather than
-/// being folded into this generic one -- even though
-/// `RoundType::WaterfallAuction` would also fail this check.
+/// Deliberately called AFTER each handler's `waterfall_auction_active` check, so
+/// the auction keeps reporting its own more specific error naming the five
+/// dedicated messages, rather than being folded into this generic one.
 fn ensure_stock_round(session: &GameSession, game_id: u64) -> Result<(), TradingError> {
     if session.current_round_type != RoundType::StockRound {
         return Err(TradingError::StockActionOutsideStockRound {
@@ -859,25 +536,19 @@ fn ensure_stock_round(session: &GameSession, game_id: u64) -> Result<(), Trading
     Ok(())
 }
 
-/// Resets `session.consecutive_passes` back to `0`, since a completed
-/// action breaks any in-progress all-pass streak -- independent of whether
-/// that action also advances the turn pointer. `advance_turn` calls this as
-/// its counter-reset half; `execute_sell_stock` calls it directly, since a
-/// sale resets the streak but must NOT move the seat (module doc comment
-/// #9).
+/// Resets `consecutive_passes` to `0`, since a completed action breaks any
+/// in-progress all-pass streak -- independent of whether that action also
+/// advances the turn pointer. `execute_sell_stock` calls it directly, since a
+/// sale resets the streak but must NOT move the seat.
 fn reset_pass_streak(session: &mut GameSession) {
     session.consecutive_passes = 0;
 }
 
-/// Advances `session.active_player_index` to the next player in
-/// `player_addresses` order (wrapping around) and resets
-/// `session.consecutive_passes` (see `reset_pass_streak`). Called after
-/// every successful `BuyStock`/`auction::execute_bid_on_private` -- the two
-/// actions that actually end a player's turn -- mirroring the
-/// pointer-advance half of `gamelog::execute_pass_turn` (which instead
-/// *increments* `consecutive_passes` -- see that function's doc comment for
-/// why a pass and a trade affect the counter oppositely). Deliberately NOT
-/// called by `execute_sell_stock` (module doc comment #9).
+/// Advances `active_player_index` and resets the pass streak. Called after every
+/// successful `BuyStock`/`BidOnPrivate` -- the two actions that end a turn.
+/// Mirrors the pointer half of `execute_pass_turn`, which instead INCREMENTS the
+/// streak: a pass extends an all-pass streak while a trade breaks one.
+/// Deliberately NOT called by `execute_sell_stock`.
 fn advance_turn(session: &mut GameSession) {
     let player_count = session.player_addresses.len() as u32;
     if player_count > 0 {
@@ -1141,32 +812,18 @@ pub fn check_cert_limit(
 // Step 4.5 Batch 1, item 4: end-of-Stock-Round resolution.
 // ===================================================================
 
-/// **Concludes a Stock Round.** Called the moment every player has passed
-/// consecutively (`gamelog::execute_pass_turn`), which is the classic 18xx
-/// end-of-Stock-Round condition and -- until Batch 1 -- a condition this
-/// contract tracked in `GameSession::consecutive_passes` but never acted on.
+/// Concludes a Stock Round, fired the moment every player has passed
+/// consecutively -- the classic end-of-round condition this contract tracked in
+/// `consecutive_passes` but never acted on.
 ///
-/// Two things happen, in this order:
-/// 1. **The 100%-Sold-Out price rise (item 4).** Every floated corporation
-///    with an empty IPO pool AND an empty Bank pool -- i.e. 100% of its
-///    shares are in player hands -- advances one cell up the chart. Delegated
-///    to `market::apply_sold_out_price_rises`; see that function for the
-///    coordinate convention and for why it must be called exactly once per
-///    round.
-/// 2. **The Buyback Lockout clears (item 3).** Every player's
-///    `PLAYER_SR_SALES` entry is dropped, so the corporations they sold this
-///    round are freely buyable again next round.
+/// Two things, in order: every floated corporation 100% in player hands advances
+/// one cell up the chart; then every player's buyback lockout is cleared. Also
+/// resets `consecutive_passes`, which is what makes it idempotent in practice.
 ///
-/// Also resets `consecutive_passes` to `0`, which is what makes this
-/// idempotent in practice: the all-passed condition cannot re-fire on the
-/// next pass without a full fresh round of passes first.
-///
-/// Deliberately does NOT flip `current_round_type` to
-/// `RoundType::OperatingRound`. That transition belongs to
-/// `operations::execute_begin_operating_round`, which also computes the
-/// operating order and the paced sub-round count; splitting it would give
-/// this contract two competing definitions of when an Operating Round starts.
-/// Mutates `session` in place; the CALLER is responsible for persisting it.
+/// Deliberately does NOT flip `current_round_type` -- that belongs to
+/// `execute_begin_operating_round`, which also computes the operating order and
+/// the paced sub-round count. Splitting it would give this contract two competing
+/// definitions of when an Operating Round starts.
 pub fn conclude_stock_round(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -1231,39 +888,16 @@ enum PoolEffect {
     },
 }
 
-/// Buys `quantity` certificates of `protocol_id` in one atomic action, from
-/// either its IPO pool or its Open Market/Bank pool per `source` -- see
-/// module doc comment #8 for the full Par Value Selection design, and
-/// `msg::SharePurchaseSource`/`ExecuteMsg::BuyStock` for the field-level
-/// contract. Payment always flows from the buyer's own `PLAYER_CASH_VGP`
-/// into the game bank (`GameSession::virtual_bank_vgp`). If this purchase
-/// empties *both* pools (100% of the protocol now in player hands), the
-/// price marker advances up one row (sold-out bonus).
+/// Buys `quantity` certificates of `protocol_id` from its IPO or Bank pool.
+/// Payment always flows from the buyer's cash into the game bank. If the purchase
+/// empties BOTH pools the marker advances one row (sold-out bonus).
 ///
-/// **Step 4.5 Batch 1 added four invariants to this handler**, all of them
-/// resolved during the Checks phase (module doc comment #13), so every
-/// rejection below leaves storage completely untouched:
-///
-/// - **Item 1, Atomic Multi-Buy.** `quantity` defaults to
-///   `DEFAULT_BUY_QUANTITY` (1). Any value above 1 requires BOTH a Brown-Zone
-///   market position AND `SharePurchaseSource::Bank`, or the call is rejected
-///   with `MultiBuyNotPermitted`. A legal multi-buy debits
-///   `quantity * price` in ONE subtraction, credits
-///   `quantity * PERCENT_PER_SHARE` in ONE write, and decrements the Bank
-///   pool by that same percentage in ONE write -- there is no partial state
-///   and the price never drifts mid-action.
-/// - **Item 2, zone invariants.** The 60% ownership cap and the Global
-///   Certificate Limit are now enforced through the named, separately
-///   testable `check_holding_limit` and `check_cert_limit`, which own the
-///   Yellow/Orange/Brown exemption rules.
-/// - **Item 3, Buyback Lockout.** Rejected outright if the buyer sold this
-///   corporation earlier in the same Stock Round.
-/// - **Item 6, President's Certificate.** The first purchase of a corporation
-///   with no President and no issued shares is NOT an ordinary 10% share: it
-///   is the 20% President's Certificate at exactly twice par, resolved
-///   automatically and buyable only singly, only from the IPO. Until it
-///   happens, every other purchase of that corporation is rejected with
-///   `PresidentsCertificateRequired`.
+/// Four invariants, all resolved during the Checks phase so every rejection
+/// leaves storage completely untouched: atomic multi-buy (Brown Zone + Bank
+/// only); the 60% cap and Global Certificate Limit via `check_holding_limit`/
+/// `check_cert_limit`; the Buyback Lockout; and the President's Certificate --
+/// the first purchase of an unopened corporation is the 20% card at exactly twice
+/// par, buyable only singly and only from the IPO.
 // Eight parameters, one past clippy's default threshold. Every one is a
 // distinct, required piece of the `ExecuteMsg::BuyStock` contract and this
 // handler is called from exactly two places (`contract::execute`'s dispatch
@@ -1374,15 +1008,11 @@ pub fn execute_buy_stock(
         .may_load(deps.storage, (game_id, protocol_id, info.sender.clone()))?
         .unwrap_or(0);
 
-    // ---- Checks (continued): resolve this purchase's price, its pool's
-    // remaining percentage after the buy, and the current market cell's
-    // zone type (needed below for BOTH the 60% ownership-cap check and the
-    // Global Certificate Limit check -- module doc comment #12) -- branching
-    // on `source`. Every branch here only *reads* storage; nothing is
-    // written until the dedicated Effects section below, once every `Err`
-    // path in this function has already returned (Checks-Effects-Interactions
-    // -- module doc comment #13). `PoolEffect` carries forward whatever this
-    // resolution decided should eventually be written.
+    // Checks (continued): resolve this purchase's price, its pool's remaining
+    // percentage, and the market cell's zone type -- needed below for BOTH the 60%
+    // ownership cap and the Global Certificate Limit. Every branch here only READS;
+    // nothing is written until the Effects section, once every `Err` path has
+    // returned. `PoolEffect` carries forward what this resolution decided.
     let (total_cost, shares_acquired, new_pool_pct, zone_type, pool_effect) = match source {
         SharePurchaseSource::Ipo => {
             // `ipo_pct` is the single hoisted read from above -- the
@@ -1528,21 +1158,18 @@ pub fn execute_buy_stock(
                 });
             }
 
-            // Every `CORE_PUBLIC_COMPANIES` protocol already has a market
-            // position seeded at room-creation time
-            // (`market::initialize_game_market`), so this is a genuine
-            // read -- see module doc comment #13 for why this no longer
-            // calls `market::ensure_protocol_position` as a write-capable
-            // fallback first.
+            // Every core protocol already has a market position seeded at room creation, so
+            // this is a genuine read rather than the write-capable
+            // `ensure_protocol_position` fallback it used to call -- which means a
+            // (practically unreachable) missing position now surfaces as a clean error
+            // instead of silently seeding a `(0, 0)` position mid-check.
             let cell = market::current_cell(deps.storage, game_id, protocol_id)?;
 
-            // Atomic multi-buy pricing (item 1): every certificate in the
-            // action settles at the SAME price -- the one the marker sits on
-            // when the action begins. The marker is not walked between
-            // certificates, so a 3-share Brown-Zone buy costs exactly 3x the
-            // listed price, never a drifting sum. This mirrors the identical
-            // fix already made on the sell side (module doc comment #6,
-            // Audit G-4).
+            // Atomic multi-buy pricing: every certificate settles at the SAME price, the one
+            // the marker sits on when the action begins. The marker is not walked between
+            // certificates, so a 3-share Brown-Zone buy costs exactly 3x the listed price,
+            // never a drifting sum -- the identical fix already made on the sell side
+            // (Audit G-4).
             let total_cost = cell
                 .price
                 .checked_mul(Uint128::from(requested_quantity))
@@ -1587,38 +1214,20 @@ pub fn execute_buy_stock(
     // See `check_holding_limit`.
     check_holding_limit(protocol_id, new_buyer_pct, zone_type)?;
 
-    // Global Certificate Limit (module doc comment #12): a STRICT, hard
-    // block -- not a warning -- on the buyer's total physical certificate
-    // count (every private company owned, plus every public-company stock
-    // card held, across the whole game -- see `state::count_player_certificates`
-    // for exactly how a certificate is counted, including the President's
-    // card counting as exactly one). Checked here, now that `zone_type` is
-    // resolved, rather than at the top of this function's checks, so the
-    // zone exemption immediately below can apply -- moving this check
-    // changes nothing about the Checks-Effects-Interactions ordering (module
-    // doc comment #13): this is still purely a read, still resolved before
-    // the Effects section below writes anything.
+    // Global Certificate Limit: a STRICT hard block on the buyer's total physical
+    // card count across the whole game. Checked here, once `zone_type` is resolved,
+    // so the exemption below can apply -- still purely a read, still before the
+    // Effects section.
     //
-    // Zone exemption: per the real 1830 rule this project documents for
-    // players (`RulesReference.tsx`'s zone legend / `StockMarketRenderer.tsx`
-    // design note #3), a certificate whose company currently sits on a
-    // Yellow, Orange, or Brown market cell does not count toward the Global
-    // Certificate Limit at all -- broader than the ownership-cap exemption
-    // just above (Orange/Brown only), since Yellow alone still exempts a
-    // certificate from the *hand limit* even though it does not exempt a
-    // holding from the 60% ownership cap. This was previously TRACKED as
-    // real, sourced zone data but never actually wired into an enforcement
-    // check (see this function's own module doc comment #2, now updated) --
-    // this pass is what gives it a genuine code hook.
+    // ZONE EXEMPTION: a certificate whose company sits on a Yellow, Orange or Brown
+    // cell does not count toward this limit at all -- broader than the ownership
+    // cap's Orange/Brown-only exemption, since Yellow alone exempts a certificate
+    // from the HAND limit without exempting a holding from the 60% cap. This was
+    // previously tracked as real sourced zone data but never wired into any
+    // enforcement check.
     //
-    // Batch 1 (item 2) moved the whole computation into `check_cert_limit`
-    // and made the zone exemption apply to the player's ALREADY-HELD
-    // certificates as well as the incoming one -- see that function's doc
-    // comment for exactly what was inconsistent before.
-    //
-    // `incoming_certificates` counts physical CARDS, not percentage points:
-    // a President's Certificate is one 20% card, so an opening purchase adds
-    // exactly one, while an ordinary purchase adds `quantity`.
+    // `incoming_certificates` counts CARDS, not percentage points: an opening
+    // purchase adds exactly one 20% card, an ordinary purchase adds `quantity`.
     let incoming_certificates = if is_opening_purchase {
         1
     } else {
@@ -1676,27 +1285,23 @@ pub fn execute_buy_stock(
 
     session.virtual_bank_vgp = new_virtual_bank_vgp;
 
-    // Step 4.5 Batch 4: record the last committing action for the Priority
-    // Deal. Captured BEFORE `advance_turn` below, because that call moves
-    // `active_player_index` off the buyer -- and this must name the buyer,
-    // not whoever happens to act next. (It also must be recorded on the
-    // Brown-Zone multi-buy path, which deliberately does NOT advance the
-    // turn; taking it from the pointer afterwards would be wrong in one
-    // case and right in the other, which is exactly the kind of difference
-    // that survives review.)
+    // Records the last committing action for the Priority Deal. Captured BEFORE
+    // `advance_turn`, because that call moves the pointer off the buyer -- and this
+    // must name the buyer, not whoever acts next. It also has to be recorded on the
+    // Brown-Zone multi-buy path, which deliberately does NOT advance the turn;
+    // taking it from the pointer afterwards would be wrong in one case and right in
+    // the other, which is exactly the kind of difference that survives review.
     session.last_active_player_index = Some(session.active_player_index);
 
-    // Brown Zone Multiple-Buy (module doc comment #15): a Bank-pool
-    // purchase made while sitting on a Brown-zone cell does NOT end the
-    // buyer's turn, so they may immediately buy again. Every other
-    // purchase -- any IPO purchase, or a Bank purchase outside a Brown
-    // cell -- advances the pointer as normal.
-    // (Batch 1 item 1 note: this stays true for a Brown-Zone Bank purchase
-    // of ANY quantity, including a single certificate. The atomic `quantity`
-    // path and this turn-pacing exception are two independent expressions of
-    // the same Brown-Zone privilege -- a player may take the whole block in
-    // one message, or one certificate at a time across several messages
-    // without surrendering their turn, and both must remain legal.)
+    // Brown Zone Multiple-Buy: a Bank purchase on a Brown cell does NOT end the
+    // buyer's turn, so they may immediately buy again. Every other purchase advances
+    // the pointer as normal.
+    //
+    // True for ANY quantity, including a single certificate. The atomic `quantity`
+    // path and this turn-pacing exception are two independent expressions of the
+    // same Brown-Zone privilege -- a player may take the whole block in one message,
+    // or one certificate at a time across several messages without surrendering
+    // their turn, and both must remain legal.
     let is_brown_zone_bank_multi_buy =
         matches!(source, SharePurchaseSource::Bank) && zone_type.permits_multiple_buy();
 
@@ -1798,14 +1403,11 @@ pub fn execute_buy_stock(
         }
     }
 
-    // General flotation check (see module doc comment #7): if this purchase
-    // brought protocol_id's total real-player-owned stake to (or past)
-    // FLOAT_THRESHOLD_PERCENTAGE and it hasn't already floated by some
-    // other path (B&O floats for free the instant its private is won --
-    // see `auction::award_bo_president_share` -- so is already
-    // `is_floated: true` long before ordinary trading could reach this
-    // check), flip it to floated and capitalize its treasury at 10x its Par
-    // Value (never a Bank/Market price -- see module doc comment #7/#8).
+    // General flotation: if this purchase brought the total real-player-owned stake
+    // to `FLOAT_THRESHOLD_PERCENTAGE` and it has not already floated by some other
+    // path (the B&O floats for free the instant its private is won), flip it to
+    // floated and capitalize its treasury at 10x its PAR VALUE -- never a market
+    // price, even on a purchase that crosses the float line via a Bank buy.
     let maybe_company: Option<PublicCompany> =
         PUBLIC_COMPANIES.may_load(deps.storage, (game_id, protocol_id))?;
     if let Some(mut company) = maybe_company {
@@ -1920,17 +1522,12 @@ pub fn execute_sell_stock(
     // Audit G-6 (module doc comment #18): selling stock is a Stock Round
     // action, same gate `execute_buy_stock` applies.
     ensure_stock_round(&session, game_id)?;
-    // Audit G-6, first half: the classic 1830 rule that NO share may be
-    // sold during the game's opening Stock Round. Checked here, before any
-    // per-player or per-protocol state is read, since it depends only on
-    // the room's own round counters. `macro_round_number` starts at `1` at
-    // genesis and is bumped to `2` by Macro Round Loop Advancement
-    // (`operations::execute_end_operating_round_turn`), so this ban lifts
-    // exactly when the first full Stock-Round-then-Operating-Rounds cycle
-    // completes -- i.e. at the start of SR2, which is precisely the real
-    // rule. The `current_round_type` half of the condition is redundant
-    // after `ensure_stock_round` above, and kept only because it makes the
-    // rule this encodes readable on its own.
+    // Audit G-6: the classic rule that NO share may be sold during the opening
+    // Stock Round. Checked before any per-player state is read, since it depends
+    // only on the room's round counters. The ban lifts exactly when the first full
+    // Stock-Round-then-Operating-Rounds cycle completes, i.e. at the start of SR2.
+    // The `current_round_type` half is redundant after `ensure_stock_round` above,
+    // and kept only because it makes the rule readable on its own.
     if session.macro_round_number == 1 && session.current_round_type == RoundType::StockRound {
         return Err(TradingError::SalesProhibitedInFirstStockRound { game_id });
     }
@@ -1972,33 +1569,23 @@ pub fn execute_sell_stock(
         });
     }
 
-    // President/Validator Transfer -- true 1830 stock dumping (Audit G-7,
-    // module doc comment #11). Simulates the holdings this sale would
-    // actually leave behind and rejects it ONLY if no one at all could hold
-    // the President's certificate afterward.
+    // President Transfer -- true 1830 stock dumping (Audit G-7). Simulates the
+    // holdings this sale would leave behind and rejects it ONLY if no one at all
+    // could hold the President's certificate afterward.
     //
     // This replaced a blanket pre-check that rejected ANY sale by a sitting
-    // President unless some OTHER player already held at least 20%. That
-    // was stricter than the real rule and blocked legal play: a President
-    // holding 60% could not sell a single 10% certificate -- even though
-    // they would still hold 50%, still be the largest holder, and still be
-    // President afterward -- purely because nobody else had reached 20%.
-    // An engine that rejects a legal move is as wrong as one that permits
-    // an illegal one.
+    // President unless some OTHER player already held 20%. That was stricter than
+    // the real rule and blocked legal play: a President holding 60% could not sell a
+    // single 10% certificate -- even though they would still hold 50%, still be the
+    // largest holder, and still be President afterward -- purely because nobody else
+    // had reached 20%. An engine that rejects a legal move is as wrong as one that
+    // permits an illegal one.
     //
-    // The real constraint is only this: a floated corporation must always
-    // have SOMEONE holding its President's certificate. So the sale is
-    // legal whenever, after it settles, at least one player (the seller
-    // included) still holds `PRESIDENT_MIN_PERCENTAGE`. Three cases fall
-    // out of that single rule:
-    //   - Seller keeps >= 20% and stays largest -> legal, seat unchanged.
-    //   - Seller keeps >= 20% but another holder is now larger -> legal,
-    //     and `recalculate_president` below moves the seat to them.
-    //   - Seller drops below 20% -> legal only if another player is at or
-    //     above 20% to take the seat; otherwise `NoEligiblePresidentSuccessor`.
-    // The classic "dump" -- selling out from under the presidency and
-    // handing it to whoever is left -- is the third case, and it now
-    // executes instead of being refused.
+    // The real constraint is only this: a floated corporation must always have
+    // SOMEONE holding its President's certificate. Three cases fall out of that one
+    // rule, and the classic dump -- selling out from under the presidency and
+    // handing it to whoever is left -- is the third, which now executes instead of
+    // being refused.
     if let Some(current_president) =
         PROTOCOL_PRESIDENT.may_load(deps.storage, (game_id, protocol_id))?
     {
@@ -2041,18 +1628,15 @@ pub fn execute_sell_stock(
 
     let num_certificates = percentage / PERCENT_PER_SHARE;
 
-    // Audit G-4 (module doc comment #6): EVERY certificate in a single sale
-    // transacts at the price the marker sits on when the sale BEGINS. The
-    // marker then walks down one row per certificate sold, AFTER the money
-    // has already changed hands.
+    // Audit G-4: EVERY certificate in a single sale transacts at the price the
+    // marker sits on when the sale BEGINS. The marker then walks down one row per
+    // certificate, AFTER the money has changed hands.
     //
-    // This previously read `current_cell()` fresh inside the loop and
-    // called `move_down` between certificates, so selling 30% settled
-    // certificate #2 one row lower than #1 and #3 two rows lower -- the
-    // seller was paid a progressively worse price the deeper into their own
-    // sale they got. That is not the 1830 rule (nor what any reference
-    // implementation does): the price is read once, all certificates
-    // transact at it, and only then does the marker move.
+    // This previously read the cell fresh inside the loop and moved the marker
+    // between certificates, so selling 30% settled certificate #2 one row lower than
+    // #1 and #3 two rows lower -- the seller was paid a progressively worse price
+    // the deeper into their own sale they got. That is not the 1830 rule, nor what
+    // any reference implementation does.
     let sale_price = market::current_cell(deps.storage, game_id, protocol_id)?.price;
 
     let total_proceeds = sale_price
@@ -2173,14 +1757,10 @@ pub fn execute_sell_stock(
     Ok(response)
 }
 
-/// Declares an Operating Round dividend of `revenue_amount` for
-/// `protocol_id`. If `distribute` is true (Distribute Yield), the revenue
-/// is split proportionally across every share -- player-held cuts go to
-/// `PLAYER_CASH_VGP`, the pool's cut (plus rounding dust) goes to the
-/// game bank -- and the price marker moves right. If false (Slash/Retain
-/// Yield), the full amount is credited to the protocol's treasury and the
-/// price marker moves left. Only `protocol_id`'s registered
-/// `PROTOCOL_PRESIDENT` may call this (see module doc comment #4).
+/// Declares an Operating Round dividend of `revenue_amount`. Distribute splits it
+/// proportionally across every share -- player cuts to their cash, the pool's cut
+/// plus rounding dust to the game bank -- and moves the price right. Withhold
+/// credits the full amount to the treasury and moves it left. President-only.
 pub fn execute_declare_dividends(
     deps: DepsMut,
     env: Env,
@@ -2351,14 +1931,11 @@ pub fn execute_declare_dividends(
             .checked_sub(ipo_share)
             .map_err(|_| TradingError::Overflow {})?;
 
-        // Audit G-2 (Split Treasury Divergence): the IPO warehouse's own
-        // dividend share is credited to `PublicCompany::treasury` inside
-        // `PUBLIC_COMPANIES` -- the SINGLE corporate cash ledger every
-        // debit site already draws from (`hardware.rs`'s train purchases,
-        // `hexmap.rs`'s terrain and Station Token fees). It used to be
-        // written to a separate `PROTOCOL_TREASURY_VGP` map that nothing
-        // in this contract ever debited, so this VGP was credited and then
-        // permanently stranded. See `state.rs`'s removal note.
+        // Audit G-2: the IPO pool's own dividend share is credited to
+        // `PublicCompany::treasury`, the SINGLE corporate cash ledger every debit site
+        // already draws from. It used to be written to a separate `PROTOCOL_TREASURY_VGP`
+        // map that nothing in this contract ever debited, so this VGP was credited and
+        // then permanently stranded.
         let mut new_protocol_treasury: Option<Uint128> = None;
         if !ipo_share.is_zero() {
             let mut company: PublicCompany = PUBLIC_COMPANIES
@@ -2396,16 +1973,12 @@ pub fn execute_declare_dividends(
             game_end_triggered = true;
         }
     } else {
-        // Audit G-2 (Split Treasury Divergence): Slash/Retain Yield now
-        // credits `PublicCompany::treasury` inside `PUBLIC_COMPANIES`, the
-        // same single corporate cash ledger `operations.rs`'s own two
-        // withhold branches (`execute_operating_round`,
-        // `execute_run_manual_route`) already wrote to, and the same one
-        // `hardware.rs`/`hexmap.rs` debit when the corporation actually
-        // spends. Withheld revenue used to land in a separate
-        // `PROTOCOL_TREASURY_VGP` map with no debit path at all, so a
-        // corporation retaining earnings across several Operating Rounds
-        // to afford a train had, on-chain, saved nothing spendable.
+        // Audit G-2: Withhold credits `PublicCompany::treasury`, the same single ledger
+        // `operations.rs`'s own withhold branches already wrote to and the same one
+        // `hardware.rs`/`hexmap.rs` debit when a corporation actually spends. Withheld
+        // revenue used to land in a separate map with no debit path at all, so a
+        // corporation retaining earnings across several Operating Rounds to afford a
+        // train had, on-chain, saved nothing spendable.
         let mut company: PublicCompany = PUBLIC_COMPANIES
             .may_load(deps.storage, (game_id, protocol_id))?
             .ok_or(TradingError::PublicCompanyNotFound {
@@ -2434,12 +2007,9 @@ pub fn execute_declare_dividends(
     session.last_action_timestamp = env.block.time.seconds();
 
     if game_end_triggered {
-        // $350 Game-End Trigger (module doc comment #16): this dividend's
-        // own bookkeeping is complete; `finalize_and_distribute_payouts`
-        // persists this same `session` (already carrying the bank-share
-        // credit and refreshed timestamp above) with `is_active = false`,
-        // superseding the plain `SESSIONS.save` the non-triggered path
-        // below would otherwise do.
+        // The $350 game-end trigger: this dividend's own bookkeeping is complete, and
+        // `finalize_and_distribute_payouts` persists this same session with
+        // `is_active = false`, superseding the plain save the non-triggered path does.
         let end_game_response =
             crate::contract::finalize_and_distribute_payouts(deps, game_id, session)
                 .map_err(|e| TradingError::Std(StdError::generic_err(e.to_string())))?;
@@ -2458,13 +2028,14 @@ pub fn execute_declare_dividends(
     Ok(response)
 }
 
-/// Phase-Gated Corporate Purchase Protocol (module doc comment #17): buys
-/// private company `private_id` out from under its current player-owner,
-/// on behalf of `protocol_id`'s own treasury. See the module doc comment
-/// for the full design; in short, hard-blocked before Phase 3
-/// (`TileColor::Green`), President-authorized and softly Operating-Round-
-/// Turn-Queue-gated exactly like `execute_declare_dividends`, and priced
-/// within 50%-200% of the private's face value inclusive.
+/// Phase-Gated Corporate Purchase Protocol: buys `private_id` out from under its
+/// player-owner on behalf of `protocol_id`'s treasury. Hard-blocked before Phase 3
+/// (Green), President-authorized, softly turn-queue-gated, and priced within
+/// 50%-200% of face value inclusive -- checked by cross-multiplication rather
+/// than halving, so an odd face value's exact half is never rounded away.
+///
+/// There is no player-side accept/reject step: this is a unilateral,
+/// price-bounded corporate purchase, not a two-party negotiation.
 pub fn execute_buy_private_company(
     deps: DepsMut,
     _env: Env,

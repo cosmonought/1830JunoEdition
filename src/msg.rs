@@ -29,24 +29,17 @@ pub struct RouteWaypoint {
     /// The real board hex label (e.g. `"G19"`), resolved to axial `(q, r)`
     /// via `hexmap::axial_for_label`.
     pub hex: String,
-    /// Which city on that hex this stop is, indexed exactly like
-    /// `hexmap::city_slot_counts_at` and `hexmap::tile_segment_cities`
-    /// (`Some(0)` is the first city, `Some(1)` the second).
+    /// Which city on that hex this stop is, indexed like
+    /// `hexmap::city_slot_counts_at` and `tile_segment_cities`.
     ///
-    /// `None` means "this hex has one stop, or none" -- a town, plain
-    /// connector track, or a single-city tile where naming the city adds
-    /// nothing. It is the correct and expected value for the overwhelming
-    /// majority of the board, so an ordinary route stays as easy to write as
-    /// it was before this field existed.
+    /// `None` means "this hex has one stop, or none" -- a town, plain connector
+    /// track, or a single-city tile -- and is the correct value for the overwhelming
+    /// majority of the board, so an ordinary route stays as easy to write as before
+    /// this field existed.
     ///
-    /// Supplying `Some(n)` for a hex whose tile has no `n`th city is a hard
-    /// error (`OperationsError::NoSuchCityOnHex`) rather than a silent
-    /// fallback: a client that is confused about the board should be told,
-    /// not quietly paid.
-    ///
-    /// `usize` to match the requested schema and the natural index type of
-    /// the slot-count slices it indexes into; it is narrowed once, checked,
-    /// to the `u8` the on-chain city registries use.
+    /// `Some(n)` naming a city the hex does not have is a HARD ERROR
+    /// (`NoSuchCityOnHex`), never a silent fallback: a client that is confused about
+    /// the board should be told, not quietly paid.
     pub city_node: Option<usize>,
 }
 
@@ -91,87 +84,40 @@ pub enum ExecuteMsg {
     /// input; see `contract::calculate_player_net_worth`. Only the room's
     /// creator may call this.
     EndGameAndDistribute { game_id: u64 },
-    /// Buys exactly one certificate (a fixed 10% share block, per rules.md's
-    /// SR transaction rule) of `protocol_id`, from either its IPO pool or
-    /// its Open Market/Bank pool, per `source`:
-    /// - `SharePurchaseSource::Ipo`: pays the protocol's fixed Par Value.
-    ///   On the very first-ever IPO purchase of this protocol, `par_value`
-    ///   is *required* and must be one of the six standard 1830 par prices
-    ///   ($67/$71/$76/$82/$90/$100) -- this choice also pins the
-    ///   protocol's starting `MARKET_GRID` position. On every later IPO
-    ///   purchase, `par_value` must be omitted or must match the
-    ///   already-chosen par value.
-    /// - `SharePurchaseSource::Bank`: pays the protocol's current floating
-    ///   Market Value, read off `MARKET_GRID` at its live position.
-    ///   `par_value` must always be omitted here.
+    /// Buys `quantity` certificates of `protocol_id` from its IPO or Bank pool.
+    /// IPO pays the fixed Par Value (chosen from the six standard 1830 rungs on the
+    /// first-ever IPO purchase, which also pins the starting market cell); Bank pays
+    /// the live floating price. Turn-gated on `active_player_index`.
     ///
-    /// See `trading::execute_buy_stock` for the full logic, including how
-    /// this interacts with the 60%-real-player-ownership flotation trigger
-    /// (still capitalizes the treasury at 10x the protocol's Par Value).
+    /// THE PRESIDENT'S CERTIFICATE INVARIANT (Batch 1, item 6). The first purchase of
+    /// a corporation with no President and no issued shares is NOT an ordinary 10%
+    /// certificate: it is the 20% President's Certificate at exactly `2 * par_value`.
+    /// The engine resolves this automatically -- there is no field to request it and
+    /// no way to decline it, exactly as in the physical game, where you cannot open a
+    /// corporation by buying a single share. Until it happens every other purchase of
+    /// that corporation is rejected (`PresidentsCertificateRequired`).
     ///
-    /// Turn-gated: only `GameSession::player_addresses[active_player_index]`
-    /// may call this (`TradingError::NotYourTurn` otherwise). A successful
-    /// purchase advances the turn pointer to the next player and resets
-    /// `consecutive_passes` to `0` -- see `trading::ensure_active_player`/
-    /// `trading::advance_turn` and `gamelog.rs`'s module doc comment #4.
+    /// BUYBACK LOCKOUT (item 3): a purchase of a corporation this player already sold
+    /// this Stock Round is rejected. Clears at the round boundary.
     ///
-    /// **Step 4.5 Batch 1, item 6 -- the President's Certificate invariant.**
-    /// The very first purchase of a corporation that has no President and no
-    /// shares in any player's hands is NOT an ordinary 10% certificate: it is
-    /// the 20% President's Certificate, and it costs exactly `2 * par_value`.
-    /// The engine resolves this automatically -- there is no message field to
-    /// request it and no way to decline it, exactly as in the physical game,
-    /// where you cannot open a corporation by buying a single share. An
-    /// ordinary 10% share simply cannot be bought out of a corporation's IPO
-    /// (nor out of the Bank pool) until that opening purchase has happened;
-    /// attempting it is rejected with
-    /// `TradingError::PresidentsCertificateRequired`.
+    /// MULTI-BUY (item 1): `quantity` above 1 requires BOTH a Brown-Zone marker AND
+    /// `SharePurchaseSource::Bank` -- the IPO never permits it, at any price, in any
+    /// zone. A legal multi-buy settles atomically (one debit, one share write, one
+    /// pool write) with no intermediate state and no price drift between
+    /// certificates. May not be 0, and may not exceed `MAX_MULTI_BUY_QUANTITY`.
     ///
-    /// **Step 4.5 Batch 1, item 3 -- the Stock Round Buyback Lockout.** A
-    /// purchase of a corporation this player has already SOLD during the
-    /// current Stock Round is rejected with
-    /// `TradingError::StockBuybackLockout`. The lockout clears at the
-    /// Stock-Round-to-Operating-Round boundary. See `state::PLAYER_SR_SALES`.
-    ///
-    /// **Step 4.5 Batch 1, item 1 -- `quantity` and the Brown Zone.**
-    /// How many certificates to buy in one atomic action. `None` means 1, and
-    /// every value is validated before any state is written, so a rejected
-    /// multi-buy debits nothing and transfers nothing.
-    ///
-    /// A `quantity` above 1 is legal ONLY when both of the following hold,
-    /// and is otherwise rejected with `TradingError::MultiBuyNotPermitted`:
-    /// 1. the corporation's price marker currently sits on a
-    ///    `ZoneType::BrownZone` cell, and
-    /// 2. `source` is `SharePurchaseSource::Bank` -- the IPO never permits a
-    ///    multi-buy, at any price, in any zone.
-    ///
-    /// A legal multi-buy settles atomically: the buyer is debited
-    /// `quantity * current_price` in one subtraction, receives
-    /// `quantity * 10%` in one write, and the Bank pool is decremented by
-    /// that same percentage in one write -- there is no intermediate state in
-    /// which some of the certificates have transferred and others have not,
-    /// and the price does not drift between certificates within the action.
-    ///
-    /// `quantity` may not be `0`, and may not exceed
-    /// `trading::MAX_MULTI_BUY_QUANTITY` (10 certificates = a whole
-    /// corporation); either is rejected with
-    /// `TradingError::InvalidBuyQuantity`.
+    /// See docs/ai_architecture/rust_contract_architecture.md, trading.rs.
     BuyStock {
         game_id: u64,
         protocol_id: u32,
         source: SharePurchaseSource,
         par_value: Option<Uint128>,
-        /// `#[serde(default)]` deliberately: this field is ADDITIVE, and
-        /// every message already in flight omits it entirely. The frontend
-        /// (out of scope for this batch -- see `App.tsx`'s own note that
-        /// "`ExecuteMsg::BuyStock` has no quantity parameter, so 'buy 3' is
-        /// three sequential `BuyStock` messages") currently sends
-        /// `{game_id, protocol_id, source, par_value}` and nothing else.
-        /// Without this attribute that JSON would stop deserializing the
-        /// moment this contract was upgraded, breaking every existing client
-        /// for a field they have no reason to know about. Omitted reads as
-        /// `None`, which resolves to `DEFAULT_BUY_QUANTITY` (1) -- byte-for-
-        /// byte the pre-Batch-1 behavior.
+        /// `#[serde(default)]` deliberately: this field is ADDITIVE and every message
+        /// already in flight omits it entirely. Without the attribute that JSON would
+        /// stop deserializing the moment the contract was upgraded, breaking every
+        /// existing client for a field they have no reason to know about. Omitted reads
+        /// `None`, which resolves to `DEFAULT_BUY_QUANTITY` -- byte-for-byte the
+        /// pre-Batch-1 behaviour.
         #[serde(default)]
         quantity: Option<u32>,
     },
@@ -276,19 +222,17 @@ pub enum ExecuteMsg {
     /// points to (`NotYourOperatingTurn` otherwise). See
     /// `operations::execute_end_operating_round_turn` for the full design.
     EndOperatingRoundTurn { game_id: u64, protocol_id: u32 },
-    /// Advances `protocol_id` past its current Operating Round sub-phase
-    /// WITHOUT acting in it -- Audit G-14's explicit skip.
+    /// Advances `protocol_id` past its current Operating Round sub-phase WITHOUT
+    /// acting in it -- Audit G-14's explicit skip.
     ///
     /// The turn runs BuyPrivate -> Track -> Tokens -> Routes -> Dividends ->
-    /// Hardware, and every one of those six actions is now gated on the
-    /// corporation being exactly on its phase. This is how a corporation with
-    /// nothing to do in a phase gets past it, and it keeps every skip a
+    /// Hardware, each gated on the corporation being exactly on its phase. This is
+    /// how a corporation with nothing to do gets past one, and it keeps every skip a
     /// recorded, replayable event rather than an implicit jump.
     ///
-    /// Rejected with `OperatingSubPhaseNotSkippable` for the two phases that
-    /// are not the corporation's to skip: `Routes` while it owns any train
-    /// (a train must be run), and `Dividends` ever (pay or withhold, but not
-    /// neither).
+    /// Refused for the two phases that are not the corporation's to skip: `Routes`
+    /// while it owns any train (a train must be run), and `Dividends` ever (pay or
+    /// withhold, but not neither).
     AdvanceOperatingSubPhase { game_id: u64, protocol_id: u32 },
     /// Manual Route Validation: lets `protocol_id`'s President submit a
     /// hand-picked path of real board hex labels (e.g. `["G19", "F20",
@@ -386,16 +330,13 @@ pub enum ExecuteMsg {
         protocol_id: u32,
         q: i32,
         r: i32,
-        /// Audit G-12: WHICH city on `(q, r)` to token. Hexes carrying two
-        /// separate cities -- New York (#54/#62) and every OO tile
-        /// (#59/#64-#68) -- need this to be answerable at all; on a
-        /// single-city hex the only valid value is `0`.
+        /// Audit G-12: WHICH city on `(q, r)` to token. New York and every OO tile carry
+        /// two separate cities and need this to be answerable at all; on a single-city
+        /// hex the only valid value is `0`.
         ///
-        /// `Option` + `#[serde(default)]` so this is genuinely additive: a
-        /// client built before G-12 omits the key and the contract resolves
-        /// it to the lowest-indexed city with a free slot, which on a
-        /// single-city hex is the only city and on a two-city hex is at
-        /// least always a LEGAL placement rather than a rejection.
+        /// `Option` + `#[serde(default)]` so this is genuinely additive: a client built
+        /// before G-12 omits the key and the contract resolves the lowest-indexed city
+        /// with a free slot -- always at least a LEGAL placement rather than a rejection.
         #[serde(default)]
         city_index: Option<u8>,
     },
@@ -406,18 +347,11 @@ pub enum ExecuteMsg {
     /// trigger the cascading "Rusting" obsolescence sweep -- see
     /// `hardware::execute_buy_hardware_from_pool`.
     BuyHardwareFromPool { game_id: u64, protocol_id: u32 },
-    /// Audit G-15: buy a train from ANOTHER corporation instead of the Bank,
-    /// at any price of $1 or more.
-    ///
-    /// Two outcomes, decided by the contract, not the caller:
-    ///   - the two corporations share a president -> the sale SETTLES
-    ///     IMMEDIATELY, since there is no counterparty to consent; or
-    ///   - different presidents -> a `TrainOffer` is recorded for the seller's
-    ///     president to `AcceptTrainOffer` or `RejectTrainOffer`.
-    ///
-    /// The response's `settlement` attribute says which happened
-    /// (`immediate_same_president` / `offer_pending`), and the latter carries
-    /// the `offer_id`.
+    /// Audit G-15: buy a train from ANOTHER corporation instead of the Bank, at any
+    /// price of $1 or more. Two outcomes, decided by the contract rather than the
+    /// caller: a shared president SETTLES IMMEDIATELY (there is no counterparty to
+    /// consent), otherwise a `TrainOffer` is recorded for the seller's president to
+    /// accept or reject. The response's `settlement` attribute says which happened.
     BuyTrainFromCorporation {
         game_id: u64,
         /// The corporation acquiring the train. Must be in its Hardware phase.
@@ -462,51 +396,35 @@ pub enum ExecuteMsg {
     /// `gamelog::execute_pass_turn`, and that module's doc comment #4 for
     /// exactly which actions are turn-gated today.
     PassTurn { game_id: u64 },
-    /// Pops the single most recent entry off `game_id`'s event-sourced
-    /// `GAME_LOG` and recomputes the room's entire replayable state --
-    /// cash, shares, IPO/Bank pools, par values, presidencies, treasuries,
-    /// market positions, laid track, Hardware ownership, and the turn/
-    /// priority pointers -- from scratch, by resetting to genesis and
-    /// fast-forwarding through whatever's left, in order. This mirrors how
-    /// 18xx.games itself implements Undo (recompute from history) rather
-    /// than trying to write a bespoke inverse for every action type. Any
-    /// player registered in `game_id` may call this, not just the room
-    /// creator. See `gamelog::execute_undo_last_action` /
-    /// `gamelog::reapply_game_log` for exactly which action types are
-    /// currently recorded in (and thus undoable from) the log -- a
-    /// deliberately scoped subset that excludes anything moving real JUNO
-    /// and a couple of complex batch/bankruptcy paths.
+    /// Pops the most recent `GAME_LOG` entry and recomputes the room's entire
+    /// replayable state -- cash, shares, pools, par values, presidencies, treasuries,
+    /// market positions, laid track, Hardware and the turn pointers -- by resetting
+    /// to genesis and fast-forwarding through whatever is left.
+    ///
+    /// This mirrors how 18xx.games itself implements Undo (recompute from history)
+    /// rather than writing a bespoke inverse for every action type. Any registered
+    /// player may call it, not just the creator.
     UndoLastAction { game_id: u64 },
-    /// **Step 4.5 Batch 3, items 2 and 3: annul an unfinished game.**
+    /// Annuls an unfinished game: tears the room down WITHOUT scoring it and refunds
+    /// every player their own real-JUNO ante, net of the developer subsidy already
+    /// forwarded at deposit time. The proportional payout math is bypassed entirely.
     ///
-    /// Tears room `game_id` down WITHOUT scoring it and refunds every
-    /// registered player their own real-JUNO ante (`state::PLAYER_JUNO_ANTE`,
-    /// net of the developer subsidy already forwarded at deposit time). The
-    /// proportional payout math is bypassed entirely.
+    /// THIS IS NOT `EndGameAndDistribute`, AND THE DIFFERENCE IS THE POINT. That
+    /// message is for a game that REACHED A RESULT, where a player can walk away with
+    /// more or less than they anted. `AnnulGame` is for a game that produced NO
+    /// result -- abandoned, stuck, or called off. Nobody won, so nothing is scored.
+    /// Running the proportional split on a half-finished position would hand a real
+    /// prize to whoever happened to be ahead when the room stalled, which is a
+    /// rage-quit exploit rather than a payout.
     ///
-    /// **This is not `EndGameAndDistribute`, and the difference is the
-    /// point.** That message is for a game that REACHED A RESULT: the pool
-    /// is divided by final VGP net worth, and a player can walk away with
-    /// more or less than they anted. `AnnulGame` is for a game that produced
-    /// NO result -- abandoned, stuck, or called off. Nobody won, so nothing
-    /// is scored and everyone gets their money back. Running the
-    /// proportional split on a half-finished position would hand a real
-    /// prize to whoever happened to be ahead when the room stalled, which is
-    /// a rage-quit exploit rather than a payout.
+    /// Callable by the room's creator at any time, or by ANY registered player once
+    /// 48 hours have elapsed since the last state-advancing action -- the
+    /// permissionless escape hatch that stops an absent creator from locking
+    /// everyone else's JUNO in the contract forever.
     ///
-    /// **Who may call it:**
-    /// - the room's creator, at any time; or
-    /// - ANY registered player, once 48 hours (`INACTIVITY_TIMEOUT_SECONDS`)
-    ///   have elapsed since `GameSession::last_action_timestamp` -- the
-    ///   permissionless escape hatch that stops an absent creator from
-    ///   locking everyone else's JUNO in the contract forever.
-    ///
-    /// Sets `GameSession::is_active` to `false` on success, matching every
-    /// other room-closing action.
-    ///
-    /// **Replaces `ClaimTimeoutRefund`,** which was this same refund without
-    /// the creator path. Two names for one abort vector meant two places for
-    /// the refund rules to drift apart; see `escrow.rs`'s module doc comment.
+    /// Replaces `ClaimTimeoutRefund`, which was this same refund without the creator
+    /// path: two names for one abort vector meant two places for the refund rules to
+    /// drift apart.
     AnnulGame { game_id: u64 },
     /// Pre-Game Waterfall Auction: buys whichever private company is
     /// currently the cheapest still-unowned one, at its exact face value,
@@ -545,16 +463,11 @@ pub enum ExecuteMsg {
     WaterfallMiniAuctionPass { game_id: u64 },
 }
 
-/// The classic 1830 Operating Round payout choice, as a named enum --
-/// `ExecuteMsg::RunManualRoute`'s own way of expressing the same
-/// Distribute Yield / Slash-Retain Yield decision
-/// `ExecuteMsg::DeclareDividends`'s `distribute: bool` field and
-/// `PublicCompanyPayoutChoice::payout: bool` (below) already expose
-/// elsewhere in this enum. This message alone gets a named enum rather than
-/// a bare `bool`; `DeclareDividends`/`ExecuteOperatingRound` are
-/// deliberately left as-is rather than retrofitted, since changing an
-/// already-live message's field type would be a breaking wire-format
-/// change for no behavioral gain.
+/// The Operating Round payout choice as a named enum -- the same Distribute /
+/// Slash-Retain decision `DeclareDividends`'s `distribute: bool` already
+/// expresses. This message alone gets an enum; the older ones are deliberately
+/// left as bare bools, since changing a live message's field type would be a
+/// breaking wire-format change for no behavioural gain.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum PayoutStrategy {
     /// Distribute Yield: the route's declared revenue splits across every
@@ -563,16 +476,12 @@ pub enum PayoutStrategy {
     /// `operations::execute_run_manual_route`), and the market price moves
     /// right (up) via `market::move_right`.
     DeclareDividends,
-    /// Slash/Retain Yield: 100% of the route's declared revenue is
-    /// withheld directly into the operating company's own treasury (no
-    /// shareholder payout), and the market price moves left (down) via
-    /// `market::move_left`. Matches this file's `execute_operating_round`
-    /// sibling function's own `payout: false` branch exactly -- see that
-    /// function's doc comment and module doc comment #4 for the
-    /// project's already-documented, not-yet-reconciled divergence between
-    /// `PublicCompany::treasury` (used here) and the separate
-    /// `PROTOCOL_TREASURY_VGP` map `trading::execute_declare_dividends`'s
-    /// own `distribute: false` branch credits instead.
+    /// Slash/Retain Yield: 100% of the route's revenue is withheld into the
+    /// operating company's own `PublicCompany::treasury` (no shareholder payout) and
+    /// the market price moves left. Since Audit G-2 that is simply THE corporate
+    /// cash ledger -- the separate `PROTOCOL_TREASURY_VGP` map this note used to
+    /// contrast against was deleted, and every withhold path now writes the same
+    /// field.
     Withhold,
 }
 
@@ -624,24 +533,15 @@ pub enum QueryMsg {
     /// frontend) to actually print. See `query::MapGridMarkdownResponse` /
     /// `query::query_map_grid_markdown`.
     GetMapGridMarkdown { game_id: u64 },
-    /// Returns every `(tile_id, orientation)` pairing that would currently
-    /// be legal to lay for `protocol_id` at `(q, r)` -- meant to back a
-    /// frontend's "legal tile" selection popup, so a player is only ever
-    /// offered choices `ExecuteMsg::LayTile` would actually accept. Tests
-    /// every `hexmap::TILE_CATALOG` entry across all six rotations against
-    /// the same three placement rules `execute_lay_tile` itself enforces:
-    /// Tech Era color-locking, Landmark Reservation, and either fresh-
-    /// placement Path Connectivity to `protocol_id`'s Token Station network
-    /// (if `(q, r)` is empty) or Topology-Retention upgrade edge
-    /// preservation (if `(q, r)` is already occupied) -- see `hexmap.rs`'s
-    /// module doc comments #8/#9/#10/#11 for each rule's full definition.
-    /// Deliberately does NOT check `protocol_id`'s President authorization,
-    /// treasury affordability, or Operating Round Corporation Turn Queue
-    /// position -- those are execution-time authorization/funding
-    /// concerns, not placement legality, and `LayTile` still enforces all
-    /// three independently; a placement returned here is not a guarantee
-    /// that a live `LayTile` transaction will succeed. See
-    /// `query::query_legal_tile_placements` / `hexmap::legal_tile_placements`.
+    /// Returns every `(tile_id, orientation)` pairing currently legal for
+    /// `protocol_id` at `(q, r)`, so a frontend only ever offers choices `LayTile`
+    /// would accept. Tests every catalog entry across all six rotations against the
+    /// same placement rules `execute_lay_tile` enforces.
+    ///
+    /// Deliberately does NOT check President authorization, treasury affordability or
+    /// Operating Round turn position -- those are execution-time authorization and
+    /// funding concerns, not placement legality. A placement returned here is not a
+    /// guarantee that a live `LayTile` will succeed.
     GetLegalTilePlacements {
         game_id: u64,
         protocol_id: u32,
@@ -706,20 +606,15 @@ pub struct PublicCompanyState {
     pub is_floated: bool,
     pub treasury: Uint128,
     pub total_shares_issued: u8,
-    /// **Step 4.5 Batch 2, item 4.** The total revenue this corporation's
-    /// trains earned on its most recent route run -- see
-    /// `state::PublicCompany::last_route_revenue` for the write path and for
-    /// why it is `Uint128` rather than the requested `u32`. Zero for a
-    /// corporation that has never run routes, and reset to zero by a run
-    /// that found no legal route, so this is always "what it earned LAST
-    /// time", never a stale high-water mark.
+    /// The total revenue this corporation's trains earned on its most recent run.
+    /// Zero for a corporation that has never run, and reset to zero by a run that
+    /// found no legal route -- so this is always "what it earned LAST time", never a
+    /// stale high-water mark.
     ///
-    /// This is the field the Operating Round table's final column reads.
-    /// It rides on `PublicCompanyState`, which `GetGameState` already returns
-    /// one of per corporation -- this contract has no separate `GameLedger`
-    /// or `Corporation` query to add it to, and inventing two more endpoints
-    /// that re-serve a subset of an existing one would give the frontend
-    /// three places to disagree about the same number.
+    /// It rides on `PublicCompanyState`, which `GetGameState` already returns one of
+    /// per corporation: inventing two more endpoints that re-serve a subset of an
+    /// existing one would give the frontend three places to disagree about the same
+    /// number.
     pub last_route_revenue: Uint128,
     /// `None` until this company's very first-ever IPO purchase chooses a
     /// par value (or, for B&O, always `Some` from the moment its private
@@ -738,50 +633,33 @@ pub struct PublicCompanyState {
     /// Station Tokens, home token (if any) first -- empty before it floats.
     /// See `hexmap::PROTOCOL_STATION_HEXES`.
     pub station_token_hexes: Vec<(i32, i32)>,
-    /// The SAME tokens as `station_token_hexes`, one entry each and in the
-    /// same order, but as `(q, r, city_index)` -- Audit G-12.
+    /// The SAME tokens as `station_token_hexes`, one entry each and in the same
+    /// order, but as `(q, r, city_index)` -- Audit G-12.
     ///
-    /// A hex is not a city. New York (#54/#62) and every OO tile
-    /// (#59/#64-#68) carry two separate cities on one hex, so `(q, r)` alone
-    /// cannot say which station a token stands in, and a renderer reading
-    /// only the hex has to guess -- which is what produced tokens floating
-    /// on the wrong half of a two-city tile.
+    /// A hex is not a city. New York and every OO tile carry two separate cities on
+    /// one hex, so `(q, r)` alone cannot say which station a token stands in, and a
+    /// renderer reading only the hex has to guess -- which is what produced tokens
+    /// floating on the wrong half of a two-city tile.
     ///
-    /// `station_token_hexes` is KEPT rather than replaced: it is what the
-    /// token-limit and duplicate-hex rules are actually about, and dropping
-    /// it would break every existing client for no gain. Read this field
-    /// when you need to know WHICH city; read that one when you need to know
-    /// how many hexes a company has tokened.
-    ///
-    /// `#[serde(default)]` for the usual reason in both directions -- a
-    /// client predating this field ignores it, and a Rust client
-    /// deserializing an older response gets an empty vector rather than a
-    /// hard error. An empty vector here alongside a NON-empty
-    /// `station_token_hexes` means "this contract predates G-12", not "this
-    /// company has no tokens".
+    /// `station_token_hexes` is KEPT rather than replaced: it is what the token-limit
+    /// and duplicate-hex rules are actually about. An empty vector here alongside a
+    /// NON-empty `station_token_hexes` means "this contract predates G-12", not
+    /// "this company has no tokens".
     #[serde(default)]
     pub station_tokens: Vec<(i32, i32, u8)>,
     /// This corporation's total Station Token limit, home token included.
     /// See `hexmap::station_token_limit`.
     pub station_token_limit: u8,
-    /// Audit G-15c: the MODEL of every train this corporation currently owns,
-    /// e.g. `["2", "2", "4"]`. Duplicates are meaningful -- two 2-trains are
-    /// two entries.
+    /// The MODEL of every train this corporation owns, e.g. `["2", "2", "4"]`.
+    /// Duplicates are meaningful. Added so a client can tell what is actually for
+    /// sale -- without it the train-trade UI had to offer all six models for every
+    /// corporation and let the contract reject the impossible ones, turning a rule
+    /// the player could have seen into a transaction failure they have to read.
     ///
-    /// Added so a client can tell what is actually for sale. Without it the
-    /// train-trade UI had to offer all six models for every corporation and
-    /// let the contract reject the impossible ones, which turns a rule the
-    /// player could have seen into a transaction failure they have to read.
-    ///
-    /// Models only, not full `HardwareAsset`s: cost and range are properties
-    /// of the MODEL (`hardware::TRAIN_CATALOG`), identical for every unit, so
-    /// sending them per-unit would be redundant data that could drift from
-    /// the catalog.
-    ///
-    /// `#[serde(default)]` so a client predating this field still
-    /// deserializes, and an older contract's response reads as an empty list
-    /// rather than a hard error -- which the UI must treat as "unknown", NOT
-    /// as "owns nothing".
+    /// Models only: cost and range are properties of the MODEL, identical for every
+    /// unit, so sending them per-unit would be redundant data that could drift.
+    /// `#[serde(default)]`, and an empty list must be read as UNKNOWN, not as
+    /// "owns nothing".
     #[serde(default)]
     pub owned_trains: Vec<String>,
 }
@@ -871,11 +749,9 @@ pub struct MapTileEntry {
     pub q: i32,
     pub r: i32,
     /// This hex's real 1830 board label (e.g. `"G19"`), resolved via
-    /// `hexmap::describe_hex` -- Coordinate Symmetries (see `hexmap.rs`'s
-    /// module doc comment #15): every coordinate this contract surfaces
-    /// carries its authentic board label alongside the axial `(q, r)`, so a
-    /// caller never has to hand-compute the transform to check it against
-    /// the physical board.
+    /// `hexmap::describe_hex`. Every coordinate this contract surfaces carries its
+    /// authentic label alongside the axial pair, so a caller never has to
+    /// hand-compute the transform to check it against the physical board.
     pub hex_label: String,
     pub tile_id: u32,
     pub orientation: u8,
@@ -929,25 +805,19 @@ pub struct MapTileEntry {
     /// `Vec` rather than a hard `missing field` error.
     #[serde(default)]
     pub paths: Vec<(u8, u8)>,
-    /// What a route actually earns for stopping on this hex, in VGP -- Audit
-    /// G-11. `hexmap::tile_base_value(tile_id)` verbatim.
+    /// What a route earns for stopping on this hex, in VGP -- `tile_base_value`
+    /// verbatim. THE payout figure, not a display hint: the same call the route
+    /// tracer and the manual route price through, so a client rendering it shows
+    /// exactly what the contract will pay.
     ///
-    /// This is THE payout figure, not a display hint: it is the same call
-    /// `pathfinding::HexInfo.value` and
-    /// `operations::execute_run_manual_route` price a route through, so a
-    /// client rendering it is showing exactly what the contract will pay.
+    /// Added because the alternative was a client re-deriving revenue from `terrain`
+    /// and disagreeing. Before Audit G-11 revenue lived only in the flat terrain
+    /// bucket, which cannot express real 1830 -- #62 and #64 share a terrain and
+    /// print $90 and $50 -- so any UI inferring a value from terrain was necessarily
+    /// wrong for most city tiles, and one hardcoding the real figures would have
+    /// advertised payouts the contract would not honour.
     ///
-    /// Added because the alternative was a client re-deriving revenue from
-    /// `terrain` and disagreeing. Before Audit G-11 revenue lived only in
-    /// the flat `terrain_base_value` bucket, which cannot express real 1830
-    /// -- #62 and #64 share a terrain but print $90 and $50 -- so any UI
-    /// that inferred a value from terrain was necessarily wrong for most
-    /// city tiles, and a UI that hardcoded the real figures would have
-    /// advertised payouts the contract would not honour. Shipping the
-    /// authoritative number removes both failure modes.
-    ///
-    /// `0` for plain connector track, which is a real answer (that hex earns
-    /// nothing), not a missing one.
+    /// `0` for plain connector track is a real answer, not a missing one.
     #[serde(default)]
     pub revenue: Uint128,
     /// `Some(city name)` if this tile sits on one of the three reserved
@@ -1021,15 +891,10 @@ pub struct LegalTilePlacementsResponse {
     pub placements: Vec<LegalTilePlacement>,
 }
 
-/// `QueryMsg::PlayerNetWorth`'s response -- see that variant's doc comment
-/// for the exact cash-plus-live-stock-value formula. Deliberately just the
-/// four aggregate figures ("a clean, aggregated payload," per the original
-/// ask) rather than a per-company breakdown -- `QueryMsg::GetGameState`'s
-/// existing `PublicCompanyState::player_holdings` already exposes each
-/// company's raw percentage for any caller that wants the underlying
-/// detail; this response is purpose-built for a single net-worth figure
-/// (an endgame ranking, a live "liquid asset log" row) instead of
-/// duplicating that registry.
+/// `QueryMsg::PlayerNetWorth`'s response. Deliberately just the four aggregate
+/// figures rather than a per-company breakdown -- `GetGameState`'s
+/// `PublicCompanyState::player_holdings` already exposes the underlying detail,
+/// and this response is purpose-built for a single net-worth figure.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PlayerNetWorthResponse {
     pub game_id: u64,
@@ -1041,13 +906,10 @@ pub struct PlayerNetWorthResponse {
     /// converted to a certificate count, priced at that company's current
     /// `MARKET_GRID` cell.
     pub stock_portfolio_value: Uint128,
-    /// Combined printed face value of every private company this player
-    /// still personally owns and that has not `closed` (Audit G-3).
-    ///
-    /// A private owned by a CORPORATION (`PrivateCompanyState::owner_protocol_id`)
-    /// rather than a player is not counted here -- that asset sits on the
-    /// corporation's balance sheet, exactly as this response excludes
-    /// company treasuries generally.
+    /// Combined printed face value of every private this player still PERSONALLY
+    /// owns and that has not closed (Audit G-3). A private owned by a CORPORATION is
+    /// not counted -- that asset sits on the corporation's balance sheet, exactly as
+    /// this response excludes company treasuries generally.
     pub private_company_value: Uint128,
     /// `cash_vgp + stock_portfolio_value + private_company_value` -- the
     /// authentic 1830 net worth figure, and the exact quantity

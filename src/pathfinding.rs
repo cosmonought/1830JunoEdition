@@ -1,124 +1,45 @@
-//! Pathfinding Revenue Engine: traces the best-value route set a floated
-//! public company can run across `MAP_GRID`, per `rules.md` section 3,
-//! Step 3 ("Revenue Generation & Yield Routing" -- "The Validator traces
-//! valid grid paths using the Protocol's active 'Hardware' (Trains) to
-//! calculate total network yield. Path tracing must obey connection paths
-//! and cannot bypass blocking enemy Nodes.").
+//! Pathfinding Revenue Engine: traces the best-value route SET a floated company
+//! can run across `MAP_GRID` (`rules.md` Step 3).
 //!
-//! ## Audit G-9 -- what this pass changed
+//! Audit G-9 closed three gaps in one traversal:
 //!
-//! Three gaps, all in the same traversal:
+//!   Edge-to-edge routing  the old walk read the flat `connections` mask and
+//!     never asked which edge that track JOINS. On real tile #1 -- two
+//!     independent towns -- a train could enter on edge 0 and leave on edge 3,
+//!     across track that does not physically touch. The walk now follows specific
+//!     edge PAIRS from `Tile::paths`.
+//!   Multi-train isolation  the engine priced exactly ONE route and had no
+//!     concept of the others. Every owned train now runs against a shared
+//!     claimed-segment ledger, so no two reuse the same track.
+//!   Token blockades  were modelled off each rival's FIRST LAID TILE -- a track
+//!     record, not a token record -- and blocked that hex outright. They now read
+//!     `PROTOCOL_STATION_HEXES` and apply the real rule: blocked only if every
+//!     slot in the city is taken.
 //!
-//! 1. **Edge-to-edge routing.** The old walk read a tile's flat `u8`
-//!    `connections` bitmask: "does edge `e` carry track?" It never asked
-//!    which edge that track actually joins. On real tile #1 -- two
-//!    INDEPENDENT towns, one joining edges 1 and 3, the other joining edges
-//!    0 and 4 -- a train could enter on edge 0 and leave on edge 3,
-//!    route-jumping between two segments that never physically touch. The
-//!    walk below now follows specific edge-PAIRS (`state::Tile::paths`, laid
-//!    down per-tile from the real 1830 manifest in `hexmap::TILE_CATALOG`):
-//!    having entered a hex through edge `e`, the only legal exits are the
-//!    other ends of segments that actually contain `e`.
-//! 2. **Multi-train route isolation.** The engine priced exactly ONE route
-//!    -- a company's best train -- and had no concept of the others. Real
-//!    1830 runs every owned train in the same Operating Round, and no two
-//!    of a company's trains may reuse the same piece of track.
-//!    `trace_best_route_set` below runs them all against a shared
-//!    `HashSet<(q, r, (u8, u8))>` claimed-segment ledger.
-//! 3. **Token blockades and route validity.** Blockades were modeled off
-//!    each rival's FIRST LAID TILE (`PROTOCOL_NETWORK_HEXES[0]`), which is a
-//!    track record, not a token record, and blocked that hex outright. They
-//!    now read `PROTOCOL_STATION_HEXES` -- the real token registry -- and
-//!    apply the real rule: blocked only if every slot in the city is taken.
-//!    A minimum-two-revenue-centres check is also enforced, which the old
-//!    engine explicitly flagged as missing (its design note #5).
+//! Key invariants:
 //!
-//! ## Design notes
+//!   A route starts at the company's own home hex -- `PROTOCOL_NETWORK_HEXES`'s
+//!   first entry, i.e. the first tile it ever LAID, not its station token.
 //!
-//! 1. **Where a route starts.** From the company's own home hex, its first
-//!    `PROTOCOL_NETWORK_HEXES` entry -- deliberately UNCHANGED by G-9. That
-//!    registry tracks laid tiles and `PROTOCOL_STATION_HEXES` tracks token
-//!    placements; `hexmap.rs`'s module doc comment #23 keeps the two
-//!    "DELIBERATELY DECOUPLED", and G-9's scope is the BLOCKADE source, not
-//!    the origin. Repointing the origin as well would make a company's
-//!    routes start at its preprinted `corporation_home_hex` regardless of
-//!    where it has actually built, which is a separate change with its own
-//!    board-wide consequences.
-//! 2. **Hex/city values.** Unchanged from before this pass. Each visited
-//!    hex's value comes from `effective_tile_and_value` below: a real laid
-//!    tile's `hexmap::tile_base_value` (Plain/Mountain $0, Small Town $10,
-//!    Major City Hub $20, and so on via `hexmap::terrain_base_value`), or,
-//!    for the six individually-sourced preprinted hexes
-//!    (`hexmap::landmark_start_value_at`) and every other real GRAY
-//!    preprinted hex (`hexmap::gray_preprinted_name_at`), a synthetic
-//!    read-only overlay tile at that hex's real printed figure. Nothing is
-//!    ever written to `MAP_GRID`. See that function's own doc comment for
-//!    the full history of both overlays.
+//!   `max_route_distance` caps REVENUE CENTRES, not hexes -- the real rule, and
+//!   the only reading consistent with the two-centre minimum. Connector hexes are
+//!   bounded separately by `MAX_ROUTE_HEXES`, purely as a gas guard.
 //!
-//!    The overlays remain deliberately PERMISSIVE in geometry -- a synthetic
-//!    tile is fully connected, every edge to every other edge -- rather than
-//!    carrying each preprinted hex's exact printed track shape. G-9 gave
-//!    real LAID tiles exact edge-pairs; it did not narrow the overlays,
-//!    because this engine's absolute edge numbering is a mirror of the
-//!    source manifest's (see `hexmap::TILE_CATALOG`'s "Edge numbering"
-//!    paragraph), and for a preprinted hex -- unlike a freely-rotatable tray
-//!    tile -- that reflection is NOT immaterial: it would point real printed
-//!    track at the wrong neighbours. Narrowing them on a mirrored numbering
-//!    would sever whole board regions, the exact failure `hexmap.rs`'s
-//!    module doc comment #20 had to repair once already. Tightening them is
-//!    tracked as residual work, and is a strict tightening: nothing routable
-//!    today would gain a path.
-//! 3. **What counts as a revenue centre.** Any visited hex whose
-//!    `effective_tile_and_value` figure is non-zero. Plain and Mountain
-//!    track price at $0 and are therefore pure connectors -- passed through
-//!    freely, never counted against a train's capacity and never counted
-//!    toward the two-centre minimum. Towns and cities price above $0 and
-//!    count as one stop each.
-//! 4. **Distance budget.** A train's `max_route_distance` caps the number of
-//!    REVENUE CENTRES its route may visit, not the number of hexes -- the
-//!    real 1830 rule, and the only reading consistent with requirement 3's
-//!    `visited_revenue_centres >= 2` minimum. (Pre-G-9 it capped visited
-//!    hexes, under which a 2-train could not have run two towns joined by a
-//!    single plain connector -- three hexes -- even though that is the most
-//!    ordinary route in the game.) Connector hexes are instead bounded by
-//!    `MAX_ROUTE_HEXES` purely as a gas guard.
-//! 5. **Search algorithm.** Depth-first over `(hex, arrival edge)` states,
-//!    exhaustive within the caps above, taking the highest-valued route
-//!    found. Deterministic by construction, which a consensus contract
-//!    requires: candidate segments are visited in the fixed order
-//!    `TILE_CATALOG` lists them, a strictly-greater comparison keeps the
-//!    first best route found on ties, and no iteration order over a
-//!    `HashSet` ever influences a decision (the ledger is consulted only by
-//!    `contains`, and route hexes are accumulated in an ordered `Vec`).
+//!   The search state is `(hex, city_node)`, so a route may serve BOTH stations
+//!   of a two-city hex but never the same station twice, and can never cross
+//!   between them inside the hex.
 //!
-//!    A route runs THROUGH the home station, not merely out of it: both ends
-//!    of one segment on the home tile can be arms of the same route (see
-//!    `best_route_for_train`).
+//!   Deterministic by construction, which a consensus contract requires:
+//!   segments are visited in catalog order, ties keep the first best route, and
+//!   no `HashSet` iteration order ever influences a decision.
 //!
-//!    **Step 4.5 Batch 2, item 1 changed what "already visited" means.** The
-//!    search state is now `(hex, city_node)`, not `hex`. G-9 left a
-//!    simplification in place here -- "a hex is visited at most once per
-//!    route... real 1830 permits re-entering a hex on genuinely separate
-//!    track, and this engine does not" -- and on a two-city tile that
-//!    simplification was not merely conservative, it silently deleted the
-//!    better half of New York's revenue. A route may now serve both stations
-//!    of a two-city hex; it still may not serve the same station twice, and
-//!    it still cannot cross between the two inside the hex, because the only
-//!    move this search makes is a step to a NEIGHBOUR over track it has not
-//!    already claimed. See `PartialRoute::visited_nodes` and
-//!    `HexInfo::arrival_city_node` for the full argument, including the three
-//!    cases where the node collapses back to the hex.
+//!   Multi-train assignment is GREEDY (biggest train first), not jointly
+//!   optimal -- that is an exponential search this contract cannot afford at
+//!   block gas limits. Greedy can only under-report revenue, never over-report.
 //!
-//!    A hex with no city (plain track, a town) is still crossed at most once
-//!    per route. That remains an under-report and is deliberately left
-//!    alone: it has nothing to do with station granularity and widening it
-//!    would only enlarge the search space.
-//! 6. **Multi-train assignment is greedy, not globally optimal.** Trains run
-//!    biggest-first, each taking the best route still available to it given
-//!    what earlier trains already claimed. A jointly-optimal assignment is
-//!    an exponential search this contract cannot afford at block gas limits.
-//!    Greedy-by-capacity is the standard 18xx heuristic, is deterministic,
-//!    and can only under-report, never over-report, revenue.
+//! See docs/ai_architecture/rust_contract_architecture.md, pathfinding.rs -- and
+//! note the recorded divergence: `operations::execute_run_manual_route` still
+//! caps HEXES rather than revenue centres.
 
 use std::collections::{HashMap, HashSet};
 
@@ -136,14 +57,10 @@ use crate::state::{
     TerrainType, Tile, COMPANY_HARDWARE, MAP_GRID, PROTOCOL_NETWORK_HEXES, PROTOCOL_STATION_HEXES,
 };
 
-/// Hard ceiling on how many hexes a single route may contain, connector
-/// hexes included. Not a game rule -- 1830 caps STOPS, which
-/// `max_route_distance` already does (design note #4) -- purely a gas guard,
-/// so a pathological board of interlocking brown junction tiles cannot make
-/// this search run away inside a block. Comfortably above any route a real
-/// 1830 board can produce: the longest train in the game is a Diesel, and
-/// even a Diesel's stops cannot be spread over more than a handful of
-/// connectors each on a 74-hex map.
+/// Hard ceiling on hexes in one route, connectors included. NOT a game rule --
+/// 1830 caps STOPS, which `max_route_distance` already does -- purely a gas guard,
+/// so a pathological board of interlocking junction tiles cannot make this search
+/// run away inside a block.
 pub const MAX_ROUTE_HEXES: usize = 24;
 
 /// Hard ceiling on how many partial-route states one train's search may
@@ -155,36 +72,21 @@ pub const MAX_ROUTE_HEXES: usize = 24;
 /// under-report revenue.
 pub const MAX_SEARCH_STATES: u32 = 20_000;
 
-/// Resolves the tile actually in play at `(q, r)` for route-tracing
-/// purposes, together with its scored value -- the Landmark Pathfinder
-/// Revenue Fix (`hexmap.rs` module doc comment #17) and its board-wide
-/// Gray-Hex extension (#20). Prefers any real `Tile` a Protocol has actually
-/// laid via `LayTile`, scored the ordinary way through `tile_base_value`.
-/// Falls back to a synthetic, unowned virtual tile at the six hexes
-/// `hexmap::landmark_start_value_at` covers -- real preprinted 1830
-/// landmark/gray-city hexes with genuine starting track -- scored at that
-/// hex's own real starting face value, and then at every OTHER real GRAY
-/// preprinted hex (`hexmap::gray_preprinted_name_at`), scored at the flat
-/// `terrain_base_value` figure for whatever marker it carries. Returns
-/// `None` for every other untiled hex. Nothing is ever written to
-/// `MAP_GRID`; this is a read-only overlay for this trace alone.
+/// Resolves the tile actually in play at `(q, r)` for route tracing, with its
+/// scored value. Prefers a real laid `Tile`; falls back to a synthetic, unowned
+/// overlay at the six individually-sourced preprinted hexes and then at every
+/// other real GRAY preprinted hex. `None` for any other untiled hex.
 ///
-/// **Audit G-9.** The synthetic tiles now also carry a `paths` list, since
-/// `Tile::paths` is what the traversal below actually follows -- an overlay
-/// left with an empty list would be unroutable, silently reintroducing the
-/// dead-zone bug #20 fixed. `FULLY_CONNECTED_PATHS` keeps them exactly as
-/// permissive as their `0b11_1111` mask always was, so this pass changes
-/// nothing about which overlay hexes a route can cross; see design note #2
-/// for why narrowing them to their real printed shapes is deliberately NOT
-/// part of this batch. `tile_id` 10 is retained as the overlays' marker id
-/// (it is not, and never was, a real `TILE_CATALOG` entry -- the value
-/// returned alongside is authoritative, never a `tile_base_value` lookup on
-/// this id).
+/// Nothing is ever written to `MAP_GRID` -- a read-only overlay for this trace.
 ///
-/// `pub(crate)`, not private: `operations::execute_run_manual_route`
-/// (Manual Route Validation) reuses this too, so a manually-declared route
-/// and an automatically-traced one can never disagree about whether an
-/// untiled landmark hex is passable or what it's worth.
+/// Audit G-9: the overlays carry a `paths` list too, since that is what the
+/// traversal follows -- an overlay with an empty list would be unroutable,
+/// silently reintroducing the dead-zone bug module doc #20 fixed. They stay
+/// FULLY CONNECTED, exactly as permissive as their mask always was.
+///
+/// `pub(crate)` so the manual route reuses it: a hand-declared route and an
+/// automatically-traced one can never disagree about whether an untiled landmark
+/// hex is passable or what it is worth.
 pub(crate) fn effective_tile_and_value(
     storage: &dyn Storage,
     game_id: u64,
@@ -198,20 +100,13 @@ pub(crate) fn effective_tile_and_value(
     if let Some(value) = landmark_start_value_at(q, r) {
         return Ok(Some((synthetic_overlay_tile(q, r), value)));
     }
-    // Module doc comment #20 (Rigid Global Gray-Hex Lockout, `hexmap.rs`):
-    // every OTHER real GRAY pre-printed hex -- the ones not already covered
-    // by `landmark_start_value_at` above -- can, since `hexmap.rs` module
-    // doc comment #19/#20, never receive a real laid `Tile` either (the
-    // Gray Hex Immutability lock rejects every `LayTile` attempt there
-    // unconditionally). Without this fallback, `MAP_GRID.may_load` above
-    // would permanently return `None` for these hexes and this function
-    // would fall all the way through to the final `Ok(None)` below --
-    // silently making each one an unroutable dead zone (no route could ever
-    // pass through it or score any value there), even though its real
-    // printed track genuinely connects to the rest of the board. A real
-    // GRAY city scores the flat `MajorCityHub` figure, a real GRAY town the
-    // flat `SmallTown`/`DoubleTown` figure, and a bare connector `$0` --
-    // still passable, preserving through-routing across it.
+    // Every OTHER real GRAY preprinted hex can never receive a laid `Tile` (Gray Hex
+    // Immutability), so without this fallback `MAP_GRID.may_load` would permanently
+    // return `None` for them and each would become a silent unroutable dead zone --
+    // no route passing through, no value scored -- even though its real printed
+    // track genuinely connects to the rest of the board. A gray city scores the flat
+    // city figure, a gray town the flat town figure, and a bare connector $0, still
+    // passable.
     if gray_preprinted_name_at(q, r).is_some() {
         let value = if city_designation_name_at(q, r).is_some() {
             terrain_base_value(TerrainType::MajorCityHub)
@@ -359,55 +254,35 @@ pub(crate) fn best_owned_distance(
     Ok(owned.iter().map(|asset| asset.max_route_distance).max())
 }
 
-/// Every hex holding at least one RIVAL Station Token, mapped to how many
-/// rival tokens sit there.
+/// Every hex holding at least one RIVAL Station Token, mapped to how many.
 ///
-/// **Audit G-9, requirement 3.** This is the repointed blockade source. It
-/// used to read `PROTOCOL_NETWORK_HEXES`' first entry per rival -- that
-/// company's first LAID TILE -- which is the wrong registry twice over: it
-/// is a track record rather than a token record, and it named exactly one
-/// hex per rival no matter how many tokens that rival had actually placed.
-/// `PROTOCOL_STATION_HEXES` (`state.rs`) is the real token registry, written
-/// by `hexmap::grant_home_station_token` at float and by
-/// `hexmap::execute_place_station_token` for every token after that, so
-/// every rival token on the board is now accounted for -- and only tokens
-/// are.
+/// Audit G-9's repointed blockade source. It used to read each rival's first
+/// LAID TILE, which is the wrong registry twice over: a track record rather than
+/// a token record, and exactly one hex per rival no matter how many tokens that
+/// rival had actually placed.
 /* ------------------------------------------------------------------ */
 /* HEX-LEVEL BLOCKADE ROLL-UP -- test-only in a non-test build          */
 /* ------------------------------------------------------------------ */
-//
 // `cargo check` reports the five functions in this block as `dead_code`.
 // THEY ARE NOT DEAD, AND DELETING THEM BREAKS THE TEST SUITE.
 //
-// `cargo check` compiles only the library target, and `mod tests` is behind
-// `#[cfg(test)]` (see `lib.rs`), so the compiler cannot see the callers.
-// `cargo check --all-targets` or `cargo test` reports no warning here. Live
-// callers, all in `src/tests.rs`:
+// `cargo check` compiles only the library target and `mod tests` is behind
+// `#[cfg(test)]`, so the compiler cannot see the callers. `cargo check
+// --all-targets` or `cargo test` reports no warning. Live callers, all in
+// `src/tests.rs`: `opponent_station_hexes` (4 blockade tests),
+// `passability_at`, and `tokened_hexes`/`passability_for_hex`/`hex_passability`
+// transitively.
 //
-//   opponent_station_hexes  -- 4 tests, including
-//     `run_manual_route_may_end_at_a_fully_blockaded_rival_city` and
-//     `run_manual_route_runs_through_the_city_once_the_blockade_is_lifted`
-//   passability_at          -- `passability_is_evaluated_per_city_not_per_hex`
-//   tokened_hexes / passability_for_hex / hex_passability
-//                           -- transitively, via the two above
+// They lost their PRODUCTION callers to Audit G-13, which made routing
+// city-granular: the hex-level question -- "is this hex closed to me ENTIRELY"
+// -- is too coarse to route on, because a hex is not a city. They are kept
+// because that question is still real and correct, just not the one the router
+// asks; it is the right question for a caller with a hex and no track, such as a
+// map overlay. Keeping them also keeps the four blockade regression tests, which
+// are the coverage proving rival tokens blockade at all -- rewriting those
+// against the per-city API would trade real coverage for a silenced warning.
 //
-// WHY THEY LOST THEIR PRODUCTION CALLERS. Audit G-13 made routing
-// city-granular. `BoardView::info` moved from `passability_for_hex` to
-// `city_passability_for_hex`, and `operations::execute_run_manual_route`
-// moved from `opponent_station_hexes` to `transit_passability_for_hex`. That
-// is the point of G-13: the hex-level question -- "is this hex closed to me
-// ENTIRELY" -- is too coarse to route on, because a hex is not a city.
-//
-// They are kept rather than deleted because the question they answer is
-// still a real and correct one, just not the one the router asks. It is the
-// right question for any caller that has a hex and no track: a map overlay
-// shading unreachable hexes, or a UI hint. Keeping them also keeps the four
-// blockade regression tests, which are the coverage that proves rival tokens
-// blockade at all -- rewriting those against the per-city API would trade
-// real coverage for a silenced warning.
-//
-// `#[allow(dead_code)]` is therefore an assertion, not a suppression: these
-// have callers, and the lint cannot see them.
+// `#[allow(dead_code)]` is therefore an ASSERTION, not a suppression.
 
 #[allow(dead_code)]
 pub(crate) fn tokened_hexes(
@@ -426,24 +301,16 @@ pub(crate) fn tokened_hexes(
     Ok(hexes)
 }
 
-/// The hexes a rival blockade forbids `protocol_id` from routing THROUGH --
-/// every hex where rivals hold tokens and no open slot remains.
+/// The hexes a rival blockade forbids `protocol_id` from routing THROUGH -- every
+/// hex where rivals hold tokens and no open slot remains.
 ///
-/// **Audit G-9.** Kept under its original name and `HashSet<(i32, i32)>`
-/// shape because `operations::execute_run_manual_route` consumes it
-/// directly; only the underlying source and rule changed (see
-/// `tokened_hexes`/`passability_at`). Two consequences for that caller, both strictly
-/// more faithful than before: a rival's mere first laid tile no longer
-/// blocks anything, and a rival-tokened city with a slot still open no
-/// longer blocks anything either.
+/// Kept under its original name and shape because the manual route consumes it
+/// directly; only the source and rule changed. Two consequences, both strictly
+/// more faithful: a rival's mere laid tile no longer blocks anything, and neither
+/// does a part-tokened city with a slot open.
 ///
-/// The residual G-9 left open here -- that `execute_run_manual_route`
-/// rejected a declared path containing ANY hex in this set, including as its
-/// final hex, so a manual route could not END at a fully-blockaded city the
-/// way `trace_best_route_set` below correctly can -- is CLOSED. That
-/// function now applies this set to the interior of a declared path only,
-/// matching `Passability::StopOnly`. Callers should read this set as "cities
-/// no route may pass THROUGH", never as "hexes no route may touch".
+/// Read this set as "cities no route may pass THROUGH", never as "hexes no route
+/// may touch" -- a route may always run INTO a fully-blockaded city and end there.
 #[allow(dead_code)]
 pub(crate) fn opponent_station_hexes(
     storage: &dyn Storage,
@@ -465,21 +332,18 @@ pub(crate) fn opponent_station_hexes(
     Ok(blocked)
 }
 
-/// Whether `protocol_id` may run THROUGH hex `(q, r)` entering on
-/// `in_edge` and leaving on `out_edge` -- Audit G-13, the city-granular
-/// transit test for a route whose track is known.
+/// Whether `protocol_id` may run THROUGH `(q, r)` entering on `in_edge` and
+/// leaving on `out_edge` -- Audit G-13's city-granular transit test for a route
+/// whose track is known.
 ///
-/// This is the same question `HexInfo::transit_passability` answers inside
-/// the DFS, exposed for `operations::execute_run_manual_route`, whose
-/// declared `hex_path` fixes both edges by the axial deltas to its
-/// neighbours and so knows exactly as much about the track as the search
-/// does. Sharing one implementation is what stops the automatic and manual
-/// route paths from disagreeing about a blockade.
+/// The same question the DFS asks internally, exposed for the manual route, whose
+/// declared path fixes both edges by axial deltas and so knows exactly as much
+/// about the track as the search does. Sharing one implementation is what stops
+/// the two route paths disagreeing about a blockade.
 ///
-/// `Open` when no segment on the tile joins those two edges: the hop is
-/// impossible for connectivity reasons, which is a different rejection with
-/// a different error, checked elsewhere. Reporting it as blocked here would
-/// attribute a connectivity failure to a rival's tokens.
+/// `Open` when no segment joins those two edges: the hop is impossible for
+/// CONNECTIVITY reasons, a different rejection with a different error. Reporting
+/// it as blocked would attribute a connectivity failure to a rival's tokens.
 pub(crate) fn transit_passability_for_hex(
     storage: &dyn Storage,
     game_id: u64,
@@ -544,33 +408,25 @@ pub(crate) fn city_passability_for_hex(
     Ok(city_passability_at(slot_counts, &occupants, protocol_id))
 }
 
-/// Whether a route may run THROUGH this hex's revenue centre or only stop
-/// there (Audit G-9 requirement 3, made PER-CITY by Audit G-12).
+/// Whether a route may run THROUGH this hex's revenue centre or only stop there,
+/// evaluated independently per city: open if this company holds a token in THAT
+/// city (never blocked out of its own station, however full), or if that city
+/// still has a slot no rival occupies. A 2-slot city holding ONE rival token
+/// blocks nobody; the same city holding TWO blocks everybody else.
 ///
-/// The rule, evaluated independently for each city on the hex:
-/// - `protocol_id` holds a token in THAT city -- open. A company is never
-///   blocked out of its own station, however full that city is.
-/// - That city still has a slot no rival occupies -- open. This is the case
-///   the rule exists for: a 2-slot city holding ONE rival token blocks
-///   nobody; the same city holding TWO blocks everybody else.
-/// - Otherwise that city is closed to this company.
-///
-/// The hex is `StopOnly` only when EVERY city on it is closed. A train may
-/// still end its route there and score it; it just cannot continue past.
+/// The HEX is `StopOnly` only when EVERY city on it is closed -- a train may
+/// still end its route there and score it, it just cannot continue past.
 ///
 /// WHY "any open city opens the hex", stated plainly because it is the one
-/// approximation left in here: the traversal is hex-granular -- `HexInfo`
-/// carries `paths` for the whole tile and does not track which city a route
-/// entered -- so at this level the honest question is "can this company get
-/// through this hex at all", and it can if any city admits it. Tightening
-/// this to "the specific city the route actually uses" requires the search
-/// itself to carry city identity through each hop, which is a change to the
-/// traversal, not to this function.
+/// approximation left here: this level is hex-granular and does not track which
+/// city a route entered, so the honest question is "can this company get through
+/// this hex at all". Tightening it requires the search itself to carry city
+/// identity through each hop -- a change to the traversal, not to this function.
 ///
-/// What G-12 fixed is the layer beneath: `slot_counts` and `occupants` are
-/// now per-city, so a hex is no longer judged by a POOLED total that could
-/// report room on a hex whose every city was full (#62 carries two 2-slot
-/// cities; the pooled count said 4 and could not tell 2+2 from 4+0).
+/// What G-12 fixed is the layer beneath: slot counts and occupants are now
+/// per-city, so a hex is no longer judged by a POOLED total that could report
+/// room on a hex whose every city was full (#62 carries two 2-slot cities; the
+/// pooled count said 4 and could not tell 2+2 from 4+0).
 #[allow(dead_code)]
 pub(crate) fn passability_at(
     slot_counts: &[u32],
@@ -580,19 +436,11 @@ pub(crate) fn passability_at(
     hex_passability(&city_passability_at(slot_counts, occupants, protocol_id))
 }
 
-/// The per-city answer, one entry per city on the hex, indexed by
-/// `city_index` (Audit G-13). Empty for a hex with no city.
-///
-/// This is the primitive; every other passability question in this module is
-/// a roll-up of it. For each city independently:
-///
-/// - `protocol_id` holds a token in THAT city -- open. Checked per city, not
-///   per hex: holding New York's western station does not entitle you to run
-///   through its eastern one.
-/// - That city still has a slot no rival occupies -- open. A 2-slot city
-///   holding ONE rival token blocks nobody; the same city holding TWO blocks
-///   everybody else.
-/// - Otherwise that city is closed to this company.
+/// The per-city answer, one entry per city, indexed by `city_index` (Audit G-13).
+/// This is the primitive; every other passability question here is a roll-up of
+/// it. Per city: open if this company holds a token in THAT city -- holding New
+/// York's western station does not entitle you to run through its eastern one --
+/// or if a slot no rival occupies remains. Otherwise closed.
 pub(crate) fn city_passability_at(
     slot_counts: &[u32],
     occupants: &[(u32, u8)],
@@ -622,23 +470,19 @@ pub(crate) fn city_passability_at(
         .collect()
 }
 
-/// Whether a hex is passable AT ALL -- open if ANY city on it admits this
-/// company, and for a hex with no cities.
+/// Whether a hex is passable AT ALL -- open if ANY city admits this company, and
+/// for a hex with no cities.
 ///
-/// **This is a strictly weaker question than `HexInfo::transit_passability`,
-/// and the distinction is the entire point of Audit G-13.** Use this only
-/// where the specific track a route runs over is genuinely unknown:
-/// `opponent_station_hexes`, whose contract with its callers is "hexes no
-/// route may touch at all". The DFS never uses it -- it knows exactly which
+/// A STRICTLY WEAKER question than `HexInfo::transit_passability`, and the
+/// distinction is the entire point of Audit G-13. Use it only where the specific
+/// track is genuinely unknown. The DFS never uses it: it knows exactly which
 /// segment it is traversing, so it asks about that segment's own city.
 ///
-/// **Step 4.5 Batch 2, item 1.** Now `pub(crate)` so
-/// `test_city_granular_pathfinding_rejects_ghost_routing` can assert the
-/// CONTRAST directly: on a tile whose city 0 is fully blockaded and whose
-/// city 1 is open, this hex-level roll-up answers `Open` -- which is exactly
-/// the ghost route -- while `HexInfo::transit_passability` answers
-/// `StopOnly` for city 0's own track. Having both functions callable side by
-/// side is what makes that test evidence rather than assertion.
+/// `pub(crate)` so the ghost-routing regression can assert the CONTRAST directly:
+/// on a tile whose city 0 is blockaded and city 1 open, this roll-up answers
+/// `Open` -- which is exactly the ghost route -- while `transit_passability`
+/// answers `StopOnly` for city 0's own track. Having both callable side by side
+/// is what makes that test evidence rather than assertion.
 #[allow(dead_code)]
 pub(crate) fn hex_passability(per_city: &[Passability]) -> Passability {
     if per_city.is_empty() || per_city.iter().any(|p| *p == Passability::Open) {
@@ -683,13 +527,11 @@ pub(crate) struct HexInfo {
 }
 
 impl HexInfo {
-    /// Whether a route may run THROUGH this hex along segment `segment_index`
-    /// -- Audit G-13, and the check the DFS actually makes.
-    ///
-    /// Resolves to the passability of the ONE city that segment runs through,
-    /// so a blockade on city 0 stops a route using city 0's track while
-    /// leaving city 1's track open, which is what real 1830 does and what
-    /// makes tokening a contested city a defensive move at all.
+    /// Whether a route may run THROUGH this hex along `segment_index` -- Audit G-13,
+    /// and the check the DFS actually makes. Resolves to the passability of the ONE
+    /// city that segment runs through, so a blockade on city 0 stops a route using
+    /// city 0's track while leaving city 1's open -- which is what real 1830 does and
+    /// what makes tokening a contested city a defensive move at all.
     pub(crate) fn transit_passability(&self, segment_index: usize) -> Passability {
         // No cities on this hex -- plain track, a town, a bare connector.
         // Nothing to blockade.
@@ -725,39 +567,27 @@ impl HexInfo {
         }
     }
 
-    /// **Step 4.5 Batch 2, item 1: which NODE a route occupies on this hex.**
+    /// Which NODE a route occupies on this hex. A hex is not a node: #62 and every OO
+    /// tile carry TWO independent city nodes on physically separate, non-intersecting
+    /// track, and the route history keys on what this returns -- so a route may
+    /// legitimately visit both stations while never visiting the same one twice.
     ///
-    /// A hex is not a node. Tile #62 (brown New York) and every OO tile
-    /// (#59, #64-#68) carry TWO independent city nodes on one hex, sitting on
-    /// physically separate, non-intersecting track. The route history keys on
-    /// what this returns, so that a route may legitimately visit both of a
-    /// two-city hex's stations -- by leaving and re-entering on that hex's
-    /// other track -- while still never visiting the same station twice.
+    /// `None` is the SINGLE-NODE answer (treat the whole hex as one indivisible
+    /// stop), returned in exactly three deliberately conservative cases: the hex has
+    /// no cities at all; the segment-to-city correspondence is not knowable (today,
+    /// only a synthesized overlay); or the arriving edge is claimed by two DIFFERENT
+    /// cities, which no real 1830 tile does and therefore means the catalog and the
+    /// slot table disagree.
     ///
-    /// `entry_segment_indices` are the segments on this hex that carry the
-    /// edge the route is arriving on. `None` is the SINGLE-NODE answer: treat
-    /// the whole hex as one indivisible stop, which is the pre-Batch-2
-    /// behavior. It is returned in exactly three cases, and all three are
-    /// deliberately conservative:
+    /// THE ASYMMETRY IS THE WHOLE POINT: guessing `None` can only ever cost a route
+    /// revenue it was owed, while guessing a specific node wrongly would hand a train
+    /// a second visit to a station it already used -- the exact double-count this
+    /// granularity exists to prevent.
     ///
-    /// - **The hex has no cities at all** (plain track, a town, a bare
-    ///   connector). There is nothing to subdivide. Note this means a route
-    ///   still crosses a plain hex at most once even where real 1830 would
-    ///   allow two passes on separate track -- an under-report this pass does
-    ///   NOT change, because widening it has nothing to do with ghost routing
-    ///   and would enlarge the search space for no rules benefit.
-    /// - **The correspondence is not knowable** -- `segment_cities` says
-    ///   `None` for a segment on a hex that does have cities, today only a
-    ///   synthesized overlay standing in for preprinted artwork.
-    /// - **The arriving edge is claimed by two DIFFERENT cities.** No real
-    ///   1830 tile does this, so it means the catalog and the slot table
-    ///   disagree; collapsing to one node refuses a visit that might have
-    ///   been legal rather than permitting one that is not.
-    ///
-    /// The asymmetry is the whole point: guessing `None` can only ever cost a
-    /// route revenue it was owed, while guessing a specific node wrongly
-    /// would hand a train a second visit to a station it already used -- the
-    /// exact double-count this granularity exists to prevent.
+    /// A route still crosses a plain hex at most once even where real 1830 would
+    /// allow two passes on separate track. That under-report is deliberately
+    /// unchanged: widening it has nothing to do with ghost routing and would enlarge
+    /// the search space for no rules benefit.
     pub(crate) fn arrival_city_node(&self, entry_segment_indices: &[usize]) -> Option<u8> {
         if self.city_passability.is_empty() {
             return None;
@@ -780,13 +610,10 @@ impl HexInfo {
     }
 }
 
-/// Builds a bare `HexInfo` for unit tests -- Audit G-13.
-///
-/// Exists so the ghost-routing regression can be asserted against the exact
-/// decision function the DFS uses, without standing up a game session, a
-/// board, eight corporations and a token registry just to reach it. The
-/// fields it does not take (`value`, `is_revenue_centre`) play no part in
-/// `transit_passability`.
+/// Builds a bare `HexInfo` for unit tests (Audit G-13), so the ghost-routing
+/// regression can be asserted against the exact decision function the DFS uses,
+/// without standing up a game session, a board, eight corporations and a token
+/// registry just to reach it.
 #[cfg(test)]
 pub(crate) fn hex_info_for_test(
     paths: Vec<(u8, u8)>,
@@ -839,15 +666,11 @@ impl<'a> BoardView<'a> {
             None => None,
             Some((tile, value)) => {
                 let paths = effective_tile_paths(&tile);
-                // Audit G-13: derived from the SAME list, so index `i` in
-                // `segment_cities` always describes `paths[i]`.
-                //
-                // `tile.tile_id` for a synthesized overlay is
-                // `SYNTHETIC_OVERLAY_TILE_ID`, which is deliberately not a
-                // real `TILE_CATALOG` entry -- so this comes back all-`None`
-                // and `transit_passability` takes its conservative branch,
-                // which is the correct handling for artwork whose segments
-                // carry no city information.
+                // Audit G-13: derived from the SAME list, so index `i` in `segment_cities`
+                // always describes `paths[i]`. A synthesized overlay's id is deliberately not a
+                // real catalog entry, so this comes back all-`None` and `transit_passability`
+                // takes its conservative branch -- the correct handling for artwork whose
+                // segments carry no city information.
                 let segment_cities = tile_segment_cities(tile.tile_id, paths.len());
                 Some(HexInfo {
                     paths,
@@ -1032,16 +855,15 @@ fn best_route_for_train(
             revenue_centres: u32::from(home_info.is_revenue_centre),
             value: home_info.value,
         };
-        // Audit G-13: the home hex needs the same per-city transit test as
-        // every other hex, and it is NOT covered by "you always hold a token
-        // at home". A company's home token sits in ONE city; a home hex with
-        // TWO cities (ERIE's E11 is an OO hex) can have its other city filled
-        // by rivals, and that city's track is then closed to the company
-        // whose home this is, exactly as it would be anywhere else.
+        // Audit G-13: the home hex needs the same per-city transit test as every other,
+        // and it is NOT covered by "you always hold a token at home". A company's home
+        // token sits in ONE city; a home hex with TWO cities (ERIE's E11 is an OO hex)
+        // can have its other city filled by rivals, and that city's track is then closed
+        // to the company whose home it is.
         //
-        // Only the two-armed JOIN below is a transit -- a single arm starts
-        // at home and leaves, which passes through nothing -- so the flag is
-        // computed here and consulted only where it applies.
+        // Only the two-armed JOIN is a transit -- a single arm starts at home and
+        // leaves, passing through nothing -- so the flag is computed here and consulted
+        // only where it applies.
         let may_transit_home =
             home_info.transit_passability(segment_index) == Passability::Open;
         let segment_key = (home.0, home.1, normalize_path(a, b));
@@ -1281,25 +1103,19 @@ fn expand(
         *best = Some(extended.clone());
     }
 
-    // ==== Audit G-13: PER-CITY TRANSIT. ====
+    // Audit G-13: PER-CITY TRANSIT. A fully-blockaded city may be STOPPED AT but
+    // never run through, and what changed is the GRANULARITY of that test -- a rules
+    // fix, not a refactor.
     //
-    // A fully-blockaded city may be stopped at -- which the record above just
-    // did -- but never run through. What changed here is the GRANULARITY of
-    // that test, and it is a rules fix, not a refactor.
+    // This was previously one hex-level check evaluated BEFORE the loop, returning
+    // early. On a multi-city tile that let a route enter through a fully-tokened
+    // city's own track and leave again as long as SOME OTHER city on the same tile
+    // had a free slot -- ghost routing straight through the blockade. On #62 and the
+    // OO tiles the two cities sit on physically separate track, so this was never a
+    // close call: the route was riding rails it had no access to.
     //
-    // Previously this was one `next_info.passability == StopOnly` check for
-    // the whole hex, evaluated BEFORE the loop and returning early. On a
-    // multi-city tile that let a route enter through a fully-tokened city's
-    // own track and leave again as long as SOME OTHER city on the same tile
-    // had a free slot -- ghost routing straight through the blockade. On #62
-    // (brown New York) and the OO tiles the two cities sit on physically
-    // separate, non-intersecting track, so this was never a close call: the
-    // route was riding rails it had no access to.
-    //
-    // The check now lives INSIDE the loop and is asked per segment, so a
-    // blockade closes exactly the track that runs through the blockaded city
-    // and leaves the other city's track open. `expand` is still reached for
-    // the hex itself, so the route may still END here and score it.
+    // The check now lives INSIDE the loop and is asked per segment. `expand` is
+    // still reached for the hex itself, so the route may still END here and score it.
     let mut deepest = extended.clone();
     for &(segment_index, (a, b)) in entry_segments.iter() {
         if next_info.transit_passability(segment_index) == Passability::StopOnly {
@@ -1328,17 +1144,14 @@ fn expand(
     Ok(Some(deepest))
 }
 
-/// Traces one valid route per train `protocol_id` owns, such that no two of
-/// its trains reuse the same track segment in a single Operating Round
-/// (Audit G-9, requirement 2).
+/// Traces one route per train `protocol_id` owns, such that no two of its trains
+/// reuse the same track segment in a single Operating Round (Audit G-9).
 ///
-/// Trains run biggest-first, each taking the best route still available to
-/// it given what earlier trains claimed; see design note #6 on why that is
-/// greedy rather than jointly optimal. Returns the summed value of every
-/// route found and the routes themselves, in the order they were assigned.
-/// A company with no Hardware, no home hex, or nothing but a single revenue
-/// centre in reach returns `(zero, empty)` -- as does a train for which no
-/// unclaimed route remains, which is simply omitted from the returned list.
+/// Trains run biggest-first, each taking the best route still available given
+/// what earlier trains claimed -- greedy rather than jointly optimal. Returns the
+/// summed value and the routes in assignment order. A company with no Hardware,
+/// no home hex, or nothing but a single revenue centre in reach returns nothing,
+/// as does a train for which no unclaimed route remains.
 pub fn trace_best_route_set(
     storage: &dyn Storage,
     game_id: u64,

@@ -1585,14 +1585,6 @@ pub(crate) fn rotate_edge(edge: u8, orientation: u8) -> u8 {
     ((edge % 6) + (orientation % 6)) % 6
 }
 
-/// Rotates a tile's base edge-pair list into its actual on-map segments (Audit
-/// G-9), re-normalized to `(min, max)` so a segment has one canonical spelling
-/// regardless of traversal direction. A terminal spur `(a, a)` stays a spur
-/// under rotation.
-///
-/// Deliberately mirrors `rotate_connections` exactly: `Tile::paths` and
-/// `Tile::connections` are both stored pre-rotation, so both must be rotated at
-/// read time and can never drift apart.
 /// The edge index on hex `from` facing hex `to`, or `None` when they are not
 /// adjacent (Audit G-13). The inverse of `HEX_NEIGHBOR_OFFSETS`, which this
 /// SEARCHES rather than re-deriving with its own arithmetic, so the two
@@ -1608,6 +1600,16 @@ pub fn edge_between(from: (i32, i32), to: (i32, i32)) -> Option<u8> {
         .and_then(|index| u8::try_from(index).ok())
 }
 
+/// Rotates a tile's base edge-pair list into its actual on-map segments (Audit
+/// G-9), re-normalized to `(min, max)` so a segment has one canonical spelling
+/// regardless of traversal direction. A terminal spur `(a, a)` stays a spur
+/// under rotation.
+///
+/// Deliberately mirrors `rotate_connections` exactly: `Tile::paths` and
+/// `Tile::connections` are both stored pre-rotation, so both must be rotated at
+/// read time and can never drift apart.
+/// (This doc comment was orphaned onto `edge_between` by a refactor that moved
+///  the function without it; restored here.)
 pub(crate) fn rotate_paths(paths: &[(u8, u8)], orientation: u8) -> Vec<(u8, u8)> {
     paths
         .iter()

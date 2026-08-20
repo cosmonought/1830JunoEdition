@@ -11,15 +11,10 @@ pub struct GameConfig {
     pub subsidy_fee_percentage: u64, // e.g., 50 for 0.5%
 }
 
-/// A tile's classic 1830 color tier -- Yellow, Green, or Brown, in that
-/// fixed progression. Declared in that exact order (Yellow first) so the
-/// derived `Ord`/`PartialOrd` impls compare eras the same way real 1830's
-/// tile-color progression does: `TileColor::Green > TileColor::Yellow`,
-/// `TileColor::Brown > TileColor::Green`. `GameSession::current_global_era`
-/// tracks which tiers are currently legal to lay or upgrade into; see
-/// `hexmap.rs`'s module doc comment on Tech Era Color-Locking for the exact
-/// unlock triggers (the first 3-train and first 5-train purchased from the
-/// Hardware pool).
+/// A tile's 1830 colour tier. Declared Yellow-first so the derived `Ord`
+/// compares eras the way the real progression does (`Green > Yellow`,
+/// `Brown > Green`) -- `current_global_era` can therefore never regress.
+/// Unlock triggers: the first 3-train (Green) and first 5-train (Brown).
 #[derive(
     Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
 )]
@@ -29,43 +24,15 @@ pub enum TileColor {
     Brown,
 }
 
-/// The Macro Round Tracker's coarse round type -- which broad phase
-/// `game_id` is currently in.
+/// The Macro Round Tracker's coarse round type.
 ///
-/// `WaterfallAuction` is the room's true genesis phase (`contract::
-/// execute_create_game_room`, changed from this contract's earlier
-/// "genesis starts in StockRound" behavior): the canonical 1830 pre-game
-/// private-company auction, allocating all six `CORE_PRIVATE_COMPANIES`
-/// before any stock is ever bought -- see `waterfall.rs`'s module doc
-/// comment for the full engine. `waterfall::conclude_waterfall` (called
-/// either once every private is owned, or once a full round of passes ends
-/// the auction early -- see that module) is this contract's one and only
-/// `WaterfallAuction -> StockRound` transition; nothing else ever sets
-/// `current_round_type` back to `WaterfallAuction` after that (this is a
-/// strictly one-time, one-directional phase, unlike the ordinary
-/// `StockRound`/`OperatingRound` cycle below).
+/// `WaterfallAuction` is the room's true genesis phase, and
+/// `waterfall::conclude_waterfall` is the ONE AND ONLY exit from it -- nothing
+/// ever sets it back. `StockRound`/`OperatingRound` are the repeating cycle,
+/// driven by `execute_begin_operating_round` and Macro Round Loop Advancement.
 ///
-/// `StockRound` (players buy/sell/pass on share ownership) and
-/// `OperatingRound` (floated corporations lay track, buy Hardware, and
-/// declare dividends in turn order via `GameSession::active_operating_order`
-/// -- see `operations.rs`) are this contract's original two-phase repeating
-/// cycle, unchanged: `operations::execute_begin_operating_round` flips
-/// `StockRound -> OperatingRound` (the codebase's one existing, explicit
-/// "stock round concludes, an operating round begins" transition point --
-/// see that function's doc comment, and its own module doc comment #10, for
-/// why nothing yet automatically detects a Stock Round's *natural* end via
-/// `consecutive_passes`). Macro Round Loop Advancement (`operations.rs`
-/// module doc comment #12) transitions it back to `StockRound`:
-/// `operations::execute_end_operating_round_turn` flips it the moment the
-/// paced Operating Round phase's very last sub-round's very last
-/// corporation ends its turn, bumping `macro_round_number` and resetting
-/// `sub_round_index` to `0` in the same step.
-///
-/// Declared in this exact order (`WaterfallAuction` first) purely for
-/// readability as the room's real chronological sequence -- nothing in this
-/// contract derives `Ord`/`PartialOrd` for this enum or compares variants
-/// by declaration position (contrast `TileColor`, just above, which
-/// deliberately does).
+/// Declared chronologically for readability only: NOTHING derives `Ord` for this
+/// enum, in deliberate contrast to `TileColor` above, which does.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum RoundType {
     WaterfallAuction,
@@ -78,23 +45,13 @@ pub struct GameSession {
     pub game_id: u64,
     pub creator: Addr,
     pub total_juno_pool: Uint128,  // Real JUNO deposited by players
-    /// **Step 4.5 Batch 3, item 4: this table's stake.** The exact GROSS
-    /// real-JUNO amount the creator deposited at `CreateGameRoom`, which
-    /// every later joiner must match to the last `ujuno` (the Uniform Ante
-    /// Rule). Written once and never mutated.
+    /// The exact GROSS real-JUNO amount the creator deposited, which every joiner
+    /// must match to the last `ujuno` (the Uniform Ante Rule). Written once, never
+    /// mutated. Validated at creation against `escrow::MINIMUM_ANTE`, so this field
+    /// is also the room's proof that its floor was cleared.
     ///
-    /// Validated at creation to be at least `escrow::MINIMUM_ANTE`, so this
-    /// field is also the room's proof that its floor was cleared -- and,
-    /// because joiners must match it exactly, one check at creation covers
-    /// the whole table.
-    ///
-    /// Previously this figure had no home: `execute_join_game_room` re-read
-    /// the creator's own `PLAYER_JUNO_ANTE` row on every join, which yields
-    /// the same number but makes the room's stake an incidental property of
-    /// one player's ledger entry rather than of the room. `#[serde(default)]`
-    /// so rooms created before this field existed still deserialize; they
-    /// read as zero, and the join path falls back to the old lookup for
-    /// exactly that case.
+    /// `#[serde(default)]`: rooms predating it read zero, and the join path falls
+    /// back to re-reading the creator's own `PLAYER_JUNO_ANTE` row for that case.
     #[serde(default)]
     pub room_ante: Uint128,
     pub virtual_bank_vgp: Uint128, // In-game play money (Starts at 12,000)
@@ -115,13 +72,9 @@ pub struct GameSession {
     /// the cap `JoinGameRoom` enforces (`ContractError::RoomFull` once
     /// `player_addresses.len() == max_players`).
     pub max_players: u8,
-    /// Index into `player_addresses` of whose turn it currently is. The
-    /// base Turn Priority Queue primitive: only this player may call
-    /// `ExecuteMsg::PassTurn` (which advances this index, wrapping), and
-    /// `gamelog::reapply_game_log` recomputes it by replaying every
-    /// `ActionRecord::PassTurn` in the event log from `0`. See
-    /// `gamelog.rs`'s module doc comment for how far turn-order
-    /// *enforcement* currently reaches beyond `PassTurn` itself.
+    /// Index into `player_addresses` of whose turn it is -- the base Turn Priority
+    /// Queue primitive. Only this player may `PassTurn`, and `reapply_game_log`
+    /// recomputes it by replaying every `PassTurn` in the log from `0`.
     pub active_player_index: u32,
     /// Index into `player_addresses` of whoever holds the Priority Deal --
     /// the classic 18xx marker for who acts first once a new Stock Round
@@ -133,35 +86,22 @@ pub struct GameSession {
     /// currently a static `0` for every room, present as the storage slot
     /// the eventual round-boundary feature will read and write.
     pub priority_deal_index: u32,
-    /// **Step 4.5 Batch 4: who took the last committing action this Stock
-    /// Round.** Index into `player_addresses`, or `None` if nobody has bought
-    /// or sold since the round began.
+    /// Who took the last COMMITTING action this Stock Round, or `None`.
     ///
-    /// This exists for exactly one purpose: the 1830 Priority Deal rule says
-    /// the deal passes to the player seated immediately to the LEFT of
-    /// whoever acted last in the Stock Round. That is not derivable when the
-    /// round ends -- by then every player has passed, `active_player_index`
-    /// has wrapped an unknown number of times, and `consecutive_passes` says
-    /// how many passes happened but not who broke the previous streak. So the
-    /// answer is recorded at the moment it is known, by
-    /// `trading::execute_buy_stock` and `trading::execute_sell_stock`, and
-    /// consumed once by `trading::conclude_stock_round`.
+    /// Exists for one purpose: 1830's Priority Deal passes to the player seated
+    /// immediately LEFT of whoever acted last. That is not derivable when the round
+    /// ends -- by then everyone has passed, `active_player_index` has wrapped an
+    /// unknown number of times, and `consecutive_passes` says how many passes
+    /// happened but not who broke the previous streak. So it is recorded when known.
     ///
-    /// **Passing deliberately does NOT update this.** A pass is the absence
-    /// of an action; if it counted, the rule would degenerate into "the deal
-    /// passes to the left of whoever passed last", which is every round the
-    /// same seat regardless of what anyone did.
+    /// PASSING DELIBERATELY DOES NOT UPDATE THIS. A pass is the absence of an
+    /// action; if it counted, the rule would degenerate into "the deal passes to the
+    /// left of whoever passed last", which is every round the same seat regardless
+    /// of what anyone did.
     ///
-    /// Reset to `None` by `conclude_stock_round` so the next round starts
-    /// clean -- a round in which nobody acts at all must not silently reuse
-    /// the previous round's last actor.
-    ///
-    /// `u32` rather than the `usize` the request named, matching
-    /// `active_player_index`/`priority_deal_index` above; every seat index in
-    /// this contract is a `u32` and a lone `usize` would need narrowing at
-    /// each comparison. `#[serde(default)]` so rooms created before this
-    /// field existed still deserialize -- they read as `None`, which is
-    /// exactly right for "we have no record of a last actor".
+    /// `u32` to match every other seat index here. Reset to `None` by
+    /// `conclude_stock_round` so a round in which nobody acts cannot silently reuse
+    /// the previous round's actor.
     #[serde(default)]
     pub last_active_player_index: Option<u32>,
     /// How many `ExecuteMsg::PassTurn` calls have landed *in a row*, with
@@ -178,16 +118,10 @@ pub struct GameSession {
     /// to `0` at genesis and recomputes it identically to live play by
     /// replaying every `PassTurn`/trade in the event log in order.
     pub consecutive_passes: u32,
-    /// The highest `TileColor` tier currently unlocked for laying or
-    /// upgrading tiles into, room-wide (classic 1830's "Tech Era" /
-    /// train-phase color-lock -- see `hexmap.rs`'s module doc comment).
-    /// Starts at `TileColor::Yellow` (every room genesis) and only ever
-    /// advances -- to `Green` the moment the first 3-train is bought from
-    /// the Hardware pool, then to `Brown` the moment the first 5-train is
-    /// bought (`hardware::record_purchase_and_apply_rusting`). Never
-    /// regresses. `gamelog::reapply_game_log` resets this to `Yellow` at
-    /// genesis and recomputes it identically to live play by replaying
-    /// every `BuyHardwareFromPool` in the event log in order.
+    /// The highest `TileColor` currently unlocked room-wide. Starts `Yellow`, only
+    /// ever advances (Green on the first 3-train, Brown on the first 5-train), never
+    /// regresses. `reapply_game_log` resets to `Yellow` and recomputes it identically
+    /// to live play by replaying every `BuyHardwareFromPool` in order.
     pub current_global_era: TileColor,
     /// The Operating Round Corporation Turn Queue: the ordered list of
     /// floated `PublicCompany::company_id`s that get to act, in turn, during
@@ -204,45 +138,21 @@ pub struct GameSession {
     /// `active_corporation_index`'s doc comment for exactly how that
     /// affects `LayTile`/`BuyHardwareFromPool`/`DeclareDividends`.
     pub active_operating_order: Vec<u32>,
-    /// Index into `active_operating_order` of whichever corporation
-    /// currently holds the Operating Round turn. `hexmap::execute_lay_tile`,
-    /// `hardware::execute_buy_hardware_from_pool`, and
-    /// `trading::execute_declare_dividends` each check this *in addition to*
-    /// their existing President-only authorization: whenever
-    /// `active_operating_order` is non-empty, the calling message's
-    /// `protocol_id` must equal `active_operating_order[active_corporation_index]`,
-    /// or the call is rejected with that module's own `NotYourOperatingTurn`
-    /// error, before any state is touched. When `active_operating_order` is
-    /// empty (no Operating Round turn queue has been established for this
-    /// game yet -- e.g. every room before its first `BeginOperatingRound`
-    /// call, and every pre-existing test in this codebase), this check is
-    /// skipped entirely and those three messages remain gated only by
-    /// President authorization, exactly as before this feature existed --
-    /// this opt-in behavior is what keeps this a purely additive change.
-    /// `operations::execute_end_operating_round_turn` (`operations.rs`
-    /// module doc comment #10) advances this index from one corporation to
-    /// the next -- wrapping back to `0` (with a freshly recomputed order)
-    /// when Pacing Automation schedules another sub-round, or clearing the
-    /// whole queue back to empty when Macro Round Loop Advancement (module
-    /// doc comment #12) closes out the macro round entirely.
+    /// Index into `active_operating_order` of whichever corporation holds the
+    /// Operating Round turn. `LayTile`, `BuyHardwareFromPool` and `DeclareDividends`
+    /// check it IN ADDITION TO their President-only authorization.
+    ///
+    /// When `active_operating_order` is EMPTY the check is skipped entirely and those
+    /// three stay gated only by President authorization -- this opt-in behaviour is
+    /// what keeps the whole turn-queue feature a purely additive change.
     pub active_corporation_index: u32,
-    /// Unix seconds (`env.block.time.seconds()`) of the most recent
-    /// state-advancing action taken in this room -- set at room creation
-    /// (`contract::execute_create_game_room`) and refreshed by every
-    /// handler that moves the game forward: `trading::execute_buy_stock`,
-    /// `trading::execute_sell_stock`, `trading::execute_declare_dividends`,
-    /// `gamelog::execute_pass_turn`, `hexmap::execute_lay_tile`, and
-    /// `hardware::execute_buy_hardware_from_pool`. This is the Inactivity
-    /// Timeout Safety Valve's clock: once
-    /// `env.block.time.seconds() > last_action_timestamp + 172800` (48
-    /// hours with no qualifying action), any player may call
-    /// `ExecuteMsg::AnnulGame` to close the room and refund every
-    /// player's original real-JUNO ante from `PLAYER_JUNO_ANTE` -- see
-    /// `escrow::execute_annul_game`. Deliberately NOT refreshed
-    /// by every mutating message (e.g. `BidOnPrivate`,
-    /// `ExecuteOperatingRound`, `BeginOperatingRound`,
-    /// `EmergencyBuyHardware`, `UndoLastAction`) -- only the six handlers
-    /// explicitly listed above, matching this feature's requested scope.
+    /// Unix seconds of the most recent state-advancing action -- the Inactivity
+    /// Timeout Safety Valve's clock. After 48 hours with no qualifying action any
+    /// player may `AnnulGame` and every ante is refunded.
+    ///
+    /// Refreshed by exactly SIX handlers (`BuyStock`, `SellStock`,
+    /// `DeclareDividends`, `PassTurn`, `LayTile`, `BuyHardwareFromPool`) and
+    /// deliberately NOT by every mutating message -- matching the requested scope.
     pub last_action_timestamp: u64,
     /// The Macro Round Tracker's coarse phase for this room -- see
     /// `RoundType`'s own doc comment for the exact transition rule. Starts
@@ -257,35 +167,19 @@ pub struct GameSession {
     /// "not replayable" reasoning -- see that function's own doc comment
     /// for the resulting Waterfall Auction/Undo interaction gap.
     pub current_round_type: RoundType,
-    /// The Macro Round Tracker's overall round counter -- the classic 18xx
-    /// "SR1", "SR2", "OR3" style numbering's leading digit. Starts at `1` at
-    /// genesis. Macro Round Loop Advancement
-    /// (`operations::execute_end_operating_round_turn`, `operations.rs`
-    /// module doc comment #12) increments this by exactly `1` the moment a
-    /// full Stock-Round-then-every-paced-Operating-Round cycle completes --
-    /// i.e. the paced Operating Round phase's very last sub-round's very
-    /// last corporation ends its turn. `gamelog::reapply_game_log` does
-    /// *not* reset this field back to `1` on Undo (unlike
-    /// `active_operating_order`/`active_corporation_index`/
-    /// `current_round_type`/`sub_round_index`) -- see that function's own
-    /// doc comment for why a macro-round boundary isn't treated as
-    /// "replayable" state the same way an in-progress OR turn queue is.
+    /// The Macro Round Tracker's overall counter -- the leading digit of "SR2",
+    /// "OR3". Starts at 1; Macro Round Loop Advancement increments it when a full
+    /// Stock-Round-then-every-paced-Operating-Round cycle completes.
+    ///
+    /// `reapply_game_log` deliberately does NOT reset this, unlike the four fields
+    /// around it: a macro-round boundary is not "replayable" state the way an
+    /// in-progress turn queue is.
     pub macro_round_number: u32,
-    /// Within the current `current_round_type` phase, which sub-round is
-    /// active -- e.g. the `1` in "OR2.1". Set to `1` by
-    /// `operations::execute_begin_operating_round` the moment an Operating
-    /// Round begins; `0` at genesis (no round has begun operating yet) and
-    /// after `gamelog::reapply_game_log` resets it, matching
-    /// `active_operating_order`'s own empty-until-first-`BeginOperatingRound`
-    /// convention. `operations::execute_end_operating_round_turn` advances
-    /// this from one Operating Round sub-round to the next within a single
-    /// macro round, once every corporation in `active_operating_order` has
-    /// acted and Pacing Automation (see `operating_round_sequence_length`'s
-    /// doc comment) says more sub-rounds are still due; once it reaches
-    /// `operating_round_sequence_length`, the *next* all-corporations-acted
-    /// moment resets this back to `0` instead (Macro Round Loop
-    /// Advancement, `operations.rs` module doc comment #12) rather than
-    /// incrementing past it.
+    /// Which sub-round is active within the current phase -- the `.1` in "OR2.1".
+    /// Set to `1` when an Operating Round begins; `0` at genesis and after a replay
+    /// reset. Advances once every queued corporation has acted, until it reaches
+    /// `operating_round_sequence_length`, at which point the next such moment resets
+    /// it to `0` instead (Macro Round Loop Advancement).
     pub sub_round_index: u32,
     /// Pacing Automation: how many consecutive Operating Round sub-rounds
     /// the *current* Operating Round phase is scheduled to run for, per the
@@ -300,45 +194,25 @@ pub struct GameSession {
     /// `0` at genesis and after `gamelog::reapply_game_log` resets it, since
     /// no Operating Round has been begun to compute a real value for yet.
     pub operating_round_sequence_length: u32,
-    /// The Deferred Bank-Break Halt flag -- the classic 1830 "Bank Break"
-    /// rule: once the shared bank treasury (`virtual_bank_vgp`) is
-    /// completely exhausted, the game does NOT hard-stop immediately mid-OR
-    /// -- every corporation still gets to finish out the CURRENT scheduled
-    /// block of Operating Rounds (Pacing Automation's own
-    /// `operating_round_sequence_length` schedule, unchanged), and only once
-    /// that whole paced block concludes does the game actually end. Set to
-    /// `true` the moment `virtual_bank_vgp` is driven to exactly zero by a
-    /// debit (currently only `trading::execute_sell_stock`'s per-certificate
-    /// Bank-pool payout -- see that function's own comment). Consulted by
-    /// `operations::execute_end_operating_round_turn`'s Macro Round Loop
-    /// Advancement branch (`operations.rs` module doc comment #12): if this
-    /// is `true` at the exact moment that branch would otherwise flip
-    /// `current_round_type` back to `RoundType::StockRound`, it instead
-    /// calls `contract::finalize_and_distribute_payouts` there and then --
-    /// the same final asset-liquidation routine every other game-end trigger
-    /// in this contract already uses (`market::price_triggers_game_end`).
-    /// Starts `false` at genesis (`contract::execute_create_game_room`); NOT
-    /// reset by `gamelog::reapply_game_log` alongside `sub_round_index`/etc.
-    /// -- once the bank has genuinely run dry earlier in the event log,
-    /// replaying that same log should reach the same broken-bank state
-    /// again, not silently forget it (the same "not every field is
-    /// replayable/resettable" reasoning `macro_round_number`'s own doc
-    /// comment already documents).
+    /// The Deferred Bank-Break Halt flag. Once `virtual_bank_vgp` is exhausted the
+    /// game does NOT hard-stop mid-Operating-Round: every corporation finishes out
+    /// the CURRENT paced block of ORs, and the game ends when that block concludes.
+    ///
+    /// Set the moment a debit drives the bank to exactly zero. Consulted by
+    /// `execute_end_operating_round_turn` at the precise moment it would otherwise
+    /// return to a Stock Round, where it calls `finalize_and_distribute_payouts`
+    /// instead.
+    ///
+    /// NOT reset by `reapply_game_log`: once the bank has genuinely run dry earlier
+    /// in the log, replaying that log should reach the same broken-bank state again,
+    /// not silently forget it -- the same reasoning `macro_round_number` records.
     pub bank_is_broken: bool,
-    /// Waterfall Auction (see `waterfall.rs`'s module doc comment): `true`
-    /// from room genesis (`contract::execute_create_game_room`) until the
-    /// canonical 1830 pre-game private-company auction concludes -- either
-    /// every one of the six `CORE_PRIVATE_COMPANIES` is owned, or a full
-    /// round of passes ends it early (`waterfall::conclude_waterfall`),
-    /// whichever comes first. While `true`, ordinary Stock Round trading
-    /// (`trading::execute_buy_stock`/`execute_sell_stock`) and the legacy
-    /// continuous-bid `auction::execute_bid_on_private` are all rejected
-    /// (`WaterfallAuctionInProgress` in each module's own error enum) --
-    /// every private-company turn action must go through one of
-    /// `waterfall.rs`'s five dedicated `ExecuteMsg` variants instead. Flips
-    /// to `false` exactly once, permanently, the moment the waterfall
-    /// concludes; `current_round_type` moves from `RoundType::
-    /// WaterfallAuction` to `RoundType::StockRound` in that same step.
+    /// Waterfall Auction: `true` from room genesis until the pre-game private
+    /// auction concludes -- either all six privates are owned or the price walks to
+    /// zero. While `true`, ordinary Stock Round trading and the legacy
+    /// continuous-bid auction are all rejected; every private-company action must go
+    /// through `waterfall.rs`'s five dedicated messages. Flips to `false` exactly
+    /// once, permanently, in the same step `current_round_type` moves to StockRound.
     pub waterfall_auction_active: bool,
     /// Waterfall Auction: how many `ExecuteMsg::WaterfallPass` calls have
     /// landed *in a row*, with no intervening `WaterfallBuyLowest`/
@@ -365,16 +239,11 @@ pub struct GameSession {
     pub last_private_winner: Option<Addr>,
 }
 
-/// Waterfall Auction (see `waterfall.rs`'s module doc comment): persisted
-/// exactly while a tie-breaking mini-auction is resolving 2+ simultaneous
-/// bids on the same private company, uncovered by the Waterfall Cascade.
-/// Only one can ever be in progress per `game_id` at a time (the cascade
-/// only ever pauses at a single tie point), hence the plain `u64` key.
-/// Absence (`WATERFALL_MINI_AUCTION.may_load` returning `None`) means no
-/// mini-auction is currently active for this room -- the normal outer-loop
-/// `WaterfallBuyLowest`/`WaterfallBidHigher`/`WaterfallPass` actions are
-/// gated on this absence, and `WaterfallMiniAuctionRaise`/
-/// `WaterfallMiniAuctionPass` are gated on its presence.
+/// Waterfall Auction: persisted exactly while a tie-breaking mini-auction is
+/// resolving 2+ simultaneous bids on one private. Only one can ever be in
+/// progress per room (the cascade pauses at a single tie point), hence the plain
+/// `u64` key. Absence gates the outer-loop actions; presence gates the
+/// mini-auction pair.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct WaterfallMiniAuction {
     /// The private company this mini-auction is resolving ownership of --
@@ -422,31 +291,21 @@ pub struct MarketCell {
     pub zone_type: ZoneType,
 }
 
-/// The real 1830 stock-market board's three tactical rule-boundary zones,
-/// per `MARKET_GRID`'s cell (see `market.rs`'s authentic price data,
-/// sourced from `SharePrice::TYPE_MAP` and `MARKET` in the open-source
-/// `tobymao/18xx` engine -- `lib/engine/share_price.rb` /
-/// `lib/engine/game/g_1830/game.rb`). Every variant below is strictly more
-/// permissive than the last, matching the real physical board's nested
-/// color bands (a Brown-zone cell is also past the Yellow/Orange lines):
+/// The real 1830 chart's three tactical zones, sourced from `tobymao/18xx`'s
+/// `share_price.rb`/`g_1830/game.rb`. Each is strictly more permissive than the
+/// last, matching the board's nested colour bands:
 ///
-/// - `YellowZone` (source letter `y`, engine type `:no_cert_limit`): shares
-///   held here don't count toward a player's certificate/hand limit.
-/// - `OrangeZone` (source letter `o`, engine type `:unlimited`): also, a
-///   single player may hold more than the standard 60% ownership cap in
-///   this corporation.
-/// - `BrownZone` (source letter `b`, engine type `:multiple_buy`): also, a
-///   player may buy more than one certificate of this corporation from the
-///   Bank pool in a single turn (see `trading::execute_buy_stock`'s
-///   Brown-Zone Multiple-Buy handling).
+///   YellowZone (`y`, `:no_cert_limit`)  certificates here do not count toward
+///                                       the holder's hand limit.
+///   OrangeZone (`o`, `:unlimited`)      also: one player may exceed the 60%
+///                                       ownership cap.
+///   BrownZone  (`b`, `:multiple_buy`)   also: multiple certificates from the
+///                                       Bank pool in one turn.
 ///
-/// Cumulative/nested semantics (Orange implies Yellow's exemption, Brown
-/// implies both) are this implementation's explicit choice, matching the
-/// standard 1830 rulebook's understanding of the three color bands --
-/// note this is NOT a literal transcription of the engine's own per-cell
-/// letter, since the verbatim `MARKET` array tags each cell with only a
-/// single letter (a `b` cell is never *also* tagged `o`); see
-/// `market.rs`'s module doc comment for the full sourcing note.
+/// The CUMULATIVE reading is this implementation's explicit choice, matching the
+/// standard rulebook -- it is NOT a literal transcription, since the verbatim
+/// `MARKET` array tags each cell with only a single letter (a `b` cell is never
+/// also tagged `o`).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum ZoneType {
     /// No special exemptions -- the standard 60%-cap, one-purchase-per-turn
@@ -458,21 +317,15 @@ pub enum ZoneType {
 }
 
 impl ZoneType {
-    /// **Step 4.5 Batch 1, item 2 (Yellow Zone invariant).** True when a
-    /// certificate of a corporation sitting on this cell does NOT count
-    /// toward its holder's Global Certificate Limit (the hand limit --
-    /// `trading::CERTIFICATE_LIMIT_BY_PLAYER_COUNT`). Granted by all three
-    /// colour bands, per this enum's own nested-band doc comment above:
-    /// Yellow is where the exemption starts, and Orange/Brown are strictly
-    /// past that line.
+    /// True when a certificate of a company on this cell does NOT count toward its
+    /// holder's Global Certificate Limit. Granted by ALL THREE bands (Yellow is where
+    /// the exemption starts), which is broader than the 60% ownership cap's own
+    /// Orange/Brown-only exemption.
     ///
-    /// This is the single predicate `trading::check_cert_limit` uses BOTH
-    /// to decide whether the incoming purchase itself counts AND to filter
-    /// the holder's already-owned certificates out of the running total --
-    /// see `count_player_certificates_with_exemptions`. Before Batch 1 the
-    /// exemption only ever skipped the check for the incoming certificate,
-    /// which under-counted nothing but over-counted every previously-bought
-    /// zone-exempt certificate the player was still holding.
+    /// The single predicate `check_cert_limit` uses BOTH to decide whether the
+    /// incoming purchase counts AND to filter already-held certificates out of the
+    /// running total. Before Batch 1 it only skipped the incoming certificate, which
+    /// over-counted every previously-bought zone-exempt certificate still held.
     pub fn waives_certificate_limit(&self) -> bool {
         matches!(
             self,
@@ -500,13 +353,10 @@ impl ZoneType {
     }
 }
 
-/// Tracks where a single game's single protocol's price marker currently
-/// sits on the shared `MARKET_GRID` board template. Deliberately does not
-/// duplicate `game_id` as a field (matching this project's convention for
-/// every other composite-keyed state struct -- `Tile`, `PrivateCompany`,
-/// `PublicCompany`, etc. -- none of which repeat their own map key inside
-/// themselves): the owning `(game_id, protocol_id)` lives entirely in
-/// `PROTOCOL_MARKET`'s key.
+/// Where one game's one protocol's price marker sits on the shared `MARKET_GRID`
+/// template. Deliberately does not repeat `game_id` as a field -- the owning
+/// `(game_id, protocol_id)` lives in the map key, matching every other
+/// composite-keyed struct here.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ProtocolMarketState {
     pub protocol_id: u32,
@@ -572,13 +422,10 @@ pub const PLAYER_SHARES: Map<(u64, u32, Addr), u8> = Map::new("player_shares");
 /// `MARKET_GRID` price -- see `trading::execute_buy_stock`.
 pub const IPO_POOL_SHARES: Map<(u64, u32), u8> = Map::new("ipo_pool_shares");
 
-/// (game_id, protocol_id) -> percentage of that protocol's shares (0-100)
-/// sitting in the Open Market/Bank pool -- shares a player previously
-/// bought and later sold back onto the market (`trading::execute_sell_stock`).
-/// Unlike `IPO_POOL_SHARES`, an unseeded entry here defaults to *empty*
-/// (0): nothing has ever been dumped back until a sale actually happens.
-/// Bought at the protocol's current floating `MARKET_GRID` price, not its
-/// fixed `PROTOCOL_PAR_VALUE` -- see `trading::execute_buy_stock`.
+/// (game_id, protocol_id) -> percentage of that protocol's shares sitting in the
+/// Open Market/Bank pool. Unlike `IPO_POOL_SHARES`, an unseeded entry defaults to
+/// EMPTY (0): nothing has been dumped back until a sale happens. Bought at the
+/// live `MARKET_GRID` price, not the fixed par.
 pub const BANK_POOL_SHARES: Map<(u64, u32), u8> = Map::new("bank_pool_shares");
 
 /// (game_id, protocol_id) -> the fixed Par Value (VGP) chosen for that
@@ -597,37 +444,23 @@ pub const PROTOCOL_PAR_VALUE: Map<(u64, u32), Uint128> = Map::new("protocol_par_
 /// and treated as zero if somehow read before that.
 pub const PLAYER_CASH_VGP: Map<(u64, Addr), Uint128> = Map::new("player_cash_vgp");
 
-/// **Step 4.5 Batch 1, item 3: the Stock Round Buyback Lockout.**
+/// The Stock Round Buyback Lockout: which corporations a player has sold during
+/// the CURRENT Stock Round. A player may not buy back into a corporation they
+/// have already sold in the same round -- without it, a player could sell 30% to
+/// crater a rival's price and immediately re-buy cheaper, a pure-profit wash
+/// trade the physical game forbids.
 ///
-/// (game_id, player) -> the `protocol_id`s that player has sold at least one
-/// certificate of during the CURRENT Stock Round. The classic 1830 rule this
-/// encodes: *a player may not buy back into a corporation they have already
-/// sold in the same Stock Round.* Without it, a player could sell 30% to
-/// crater a rival's price, then immediately re-buy the same stock cheaper in
-/// the same round -- a pure-profit wash trade the physical game forbids.
+/// A sorted, deduplicated `Vec<u32>`, not a `HashSet<String>`, and both halves
+/// are deliberate. `HashSet`'s JSON serialization has NO GUARANTEED ELEMENT
+/// ORDER, which is a determinism hazard in a CosmWasm contract -- two validators
+/// could serialize the same logical set into two different byte strings and
+/// disagree on the state root. Lists are at most 8 long, so a linear scan is
+/// cheaper than hashing anyway. And `protocol_id` rather than a ticker, because
+/// a ticker would be a second, drift-prone identity for a corporation.
 ///
-/// Stored as a `Vec<u32>` rather than a `HashSet<String>` deliberately:
-/// - **`Vec`, not `HashSet`** -- `HashSet`'s JSON serialization has no
-///   guaranteed element order, which is a determinism hazard in a CosmWasm
-///   contract (two validators could serialize the same logical set into two
-///   different byte strings and disagree on the state root). Every writer
-///   below keeps this `Vec` sorted and deduplicated, giving set semantics
-///   with a canonical byte encoding. Lists are at most
-///   `public_company::CORE_PUBLIC_COMPANIES.len()` (8) long, so a linear
-///   scan is cheaper than any hashing would be anyway.
-/// - **`u32` protocol id, not a `String` ticker** -- every other share
-///   registry in this contract (`PLAYER_SHARES`, `IPO_POOL_SHARES`,
-///   `PROTOCOL_PRESIDENT`, ...) is keyed by `protocol_id`; storing tickers
-///   here would introduce a second, drift-prone identity for a corporation.
-///   `TradingError::StockBuybackLockout` resolves the human-readable ticker
-///   from `PUBLIC_COMPANIES` only at error-formatting time.
-///
-/// Cleared for every player on the Stock-Round-to-Operating-Round boundary --
-/// both by `trading::conclude_stock_round` (the all-players-passed path, item
-/// 4) and defensively by `operations::execute_begin_operating_round`, so the
-/// lockout can never leak across a round boundary. Also cleared wholesale at
-/// `gamelog::reapply_game_log`'s genesis reset and rebuilt by replaying the
-/// log's `SellStock` entries, exactly like every other replayable registry.
+/// Cleared at the Stock-Round-to-Operating-Round boundary from BOTH
+/// `conclude_stock_round` and `execute_begin_operating_round`, so it can never
+/// leak across a round.
 pub const PLAYER_SR_SALES: Map<(u64, Addr), Vec<u32>> = Map::new("player_sr_sales");
 
 /// (game_id, player) -> the exact real-JUNO amount that specific player
@@ -648,32 +481,19 @@ pub const PLAYER_SR_SALES: Map<(u64, Addr), Vec<u32>> = Map::new("player_sr_sale
 /// time rather than fluctuating with gameplay.
 pub const PLAYER_JUNO_ANTE: Map<(u64, Addr), Uint128> = Map::new("player_juno_ante");
 
-// REMOVED (Audit G-2, Split Treasury Divergence): `PROTOCOL_TREASURY_VGP`,
-// formerly `(game_id, protocol_id) -> Uint128`, map key
-// `"protocol_treasury_vgp"`.
+// REMOVED (Audit G-2, Split Treasury Divergence): `PROTOCOL_TREASURY_VGP`.
 //
-// A corporation's treasury used to be written to TWO independent places
-// that no code ever reconciled: `trading::execute_declare_dividends`
-// credited withheld ("Slash/Retain Yield") revenue -- and the IPO pool's
-// dividend share -- into this map, while EVERY debit site
-// (`hardware::execute_buy_hardware_from_pool`'s train purchases,
-// `hexmap::execute_lay_tile`'s terrain fees,
-// `hexmap::execute_place_station_token`'s token fees) and every OTHER
-// credit site (`trading::execute_buy_stock`'s 10x-par flotation
-// capitalization, `operations::execute_operating_round`'s and
-// `operations::execute_run_manual_route`'s own withhold branches) read and
-// wrote `PublicCompany::treasury` inside `PUBLIC_COMPANIES` instead.
+// A corporation's treasury was written to TWO independent places nothing ever
+// reconciled -- `execute_declare_dividends` credited withheld revenue here,
+// while every DEBIT site and every other credit site used
+// `PublicCompany::treasury`.
 //
-// Nothing anywhere ever DEBITED this map, so every VGP a corporation
-// retained through `DeclareDividends` was permanently unspendable: a
-// company could withhold for five Operating Rounds to save for a 5-train
-// and, on-chain, have saved nothing it could actually spend. That broke
-// the game's entire capital-accumulation loop.
+// NOTHING ANYWHERE EVER DEBITED THIS MAP, so every VGP retained through
+// `DeclareDividends` was permanently unspendable: a company could withhold for
+// five Operating Rounds to save for a 5-train and, on-chain, have saved nothing
+// it could spend. That broke the entire capital-accumulation loop.
 //
-// `PublicCompany::treasury` is now the single source of truth for
-// corporate VGP. See `trading::execute_declare_dividends` for the migrated
-// credit paths and `operations.rs`'s module doc comment #4, which flagged
-// this divergence before it was fixed.
+// `PublicCompany::treasury` is now the single source of truth for corporate VGP.
 
 /// (game_id, protocol_id) -> the player address currently serving as that
 /// protocol's President/Validator (the highest shareholder, at or above
@@ -681,35 +501,18 @@ pub const PLAYER_JUNO_ANTE: Map<(u64, Addr), Uint128> = Map::new("player_juno_an
 /// qualifies (e.g. the protocol hasn't floated yet).
 pub const PROTOCOL_PRESIDENT: Map<(u64, u32), Addr> = Map::new("protocol_president");
 
-/// A private company available from the start of a game, during the
-/// Private Auctions phase that opens the session (see `auction.rs`).
-/// `owner` always reflects whoever currently holds the top bid recorded in
-/// `PRIVATE_BIDS`: ownership transfers automatically and immediately to
-/// each new qualifying bidder, so there's no separate "close the auction"
-/// step. `revenue_per_or` is paid automatically at the start of every
-/// Operating Round -- see `operations.rs`'s Automatic Pre-OR Revenue
-/// Payout (module doc comment #14) and `execute_operating_round`'s own
-/// Phase 1, the two places that actually credit it.
+/// A private company, seeded unowned at room creation.
 ///
-/// `owner` and `owner_protocol_id` are mutually exclusive: at most one is
-/// ever `Some` at a time. A private starts with both `None` (unowned, mid-
-/// auction); a player's winning bid sets `owner`; a corporation buying it
-/// out from that player (`trading::execute_buy_private_company`, the
-/// Phase-Gated Corporate Purchase Protocol) clears `owner` back to `None`
-/// and sets `owner_protocol_id` instead -- a private can never be owned by
-/// both a player and a corporation, or by two corporations, at once.
+/// `owner` and `owner_protocol_id` are MUTUALLY EXCLUSIVE: at most one is ever
+/// `Some`. Both `None` is unowned; a winning bid sets `owner`; a corporate
+/// purchase clears `owner` and sets `owner_protocol_id`. A private can never be
+/// owned by both a player and a corporation, or by two corporations.
 ///
-/// `closed` starts `false` and is set permanently `true` either by the B&O
-/// Special Closure (the instant the public B&O corporation buys its first
-/// train -- `hardware.rs`'s module doc comment #11) or the Phase 5 Private
-/// Closure (every still-open private closes the instant the room's first
-/// 5-train is bought -- `hardware.rs`'s module doc comment #12). A closed
-/// private pays no further Operating Round revenue, can never be bought or
-/// sold again (`auction::execute_bid_on_private` /
-/// `trading::execute_buy_private_company` both reject it), and -- for
-/// Delaware & Hudson/Mohawk & Hudson specifically -- releases whichever
-/// board hex its ownership used to reserve (`hexmap.rs`'s module doc
-/// comment #24).
+/// `closed` is set permanently by either the B&O Special Closure (the instant the
+/// public B&O buys its first train) or the Phase 5 Private Closure (every open
+/// private, the instant the room's first 5-train is bought). A closed private
+/// pays no further revenue, can never be traded again, and releases whichever
+/// board hex its ownership reserved.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PrivateCompany {
     pub private_id: u32,
@@ -770,29 +573,17 @@ pub struct PublicCompany {
     pub treasury: Uint128,
     pub is_floated: bool,
     pub total_shares_issued: u8,
-    /// **Step 4.5 Batch 2, item 4.** The total revenue this corporation's
-    /// trains earned the LAST time it ran routes -- written by
-    /// `operations::execute_run_manual_route` on every run, whether that
-    /// revenue was paid out to shareholders or withheld into the treasury,
-    /// and whether it was non-zero or zero. Surfaced through
-    /// `msg::PublicCompanyState::last_route_revenue` so the Operating Round
-    /// table can show each corporation's most recent earnings without the
-    /// client having to scrape and replay transaction attributes.
+    /// The total revenue this corporation's trains earned the LAST time it ran
+    /// routes -- written on every run, whether paid out or withheld, zero or not.
     ///
-    /// **Deliberately `Uint128`, not `u32`.** The request specified `u32`,
-    /// but every other monetary quantity in this contract -- `treasury`,
-    /// `PLAYER_CASH_VGP`, `virtual_bank_vgp`, and the `revenue_amount` this
-    /// field is assigned FROM -- is `Uint128`, per the project's
-    /// fixed-point/no-floats rule. A `u32` here would need a lossy,
-    /// panic-prone narrowing conversion at the one place it is written, and
-    /// would silently truncate a late-game route above ~4.29 billion base
-    /// units. Matching the surrounding type removes the conversion entirely.
+    /// Deliberately `Uint128`, not the requested `u32`: every other monetary quantity
+    /// here is `Uint128` per the no-floats rule, and a `u32` would need a lossy,
+    /// panic-prone narrowing at its one write site and would silently truncate a
+    /// late-game route above ~4.29 billion base units.
     ///
-    /// **`#[serde(default)]` is required, not stylistic.** Every
-    /// `PublicCompany` already written to `PUBLIC_COMPANIES` predates this
-    /// field; without the attribute those records stop deserializing the
-    /// moment the contract is upgraded, bricking every game in flight.
-    /// Defaults to zero, which reads correctly as "has not run routes yet".
+    /// `#[serde(default)]` is REQUIRED, not stylistic: every `PublicCompany` already
+    /// written predates this field, and without it those records stop deserializing
+    /// the moment the contract is upgraded, bricking every game in flight.
     #[serde(default)]
     pub last_route_revenue: Uint128,
 }
@@ -803,20 +594,12 @@ pub struct PublicCompany {
 /// `auction::award_bo_president_share` (see that function's doc comment).
 pub const PUBLIC_COMPANIES: Map<(u64, u32), PublicCompany> = Map::new("public_companies");
 
-/// A hex's terrain classification, loosely modeled on classic 1830 terrain
-/// categories. Tagged onto each `hexmap::TILE_CATALOG` entry and used by
-/// `hexmap::terrain_base_value` as the key into that static VGP-value
-/// lookup (see that function for the exact figures) -- the Pathfinding
-/// Revenue Engine (`pathfinding.rs`) reads a laid `Tile`'s value through
-/// this classification rather than a raw per-tile number.
+/// A hex's terrain classification, tagged onto each `TILE_CATALOG` entry and used
+/// as the key into `hexmap::terrain_base_value`.
 ///
-/// `DoubleTown` (added for the Rigid On-Chain Tile Matching pass, see
-/// `hexmap.rs` module doc comment #16): a single hex printing TWO
-/// independent town stops sharing one hex -- the real 1830 board's Akron &
-/// Canton (G7), Reading & Allentown (G17), and New Haven & Hartford (F20)
-/// hexes, each verbatim-sourced from `tobymao/18xx`'s `g_1830/map.rb` as a
-/// `town=revenue:0;town=revenue:0` (two town slots, no printed track)
-/// white-section entry -- distinct from `SmallTown`'s single stop.
+/// `DoubleTown` is a single hex printing TWO independent town stops -- the real
+/// board's Akron & Canton (G7), Reading & Allentown (G17) and New Haven &
+/// Hartford (F20) -- distinct from `SmallTown`'s single stop.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum TerrainType {
     Plain,
@@ -824,15 +607,11 @@ pub enum TerrainType {
     SmallTown,
     DoubleTown,
     MajorCityHub,
-    /// A preprinted OO double-city hex's upgrade artwork -- two distinct
-    /// station circles sharing one hex, mirroring `DoubleTown`'s own
-    /// "two stops, one hex" pattern but for cities instead of towns. Added
-    /// by the Tile Selection Catalog verification pass (`hexmap.rs` module
-    /// doc comment #18): previously every city-type hex, OO hexes included,
-    /// required plain `MajorCityHub` artwork, which let a player illegally
-    /// upgrade a real two-station hex (e.g. Detroit & Windsor) with an
-    /// ordinary single-city tile. See `hexmap::OO_DESIGNATED_HEXES` for the
-    /// four reserved hexes this terrain is exclusive to.
+    /// A preprinted OO double-city hex's upgrade artwork: two distinct station
+    /// circles sharing one hex. Added because previously EVERY city-type hex, OO
+    /// included, required plain `MajorCityHub` -- which let a player upgrade a real
+    /// two-station hex (Detroit & Windsor) with an ordinary single-city tile.
+    /// Exclusive to `hexmap::OO_DESIGNATED_HEXES`' four hexes.
     DoubleCityHub,
     /// Real 1830's "B"-labeled hex upgrade artwork (`hexmap.rs` module doc
     /// comment #26, Canonical Tile Upgrade Restrictions; extended by #27) --
@@ -852,68 +631,34 @@ pub enum TerrainType {
     /// own dedicated tile, distinct from the Green one) -- Yellow start
     /// remains the ordinary, shared `MajorCityHub` artwork for both hexes.
     BostonHub,
-    /// New York's own real, "NY"-labeled upgrade artwork (`hexmap.rs`
-    /// module doc comment #26, extended by #27) -- a real two-station
-    /// double city (`tobymao/18xx`'s `g_1830/map.rb`: `city=revenue:40;
-    /// city=revenue:40`), same "two stops, one hex" shape as `DoubleCityHub`
-    /// but a DISTINCT terrain from it: `DoubleCityHub` is exclusive to the
-    /// four `hexmap::OO_DESIGNATED_HEXES`, while `BostonHub`/`NewYorkHub`'s
-    /// underlying real-life restriction ("this exact tile, not a
-    /// same-shaped substitute, and only at this one hex/label") is
-    /// functionally identical but a legally SEPARATE reservation -- New
-    /// York's own tile isn't a legal substitute for the OO tile or the "B"
-    /// tile or vice versa, even where more than one happens to be
-    /// double-city artwork. Only ever legal at `hexmap::LANDMARK_HEXES`'
-    /// New York entry. As of #26, Green-tier only; #27 added a Brown-tier
-    /// catalog entry too, mirroring `BostonHub`'s own Brown extension --
-    /// Yellow start remains the ordinary, shared `MajorCityHub` artwork.
+    /// New York's own "NY"-labelled artwork -- a real two-station double city, the
+    /// same shape as `DoubleCityHub` but a DISTINCT terrain from it.
+    ///
+    /// The underlying restriction ("this exact tile, not a same-shaped substitute,
+    /// and only at this hex") is functionally identical to OO's but a legally
+    /// SEPARATE reservation: New York's tile is not a legal substitute for the OO
+    /// tile or the "B" tile, or vice versa, even where more than one happens to be
+    /// double-city artwork. Green and Brown tiers; the Yellow start remains the
+    /// ordinary shared `MajorCityHub`.
     NewYorkHub,
 }
 
-/// A single hex tile physically laid onto the shared map network during an
-/// Operating Round (`rules.md`, section 3, Step 1: "Network Infrastructure
-/// & Tile Placement"). `q`/`r` are axial hex coordinates -- see
-/// `hexmap::HEX_NEIGHBOR_OFFSETS` for the neighbor-direction table they're
-/// used with. `connections` is the tile's *base* (pre-rotation)
-/// track-connection bitmask over its six edges (bit `i` set means edge `i`
-/// of the tile artwork carries a track stub), taken from `hexmap::TILE_CATALOG`
-/// for `tile_id`; `orientation` (0-5) is the number of 60-degree rotation
-/// steps applied on top of that base pattern to get the tile's actual
-/// on-map edges -- see `hexmap::rotate_connections`. `tile_id`'s terrain
-/// classification (and thus its revenue value) is looked up from
-/// `hexmap::TILE_CATALOG` / `hexmap::terrain_base_value` rather than stored
-/// redundantly here.
+/// A single hex tile laid onto the shared map. `q`/`r` are axial; `connections`
+/// is the BASE (pre-rotation) edge bitmask and `orientation` the 60-degree steps
+/// applied at read time.
 ///
-/// **Audit G-9 (Edge-to-Edge Routing).** `connections` alone records only
-/// WHICH edges carry track, never HOW those edges pair up internally, which
-/// let `pathfinding.rs`'s old bitmask walk "route-jump": on a real tile #1
-/// (two independent towns, one joining edges 1 and 3, the other joining
-/// edges 0 and 4) a train could enter on edge 0 and leave on edge 3, track
-/// that physically does not exist. `paths` closes that: it is the tile's
-/// *base* (pre-rotation) list of edge-to-edge track segments, sourced
-/// per-tile from the real 1830 manifest (`tobymao/18xx`'s
-/// `lib/engine/config/tile.rb`) and carried on every `TILE_CATALOG` entry --
-/// see that constant for the full 46-tile table and for the invariant that
-/// `connections` is exactly the union of `paths`' edges, which
-/// `hexmap::tile_base_connections` re-derives and the test suite asserts.
+/// Audit G-9: `connections` alone records only WHICH edges carry track, never HOW
+/// they pair up, which let the old bitmask walk route-jump -- on real tile #1 a
+/// train could enter on edge 0 and leave on edge 3, across track that physically
+/// does not exist. `paths` is the tile's base edge-to-edge segments, sourced
+/// per-tile from the real 1830 manifest; `(a, b)` is a through segment and
+/// `(a, a)` a terminal spur into a revenue centre with no second exit.
 ///
-/// Encoding, in `hexmap::TILE_CATALOG`'s own convention:
-/// - `(a, b)` with `a != b` -- a THROUGH segment joining edges `a` and `b`.
-///   Traversable in either direction; if the tile is a revenue centre, the
-///   city/town sits on this segment and is stopped at in passing.
-/// - `(a, a)` -- a TERMINAL SPUR running from edge `a` to an interior
-///   revenue centre with no second exit (real 1830's yellow "OO" tile #59
-///   and preprinted New York, whose two cities are each a dead-end stub).
-///   A train may enter and END its route there; it may never pass through.
-///
-/// Retained ALONGSIDE `connections` rather than replacing it: the flat mask
-/// is what `hexmap::execute_lay_tile`/`legal_tile_placements` match edges
-/// with, what `impassable_edge_mask` is ANDed against, and what the frontend
-/// (`HexGridRenderer.tsx`, out of scope for this batch) reads back off this
-/// struct to draw track. `paths` is additive and `#[serde(default)]`, so a
-/// `Tile` written to `MAP_GRID` before this field existed still deserializes
-/// -- it simply reads as "no edge-pair data", which
-/// `hexmap::effective_tile_paths` backfills from the catalog by `tile_id`.
+/// Retained ALONGSIDE `connections` rather than replacing it: the flat mask is
+/// what placement matches edges with, what `impassable_edge_mask` is ANDed
+/// against, and what the frontend reads back to draw track. `#[serde(default)]`,
+/// so a pre-G-9 tile deserializes as "no edge-pair data" and
+/// `hexmap::effective_tile_paths` backfills it from the catalog by `tile_id`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Tile {
     pub q: i32,
@@ -927,31 +672,20 @@ pub struct Tile {
     pub paths: Vec<(u8, u8)>,
 }
 
-/// (game_id, tile_id) -> how many physical copies of that tile artwork are
-/// still sitting in this room's tile tray, unlaid (Audit G-5, the On-Chain
-/// Tile Inventory Supply Engine).
+/// (game_id, tile_id) -> how many copies of that artwork are still in this
+/// room's tray, unlaid (Audit G-5, the Tile Inventory Supply Engine).
 ///
-/// Seeded once per room by `hexmap::seed_tile_inventory` at
-/// `contract::execute_create_game_room`, from each `hexmap::TILE_CATALOG`
-/// entry's own starting `quantity` field. `hexmap::execute_lay_tile`
-/// decrements the laid tile's count and -- on a colour upgrade -- returns
-/// the REPLACED tile to the tray (real 1830 recycles the tile you lift off
-/// the board back into the supply, where anyone may lay it again);
-/// `hexmap::legal_tile_placements` skips any tile whose count has reached
-/// zero, so a depleted tile never appears as a legal option in the first
-/// place.
+/// Seeded per room from each catalog entry's printed quantity. `execute_lay_tile`
+/// decrements the laid tile and -- on an upgrade -- RETURNS the replaced tile to
+/// the tray, because real 1830 recycles the tile you lift off the board.
+/// `legal_tile_placements` skips a depleted tile so it never appears as an option.
 ///
-/// A count of `hexmap::UNLIMITED_TILE_SUPPLY` (`u32::MAX`) means "exempt
-/// from depletion entirely" -- it is never decremented and never
-/// incremented. That sentinel is currently carried by this catalog's five
-/// invented, non-1830 tile entries (see `hexmap::TILE_CATALOG`'s own
-/// per-entry comments), which have no physical tray count to be faithful
-/// to. Every entry that DOES correspond to a real 1830 tray tile carries
-/// that tile's real printed quantity.
+/// `hexmap::UNLIMITED_TILE_SUPPLY` marks an entry exempt from depletion.
+/// HISTORICAL: it was carried by the five invented non-1830 tiles, all of which
+/// Audit G-5/G-10 deleted -- nothing carries it today.
 ///
-/// Reset to its genesis values and replayed by `gamelog::reapply_game_log`
-/// alongside every other replayable registry, so `UndoLastAction` restores
-/// the tray as well as the board.
+/// Reset and replayed by `reapply_game_log`, so `UndoLastAction` restores the
+/// tray as well as the board.
 pub const REMAINING_TILES: Map<(u64, u32), u32> = Map::new("remaining_tiles");
 
 /// (game_id, q, r) -> Tile. One shared map per game session -- tiles aren't
@@ -971,17 +705,11 @@ pub const MAP_GRID: Map<(u64, i32, i32), Tile> = Map::new("map_grid");
 pub const PROTOCOL_NETWORK_HEXES: Map<(u64, u32), Vec<(i32, i32)>> =
     Map::new("protocol_network_hexes");
 
-/// (game_id, protocol_id) -> the ordered list of `(q, r)` hexes currently
-/// holding one of that protocol's own Station Tokens, home token (if any)
-/// first (design note #40 in `hexmap.rs`). Deliberately a SEPARATE registry
-/// from `PROTOCOL_NETWORK_HEXES` -- that one tracks LAID TILES for track-
-/// connectivity legality, this one tracks TOKEN PLACEMENTS for
-/// `hexmap::station_token_limit`/`hexmap::station_token_cost` bookkeeping;
-/// see `hexmap::execute_place_station_token`'s own module doc comment for
-/// why the two aren't unified. `.len()` is this protocol's token count so
-/// far (its free home token, once granted at float, is entry `0`); a hex
-/// appearing in this list can never appear twice for the same protocol
-/// (`StationTokenAlreadyOnHex`).
+/// (game_id, protocol_id) -> the ordered `(q, r)` hexes holding that protocol's
+/// Station Tokens, home token first. Deliberately SEPARATE from
+/// `PROTOCOL_NETWORK_HEXES`: that tracks LAID TILES for track-connectivity
+/// legality, this tracks TOKEN PLACEMENTS for limit/cost bookkeeping. `.len()` is
+/// the token count so far; a hex can never appear twice for one protocol.
 pub const PROTOCOL_STATION_HEXES: Map<(u64, u32), Vec<(i32, i32)>> =
     Map::new("protocol_station_hexes");
 
@@ -995,44 +723,34 @@ pub const PROTOCOL_STATION_HEXES: Map<(u64, u32), Vec<(i32, i32)>> =
 pub const PROTOCOL_LAST_TOKEN_SUBROUND: Map<(u64, u32), (u32, u32)> =
     Map::new("protocol_last_token_subround");
 
-/// (game_id, q, r) -> every Station Token standing on that hex, as
-/// `(protocol_id, city_index)`.
+/// (game_id, q, r) -> every Station Token on that hex, as
+/// `(protocol_id, city_index)` -- Audit G-12, per-CITY token accounting.
 ///
-/// **Audit G-12: per-CITY token accounting.** `PROTOCOL_STATION_HEXES` above
-/// records which HEXES a company has tokened, which is all the token-limit
-/// and duplicate checks ever needed. It cannot answer the question the
-/// blockade rule actually asks, though: a hex is not a city. #62 (brown New
-/// York) is one hex carrying TWO separate 2-slot cities, and #54/#59/#64-#68
-/// each carry two separate 1-slot cities. Pooling their slots -- which is
-/// what a hex-keyed count necessarily does -- reports an OPEN slot on a hex
-/// whose relevant city is genuinely full, and there is no way to recover the
-/// distinction after the fact from a `Vec<(i32, i32)>`.
+/// `PROTOCOL_STATION_HEXES` records which HEXES a company has tokened, which is
+/// all the limit and duplicate checks ever needed. It cannot answer what the
+/// blockade rule asks, though: A HEX IS NOT A CITY. #62 is one hex carrying TWO
+/// separate 2-slot cities, and #54/#59/#64-#68 each carry two 1-slot cities.
+/// Pooling their slots reports an OPEN slot on a hex whose relevant city is
+/// genuinely full, and the distinction cannot be recovered afterwards from a
+/// `Vec<(i32, i32)>`.
 ///
-/// Deliberately a SEPARATE map rather than a widened `PROTOCOL_STATION_HEXES`
-/// element type. That map's entries are stored as JSON `[q, r]` pairs; any
-/// struct or 3-tuple replacement fails to deserialize them, which would brick
-/// every game in flight. A new map starts empty and absent, so a pre-G-12
-/// game reads it as "no per-city detail recorded" and
-/// `hexmap::hex_token_occupants` reconstructs those tokens against city 0 --
-/// the pre-G-12 assumption, and correct for the single-city hexes that are
-/// the overwhelming majority of the board.
+/// A SEPARATE map rather than a widened element type, deliberately: that map's
+/// entries are stored as JSON `[q, r]` pairs, and any struct or 3-tuple
+/// replacement fails to deserialize them, bricking every game in flight. A new
+/// map starts empty, so a pre-G-12 game reads "no per-city detail recorded" and
+/// `hex_token_occupants` reconstructs those tokens against city 0.
 ///
-/// INVARIANT, enforced by `hexmap::execute_place_station_token` and
-/// `hexmap::grant_home_station_token`, the only two writers: for any hex, the
-/// number of entries naming a given `city_index` never exceeds that city's
-/// slot count from `hexmap::city_slot_counts_at`.
+/// INVARIANT, enforced by the only two writers: for any hex, the entries naming a
+/// given `city_index` never exceed that city's slot count.
 pub const HEX_STATION_TOKENS: Map<(u64, i32, i32), Vec<(u32, u8)>> =
     Map::new("hex_station_tokens");
 
-/// One step of a corporation's Operating Round turn -- Audit G-14.
+/// One step of a corporation's Operating Round turn (Audit G-14).
 ///
-/// The order is the rule, and it is defined once, in
-/// `or_phase::OR_PHASE_ORDER`. This enum deliberately carries no ordering of
-/// its own (no `PartialOrd`, no discriminant arithmetic) so there is exactly
-/// one place a phase sequence can be read from and no second, drifting copy.
-///
-/// See `or_phase`'s module doc for what each phase gates and which may be
-/// skipped.
+/// The ORDER is the rule, and it is defined once, in `or_phase::OR_PHASE_ORDER`.
+/// This enum deliberately carries no ordering of its own -- no `PartialOrd`, no
+/// discriminant arithmetic -- so there is exactly one place a phase sequence can
+/// be read from and no second, drifting copy.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum OperatingSubPhase {
     /// Buy a private company from a player. Phase 3+ only, and FIRST in the
@@ -1051,35 +769,25 @@ pub enum OperatingSubPhase {
     Hardware,
 }
 
-/// (game_id, protocol_id) -> which Operating Round phase that corporation is
-/// currently in (Audit G-14).
+/// (game_id, protocol_id) -> which Operating Round phase that corporation is in.
 ///
-/// ABSENT means "at the start of its turn": `or_phase::current_sub_phase`
-/// resolves a missing entry through `initial_sub_phase`, which is era
-/// dependent. That is also why `or_phase::reset_for_turn` REMOVES the entry
-/// rather than writing one -- see its doc comment for why writing a concrete
-/// phase would silently skip `BuyPrivate` in a later era.
-///
-/// No migration needed for a game already in flight: every corporation simply
-/// starts its next turn at the top of the sequence.
+/// ABSENT means "at the start of its turn", resolved through
+/// `or_phase::initial_sub_phase`, which is era dependent. That is why
+/// `reset_for_turn` REMOVES the entry rather than writing one: writing a concrete
+/// phase would silently skip `BuyPrivate` in a later era. No migration needed --
+/// a game in flight simply starts its next turn at the top of the sequence.
 pub const PROTOCOL_OR_SUB_PHASE: Map<(u64, u32), OperatingSubPhase> =
     Map::new("protocol_or_sub_phase");
 
-/// A standing offer from one corporation to buy a train from another --
-/// Audit G-15.
+/// A standing offer from one corporation to buy a train from another (G-15).
 ///
-/// Only ever exists for a CROSS-PLAYER sale. When one president controls both
-/// corporations there is no counterparty to consent, and
-/// `train_trade::execute_buy_train_from_corporation` settles immediately
-/// without writing one of these.
+/// Only ever exists for a CROSS-PLAYER sale; a single president controlling both
+/// corporations settles immediately with no offer written.
 ///
-/// Deliberately records the MODEL, not a specific unit. Trains of a model are
-/// interchangeable -- same cost, same range, same rust fate -- so pinning an
-/// index would only create a way for the offer to go stale when an unrelated
-/// train left the seller's roster.
-///
-/// Nothing is escrowed here: see `train_trade`'s module doc for why the
-/// price is re-checked at acceptance instead of reserved at offer time.
+/// Records the MODEL, not a specific unit: trains of a model are interchangeable
+/// -- same cost, range and rust fate -- so pinning an index would only create a
+/// way for the offer to go stale when an unrelated train left the roster.
+/// Nothing is escrowed; the price is re-checked at acceptance.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct TrainOffer {
     pub offer_id: u64,
@@ -1134,22 +842,12 @@ pub const COMPANY_HARDWARE: Map<(u64, u32), Vec<HardwareAsset>> = Map::new("comp
 /// tier never repeats the obsolescence sweep.
 pub const TRAINS_PURCHASED_COUNT: Map<(u64, String), u32> = Map::new("trains_purchased_count");
 
-/// One completed, replayable game transaction, recorded into `GAME_LOG` the
-/// instant its handler succeeds (see `contract::execute`'s dispatch, which
-/// calls `gamelog::record_action` right after each of these variants'
-/// underlying handler returns `Ok`). Every variant carries the acting
-/// `player` explicitly -- `game_id` itself is not repeated here since it's
-/// already `GAME_LOG`'s map key, matching this project's established
-/// convention of not duplicating a composite key's leading component inside
-/// the stored value (see `ProtocolMarketState`, `Tile`, `PrivateCompany`,
-/// etc.).
+/// One completed, replayable game transaction, appended to `GAME_LOG` the instant
+/// its handler succeeds. Every variant carries the acting `player`; `game_id` is
+/// the map key and is not repeated inside the value.
 ///
-/// This is a deliberately scoped subset of `ExecuteMsg`, NOT a 1:1 mirror
-/// of every mutating message -- see `gamelog.rs`'s module doc comment for
-/// exactly which messages are excluded (real-JUNO-moving messages like
-/// `CreateGameRoom`/`JoinGameRoom`/`EndGameAndDistribute`, plus
-/// `EmergencyBuyHardware`'s bankruptcy path and `ExecuteOperatingRound`'s
-/// multi-company batch) and why.
+/// A deliberately scoped SUBSET of `ExecuteMsg`, not a 1:1 mirror -- real-JUNO
+/// messages and the batch/bankruptcy paths are excluded. See `gamelog.rs`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum ActionRecord {
     BidOnPrivate {
@@ -1162,14 +860,12 @@ pub enum ActionRecord {
         protocol_id: u32,
         source: SharePurchaseSource,
         par_value: Option<Uint128>,
-        /// **Step 4.5 Batch 1, item 1.** How many certificates the original
-        /// call bought in one atomic action -- `None`/`Some(1)` for an
-        /// ordinary purchase, `Some(n > 1)` only for a Brown-Zone Bank
-        /// multi-buy. `#[serde(default)]` so an `ActionRecord` written
-        /// before Batch 1 still deserializes: it reads as `None`, which
-        /// `trading::execute_buy_stock` resolves to exactly the single
-        /// certificate that log entry originally bought, so historical logs
-        /// replay to the identical state they always did.
+        /// How many certificates the original call bought in one atomic action --
+        /// `None`/`Some(1)` for an ordinary purchase, `Some(n > 1)` only for a Brown-Zone
+        /// Bank multi-buy. `#[serde(default)]` so a pre-Batch-1 record still
+        /// deserializes: it reads `None`, which resolves to exactly the single
+        /// certificate that log entry originally bought, so historical logs replay to the
+        /// identical state they always did.
         #[serde(default)]
         quantity: Option<u32>,
     },
@@ -1198,15 +894,12 @@ pub enum ActionRecord {
         /// isn't auto-picked) rotation on replay.
         orientation: u32,
     },
-    /// Records a successful `hexmap::execute_place_station_token` call --
-    /// see design note #40 in `hexmap.rs`. Does NOT record the free home
-    /// token granted automatically at float (that's re-derived on replay by
-    /// re-running whichever `BidOnPrivate`/`BuyStock` action originally
-    /// floated the company, exactly like every other float-time side
-    /// effect already is).
-    /// Audit G-14: a recorded sub-phase skip, so `reapply_game_log` rebuilds
-    /// the same phase cursor the live game had. Without this the replayed
-    /// board would stall the first time a corporation skipped a phase.
+    /// Records a successful `PlaceStationToken`. Does NOT record the free home token
+    /// granted at float -- that is re-derived on replay by re-running whichever
+    /// action originally floated the company, like every other float-time side effect.
+    /// Audit G-14: a recorded sub-phase skip, so `reapply_game_log` rebuilds the same
+    /// phase cursor the live game had. Without it a replayed board would stall the
+    /// first time a corporation skipped a phase.
     AdvanceOperatingSubPhase {
         player: Addr,
         protocol_id: u32,
@@ -1277,39 +970,20 @@ pub enum ActionRecord {
 /// scope.
 pub const GAME_LOG: Map<u64, Vec<ActionRecord>> = Map::new("game_log");
 
-/// Counts every certificate `player` currently holds in `game_id`, per the
-/// classic 1830 Global Certificate Limit rule: one certificate for each
-/// private company they own (checked against `private_ids`), plus one
-/// certificate for every physical stock card they hold across
-/// `public_company_ids`. Shared by `trading::execute_buy_stock` and
-/// `auction::execute_bid_on_private`'s certificate-limit checks (see
-/// `trading::CERTIFICATE_LIMIT_BY_PLAYER_COUNT`) since both need the exact
-/// same count. Takes the id catalogs as parameters -- rather than importing
-/// `auction::CORE_PRIVATE_COMPANIES` / `public_company::CORE_PUBLIC_COMPANIES`
-/// directly -- so this data-layer module stays a leaf with no dependency on
-/// either business-logic module; callers already have both catalogs in
-/// scope.
+/// Counts every certificate `player` holds: one per private company owned, plus
+/// one per physical stock card across the public companies. Shared by
+/// `execute_buy_stock` and `execute_bid_on_private`, which need the same count.
 ///
-/// **President's certificate counts as exactly ONE physical card, not two.**
-/// A player's raw `PLAYER_SHARES` percentage in a company they preside over
-/// includes their President's certificate -- one physical card worth
-/// `president_share_percentage` (20%) -- plus, potentially, additional
-/// ordinary `percent_per_share` (10%) cards on top of that. A naive
-/// `held_pct / percent_per_share` (e.g. `20 / 10 = 2`) double-counts the
-/// President's card as if it were two ordinary certificates -- wrong, per
-/// the real 1830 rule (re-verified against the official Lookout Games
-/// rulebook, 18xx.net, and the open-source `tobymao/18xx` engine's own
-/// `num_certs`/`cert_size` implementation, where a president's `Share`
-/// never gets `cert_size: 2` -- see `RulesReference.tsx`'s own design note
-/// #4 in the frontend for the full citations). This function checks
-/// `PROTOCOL_PRESIDENT` for each company `player` holds any stake in: if
-/// they're the registered President there, exactly 1 certificate covers
-/// their first `president_share_percentage` of ownership, and only the
-/// REMAINDER beyond that is counted in ordinary `percent_per_share` blocks.
-/// `president_share_percentage` is threaded in as a parameter (like
-/// `percent_per_share` already is) rather than imported from `trading.rs`
-/// directly, for the identical leaf-module reason given above -- callers
-/// pass `trading::PRESIDENT_MIN_PERCENTAGE`.
+/// Takes the id catalogs as PARAMETERS rather than importing them, so this
+/// data-layer module stays a leaf with no dependency on either business-logic
+/// module; callers already have both in scope.
+///
+/// THE PRESIDENT'S CERTIFICATE COUNTS AS EXACTLY ONE PHYSICAL CARD, NOT TWO. A
+/// naive `held_pct / percent_per_share` (20 / 10 = 2) double-counts it as two
+/// ordinary certificates. Re-verified against the official rulebook, 18xx.net and
+/// `tobymao/18xx`'s own `num_certs`/`cert_size`, where a president's `Share` never
+/// gets `cert_size: 2`. So the first `president_share_percentage` of a president's
+/// holding is one card, and only the remainder counts in ordinary blocks.
 pub fn count_player_certificates(
     storage: &dyn Storage,
     game_id: u64,
@@ -1331,34 +1005,22 @@ pub fn count_player_certificates(
     )
 }
 
-/// **Step 4.5 Batch 1, item 2.** `count_player_certificates` with the Yellow/
-/// Orange/Brown zone exemption actually applied to the RUNNING TOTAL, not
-/// merely to the certificate being bought.
+/// `count_player_certificates` with the zone exemption applied to the RUNNING
+/// TOTAL, not merely to the certificate being bought.
 ///
-/// `exempt_company_ids` is the subset of `public_company_ids` whose market
-/// marker currently sits on a cell whose `ZoneType::waives_certificate_limit`
-/// is true. Every certificate of such a company is skipped entirely: per the
-/// real 1830 rule, those cards do not count toward the holder's hand limit
-/// *while the marker sits in that band*, whether they were bought a moment
-/// ago or ten rounds ago.
+/// A LIVE, POSITION-DERIVED exemption rather than a sticky flag stamped at
+/// purchase time: a company whose price later climbs out of the Yellow band has
+/// its certificates start counting again, which is how the physical board behaves
+/// -- the colour band is printed on the CHART, not on the certificate.
 ///
-/// This is deliberately a live, position-derived exemption rather than a
-/// sticky flag stamped at purchase time. A company whose price later climbs
-/// back out of the Yellow band has its certificates start counting again,
-/// which is exactly how the physical board behaves -- the colour band is
-/// printed on the CHART, not on the certificate. A consequence worth stating
-/// plainly: a player can be legally over the hand limit without having done
-/// anything wrong, simply because a company they hold moved up out of an
-/// exempt band. `trading::check_cert_limit` only ever blocks *new*
+/// A consequence worth stating plainly: a player can be legally over the hand
+/// limit without having done anything wrong, simply because a company they hold
+/// moved up out of an exempt band. `check_cert_limit` only ever blocks NEW
 /// purchases; it never retroactively invalidates a holding, and there is no
 /// forced-sale path in this contract.
 ///
-/// Private companies are never zone-exempt -- a private has no market
-/// position at all -- so they are always counted in full.
-///
-/// `count_player_certificates` is the `exempt_company_ids: &[]` special case,
-/// kept as its own name because `auction::execute_bid_on_private` genuinely
-/// wants the unconditional count (see `trading.rs` module doc comment #12).
+/// Private companies are never zone-exempt -- a private has no market position at
+/// all -- so they are always counted in full.
 #[allow(clippy::too_many_arguments)]
 pub fn count_player_certificates_with_exemptions(
     storage: &dyn Storage,

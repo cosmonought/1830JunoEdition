@@ -1,72 +1,34 @@
-//! Private Auctions: the phase that opens an 18Cosmos game session, before
-//! any Stock or Operating Round play. `spawn_core_private_companies` seeds
-//! a game with the classic fixed set of 1830 private companies when its
-//! room is created; `execute_bid_on_private` processes competitive bids
-//! against them.
+//! Private Auctions: seeds the six 1830 privates at room creation and processes
+//! competitive bids against them.
 //!
-//! Design notes / assumptions, since neither `rules.md` nor the existing
-//! message/state definitions cover an auction in detail:
+//! THE CORE PRIVATES, at real face value and OR revenue: Schuylkill Valley
+//! ($20/$5), Champlain & St. Lawrence ($40/$10), Delaware & Hudson ($70/$15),
+//! Mohawk & Hudson ($110/$20), Camden & Amboy ($160/$25), Baltimore & Ohio
+//! ($220/$30).
 //!
-//! 1. **The core privates.** Seeded with all six private companies from
-//!    the physical 1830 game (matching this project's "Based on 1830
-//!    Baseline" rules.md), each with its real face-value cost and OR
-//!    revenue: Schuylkill Valley ($20/$5), Champlain & St. Lawrence
-//!    ($40/$10), Delaware & Hudson ($70/$15), Mohawk & Hudson ($110/$20),
-//!    Camden & Amboy ($160/$25), and Baltimore & Ohio ($220/$30). B&O is
-//!    auctioned and escrowed exactly like the other five, but winning it
-//!    also triggers its real 1830 power -- see #4 below.
-//! 2. **Auction model.** Rather than a multi-round bid-or-pass protocol
-//!    (which would need its own "pass" message and round-closing logic
-//!    that nothing here asks for), this models a continuous English
-//!    auction: `PrivateCompany::owner` always reflects the current top
-//!    bidder, and every qualifying bid immediately and automatically (a)
-//!    escrows the new bidder's VGP by deducting it from `PLAYER_CASH_VGP`,
-//!    (b) refunds the previous top bidder's escrowed VGP, and (c)
-//!    transfers `owner`. There's no separate "close the auction" step --
-//!    whoever holds a private when the game moves on to the Stock Round is
-//!    its owner. The first bid on an unowned private must meet its face
-//!    value (`PrivateCompany::cost`); every bid after that must beat the
-//!    current standing bid by at least `MIN_BID_INCREMENT` ($5 VGP).
+//! AUCTION MODEL: a continuous English auction rather than a bid-or-pass
+//! protocol. `owner` always reflects the current top bidder, and every qualifying
+//! bid immediately escrows the new bidder's cash, refunds the previous top
+//! bidder, and transfers ownership. There is no separate close step.
 //!
-//!    **Superseded as the room's genesis allocation mechanism** by the
-//!    canonical 1830 Pre-Game Waterfall Auction Engine (`waterfall.rs`):
-//!    every room now starts in `RoundType::WaterfallAuction`
-//!    (`GameSession::waterfall_auction_active = true`), and
-//!    `execute_bid_on_private` rejects every call
-//!    (`AuctionError::WaterfallAuctionInProgress`) until that phase
-//!    concludes. This continuous-bid auction remains fully functional
-//!    afterward, though, as the fallback path for any private the
-//!    waterfall's own early-termination edge case left unsold -- see
-//!    `waterfall.rs`'s module doc comment for exactly when that can happen.
-//!    `spawn_core_private_companies` below is unchanged and still the one
-//!    place all six privates are seeded unowned; the waterfall reads and
-//!    writes the very same `PRIVATE_COMPANIES`/`PRIVATE_BIDS` storage this
-//!    module always has.
-//! 3. **Revenue.** `PrivateCompany::revenue_per_or` is paid automatically
-//!    at the start of every Operating Round -- see `operations.rs`'s
-//!    Automatic Pre-OR Revenue Payout (module doc comment #14) and
-//!    `execute_operating_round`'s own pre-existing Phase 1.
-//! 4. **B&O's true power.** Winning the Baltimore & Ohio private
-//!    (`PRIVATE_BO_ID`) now floats its public counterpart
-//!    (`BO_PUBLIC_COMPANY_ID`, seeded unfloated by
-//!    `public_company::spawn_core_public_companies`) automatically and for
-//!    free: the winner is granted B&O's 20% President's Certificate
-//!    (`BO_PRESIDENT_SHARE_PERCENTAGE`), the remaining 80% opens in B&O's
-//!    IPO pool for ordinary Stock Round trading, and the treasury is
-//!    capitalized at a fixed par value (`BO_DEFAULT_PAR_VALUE`, the lowest
-//!    standard 1830 par) times its 10 certificates, since B&O's president
-//!    doesn't get to freely choose a par value the way
-//!    `trading::execute_buy_stock`'s general Par Value Selection now lets
-//!    other companies' first IPO buyer do. Matching the real
-//!    1830 rule that this power fires exactly once, the B&O private closes
-//!    to further bidding the moment it floats B&O --
-//!    `execute_bid_on_private` rejects any bid on it once
-//!    `PublicCompany::is_floated` is true.
-//! 5. **Global Certificate Limit.** A winning bid also counts toward the
-//!    bidder's total certificate count across the whole game (private
-//!    companies owned plus public stock blocks held) -- see
-//!    `trading.rs`'s module doc comment #12 for the full rule, shared with
-//!    `trading::execute_buy_stock` via `state::count_player_certificates`.
+//! SUPERSEDED as the room's genesis mechanism by the Waterfall Auction Engine:
+//! every room now starts there and this message is rejected until that phase
+//! concludes. It remains fully functional afterwards as the fallback for any
+//! private the waterfall never allocated. `spawn_core_private_companies` is
+//! unchanged and still the one place all six are seeded, and the waterfall reads
+//! and writes the very same storage this module always has.
+//!
+//! B&O'S POWER: winning the B&O private FLOATS its public counterpart
+//! automatically and for free -- the winner is granted the 20% President's
+//! Certificate, the remaining 80% opens in the IPO pool, and the treasury is
+//! capitalized at the lowest standard par times ten, since B&O's president does
+//! not get to choose a par value the way every other corporation's first IPO
+//! buyer does. The private closes to further bidding the moment it fires.
+//!
+//! DIVERGENCE, recorded rather than fixed: real 1830 hands the winner the
+//! President's certificate but does NOT float the corporation -- it still floats
+//! on the ordinary 60% threshold like every other. See
+//! docs/ai_architecture/rust_contract_architecture.md.
 
 use cosmwasm_std::{
     Addr, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
@@ -200,13 +162,9 @@ pub enum AuctionError {
     Overflow {},
 }
 
-/// Verifies `sender` is the player currently sitting at
-/// `session.active_player_index` -- the same Turn Priority Queue guardrail
-/// `trading::execute_buy_stock`/`execute_sell_stock` enforce (see that
-/// module's identically-named private helper; kept as separate small
-/// copies rather than a shared cross-module helper since each module has
-/// its own error enum). See `gamelog.rs`'s module doc comment #4 for how
-/// far turn-order enforcement reaches beyond these three actions.
+/// Verifies `sender` is the player at `active_player_index` -- the same Turn
+/// Priority Queue guardrail `trading.rs` enforces, kept as a separate small copy
+/// rather than a shared helper since each module has its own error enum.
 fn ensure_active_player(
     session: &GameSession,
     game_id: u64,
@@ -276,14 +234,11 @@ pub fn execute_bid_on_private(
     if !session.is_active {
         return Err(AuctionError::GameNotActive { game_id });
     }
-    // Waterfall Auction (`waterfall.rs`'s module doc comment): the room's
-    // real genesis private-company allocation mechanism now runs BEFORE
-    // this legacy continuous-bid auction is reachable at all -- every
-    // private-company turn action during that phase must go through one of
-    // `waterfall.rs`'s five dedicated `ExecuteMsg` variants instead. Once
-    // the waterfall concludes, this message remains available exactly as
-    // before, as a fallback path for any private the waterfall itself never
-    // allocated (its own early-termination edge case -- see that module).
+    // Waterfall Auction: the room's real genesis allocation mechanism runs BEFORE
+    // this legacy continuous-bid auction is reachable at all, and every
+    // private-company action during that phase must go through one of the five
+    // dedicated messages. Once it concludes this remains available exactly as
+    // before, as the fallback for any private the waterfall never allocated.
     if session.waterfall_auction_active {
         return Err(AuctionError::WaterfallAuctionInProgress { game_id });
     }
@@ -505,18 +460,12 @@ pub(crate) fn award_bo_president_share(
         .checked_mul(Uint128::new(u128::from(company.total_shares_issued)))
         .map_err(|_| AuctionError::Overflow {})?;
 
-    // B&O's President's Certificate is granted for free rather than bought,
-    // so it never goes through `trading::execute_buy_stock`'s normal
-    // first-ever-IPO-purchase flow -- meaning nothing else would ever set
-    // `PROTOCOL_PAR_VALUE` for it. Set it explicitly here so B&O's
-    // remaining 80% IPO shares are still correctly priced at
-    // `BO_DEFAULT_PAR_VALUE` (not the default `MARKET_GRID` formula) the
-    // first time anyone buys one. `BO_DEFAULT_PAR_VALUE` ($67) is
-    // deliberately the lowest entry of `market::PAR_VALUE_LADDER`, at grid
-    // coordinates (0, 0) -- exactly what `ensure_protocol_position`'s
-    // `(0, 0)` default below already places the marker at, so this doesn't
-    // change B&O's on-grid starting position, only makes its par value
-    // explicit and durable.
+    // B&O's President's Certificate is GRANTED rather than bought, so it never goes
+    // through the normal first-ever-IPO-purchase flow -- meaning nothing else would
+    // ever set its par value. Set explicitly here so the remaining 80% is correctly
+    // priced the first time anyone buys one. The lowest ladder rung sits at grid
+    // `(0, 0)`, exactly where the default position already places the marker, so
+    // this changes no on-grid position -- only makes the par explicit and durable.
     PROTOCOL_PAR_VALUE.save(
         storage,
         (game_id, BO_PUBLIC_COMPANY_ID),
@@ -540,12 +489,9 @@ pub(crate) fn award_bo_president_share(
     )?;
     PROTOCOL_PRESIDENT.save(storage, (game_id, BO_PUBLIC_COMPANY_ID), new_owner)?;
 
-    // Station Tokens (`hexmap.rs` module doc comment #23): B&O's free home
-    // token (Baltimore, I15) is granted the moment it floats, exactly like
-    // every other corporation's -- this is the earlier of the two places
-    // `PublicCompany::is_floated` ever flips to `true` (see that function's
-    // own doc comment for the other, `trading::execute_buy_stock`'s
-    // ordinary 60%-ownership float branch).
+    // Station Tokens: B&O's free home token (Baltimore, I15) is granted the moment
+    // it floats, exactly like every other corporation's. This is the EARLIER of the
+    // two places `is_floated` ever flips to `true`.
     hexmap::grant_home_station_token(storage, game_id, BO_PUBLIC_COMPANY_ID)?;
 
     Ok(())

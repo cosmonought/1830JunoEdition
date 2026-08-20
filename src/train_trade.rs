@@ -1,80 +1,47 @@
 //! Corporation-to-corporation train sales -- Audit G-15.
 //!
-//! # The rule
-//!
 //! During its Hardware phase a corporation may buy a train from ANOTHER
-//! corporation, at any price of $1 or more, instead of (or as well as) buying
-//! from the Bank. There is no upper bound: in 1830 a president who controls
-//! both companies routinely moves a train for $1 to strand a rival, or for a
-//! company's entire treasury to shift money between his own corporations.
+//! corporation at any price of $1 or more. There is no upper bound: in 1830 a
+//! president controlling both companies routinely moves a train for $1 to strand
+//! a rival, or for a whole treasury to shift money between his own corporations.
 //! That is a legitimate and central part of the game, not an exploit.
 //!
-//! # Two paths, because consent only matters across players
+//! TWO PATHS, BECAUSE CONSENT ONLY MATTERS ACROSS PLAYERS. A shared president
+//! executes immediately -- requiring them to offer a train to themselves and then
+//! accept it would be two transactions to express one decision they already made
+//! alone. Different presidents record an offer the seller answers.
 //!
-//! **Same president -- executes immediately.** If one human is president of
-//! both corporations, there is no counterparty to negotiate with. Requiring
-//! them to offer a train to themselves and then accept it would be two
-//! transactions to express one decision they have already made alone.
+//! A PENDING OFFER BLOCKS THE BUYER IN ITS BUY TRAINS STEP. It may still buy from
+//! the Bank -- that is inside the same step -- but it cannot walk away. An offer
+//! is a live commitment, and letting the buyer end its turn with one outstanding
+//! would leave a rival's train tied up in a proposition the offerer had already
+//! moved on from, at no cost to the offerer.
 //!
-//! **Different presidents -- an offer the seller answers.** The buyer's
-//! president records an offer; the seller's president accepts or rejects it.
-//! The buyer may rescind at any time before it is answered.
+//! THE BUYER IS NEVER TRAPPED, and that is what makes blocking safe on-chain
+//! rather than a deadlock: `RescindTrainOffer` is unilateral and one transaction
+//! away, needing nobody's cooperation. That is also why no timeout is needed --
+//! and a timeout would be unwelcome anyway, since block-time-driven
+//! auto-rejection would make the game log non-deterministic to replay, which
+//! `reapply_game_log` depends on. Only ONE offer may be outstanding per
+//! corporation: with the turn already blocked, a second would only tie up a
+//! second rival at the same time, for free.
 //!
-//! # A pending offer BLOCKS the buyer in its Buy Trains step
-//!
-//! While an offer it made is unanswered, the buying corporation may NOT end
-//! its Operating Round turn (`operations::PendingTrainOfferBlocksTurn`). It
-//! may still buy from the Bank -- that is inside the same step -- but it
-//! cannot walk away.
-//!
-//! An offer is a live commitment. Letting the buyer end its turn with one
-//! outstanding would leave a rival's train tied up in a proposition the
-//! offerer had already moved on from, at no cost to the offerer. Blocking
-//! keeps the offer honest: it stays outstanding only as long as the buyer is
-//! genuinely still standing behind it.
-//!
-//! THE BUYER IS NEVER TRAPPED, and this is what makes blocking safe on-chain
-//! rather than a deadlock. The buyer holds `RescindTrainOffer` and may use it
-//! at any time, unilaterally, without the seller's involvement. So the block
-//! is always one transaction away from clearing, by the same player it
-//! constrains. That is why no timeout is needed -- and a timeout would be
-//! unwelcome anyway, since block-time-driven auto-rejection would make the
-//! game log non-deterministic to replay, which
-//! `gamelog::reapply_game_log` depends on.
-//!
-//! Only ONE offer may be outstanding per corporation. With the turn already
-//! blocked, a second would only serve to tie up a second rival at the same
-//! time, for free.
-//!
-//! # Everything is re-validated at ACCEPT, not at offer
-//!
-//! An offer is a proposition, not a reservation. Between making one and
-//! answering it, the buyer may have spent its treasury, bought a train from
-//! the Bank and hit its train limit, or had the train rust out from under the
-//! seller. So acceptance re-checks: the seller still owns that model, the
-//! buyer can still pay, and the buyer is still under its train limit. A stale
-//! offer fails at acceptance rather than transferring something impossible.
-//!
-//! Nothing is escrowed. Reserving the buyer's VGP at offer time would let a
-//! player freeze their own treasury against a rival's acceptance, and would
+//! EVERYTHING IS RE-VALIDATED AT ACCEPT, NOT AT OFFER. An offer is a proposition,
+//! not a reservation -- between making one and answering it the buyer may have
+//! spent its treasury, hit its train limit, or had the train rust out from under
+//! the seller. Nothing is escrowed: reserving the buyer's VGP at offer time would
+//! let a player freeze their own treasury against a rival's acceptance, and would
 //! need unwinding on every rescind, reject and expiry path.
 //!
-//! # A transfer is NOT a purchase
+//! A TRANSFER IS NOT A PURCHASE. This deliberately does not call
+//! `record_purchase_and_apply_rusting`: that helper is about a train ENTERING
+//! PLAY from the Bank, and counting a resale again would advance the phase and
+//! rust an entire tier out of existence on a move that introduced no new
+//! equipment. The train changes hands; the game's phase does not move.
 //!
-//! Deliberately does NOT call `hardware::record_purchase_and_apply_rusting`.
-//! That helper bumps `TRAINS_PURCHASED_COUNT` and runs the Rusting sweep,
-//! both of which are about a train ENTERING PLAY from the Bank. A train sold
-//! between corporations was already bought once; counting it again would
-//! advance the phase and rust an entire tier out of existence on a move that
-//! introduced no new equipment. The train changes hands; the game's phase
-//! does not move.
-//!
-//! # What is deliberately NOT restricted
-//!
-//! - **Selling your last train.** Legal in 1830. A corporation that strands
-//!   itself can recover through the Validator Liability emergency purchase.
-//! - **Price ceiling.** None. $1 minimum, nothing above.
-//! - **Train limit on the SELLER.** Selling only ever reduces its count.
+//! DELIBERATELY NOT RESTRICTED: selling your last train (legal in 1830 -- a
+//! corporation that strands itself can recover through the emergency purchase);
+//! any price ceiling; and the SELLER's train limit, since selling only reduces it.
 
 use cosmwasm_std::{Addr, DepsMut, Env, MessageInfo, Order, Response, StdError, Storage, Uint128};
 use thiserror::Error;
@@ -144,16 +111,14 @@ pub enum TrainTradeError {
     #[error("Train offer {offer_id} was not found in game room {game_id}")]
     OfferNotFound { game_id: u64, offer_id: u64 },
 
-    /// Audit G-16: buying a train is a Hardware-phase action wherever the
-    /// train comes from, so the same sub-phase gate applies here as to
-    /// `BuyHardwareFromPool`.
+    /// Audit G-16: buying a train is a Hardware-phase action wherever the train comes
+    /// from, so the same sub-phase gate applies as to a Bank purchase.
     ///
-    /// Typed, matching the four other gated modules. It was briefly a
-    /// formatted `StdError::generic_err`, which type-checked but was wrong on
-    /// two counts: a client could only detect it by substring-matching an
-    /// English sentence, and it collapsed a domain rule into the same variant
-    /// that carries genuine storage failures -- so a phase violation and a
-    /// corrupt read were indistinguishable to a caller.
+    /// Typed, matching the four other gated modules. It was briefly a formatted
+    /// `generic_err`, which type-checked but was wrong on two counts: a client could
+    /// only detect it by substring-matching an English sentence, and it collapsed a
+    /// domain rule into the same variant that carries genuine storage failures, so a
+    /// phase violation and a corrupt read were indistinguishable to a caller.
     #[error(
         "protocol {protocol_id} is in Operating Round phase {actual} (step {actual_index} of 6); buying a train requires phase {required} (step {required_index} of 6)"
     )]
@@ -200,17 +165,11 @@ pub fn pending_offers(
         .collect()
 }
 
-/// The offer `buyer_protocol_id` currently has outstanding, if any.
-///
-/// Audit G-15b: a pending offer BLOCKS the buying corporation in its Buy
-/// Trains step. It may still buy from the Bank, but it may not end its turn
-/// while an offer it made is unanswered -- the offer is a live commitment,
-/// and walking away from one mid-negotiation would let a player tie up a
-/// rival's train indefinitely at no cost.
-///
-/// It is also why only ONE offer may be outstanding per corporation: with the
-/// turn already blocked, a second offer could only serve to blockade a second
-/// rival simultaneously.
+/// The offer `buyer_protocol_id` currently has outstanding, if any. A pending
+/// offer blocks the buying corporation in its Buy Trains step -- it may still buy
+/// from the Bank, but may not end its turn while an offer it made is unanswered.
+/// That is also why only ONE may be outstanding: with the turn already blocked, a
+/// second could only serve to blockade a second rival simultaneously.
 pub fn pending_offer_for_buyer(
     storage: &dyn Storage,
     game_id: u64,

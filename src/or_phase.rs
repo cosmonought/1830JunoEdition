@@ -1,78 +1,50 @@
 //! Operating Round sub-phase sequencing -- Audit G-14.
 //!
-//! # What this enforces
+//!   # | Phase        | Action                      | Skippable
+//!   1 | BuyPrivate   | BuyPrivateCompany (Ph3+)    | yes
+//!   2 | Track        | LayTile                     | yes
+//!   3 | Tokens       | PlaceStationToken           | yes
+//!   4 | Routes       | RunManualRoute              | only with NO train
+//!   5 | Dividends    | DeclareDividends            | NEVER
+//!   6 | Hardware     | BuyHardwareFromPool         | yes
 //!
-//! A corporation's Operating Round turn runs through six phases, in this
-//! order, and the contract now refuses any action taken out of order:
+//! WHY THIS EXISTS. Before G-14 the order was a CLIENT-SIDE CONVENTION and
+//! nothing more: the frontend walked its own state machine and drew the matching
+//! buttons, while every one of the six messages was gated only on "is it your
+//! corporation's turn". A player dispatching directly -- or any second client --
+//! could declare dividends before running trains, or buy a train and then go back
+//! and lay track. The UI told an orderly story the chain did not enforce.
 //!
-//! | # | Phase        | Action                              | Skippable |
-//! |---|--------------|-------------------------------------|-----------|
-//! | 1 | `BuyPrivate` | `BuyPrivateCompany` (Phase 3+ only) | yes       |
-//! | 2 | `Track`      | `LayTile`                           | yes       |
-//! | 3 | `Tokens`     | `PlaceStationToken`                 | yes       |
-//! | 4 | `Routes`     | `RunManualRoute` / `ExecuteOperatingRound` | only with NO train |
-//! | 5 | `Dividends`  | `DeclareDividends`                  | **never** |
-//! | 6 | `Hardware`   | `BuyHardwareFromPool`               | yes       |
+//! That matters beyond tidiness because two of these phases are ORDER DEPENDENT
+//! in the rules themselves: dividends are declared against revenue that running
+//! trains produced, and a token may only be placed into a city the corporation's
+//! network reaches, which the tile it just laid may be what connects. Allowing
+//! them out of order does not merely look wrong -- it lets a player declare a
+//! payout for revenue that was never computed.
 //!
-//! # Why this exists
+//! THE TWO CONDITIONAL RULES. `Routes` is skippable only by a corporation owning
+//! no train: a company with one MUST run it, since in 1830 running is not
+//! optional and you may not decline to earn in order to dodge a dividend. A
+//! company with no train would otherwise be stuck forever. `Dividends` is never
+//! skippable: having run, the corporation must say what happens to the money, and
+//! letting the phase be skipped would leave revenue in an undefined state with
+//! the turn already over.
 //!
-//! Before G-14 the order was a CLIENT-SIDE CONVENTION and nothing more.
-//! `App.tsx` walked its own `OperatingSubPhase` state machine and drew the
-//! matching buttons, while every one of the six messages was gated only on
-//! "is it your corporation's turn". A player dispatching directly -- or any
-//! second client -- could declare dividends before running trains, place a
-//! token before laying track, or buy a train and then go back and lay track
-//! afterwards. The UI told an orderly story the chain did not enforce.
+//! PHASE 1 AND THE PRE-PHASE-3 BOARD. `BuyPrivate` leads the turn, but the action
+//! behind it is locked until Phase 3. Rather than force every corporation to burn
+//! a no-op skip every turn for the whole Yellow era, the cursor starts at `Track`
+//! while the era is Yellow. The phase is not skipped; for that part of the game
+//! it does not yet exist.
 //!
-//! That matters beyond tidiness because two of these phases are ORDER
-//! DEPENDENT in the rules themselves: dividends are declared against revenue
-//! that running trains produced, and a token may only be placed into a city
-//! the corporation's network reaches, which the tile it just laid may be what
-//! connects. Allowing them out of order does not merely look wrong, it lets a
-//! player declare a payout for revenue that was never computed.
+//! `LayTile` ADVANCES the cursor, which is what makes 1830's real
+//! one-tile-lay-per-turn rule fall out of the sequencing -- there was no such
+//! limit before, and a corporation could lay unlimited tiles in a turn.
+//! `BuyHardwareFromPool` deliberately does NOT advance: a corporation may buy as
+//! many trains as it can afford up to the phase's limit.
 //!
-//! # The two conditional rules, and why they are conditional
-//!
-//! **`Routes` is skippable only by a corporation that owns no train.** A
-//! company with a train MUST run it. In 1830 running is not optional -- you
-//! may not decline to earn in order to dodge a dividend, and you may not
-//! withhold by simply never running. A company with no train has nothing to
-//! run and would otherwise be stuck forever, so it alone may pass through.
-//!
-//! **`Dividends` is never skippable.** Having run, the corporation must say
-//! what happens to the money: pay it out or withhold it. Both are legal, so
-//! there is no case where "neither" is a legitimate answer -- and letting the
-//! phase be skipped would leave revenue in an undefined state with the turn
-//! already over.
-//!
-//! # Phase 1 and the pre-Phase-3 board
-//!
-//! `BuyPrivate` leads the turn, per the real sequence, but the action behind
-//! it is locked until the game reaches Phase 3 (`trading.rs`'s own
-//! `PrivatePurchaseLockedBeforePhase3`). Rather than force every corporation
-//! to burn a no-op skip transaction every turn for the whole Yellow era,
-//! `initial_sub_phase` starts the cursor at `Track` while the era is Yellow
-//! and at `BuyPrivate` from Green onward. The phase is not skipped; for that
-//! part of the game it does not yet exist.
-//!
-//! # Actions per phase
-//!
-//! `LayTile` advances the cursor on success, which is what makes 1830's real
-//! ONE-TILE-LAY-PER-TURN rule fall out of the sequencing -- there was no such
-//! limit before this, and a corporation could lay unlimited tiles in a turn.
-//!
-//! `BuyHardwareFromPool` deliberately does NOT advance: a corporation may buy
-//! as many trains as it can afford up to the phase's train limit
-//! (`hardware::train_limit_for_phase`), so the cursor stays on `Hardware`
-//! until the turn ends. Every other phase advances on its own action.
-//!
-//! # Storage and replay
-//!
-//! The cursor lives in `PROTOCOL_OR_SUB_PHASE`, keyed per (game,
-//! corporation), and is reset by `reset_for_turn` whenever the operating turn
-//! moves on. A missing entry reads as `initial_sub_phase`, so a game in
-//! flight when this ships simply starts every corporation at the top of its
-//! next turn rather than needing a migration.
+//! A missing `PROTOCOL_OR_SUB_PHASE` entry reads as `initial_sub_phase`, so a
+//! game in flight when this ships simply starts every corporation at the top of
+//! its next turn rather than needing a migration.
 
 use cosmwasm_std::{StdError, Storage};
 
@@ -211,23 +183,17 @@ pub fn require_sub_phase(
     protocol_id: u32,
     required: OperatingSubPhase,
 ) -> Result<(), PhaseMismatch> {
-    // NO OPERATING ROUND QUEUE, NO TURN TO SEQUENCE.
-    //
-    // A sub-phase is a step WITHIN a corporation's Operating Round turn. If
-    // the room has no `active_operating_order` it is not in an Operating Round
-    // at all -- no corporation is "up", and there is no turn whose steps could
-    // be out of order. Enforcing an ordering on a turn that does not exist
+    // No Operating Round queue, no turn to sequence. A sub-phase is a step WITHIN a
+    // corporation's turn; if the room has no operating order it is not in an
+    // Operating Round at all, no corporation is up, and there is no turn whose steps
+    // could be out of order. Enforcing an ordering on a turn that does not exist
     // would reject actions for violating a sequence they were never part of.
     //
-    // This is the SAME soft-gate precedent `trading.rs` and `hardware.rs`
-    // already set for the turn-queue check itself ("only enforced once the
-    // room actually has a non-empty `active_operating_order`"), applied one
-    // level down for consistency.
-    //
-    // It does not weaken the rule in real play: `BeginOperatingRound` builds
-    // the queue before any corporation can operate, so every genuine
-    // Operating Round action is gated. What it spares is direct unit-level
-    // calls made outside an Operating Round entirely.
+    // The same soft-gate precedent `trading.rs` and `hardware.rs` set for the
+    // turn-queue check itself, applied one level down. It does not weaken the rule
+    // in real play -- `BeginOperatingRound` builds the queue before any corporation
+    // can operate -- it only spares direct unit-level calls made outside an
+    // Operating Round entirely.
     if session.active_operating_order.is_empty() {
         return Ok(());
     }

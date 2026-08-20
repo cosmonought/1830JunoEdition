@@ -1,142 +1,34 @@
-//! Event-Sourced Ledger: records every "replayable" game transaction to a
-//! per-room, append-only `GAME_LOG`, and can recompute a room's entire
-//! replayable state from scratch by resetting to genesis and re-running
-//! that log -- the same technique 18xx.games itself uses for Undo, rather
-//! than trying to write a bespoke "inverse" for every action.
+//! Event-Sourced Ledger: records every replayable transaction to a per-room
+//! append-only `GAME_LOG`, and recomputes a room's entire replayable state by
+//! resetting to genesis and re-running that log -- the same technique 18xx.games
+//! uses for Undo, rather than writing a bespoke inverse for every action.
 //!
-//! Design notes / scope, since this is a large feature built incrementally
-//! on top of an already-substantial contract:
+//! WHAT IS IN THE LOG: actions that (a) move only VGP, never real JUNO, and (b)
+//! mutate state through a single already-pure handler with no side channel this
+//! module cannot also reset.
 //!
-//! 1. **What's in the log.** `ActionRecord` covers the actions that (a)
-//!    move only Virtual Game Points, never real JUNO, and (b) mutate state
-//!    through a single, already-pure handler function with no side channel
-//!    this module can't also reset: `BidOnPrivate`, `BuyStock`,
-//!    `SellStock`, `DeclareDividends`, `LayTile`, `BuyHardwareFromPool`,
-//!    and the new `PassTurn`. `contract::execute` calls `record_action`
-//!    right after each of these six pre-existing handlers returns `Ok`;
-//!    `execute_pass_turn` records its own.
-//! 2. **What's deliberately excluded**, and why:
-//!    - `CreateGameRoom`/`JoinGameRoom`/`EndGameAndDistribute` move real
-//!      JUNO via `BankMsg`, which can't be safely "replayed" (there's no
-//!      way to re-attach historical `info.funds`, and re-issuing a
-//!      `BankMsg` during a replay would double-spend real tokens). These
-//!      also define the room's genesis, rather than being something to
-//!      undo past.
-//!    - `EmergencyBuyHardware` can durably halt the whole session
-//!      (`GameSession::is_active = false`, see `hardware.rs`); undoing
-//!      *past* a bankruptcy halt raises questions (does the room
-//!      reactivate? what if players have already left?) deliberately left
-//!      for a follow-up rather than answered by assumption here.
-//!    - `ExecuteOperatingRound` batches revenue for every private company
-//!      plus every listed public company in one message; replaying it
-//!      correctly needs the exact same pathfinding inputs (laid track,
-//!      owned Hardware) to still be true at replay time, which is a bigger
-//!      reconciliation problem than this pass takes on.
-//!    - `BeginOperatingRound` populates the Operating Round Corporation
-//!      Turn Queue (`GameSession::active_operating_order`/
-//!      `active_corporation_index` -- see `operations.rs`'s module doc
-//!      comment) from whichever companies happen to be floated, at
-//!      whatever price, *at the moment it's called* -- replaying it later
-//!      could legitimately compute a different order if flotation or
-//!      pricing history diverges by then, the same class of problem as
-//!      `ExecuteOperatingRound` above. `reapply_game_log` instead just
-//!      resets both fields to empty/`0` at genesis (see reset scope below)
-//!      and leaves them there; re-establishing the queue after an undo is
-//!      a fresh `BeginOperatingRound` call.
-//! 3. **Reset scope.** `reapply_game_log`'s reset step returns every
-//!    replayable piece of state to its game-genesis value: player cash
-//!    (`PLAYER_CASH_VGP`, back to `contract::STARTING_CAPITAL_POOL /
-//!    max_players`), the bank pool (`GameSession::virtual_bank_vgp`, reset
-//!    to the immutable `GameSession::virtual_bank_start`), every core
-//!    public company's shares (`PLAYER_SHARES`), IPO/Bank pools, par
-//!    value, presidency, treasury, and market position, every core
-//!    private company's ownership, every laid `Tile` (collected from the
-//!    *pre-undo* log's `LayTile` entries, since `MAP_GRID`'s `(q, r)` key
-//!    space has no static catalog to iterate the way public/private
-//!    companies do), every protocol's network-hex set, the Hardware pool
-//!    and every company's owned Hardware, and the turn/priority state
-//!    (`active_player_index`/`priority_deal_index`/`consecutive_passes`,
-//!    all reset to `0`, plus `active_operating_order`/
-//!    `active_corporation_index`, reset to empty/`0` -- see the exclusion
-//!    bullet above). `PRIVATE_BIDS` entries for addresses that are no
-//!    longer any private's current owner after reset are deliberately left
-//!    in place rather than explicitly swept -- they're inert (never read
-//!    except through a private's live `owner` field, which reset always
-//!    clears first, and any address that bids again during replay gets its
-//!    entry freshly overwritten before it's ever read back) and clearing
-//!    them would need another key-enumeration pass for no behavioral
-//!    difference, just fewer stray entries sitting in storage.
-//!    - The Pre-Game Waterfall Auction's five `Waterfall*` messages
-//!      (`waterfall.rs`) join `BeginOperatingRound`/`ExecuteOperatingRound`
-//!      as not recorded to `GAME_LOG`, for the same "automatic,
-//!      multi-step cascading side effects" reason -- meaning this function
-//!      has no log entries to recompute whether, or how far, the waterfall
-//!      progressed. `reapply_game_log` instead reads the room's CURRENT
-//!      `waterfall_auction_active` flag, before its own reset step
-//!      overwrites it, as the one signal actually available: every
-//!      loggable action type gated on that flag (`BuyStock`/`SellStock` in
-//!      `trading.rs`, `BidOnPrivate` in `auction.rs`) can only ever have
-//!      been recorded while it already read `false`, so a `false` reading
-//!      here means the waterfall (won through real play, or bypassed
-//!      entirely by a test harness) had already concluded by the time
-//!      whatever this undo call is unwinding took place. In that case
-//!      replay resumes directly in `RoundType::StockRound` with
-//!      `waterfall_auction_active` still `false`, `priority_deal_index`/
-//!      `last_private_winner` preserved exactly as they already are (both
-//!      are permanently fixed the moment `waterfall::conclude_waterfall`
-//!      runs, and nothing in `replay_log` can recompute them), and --
-//!      since the six core privates' ownership was likewise settled by the
-//!      unlogged waterfall, not by anything replayable -- `PRIVATE_COMPANIES`/
-//!      `PRIVATE_BIDS`/`WATERFALL_MINI_AUCTION` are left untouched instead
-//!      of reset. An earlier version of this function reset unconditionally
-//!      back to `RoundType::WaterfallAuction` here regardless of the room's
-//!      actual state, which meant ANY `UndoLastAction` call on a log
-//!      containing so much as one Stock Round action hard-failed with
-//!      `WaterfallAuctionInProgress` the instant replay reached it --
-//!      caught by `undo_last_action_reverts_the_float_triggering_purchase`,
-//!      a pre-existing test this waterfall feature had silently regressed.
-//!      Only an undo that unwinds back through the waterfall itself (the
-//!      flag still reads `true` right now) still re-opens the ENTIRE
-//!      Waterfall Auction from scratch, exactly as originally documented --
-//!      see `reapply_game_log`'s own reset step for the full branch, plus
-//!      the one narrower gap this leaves open: a `BidOnPrivate` entry (the
-//!      legacy fallback auction, still usable post-waterfall -- see
-//!      `auction.rs`'s module doc comment #2) in a post-conclusion
-//!      `replay_log` replays against a private already sitting in its
-//!      currently-owned state rather than a freshly-reset unowned one, so
-//!      it is not guaranteed to reproduce bit-for-bit. No test in this
-//!      suite exercises that combination today.
-//! 4. **Turn-order enforcement.** `BuyStock`, `SellStock`, and
-//!    `BidOnPrivate` are now all turn-gated: each verifies `info.sender`
-//!    matches `GameSession::player_addresses[active_player_index]` before
-//!    touching any state (`trading::ensure_active_player` /
-//!    `auction::ensure_active_player` -- small per-module copies rather
-//!    than one shared helper, since each module has its own error enum),
-//!    rejecting out-of-turn attempts with that module's own `NotYourTurn`
-//!    variant. A successful call from any of these three then advances
-//!    `active_player_index` to the next player and resets
-//!    `consecutive_passes` to `0` (`trading::advance_turn` /
-//!    `auction::advance_turn`), exactly mirroring the pointer half of what
-//!    `PassTurn` does -- `PassTurn` instead *increments*
-//!    `consecutive_passes`, since a pass extends an all-pass streak while a
-//!    trade breaks one. `DeclareDividends`, `LayTile`,
-//!    `BuyHardwareFromPool`, and `ExecuteOperatingRound` remain un-gated --
-//!    left for a follow-up, since each has its own existing authorization
-//!    story (President-only, Validator-only) that turn order would need to
-//!    be layered onto rather than simply substituted for. Because these
-//!    turn checks and pointer advances live inside the same handler
-//!    functions replay calls (see #5), `reapply_game_log` reconstructs
-//!    `active_player_index`/`consecutive_passes` correctly for free: replay
-//!    re-validates the exact same turn order the actions already satisfied
-//!    live, in the same order, so it can never diverge.
-//! 5. **Why replay reuses the live handler functions.** `reapply_game_log`
-//!    doesn't reimplement buy/sell/lay-tile/etc. logic -- it calls
-//!    `auction::execute_bid_on_private`, `trading::execute_buy_stock`, and
-//!    so on, exactly like `contract::execute` does live, just via
-//!    `deps.branch()` in a loop with a synthetic zero-funds `MessageInfo`
-//!    instead of the chain's real one. This guarantees replayed behavior
-//!    can never drift from what actually happened live, since there's only
-//!    one implementation of each rule, not two to keep in sync.
+//! WHAT IS EXCLUDED, AND WHY:
+//!   Real-JUNO messages cannot be replayed -- there is no way to re-attach
+//!   historical `info.funds`, and re-issuing a `BankMsg` during a replay would
+//!   double-spend real tokens. They also define the room's genesis rather than
+//!   being something to undo past.
+//!   `EmergencyBuyHardware` can durably halt the session, and undoing PAST a
+//!   bankruptcy raises questions (does the room reactivate? what if players have
+//!   left?) deliberately left for a follow-up rather than answered by assumption.
+//!   The queue-populating and cascading messages depend on state a later replay
+//!   cannot safely re-derive; `reapply_game_log` resets their fields to genesis
+//!   and leaves them there, so re-establishing the queue after an undo is a fresh
+//!   `BeginOperatingRound` call.
+//!
+//! WHY REPLAY REUSES THE LIVE HANDLERS: `reapply_game_log` calls the same
+//! functions `contract::execute` does, just via `deps.branch()` with a synthetic
+//! zero-funds `MessageInfo`. This guarantees replayed behaviour can never drift
+//! from what actually happened, since there is only one implementation of each
+//! rule rather than two to keep in sync -- which is also why the turn pointers
+//! reconstruct for free.
+//!
+//! See docs/ai_architecture/rust_contract_architecture.md, gamelog.rs, for the
+//! full reset scope and the waterfall-reset regression.
 
 use cosmwasm_std::{Addr, DepsMut, Env, MessageInfo, Response, StdError, Uint128};
 use thiserror::Error;
@@ -238,14 +130,9 @@ fn synthetic_info(player: Addr) -> MessageInfo {
     }
 }
 
-/// Advances `game_id`'s turn pointer (`GameSession::active_player_index`)
-/// to the next player in `player_addresses` order, wrapping around, and
-/// increments `GameSession::consecutive_passes` by one -- the opposite of
-/// what a successful turn-gated trade does to that counter (see
-/// `trading::advance_turn`'s doc comment): a pass *extends* an all-pass
-/// streak, a trade *breaks* one. Only the current active player may call
-/// this. See module doc comment #4 for how far turn-order enforcement
-/// reaches beyond this one action.
+/// Advances the turn pointer and INCREMENTS `consecutive_passes` -- the opposite
+/// of what a successful trade does to that counter: a pass extends an all-pass
+/// streak, a trade breaks one. Only the current active player may call it.
 pub fn execute_pass_turn(
     deps: DepsMut,
     env: Env,
@@ -409,14 +296,10 @@ pub fn execute_undo_last_action(
         .add_attribute("undone_action", format!("{undone:?}")))
 }
 
-/// Resets `game_id`'s entire replayable state to genesis, then
-/// fast-forwards through `replay_log` in order (each entry re-applied by
-/// calling the exact same handler function live play uses -- see module
-/// doc comment #5). `previously_laid_tiles` is the manifest of every
-/// `(q, r)` `MAP_GRID` needs cleared before replay begins; see
-/// `execute_undo_last_action` for how it's derived. See the module doc
-/// comment for exactly what "genesis" means here and what's deliberately
-/// out of scope.
+/// Resets `game_id`'s entire replayable state to genesis, then fast-forwards
+/// through `replay_log` in order, each entry re-applied by calling the exact same
+/// handler live play uses. `previously_laid_tiles` is the manifest of every
+/// `(q, r)` that must be cleared before replay begins.
 pub fn reapply_game_log(
     mut deps: DepsMut,
     env: Env,
@@ -430,41 +313,29 @@ pub fn reapply_game_log(
 
     // ---- 1. Reset every replayable piece of state to genesis ----
 
-    // Pre-Game Waterfall Auction (see `waterfall.rs`'s module doc comment
-    // #6, and this file's own module doc comment #2): none of its five
-    // `Waterfall*` messages are recorded to `GAME_LOG`, so this function has
-    // no log entries to recompute whether, or how far, the waterfall
-    // progressed. The one signal actually available is the room's CURRENT
-    // `waterfall_auction_active` flag, captured here BEFORE the reset step
-    // below overwrites it: every loggable action type that's actually gated
-    // on it (`trading::execute_buy_stock`/`execute_sell_stock`,
-    // `auction::execute_bid_on_private`) can only ever have been recorded
-    // while that flag already read `false`. So if it reads `false` right
-    // now, the room's waterfall phase (won through real play, or bypassed
-    // entirely by a test harness -- see `tests::skip_waterfall_auction`) had
-    // already concluded by the time whatever action this undo call is
-    // unwinding took place, and replay MUST resume from that same
-    // post-waterfall phase: resetting all the way back to
-    // `RoundType::WaterfallAuction` unconditionally (as an earlier version
-    // of this function did) makes the very first `BuyStock`/`SellStock`/
-    // `BidOnPrivate` entry in `replay_log` fail with
-    // `WaterfallAuctionInProgress`, hard-failing the whole undo -- exactly
-    // the regression `undo_last_action_reverts_the_float_triggering_purchase`
-    // caught. If it reads `true`, this undo is unwinding something from
-    // during (or before) the waterfall itself, and the scope gap documented
-    // below still applies.
+    // Pre-Game Waterfall Auction: none of its five messages are logged, so this
+    // function has no entries to recompute whether or how far the waterfall
+    // progressed. The one signal available is the room's CURRENT
+    // `waterfall_auction_active` flag, captured here BEFORE the reset overwrites it.
+    //
+    // Every loggable action gated on that flag can only have been recorded while it
+    // already read `false`. So a `false` reading means the waterfall had already
+    // concluded by the time whatever this undo is unwinding took place, and replay
+    // MUST resume from that same post-waterfall phase.
+    //
+    // Resetting unconditionally back to `WaterfallAuction` -- as an earlier version
+    // did -- makes the very first replayed Stock Round action fail with
+    // `WaterfallAuctionInProgress`, hard-failing the whole undo. That was caught by
+    // a pre-existing test this waterfall feature had silently regressed.
     let waterfall_already_concluded = !session.waterfall_auction_active;
 
     session.virtual_bank_vgp = session.virtual_bank_start;
-    // Turn Priority Queue: reset all the way back to the room's absolute
-    // genesis (`0`) only if the waterfall itself is what's being unwound.
-    // Once the waterfall has concluded, `priority_deal_index` is fixed for
-    // the rest of the game (`waterfall::conclude_waterfall` is its only
-    // writer -- see module doc comment #2) and `active_player_index` must
-    // resume from that exact same seat, not `0`, or the first replayed
-    // Stock Round action could spuriously fail turn-order validation in any
-    // room where the waterfall assigned Priority Deal to someone other than
-    // the room creator.
+    // Turn Priority Queue: reset all the way to genesis only if the waterfall itself
+    // is what is being unwound. Once it has concluded, `priority_deal_index` is
+    // fixed for the rest of the game and `active_player_index` must resume from that
+    // same seat, not `0`, or the first replayed Stock Round action could spuriously
+    // fail turn-order validation in any room where the waterfall assigned Priority
+    // Deal to someone other than the creator.
     if waterfall_already_concluded {
         session.active_player_index = session.priority_deal_index;
     } else {
@@ -489,18 +360,12 @@ pub fn reapply_game_log(
     // undo needs a fresh `BeginOperatingRound` call.
     session.active_operating_order = Vec::new();
     session.active_corporation_index = 0;
-    // Macro Round Tracker: tied to the same non-replayable
-    // `BeginOperatingRound`/`EndOperatingRoundTurn` pair (`operations.rs`'s
-    // module doc comments #11/#12 mutate these three fields, plus
-    // `active_operating_order`/`active_corporation_index` above), so
-    // they're reset to their genesis values here rather than recomputed,
-    // exactly like the two fields above. A room that wants the Operating
-    // Round phase and its paced sub-round count back after an undo needs a
-    // fresh `BeginOperatingRound` call, same as the turn queue itself.
-    // `macro_round_number` is deliberately NOT reset here -- see that
-    // field's own doc comment in `state.rs` for why a macro-round boundary
-    // isn't treated as "replayable" state the same way an in-progress OR
-    // turn queue is.
+    // Macro Round Tracker: tied to the same non-replayable pair as the queue fields
+    // above, so these are reset to genesis rather than recomputed. A room wanting the
+    // Operating Round phase and its paced count back after an undo needs a fresh
+    // `BeginOperatingRound`. `macro_round_number` is deliberately NOT reset -- a
+    // macro-round boundary is not "replayable" state the way an in-progress turn
+    // queue is.
     session.sub_round_index = 0;
     session.operating_round_sequence_length = 0;
 
@@ -576,12 +441,10 @@ pub fn reapply_game_log(
         BANK_POOL_SHARES.remove(deps.storage, (game_id, company_id));
         PROTOCOL_PAR_VALUE.remove(deps.storage, (game_id, company_id));
         PROTOCOL_PRESIDENT.remove(deps.storage, (game_id, company_id));
-        // Audit G-2: `PROTOCOL_TREASURY_VGP.remove(...)` used to sit here.
-        // That map is gone -- corporate cash now lives solely in
-        // `PublicCompany::treasury`, which the
-        // `spawn_core_public_companies` call further down already resets to
-        // its genesis value by fully overwriting each company record (see
-        // the comment there). No replacement removal is needed.
+        // Audit G-2: a `PROTOCOL_TREASURY_VGP.remove(...)` used to sit here. That map is
+        // gone -- corporate cash lives solely in `PublicCompany::treasury`, which the
+        // company respawn further down already resets by fully overwriting each record.
+        // No replacement removal is needed.
         COMPANY_HARDWARE.remove(deps.storage, (game_id, company_id));
         PROTOCOL_NETWORK_HEXES.remove(deps.storage, (game_id, company_id));
         // Station Tokens (`hexmap.rs` module doc comment #23): reset to
@@ -596,15 +459,12 @@ pub fn reapply_game_log(
         MAP_GRID.remove(deps.storage, (game_id, q, r));
     }
 
-    // Tile Inventory Supply Engine (Audit G-5): reset the tray to a full
-    // genesis supply, in lockstep with clearing the board above. Every
-    // `ActionRecord::LayTile` still in `replay_log` re-consumes (and, for
-    // an upgrade, re-recycles) its own tile as it is replayed below, so the
-    // tray always lands exactly where the surviving prefix of the event log
-    // says it should -- the same reset-then-replay contract every other
-    // registry here follows. Without this, an undone tile lay would leave
-    // its copy permanently missing from the tray even though the tile is no
-    // longer on the board.
+    // Tile Inventory Supply Engine (Audit G-5): reset the tray to a full genesis
+    // supply, in lockstep with clearing the board above. Every surviving `LayTile`
+    // re-consumes (and, for an upgrade, re-recycles) its own tile as it replays, so
+    // the tray lands exactly where the surviving prefix of the log says it should.
+    // Without this, an undone tile lay would leave its copy permanently missing from
+    // the tray even though the tile is no longer on the board.
     hexmap::seed_tile_inventory(deps.storage, game_id)?;
 
     for (model_type, _cost, _max_route_distance, _quantity) in

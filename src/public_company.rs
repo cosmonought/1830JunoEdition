@@ -1,28 +1,16 @@
-//! Public Company registry: seeds the fixed roster of classic 1830
-//! railroad corporations into a game room, all unfloated, when the room is
-//! created. See `auction.rs` for how the Baltimore & Ohio private company
-//! floats its corresponding public company early and automatically, and
-//! `trading.rs` / `market.rs` for the share-trading and price-grid
-//! mechanics a floated `PublicCompany` participates in via its
-//! `company_id` (used as the `protocol_id` in those modules' storage maps).
+//! Public Company registry: seeds the fixed roster of eight 1830 corporations
+//! into a room at creation, all unfloated -- PRR, NYC, CPR, B&O, C&O, ERIE, NNH
+//! and B&M.
 //!
-//! Design notes:
-//! 1. **The eight corporations.** Matches the physical 1830 game's fixed
-//!    roster: Pennsylvania Railroad (PRR), New York Central (NYC),
-//!    Canadian Pacific (CPR), Baltimore & Ohio (B&O), Chesapeake & Ohio
-//!    (C&O), Erie (ERIE), New York, New Haven & Hartford (NNH), and Boston
-//!    & Maine (B&M).
-//! 2. **Unfloated by default.** Every seeded `PublicCompany` starts with
-//!    `is_floated: false`, zero treasury, zero shares issued, and a
-//!    placeholder `(0, 0)` market position -- no par value has been chosen
-//!    and no shares exist yet. Flotation happens later: for B&O
-//!    specifically, automatically and for free the moment its private
-//!    company is won (see `auction::award_bo_president_share`); for every
-//!    other corporation, automatically the moment ordinary Stock Round
-//!    `BuyStock` purchases push its total real-player-owned stake to 60%
-//!    or more (see `trading::execute_buy_stock`'s module doc comment #7),
-//!    at which point its treasury is capitalized at 10x the price it was
-//!    just bought at.
+//! Every seeded company starts with `is_floated: false`, zero treasury, zero
+//! shares issued and a placeholder market position: no par has been chosen and no
+//! shares exist yet.
+//!
+//! Flotation happens later, and by two different routes. The B&O floats
+//! automatically and for free the moment its private company is won (see
+//! `auction::award_bo_president_share`); every other corporation floats when
+//! ordinary Stock Round purchases push its real-player-owned stake to 60% or
+//! more, at which point its treasury is capitalized at 10x its par value.
 
 use cosmwasm_std::{StdResult, Storage, Uint128};
 

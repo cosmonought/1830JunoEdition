@@ -114,7 +114,15 @@ These arguments appear across many notes and are worth reading once:
 | 5A | JSX residue (`App.tsx`, `HexGridRenderer.tsx`) + the eight heaviest tail files (`appStyles`, `RadialTileSelector`, `TrainPurchasePanel`, `gameState`, `RulesReference`, `hexContractTypes`, `TileSelectionPopup`, `FinancialLedger`) | Done |
 | 5B | The 19 heaviest remaining frontend files (`TopTicker`, `gameSetup`, `RoutePlannerPanel`, `routeAutoTrace`, `PlayerCards`, `Lobby`, `sandboxTileLegality`, `PrivatePowerPanel`, `SeatOrderTrail`, `trackReach`, `stationTokens`, `gamePhase`, `ContextualSubPanel`, `hexTileCatalog`, `PrivateTradePanel`, `lobby`, `OperatingSubPhaseStepper`, `privateCatalog`, `trackSegments`) | Done |
 | 5C | The remaining 56 small frontend files (auction/game-over/tutorial modals, the tab strip and top bar, `context/`, `styles/`, and 27 `utils/` modules) | Done |
-| 6 | Rust contract backend | Pending |
+| 6A | Rust backend: `hexmap.rs` (58 blocks, the 952-line module doc) | Done |
+| 6B | Rust backend: the remaining 17 `.rs` files | Done |
+
+**Rust verification.** Batches 6A/6B were verified with a real toolchain bootstrapped inside the
+extraction sandbox: the Rust **token stream** is byte-identical for all 18 files, `cargo check` and
+`cargo check --all-targets` both exit 0, and `cargo test --doc` confirms the crate has **zero doctests**,
+which is what made rewriting `///` and `//!` blocks safe. Before trusting the lexer, every comment was
+stripped from all 18 files and that crate compiled — proving no `//` inside a string was ever mistaken
+for a comment. See [rust_contract_architecture.md](rust_contract_architecture.md).
 
 Test files (`src/tests.rs`, `frontend/src/**/*.test.ts`) are out of scope by decision — they
 are self-documenting.
@@ -1476,3 +1484,211 @@ pass tries to resolve one.
 `@param address`, `@param displayName`) with the `#644` diary block that follows it. The applier hard-fails
 on `@param` rather than paraphrasing an API contract, so only the diary half was condensed and the JSDoc
 survives byte-identical.
+
+## Anchor index — Batches 6A/6B (Rust)
+
+Every `#N` the Rust sources cite, and where it resolves. Rust numbering is **module doc comment #N**;
+Audit codes (`G-1`…`G-17`) are named in the section headings rather than numbered here.
+
+**Known false-positive class, recorded rather than chased.** `#53`, `#57`, `#59`, `#62`, `#63`, `#64`
+and `#65` in the Rust sources are **real 1830 printed tray-tile numbers**, not note anchors — the same
+`#N`-shaped trap as `TileGraphics.ts #40` (a tile-tray number) and `corporationLivery.ts #000000` (a hex
+colour). A `#` followed by digits is not automatically an anchor.
+
+### hexmap.rs
+
+| anchor | document | section |
+|---|---|---|
+| `hexmap.rs #1` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #1 — Coordinate system |
+| `hexmap.rs #2` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #2 — A real colour rule over an invented board |
+| `hexmap.rs #3` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #3 — What the connection bitmask is not |
+| `hexmap.rs #4` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #4 — Orientation is the player's, validated not auto-picked |
+| `hexmap.rs #7` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #7 / #9 — The Token Station, and what connectivity means |
+| `hexmap.rs #8` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #8 — Tech-era colour locking |
+| `hexmap.rs #9` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #7 / #9 — The Token Station, and what connectivity means |
+| `hexmap.rs #10` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #10 — Topology-retention upgrades |
+| `hexmap.rs #11` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #11 / #16 — Landmark, City and Town reservation |
+| `hexmap.rs #12` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #5 / #12 — Where the terrain cost goes, and when |
+| `hexmap.rs #13` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `hexmap.rs #14` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #14 — Off-board reservation |
+| `hexmap.rs #15` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #15 — Restored Boston/New York nameplates |
+| `hexmap.rs #16` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #11 / #16 — Landmark, City and Town reservation |
+| `hexmap.rs #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `hexmap.rs #18` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #18 — "OO": the check that did not exist |
+| `hexmap.rs #19` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #19 / #20 — Gray hex immutability, and the routing bug it caused |
+| `hexmap.rs #20` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #19 / #20 — Gray hex immutability, and the routing bug it caused |
+| `hexmap.rs #22` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #22 — Impassable border edges |
+| `hexmap.rs #23` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #23 — Homes, limits, costs, and one deliberate decoupling |
+| `hexmap.rs #24` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #24 — Private-company-reserved hexes ⚠️ |
+| `hexmap.rs #25` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #25 — House rule: NYC → Albany, NYNH → New York |
+| `hexmap.rs #26` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #26 / #27 / #28 — "B" and "NY", three passes to get right |
+| `hexmap.rs #27` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #26 / #27 / #28 — "B" and "NY", three passes to get right |
+| `hexmap.rs #28` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #26 / #27 / #28 — "B" and "NY", three passes to get right |
+| `hexmap.rs #29` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #29 (Audit G-5 + G-10) — the real 46-tile manifest, and terrain moves to the hex |
+| `hexmap.rs #30` | [rust_contract_architecture.md](rust_contract_architecture.md) | hexmap.rs #30 (Audit G-9) — edge-to-edge geometry |
+| `hexmap.rs #39` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #39 / #70 / #109 — Adaptive placement, and the offset that moved four times |
+| `hexmap.rs #40` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #40 — The rails must GROW, not merely exist |
+| `hexmap.rs #41` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #41 / #49 / #54c — Stacked dual names move to centre |
+| `hexmap.rs #42` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #42 — Perpendicular Bezier track splines |
+| `hexmap.rs #43` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #43 — A floor below the fit |
+| `hexmap.rs #44` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #44 — The control cluster left the canvas |
+| `hexmap.rs #45` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #36 / #44 / #45 — The home-hex table and the ticker fallback |
+| `hexmap.rs #46` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #46 / #48 / #116 / #513 / #564 — Token typography and livery |
+| `hexmap.rs #47` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #47 / #364 / #366 — The reservation badge and its tooltip line |
+| `hexmap.rs #53` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `hexmap.rs #54` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #50 → #54 → #78 → #82 — The shield box, four times |
+| `hexmap.rs #55` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #55 — Strict canvas layering hierarchy |
+| `hexmap.rs #56` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #52 / #56 / #58 / #73 / #77 — The two-node coordinate, five passes |
+| `hexmap.rs #57` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `hexmap.rs #58` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #52 / #56 / #58 / #73 / #77 — The two-node coordinate, five passes |
+| `hexmap.rs #59` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #59 / #60 / #61 — The town dit, three sizes |
+| `hexmap.rs #61` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #59 / #60 / #61 — The town dit, three sizes |
+| `hexmap.rs #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `hexmap.rs #63` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `hexmap.rs #64` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `hexmap.rs #65` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `hexmap.rs #66` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `hexmap.rs #67` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #67 — Scroll-wheel zoom removed |
+| `hexmap.rs #68` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #68 / #87 → #102 — The terrain compound badge |
+| `hexmap.rs #69` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #47 / #49 / #69 / #125 — The restriction badge |
+| `hexmap.rs #70` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #39 / #70 / #109 — Adaptive placement, and the offset that moved four times |
+
+### state.rs
+
+| anchor | document | section |
+|---|---|---|
+| `state.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `state.rs #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `state.rs #26` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #21 / #26 / #29 — The hover card |
+| `state.rs #27` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #19 / #27 — Viewport maximisation, then true proportional scale |
+| `state.rs #54` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #50 → #54 → #78 → #82 — The shield box, four times |
+| `state.rs #59` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #59 / #60 / #61 — The town dit, three sizes |
+| `state.rs #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `state.rs #64` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `state.rs #68` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #68 / #87 → #102 — The terrain compound badge |
+
+### msg.rs
+
+| anchor | document | section |
+|---|---|---|
+| `msg.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `msg.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `msg.rs #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `msg.rs #10` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #10 — Off-board pre-printed track |
+| `msg.rs #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `msg.rs #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `msg.rs #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `msg.rs #23` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `msg.rs #24` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `msg.rs #55` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #55 — Strict canvas layering hierarchy |
+| `msg.rs #56` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #52 / #56 / #58 / #73 / #77 — The two-node coordinate, five passes |
+| `msg.rs #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `msg.rs #64` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `msg.rs #69` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #47 / #49 / #69 / #125 — The restriction badge |
+
+### trading.rs
+
+| anchor | document | section |
+|---|---|---|
+| `trading.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `trading.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `trading.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `trading.rs #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `trading.rs #10` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #10 — Off-board pre-printed track |
+| `trading.rs #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `trading.rs #13` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `trading.rs #16` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #16 — Row letters and column numbers |
+| `trading.rs #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `trading.rs #18` | [contract_economy.md](contract_economy.md) | WaterfallAuctionDashboard.tsx #12 / #18 — Certificates, one fill, state at the edges |
+| `trading.rs #23` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+
+### pathfinding.rs
+
+| anchor | document | section |
+|---|---|---|
+| `pathfinding.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `pathfinding.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `pathfinding.rs #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `pathfinding.rs #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `pathfinding.rs #6` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #6 — The static board is the authentic 93 hexes |
+| `pathfinding.rs #14` | [contract_economy.md](contract_economy.md) | App.tsx #14 — Buy Private Company action tray |
+| `pathfinding.rs #15` | [canvas_rendering.md](canvas_rendering.md) | App.tsx #15 — Restored Boston/New York nameplates |
+| `pathfinding.rs #20` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+| `pathfinding.rs #53` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+| `pathfinding.rs #61` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #59 / #60 / #61 — The town dit, three sizes |
+| `pathfinding.rs #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+| `pathfinding.rs #63` | — | **FALSE POSITIVE: a real 1830 TRAY TILE NUMBER, not a note anchor** |
+
+### operations.rs
+
+| anchor | document | section |
+|---|---|---|
+| `operations.rs #0` | [canvas_rendering.md](canvas_rendering.md) | RadialTileSelector.tsx #0 — Why the ring is DOM and the preview is canvas |
+| `operations.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `operations.rs #8` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `operations.rs #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `operations.rs #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `operations.rs #14` | [contract_economy.md](contract_economy.md) | App.tsx #14 — Buy Private Company action tray |
+| `operations.rs #16` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #16 — Row letters and column numbers |
+| `operations.rs #17` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #17 — Standalone camera buttons |
+| `operations.rs #62` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #62 → #66 — Shape-based iconography, and five sizing passes |
+
+### hardware.rs
+
+| anchor | document | section |
+|---|---|---|
+| `hardware.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `hardware.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `hardware.rs #8` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `hardware.rs #10` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #10 — Off-board pre-printed track |
+| `hardware.rs #10a` | [rust_contract_architecture.md](rust_contract_architecture.md) | hardware.rs — the train-limit cap (module doc comment #10a) |
+| `hardware.rs #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `hardware.rs #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+| `hardware.rs #16` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #16 — Row letters and column numbers |
+
+### contract.rs
+
+| anchor | document | section |
+|---|---|---|
+| `contract.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `contract.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `contract.rs #8` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `contract.rs #10` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #10 — Off-board pre-printed track |
+
+### gamelog.rs
+
+| anchor | document | section |
+|---|---|---|
+| `gamelog.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `gamelog.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `gamelog.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `gamelog.rs #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `gamelog.rs #8` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `gamelog.rs #23` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+
+### waterfall.rs
+
+| anchor | document | section |
+|---|---|---|
+| `waterfall.rs #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `waterfall.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `waterfall.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+
+### query.rs
+
+| anchor | document | section |
+|---|---|---|
+| `query.rs #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `query.rs #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `query.rs #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `query.rs #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `query.rs #23` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #20 / #23 / #24 / #25 — The DOM detour, and its reversal |
+
+### auction.rs
+
+| anchor | document | section |
+|---|---|---|
+| `auction.rs #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `auction.rs #11` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #11 — Off-board value plates print both tiers |
+| `auction.rs #12` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #12 — Gray hexes and OO hexes |
+

@@ -1,78 +1,33 @@
-//! Stock-market grid mechanics for the 1830-style Operating Round price
-//! chart described in `rules.md` (sections 2-3). The market is modeled as a
-//! sparse 2D grid of `MarketCell`s keyed by `(x, y)` -- a single shared
-//! board *template*, identical for every game room, exactly like a
-//! physical 18xx board's printed price chart is the same for every table.
-//! `PROTOCOL_MARKET` tracks each *game's own* protocol's current position
-//! on that shared template, keyed by `(game_id, protocol_id)` -- see its
-//! doc comment in `state.rs`. Every function below that reads or moves a
-//! marker therefore takes `game_id` explicitly, so two game rooms trading
-//! the same `protocol_id` (e.g. both running a PRR) never share or clobber
-//! each other's price marker; only the underlying board layout
-//! (`MARKET_GRID`) is shared. Four movements are supported, one per
-//! price-chart trigger in the rules:
+//! Stock-market grid mechanics. `MARKET_GRID` is a single shared board TEMPLATE,
+//! identical for every room, exactly like a physical 18xx board's printed chart;
+//! `PROTOCOL_MARKET` tracks each GAME's own marker on it, so two rooms both
+//! running a PRR never clobber each other's price.
 //!
-//! - `move_up`    -- sold-out round bonus (all shares held, none left in the bank pool)
-//! - `move_down`  -- dumped shares (a large block sold back onto the open market)
-//! - `move_right` -- Distribute Yield (a paid dividend)
-//! - `move_left`  -- Slash/Retain Yield (a withheld dividend)
+//!   move_up     sold-out bonus        move_right  Distribute Yield
+//!   move_down   dumped shares         move_left   Slash/Retain Yield
 //!
-//! `x` is the column (price generally increases moving right); `y` is the
-//! row (price generally increases moving up). Every movement is bounds
-//! checked against `MARKET_MIN_X`/`MARKET_MAX_X`/`MARKET_MIN_Y`/`MARKET_MAX_Y`
-//! so a protocol's marker can never be pushed off the matrix: hitting an
-//! edge simply saturates the move on that axis, exactly like the physical
-//! 18xx board (no panics, no wrapping, no out-of-bounds coordinates).
+//! `x` is the column, `y` the row, and `y = MARKET_MAX_Y` is the TOP.
 //!
-//! `seed_default_price_grid` populates the shared board template with the
-//! **authentic real 1830 price chart**; see its doc comment for the full
-//! sourcing note. Until a seeding function was first added, `MARKET_GRID`
-//! was never populated anywhere, so every movement here would have failed.
-//! Seeding also stamps the six `PAR_VALUE_LADDER` cells with the real
-//! standard 1830 par prices ($67/$71/$76/$82/$90/$100) -- see
-//! `trading::execute_buy_stock` for how a protocol's Par Value selection
-//! pins its starting marker to one of them. `initialize_game_market` is the
-//! per-room counterpart: called once per game at
-//! `contract::execute_create_game_room`, it gives that room's companies
-//! their own starting positions on the shared template, independent of any
-//! other room.
+//! THE CHART IS GENUINELY RAGGED (cliffside) -- 19 columns at its widest row,
+//! narrowing to as few as 4 populated cells at the bottom -- not a uniform
+//! rectangle. A blank coordinate simply has no `MARKET_GRID` entry and is treated
+//! exactly like the rectangle's own edge.
 //!
-//! **Architectural Refactor -- Definitive 1830 Tactical Compliance.** This
-//! module was originally seeded with an invented, illustrative linear
-//! formula (`price = 100 + x*10 + y*20` over a uniform 26x11 rectangle).
-//! It has since been replaced end-to-end with the real, verbatim 1830
-//! stock-market chart, sourced from the open-source `tobymao/18xx` engine
-//! (`lib/engine/game/g_1830/game.rb`'s `MARKET` constant, cross-checked
-//! against `github.com/blob` and `raw.githubusercontent.com` mirrors), plus
-//! its zone-letter legend (`lib/engine/share_price.rb`'s `TYPE_MAP` /
-//! `lib/engine/game/base.rb`'s `CERT_LIMIT_TYPES`/`MULTIPLE_BUY_TYPES`).
-//! The real chart is a genuinely **ragged (cliffside) shape** -- 19 columns
-//! at its widest row, narrowing to as few as 4 populated cells in its
-//! lowest row -- not a uniform rectangle; `MARKET_GRID` simply has no entry
-//! at a masked-out (blank) coordinate, and `apply_market_movement` treats
-//! that exactly like hitting the rectangle's own edge (see its doc
-//! comment): the move saturates in place rather than erroring, so a
-//! marker can never wander off the printed chart in either sense.
+//! Verbatim real 1830 data, sourced from `tobymao/18xx`'s `g_1830/game.rb`
+//! `MARKET` constant plus its zone legend, replacing an earlier invented linear
+//! formula end to end.
 //!
-//! `MarketCell::zone_type` (`state::ZoneType`) is real, sourced data too --
-//! see that type's own doc comment for the Yellow/Orange/Brown zone
-//! semantics and exactly which of this crate's trading rules each one
-//! waives. **`GAME_END_PRICE_TRIGGER` ($350, the chart's single highest
-//! cell) is this project's own explicit, user-requested house rule, not a
-//! transcription of the software engine's behavior** -- the verbatim
-//! `MARKET` array does NOT tag that cell with the engine's own `:endgame`/
-//! `:close` type codes (those exist in `TYPE_MAP` but are unused anywhere
-//! in 1830's own `MARKET` array); the real rulebook's primary end condition
-//! is the bank breaking, not a marker reaching the top of the chart. This
-//! module still enforces the $350 trigger exactly as requested, flagged
-//! here so it's never mistaken for verbatim-sourced engine behavior.
+//! `GAME_END_PRICE_TRIGGER` ($350, the chart's highest cell) is THIS PROJECT'S
+//! OWN EXPLICIT HOUSE RULE, not a transcription of engine behaviour -- the
+//! verbatim array does not tag that cell, and the real rulebook's primary end
+//! condition is the bank breaking. Enforced as requested, flagged here so it is
+//! never mistaken for sourced behaviour.
 //!
-//! Every write to a `ProtocolMarketState` (its initial default placement,
-//! an unconditional overwrite, or an ordinary grid movement) also stamps a
-//! fresh `arrival_sequence` via `next_arrival_sequence` -- a single,
-//! strictly increasing "who moved most recently" clock per game room, used
-//! only to break Operating Round tie-breaks (`operations::calculate_operating_order`)
-//! when two protocols land on the exact same price.
+//! Every write to a marker stamps a fresh `arrival_sequence` -- a strictly
+//! increasing per-room "who moved most recently" clock, used only to break
+//! Operating Round order ties when two protocols land on the same price.
+//!
+//! See docs/ai_architecture/rust_contract_architecture.md, market.rs.
 
 use cosmwasm_std::{StdResult, Storage, Uint128};
 use thiserror::Error;
@@ -183,20 +138,12 @@ pub enum MarketMovement {
     Left,
 }
 
-/// **Step 4.5 Batch 1, item 5: Cliffs and Ledges deflection geometry.**
-///
-/// The exact result of one `apply_market_movement_detailed` call, so callers
-/// (and the test suite) can distinguish the three genuinely different things
-/// that can happen at a chart boundary, which the plain `MarketCell` return
-/// of `apply_market_movement` collapses into one:
-///
-/// - **A clean move.** `applied == Some(requested)`, `deflected == false`.
-/// - **A deflection** (a Cliff). The requested direction was blocked, so the
-///   marker travelled the 1830-mandated substitute direction instead:
-///   `applied == Some(other)`, `deflected == true`.
-/// - **No movement at all** (a Ledge or the Ceiling, or a Cliff whose own
-///   deflection target is off the printed chart too). `applied == None`, and
-///   `cell` is the cell the marker was already standing on.
+/// The exact result of one movement, so callers can distinguish the three
+/// genuinely different things that can happen at a boundary, which a plain cell
+/// return collapses into one: a clean move; a DEFLECTION (a Cliff), where the
+/// requested direction was blocked and the marker travelled the 1830-mandated
+/// substitute instead; or no movement at all (a Ledge, the Ceiling, or a Cliff
+/// whose own deflection target is off the printed chart too).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarketMoveOutcome {
     /// The cell the marker is standing on once this movement resolves --
@@ -261,35 +208,28 @@ fn step_coordinates(x: u32, y: u32, movement: MarketMovement) -> Option<(u32, u3
     }
 }
 
-/// **The Cliffs and Ledges rule table (item 5), in one place.** Given a
-/// movement that could not be travelled -- because it would leave the
-/// bounding rectangle, or because the cell it points at is one of the real
-/// chart's blank (unprinted) coordinates -- returns the substitute direction
-/// 1830 says the marker travels instead, or `None` if the marker simply holds
-/// station.
+/// The Cliffs and Ledges rule table, in one place. Given a movement that cannot
+/// be travelled -- off the rectangle, or onto one of the chart's blank
+/// coordinates -- returns the substitute direction 1830 says the marker takes, or
+/// `None` if it simply holds station.
 ///
-/// - **Right Cliff -> Up.** A Distribute Yield that would push the marker off
-///   the right-hand end of its row instead lifts it one row. This is the real
-///   chart's only way to climb past a short row into the wider rows above it,
-///   and without it a company parked on a row's last cell could never reach
-///   $350 at all.
-/// - **Left Cliff -> Down.** A Slash/Retain Yield that would push the marker
-///   off the left-hand end of its row instead drops it one row. The real
-///   chart's rows get *shorter* toward the bottom and their blanks are all at
-///   the low-`x` end (see `REAL_MARKET_ROWS`), so this is the staircase a
-///   repeatedly-withholding company walks down.
-/// - **Bottom Ledge -> clamp.** A downward movement from the chart's bottom
-///   row does NOT deflect anywhere; it is simply refused. There is no cell
-///   below $10 and a marker can never fall off the board -- the physical
-///   board's bottom edge is a ledge, not a cliff.
-/// - **Top Ceiling -> clamp.** Symmetrically, an upward movement from the top
-///   row is refused. The chart's single highest cell is $350
-///   (`GAME_END_PRICE_TRIGGER`), and nothing goes above it.
+///   RIGHT CLIFF -> UP    a Distribute Yield off the right end of its row lifts
+///                        the marker one row. This is the chart's ONLY way to
+///                        climb past a short row into the wider rows above, and
+///                        without it a company parked on a row's last cell could
+///                        never reach $350 at all.
+///   LEFT CLIFF -> DOWN   a Slash/Retain off the left end drops it one row. The
+///                        rows get shorter toward the bottom and their blanks are
+///                        all at the low-`x` end, so this is the staircase a
+///                        repeatedly-withholding company walks down.
+///   BOTTOM LEDGE         refused, no deflection. The board's bottom edge is a
+///                        ledge, not a cliff.
+///   TOP CEILING          refused. Nothing goes above $350.
 ///
-/// Deflection is deliberately NOT recursive: if the substitute direction is
-/// itself blocked, the marker holds station rather than chaining into a third
-/// direction. Real 1830 never chains deflections, and a recursive rule on a
-/// ragged chart could walk a marker an unbounded distance from one dividend.
+/// Deflection is deliberately NOT RECURSIVE: if the substitute is itself blocked
+/// the marker holds station rather than chaining into a third direction. Real
+/// 1830 never chains deflections, and a recursive rule on a ragged chart could
+/// walk a marker an unbounded distance from one dividend.
 fn deflection_for(movement: MarketMovement) -> Option<MarketMovement> {
     match movement {
         MarketMovement::Right => Some(MarketMovement::Up),
@@ -347,39 +287,19 @@ fn next_arrival_sequence(storage: &mut dyn Storage, game_id: u64) -> StdResult<u
     Ok(next)
 }
 
-/// Applies a single grid movement to `game_id`'s `protocol_id` price
-/// marker, honoring the real board's Cliff/Ledge boundary geometry, then
-/// persists the new position and returns the `MarketCell` it landed on.
+/// Applies one movement to `game_id`'s `protocol_id` marker, honouring the real
+/// board's Cliff/Ledge geometry, then persists and returns the landed cell.
 ///
-/// **Step 4.5 Batch 1, item 5 changed this function's boundary behavior.**
-/// It previously treated all four edges identically: any blocked movement
-/// (off the bounding rectangle, or onto one of the ragged chart's blank
-/// cells) simply saturated in place. That is right for two of the four
-/// directions and wrong for the other two. Real 1830 deflects a blocked
-/// horizontal movement into a vertical one:
+/// This previously treated all four edges identically -- any blocked movement
+/// saturated in place. That is right for the two vertical directions and wrong
+/// for the two horizontal ones, and the consequence was not cosmetic: A COMPANY
+/// PARKED ON THE LAST PRINTED CELL OF A SHORT ROW COULD PAY DIVIDENDS FOREVER
+/// AND ITS PRICE WOULD NEVER MOVE, so it could never climb into the wider rows
+/// above and could never reach the $350 trigger at all.
 ///
-/// - **Right Cliff:** a Distribute Yield blocked on the right moves the
-///   marker UP one row instead of standing still.
-/// - **Left Cliff:** a Slash/Retain Yield blocked on the left moves the
-///   marker DOWN one row instead of standing still.
-/// - **Bottom Ledge / Top Ceiling:** blocked vertical movements still clamp,
-///   with no deflection -- a marker can neither fall off the bottom of the
-///   chart nor climb above $350.
-///
-/// The consequence of the old behavior was not cosmetic: a company parked on
-/// the last printed cell of a short row could pay dividends forever and its
-/// price would never move, so it could never climb into the wider rows above
-/// and could never reach the $350 `GAME_END_PRICE_TRIGGER` at all.
-///
-/// See `deflection_for` for the rule table and `resolve_movement` for the
-/// resolution order. `MarketError::MarketCellNotFound` remains unreachable
-/// from an ordinary movement (every resolved destination is either a real
-/// seeded cell or the marker's own already-valid current position); it
-/// remains for `current_cell`'s own doc comment case (a position recorded
-/// against a cell that was somehow never seeded in the first place).
-///
-/// Errors (rather than panics) only if this game's protocol has no
-/// recorded market position at all.
+/// `MarketCellNotFound` remains unreachable from an ordinary movement -- every
+/// resolved destination is either a real seeded cell or the marker's own already
+/// valid position. Errors only if this protocol has no recorded position at all.
 pub fn apply_market_movement(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -581,50 +501,31 @@ pub fn initialize_game_market(
     Ok(())
 }
 
-/// **Step 4.5 Batch 1, item 4: the 100%-Sold-Out End-of-Stock-Round rise.**
+/// The 100%-Sold-Out end-of-Stock-Round rise: every FLOATED company whose IPO and
+/// Bank pools are both empty advances one cell up. Returns each evaluated
+/// company and its landed cell so the caller can attribute the movement and check
+/// the price against the game-end trigger.
 ///
-/// Walks every `company_id` in `company_ids` and, for each one that is both
-/// FLOATED and 100% in player hands -- `IPO_POOL_SHARES == 0` AND
-/// `BANK_POOL_SHARES == 0` -- advances its price marker one cell UP.
-/// Returns `(company_id, landed_cell)` for each company that was evaluated
-/// as sold out, in `company_ids` order, so the caller can attribute the
-/// movement and check the landed price against `price_triggers_game_end`.
+/// CALLED EXACTLY ONCE PER STOCK ROUND, from `conclude_stock_round`. That single
+/// call site is what makes this an end-of-round bonus rather than a per-purchase
+/// one, and is why it must never be invoked speculatively: two calls in one round
+/// would double-raise every sold-out company.
 ///
-/// **Called exactly once per Stock Round**, from
-/// `trading::conclude_stock_round`, at the moment every player has passed
-/// consecutively. That single call site is what makes this an end-of-round
-/// bonus rather than a per-purchase one, and is why this function must never
-/// be invoked speculatively: two calls in one round would double-raise every
-/// sold-out company.
+/// It coexists with the per-purchase sold-out bonus in `execute_buy_stock` -- a
+/// different trigger with different timing, and both exist in the real game, so a
+/// corporation that goes sold out mid-round and stays that way is legitimately
+/// raised twice.
 ///
-/// **Coordinate convention.** The request this implements is phrased as
-/// "move the token up 1 vertical cell (`y - 1`)", which is the convention of
-/// a chart indexed from its top row downward. This module has always used the
-/// opposite convention -- `y = MARKET_MAX_Y` is the TOP row and price
-/// generally increases with `y` (see this module's own doc comment and
-/// `REAL_MARKET_ROWS`, which maps the verbatim source's row 0 to
-/// `MARKET_MAX_Y`). "Up one cell" is therefore `y + 1` here. Both describe
-/// the identical physical movement; this function goes through `move_up` so
-/// there is exactly one definition of which way is up.
+/// `is_floated` is required because an unfloated corporation has never sold a
+/// share, so its IPO pool is untouched -- and an unwritten entry defaults to FULL
+/// (100), not 0, which is exactly why `full_pool_percentage` is threaded in as a
+/// parameter rather than letting an absent entry read as zero.
 ///
-/// **Interaction with the pre-existing per-purchase sold-out bonus.**
-/// `trading::execute_buy_stock` already bumps a company the instant a
-/// purchase empties both of its pools. That is a different trigger with a
-/// different timing, and both exist in the real game; a corporation that goes
-/// 100% sold out mid-round and stays that way to the end of the round is
-/// legitimately raised twice, once by each rule.
-///
-/// **Why `is_floated` is required.** An unfloated corporation has never sold
-/// a share, so its `IPO_POOL_SHARES` is untouched -- and an unwritten entry
-/// defaults to `full_pool_percentage` (100), not 0, which is exactly why the
-/// caller must pass that constant in rather than letting an absent entry read
-/// as zero. The `is_floated` gate is the belt to that braces: a corporation
-/// nobody has ever bought into can never be "sold out".
-///
-/// `full_pool_percentage` is threaded in as a parameter (matching
-/// `state::count_player_certificates`'s convention) rather than imported from
-/// `trading.rs`, so this module stays below `trading` in the dependency
-/// order instead of reaching back up into it.
+/// COORDINATE NOTE: the request was phrased as "move up 1 cell (`y - 1`)", the
+/// convention of a chart indexed from its top row downward. This module has
+/// always used the opposite -- `y = MARKET_MAX_Y` is the TOP -- so "up one" is
+/// `y + 1` here. Both describe the identical physical movement, and this goes
+/// through `move_up` so there is exactly one definition of which way is up.
 pub fn apply_sold_out_price_rises(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -874,26 +775,17 @@ const REAL_MARKET_ROWS: &[(u32, u32, &[RealCell])] = &[
     ),
 ];
 
-/// Seeds `MARKET_GRID` with the authentic 1830 price chart
-/// (`REAL_MARKET_ROWS`), so `apply_market_movement` always has a real
-/// `MarketCell` to land on (or, at the chart's ragged edges, a well-defined
-/// "stay put" -- see that function's doc comment). Nothing in this contract
-/// previously ever populated `MARKET_GRID` -- every price movement
-/// (`BuyStock`'s sold-out bonus, `SellStock`'s dumped-shares drop,
-/// `DeclareDividends`, `ExecuteOperatingRound`'s payout/retain shift) would
-/// have failed with `MarketCellNotFound` the first time it ran. `MARKET_GRID`
-/// is the shared board *template* -- intentionally global, not game-scoped,
-/// since it's just the static layout every room's markers move around on
-/// (see its doc comment in `state.rs`; contrast with `PROTOCOL_MARKET`,
-/// which *is* scoped per game via `initialize_game_market`) -- so this only
-/// ever needs to run once, at contract `instantiate` time, rather than per
-/// room -- see `contract::instantiate`.
+/// Seeds `MARKET_GRID` with the authentic 1830 chart, so a movement always has a
+/// real cell to land on -- or, at the ragged edges, a well-defined "stay put".
+/// Nothing previously populated this map, so every price movement would have
+/// failed the first time it ran.
 ///
-/// Only cells listed in `REAL_MARKET_ROWS` are ever written -- this
-/// function does NOT also fill the surrounding `[MARKET_MIN_X,
-/// MARKET_MAX_X] x [MARKET_MIN_Y, MARKET_MAX_Y]` rectangle with placeholder
-/// prices; the real board's blank cells stay genuinely unseeded (see this
-/// module's doc comment on the ragged/cliffside shape).
+/// The grid is the shared board TEMPLATE, intentionally global rather than
+/// game-scoped, so this runs once at `instantiate` rather than per room.
+///
+/// Only cells the real chart prints are written -- the surrounding rectangle is
+/// NOT filled with placeholders, so the board's blank cells stay genuinely
+/// unseeded.
 pub fn seed_default_price_grid(storage: &mut dyn Storage) -> StdResult<()> {
     for &(y, start_x, cells) in REAL_MARKET_ROWS {
         for (offset, &(price, zone_type)) in cells.iter().enumerate() {

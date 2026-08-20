@@ -1,127 +1,45 @@
-//! Pre-Game Waterfall Auction Engine: the canonical 1830 mechanism for
-//! allocating all six `auction::CORE_PRIVATE_COMPANIES` before Stock Round 1
-//! ever opens. Every room genesis starts here (`RoundType::WaterfallAuction`,
-//! `GameSession::waterfall_auction_active = true` -- see
-//! `contract::execute_create_game_room`); `conclude_waterfall` below is this
-//! contract's one and only exit from this phase, into `RoundType::
-//! StockRound`.
+//! Pre-Game Waterfall Auction Engine: the canonical 1830 mechanism for allocating
+//! all six privates before Stock Round 1 opens. Every room genesis starts here,
+//! and `conclude_waterfall` is the one and only exit.
 //!
-//! Design notes:
+//!   BUY LOWEST   pays face value in cash for whichever private is currently the
+//!                cheapest unowned one. This is the ONLY way to acquire that
+//!                specific private -- it can never be bid on, because if it
+//!                could, turn one could immediately produce a 2+-bid tie on the
+//!                very first private with zero information exchanged.
+//!   BID HIGHER   escrows a bid on any OTHER unowned private, at face value or
+//!                the standing high bid plus the minimum increment.
+//!   PASS         ALWAYS legal on your turn. It used to require that some
+//!                private already carried a bid, which made the opening position
+//!                of the game a FORCED MOVE -- you could buy or bid, but not
+//!                decline.
 //!
-//! 1. **Two turn actions, plus a Pass, plus a separate mini-auction pair.**
-//!    While no mini-auction is in progress (`state::WATERFALL_MINI_AUCTION`
-//!    absent for this `game_id`), whoever `GameSession::active_player_index`
-//!    points at may call exactly one of:
-//!    - `execute_waterfall_buy_lowest`: pays `PrivateCompany::cost` in cash,
-//!      right now, for whichever private is currently the cheapest still
-//!      unowned one (`lowest_unowned_private_id`) -- this is the ONLY way
-//!      to acquire that specific private; it can never be bid on (see #2).
-//!    - `execute_waterfall_bid_higher`: escrows a bid on any OTHER
-//!      still-unowned private (never the current lowest). Minimum bid is
-//!      that private's face value if it has no bids yet, or the current
-//!      highest bid on it plus `auction::MIN_BID_INCREMENT` ($5)
-//!      otherwise. A player may hold at most one standing bid per private
-//!      at a time (raising it again requires the mini-auction path, #3).
-//!    - `execute_waterfall_pass`: ALWAYS legal on your turn (Step 4.5
-//!      Batch 4). It used to require that some private anywhere already
-//!      carried a bid, which made the opening position of the game a forced
-//!      move -- you could buy or bid, but not decline. Real 1830 lets a
-//!      table pass from a cold start, and #4 is what makes that terminate
-//!      rather than loop: the price walks down until somebody wants the
-//!      company, or until it is free and forced on them.
-//!    Every one of these three, when it doesn't trigger a phase-ending
-//!    `conclude_waterfall`, advances `active_player_index` to the next
-//!    seated player (`advance_waterfall_turn`) exactly once, regardless of
-//!    whatever cascade/mini-auction side effects it triggered.
-//! 2. **Why the cheapest private can only ever be bought outright, never
-//!    bid on.** If it could also accumulate bids, turn one could
-//!    immediately produce a 2+-bid tie on the very first private with zero
-//!    real information exchanged -- `execute_waterfall_bid_higher` rejects
-//!    `private_id == lowest_unowned_private_id` outright
-//!    (`CannotBidOnLowest`), matching the real 1830 rule this engine is
-//!    modeling.
-//! 3. **The Waterfall Cascade.** `run_cascade` is the automatic resolution
-//!    loop, invoked every time a private is newly won (from
-//!    `execute_waterfall_buy_lowest` directly, or from a mini-auction
-//!    concluding via `execute_waterfall_mini_auction_pass`): it repeatedly
-//!    inspects whichever private is now the cheapest still-unowned one and,
-//!    per its current bid count, either (a) leaves it as the new open offer
-//!    and returns control to players (0 bids), (b) auto-resolves it to its
-//!    sole bidder at their bid price and loops again to check the next one
-//!    (1 bid, via `resolve_private_win`), or (c) starts a mini-auction
-//!    (`start_mini_auction`) among its 2+ bidders and pauses the cascade
-//!    entirely until `execute_waterfall_mini_auction_pass` resolves it down
-//!    to one remaining bidder (2+ bids). Once every private is owned, the
-//!    loop calls `conclude_waterfall` instead of continuing.
+//! THE CASCADE resolves automatically after every win: 0 bids on the new cheapest
+//! private returns control to players, 1 bid auto-wins and loops, 2+ starts a
+//! mini-auction and pauses. The mini-auction runs in SEATING order among the tied
+//! bidders only, and auto-skips the current high bidder's own turns -- they have
+//! nothing to decide while already winning.
 //!
-//!    The mini-auction itself (`state::WaterfallMiniAuction`) is turn-based
-//!    among just its tied bidders, in the room's seating order
-//!    (`GameSession::player_addresses`), not raw storage/`Addr` order --
-//!    `start_mini_auction` builds `bidders` by filtering the seating list
-//!    down to whoever has a bid on the contested private. The CURRENT high
-//!    bidder's own turn slots are auto-skipped (`skip_leader_turns`) rather
-//!    than ever explicitly prompted -- they have nothing to decide while
-//!    already winning; only trailing participants are ever asked to raise
-//!    (`execute_waterfall_mini_auction_raise`, escrowing just the delta
-//!    above their own prior bid) or pass (`execute_waterfall_mini_auction_pass`,
-//!    fully refunded and dropped from `bidders`). The mini-auction resolves
-//!    the instant `bidders.len()` reaches `1`.
-//! 4. **A full round of passes runs the WATERFALL -- it does not end the
-//!    auction (Step 4.5 Batch 4).** `GameSession::consecutive_waterfall_passes`
-//!    counts consecutive `WaterfallPass` calls (reset to `0` by either
-//!    committing action). The moment it reaches `player_addresses.len()`,
-//!    `execute_waterfall_pass` performs the canonical 1830 sequence: the
-//!    cheapest unowned private's face value drops by
-//!    `WATERFALL_PASS_PRICE_DROP` ($5, floored at $0), every ALREADY-OWNED
-//!    private immediately pays its printed revenue to its owner, and -- if
-//!    that price has reached $0 -- the company is forced free on whoever's
-//!    turn it now is. Then the pass streak resets and play continues.
+//! A FULL ROUND OF PASSES RUNS THE WATERFALL; IT DOES NOT END IT. The cheapest
+//! private's price drops $5, every already-owned private pays its revenue, and at
+//! $0 the company is forced free on whoever's turn it is. This replaced a blunter
+//! rule that refunded every bid and concluded the phase outright -- which
+//! terminated the auction in exactly the situation where the real game is only
+//! getting started, and meant a table that collectively did not want the cheapest
+//! private simply skipped the rest of the auction rather than discovering a price
+//! at which somebody did.
 //!
-//!    This REPLACED a much blunter rule: reaching a full round of passes
-//!    used to refund every standing bid and conclude the phase outright. That
-//!    terminated the auction in exactly the situation where the real game is
-//!    only getting started, and it meant a table that collectively did not
-//!    want the cheapest private simply skipped the rest of the auction rather
-//!    than discovering a price at which somebody did.
+//! THE PHASE STILL ALWAYS TERMINATES, and now for a better reason: the price is
+//! monotonically non-increasing, $0 is reachable in a finite number of rounds,
+//! and a $0 company is forced on a player rather than offered.
 //!
-//!    **The phase still always terminates**, and now for a better reason:
-//!    the price is monotonically non-increasing, $0 is reachable in a finite
-//!    number of rounds, and a $0 company is forced on a player rather than
-//!    offered. `conclude_waterfall` is now reached in exactly one way -- every
-//!    private owned -- whether that happened through buying, bidding, or a
-//!    forced free assignment. `refund_all_standing_bids` still runs
-//!    immediately before it, since a private that was never cascaded to can
-//!    still hold escrowed bids at that moment.
+//! `conclude_waterfall` assigns Stock Round 1's Priority Deal to whoever sits
+//! immediately left of the last private's winner.
 //!
-//!    `GameSession::last_private_winner` can no longer be `None` at
-//!    conclusion in practice (something must have been acquired for every
-//!    private to be owned), but `conclude_waterfall` still handles that case
-//!    explicitly -- see #5.
-//! 5. **Priority Deal assignment.** `conclude_waterfall` assigns Stock Round
-//!    1's Priority Deal (`GameSession::priority_deal_index`, and --
-//!    extending that assignment to its natural practical meaning --
-//!    `active_player_index` too, so SR1 actually opens with that player's
-//!    turn) to whoever sits immediately to `last_private_winner`'s left in
-//!    `player_addresses`. If `last_private_winner` is `None` (see #4),
-//!    `priority_deal_index` is deliberately left at whatever it already
-//!    was (the room creator, index `0`, at genesis) -- there's no
-//!    "last winner" to seat relative to, and this contract has no other
-//!    documented tiebreak for that specific edge case.
-//! 6. **Not replayable.** None of this module's five `ExecuteMsg` variants
-//!    are recorded to `GAME_LOG` or given an `ActionRecord` variant --
-//!    matching the precedent `gamelog.rs`'s module doc comment #2 already
-//!    sets for `BeginOperatingRound`/`ExecuteOperatingRound` (automatic,
-//!    multi-step cascading side effects that a later replay can't safely
-//!    reconstruct in general). See that file's own doc comment for the
-//!    resulting, explicitly accepted `UndoLastAction` interaction gap.
-//! 7. **B&O linkage.** Winning the Baltimore & Ohio private
-//!    (`auction::PRIVATE_BO_ID`) through ANY of this module's resolution
-//!    paths (`WaterfallBuyLowest`, the Waterfall Cascade's 1-bid auto-win,
-//!    or a mini-auction concluding) calls the exact same
-//!    `auction::award_bo_president_share` the legacy continuous-bid auction
-//!    already uses -- floating the public B&O, granting its 20% President's
-//!    Certificate, and opening the remaining 80% in its IPO pool. See
-//!    `resolve_private_win`.
+//! NOT REPLAYABLE: none of the five messages are recorded to `GAME_LOG`, matching
+//! the precedent for automatic, multi-step cascading side effects.
+//!
+//! See docs/ai_architecture/rust_contract_architecture.md, waterfall.rs.
 
 use cosmwasm_std::{Addr, Attribute, DepsMut, Env, MessageInfo, Order, Response, StdError, StdResult, Storage, Uint128};
 use thiserror::Error;
@@ -311,20 +229,15 @@ fn collect_bids(
 // a helper kept alive only by an allow attribute is one someone eventually
 // wires back up without reading why it was retired.
 
-/// Refunds and clears every still-standing `PRIVATE_BIDS` entry across all
-/// six core privates -- used only by `execute_waterfall_pass`'s early
-/// termination path (module doc comment #4). This is necessary specifically
-/// there (and nowhere else in this module): every OTHER path that ends a
-/// private's bidding already resolves or refunds each of its bids one at a
-/// time as part of winning it (`resolve_private_win` clears the winner's own
-/// entry; `execute_waterfall_mini_auction_pass` refunds every losing
-/// bidder's), so by the time all six privates are owned, no stray entries
-/// can remain. A full round of passes, though, can end the whole auction
-/// while a private OTHER than the current lowest still has one or more
-/// active, never-cascaded-to bids on it (Pass only requires *some* private
-/// anywhere to have a bid, not the lowest one specifically) -- without this
-/// sweep, that escrowed cash would simply vanish from its bidder's balance
-/// forever, permanently unowned by anyone.
+/// Refunds and clears every still-standing bid across all six privates -- used
+/// only by the early-termination path, and necessary specifically there.
+///
+/// Every OTHER path that ends a private's bidding already resolves or refunds
+/// each bid as part of winning it, so by the time all six are owned no stray
+/// entries can remain. A full round of passes, though, can end the auction while
+/// a private OTHER than the current lowest still holds never-cascaded-to bids --
+/// and without this sweep that escrowed cash would simply vanish from its
+/// bidder's balance forever, permanently unowned by anyone.
 fn refund_all_standing_bids(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -387,18 +300,11 @@ fn refund_bids_on_private(
     Ok(())
 }
 
-/// Finalizes `private_id`'s ownership to `winner`. Does NOT touch
-/// `PLAYER_CASH_VGP` -- callers that owe fresh cash (only
-/// `execute_waterfall_buy_lowest`, a direct face-value purchase) deduct it
-/// themselves before calling this; every other caller (the Waterfall
-/// Cascade's 1-bid auto-win, a concluded mini-auction) already escrowed
-/// `winner`'s cash at bid time, so nothing further is owed. Always clears
-/// `winner`'s own `PRIVATE_BIDS` entry for `private_id` (idempotent if none
-/// existed, e.g. the direct-buy path), records `winner` as
-/// `session.last_private_winner` for Priority Deal purposes (module doc
-/// comment #5), and -- if `private_id` is the B&O private -- floats the
-/// public B&O via `auction::award_bo_president_share` (module doc comment
-/// #7).
+/// Finalizes `private_id`'s ownership. Does NOT touch player cash: the only
+/// caller that owes fresh money deducts it before calling, and every other caller
+/// already escrowed at bid time. Always clears the winner's own bid entry
+/// (idempotent), records them for Priority Deal purposes, and -- if this is the
+/// B&O private -- floats the public B&O.
 fn resolve_private_win(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -479,13 +385,10 @@ fn start_mini_auction(
     Ok(())
 }
 
-/// Moves `mini.turn_index` forward past every consecutive slot currently
-/// held by `mini.high_bidder` -- module doc comment #3: the current leader
-/// never needs an explicit prompt while already winning, so their own
-/// slot(s) are skipped rather than ever being asked to act. `guard` bounds
-/// the loop at `bidders.len()` iterations so a degenerate single-bidder
-/// state (which callers are expected to have already resolved before
-/// calling this) can never spin forever.
+/// Moves the mini-auction cursor past every consecutive slot held by the current
+/// high bidder: the leader never needs an explicit prompt while already winning.
+/// `guard` bounds the loop at `bidders.len()` so a degenerate single-bidder state
+/// can never spin forever.
 fn skip_leader_turns(mini: &mut WaterfallMiniAuction) {
     let len = mini.bidders.len() as u32;
     if len == 0 {
@@ -513,12 +416,10 @@ fn advance_mini_auction_turn_after_raise(mini: &mut WaterfallMiniAuction) {
     skip_leader_turns(mini);
 }
 
-/// The Waterfall Cascade (module doc comment #3): repeatedly inspects
-/// whichever private is now cheapest among those still unowned, resolving
-/// it automatically for as long as it can (0 bids stops the loop and
-/// returns control to players; 1 bid auto-wins and loops again; 2+ bids
-/// starts a mini-auction and stops the loop). Once every private is owned,
-/// calls `conclude_waterfall` instead of continuing.
+/// The Waterfall Cascade: repeatedly inspects whichever private is now cheapest
+/// among the unowned, resolving automatically for as long as it can -- 0 bids
+/// stops and returns control, 1 bid auto-wins and loops, 2+ starts a mini-auction
+/// and stops. Once every private is owned it calls `conclude_waterfall`.
 fn run_cascade(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -552,16 +453,11 @@ fn run_cascade(
     }
 }
 
-/// Ends the Waterfall Auction (module doc comments #4/#5): flips
-/// `waterfall_auction_active` off and `current_round_type` to
-/// `RoundType::StockRound` for good, resets the pass streak, and assigns
-/// Stock Round 1's Priority Deal (and, following from what Priority Deal
-/// actually means, `active_player_index` too) to whoever sits immediately
-/// to `last_private_winner`'s left -- or leaves `priority_deal_index`
-/// untouched if no private was ever won (see module doc comment #4's edge
-/// case). Called either from `run_cascade` (every private now owned) or
-/// directly from `execute_waterfall_pass` (a full round of passes ended it
-/// early).
+/// Ends the Waterfall Auction: flips the phase flags for good, resets the pass
+/// streak, and assigns Stock Round 1's Priority Deal (and, following from what
+/// Priority Deal actually means, the active seat too) to whoever sits immediately
+/// left of the last private's winner -- or leaves it untouched if no private was
+/// ever won.
 fn conclude_waterfall(session: &mut GameSession, attrs: &mut Vec<Attribute>) {
     session.waterfall_auction_active = false;
     session.current_round_type = RoundType::StockRound;

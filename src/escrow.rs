@@ -1,73 +1,36 @@
-//! **Escrow: every path real JUNO takes into, around, and out of this
-//! contract.**
+//! Escrow: every path real JUNO takes into, around and out of this contract.
 //!
-//! Step 4.5 Batch 3 extracted this module out of `contract.rs`. The split is
-//! along a single line, and it is worth stating precisely because it is the
-//! rule for what belongs here: this module deals in the NATIVE TOKEN
-//! (`ujuno`) -- real money, held by the contract, moved with `BankMsg`.
-//! Everything on the other side of that line -- Virtual Game Points, share
-//! percentages, market positions, train rosters -- stays in the game modules
-//! and never appears here. `finalize_and_distribute_payouts` is the one
-//! place the two meet, and it does so through a single read-only call into
-//! the appraiser (`contract::appraise_player_net_worth`) rather than by
-//! reaching into game state itself.
+//! THE SPLIT IS ALONG ONE LINE, and it is the rule for what belongs here: this
+//! module deals in the NATIVE TOKEN (`ujuno`) -- real money, held by the
+//! contract, moved with `BankMsg`. Virtual Game Points, share percentages, market
+//! positions and train rosters stay in the game modules and never appear here.
+//! `finalize_and_distribute_payouts` is the one place the two meet, and it does
+//! so through a single read-only call into the appraiser.
 //!
-//! ## What lives here
+//! What lives here: the token constants (re-exported from `contract.rs` so every
+//! existing caller and the generated schema keep resolving); deposit intake and
+//! splitting, so there is exactly one definition of what a deposit is worth; the
+//! Ante Floor; payout; and annulment.
 //!
-//! 1. **The token constants.** `NATIVE_DENOM`, `BPS_DENOMINATOR`,
-//!    `MINIMUM_ANTE`, `INACTIVITY_TIMEOUT_SECONDS`. `contract.rs` re-exports
-//!    all four, so `contract::NATIVE_DENOM` and friends keep resolving for
-//!    every existing caller and for the frontend's generated schema.
-//! 2. **Deposit intake.** `require_native_deposit` (exactly one non-zero coin
-//!    of the native denom) and `split_deposit` (that amount, cleanly divided
-//!    into the developer subsidy and the net that actually reaches the
-//!    room's pool). Room creation and room entry both route through
-//!    `split_deposit`, so there is exactly one definition of what a deposit
-//!    is worth.
-//! 3. **The Ante Floor (Batch 3, item 4).** `MINIMUM_ANTE` is a hard on-chain
-//!    safety net, nothing more. A CosmWasm contract cannot query live gas
-//!    prices, so it cannot compute a sensible stake itself; the frontend
-//!    does that (roughly "current gas price x 400 transactions") and puts the
-//!    result in the `CreateGameRoom` deposit. This module's only job is to
-//!    refuse a table funded so thinly that its own players could not afford
-//!    to play it out. See `require_minimum_ante`.
-//! 4. **Payout.** `finalize_and_distribute_payouts` (proportional to final
-//!    net worth) and its creator-invoked wrapper
-//!    `execute_end_game_and_distribute`.
-//! 5. **Annulment.** `execute_annul_game` -- the abort path, which refunds
-//!    antes directly and never touches the payout math.
+//! PAYOUT AND ANNULMENT ARE DIFFERENT MACHINES, and the contract had drifted
+//! toward confusing them. `EndGameAndDistribute` is a RESULT -- the game reached
+//! a conclusion and the pool is divided by how well each player actually played,
+//! so someone can win and someone can walk away with less than they anted, which
+//! is the entire point of playing. `AnnulGame` is a NON-RESULT -- the table is
+//! being torn down without a game having happened, nobody won, so nothing is
+//! scored and everyone gets their own money back. Running the proportional split
+//! there would hand a real-JUNO prize to whoever happened to be ahead when the
+//! room stalled, which is indistinguishable from a rage-quit exploit.
 //!
-//! ## Payout and annulment are different machines (Batch 3, item 2)
+//! `ClaimTimeoutRefund` used to be a third, narrower exit firing only on the
+//! 48-hour timeout. It is GONE, folded into `AnnulGame` -- one refund path, so
+//! the two can never disagree about what a player is owed.
 //!
-//! These two exits must not be confused, and before this pass the contract
-//! had drifted toward doing so:
-//!
-//! - **`EndGameAndDistribute` is a RESULT.** The game reached a natural
-//!   conclusion -- the $350 trigger, a broken bank, or the creator calling
-//!   it -- and the pool is divided by how well each player actually played,
-//!   proportional to final VGP net worth. Someone can win. Someone can walk
-//!   away with less than they anted, which is the entire point of playing.
-//! - **`AnnulGame` is a NON-RESULT.** The table is being torn down without a
-//!   game having happened: abandoned, stuck, or called off. Nobody won, so
-//!   nothing is scored. Every player gets their own money back, and the
-//!   payout math is bypassed entirely rather than run over a half-finished
-//!   position. Running the proportional split here would hand a real-JUNO
-//!   prize to whoever happened to be ahead when the room stalled, which is
-//!   indistinguishable from a rage-quit exploit.
-//!
-//! `ExecuteMsg::ClaimTimeoutRefund` used to be a third, narrower exit that
-//! only fired on the 48-hour timeout. It is GONE, folded into `AnnulGame`
-//! along with its solvency handling -- one refund path, so the two can never
-//! disagree about what a player is owed.
-//!
-//! ## Solvency (Audit G-11, preserved verbatim through the move)
-//!
-//! `PLAYER_JUNO_ANTE` records each player's GROSS deposit, but the subsidy
-//! cut leaves for the developer treasury the moment it is taken, so only the
-//! net ever reaches the pool. Refunding the gross would try to pay out more
-//! than the room holds. Every refund is therefore
-//! `ante - subsidy_cut(ante)`, which sums to exactly `total_juno_pool` and
-//! can never overdraw the contract's balance.
+//! SOLVENCY (Audit G-11): `PLAYER_JUNO_ANTE` records each player's GROSS deposit,
+//! but the subsidy leaves for the developer treasury the moment it is taken, so
+//! only the net ever reaches the pool. Refunding the gross would try to pay out
+//! more than the room holds. Every refund is `ante - subsidy_cut(ante)`, which
+//! sums to exactly `total_juno_pool` and can never overdraw the contract.
 
 use cosmwasm_std::{
     Addr, BankMsg, Coin, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128,
@@ -88,22 +51,18 @@ pub const BPS_DENOMINATOR: u128 = 10_000;
 /// `execute_annul_game`.
 pub const INACTIVITY_TIMEOUT_SECONDS: u64 = 172_800;
 
-/// **Step 4.5 Batch 3, item 4: the Ante Floor.** The smallest real-JUNO
-/// deposit that may open a game room, in `ujuno` (2 JUNO).
+/// The Ante Floor: the smallest real-JUNO deposit that may open a room (2 JUNO).
 ///
-/// This is a SAFETY NET, not a pricing mechanism, and the distinction
-/// matters. A CosmWasm contract has no way to read live network gas prices,
-/// so it cannot possibly compute what a table ought to cost; the frontend
-/// does that off-chain when it builds the `CreateGameRoom` payload (roughly
-/// "current gas price x 400 transactions" -- a full 1830 match's worth of
-/// signatures) and attaches the result. All this constant does is refuse a
-/// room funded so thinly that the game could not be played to its end --
-/// which would strand every joiner's ante in a table nobody can finish.
+/// A SAFETY NET, not a pricing mechanism, and the distinction matters. A CosmWasm
+/// contract has no way to read live gas prices, so it cannot compute what a table
+/// ought to cost; the frontend does that off-chain (roughly "gas price x 400
+/// transactions") and attaches the result. All this does is refuse a room funded
+/// so thinly that the game could not be played to its end, which would strand
+/// every joiner's ante in a table nobody can finish.
 ///
 /// Deliberately a compile-time constant rather than an `InstantiateMsg`
-/// parameter: a deployer-supplied floor could be set to zero, which would
-/// defeat the entire check, and the value protects players rather than the
-/// deployer.
+/// parameter: a deployer-supplied floor could be set to zero, which would defeat
+/// the check entirely, and the value protects players rather than the deployer.
 pub const MINIMUM_ANTE: Uint128 = Uint128::new(2_000_000);
 
 /// How a single real-JUNO deposit divides.
@@ -137,19 +96,16 @@ pub fn require_native_deposit(info: &MessageInfo) -> Result<Uint128, ContractErr
     Ok(coin.amount)
 }
 
-/// The developer gas-subsidy cut taken from a real-JUNO deposit:
-/// `deposit * subsidy_fee_percentage / BPS_DENOMINATOR`, floor-divided,
-/// using only checked deterministic `Uint128` math (no floats).
+/// The developer gas-subsidy cut: `deposit * subsidy_fee_percentage /
+/// BPS_DENOMINATOR`, floor-divided, checked `Uint128` math only.
 ///
-/// Extracted (Audit G-11) so room creation, room entry, and annulment all
-/// compute the identical figure from the identical formula.
+/// Extracted (Audit G-11) so creation, entry and annulment all compute the
+/// identical figure from the identical formula.
 ///
-/// `GameConfig::subsidy_fee_percentage` is written once, at `instantiate`,
-/// and never updated anywhere in this contract, so re-deriving a past
-/// deposit's cut at refund time always reproduces the exact value that was
-/// taken at deposit time. If a config-update handler is ever added, this
-/// assumption breaks and the refund path below must store the net figure
-/// instead of recomputing it.
+/// ASSUMPTION: `subsidy_fee_percentage` is written once at instantiate and never
+/// updated, so re-deriving a past deposit's cut at refund time always reproduces
+/// what was taken. IF A CONFIG-UPDATE HANDLER IS EVER ADDED THIS BREAKS, and the
+/// refund path must store the net figure instead of recomputing it.
 pub fn subsidy_cut(
     deposit: Uint128,
     subsidy_fee_percentage: u64,
@@ -347,36 +303,25 @@ pub(crate) fn finalize_and_distribute_payouts(
         .add_attribute("dust_swept_to_treasury", dust))
 }
 
-/// **Step 4.5 Batch 3, items 2 and 3: game annulment.**
+/// Annuls a room: tears it down WITHOUT scoring and refunds every player their
+/// own ante, net of the subsidy. Deliberately bypasses the payout math entirely.
 ///
-/// Tears a room down WITHOUT scoring it and refunds every player their own
-/// ante, net of the subsidy already forwarded to the developer treasury.
-/// Deliberately bypasses `finalize_and_distribute_payouts` entirely: see this
-/// module's doc comment for why running the proportional split on an aborted
-/// game would be a rage-quit exploit rather than a payout.
+/// TWO TIERS, and the second is the one that matters:
 ///
-/// **Who may call it -- the permissionless escape hatch (item 3).** Two
-/// tiers, and the second is the one that matters:
+///   THE CREATOR, AT ANY TIME. The host called the table off. No waiting period,
+///   because there is nobody to protect from them: every player gets exactly
+///   their own money back, so the creator gains nothing by annulling early. The
+///   worst they can do is end a game other players were enjoying, which is a
+///   social problem, not a financial one.
 ///
-/// - **The room creator, at any time.** The host called the table off. No
-///   waiting period, because there is nobody to protect from them: every
-///   player gets exactly their own money back, so the creator gains nothing
-///   by annulling early. The worst they can do is end a game other players
-///   were enjoying, which is a social problem, not a financial one.
-/// - **ANY registered player, once the room has been silent for
-///   `INACTIVITY_TIMEOUT_SECONDS` (48 hours).** This is the real safety
-///   valve. Without it, a creator who walks away -- or loses their keys --
-///   locks every other player's real JUNO in the contract permanently.
-///   `GameSession::last_action_timestamp` is refreshed by every
-///   state-advancing handler, so the clock only runs while the room is
-///   genuinely idle.
+///   ANY REGISTERED PLAYER, after 48 hours of silence. This is the real safety
+///   valve. Without it, a creator who walks away -- or loses their keys -- locks
+///   every other player's real JUNO in the contract permanently.
 ///
-/// The comparison is `>=`, not `>`: at exactly the timeout boundary the room
-/// has been idle for the full 48 hours and the valve is open. A player whose
-/// funds are already stuck should not be made to wait an extra block for a
-/// strictly-greater-than.
-///
-/// A non-player cannot annul under either tier, timeout or not.
+/// The comparison is `>=`, not `>`: at exactly the boundary the room has been
+/// idle for the full 48 hours and the valve is open. A player whose funds are
+/// already stuck should not be made to wait an extra block for a
+/// strictly-greater-than. A non-player cannot annul under either tier.
 pub fn execute_annul_game(
     deps: DepsMut,
     env: Env,

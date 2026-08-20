@@ -1,193 +1,37 @@
-//! Hardware Store (Train Pool): the global, sequential Hardware supply,
-//! its automated "Rusting" obsolescence sweeps, and the Validator Liability
-//! / Emergency Buy backstop, per `rules.md` section 4 ("Hardware Asset
-//! Upgrades (Train Cycles)").
+//! Hardware Store (Train Pool): the global sequential supply, its automatic
+//! Rusting sweeps, and the Validator Liability / Emergency Buy backstop.
 //!
-//! Design notes / assumptions, since `rules.md` describes the shape of
-//! this mechanic but not its exact numbers:
+//!   Catalog        real 1830 costs and quantities ($80/$180/$300/$450/$630,
+//!                  6/5/4/3/2). The Diesel has unlimited supply in 1830; see
+//!                  `ensure_pool_not_empty` for how a `Vec` expresses that.
+//!   No selection   `BuyHardwareFromPool` takes no model. The pool is seeded in
+//!                  full tier order and every purchase removes the FRONT
+//!                  element, so a buyer can never skip ahead while an earlier
+//!                  tier still has stock -- which is also why rusting only ever
+//!                  needs to sweep company inventories, never the pool.
+//!   Rusting        the first 4-train rusts every 2; the first 6 rusts every 3;
+//!                  the first Diesel rusts every 4.
+//!   Era unlocks    the first 3-train unlocks Green tiles, the first 5-train
+//!                  Brown. Detected in the SAME pass as rusting, so the two
+//!                  first-ever-purchase triggers can never drift apart.
+//!   First-ever     tracked in `TRAINS_PURCHASED_COUNT`, not inferred from queue
+//!                  position, so exactly-once firing does not silently break if
+//!                  the buying rules change.
+//!   Train limits   4 trains in Phase 2/3, 3 in Phase 4, 2 from Phase 5 --
+//!                  checked BEFORE the pool, treasury or rusting sweep, using
+//!                  the phase as it stands.
+//!   Pacing         a 2-train paces 1 Operating Round, a 3/4-train 2, a 5 or
+//!                  better 3.
+//!   Closures       the B&O private closes when the public B&O buys its first
+//!                  train; EVERY open private closes when Phase 5 begins.
 //!
-//! 1. **The catalog.** `TRAIN_CATALOG` gives each tier's baseline cost,
-//!    max route distance, and bank quantity. The 2/3/4/5/6 figures are the
-//!    real 1830 values (costs $80/$180/$300/$450/$630; bank quantities
-//!    6/5/4/3/2; route distance equal to the tier number). `rules.md` also
-//!    names a "Type-D" (Diesel) tier but gives it no numbers; real 1830's
-//!    Diesel has *unlimited* bank supply, which this contract's
-//!    fixed-length `HARDWARE_POOL` queue can't represent exactly, so it's
-//!    modeled with a large-but-finite stand-in quantity (20) at the real
-//!    1830 cost ($1100) instead.
-//! 2. **No model selection.** `BuyHardwareFromPool` takes only `game_id`
-//!    and `protocol_id` -- no model type -- matching rules.md's "purchased
-//!    *sequentially* from a fixed global supply pool." `HARDWARE_POOL` is
-//!    seeded once, in full tier order (all 2s, then all 3s, then all 4s,
-//!    ...), and every purchase (by any company, including an emergency
-//!    buy) removes exactly the front element. A buyer can never skip ahead
-//!    to a later tier while an earlier one still has stock.
-//! 3. **Rusting triggers.** Three triggers are wired up: the first Type-4
-//!    purchased rusts every Type-2 out of every company's inventory; the
-//!    first Type-6 purchased rusts every Type-3; the first Type-D
-//!    purchased rusts every Type-4 (added per an explicit later request --
-//!    the real classic 1830 rule, not speculative; `rules.md`'s own
-//!    original spec only named the first two). `RUST_TRIGGERS` is a small
-//!    table so it stays easy to see all three at a glance and to extend
-//!    further if ever needed. Because `HARDWARE_POOL` is strictly sequential, a tier's stock
-//!    is always fully exhausted before the next tier's first unit can be
-//!    bought, so rusting only ever needs to sweep company inventories, not
-//!    the pool itself. `record_purchase_and_apply_rusting` is the shared
-//!    helper both `execute_buy_hardware_from_pool` and
-//!    `execute_emergency_buy_hardware` funnel through, so this logic only
-//!    lives in one place.
-//! 4. **"First unit ever" detection.** Tracked via
-//!    `state::TRAINS_PURCHASED_COUNT` rather than inferred from queue
-//!    position, so the exactly-once firing behavior doesn't silently break
-//!    if this module's buying rules ever change.
-//! 5. **Where the purchase cost goes.** Paid out of the company's own
-//!    `PublicCompany::treasury` (mirroring `hexmap::execute_lay_tile`'s
-//!    terrain-cost handling) and credited into `GameSession::virtual_bank_vgp`,
-//!    keeping VGP circulating in the bank rather than deleting it from
-//!    state. An emergency buy credits the *full* cost -- the treasury's
-//!    entire (insufficient) balance plus the President's personal deficit
-//!    contribution -- into the same bank pool.
-//! 6. **Validator Liability / Emergency Buy.** `EmergencyBuyHardware`
-//!    implements rules.md's rule ("If a Protocol owns 0 active hardware
-//!    assets during its OR step, the Validator address is legally forced
-//!    to inject personal funds to purchase a new piece of hardware at
-//!    baseline market cost. Failure to afford this triggers a liquidation
-//!    event."). It requires the calling company to own zero Hardware,
-//!    rejects the call outright if the treasury alone can already afford
-//!    the next pool unit (pointing the caller at the ordinary
-//!    `BuyHardwareFromPool` instead), and otherwise tops up the shortfall
-//!    from the President's own `PLAYER_CASH_VGP`. There's still no
-//!    OR-step sequencing in this contract, so nothing calls this
-//!    automatically yet -- it's available to be called (by the President)
-//!    whenever the zero-Hardware condition applies, rather than being
-//!    enforced as a forced step of a turn structure that doesn't exist.
-//! 7. **Bankruptcy halts the session via a successful transaction, not an
-//!    error.** Earlier this returned `Err(HardwareError::Bankrupt)`, but
-//!    CosmWasm reverts *every* state write made during a call that returns
-//!    `Err(..)` -- there's no partial commit -- so an error return could
-//!    never durably flip `GameSession::is_active` to false. To make the
-//!    halt actually stick on-chain, `execute_emergency_buy_hardware` now
-//!    treats an unaffordable combined total as a normal, successful
-//!    outcome instead of raising an error, then returns `Ok(Response)`
-//!    carrying a dedicated `Event::new("bankruptcy")` plus matching
-//!    top-level attributes. No train is awarded, and the deficit itself is
-//!    never actually collected on this path.
+//! Bankruptcy halts via a SUCCESSFUL transaction, not an error: CosmWasm reverts
+//! every state write made during a call returning `Err`, so an error return could
+//! never durably flip `is_active` to false. The halt runs the same final
+//! liquidation every other game-end trigger uses, so a bankruptcy no longer
+//! leaves the lobby's real JUNO stranded in contract state.
 //!
-//!    UPDATED (Bankruptcy Hard Halt): this outcome now calls
-//!    `contract::finalize_and_distribute_payouts` -- the SAME final
-//!    net-worth liquidation routine every other game-end trigger in this
-//!    contract already uses -- rather than only flipping `is_active` to
-//!    `false` and saving. That routine still flips `is_active` to `false`
-//!    (so every other message against this `game_id` -- `BuyStock`,
-//!    `LayTile`, `ExecuteOperatingRound`, etc. -- immediately starts
-//!    failing with their own `GameNotActive` checks, which is also exactly
-//!    what "abort every remaining queued corporation's turn this Operating
-//!    Round" means in practice here, matching that routine's own doc
-//!    comment), but ALSO now computes every player's final VGP net worth
-//!    and dispatches the real-JUNO payout `BankMsg::Send`s -- unlike a plain
-//!    halt, a bankruptcy no longer leaves the lobby's real JUNO pool
-//!    stranded in contract state. Contrast the Deferred Bank-Break Halt
-//!    (`GameSession::bank_is_broken`, `state.rs`/`operations.rs`), which
-//!    reaches this same liquidation routine but only once the CURRENT
-//!    scheduled block of Operating Rounds finishes naturally -- this path
-//!    is the immediate, mid-turn version of that same final step.
-//! 8. **Tech Era Color-Locking.** The real classic 1830 rule that buying
-//!    the first-ever 3-train unlocks Green tiles, and the first-ever
-//!    5-train unlocks Brown tiles (`hexmap.rs`'s module doc comment #8).
-//!    `record_purchase_and_apply_rusting` -- already the single place that
-//!    detects "first-ever unit of this tier" for the Rusting sweep -- also
-//!    checks `ERA_UNLOCK_TRIGGERS` there and advances
-//!    `GameSession::current_global_era` in the same pass, so the two
-//!    "first-ever purchase" triggers (Rusting, Era Color-Locking) can never
-//!    drift out of sync with each other.
-//! 9. **Operating Round Corporation Turn Queue gating.** Layered on top of
-//!    `execute_buy_hardware_from_pool`'s existing President-only
-//!    authorization: whenever `GameSession::active_operating_order` is
-//!    non-empty, `protocol_id` must be whichever corporation
-//!    `active_corporation_index` currently points to, or the call is
-//!    rejected with `NotYourOperatingTurn` (see `hexmap.rs`'s module doc
-//!    comment #13 for the shared design and `operations.rs` for how the
-//!    queue itself is computed). Deliberately *not* applied to
-//!    `execute_emergency_buy_hardware` -- the Validator Liability backstop
-//!    is meant to be callable whenever its own zero-Hardware/treasury
-//!    conditions apply, not restricted to a scheduled turn.
-//! 10a. **Train Limits (capacity caps).** Real 1830 caps how many trains a
-//!     single corporation may hold at once, and that cap shrinks as the
-//!     game's highest-available tier advances: 4 trains while Phase 2/3 is
-//!     current, 3 while Phase 4 is current, 2 once Phase 5/6/D is current.
-//!     `train_limit_for_phase` maps the result of
-//!     `highest_train_tier_purchased` (the SAME "highest tier ever bought
-//!     in the room" reading `operating_round_sequence_length_for_tier`
-//!     already uses for pacing, module doc comment #10) to that cap, and
-//!     `execute_buy_hardware_from_pool` rejects a purchase outright with
-//!     `TrainLimitExceeded` if the buying corporation's current
-//!     `COMPANY_HARDWARE` count is already at or above it. This check runs
-//!     BEFORE the purchase touches the pool, treasury, or the Rusting
-//!     sweep -- deliberately using the phase as it stands right now (prior
-//!     to this purchase), not a projected post-purchase phase, and
-//!     deliberately NOT looking ahead to whether this same purchase would
-//!     immediately rust away some of the corporation's own older trains:
-//!     a corporation already at its cap is blocked outright, full stop,
-//!     even in the case where the purchase would itself trigger a Rusting
-//!     sweep that (as a side effect) would have brought it back under the
-//!     cap. Real 1830 separately has an optional "discard down to the new,
-//!     lower limit" event triggered by a phase advancing -- that's a
-//!     different rule (forcibly shrinking EVERY corporation's holdings,
-//!     not just gating one corporation's purchase) and is out of scope
-//!     here; only the buy-time cap check was requested.
-//! 10. **Pacing Automation.** `OR_SEQUENCE_LENGTH_BY_TIER` gives the classic
-//!     1830 rule for how many consecutive Operating Round sub-rounds a
-//!     macro round runs once a Stock Round concludes, keyed off the highest
-//!     Hardware tier any company has purchased *anywhere in the room* so
-//!     far: 1 OR for a 2-train (or if nothing has been bought yet -- see
-//!     below), 2 ORs for a 3-train or 4-train, 3 ORs for a 5-train, 6-train,
-//!     or Diesel. `highest_train_tier_purchased` reads this off the same
-//!     `TRAINS_PURCHASED_COUNT` map `record_purchase_and_apply_rusting`
-//!     already maintains (rather than re-deriving it from `COMPANY_HARDWARE`
-//!     inventories, which Rusting can delete units from -- a rusted-away
-//!     2-train should *not* make the room forget a 2-train was ever bought
-//!     for pacing purposes), checking tiers from highest to lowest so a
-//!     later, higher purchase always wins even if an earlier tier's units
-//!     later rusted away. `operating_round_sequence_length_for_tier` maps
-//!     the result through `OR_SEQUENCE_LENGTH_BY_TIER`, defaulting to `1`
-//!     when no Hardware has ever been purchased yet in the room (mirroring
-//!     the 2-train's own baseline pacing, since a room with no trains
-//!     bought hasn't reached even the first pacing threshold).
-//!     `operations::execute_begin_operating_round` calls both, every time an
-//!     Operating Round begins, and writes the result into
-//!     `GameSession::operating_round_sequence_length` -- see that field's
-//!     own doc comment in `state.rs` for exactly which "Stock Round
-//!     concludes" moment this hooks (this contract's only existing explicit
-//!     stock-round-to-operating-round transition point).
-//! 11. **B&O Special Closure.** The real 1830 rule that the Baltimore &
-//!     Ohio private company closes automatically the instant the PUBLIC
-//!     B&O corporation buys its very first train -- independent of which
-//!     tier that train is, and a company-scoped event distinct from the
-//!     room-wide "first-ever unit of tier X" detection design note #4
-//!     already covers. `record_purchase_and_apply_rusting` detects this
-//!     by checking whether `protocol_id`'s own `COMPANY_HARDWARE` was
-//!     empty before this call's `owned.push(asset.clone())`, unconditional
-//!     on which tier was bought or whether that tier triggers Rusting/an
-//!     era unlock. A no-op if the B&O private is already `closed` (already
-//!     fired, or independently closed by design note #12's Phase 5
-//!     closure first) or if `PRIVATE_COMPANIES` somehow has no entry for
-//!     it (defensive; shouldn't happen -- every game room spawns all six
-//!     core privates at creation).
-//! 12. **Phase 5 Private Closure.** The real 1830 rule that EVERY private
-//!     company still open closes automatically the instant Phase 5
-//!     begins, regardless of whether it's player-owned, corporation-owned
-//!     (`trading::execute_buy_private_company`), or unowned. This engine
-//!     has no separate `Phase` type (see `hexmap.rs`'s module doc comment
-//!     #24 for the full mapping); Phase 5 is modeled as the room's
-//!     `TileColor::Brown` era, which `ERA_UNLOCK_TRIGGERS` above already
-//!     unlocks on the room's first-ever 5-train purchase -- so this closure
-//!     is hooked directly into that existing era-advance branch, firing
-//!     only the instant `current_global_era` newly becomes `Brown` (not on
-//!     every later 5-train/6-train/Diesel purchase once the room is
-//!     already Brown). Iterates the same canonical `CORE_PRIVATE_COMPANIES`
-//!     list `operations::execute_operating_round`'s Phase 1 already uses,
-//!     so the set of privates closed can never drift out of sync with what
-//!     was actually spawned.
+//! See docs/ai_architecture/rust_contract_architecture.md, hardware.rs.
 
 use cosmwasm_std::{
     Addr, Attribute, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
@@ -238,14 +82,9 @@ pub const TRAIN_LIMIT_BY_PHASE: &[(&str, u32)] = &[
     ("D", 2),
 ];
 
-/// Maps the highest Hardware tier ever purchased in the room (from
-/// `highest_train_tier_purchased`) to that phase's train-limit cap -- see
-/// module doc comment #10a. `None` (nothing purchased yet) is Phase 2's own
-/// baseline cap, `4`, same as an actual first 2-train purchase would read.
-/// An unrecognized model type (shouldn't happen -- every `TRAIN_CATALOG`
-/// entry has a matching `TRAIN_LIMIT_BY_PHASE` row) also falls back to `4`
-/// rather than panicking, matching `operating_round_sequence_length_for_tier`'s
-/// own defensive-fallback convention just above.
+/// Maps the highest tier ever purchased to that phase's train-limit cap. `None`
+/// (nothing purchased) is Phase 2's baseline of 4, same as a first 2-train would
+/// read; an unrecognized model also falls back to 4 rather than panicking.
 pub fn train_limit_for_phase(model_type: Option<&str>) -> u32 {
     match model_type {
         None => 4,
@@ -257,12 +96,9 @@ pub fn train_limit_for_phase(model_type: Option<&str>) -> u32 {
     }
 }
 
-/// `(trigger_model, unlocked_color)`: buying the *first-ever* unit of
-/// `trigger_model` advances `GameSession::current_global_era` to
-/// `unlocked_color`, room-wide -- the real classic 1830 Tech Era rule (see
-/// `hexmap.rs`'s module doc comment #8). `TileColor`'s derived `Ord`
-/// (declared Yellow < Green < Brown) means this can never regress the era
-/// even if triggers ever fired out of order.
+/// `(trigger_model, unlocked_color)`: buying the FIRST-EVER unit of the trigger
+/// advances `current_global_era` room-wide. `TileColor`'s derived `Ord` means this
+/// can never regress the era even if triggers ever fired out of order.
 pub const ERA_UNLOCK_TRIGGERS: &[(&str, TileColor)] =
     &[("3", TileColor::Green), ("5", TileColor::Brown)];
 
@@ -274,12 +110,10 @@ pub const ERA_UNLOCK_TRIGGERS: &[(&str, TileColor)] =
 pub const OR_SEQUENCE_LENGTH_BY_TIER: &[(&str, u32)] =
     &[("2", 1), ("3", 2), ("4", 2), ("5", 3), ("6", 3), ("D", 3)];
 
-/// Returns the highest-tier Hardware model type ever purchased in `game_id`,
-/// or `None` if nothing has been bought yet. Checks `TRAIN_CATALOG`'s tiers
-/// from highest to lowest against `TRAINS_PURCHASED_COUNT` (rather than
-/// live `COMPANY_HARDWARE` inventories, which Rusting can empty out) so a
-/// tier that later fully rusted away is still correctly remembered as
-/// having been reached -- see module doc comment #10.
+/// The highest-tier model ever purchased in `game_id`, or `None`. Checks tiers
+/// highest-to-lowest against `TRAINS_PURCHASED_COUNT` rather than live
+/// inventories, which Rusting can empty -- so a tier that later fully rusted away
+/// is still correctly remembered as having been reached.
 pub fn highest_train_tier_purchased(
     storage: &dyn Storage,
     game_id: u64,
@@ -295,15 +129,11 @@ pub fn highest_train_tier_purchased(
     Ok(None)
 }
 
-/// Maps a highest-purchased model type (from `highest_train_tier_purchased`)
-/// through `OR_SEQUENCE_LENGTH_BY_TIER` to the number of Operating Round
-/// sub-rounds the upcoming macro round should run for. `None` (no Hardware
-/// purchased yet in the room) defaults to `1`, the same baseline pacing as
-/// an actual 2-train purchase -- see module doc comment #10. An unrecognized
-/// model type (shouldn't happen -- every `TRAIN_CATALOG` entry has a
-/// matching `OR_SEQUENCE_LENGTH_BY_TIER` row) also falls back to `1` rather
-/// than panicking, since this is a display/pacing convenience, not a
-/// funds-moving calculation.
+/// Maps the highest-purchased model to the number of Operating Round sub-rounds
+/// the upcoming macro round runs. `None` defaults to `1`, the same baseline as a
+/// 2-train, since a room with nothing bought has not reached even the first
+/// pacing threshold. An unrecognized model also falls back to `1` rather than
+/// panicking, since this is pacing, not funds-moving calculation.
 pub fn operating_round_sequence_length_for_tier(model_type: Option<&str>) -> u32 {
     match model_type {
         None => 1,
@@ -320,12 +150,9 @@ pub enum HardwareError {
     #[error("{0}")]
     Std(#[from] StdError),
 
-    /// Audit G-8: Emergency Asset Liquidation reads and moves the stock
-    /// market (`market::current_cell`/`market::move_down`) while force-
-    /// selling a President's shares, so this module now has to carry
-    /// `MarketError` the same way `trading.rs` and `operations.rs` already
-    /// do -- identical `#[error("{0}")]` passthrough shape, so the
-    /// underlying market error text surfaces unchanged.
+    /// Audit G-8: Emergency Asset Liquidation reads and moves the stock market while
+    /// force-selling a President's shares, so this module carries `MarketError` the
+    /// same way `trading.rs` and `operations.rs` already do.
     #[error("{0}")]
     Market(#[from] MarketError),
 
@@ -449,34 +276,26 @@ pub const DIESEL_MODEL: &str = "D";
 
 /// Guarantees the pool is never empty -- Audit G-17.
 ///
-/// # The rule
-///
 /// In 1830 every train type has a fixed supply EXCEPT the Diesel, which is
-/// unlimited: once the game reaches the D tier, the Bank can always sell you
-/// another one. That is not a detail. It is the game's terminal state --
-/// Diesels never rust, so the endgame assumes any corporation that can afford
-/// one can always buy one.
+/// unlimited. That is not a detail: it is the game's terminal state -- Diesels
+/// never rust, so the endgame assumes any corporation that can afford one can
+/// always buy one.
 ///
-/// # Why a `Vec` needed help
+/// `HARDWARE_POOL` is a `Vec`, and "unlimited" has no representation in one. The
+/// previous approach seeded 20 Diesels and relied on no real game exhausting
+/// them. That is PROBABLY true -- but "probably" is doing load-bearing work in a
+/// rule that says "always", and the failure mode is the worst kind: a late-game
+/// `PoolEmpty` that looks like a contract bug and strands every corporation at
+/// once, in a state the rules say cannot occur.
 ///
-/// `HARDWARE_POOL` is a `Vec<HardwareAsset>` seeded once by
-/// `spawn_hardware_pool`, and "unlimited" has no representation in a `Vec`.
-/// The previous approach seeded a large finite number of Diesels (20) as a
-/// stand-in and relied on no real game exhausting them. That is *probably*
-/// true -- but "probably" is doing load-bearing work in a rule that says
-/// "always", and the failure mode is the worst kind: a late-game
-/// `PoolEmpty` that looks like a contract bug and strands every corporation
-/// at once, in a state the rules say cannot occur.
+/// So the pool tops itself up: when the last unit is taken, the next call finds
+/// it empty and appends a fresh Diesel. The finite tiers are untouched; only the
+/// tail is inexhaustible.
 ///
-/// So the pool is topped up instead. When the last unit is taken, the next
-/// call finds it empty and appends a fresh Diesel. The finite tiers are
-/// untouched -- they are consumed in catalog order and run out exactly as
-/// they should; only the tail is inexhaustible.
-///
-/// `PoolEmpty` is consequently unreachable from either buy path. It is
-/// deliberately KEPT rather than deleted: it is still the honest answer if a
-/// future caller reads the pool without going through this, and a removed
-/// error variant is a worse outcome than an unused one.
+/// `PoolEmpty` is consequently unreachable from either buy path, and is
+/// deliberately KEPT: it is still the honest answer if a future caller reads the
+/// pool without going through this, and a removed error variant is a worse
+/// outcome than an unused one.
 pub fn replenish_pool_if_exhausted(pool: &mut Vec<HardwareAsset>) {
     if pool.is_empty() {
         pool.push(diesel_asset());
@@ -498,12 +317,10 @@ pub fn spawn_hardware_pool(storage: &mut dyn Storage, game_id: u64) -> StdResult
     Ok(())
 }
 
-/// Records `asset` as newly owned by `protocol_id`, bumps
-/// `TRAINS_PURCHASED_COUNT`, and -- if this is the first-ever unit of a
-/// triggering tier -- runs the cross-company Rusting sweep, adding
-/// attributes describing whatever happened onto `response`. Shared by
-/// `execute_buy_hardware_from_pool` and `execute_emergency_buy_hardware` so
-/// the rusting logic only lives in one place (see module doc comment #3).
+/// Records `asset` as owned by `protocol_id`, bumps `TRAINS_PURCHASED_COUNT` and
+/// -- if this is the first-ever unit of a triggering tier -- runs the
+/// cross-company Rusting sweep and the era unlock. Shared by both buy paths so
+/// this logic lives in one place.
 fn record_purchase_and_apply_rusting(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -684,13 +501,11 @@ pub fn execute_buy_hardware_from_pool(
         });
     }
 
-    // Operating Round Corporation Turn Queue (see `hexmap.rs`'s module doc
-    // comment #13 for the shared design): layered on top of the President
-    // check above, only enforced once the room actually has a non-empty
-    // `active_operating_order`. `EmergencyBuyHardware` deliberately isn't
-    // wrapped by this check -- its whole purpose is a Validator Liability
-    // backstop usable whenever the zero-Hardware condition applies, not a
-    // scheduled turn action.
+    // Operating Round turn-queue gating, layered on top of the President check and
+    // only enforced once the room has a non-empty operating order.
+    // `EmergencyBuyHardware` is deliberately NOT wrapped: its whole purpose is a
+    // backstop usable whenever the zero-Hardware condition applies, not a scheduled
+    // turn action.
     if let Some(&expected_protocol_id) = session
         .active_operating_order
         .get(session.active_corporation_index as usize)
@@ -711,13 +526,11 @@ pub fn execute_buy_hardware_from_pool(
             company_id: protocol_id,
         })?;
 
-    // Train Limit cap (module doc comment #10a) -- checked BEFORE the pool,
-    // treasury, or Rusting sweep are touched at all, using the phase as it
-    // stands right now (prior to this purchase). A corporation already at
-    // its cap is rejected outright, even in the case where this exact
-    // purchase would itself trigger a Rusting sweep that would (as a side
-    // effect) bring it back under the cap -- see that design note for why
-    // that isn't looked ahead to here.
+    // Train Limit cap, checked BEFORE the pool, treasury or Rusting sweep are
+    // touched at all, using the phase as it stands right now. A corporation already
+    // at its cap is rejected outright, even where this exact purchase would itself
+    // trigger a Rusting sweep that would bring it back under -- that lookahead is
+    // deliberately not performed.
     let owned_count = COMPANY_HARDWARE
         .may_load(deps.storage, (game_id, protocol_id))?
         .unwrap_or_default()
@@ -783,54 +596,36 @@ pub fn execute_buy_hardware_from_pool(
     record_purchase_and_apply_rusting(deps.storage, game_id, protocol_id, asset, response)
 }
 
-/// Implements rules.md's Validator Liability rule. Requires `protocol_id`
-/// to currently own zero Hardware and its treasury to be *unable* to
-/// afford the next `HARDWARE_POOL` unit alone (otherwise it rejects the
-/// call and points the caller at `BuyHardwareFromPool`). If the President's
-/// own `PLAYER_CASH_VGP` can cover the shortfall, it's deducted, the
-/// company's treasury is emptied to zero, and the train is awarded exactly
-/// like an ordinary purchase (including the Rusting sweep). If the
-/// combined treasury and personal wallet still can't cover it, this
-/// returns `Ok(Response)` with `GameSession::is_active` durably flipped to
-/// `false` and a `bankruptcy` event attached instead -- see module doc
-/// comment #7 for why that's a successful transaction, not an error.
-/// Emergency Asset Liquidation (Audit G-8), the tier that sits between "the
-/// President's wallet is short" and "the game is over".
+/// Validator Liability: requires `protocol_id` to own zero Hardware and its
+/// treasury to be UNABLE to afford the next pool unit alone (otherwise it points
+/// the caller at the ordinary purchase). The President's personal cash covers the
+/// shortfall; if that is still short, Emergency Asset Liquidation runs; if even
+/// that cannot cover it, the call returns `Ok` with the session durably halted
+/// and a `bankruptcy` event -- a successful transaction, not an error, because
+/// CosmWasm would revert the halt otherwise.
+/// Emergency Asset Liquidation (Audit G-8) -- the tier between "the President's
+/// wallet is short" and "the game is over".
 ///
-/// Force-sells `president`'s PERSONAL share holdings into the open-market
-/// Bank pool, one certificate at a time, until either `deficit` is covered
-/// or nothing further can legally be sold. Returns the total VGP raised --
-/// which the caller adds to the President's spendable cash before
-/// re-testing affordability.
-///
-/// Real 1830 requires a president who cannot fund a mandatory train to
-/// raise cash by selling shares before bankruptcy is even considered. This
-/// cascade previously jumped straight from "personal cash is short" to a
-/// hard bankruptcy halt, declaring games over on presidents who were, in
-/// 1830 terms, entirely solvent.
+/// Force-sells the President's PERSONAL holdings into the Bank pool, one
+/// certificate at a time, until the deficit is covered or nothing further can
+/// legally be sold. The cascade previously jumped straight from "personal cash is
+/// short" to a hard bankruptcy halt, declaring games over on presidents who were,
+/// in 1830 terms, entirely solvent.
 ///
 /// Rules honoured while liquidating:
-///
-/// - **Deterministic order.** Companies are swept in `CORE_PUBLIC_COMPANIES`
-///   id order, never storage-iteration order, so the same board state
-///   always liquidates identically on every node.
-/// - **Per-certificate pricing.** Each certificate sells at the market
-///   price *at the moment it is sold*, and the marker then moves down one
-///   row. This is a SEQUENCE of individual one-certificate sales, not one
-///   bulk sale, so it does not contradict Audit G-4 (which fixed the price
-///   for all certificates within a single `SellStock` call).
-/// - **50% Bank pool cap.** A company whose pool is already at
-///   `BANK_POOL_CAP_PERCENTAGE` absorbs nothing more; the sweep moves on.
-/// - **The President's certificate is never force-sold.** Where the seller
-///   is the registered President, liquidation stops at
-///   `PRESIDENT_MIN_PERCENTAGE` -- real 1830 does not let a president be
-///   involuntarily stripped of the presidency to fund a train. This also
-///   keeps the sweep from ever leaving a floated corporation with nobody
-///   able to hold its President's certificate, so no seat ever has to move
-///   and `trading::recalculate_president` is deliberately not involved.
-/// - **Bank solvency.** The game bank funds these buybacks; if it cannot
-///   cover a certificate, the sweep stops rather than driving
-///   `virtual_bank_vgp` negative.
+///   DETERMINISTIC ORDER -- companies are swept in catalog id order, never
+///     storage-iteration order, so the same board always liquidates identically
+///     on every node.
+///   PER-CERTIFICATE PRICING -- each sells at the price at the moment it sells,
+///     and the marker then moves down. This is a SEQUENCE of one-certificate
+///     sales, not one bulk sale, so it does not contradict Audit G-4.
+///   THE 50% BANK POOL CAP -- a company already at it absorbs nothing more.
+///   THE PRESIDENT'S CERTIFICATE IS NEVER FORCE-SOLD -- real 1830 does not let a
+///     president be involuntarily stripped of the presidency to fund a train.
+///     This also keeps the sweep from ever leaving a floated corporation with
+///     nobody able to hold its President's certificate, so no seat has to move.
+///   BANK SOLVENCY -- if the bank cannot cover a certificate the sweep stops
+///     rather than driving `virtual_bank_vgp` negative.
 fn liquidate_president_assets(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -958,26 +753,19 @@ pub fn execute_emergency_buy_hardware(
         });
     }
 
-    // ==== Audit G-17: an outstanding train offer must be resolved first. ====
+    // Audit G-17: an outstanding train offer must be resolved first. The two
+    // mechanisms answer the SAME problem -- this corporation has no train -- and
+    // running them concurrently is incoherent. An emergency purchase is the
+    // expensive last resort; a pending offer might be about to supply a train at a
+    // price the corporation can actually afford.
     //
-    // The two mechanisms are answers to the SAME problem -- this corporation
-    // has no train -- and running them concurrently is incoherent. An
-    // emergency purchase is the expensive last resort: it empties the
-    // company's treasury and reaches into the President's own personal cash.
-    // A pending offer might be about to supply a train at a price the
-    // corporation can actually afford.
+    // REFUSED, NOT AUTO-RESCINDED, and the distinction is deliberate. Silently
+    // withdrawing an offer the player made, as a side effect of a different message,
+    // spends their negotiating position without asking -- and the rival might have
+    // been one block away from accepting. Refusing hands the decision back.
     //
-    // REFUSED, NOT AUTO-RESCINDED, and the distinction is deliberate.
-    // Silently withdrawing an offer the player made, as a side effect of a
-    // different message, spends their negotiating position without asking --
-    // and the rival might have been one block away from accepting. Refusing
-    // hands the decision back: rescind and emergency-buy, or wait.
-    //
-    // NOT A DEADLOCK. `RescindTrainOffer` is the buyer's own unilateral
-    // right, one transaction away, needing nobody's cooperation. A stranded
-    // corporation is therefore never more than one message from its escape
-    // hatch -- which is exactly the property that makes the turn block safe
-    // too (see `train_trade`'s module doc).
+    // NOT A DEADLOCK: `RescindTrainOffer` is the buyer's own unilateral right, one
+    // transaction away, needing nobody's cooperation.
     if let Some((offer_id, offer)) =
         crate::train_trade::pending_offer_for_buyer(deps.storage, game_id, protocol_id)?
     {
@@ -1046,22 +834,12 @@ pub fn execute_emergency_buy_hardware(
     }
 
     if personal_cash < deficit {
-        // Treasury + personal wallet + everything the President could
-        // legally liquidate still can't cover it -- only NOW is this an
-        // absolute immediate Bankruptcy Hard Halt (module doc comment #7,
-        // extended here). Unlike the Deferred Bank-Break Halt
-        // (`GameSession::bank_is_broken`, see `state.rs`'s own doc comment
-        // and `operations.rs`), this does NOT wait for the current
-        // scheduled block of Operating Rounds to finish -- a President who
-        // cannot personally cover the Validator Liability deficit halts the
-        // game on the spot, mid-turn. This is still treated as a
-        // *successful* transaction (not an Err) specifically so the halt
-        // actually persists -- see module doc comment #7. No train is
-        // awarded, and the only funds that move are the final liquidation
-        // payout below (`finalize_and_distribute_payouts`, the same
-        // net-worth liquidation routine every other game-end trigger in
-        // this contract already uses) -- NOT the deficit itself, which is
-        // never actually collected on this path.
+        // Treasury + personal wallet + everything the President could legally liquidate
+        // still cannot cover it -- only NOW is this an immediate Bankruptcy Hard Halt.
+        // Unlike the Deferred Bank-Break Halt this does NOT wait for the current
+        // scheduled block of Operating Rounds to finish; it halts on the spot, mid-turn.
+        // Still a SUCCESSFUL transaction so the halt actually persists. No train is
+        // awarded, and the deficit itself is never collected on this path.
         let end_game_response = crate::contract::finalize_and_distribute_payouts(deps, game_id, session)?;
 
         let bankruptcy_event = Event::new("bankruptcy")

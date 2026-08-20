@@ -1,218 +1,36 @@
-//! Operating Round Revenue Execution: connects private and public
-//! companies to the player cash pools once per Operating Round, in two
-//! sequential phases.
+//! Operating Round execution: the sequential per-corporation turn queue, its
+//! pacing, and manual route declaration.
 //!
-//! Design notes / assumptions, since neither `rules.md` nor the existing
-//! message/state definitions cover a batched Operating Round message:
+//!   Ordering       floated companies, highest market price first -- the real
+//!                  1830 rule. Ties break on `arrival_sequence` (most recently
+//!                  moved), the practical stand-in for "whichever token is
+//!                  stacked on top of the shared cell acts first", since this
+//!                  chart can give two DIFFERENT cells the same price.
+//!   Beginning      `execute_begin_operating_round` is creator-authorized,
+//!                  computes the order, resets the cursor, and recomputes the
+//!                  paced sub-round count (1 OR for a 2-train, 2 for a 3/4, 3
+//!                  for a 5 or better).
+//!   Advancing      `execute_end_operating_round_turn` moves the cursor. It
+//!                  deliberately does NOT require the ending corporation to have
+//!                  acted -- passing with zero actions is legal in 1830, so
+//!                  requiring one would be an invented restriction.
+//!   Sub-rounds     between paced sub-rounds the order is RECOMPUTED, not
+//!                  replayed: prices move mid-sub-round, so the next order
+//!                  should reflect prices as of when it starts.
+//!   Macro round    once the last paced sub-round's last corporation ends,
+//!                  `macro_round_number` increments, the queue is cleared and
+//!                  the room returns to a Stock Round.
+//!   Private pay    every private's `revenue_per_or` is paid at the start of
+//!                  EVERY paced sub-round, not once per macro round -- to its
+//!                  player owner's cash, or to its corporate owner's treasury.
 //!
-//! 1. **Authorization.** Unlike `DeclareDividends` (called per-company by
-//!    that company's own `PROTOCOL_PRESIDENT`), `ExecuteOperatingRound`
-//!    processes every private and every submitted public company in a
-//!    single transaction, so there's no single president to authorize it.
-//!    This mirrors `EndGameAndDistribute`'s model instead: only the game
-//!    room's `creator` (its Validator/organizer) may call it.
-//! 2. **Phase 1 (Private Assets).** Iterates the same canonical
-//!    `auction::CORE_PRIVATE_COMPANIES` list used to seed the game, so the
-//!    set of private ids processed can never drift out of sync with what
-//!    was actually spawned. Companies with no current owner (unsold, or --
-//!    not currently possible, but defensively handled -- somehow cleared)
-//!    are skipped rather than erroring, since an unowned private simply has
-//!    no one to pay.
-//! 3. **Phase 2 (Public Corporations).** Only processes companies actually
-//!    listed in `public_company_choices`; a company must already be
-//!    `is_floated` (`CompanyNotFloated` otherwise), since an unfloated
-//!    company has no shareholders, no treasury capitalization, and no
-//!    market position to move. Revenue is no longer a caller-supplied
-//!    number -- it's computed automatically via
-//!    `pathfinding::trace_best_route` (the Pathfinding Revenue Engine,
-//!    `rules.md` Step 3), bounded by the company's best owned Hardware's
-//!    `max_route_distance`; the caller only chooses, per listed company,
-//!    whether to distribute or retain whatever that route earns. The
-//!    `payout: true` split replicates `trading::execute_declare_dividends`'s
-//!    "distribute across all 100% of shares, credit the pool's/bank's
-//!    share to `GameSession::virtual_bank_vgp`" pattern exactly, for
-//!    consistency between the two dividend paths.
-//! 4. **Treasury divergence -- RESOLVED (Audit G-2).** Withheld
-//!    (`payout: false`) public earnings are credited to
-//!    `PublicCompany::treasury`, the field introduced for the Public
-//!    Company Initialization Engine. `trading::execute_declare_dividends`'s
-//!    `distribute: false` path used to credit a SEPARATE
-//!    `PROTOCOL_TREASURY_VGP` map instead, and the two were never
-//!    reconciled -- so a company's "true" treasury balance was split across
-//!    two ledgers, only one of which anything could actually spend from.
-//!    That map is now deleted (see `state.rs`'s removal note) and both
-//!    withhold paths, plus the IPO pool's dividend share, write
-//!    `PublicCompany::treasury` exclusively. There is now exactly one
-//!    corporate cash ledger, and this module's branches below were already
-//!    on the correct side of it -- they are unchanged by the fix.
-//! 5. **Market position.** Both payout branches call
-//!    `market::ensure_protocol_position` before moving the price, exactly
-//!    like `trading.rs`, so a public company that floated without ever
-//!    trading still has a valid grid position to move from.
-//! 6. **Zero-revenue companies are skipped, not erroring.** A listed
-//!    company that owns no Hardware, or has laid no track (so
-//!    `pathfinding::trace_best_route` returns zero), is still validated
-//!    (must exist and be floated) but contributes no cash movement or
-//!    market shift for that phase -- there's nothing to distribute or
-//!    retain and no meaningful price movement to make.
+//! Manual route declaration (`execute_run_manual_route`) is the alternative to
+//! the automatic tracer: a caller-submitted path validated hop by hop.
 //!
-//! ---
-//!
-//! **The Operating Round Corporation Turn Queue (Step 1 of the per-company
-//! OR turn structure).** `execute_operating_round` above is a *separate*,
-//! pre-existing mechanic: one batched, creator-only transaction that runs
-//! every listed company's revenue in one shot. `calculate_operating_order`/
-//! `execute_begin_operating_round` below start building a different,
-//! *sequential* structure on top of it -- the classic 1830 rule that
-//! Operating Round corporations act one at a time, in a fixed order, each
-//! taking as many of its own actions (lay track, buy Hardware, declare
-//! dividends) as it wants before the next corporation's turn:
-//!
-//! 7. **Ordering rule.** `calculate_operating_order` queries every currently
-//!    floated `PUBLIC_COMPANIES` entry, reads its live price off
-//!    `PROTOCOL_MARKET`/`MARKET_GRID` (via `market::current_cell`), and
-//!    sorts highest price first -- the real 1830 rule ("operate in stock
-//!    price order, highest first"). Unfloated companies never appear in the
-//!    order; they have no shareholders or treasury to run an OR turn with.
-//! 8. **Tie-breaker.** Two companies sharing the exact same price are
-//!    ordered by `ProtocolMarketState::arrival_sequence` (higher first) --
-//!    whichever protocol's marker most recently moved or was placed
-//!    anywhere on the grid. This is the practical stand-in for the real
-//!    1830 rule ("whichever token is stacked on top of the shared price
-//!    cell acts first"): since this contract's invented linear price
-//!    formula (`market::seed_default_price_grid`) can coincidentally give
-//!    two *different* cells the same price, "most recently arrived,
-//!    per-protocol" is used instead of "physically on top of one specific
-//!    cell's token stack" -- see `arrival_sequence`'s doc comment in
-//!    `state.rs`.
-//! 9. **`execute_begin_operating_round` populates the queue.** Authorized
-//!    exactly like `execute_operating_round` (creator/Validator-only, since
-//!    starting an Operating Round is a room-level administrative action,
-//!    not any one company's). It calls `calculate_operating_order`, writes
-//!    the result into `GameSession::active_operating_order`, and resets
-//!    `active_corporation_index` to `0` -- errors with
-//!    `NoFloatedCompanies` if the order comes back empty, since a queue
-//!    with nothing in it can't meaningfully gate anything.
-//! 10. **`EndOperatingRoundTurn` (Step 2): advances the queue.** A follow-up
-//!     to Step 1 above -- `hexmap::execute_lay_tile`,
-//!     `hardware::execute_buy_hardware_from_pool`, and
-//!     `trading::execute_declare_dividends` were already wrapped to
-//!     *enforce* the queue (see each module's own doc comment), but nothing
-//!     used to advance `active_corporation_index` from one corporation to
-//!     the next once it was populated -- only the very first corporation in
-//!     the order could ever act. `execute_end_operating_round_turn` closes
-//!     that gap: called by whichever protocol's President is currently
-//!     pointed to by `active_corporation_index` (`NotYourOperatingTurn`
-//!     otherwise, the identical check `LayTile`/`BuyHardwareFromPool`/
-//!     `DeclareDividends` already perform), it moves the pointer to the next
-//!     corporation in `active_operating_order`. This deliberately does *not*
-//!     itself validate that the ending corporation actually took an action
-//!     this turn (laid track, bought Hardware, declared dividends) --
-//!     passing turn with zero actions taken is legal in 1830 (a company can
-//!     have nothing useful to do), so requiring at least one prior action
-//!     here would be an invented restriction, not a rule this contract's
-//!     other modules establish. `EndOperatingRoundTurn` is not recorded to
-//!     `GAME_LOG` (see `gamelog.rs`'s module doc comment #2), for the same
-//!     reconciliation reasons `ExecuteOperatingRound`/`BeginOperatingRound`
-//!     already aren't.
-//! 11. **Macro Round Tracker / Pacing Automation.** `execute_begin_operating_round`
-//!     is this contract's one existing explicit "a Stock Round concludes, an
-//!     Operating Round begins" transition point (design note #9) -- there is
-//!     no automatic pass-streak-based Stock Round ending anywhere in this
-//!     codebase (`GameSession::consecutive_passes` is explicitly "tracked
-//!     but not yet consumed," per its own doc comment), so Pacing Automation
-//!     is hooked in here rather than at an invented new trigger. On every
-//!     successful call, `session.current_round_type` flips to
-//!     `RoundType::OperatingRound`, `session.sub_round_index` resets to `1`
-//!     (the first sub-round of the new Operating Round phase), and
-//!     `session.operating_round_sequence_length` is recomputed via
-//!     `hardware::highest_train_tier_purchased` /
-//!     `hardware::operating_round_sequence_length_for_tier` -- the classic
-//!     1830 rule that a 2-train paces 1 OR, a 3/4-train paces 2 ORs, and a
-//!     5-train-or-higher paces 3 ORs (see `hardware.rs`'s module doc comment
-//!     #10 for the full lookup).
-//! 12. **Macro Round Loop Advancement.** `GameSession::macro_round_number`
-//!     used to be left untouched everywhere -- nothing in this contract
-//!     detected a full macro-round cycle completing to know when to bump
-//!     it. `execute_end_operating_round_turn` (design note #10) now closes
-//!     this loop: whenever advancing `active_corporation_index` would run
-//!     past the end of `active_operating_order` (every corporation has had
-//!     its turn this OR sub-round), one of two things happens. If
-//!     `session.sub_round_index` hasn't yet reached
-//!     `session.operating_round_sequence_length`, the Pacing Automation
-//!     schedule (design note #11) isn't done yet: `sub_round_index`
-//!     increments by one, `active_corporation_index` resets to `0`, and
-//!     `active_operating_order` is *recomputed* via
-//!     `calculate_operating_order` rather than simply replayed -- stock
-//!     prices can move mid-sub-round (Distribute Yield moves a company's
-//!     marker right, Slash/Retain moves it left), so the next sub-round's
-//!     operating order should reflect prices as of when it starts, exactly
-//!     like `execute_begin_operating_round` computes a fresh order rather
-//!     than reusing a stale one. If `sub_round_index` has already reached
-//!     `operating_round_sequence_length`, the entire paced Operating Round
-//!     phase is done: `session.macro_round_number` increments by one,
-//!     `sub_round_index` resets to `0`, `current_round_type` flips back to
-//!     `RoundType::StockRound`, and `active_operating_order`/
-//!     `active_corporation_index` are cleared -- mirroring exactly what
-//!     `gamelog::reapply_game_log`'s genesis reset already does to those
-//!     five fields, since a Stock Round has no operating queue to enforce.
-//!     LIMITATION (flagged, not fixed here): this doesn't yet gate re-entry
-//!     into a Stock Round behind anything (e.g. `BuyStock`/`SellStock` were
-//!     never gated *out* during an Operating Round in the first place -- see
-//!     `trading.rs`'s own doc comments), so `current_round_type` is
-//!     currently informational/display-oriented (surfaced through
-//!     `GetGameState`) rather than itself an enforcement gate on trading
-//!     messages; wiring that up is future work, not assumed here.
-//! 13. **Manual Route Validation.** `execute_run_manual_route` is a THIRD way
-//!     to earn Operating Round revenue for a single company, alongside the
-//!     batched `execute_operating_round` (design notes #1-#6) and the
-//!     step-by-step queue this file otherwise assumes. Instead of trusting
-//!     `pathfinding::trace_best_route`'s automatic search, the caller
-//!     submits their own `hex_path` (real board labels, e.g. `["G19",
-//!     "F20"]`), which is validated hop-by-hop against the identical rules
-//!     that search already enforces implicitly -- connectivity via
-//!     `hexmap::rotate_connections`, the "home hex is the company's only
-//!     modeled station" stand-in, and rival-station blocking
-//!     (`pathfinding::opponent_station_hexes`, now `pub(crate)` so both
-//!     paths share one implementation and can never disagree). See that
-//!     function's own doc comment for the full five-step validation and why
-//!     it always Distribute-Yields (no retain choice on this message) and
-//!     always advances the Operating Round Corporation Turn Queue
-//!     afterward, via the `advance_operating_round_turn` helper factored out
-//!     of `execute_end_operating_round_turn` (design note #10) for exactly
-//!     this reuse. Not recorded to `GAME_LOG`, for the same
-//!     live-track-state reconciliation reasons `ExecuteOperatingRound`
-//!     already isn't (see `gamelog.rs`'s module doc comment #2).
-//! 14. **Automatic Pre-OR Revenue Payout.** Every private company's fixed
-//!     `revenue_per_or` is now paid automatically at the ABSOLUTE
-//!     initialization step of every Operating Round in the sequential
-//!     per-corporation-turn structure (design notes #7-#12) -- before the
-//!     very first queued corporation's own Track sub-phase ever runs.
-//!     `pay_private_company_revenues` (shared, called from both places
-//!     below) mirrors `execute_operating_round`'s own pre-existing Phase 1
-//!     loop, plus the corporate-ownership branch `PrivateCompany`'s doc
-//!     comment in `state.rs` describes: a player-owned private credits
-//!     `PLAYER_CASH_VGP` directly, a corporation-owned one credits that
-//!     corporation's own `PublicCompany::treasury` instead, and a `closed`
-//!     private is skipped entirely. "Every Operating Round" means every
-//!     PACED SUB-ROUND, not just the first one of a macro round -- Pacing
-//!     Automation (design note #11) can schedule 1-3 sub-rounds per macro
-//!     round, and real 1830 pays private revenue at the start of each one
-//!     individually, not once per macro round -- so this is hooked into
-//!     BOTH `execute_begin_operating_round` (the very first sub-round) AND
-//!     `advance_operating_round_turn`'s "advanced_to_next_sub_round" branch
-//!     (every sub-round after the first).
-//!
-//!     NOT wired into `execute_operating_round` (design notes #1-#6): that
-//!     remains a separate, legacy, creator-batched mechanic with its own
-//!     pre-existing Phase 1, left unchanged here. A room that calls BOTH
-//!     `BeginOperatingRound`/a sub-round advance AND `ExecuteOperatingRound`
-//!     within what a player would consider the "same" Operating Round will
-//!     have every active private paid twice, once per mechanism -- a real,
-//!     known interaction, flagged here exactly the way design note #4's
-//!     Treasury Divergence already is rather than resolved, since unifying
-//!     the two OR mechanics outright is a larger change than this feature
-//!     asked for.
+//! See docs/ai_architecture/rust_contract_architecture.md, operations.rs -- and
+//! note the recorded divergence: this module's distance check counts HEXES while
+//! `pathfinding.rs` counts REVENUE CENTRES, and the manual path does not enforce
+//! the two-revenue-centre minimum the automatic tracer does.
 
 use std::collections::HashSet;
 
@@ -406,37 +224,24 @@ pub enum OperationsError {
     DisconnectedRouteSegment { from: String, to: String },
 }
 
-// REMOVED (Audit G-13): `execute_operating_round`, the legacy batched
-// Operating Round handler, together with its `ExecuteMsg::ExecuteOperatingRound`
-// variant and `msg::PublicCompanyPayoutChoice`.
+// REMOVED (Audit G-13): `execute_operating_round`, the legacy batched Operating
+// Round handler, with its `ExecuteMsg` variant and payout-choice type.
 //
-// Two independent Operating Round mechanics coexisted in this module: this
-// creator-authorized batch, which ran every listed company's revenue in one
-// transaction, and the sequential `BeginOperatingRound` /
-// `EndOperatingRoundTurn` corporation queue below. BOTH paid out every
-// private company's `revenue_per_or`, and nothing reconciled them -- so a
-// room that drove both within what a player would consider one Operating
-// Round paid every private TWICE. That was flagged in this module's own doc
-// comment #14 and is now fixed by deletion rather than reconciliation: the
-// sequential queue is the sole source of truth for Operating Round
-// execution, and `pay_private_company_revenues` has exactly one caller
-// chain again.
+// Two independent Operating Round mechanics coexisted: that creator-authorized
+// batch and the sequential queue below. BOTH paid every private's
+// `revenue_per_or`, and nothing reconciled them -- so a room driving both within
+// what a player would consider one Operating Round paid every private TWICE.
+// Fixed by deletion rather than reconciliation: the queue is now the sole source
+// of truth, and `pay_private_company_revenues` has one caller chain again.
 //
-// Nothing is lost. Revenue tracing lives in `pathfinding::trace_best_route`
-// (still used by `execute_run_manual_route`), the distribute/retain split
-// lives in `trading::execute_declare_dividends`, and per-sub-round private
-// revenue lives in `pay_private_company_revenues`, which the queue already
-// calls at every sub-round boundary.
+// Nothing is lost -- tracing lives in `pathfinding`, the distribute/retain split
+// in `trading::execute_declare_dividends`, and per-sub-round private revenue in
+// `pay_private_company_revenues`.
 
-/// Computes `game_id`'s Operating Round Corporation Turn Queue: every
-/// currently floated `PUBLIC_COMPANIES` entry, sorted by its live
-/// `MARKET_GRID` price (highest first), ties broken by
-/// `ProtocolMarketState::arrival_sequence` (higher -- i.e. more recently
-/// arrived -- first). See the module doc comment (design notes #7/#8) for
-/// the full rationale. Pure and read-only: callers decide what to do with
-/// the resulting order (`execute_begin_operating_round` writes it into
-/// `GameSession::active_operating_order`; tests may call this directly to
-/// assert the ordering itself).
+/// Computes the Operating Round Corporation Turn Queue: every floated company,
+/// sorted by live market price (highest first), ties broken by
+/// `arrival_sequence` (more recently arrived first). Pure and read-only -- the
+/// caller decides what to do with the order.
 pub fn calculate_operating_order(
     storage: &dyn Storage,
     game_id: u64,
@@ -474,24 +279,15 @@ pub fn calculate_operating_order(
         .collect())
 }
 
-/// Automatic Pre-OR Revenue Payout (module doc comment #14): pays every
-/// active (not `closed`) private company's fixed `revenue_per_or` to its
-/// current owner -- a player-owned private credits `PLAYER_CASH_VGP`
-/// directly; a corporation-owned one (see `PrivateCompany`'s own doc
-/// comment in `state.rs`) credits that corporation's own
-/// `PublicCompany::treasury` instead; an unowned private pays no one.
-/// Iterates the same canonical `CORE_PRIVATE_COMPANIES` list
-/// `execute_operating_round`'s pre-existing Phase 1 already uses, so the
-/// set of privates processed can never drift out of sync with what was
-/// actually spawned. Called from both `execute_begin_operating_round` and
-/// `advance_operating_round_turn`'s next-sub-round branch -- see module
-/// doc comment #14 for why both call sites are needed.
-/// `pub(crate)` since Step 4.5 Batch 4: `waterfall::execute_waterfall_pass`
-/// reuses this for the canonical 1830 all-pass rule, where every already-owned
-/// private pays its printed revenue the moment a full round of passes
-/// completes. That is a different TRIGGER from the Operating Round one, but it
-/// is the same PAYOUT, and two copies of "privates pay their owners" would be
-/// two places for the corporation-owned branch to drift.
+/// Pays every active (not closed) private's `revenue_per_or` to its current
+/// owner: a player-owned private credits their cash, a corporation-owned one
+/// credits that corporation's treasury, an unowned one pays nobody. Iterates the
+/// canonical `CORE_PRIVATE_COMPANIES` list, so the set processed can never drift
+/// out of sync with what was actually spawned.
+///
+/// `pub(crate)` because `execute_waterfall_pass` reuses it for the all-pass rule.
+/// That is a different TRIGGER but the same PAYOUT, and two copies would be two
+/// places for the corporation-owned branch to drift.
 pub(crate) fn pay_private_company_revenues(
     storage: &mut dyn Storage,
     game_id: u64,
@@ -543,13 +339,11 @@ pub(crate) fn pay_private_company_revenues(
     Ok(attrs)
 }
 
-/// Begins `game_id`'s Operating Round Corporation Turn Queue: computes
-/// `calculate_operating_order` and writes it into
-/// `GameSession::active_operating_order`, resetting
-/// `active_corporation_index` back to `0`. Authorized exactly like
-/// `execute_operating_round` -- only the room's `creator` may call this, per
-/// design note #9. Errors with `NoFloatedCompanies` if the computed order is
-/// empty, since an empty queue has nothing to gate.
+/// Begins the Operating Round Corporation Turn Queue: computes the order, writes
+/// it, and resets the cursor to `0`. Creator-only, since starting an Operating
+/// Round is a room-level administrative action rather than any one company's.
+/// Errors if the order is empty -- a queue with nothing in it cannot gate
+/// anything.
 pub fn execute_begin_operating_round(
     deps: DepsMut,
     _env: Env,
@@ -630,29 +424,17 @@ pub fn execute_begin_operating_round(
         .add_attributes(private_revenue_attrs))
 }
 
-/// Ends `protocol_id`'s turn in `game_id`'s Operating Round Corporation Turn
-/// Queue and advances it -- design notes #10/#12 for the full design. Only
-/// `protocol_id`'s registered President may call this, and `protocol_id`
-/// must be exactly whichever corporation `active_operating_order[active_corporation_index]`
-/// currently points to (`NotYourOperatingTurn` otherwise), the same gating
-/// `LayTile`/`BuyHardwareFromPool`/`DeclareDividends` already enforce.
-/// Errors with `NoActiveOperatingOrder` if `BeginOperatingRound` hasn't run
-/// (or the room's queue was already cleared by a prior macro-round close).
+/// Ends `protocol_id`'s turn and advances the queue. Only its registered
+/// President may call it, and it must be exactly the corporation the cursor
+/// points at -- the same gating `LayTile`/`BuyHardwareFromPool`/
+/// `DeclareDividends` already enforce.
 ///
-/// Three outcomes, depending on how much of the queue and Pacing Automation
-/// schedule remain:
-/// - **Another corporation is still queued this sub-round:**
-///   `active_corporation_index` simply advances to it.
-/// - **Every corporation has acted, but more paced sub-rounds remain**
-///   (`sub_round_index < operating_round_sequence_length`): `sub_round_index`
-///   increments, the operating order is recomputed fresh (stock prices may
-///   have moved during the sub-round just finished), and
-///   `active_corporation_index` resets to `0`.
-/// - **Every corporation has acted AND this was the last paced sub-round**
-///   (`sub_round_index == operating_round_sequence_length`): Macro Round
-///   Loop Advancement -- `macro_round_number` increments, `sub_round_index`
-///   resets to `0`, `current_round_type` flips back to `RoundType::StockRound`,
-///   and `active_operating_order`/`active_corporation_index` are cleared.
+/// Three outcomes: another corporation is still queued (the cursor advances);
+/// every corporation has acted but paced sub-rounds remain (the sub-round
+/// increments, the order is recomputed fresh because prices may have moved, and
+/// the cursor resets); or that was the last paced sub-round (Macro Round Loop
+/// Advancement -- the macro round increments, the queue clears, and the room
+/// returns to a Stock Round).
 pub fn execute_end_operating_round_turn(
     deps: DepsMut,
     _env: Env,
@@ -677,13 +459,11 @@ pub fn execute_end_operating_round_turn(
         return Err(OperationsError::NotPresident { protocol_id });
     }
 
-    // Audit G-15b: an unanswered train offer holds the turn open. The buyer
-    // may still buy from the Bank -- that is inside the same Buy Trains step
-    // -- but it may not walk away leaving a rival's train tied up in a
-    // proposition it has already moved on from.
-    //
-    // Never a deadlock: `RescindTrainOffer` clears this unilaterally, by the
-    // same player it constrains, in one transaction.
+    // Audit G-15b: an unanswered train offer holds the turn open. The buyer may
+    // still buy from the Bank -- that is inside the same Buy Trains step -- but it
+    // may not walk away leaving a rival's train tied up in a proposition it has
+    // already moved on from. Never a deadlock: `RescindTrainOffer` clears this
+    // unilaterally, by the same player it constrains, in one transaction.
     if let Some((offer_id, offer)) =
         train_trade::pending_offer_for_buyer(deps.storage, game_id, protocol_id)?
     {
@@ -709,17 +489,15 @@ pub fn execute_end_operating_round_turn(
         });
     }
 
-    // Mandatory Train Purchase (Audit G-8, design note #15): a corporation
-    // that owns no Hardware may not end its turn while the pool still has
-    // something to sell it. Real 1830 makes buying a train compulsory in
-    // exactly this situation -- it is the trigger for the whole Validator
-    // Liability / emergency-fundraising cascade in `hardware.rs`, which
-    // could previously never fire because a trainless company was free to
-    // simply pass.
+    // Mandatory Train Purchase (Audit G-8): a corporation owning no Hardware may not
+    // end its turn while the pool still has something to sell it. Real 1830 makes
+    // buying compulsory in exactly this situation -- it is the trigger for the whole
+    // Validator Liability cascade, which could previously never fire because a
+    // trainless company was free to simply pass.
     //
-    // Gated on a NON-EMPTY pool: once every train in the game has been
-    // bought there is nothing left to compel, and blocking the turn then
-    // would deadlock the room permanently.
+    // Gated on a NON-EMPTY pool: once every train in the game has been bought there
+    // is nothing left to compel, and blocking the turn then would deadlock the room
+    // permanently.
     let owns_hardware = !COMPANY_HARDWARE
         .may_load(deps.storage, (game_id, protocol_id))?
         .unwrap_or_default()
@@ -744,20 +522,17 @@ pub fn execute_end_operating_round_turn(
     advance_operating_round_turn(deps, game_id, session, response)
 }
 
-/// Advances `protocol_id` past its current Operating Round sub-phase without
-/// acting in it -- Audit G-14, the explicit skip.
+/// Advances `protocol_id` past its current sub-phase without acting in it --
+/// Audit G-14's explicit skip. This is what makes the sequence enforceable
+/// without being a straitjacket: a corporation with no tile worth laying, no
+/// reachable city and no train to buy still has to reach the phases it cares
+/// about, and every skip is a recorded, replayable event.
 ///
-/// This is what makes the sequence enforceable without being a straitjacket:
-/// a corporation with no tile worth laying, no reachable city to token and no
-/// train to buy still has to reach the phases it cares about, and every skip
-/// is a recorded, replayable event rather than an implicit jump.
-///
-/// REFUSES the two phases that are not the corporation's to skip:
-///   - `Routes`, if it owns any train. Running is not optional in 1830 -- you
-///     may not decline to earn in order to dodge a dividend. A corporation
-///     with NO train has nothing to run and may pass through.
-///   - `Dividends`, ever. Pay or withhold are both legal, so "neither" never
-///     is, and skipping would end the turn with revenue in an undefined state.
+/// Refuses the two phases that are not the corporation's to skip: `Routes` if it
+/// owns any train (running is not optional in 1830 -- you may not decline to earn
+/// in order to dodge a dividend), and `Dividends` ever (pay or withhold are both
+/// legal, so "neither" never is, and skipping would end the turn with revenue in
+/// an undefined state).
 pub fn execute_advance_operating_sub_phase(
     deps: DepsMut,
     info: MessageInfo,
@@ -832,32 +607,26 @@ pub fn execute_advance_operating_sub_phase(
         .add_attribute("current_phase_index", or_phase::phase_index(now).to_string()))
 }
 
-/// Shared three-way Operating Round Corporation Turn Queue advancement --
-/// design notes #10/#12 for the full design. Factored out of
-/// `execute_end_operating_round_turn` (which still owns every check BEFORE
-/// this point -- loading `session`, verifying `protocol_id`'s President
-/// authorized the call, and confirming `active_operating_order`/
-/// `active_corporation_index` actually point at `protocol_id`) so
-/// `execute_run_manual_route` (Manual Route Validation) can reuse the exact
-/// same macro-round bookkeeping after declaring its own route's revenue,
-/// instead of duplicating roughly eighty lines of it. Both callers are
-/// REQUIRED to have already confirmed `session.active_operating_order` is
-/// non-empty and points at the caller's own `protocol_id` -- this function
-/// doesn't re-check either, since without that precondition the "every
-/// corporation has acted" `else` branch below would fire on an
-/// operating-order-less session and incorrectly advance the macro round.
+/// Shared three-way queue advancement, factored out of
+/// `execute_end_operating_round_turn` so `execute_run_manual_route` can reuse the
+/// same macro-round bookkeeping instead of duplicating eighty lines of it.
+///
+/// BOTH callers are REQUIRED to have already confirmed the operating order is
+/// non-empty and points at their own `protocol_id`. This function does not
+/// re-check either: without that precondition the "every corporation has acted"
+/// branch would fire on an order-less session and incorrectly advance the macro
+/// round.
 fn advance_operating_round_turn(
     deps: DepsMut,
     game_id: u64,
     mut session: GameSession,
     mut response: Response,
 ) -> Result<Response, OperationsError> {
-    // Audit G-14: every corporation queued this round starts its NEXT turn at
-    // the top of the sequence. Cleared here, in the one function BOTH turn-end
-    // paths funnel through (`execute_end_operating_round_turn` and
-    // `execute_run_manual_route`), so no path can leave a stale cursor behind
-    // -- a corporation that ended its turn on `Hardware` would otherwise begin
-    // its next one there and be unable to lay track for the rest of the game.
+    // Audit G-14: every corporation queued this round starts its NEXT turn at the
+    // top of the sequence. Cleared here, in the one function BOTH turn-end paths
+    // funnel through, so no path can leave a stale cursor -- a corporation that
+    // ended its turn on `Hardware` would otherwise begin its next one there and be
+    // unable to lay track for the rest of the game.
     or_phase::reset_all_for_session(deps.storage, &session);
 
     let next_index = session.active_corporation_index + 1;
@@ -918,16 +687,12 @@ fn advance_operating_round_turn(
         // Operating Round phase's very last sub-round just had its very
         // last corporation finish -- the whole macro round is complete.
 
-        // Deferred Bank-Break Halt (see `state.rs`'s `GameSession::bank_is_broken`
-        // doc comment): if the bank was driven to zero at any point during
-        // this exact scheduled block of Operating Rounds, the engine
-        // deliberately let every remaining corporation finish out its
-        // actions instead of hard-stopping mid-turn -- this IS that block's
-        // very last corporation's very last action concluding, so the game
-        // ends HERE, via the same final asset-liquidation routine every
-        // other game-end trigger in this contract already uses
-        // (`market::price_triggers_game_end`), instead of looping back into
-        // a new Stock Round.
+        // Deferred Bank-Break Halt: if the bank was driven to zero at any point during
+        // this scheduled block of Operating Rounds, the engine deliberately let every
+        // remaining corporation finish its actions rather than hard-stopping mid-turn.
+        // This IS that block's last corporation's last action concluding, so the game
+        // ends HERE, through the same final liquidation routine every other game-end
+        // trigger uses, instead of looping back into a new Stock Round.
         if session.bank_is_broken {
             let end_game_response =
                 crate::contract::finalize_and_distribute_payouts(deps, game_id, session)
@@ -966,104 +731,46 @@ fn advance_operating_round_turn(
     Ok(response)
 }
 
-/// Manual Route Validation: lets `protocol_id`'s President submit a
-/// hand-picked path of real board hex labels (`hex_path`) instead of
-/// relying on `pathfinding::trace_best_route`'s automatic best-value search.
-/// Unlike that engine, a caller-submitted path must be validated
-/// step-by-step against every rule the automatic BFS already enforces
-/// implicitly (`pathfinding.rs`'s module doc comments #1-#4):
+/// Manual Route Validation: lets `protocol_id`'s President submit a hand-picked
+/// path instead of relying on the automatic best-value search. A caller-submitted
+/// path must be validated step by step against every rule that search enforces
+/// implicitly:
 ///
-/// 1. **Parse.** Every `RouteWaypoint::hex` must resolve to a real board hex
-///    via `hexmap::axial_for_label` (`InvalidHexLabel` otherwise), every
-///    `city_node` must name a city that hex actually has
-///    (`NoSuchCityOnHex`), and no STOP may repeat
-///    (`DuplicateHexInRoute`).
+///   1. PARSE. Every hex label must resolve, every `city_node` must name a city
+///      that hex actually has, and no STOP may repeat. The uniqueness key is the
+///      STOP, not the hex -- `RouteWaypoint` carries the node explicitly, so a
+///      route may legitimately serve both stations of a two-city hex, matching
+///      the automatic tracer.
+///   2. TOUCHES ITS OWN STATION. The path need only CONTAIN the company's home
+///      hex somewhere, not begin there -- a real 1830 route runs BETWEEN
+///      stations and is not required to be listed starting from one.
+///   3. NO RIVAL BLOCKADE ON AN INTERIOR STOP. Reuses
+///      `pathfinding::opponent_station_hexes` so the two route paths can never
+///      disagree about which cities are blockaded. Checked for the INTERIOR
+///      only: a train may run INTO a fully blockaded city and end there, scoring
+///      it; what it may not do is run through and out the far side. Both ends
+///      are exempt -- the last because that is where the train stops, the first
+///      for symmetry, since a route is an undirected run and reversing how the
+///      President typed it must not change whether it is legal.
+///   4. DISTANCE. The path must not exceed the longest `max_route_distance`
+///      among the corporation's Hardware.
+///   5. CONNECTIVITY. Every hex must carry a laid `Tile`, and each consecutive
+///      pair must be axial neighbours joined by a real track edge.
 ///
-///    **Step 4.5 Batch 3, item 1 closed the gap that used to sit here.**
-///    Batch 2 moved `pathfinding`'s own history to `(hex, city_node)` keys,
-///    so the automatic tracer can serve both stations of a two-city hex. This
-///    validator could not: `hex_path` was a list of bare labels with no way
-///    to say WHICH of New York's stations an entry meant, so it had to refuse
-///    any repeated label rather than guess and risk paying for a stop the
-///    train never reached. `RouteWaypoint` carries the node explicitly, the
-///    ambiguity is gone, and the uniqueness key is now the stop rather than
-///    the hex -- the two route paths agree again.
-/// 2. **Touches the operating company's own station.** `pathfinding.rs`'s
-///    existing model (module doc comment #1) treats a company's home
-///    node/station as the first hex it ever laid track on
-///    (`PROTOCOL_NETWORK_HEXES`'s first entry) -- there's no separate Token
-///    Station Placement message yet. Unlike `trace_best_route`, which
-///    always starts its search exactly there, a manually-drawn path only
-///    has to CONTAIN that hex somewhere in the chain (`RouteMustTouchOwnStation`
-///    otherwise) -- a real 1830 route runs BETWEEN stations, it isn't
-///    required to be listed starting from one.
-/// 3. **No rival blockades on an intermediate stop.** Reuses
-///    `pathfinding::opponent_station_hexes` (now `pub(crate)` specifically
-///    for this) so the two route-revenue paths can never disagree about
-///    which cities are blockaded (`RouteBlockedByRivalStation`). That helper
-///    lists only cities where rivals hold tokens AND no slot remains open --
-///    a rival's mere laid track blocks nothing, and neither does a
-///    part-tokened city with a free slot.
+/// On success the summed tile value is declared per `payout_strategy` --
+/// distributed to shareholders (price moves right) or withheld into the treasury
+/// (price moves left) -- and the turn queue advances, so this message REQUIRES an
+/// active queue pointing at `protocol_id`.
 ///
-///    Checked for the INTERIOR of the path only. Real 1830 lets a train run
-///    into a fully blockaded city and end its route there, scoring it; what
-///    it may not do is run through and out the far side. Both ends of the
-///    path are therefore exempt -- the last hex because that is where the
-///    train stops, and the first for symmetry, since a route is an
-///    undirected run between two ends and reversing how the President typed
-///    it must not change whether it is legal. This matches
-///    `pathfinding::trace_best_route_set`'s `Passability::StopOnly`
-///    handling, so an automatically-traced route and a manually-declared
-///    one now agree here too.
-/// 4. **Distance budget.** `hex_path.len()` (the visited-hex count, matching
-///    `trace_best_route`'s own `visited.len() >= max_distance` check, not a
-///    hop count) must not exceed the longest `max_route_distance` among
-///    `protocol_id`'s owned Hardware (`pathfinding::best_owned_distance`,
-///    also now `pub(crate)`) -- `NoHardwareOwned` if it owns none,
-///    `RouteExceedsMaxDistance` if the path is too long.
-/// 5. **Connectivity.** Every hex must carry an actually-laid `Tile`
-///    (`NoTileAtHex` otherwise), and each consecutive pair must be direct
-///    axial neighbors joined by a real track edge -- both tiles' rotated
-///    connection bitmasks (`hexmap::rotate_connections`, the identical
-///    edge-matching `trace_best_route`'s BFS performs one hop at a time)
-///    must agree on the shared edge (`DisconnectedRouteSegment` otherwise).
+/// DELIBERATELY NOT recorded to `GAME_LOG`: this revenue depends on the exact
+/// live board and roster at call time, which a later replay cannot safely
+/// re-derive.
 ///
-/// On success, the path's summed `hexmap::tile_base_value` is declared
-/// according to `payout_strategy`:
-/// - `PayoutStrategy::DeclareDividends` -- DISTRIBUTED to shareholders, the
-///   same Distribute Yield pattern `execute_operating_round`'s
-///   `payout: true` branch and `trading::execute_declare_dividends`'s
-///   `distribute: true` branch both already use: split proportionally
-///   across every `PLAYER_SHARES` holder, with any un-owned/IPO-held
-///   remainder falling to `GameSession::virtual_bank_vgp`, and the market
-///   price moves right via `market::move_right`.
-/// - `PayoutStrategy::Withhold` -- the full amount is credited straight to
-///   `PublicCompany::treasury` (no shareholder payout), and the market
-///   price moves left via `market::move_left` -- exactly
-///   `execute_operating_round`'s own `payout: false` branch, "matching our
-///   standard Operating Round parameters" per this feature's own request.
-///   As of Audit G-2 this is simply THE corporate treasury: the separate
-///   `PROTOCOL_TREASURY_VGP` map `trading::execute_declare_dividends`'s
-///   `distribute: false` branch used to credit is deleted, and that branch
-///   now writes this same `PublicCompany::treasury` field (module doc
-///   comment #4).
-///
-/// An earlier pass of this message had no separate retain/withhold choice
-/// field at all (always Distribute Yield) -- `payout_strategy` closes that
-/// gap. The Operating Round Corporation Turn Queue then advances exactly
-/// like `EndOperatingRoundTurn` (`advance_operating_round_turn`, shared
-/// above) -- so this message REQUIRES an active queue pointing at
-/// `protocol_id` (`NoActiveOperatingOrder`/`NotYourOperatingTurn`
-/// otherwise), unlike `DeclareDividends`'s own softer "only enforced if a
-/// queue exists" check, since this message always ends by advancing that
-/// same queue.
-///
-/// DELIBERATELY NOT recorded to `GAME_LOG`: like `ExecuteOperatingRound`
-/// (`gamelog.rs`'s module doc comment #2), this message's revenue depends on
-/// the exact live `MAP_GRID`/`COMPANY_HARDWARE` state at call time --
-/// replaying it later against however that state has since diverged is the
-/// same "bigger reconciliation problem" that already excludes
-/// `ExecuteOperatingRound`/`BeginOperatingRound`/`EndOperatingRoundTurn`.
+/// KNOWN DIVERGENCE, recorded rather than fixed: step 4 counts HEXES, while
+/// `pathfinding.rs` counts REVENUE CENTRES -- capping hexes is precisely the
+/// pre-G-9 behaviour that note corrected, under which a 2-train cannot run two
+/// towns joined by one plain connector. The two-revenue-centre minimum is not
+/// enforced here either. See rust_contract_architecture.md.
 pub fn execute_run_manual_route(
     deps: DepsMut,
     env: Env,
@@ -1225,57 +932,24 @@ pub fn execute_run_manual_route(
         return Err(OperationsError::RouteMustTouchOwnStation { protocol_id });
     }
 
-    // ---- 3. No rival token blockades on any INTERMEDIATE stop. ----
+    // No rival blockade on any INTERMEDIATE stop, checked per CITY rather than per
+    // hex (Audit G-13).
     //
-    // Audit G-9 follow-up. This loop used to reject the route if ANY hex in
-    // it was blockaded, terminals included. That is not the 1830 rule: a
-    // fully-tokened-out rival city blocks a train from running THROUGH it,
-    // but a train may always run INTO one and end its route there, scoring
-    // the city like any other stop. `pathfinding::trace_best_route_set`
-    // already models exactly that (its `Passability::StopOnly`); this
-    // manually-declared path was the last place still enforcing the older,
-    // stricter reading, and the residual noted on
-    // `pathfinding::opponent_station_hexes` is now closed.
+    // `opponent_station_hexes` answers "is this hex closed to me ENTIRELY", which on
+    // a multi-city tile is the wrong question: #62 and the OO tiles carry two cities
+    // on separate, non-intersecting track, and a route through the blockaded one is
+    // illegal even while the other is wide open. Checking only the hex let a
+    // President hand-write exactly the ghost route the automatic search refuses.
     //
-    // Only the interior of the path is checked, so both ends are free:
-    // - the LAST hex is where the train stops, which is the case above;
-    // - the FIRST hex is symmetric. A route is an undirected run between two
-    //   ends -- `hex_path` merely lists it in one of the two orders the
-    //   President could equally have typed -- so blocking on index `0` would
-    //   have rejected a perfectly legal route purely for being written
-    //   backwards, and `["A", "B", "C"]` and `["C", "B", "A"]` must accept
-    //   or reject identically.
+    // A declared path knows as much about the track as the DFS does: hex `i`'s
+    // inbound edge is fixed by its delta to `i - 1` and its outbound by the delta to
+    // `i + 1`, so the specific segment -- and therefore the specific city -- is
+    // determined. Both paths go through `transit_passability_for_hex`.
     //
-    // Degenerate lengths fall out correctly: a 1-hex path has no interior at
-    // all, and a 2-hex path is two terminals with nothing between them, so
-    // neither can be blockaded here. Neither is a scoring route anyway --
-    // 1830's two-revenue-centre minimum is enforced separately -- and a
-    // 0-hex path was already rejected as `EmptyRoutePath` in step 1.
-    // ==== Audit G-13: CITY-GRANULAR, not hex-granular. ====
-    //
-    // `opponent_station_hexes` answers "is this hex closed to me ENTIRELY",
-    // which on a multi-city tile is the wrong question: #62 and the OO tiles
-    // carry two cities on separate, non-intersecting track, and a route
-    // running through the blockaded one is illegal even while the other is
-    // wide open. Checking only the hex let a President hand-write exactly the
-    // ghost route the automatic search now refuses.
-    //
-    // A declared `hex_path` knows as much about the track as the DFS does:
-    // hex `i`'s inbound edge is fixed by its axial delta to hex `i - 1` and
-    // its outbound edge by the delta to hex `i + 1`, so the specific segment
-    // -- and therefore the specific city -- is determined. Both paths now go
-    // through the same `pathfinding::transit_passability_for_hex`, so they
-    // cannot disagree.
-    //
-    // Only the interior of the path is checked, so both ends are free:
-    // - the LAST hex is where the train stops, which is the case above;
-    // - the FIRST hex is symmetric. A route is an undirected run between two
-    //   ends -- `hex_path` merely lists it in one of the two orders the
-    //   President could equally have typed -- so blocking on index `0` would
-    //   have rejected a perfectly legal route purely for being written
-    //   backwards, and `["A", "B", "C"]` and `["C", "B", "A"]` must accept
-    //   or reject identically. An interior hex has both neighbours by
-    //   definition, which is exactly what makes its transit edges knowable.
+    // Interior only, so both ends are free: the last hex is where the train stops,
+    // and the first is symmetric, since `["A","B","C"]` and `["C","B","A"]` must
+    // accept or reject identically. An interior hex has both neighbours by
+    // definition, which is exactly what makes its transit edges knowable.
     let interior = axial_path.len().saturating_sub(1);
     for index in 1..interior {
         let (q, r) = axial_path[index];
@@ -1372,13 +1046,10 @@ pub fn execute_run_manual_route(
         }
     }
 
-    // ---- Revenue: summed tile value across the whole declared path. Uses
-    // the values already resolved in step 5 above (real `tile_base_value`
-    // for a laid tile, or the Landmark Pathfinder Revenue Fix's real
-    // starting figure for one of the five synthetic-tile hexes) rather than
-    // re-deriving from `tile.tile_id` here, since a synthetic virtual tile
-    // (module doc comment #17 in `hexmap.rs`) always carries tile_id 10's
-    // generic $20 -- re-deriving here would silently drop the override.
+    // Revenue: summed tile value across the declared path, using the values already
+    // resolved in step 5 rather than re-deriving from `tile_id` -- a synthetic
+    // overlay tile always carries the generic id, so re-deriving here would silently
+    // drop the real sourced starting figure.
     let mut revenue_amount = Uint128::zero();
     for value in &tile_values {
         revenue_amount = revenue_amount
@@ -1517,13 +1188,10 @@ pub fn execute_run_manual_route(
                 }
             }
             PayoutStrategy::Withhold => {
-                // Slash/Retain Yield -- 100% of the route's revenue goes
-                // straight into the company's own treasury, and its stock
-                // token moves left on the market matrix. Exactly
-                // `execute_operating_round`'s own `payout: false` branch --
-                // and, since Audit G-2 deleted the separate
-                // `PROTOCOL_TREASURY_VGP` map, exactly `trading.rs`'s
-                // withhold path too (module doc comment #4).
+                // Slash/Retain Yield: the whole route revenue goes into the company's own
+                // treasury and its marker moves left. Since Audit G-2 deleted the separate
+                // treasury map, this is the same single ledger `trading.rs`'s withhold path
+                // writes.
                 company.treasury = company
                     .treasury
                     .checked_add(revenue_amount)

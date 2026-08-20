@@ -1,108 +1,35 @@
-//! Read-only Game State Queries: `QueryMsg` handlers that assemble a game
-//! room's live state into clean, JSON-serializable response structs, plus a
-//! Markdown/ASCII map renderer for local inspection. See `contract::query`
-//! for the CosmWasm `query` entry point that dispatches into this module,
-//! and `msg.rs` for each `QueryMsg` variant's own doc comment.
+//! Read-only Game State Queries: `QueryMsg` handlers assembling a room's live
+//! state into JSON-serializable responses, plus a Markdown/ASCII map renderer.
 //!
-//! Design notes:
-//! 1. **Errors are plain `StdError`.** Unlike every `execute_*` module in
-//!    this contract, these handlers return `cosmwasm_std::StdResult<T>`
-//!    directly rather than a dedicated `thiserror` enum -- this matches the
-//!    CosmWasm convention that a contract's `query` entry point always
-//!    returns `StdResult<Binary>`, and none of these handlers have
-//!    multiple distinct failure modes worth a typed enum for (only "the
-//!    requested game room doesn't exist," surfaced via
-//!    `StdError::generic_err` from `load_session`). Where a helper from
-//!    another module returns its own error type (e.g.
-//!    `market::MarketError`), it's either converted with
-//!    `.map_err(|e| StdError::generic_err(e.to_string()))` or, for a purely
-//!    cosmetic lookup, downgraded to `None` via `.ok()` -- see design note
-//!    #3.
-//! 2. **"Ownership registries."** `GameStateResponse` reports every
-//!    registered player's cash, and, per public/private company: its
-//!    treasury, floated status, par value, President, IPO/Bank pool
-//!    percentages, and every player's nonzero share holding. Player shares
-//!    at exactly `0%` are omitted from `player_holdings` (matching this
-//!    contract's existing convention elsewhere that an absent/zero holding
-//!    means "no position") rather than listing every registered player
-//!    against every company.
-//! 3. **`GetMarketGrid` includes every core public company, not just
-//!    floated ones.** `market::initialize_game_market` seeds a market
-//!    position for all eight `CORE_PUBLIC_COMPANIES` the moment a room is
-//!    created (see that function's doc comment), so "the active coordinate
-//!    positions of all company stock tokens" is read literally here: every
-//!    company always has *a* token position from genesis, whether or not
-//!    it has floated. `MarketPositionEntry::price` is `None` only in the
-//!    defensive case where a position was somehow recorded but its
-//!    `MARKET_GRID` cell isn't seeded -- shouldn't happen after
-//!    `contract::instantiate`'s `market::seed_default_price_grid`, but a
-//!    query handler should never hard-fail an entire response over one
-//!    company's cosmetic price lookup.
-//! 4. **`print_markdown_map` cannot literally "print to the terminal" from
-//!    inside a deployed contract.** CosmWasm's Wasm execution sandbox has
-//!    no stdout, no filesystem, and no host import for `println!`-style
-//!    I/O -- a smart contract can only ever *return* data to whoever
-//!    queried it; there is no way for on-chain code to write to anyone's
-//!    terminal. `print_markdown_map` therefore builds and returns the
-//!    rendered Markdown/ASCII `String`; `QueryMsg::GetMapGridMarkdown`
-//!    exposes it as an ordinary query response. The actual "print to a
-//!    terminal" step happens off-chain, in whatever queried it -- a CLI
-//!    script piping `wasmd query wasm contract-state smart ...` through a
-//!    formatter, a test calling this function directly with
-//!    `cargo test -- --nocapture` (see `tests.rs`), or a frontend. This
-//!    module's own tests demonstrate exactly that off-chain usage.
-//! 5. **The ASCII sketch is an approximation, not true hex tiling.**
-//!    `render_ascii_grid` plots `(q, r)` axial coordinates directly onto a
-//!    plain rectangular character grid (columns by `q`, rows by `r`)
-//!    rather than a geometrically accurate offset hex rendering -- good
-//!    enough to eyeball where track has been laid and whether the three
-//!    landmark cities are connected, not a substitute for a real hex-grid
-//!    renderer. Its bounding box spans every laid tile's coordinate plus
-//!    all three `LANDMARK_HEXES` (so a city always shows up, even before
-//!    anyone has laid its hub tile) -- a single tile laid very far from
-//!    everything else will produce a correspondingly large, mostly-empty
-//!    sketch, which is an accepted characteristic of a bounding-box
-//!    rendering rather than a bug.
-//! 6. **`GetLegalTilePlacements` mirrors, rather than reuses,
-//!    `execute_lay_tile`'s legality checks.** `query_legal_tile_placements`
-//!    delegates entirely to `hexmap::legal_tile_placements`, a read-only
-//!    function that independently re-implements the same three rules
-//!    (era-locking, landmark reservation, connectivity/topology) rather
-//!    than sharing code with `execute_lay_tile` itself -- see that
-//!    function's own doc comment for the maintenance implication (the two
-//!    must be kept in sync by hand). It deliberately does not check
-//!    President authorization, treasury affordability, or Operating Round
-//!    turn-queue position -- see `QueryMsg::GetLegalTilePlacements`'s doc
-//!    comment for why those are out of scope for a placement-legality
-//!    query.
-//! 7. **Coordinate Symmetries.** `query_map_grid`'s `MapTileEntry` and
-//!    `query_legal_tile_placements`'s `LegalTilePlacementsResponse` both
-//!    carry a `hex_label` field (via `hexmap::describe_hex`) alongside
-//!    every `(q, r)` they report -- the real 1830 board label (e.g.
-//!    `"G19"`), not just the bare axial pair -- and `print_markdown_map`'s
-//!    table leads with that same label column. See `hexmap.rs`'s module
-//!    doc comment #15 for the full rationale: `(q, r)` is still the actual
-//!    storage/query key, this is purely added traceability.
-//! 8. **Player Net Worth (`query_player_net_worth`).** The one handler in
-//!    this module that takes a caller-supplied address rather than only
-//!    `game_id`/coordinates -- `wallet_address: String` is validated into a
-//!    real `Addr` via `deps.api.addr_validate`, matching every `execute_*`
-//!    handler's own convention for a caller-supplied address, rather than
-//!    silently accepting a malformed string. Net worth is the authentic
-//!    1830 figure: liquid `PLAYER_CASH_VGP` cash plus the LIVE market value
-//!    of every share certificate held (each company's `PLAYER_SHARES`
-//!    percentage, converted to a certificate count and priced at that
-//!    company's current `MARKET_GRID` cell via `market::current_cell`) --
-//!    deliberately NOT each company's fixed `PROTOCOL_PAR_VALUE`, since par
-//!    value only prices a fresh IPO purchase, not what an existing
-//!    certificate is actually worth on today's market. Placed in this
-//!    module (not `operations.rs`) to match `contract::query`'s own
-//!    documented dispatch convention -- "dispatches each `QueryMsg` variant
-//!    to its assembly function in `query.rs`" -- and this module's design
-//!    note #1 (`Deps`, plain `StdResult`, no dedicated error enum), the
-//!    same shape every other handler here already follows; `operations.rs`
-//!    is exclusively `DepsMut` execute handlers with their own
-//!    `thiserror` conventions, and has never held a query.
+//!   Errors are plain `StdError`, matching the CosmWasm convention that `query`
+//!   returns `StdResult<Binary>`; none of these handlers has multiple distinct
+//!   failure modes worth a typed enum.
+//!   Player shares at exactly 0% are omitted from `player_holdings`, matching
+//!   this contract's convention that an absent holding means "no position".
+//!   `GetMarketGrid` includes EVERY core company, floated or not -- all eight get
+//!   a market position at room creation. A `None` price is the defensive case of
+//!   a position recorded against an unseeded cell; a query handler should never
+//!   hard-fail an entire response over one company's cosmetic lookup.
+//!   `GetLegalTilePlacements` MIRRORS rather than reuses `execute_lay_tile`'s
+//!   checks -- see `hexmap::legal_tile_placements`' MAINTENANCE NOTE.
+//!   Every coordinate reported carries its real board label alongside `(q, r)`.
+//!   `PlayerNetWorth` is the one handler taking a caller-supplied address, and
+//!   validates it into a real `Addr` rather than silently accepting a malformed
+//!   string. Net worth prices shares at the LIVE market cell, deliberately not
+//!   at par -- par only prices a fresh IPO purchase, not what an existing
+//!   certificate is worth today.
+//!
+//! A CONTRACT CANNOT PRINT TO A TERMINAL. CosmWasm's Wasm sandbox has no stdout,
+//! no filesystem and no host import for `println!`-style I/O -- on-chain code can
+//! only ever RETURN data. So `print_markdown_map` builds and returns a `String`,
+//! and the actual printing happens off-chain in whatever queried it.
+//!
+//! The ASCII sketch is an APPROXIMATION, not true hex tiling: it plots axial
+//! coordinates onto a plain rectangular character grid. Good enough to eyeball
+//! where track has been laid and whether the landmarks are connected; not a
+//! substitute for a real hex renderer. Its bounding box spans every laid tile
+//! plus all three landmarks, so one distant tile produces a large, mostly-empty
+//! sketch -- a characteristic of bounding-box rendering, not a bug.
 
 use std::fmt::Write as _;
 
@@ -193,12 +120,11 @@ pub fn query_game_state(deps: Deps, game_id: u64) -> StdResult<GameStateResponse
         let station_token_hexes: Vec<(i32, i32)> = PROTOCOL_STATION_HEXES
             .may_load(deps.storage, (game_id, company_id))?
             .unwrap_or_default();
-        // Audit G-12: resolved through `hex_token_occupants`, the same read
-        // path the blockade rule uses, so a client can never be shown a token
-        // in a city the pathfinder thinks is elsewhere. That helper also
-        // reconstructs pre-G-12 tokens against city 0, which is why this
-        // reports a city for every hex in the list above rather than only for
-        // tokens placed since the upgrade.
+        // Audit G-12: resolved through `hex_token_occupants`, the same read path the
+        // blockade rule uses, so a client can never be shown a token in a city the
+        // pathfinder thinks is elsewhere. That helper also reconstructs pre-G-12 tokens
+        // against city 0, which is why this reports a city for every hex rather than
+        // only for tokens placed since the upgrade.
         let mut station_tokens: Vec<(i32, i32, u8)> = Vec::with_capacity(station_token_hexes.len());
         for (q, r) in station_token_hexes.iter().copied() {
             let city_index = hexmap::hex_token_occupants(deps.storage, game_id, q, r)?
@@ -307,14 +233,11 @@ pub fn query_market_grid(deps: Deps, game_id: u64) -> StdResult<MarketGridRespon
     Ok(MarketGridResponse { game_id, positions })
 }
 
-/// Assembles `QueryMsg::GetMapGrid`'s response: every tile currently laid
-/// on `game_id`'s shared `MAP_GRID`, sorted by `(r, q)` for a stable,
-/// row-by-row reading order.
-/// `QueryMsg::GetTrainOffers` -- Audit G-15.
-///
-/// Resolves each side's PRESIDENT alongside the raw offer, so a client can
-/// decide what to show without a second round-trip: the seller's president
-/// sees Accept/Reject, the buyer's president sees Rescind, everyone else sees
+/// Assembles `GetMapGrid`: every tile currently laid, sorted by `(r, q)` for a
+/// stable row-by-row reading order.
+/// `GetTrainOffers` (Audit G-15). Resolves each side's PRESIDENT alongside the raw
+/// offer, so a client can decide what to show without a second round-trip: the
+/// seller's president sees Accept/Reject, the buyer's sees Rescind, everyone else
 /// a read-only row.
 pub fn query_train_offers(deps: Deps, game_id: u64) -> StdResult<TrainOffersResponse> {
     load_session(deps, game_id)?;
@@ -353,22 +276,16 @@ pub fn query_map_grid(deps: Deps, game_id: u64) -> StdResult<MapGridResponse> {
                 tile_id: tile.tile_id,
                 orientation: tile.orientation,
                 // BASE (pre-rotation) edge pairs, resolved through the same
-                // stored-list-then-catalog fallback every routing call in
-                // the contract already goes through -- `orientation` above
-                // is reported separately and the caller applies it, exactly
-                // as it already must for `connections`.
+                // stored-list-then-catalog fallback every routing call already uses;
+                // `orientation` is reported separately and the caller applies it, exactly as it
+                // already must for `connections`.
                 //
-                // Deliberately NOT `tile.paths` raw. `Tile::paths` is
-                // `#[serde(default)]`, so a tile written to `MAP_GRID`
-                // before that field existed deserializes with an empty list;
-                // handing that empty list straight to a client would make a
-                // legacy tile render as a bare fan forever, even though its
-                // real pairing is knowable -- `paths` is a pure function of
-                // `tile_id`, which is why `hexmap::effective_tile_paths`
-                // resolves it this way for `pathfinding.rs` too. Falling
-                // back here keeps the query's answer identical to what the
-                // contract itself routes on, rather than inventing a second,
-                // weaker notion of what a tile's segments are.
+                // Deliberately NOT `tile.paths` raw: that field is `#[serde(default)]`, so a
+                // pre-G-9 tile deserializes with an empty list, and handing that straight to a
+                // client would make a legacy tile render as a bare fan forever even though its
+                // real pairing is knowable. Falling back keeps the query's answer identical to
+                // what the contract itself routes on, rather than inventing a second, weaker
+                // notion of what a tile's segments are.
                 paths: hexmap::effective_base_tile_paths(&tile).to_vec(),
                 // Audit G-11: resolved through the SAME `tile_base_value`
                 // the payout engine uses, so this can never report a figure
@@ -452,13 +369,9 @@ pub fn print_markdown_map(game_id: u64, tiles: &[MapTileEntry]) -> String {
     out
 }
 
-/// Assembles `QueryMsg::GetLegalTilePlacements`'s response: every
-/// `(tile_id, orientation)` pairing `hexmap::legal_tile_placements`
-/// currently considers legal at `(q, r)` for `protocol_id` -- see that
-/// function's doc comment for exactly which of `execute_lay_tile`'s rules
-/// are (and aren't) checked here. The only failure mode is `game_id` not
-/// existing (`hexmap::HexMapError::GameNotFound`), surfaced as a plain
-/// `StdError` per this module's design note #1.
+/// Assembles `GetLegalTilePlacements`: every `(tile_id, orientation)` pairing
+/// currently legal at `(q, r)` for `protocol_id`. The only failure mode is
+/// `game_id` not existing, surfaced as a plain `StdError`.
 pub fn query_legal_tile_placements(
     deps: Deps,
     game_id: u64,
@@ -485,32 +398,22 @@ pub fn query_legal_tile_placements(
     })
 }
 
-/// Assembles `QueryMsg::PlayerNetWorth`'s response -- see that variant's
-/// doc comment for the full formula. `wallet_address` is validated into a
-/// real `Addr` first (a malformed address is a genuine error, same as
-/// every `execute_*` handler's own `deps.api.addr_validate` call); every
-/// storage lookup after that treats a missing entry as zero rather than
-/// erroring, so an unregistered address prices out at an honest `0`
-/// instead of failing the query.
+/// Assembles `PlayerNetWorth`. The address is validated first (a malformed one is
+/// a genuine error); every lookup after that treats a missing entry as zero, so
+/// an unregistered address prices out at an honest `0` rather than failing.
 ///
-/// **Shared appraiser (Audit G-1).** The cash/stock/private summation this
-/// function used to perform inline now lives in
-/// `contract::appraise_player_net_worth_breakdown`, which
-/// `contract::finalize_and_distribute_payouts` also calls -- so the
-/// read-only figure reported here and the figure the real-JUNO endgame
-/// payout actually divides against are computed by the same code and can
-/// never drift apart again. (They previously DID: this handler used the
-/// correct certificate-count formula while `contract.rs`'s own appraiser
-/// used `price * percentage / 100`, undervaluing stock by 10x in the
-/// payout path only.)
+/// SHARED APPRAISER (Audit G-1): the cash/stock/private summation lives in
+/// `contract::appraise_player_net_worth_breakdown`, which the real-JUNO endgame
+/// payout also calls -- so the figure reported here and the figure the payout
+/// divides against are computed by the same code and can never drift apart
+/// again. They previously DID: this handler used the correct certificate-count
+/// formula while the payout path used `price * percentage / 100`, undervaluing
+/// stock by 10x in the payout only.
 ///
-/// One behavioral change beyond the refactor: `net_worth` now also
-/// includes the face value of every unclosed private company the player
-/// owns. `PlayerNetWorthResponse` has no `private_company_value` field to
-/// report that line separately, so for a player holding privates
-/// `net_worth > cash_vgp + stock_portfolio_value`. Adding that field
-/// (and its `utils/gameState.ts` mirror) is a deliberate follow-up, kept
-/// out of this pass to leave the wire format untouched.
+/// `net_worth` now also includes unclosed private face value, and the response
+/// has no field to report that line separately, so for a player holding privates
+/// `net_worth > cash + stock`. Adding that field is a deliberate follow-up, kept
+/// out to leave the wire format untouched.
 pub fn query_player_net_worth(
     deps: Deps,
     game_id: u64,
@@ -532,12 +435,9 @@ pub fn query_player_net_worth(
     })
 }
 
-/// Assembles `QueryMsg::GetWaterfallState`'s response -- every still-unowned
-/// core private company in ascending face-value order (each with its live
-/// standing bids), which one is currently the lowest-offered
-/// (face-value-buyable) private, whose turn it is, and -- if a 2+-bidder
-/// mini-auction is currently in progress -- that mini-auction's own status.
-/// See `waterfall.rs` module doc comment for the full mechanic this mirrors.
+/// Assembles `GetWaterfallState`: every still-unowned private in ascending
+/// face-value order with its live standing bids, which one is currently
+/// face-value-buyable, whose turn it is, and any mini-auction in progress.
 pub fn query_waterfall_state(deps: Deps, game_id: u64) -> StdResult<WaterfallStateResponse> {
     let session = load_session(deps, game_id)?;
 

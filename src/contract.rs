@@ -1,125 +1,34 @@
 //! Execution logic for the 18Cosmos hybrid-economy game contract.
 //!
-//! Design notes / assumptions made explicit here because they aren't fully
-//! pinned down by `msg.rs` / `state.rs` alone:
+//!   Instantiate    the instantiator becomes `GameConfig::developer_treasury`.
+//!                  `subsidy_fee_percentage` is in BASIS POINTS (50 = 0.5%).
+//!   Real money     Juno's native `ujuno`, hardcoded as `NATIVE_DENOM` since
+//!                  state carries no configurable denom.
+//!   The subsidy    deducted from EVERY real-JUNO deposit, creation and join
+//!                  alike, at the identical rate and rounding (Audit G-11;
+//!                  entry deposits used to flow in untaxed). Only the net
+//!                  reaches the pool, and annulment refunds each player NET of
+//!                  their own cut. Splitting lives in `escrow.rs`; this module
+//!                  only decides WHEN a deposit is taken.
+//!   Uniform Ante   every joiner must attach exactly what the creator deposited.
+//!   Payout         `EndGameAndDistribute` is creator-only, and every player's
+//!                  final net worth is computed ON-CHAIN from this room's own
+//!                  ledger, never accepted as caller input. An earlier version
+//!                  trusted a client-submitted list with no check that it
+//!                  matched the room's state, meaning a buggy or malicious
+//!                  client -- not this contract's ledger -- decided how the real
+//!                  JUNO pool split.
+//!   Dust           integer division can leave a remainder, swept to the
+//!                  developer treasury so no funds are silently stranded.
+//!   Authorization  per-company actions are President-only and paid from that
+//!                  company's own treasury; room-level actions are creator-only.
+//!   Queries        `query.rs` has no authorization at all (every variant reads
+//!                  already-public state) and returns plain `StdResult<Binary>`,
+//!                  matching the convention that queries emit no events,
+//!                  messages or writes.
+//!   Annulment      `AnnulGame` scores NOTHING -- see `escrow.rs`.
 //!
-//! 1. `InstantiateMsg` carries no admin/treasury address, only
-//!    `subsidy_fee_percentage`. The instantiator (`info.sender`) is stored as
-//!    `GameConfig::developer_treasury`. If a dedicated treasury multisig is
-//!    desired, extend `InstantiateMsg` with an explicit address field and
-//!    validate it with `deps.api.addr_validate`.
-//! 2. `subsidy_fee_percentage` is expressed in basis points (1/100 of a
-//!    percent), matching the doc comment in `msg.rs` ("50 for 0.5%"), i.e. the
-//!    fee fraction is `subsidy_fee_percentage / 10_000`.
-//! 3. The real-money asset is Juno's native token, `ujuno` (see
-//!    `juno_developer_spec.md`). It is hardcoded as `NATIVE_DENOM` since
-//!    `state.rs` does not store a configurable denom.
-//! 4. Per the project rules ("Dedicate a small, configurable percentage fee
-//!    from game lobby creation deposits..."), the subsidy is deducted from
-//!    EVERY real-JUNO deposit into a room -- `CreateGameRoom` and
-//!    `JoinGameRoom` alike, at the identical rate and rounding, via the
-//!    shared `subsidy_cut` helper (Audit G-11; entry deposits used to flow
-//!    in untaxed). Only the net reaches the lobby pool that gets redeemed
-//!    proportionally at game end, and `AnnulGame` correspondingly refunds
-//!    each player NET of their own cut -- see design note #13. Since Step
-//!    4.5 Batch 3 the deposit-splitting itself lives in `escrow.rs`
-//!    (`split_deposit`/`subsidy_cut`); this module only decides WHEN a
-//!    deposit is taken, never how it divides.
-//!    **Uniform Ante Rule:** every joining
-//!    player must attach exactly the same amount the room's creator
-//!    deposited at creation -- not merely a nonzero amount, and no longer
-//!    optional -- or the join is rejected with
-//!    `ContractError::InvalidAnteAmount` (see `execute_join_game_room`'s
-//!    doc comment). This also means every entry in `PLAYER_JUNO_ANTE` for a
-//!    given `game_id` is now identical.
-//! 5. `EndGameAndDistribute` may only be called by the room's creator (the
-//!    "Validator" of the lobby). Each player's final VGP net worth used for
-//!    the proportional split is computed automatically on-chain, from this
-//!    room's own ledger -- `PLAYER_CASH_VGP`, plus the live market value of
-//!    every `PLAYER_SHARES` holding priced off that protocol's current
-//!    `PROTOCOL_MARKET` cell, plus the face value of every unclosed private
-//!    company the player still owns (see `appraise_player_net_worth`, the
-//!    single shared appraiser) -- never
-//!    accepted as caller-submitted input. This closes a payout-integrity
-//!    gap: an earlier version of this handler trusted a client-submitted
-//!    `final_player_points` list directly, with no on-chain check that
-//!    those numbers matched the room's actual state, meaning a buggy or
-//!    malicious client -- not this contract's own ledger -- decided how
-//!    the real JUNO pool split.
-//! 6. All pool-redemption math uses checked `Uint128` arithmetic exclusively
-//!    (no floats, per project rules). Integer division during the
-//!    proportional split can leave a small remainder ("dust") in the pool;
-//!    that dust is swept to the developer treasury so no funds are ever
-//!    silently stranded in contract state.
-//! 7. `CreateGameRoom` also seeds the room's Private Auctions phase (see
-//!    `auction.rs`) via `auction::spawn_core_private_companies`, the
-//!    unfloated public-corporation roster (see `public_company.rs`) via
-//!    `public_company::spawn_core_public_companies`, and the global
-//!    Hardware (train) supply (see `hardware.rs`) via
-//!    `hardware::spawn_hardware_pool`, since a room activates -- and so
-//!    should have all three available -- as soon as it's created.
-//! 8. `ExecuteOperatingRound` (see `operations.rs`) is authorized like
-//!    `EndGameAndDistribute`: only the room's `creator` may call it, since
-//!    it's a single batched action covering every private and listed
-//!    public company at once, rather than a per-company action a single
-//!    president could authorize. Public company revenue is computed
-//!    automatically by the Pathfinding Revenue Engine (see
-//!    `pathfinding.rs`) rather than supplied by the caller -- only which
-//!    floated companies run this round, and each one's distribute/retain
-//!    choice, still comes from the message. `BeginOperatingRound` is
-//!    authorized identically (creator-only) and, like
-//!    `ExecuteOperatingRound`, is deliberately not recorded to `GAME_LOG`
-//!    (see `gamelog.rs`'s module doc comment #2) -- it populates the
-//!    separate, sequential Operating Round Corporation Turn Queue that
-//!    `LayTile`/`BuyHardwareFromPool`/`DeclareDividends` now additionally
-//!    check (see `operations.rs`'s module doc comment for the full design).
-//! 9. `LayTile` (see `hexmap.rs`) is authorized per-company, like
-//!    `DeclareDividends`: only the target protocol's registered
-//!    `PROTOCOL_PRESIDENT` may lay tiles for it, and terrain cost is paid
-//!    from that company's own treasury, not the room creator or any
-//!    player's personal cash.
-//! 10. `BuyHardwareFromPool` (see `hardware.rs`) is authorized the same
-//!     way as `LayTile`: only the target protocol's registered
-//!     `PROTOCOL_PRESIDENT`, paid from that company's treasury. It also
-//!     may trigger a global, cross-company Rusting sweep as a side effect
-//!     -- see `hardware::RUST_TRIGGERS`.
-//! 11. `EmergencyBuyHardware` (see `hardware.rs`) implements rules.md's
-//!     Validator Liability rule: only usable when the company owns zero
-//!     Hardware and its treasury alone can't afford the next pool unit,
-//!     topping up the shortfall from the President's own personal VGP. If
-//!     even that combined total can't cover it, the call *succeeds* (not
-//!     an error) but durably halts the session: `GameSession::is_active`
-//!     is flipped to `false` and saved, and the response carries a
-//!     dedicated `bankruptcy` event -- see `hardware.rs` module doc
-//!     comment #7 for why an `Err` return couldn't achieve a durable halt
-//!     under CosmWasm's atomic-revert rules.
-//! 12. `query` (see `query.rs`) is this contract's separate, read-only
-//!     entry point -- the Game State Query messages. It has no
-//!     authorization checks at all (every `QueryMsg` variant just reads
-//!     `game_id`'s already-public on-chain state) and returns plain
-//!     `StdResult<Binary>` rather than `Result<Response, ContractError>`,
-//!     matching the standard CosmWasm convention that queries can't emit
-//!     events, messages, or state writes -- only data.
-//! 13. `AnnulGame` (Step 4.5 Batch 3, items 2/3 -- replaces the narrower
-//!     `ClaimTimeoutRefund`) is the abort vector, and is callable by the
-//!     room's creator at ANY time or by any currently registered player once
-//!     48 hours have elapsed. Unlike `EndGameAndDistribute` it scores
-//!     nothing: an abandoned or called-off game produced no result, so the
-//!     proportional split is bypassed entirely and each player simply gets
-//!     their money back. It refunds each player their own original
-//!     real-JUNO ante
-//!     (`state::PLAYER_JUNO_ANTE`, populated at `CreateGameRoom`/
-//!     `JoinGameRoom` deposit time) NET of the developer subsidy that was
-//!     taken from it -- never a proportional split of the pool. The net is
-//!     what actually reached the pool, so the refunds sum to exactly
-//!     `total_juno_pool` and a room can never overdraw the contract
-//!     (Audit G-11). Payable only once `env.block.time.seconds()` has passed
-//!     `GameSession::last_action_timestamp + INACTIVITY_TIMEOUT_SECONDS`
-//!     (48 hours since the room's last qualifying state-advancing action --
-//!     see `state.rs`'s `GameSession::last_action_timestamp` doc comment).
-//!     Like `CreateGameRoom`/`JoinGameRoom`/`EndGameAndDistribute`, it moves
-//!     real JUNO via `BankMsg` and so is deliberately not recorded to
-//!     `GAME_LOG` (`gamelog.rs`'s module doc comment #2).
+//! See docs/ai_architecture/rust_contract_architecture.md.
 
 // `BankMsg`/`Coin` are deliberately absent: after the Step 4.5 Batch 3
 // escrow extraction, this module no longer constructs a single token
@@ -245,13 +154,12 @@ pub enum ContractError {
     #[error("Deposit amount must be greater than zero")]
     ZeroDeposit {},
 
-    /// **Step 4.5 Batch 3, item 4: the Ante Floor.** The deposit opening a
-    /// room was below `escrow::MINIMUM_ANTE`. Deliberately DISTINCT from
-    /// `InvalidAnteAmount` just below, which is the Uniform Ante Rule's
-    /// exact-match check on a JOINER. The two fail for genuinely different
-    /// reasons -- "you did not stake enough to open a table anyone could
-    /// finish" versus "you did not match this table's stake" -- and a client
-    /// needs to tell them apart to say anything useful to the player.
+    /// The Ante Floor: the deposit opening a room was below `escrow::MINIMUM_ANTE`.
+    /// Deliberately DISTINCT from `InvalidAnteAmount`, which is the Uniform Ante
+    /// Rule's exact-match check on a JOINER. The two fail for genuinely different
+    /// reasons -- "you did not stake enough to open a table anyone could finish"
+    /// versus "you did not match this table's stake" -- and a client needs to tell
+    /// them apart to say anything useful to the player.
     #[error(
         "A deposit of at least {minimum} ujuno is required to open a game room; {got} ujuno was attached"
     )]
@@ -329,16 +237,11 @@ pub fn execute(
         ExecuteMsg::EndGameAndDistribute { game_id } => {
             escrow::execute_end_game_and_distribute(deps, env, info, game_id)
         }
-        // The six arms below are the Event-Sourced Ledger's "loggable" set
-        // (see `gamelog.rs` module doc comment #1): each dispatches to its
-        // pre-existing handler exactly as before via `deps.branch()`, and --
-        // only once that handler has actually succeeded -- appends the
-        // equivalent `ActionRecord` to `GAME_LOG` before returning the
-        // handler's own `Response` untouched. Logging strictly after success
-        // means a reverted (`Err`) call never pollutes the log, since
-        // CosmWasm's atomic-revert semantics mean neither the handler's
-        // writes nor this arm's `record_action` write are ever committed on
-        // an `Err` return.
+        // The loggable set (`gamelog.rs`): each arm dispatches to its pre-existing
+        // handler and -- only once that handler has SUCCEEDED -- appends the equivalent
+        // `ActionRecord`. Logging strictly after success means a reverted call never
+        // pollutes the log, since CosmWasm's atomic-revert semantics mean neither the
+        // handler's writes nor the log write are committed on an `Err`.
         ExecuteMsg::BuyStock {
             game_id,
             protocol_id,
@@ -490,12 +393,8 @@ pub fn execute(
             protocol_id,
         } => operations::execute_end_operating_round_turn(deps, env, info, game_id, protocol_id)
             .map_err(Into::into),
-        // Manual Route Validation -- not recorded to `GAME_LOG`, for the
-        // same reasons `ExecuteOperatingRound` isn't (see
-        // `operations.rs`'s module doc comment #13 / `gamelog.rs`'s module
-        // doc comment #2): this message's revenue depends on live
-        // `MAP_GRID`/`COMPANY_HARDWARE` state that a later replay can't
-        // safely re-derive.
+        // Manual Route Validation -- not recorded to `GAME_LOG`: this revenue depends on
+        // live board and roster state that a later replay cannot safely re-derive.
         ExecuteMsg::RunManualRoute {
             game_id,
             protocol_id,
@@ -713,25 +612,19 @@ pub fn execute(
         ExecuteMsg::UndoLastAction { game_id } => {
             gamelog::execute_undo_last_action(deps, env, info, game_id).map_err(Into::into)
         }
-        // Step 4.5 Batch 3, items 2/3. Not recorded to `GAME_LOG` -- like
-        // `CreateGameRoom`/`JoinGameRoom`/`EndGameAndDistribute`, this moves
-        // real JUNO via `BankMsg`, which the Event-Sourced Ledger
-        // deliberately excludes (see `gamelog.rs`'s module doc comment #2).
+        // Not recorded to `GAME_LOG` -- like the other real-JUNO messages, this moves
+        // funds via `BankMsg`, which the Event-Sourced Ledger deliberately excludes.
         //
-        // This arm replaced `ClaimTimeoutRefund`, which was a narrower
-        // version of the same thing (timeout only, no creator path). One
-        // abort vector, so the refund rules cannot drift between two
-        // handlers -- see `escrow.rs`'s module doc comment.
+        // Replaces `ClaimTimeoutRefund`, a narrower version of the same thing (timeout
+        // only, no creator path). One abort vector, so the refund rules cannot drift
+        // between two handlers.
         ExecuteMsg::AnnulGame { game_id } => {
             escrow::execute_annul_game(deps, env, info, game_id)
         }
-        // Pre-Game Waterfall Auction actions -- none of these five are
-        // recorded to `GAME_LOG`/given an `ActionRecord` variant, for the
-        // same reasons `BeginOperatingRound`/`ExecuteOperatingRound` aren't
-        // (see `gamelog.rs`'s module doc comment #2 and `waterfall.rs`'s
-        // own module doc comment #6): the Waterfall Cascade's automatic,
-        // multi-step resolution side effects can't be safely reconstructed
-        // by a later replay.
+        // Pre-Game Waterfall Auction actions -- none of the five are recorded to
+        // `GAME_LOG`, for the same reason the queue-populating messages are not: the
+        // cascade's automatic, multi-step resolution side effects cannot be safely
+        // reconstructed by a later replay.
         ExecuteMsg::WaterfallBuyLowest { game_id } => {
             waterfall::execute_waterfall_buy_lowest(deps, env, info, game_id).map_err(Into::into)
         }
@@ -889,14 +782,9 @@ fn execute_create_game_room(
         // 48-hour inactivity clock starts ticking from the moment it's
         // created.
         last_action_timestamp: env.block.time.seconds(),
-        // Macro Round Tracker (see `state.rs`'s `RoundType`/`GameSession`
-        // doc comments, and `operations.rs`'s module doc comment #11):
-        // every room genesis now starts in the Pre-Game Waterfall Auction
-        // (see `waterfall.rs`), not directly in Stock Round 1 -- the six
-        // core private companies must be fully allocated first.
-        // `macro_round_number`/`sub_round_index`/
-        // `operating_round_sequence_length` stay seeded for SR1's eventual
-        // start, exactly as before.
+        // Macro Round Tracker: every room genesis starts in the Pre-Game Waterfall
+        // Auction, not directly in Stock Round 1 -- the six core privates must be fully
+        // allocated first. The round counters stay seeded for SR1's eventual start.
         current_round_type: RoundType::WaterfallAuction,
         macro_round_number: 1,
         sub_round_index: 0,
@@ -1032,23 +920,18 @@ fn execute_join_game_room(
         return Err(ContractError::RoomFull { game_id });
     }
 
-    // Uniform Ante Rule: the joining player's attached funds must match the
-    // room creator's original ante exactly, down to the micro-token
-    // (ujuno) -- see this function's doc comment.
-    // Uniform Ante Rule: compared on the GROSS attached amount, against the
-    // creator's own gross deposit as recorded in `PLAYER_JUNO_ANTE`. This
-    // check deliberately runs BEFORE the subsidy is taken (G-11 below), so
-    // "every player antes the same amount" keeps meaning what a player
-    // actually sends, not what survives the fee.
+    // Uniform Ante Rule: the joiner's attached funds must match the creator's
+    // original ante exactly, down to the ujuno.
     //
-    // Step 4.5 Batch 3, item 4: the figure compared against is now
-    // `GameSession::room_ante` -- written once, at room creation, from the
-    // creator's own deposit. It used to be re-read out of the creator's
-    // `PLAYER_JUNO_ANTE` entry on every join, which produced the same number
-    // but made the room's stake an incidental consequence of one player's
-    // ledger row rather than a property of the room. `room_ante` says what it
-    // is. (The old lookup is kept as a fallback for rooms created before this
-    // field existed, where `#[serde(default)]` reads it as zero.)
+    // Compared on the GROSS attached amount, deliberately BEFORE the subsidy is
+    // taken, so "every player antes the same" keeps meaning what a player actually
+    // sends rather than what survives the fee.
+    //
+    // The figure compared against is `GameSession::room_ante`, written once at room
+    // creation. It used to be re-read from the creator's own ledger row on every
+    // join, which produced the same number but made the room's stake an incidental
+    // consequence of one player's row rather than a property of the room. The old
+    // lookup remains only as a fallback for rooms predating the field.
     let required_ante = if session.room_ante.is_zero() {
         PLAYER_JUNO_ANTE.load(deps.storage, (game_id, session.creator.clone()))?
     } else {
@@ -1123,64 +1006,42 @@ pub(crate) struct NetWorthBreakdown {
     /// Live market value of every certificate held across
     /// `CORE_PUBLIC_COMPANIES`.
     pub stock_portfolio_value: Uint128,
-    /// Combined printed face value of every unclosed private company this
-    /// player still personally owns.
-    ///
-    /// Surfaced on `msg::PlayerNetWorthResponse::private_company_value` by
-    /// `query::query_player_net_worth` (Audit G-3), so a caller sees the
-    /// three asset classes as separate lines and `cash_vgp +
-    /// stock_portfolio_value + private_company_value == net_worth` holds
-    /// exactly. The `#[allow(dead_code)]` this field used to carry -- from
-    /// the pass where the appraiser computed it but no response exposed it
-    /// -- is gone with it.
+    /// Combined printed face value of every unclosed private this player still
+    /// personally owns, surfaced as its own response line so that
+    /// `cash + stock + privates == net_worth` holds exactly.
     pub private_company_value: Uint128,
     /// `cash_vgp + stock_portfolio_value + private_company_value`.
     pub net_worth: Uint128,
 }
 
-/// **The single shared net-worth appraiser** (Audit G-1). Sums one
-/// player's VGP net worth entirely from `game_id`'s own on-chain state,
-/// never from caller input -- see `execute_end_game_and_distribute`'s doc
-/// comment for why that matters. Both the real-JUNO endgame payout
-/// (`finalize_and_distribute_payouts`, via `appraise_player_net_worth`
-/// below) and the read-only `QueryMsg::PlayerNetWorth` handler
-/// (`query::query_player_net_worth`) route through this one function, so
-/// the two can never again disagree about what a player is worth.
+/// THE SINGLE SHARED NET-WORTH APPRAISER (Audit G-1). Sums one player's VGP net
+/// worth entirely from on-chain state, never from caller input. Both the
+/// real-JUNO endgame payout and the read-only `PlayerNetWorth` query route
+/// through this one function, so the two can never again disagree.
 ///
-/// Three asset classes, per the standard 1830 endgame appraisal:
+/// Three asset classes:
+///   CASH      at face.
+///   STOCK     `(held_percentage / PERCENT_PER_SHARE) * current_market_price`.
+///             A chart price is the price of ONE 10% certificate, so a
+///             percentage must be converted to a CERTIFICATE COUNT and
+///             multiplied -- never multiplied by the raw percentage and divided
+///             by 100.
+///   PRIVATES  printed face value of every unclosed private the PLAYER owns.
 ///
-/// 1. **Cash** -- `PLAYER_CASH_VGP`, at face.
-/// 2. **Stock** -- for each company, `(held_percentage /
-///    trading::PERCENT_PER_SHARE) * current_market_price`. `MARKET_GRID`'s
-///    price is the price of ONE 10% certificate (see
-///    `market::PAR_VALUE_LADDER`, whose $67-$100 rungs are per-share par
-///    prices, and `trading::FLOAT_CAPITALIZATION_MULTIPLIER`, which
-///    multiplies par by 10 to capitalize a whole company) -- so a
-///    percentage must be converted to a CERTIFICATE COUNT and multiplied,
-///    never multiplied by the raw percentage and divided by 100.
+/// THIS IS THE G-1 FIX. The previous implementation computed
+/// `price * percentage / 100`, treating a cell price as a whole-company
+/// valuation and undervaluing every holding by exactly 10x. Because cash was
+/// correctly counted at face while stock was counted at a tenth of face, the
+/// error did NOT cancel out of the proportional split: it systematically
+/// transferred real JUNO from stock-heavy players to cash-heavy ones. The
+/// net-worth QUERY already used the correct formula, so the contract's own payout
+/// math and its own query disagreed by 10x on the same holding.
 ///
-///    **This is the G-1 fix.** The previous implementation here computed
-///    `price * percentage / 100`, i.e. it treated `cell.price` as a
-///    whole-company valuation and undervalued every holding by exactly
-///    10x. Because cash was (correctly) counted at face while stock was
-///    counted at a tenth of face, the error did NOT cancel out of the
-///    proportional split in `finalize_and_distribute_payouts`: it
-///    systematically transferred real JUNO from stock-heavy players to
-///    cash-heavy ones. `query::query_player_net_worth` already used the
-///    correct certificate-count formula, so the contract's own payout math
-///    and its own net-worth query disagreed by 10x on the same holding.
-/// 3. **Private companies** -- the printed `PrivateCompany::cost` (face
-///    value) of every private this player still personally owns and that
-///    has not `closed`. Newly counted as of G-1; both appraisers used to
-///    omit privates entirely, booking $0 for a player holding e.g. the
-///    $220 B&O at game end. A private owned by a CORPORATION
-///    (`owner_protocol_id`) rather than a player is deliberately NOT
-///    counted here -- see the treasury note below.
-///
-/// Deliberately excludes a company's own `PublicCompany::treasury`: that
-/// VGP belongs to the protocol, not to any individual player, exactly like
-/// `query::GameStateResponse` reports company treasuries and player share
-/// percentages as separate fields rather than folding one into the other.
+/// Privates are newly counted as of G-1 -- both appraisers used to omit them
+/// entirely, booking $0 for a player holding the $220 B&O at game end. A private
+/// owned by a CORPORATION is deliberately not counted, for the same reason a
+/// company's own treasury is excluded: that VGP belongs to the protocol, not to
+/// any individual player.
 pub(crate) fn appraise_player_net_worth_breakdown(
     deps: Deps,
     game_id: u64,

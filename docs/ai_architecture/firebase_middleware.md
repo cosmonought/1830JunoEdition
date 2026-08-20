@@ -658,3 +658,216 @@ Same rule as `config.ts #1`: **a path string duplicated across modules is a path
 drift.** These three are the **entire** Firestore surface this app uses, and `firestore.rules` is written
 against exactly these shapes — **change one here and the rules file must change with it, or writes start
 being denied in production while continuing to work in Test Mode.**
+
+---
+
+# The off-chain lobby — `utils/lobby.ts` and `components/Lobby.tsx`
+
+### lobby.ts #0 — What is and is not authoritative here
+Everything in this layer is off-chain staging data with exactly one job: **getting a group of players agreed on who is
+playing BEFORE any real JUNO moves.** Once the host launches, the contract takes over completely **and this data
+becomes a directory entry.**
+
+| state | who owns it |
+|---|---|
+| **staging** | Firestore only. Discovery, seats, chat, Ready. **ZERO gas, no contract, works with an entirely unconfigured chain — the phase that exists to stop dead on-chain rooms being created for games that never fill.** |
+| **launching** | the host has broadcast `CreateGameRoom` and awaits the tx. **A transient state, held so the other players see "Launching…" instead of a room that appears frozen.** |
+| **live** | `chainGameId` is bound. **The contract is now the source of truth.** |
+| **closed** | host cancelled, or the game ended. |
+
+**Seat count, ready flags and display names are staging conveniences and are NOT consulted once a room is live** —
+the on-chain roster is the real one from that point on. **A player who somehow holds a Firestore seat but never anted
+simply is not in the contract's roster and cannot act; Firestore cannot grant them a turn.**
+
+### lobby.ts #1 — Presence is a heartbeat, and is clock-skew-immune
+**⚠ Honest limitation, read this before relying on presence. Cloud Firestore has NO `onDisconnect` primitive** — that
+is Realtime Database, a different product. **There is therefore no way to learn that a browser closed; the only thing
+available is "this client stopped saying it was alive."**
+Each player writes `lastSeen` to their own seat doc on an interval, and a seat unseen for the stale window is shown as
+dropped. **Consequences worth stating rather than discovering:**
+
+- **Detection is DELAYED** by up to the stale window. **A player who closes their laptop reads as online for up to a
+  minute.**
+- **A backgrounded tab is throttled by the browser** (`setInterval` in a hidden tab is clamped, often to ≥1/minute).
+  The stale window is **3× the heartbeat specifically to tolerate that**, and the heartbeat also fires on
+  `visibilitychange` **so returning to the tab clears a false "dropped" immediately.**
+- **This is a UI HINT ONLY. It must never gate a game action.** The contract has its own on-chain Inactivity Timeout
+  Safety Valve **and that is the only mechanism permitted to have consequences for a player who disappears. Presence
+  tells the table why nobody is moving; the contract decides what to do about it.**
+
+**Staleness is measured against the NEWEST `lastSeen` in the room, not against the local clock.** `lastSeen` is a
+`serverTimestamp()`, **so every value comes from one clock (Google's), while `Date.now()` on the observer's machine is
+a different and possibly badly-skewed clock. Comparing the two would let a user with a wrong system time see the whole
+table as dropped, or a genuinely dropped player as online.** Since the observer is themselves heartbeating, **the
+newest server timestamp in the room IS approximately "now" on the server clock — so comparing server times to server
+times is both simpler and correct.**
+A `null` timestamp means the write is **still pending locally — which is only possible for a doc THIS client just
+wrote, i.e. one that is alive by definition. Treated as online, never as stale, so a player never briefly sees
+themselves as dropped in the moment they join.**
+
+### lobby.ts (schema and transport)
+- **`chainGameId` is a pointer, not state:** write-once, and only ever used as the argument to a real on-chain query.
+  `firestore.rules` enforces the write-once part. **It is the single field in this schema that other clients act on
+  without verifying, so it is the single field worth protecting hardest — even so, the blast radius of a bad value is a
+  failed or wrong query, not a corrupted game: the contract cannot be talked into agreeing.**
+- **`anteUjuno` is a base-denom INTEGER STRING, never a number** — `Uint128` overflows a JS double, **the same
+  discipline `config.ts`'s formatter keeps.** Advertised so joiners attach the right amount; **the contract's Uniform
+  Ante Rule still enforces it to the last `ujuno`, and this only saves a player from discovering the number by having
+  a transaction rejected.**
+- **Display names are self-asserted and spoofable.** Firestore is in Test Mode with no auth. **The WALLET ADDRESS
+  therefore remains the real identity everywhere identity matters — turn order, ownership, payouts — all of which are
+  on-chain anyway and never read this field.** Which is why the seat card and chat both still show the truncated
+  address alongside it.
+- **Every field is read defensively with a fallback.** Not paranoia about Firestore — **Test Mode lets ANY client
+  write ANY shape, so a malformed doc is a thing that can actually happen, and one bad room must not throw inside a
+  snapshot callback and tear down the whole listener for every other room.**
+- **The room list is ordered by `createdAt` alone and filtered by status CLIENT-SIDE, on purpose:** adding a `where`
+  to an `orderBy` **makes it a composite query, which Firestore refuses to serve until someone manually creates an
+  index in the console. A single-field `orderBy` runs on the automatic index that always exists** — and at the list
+  limit the client-side filter is free, **which keeps first-run setup to "enable Firestore" with no index step.**
+- **Two listeners rather than one** for a room and its seats: **seats carry a heartbeat that rewrites on an interval,
+  and folding them into the room document would re-fire the room snapshot — and every consumer's re-render — several
+  times a minute for a document whose real contents almost never change.**
+- **Mutations throw rather than returning an error value.** All are invoked from an explicit user action, **so there
+  is always a handler in a position to catch and display — the same "throw at the point of use, where the UI is alive
+  to show it" rule `config.ts #0` sets out.**
+- **Claiming a seat is a transaction, not a plain write.** Two players clicking Join on the last seat at the same
+  moment **is an ordinary race, not an exotic one — and the consequence of losing it is a 5-player Firestore roster
+  for a 4-player on-chain room, discovered only when someone's ante is rejected with `RoomFull` after they have
+  already signed. The capacity check and the seat write have to be one operation.** Re-claiming a seat you already
+  hold is **a no-op refresh, not an error: reloading the page mid-staging must not read as an attempt to take a
+  second seat.**
+- **The heartbeat is fire-and-forget.** A failed write **is not worth surfacing — it self-corrects on the next tick,
+  and the failure it most often indicates (offline) is one the player can already see.** It is deliberately usable
+  from **both** the lobby and the live game: **a table needs to know the active turn-holder has dropped far more
+  urgently mid-game than while waiting in a staging room.**
+- **#644 — which collection the room lives in.** Lobby rooms are in `games`; sandbox rooms in `sandbox_rooms`. **Both
+  hang their transcript off the room document the same way, so the SHAPE of the path is one decision and the
+  collection is a parameter — which is still this function's stated purpose, that nowhere disagrees about where chat
+  lives.** Defaulted, **so every existing caller is unchanged and the lobby path cannot be got wrong by omission.**
+
+### Lobby.tsx #0 — Stage off-chain, launch on-chain
+**Creating a room does NOT touch the chain.** A room lives in Firestore through its entire gathering phase — at zero
+gas — **and only when the host clicks "Launch Game" does anything sign anything.**
+Signing `CreateGameRoom` on Create was rejected for two concrete reasons:
+
+- **It litters the contract with dead rooms.** Every abandoned "let me see what this does" click becomes a permanent
+  on-chain `GameSession` with real JUNO locked in it, **recoverable only through the Inactivity Timeout Safety Valve.
+  Rooms that never fill should cost nothing and leave no trace.**
+- **It makes the lobby unusable without a deployed contract**, which would quietly kill the offline sandbox that
+  `config.ts #0` goes to considerable length to protect.
+
+**What that buys, and the cost:** the gathering phase is free and works with an entirely unconfigured chain, **but a
+Firestore seat is a RESERVATION, not a commitment — nothing stops a player claiming a seat and vanishing before they
+ante. That is why `SeatDoc.onChain` exists and why the seat list distinguishes "Ready" (staging intent) from "Anted"
+(actually in the contract's roster). Only the second one means anything.**
+
+### Lobby.tsx #1 / #2 — The ante is the contract's rule; the game id comes from the transaction
+`execute_join_game_room` requires every joiner to attach **exactly** the creator's deposit — **down to the last
+`ujuno`, with no funds and merely-close amounts both rejected.** So the host sets the ante once and the room
+advertises it.
+**That advertisement is a CONVENIENCE, not a validation.** Firestore is not deciding what a legal ante is. **If a
+malicious client rewrote the field, the only consequence is that joiners would attach the wrong amount and the
+CONTRACT would reject them — the boundary holds because the contract never reads this field.**
+The display→base conversion is **pure string manipulation**, and returns `null` for anything malformed **including
+more fractional digits than the denom has — silently truncating a player's stated amount is not an acceptable failure
+mode when the amount is a deposit.** (`Number("0.1") * 1e6` is `100000.00000000001`, **which is not a valid `Uint128`
+and would be rejected on chain.**)
+**#2 — the `game_id` comes from the transaction, not from us.** `NEXT_GAME_ID` lives in contract storage; **the client
+cannot predict it, and guessing (or using the Firestore doc id) would bind the room to a game that does not exist or,
+worse, to somebody else's.** The contract emits it as an attribute, **so Launch parses the confirmed transaction's own
+events and binds THAT** — reading the `wasm` event specifically, **since scoping to it avoids picking up a same-named
+attribute from an unrelated module in a multi-message transaction.**
+**If the parse fails, the room is deliberately left in an explicit error state rather than being guessed at: the
+transaction succeeded and real JUNO has moved, so silently retrying would create a SECOND paid room.** The error text
+carries the tx hash **so the id can be recovered by hand.**
+
+### Lobby.tsx #3 — The silent-button bug, and the rule that replaced it
+**Symptom as reported:** clicking "Create Room" did nothing at all. No UI change, no error banner, and — **the detail
+that identifies the cause — NOTHING in the browser console.**
+**Cause: the button was `disabled`.** With no wallet connected the condition was true, **so the browser DISCARDED THE
+CLICK BEFORE REACT SAW IT. No handler ran, so there was nothing to log, nothing to catch, and nothing to display. A
+silent no-op is the correct behaviour for a disabled button; the bug is that it did not look disabled.**
+**It did not look disabled because this codebase styles with inline `React.CSSProperties` objects, and INLINE STYLES
+CANNOT EXPRESS `:disabled`.** A pseudo-class needs a stylesheet. **Eleven buttons in this file were disabled somewhere
+in their lifecycle and not one had any disabled appearance — so this was not one broken button, it was eleven
+identical traps, and Create Room simply happened to be the one clicked first.**
+**Two rules now, and the second matters more than the first:**
+
+1. **Never `disabled` without the disabled style.** Every `disabled` prop in this file is paired with one.
+2. **Prefer a loud failure to a disabled control.** Disabling is reserved for "an action is already in flight", which
+   is genuinely transient and self-explanatory. **Every OTHER precondition — no wallet, no Firebase, malformed ante —
+   leaves the button ENABLED and reports the specific reason when clicked.**
+
+**This inverts the usual instinct, so here is the justification: a disabled button answers "can I do this?" with
+silence, and the user is left to guess which of four preconditions they have missed. An enabled button that says
+"Connect a wallet first — the room is stored under your address as host" answers the question they actually have.**
+The precondition is still enforced in the handler, **so nothing invalid gets through; the only thing that changed is
+that refusing now explains itself.**
+`pointerEvents` is deliberately **NOT** set to `none`: **the click must still reach React so a genuinely disabled
+(busy) control can be distinguished from a dead one during debugging, and so the `title` tooltip still appears on
+hover. `cursor: not-allowed` is what communicates it.**
+**And it logs as well as banners.** The original report came with **"there are no errors in the console", which was
+true and was itself the clue — an empty console should mean nothing ran, never that something failed quietly.**
+The blocked-reason strings are **ordered most-fundamental first, so the message names the thing to fix FIRST rather
+than the last check that happened to fail** — and each is **written to be actionable on its own ("Connect a wallet"
+rather than "wallet required"), because this is the entire explanation the user gets.**
+
+### Lobby.tsx (entry points) — Enter, spectate, sandbox
+**Spectating is a separate callback rather than a flag on "enter", because the two are different in kind and confusing
+them would be expensive:** entering means "I am in this contract's roster and may act", spectating means "I may look
+and may not". **Keeping them as distinct entry points means a caller cannot accidentally open a playable board by
+forgetting a boolean.**
+**Spectate requires no wallet and claims no seat** — a spectator **is not a participant in either system:** not in the
+contract's roster, so the chain would reject any action from them regardless, **and no Firestore seat doc, so they
+never appear in the table's player list or occupy capacity.**
+**`launching` rooms belong in the Live tab**, not Open Lobbies: **the host has already signed so the room is no longer
+joinable — but it has no `chainGameId` yet, so it is not watchable either. It appears with Spectate disabled, which is
+the honest representation of a transient state, rather than vanishing from both tabs for the duration of a block
+time.**
+**Joining means taking a seat in the anteroom** (`#527`), **done here rather than in the waiting room so a player who
+joins and then closes the tab has still been seen — and so the room's roster is correct the moment the screen opens
+rather than one round trip later.** The log is read **once purely to TELL THE PLAYER whether the room is real before
+the board opens: an empty log and a wrong code are indistinguishable once you are inside, and the second is a much
+more common mistake than the first.** The replay itself belongs to the shell's listener — **doing it here would apply
+the history twice.**
+**Naming note:** the requested filter for the second tab was `status: "active"`. **This schema has no `"active"` — the
+equivalent is `"live"`, and a second status string meaning the same thing as an existing one is exactly the kind of
+drift `config.ts #1` is about**, so the tab is **labelled** "Live Games" and filters on `"live"`. The contract's own
+`is_active` is **a different flag again — it distinguishes a running game from a finished one, which is a question
+only the chain can answer and Firestore deliberately does not mirror.**
+
+### Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby
+**The sandbox entry is placed OUTSIDE the room-browser branch, so it is reachable in every state this screen can be
+in — including the states that motivated it: Firebase unconfigured, no wallet, no rooms, or stuck in a staging room
+that can never launch because the contract address is a placeholder.** It **deliberately has NO `disabled` condition
+of any kind: it is the one control on this screen that must work when everything else is broken, which is exactly why
+it must never be gated on any of the things that might be broken.**
+**#524 — the multiplayer decision is a lobby decision.** `#522` mounted the host/join strip inside the game shell,
+**which put "host or join" BEHIND "enter the sandbox". Two playtesters therefore had to open the board separately,
+find a strip neither knew was there, and only then discover each other — a multiplayer feature whose first step was
+for everyone to go and play alone.**
+**Hosting enters immediately.** The alternative — show the code, wait for a "start" — **is a staging room, and the Web3
+lobby already has one of those for a flow that genuinely needs it. A sandbox room needs none of that: the code is
+visible on the board's own strip, and a joiner can arrive at any point because the log replays.**
+**#525 — the Web3 lobby is parked, not deleted.** *Reported:* hide it while the Firebase middleware is being
+playtested. **It is gated behind ONE flag rather than removed, and the constant is at the top of the file where it can
+be found. Deleting a working staging room — seats, ready checks, the ante, the contract launch — to run a playtest
+would cost far more to rebuild than it costs to switch off**, and `#24` already records what happens when the lobby
+becomes unreachable by accident.
+**What is hidden is the whole branch, browser and staging room alike. Hiding only the create button would leave a room
+list that cannot be joined, which is a worse trap than the one being removed: a control that looks live and refuses is
+harder to dismiss than one that is absent.**
+**#586 — the offline strip is gone.** `#578` removed solo sandbox **and this button outlived it by one pass — so the
+Lobby went on offering an "Offline Sandbox" that landed on a screen asking the player to host a room. A door labelled
+for a room that no longer exists.** **Nothing to merge:** both strips called the same handler, **and that single
+handler is the only path into the shell. There was never a second branch behind the second button — which is why
+deleting the button is the whole change.**
+**The burner-wallet recommendation ships with the connect button**, so the lobby's connect path shows it just like the
+in-game top bar does — **calling `wallet.connect()` directly here is exactly the omission that component exists to make
+impossible.**
+**Longhand, not the `borderBottom` shorthand,** on the tab underline. That pair produced a real console warning: **the
+base style set the SHORTHAND while the active variant overrode only the `borderBottomColor` LONGHAND. On a tab switch
+React removes the longhand from the outgoing element while the shorthand is still present, and the order in which a
+browser applies that combination is not guaranteed.** Expressing all three parts as longhands **means the active
+variant overrides exactly one property that was already there, with nothing to reconcile.**

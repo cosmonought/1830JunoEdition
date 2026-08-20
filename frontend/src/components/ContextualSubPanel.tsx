@@ -1,53 +1,18 @@
 // frontend/src/components/ContextualSubPanel.tsx
 //
-// The automated contextual block underneath the main board canvas (see
-// App.tsx's restructure, item 2 of this pass): switches its entire content
-// based on the room's live `GameStateResponse.current_round_type` -- a
-// Player Index during a Stock Round, a Corporation panel during an
-// Operating Round -- rather than a host screen manually deciding which to
-// show.
+// The automated contextual block underneath the board canvas: a Player Index during a Stock Round, a
+// Corporation panel during an Operating Round, a short pointer during the auction.
 //
-// Design notes:
-// 1. **Driven entirely by `current_round_type`, no other prop decides the
-//    mode.** `RoundType` (from `utils/gameState.ts`) is exactly the three
-//    real backend variants, `"WaterfallAuction"` / `"StockRound"` /
-//    `"OperatingRound"` -- this component's own branch covers all three
-//    explicitly (see `WaterfallAuctionNotice` below), rather than letting
-//    the pre-existing Waterfall Auction genesis phase fall through into the
-//    Operating Round branch by accident. `RoundType` gained
-//    `"WaterfallAuction"` when the Pre-Game Waterfall Auction Engine
-//    (`waterfall.rs`) was added -- every room now starts there, before
-//    `"StockRound"` is reachable at all.
-// 2. **Stock Round: Player Index.** Every `player_addresses` entry, its
-//    live cash treasury (`player_cash`), and an ESTIMATED certificate
-//    count (`certificateCount` -- see that function's own doc
-//    comment in `utils/gameState.ts` design note #3 for exactly what
-//    "estimated" means and why). The room's active player
-//    (`active_player_index`) is highlighted.
-// 3. **Operating Round: Corporation panel.** Every `public_companies`
-//    entry's real treasury/floated/president fields, with the active
-//    corporation in the Operating Round Corporation Turn Queue
-//    (`active_operating_order[active_corporation_index]`) highlighted.
-//    "Routes and train sheets" -- explicitly asked for by this pass's own
-//    request -- are NOT fabricated: `src/state.rs` genuinely models
-//    hardware/train ownership and `pathfinding.rs` genuinely traces routes
-//    for revenue during `ExecuteOperatingRound`, but no `QueryMsg` exposes
-//    either (verified against `src/msg.rs` for this pass -- see
-//    `utils/gameState.ts` design note #2). This panel says so directly,
-//    the same "DESIGN GAP" callout style used throughout this codebase,
-//    rather than inventing plausible-looking route/train numbers.
-// 4. **No live game state yet.** Before a real `GetGameState` query
-//    resolves (or if the placeholder contract/game_id in `App.tsx` simply
-//    can't be reached), this renders a single honest placeholder row
-//    instead of an empty or broken-looking table.
-// 5. **Upscaled Round Detail text (App.tsx design note #12/item 5's "Round
-//    Detail Footer" bullet, final visual theme pass).** This is the
-//    "structural footer pane" that item names -- `App.tsx` renders this
-//    component directly underneath the board canvas. Pure typography/
-//    spacing: header/table/footnote text all scaled up roughly 25-40% so
-//    the active phase status (the header title, the SR/OR round badge, and
-//    the active-player/active-corporation row highlight) reads clearly at
-//    a glance instead of as fine print. No behavior change.
+// Design note #1: driven entirely by `current_round_type` and nothing else. The branch covers all three real
+// variants explicitly, rather than letting the Waterfall Auction genesis phase fall through into the Operating
+// Round branch by accident.
+// Design note #3: "Routes and train sheets" are NOT fabricated. `state.rs` genuinely models hardware ownership
+// and `pathfinding.rs` genuinely traces routes, but no `QueryMsg` exposes either (`gameState.ts #2`), so this
+// panel says so directly rather than inventing plausible-looking numbers.
+// Design note #4: before a real query resolves, one honest placeholder row -- not an empty or broken-looking
+// table.
+//
+// Design notes #10/#11/#170/#405/#449/#572/#645: see `docs/ai_architecture/ui_shell_layout.md`.
 
 import PresidentCrown from "./PresidentCrown";
 import React from "react";
@@ -74,23 +39,13 @@ import { FONT_SIZE } from "../styles/typography";
 import { sandboxPlayerLabel } from "../utils/playerLabels";
 import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
 
-/* ===================================================================
- *  DESIGN NOTE 170: SHOW THE PERSON, NOT THE HASH
- * ===================================================================
- *
- * The President column rendered `truncate(company.president)` -- a raw
- * bech32 address clipped to something like `juno1san...0000`. In the
- * sandbox every seat's address is `juno1sandbox<name>000...`, so all four
- * players truncated to a near-identical string of zeroes and the column
- * became four rows of visually indistinguishable noise. A player could not
- * tell which corporation was theirs from the one panel whose job is to say
- * so.
- *
- * `sandboxPlayerLabel` already maps a sandbox address to "Alice"/"Bob"/etc
- * and returns `null` for anything it does not recognise -- which is exactly
- * the right shape here: a live room's real wallet falls through to the
- * existing truncation unchanged, so this improves the sandbox without
- * inventing a name for a stranger. */
+/* Design note #170: SHOW THE PERSON, NOT THE HASH. The President column rendered a raw bech32 address clipped
+   to something like `juno1san...0000`, and in the sandbox every seat shares a prefix and a run of zeroes -- so
+   all four players truncated to a near-identical string and the column became four rows of indistinguishable
+   noise. A player could not tell which corporation was theirs from the one panel whose job is to say so.
+   The label resolver returns `null` for anything it does not recognise, which is exactly the right shape here:
+   a live room's real wallet falls through to truncation unchanged, so this improves the sandbox without
+   inventing a name for a stranger. */
 function playerLabel(address: string): string {
   return sandboxPlayerLabel(address) ?? truncate(address);
 }
@@ -105,12 +60,9 @@ export interface ContextualSubPanelProps {
    *  to render. Market price is NOT on `GameStateResponse` -- see design
    *  note #10 -- so it has to arrive separately or not at all. */
   marketGrid?: MarketGridResponse | null;
-  /* Design note #405: what the Stock Round footer's Player Assets table
-     needs. The QUERY INPUTS rather than its resolved output, because the
-     net-worth query is a shared hook (`usePlayerNetWorths`) and handing the
-     footer a pre-resolved copy would mean App had to run it too -- a second
-     caller of a query whose one existing caller is the ledger. Optional
-     throughout: omitted, the table renders its own "not connected"
+  /* Design note #405: what the Stock Round footer's Player Assets table needs -- the QUERY INPUTS rather than
+     its resolved output, because the net-worth query is a shared hook and handing the footer a pre-resolved copy
+     would mean App had to run it too. Optional throughout: omitted, the table renders its own "not connected"
      placeholders, which is the honest offline state. */
   queryClient?: QueryCapableClient;
   contractAddress?: string;
@@ -154,11 +106,9 @@ export function ContextualSubPanel({
       {gameState.current_round_type === "WaterfallAuction" ? (
         <WaterfallAuctionNotice />
       ) : gameState.current_round_type === "StockRound" ? (
-        /* Design note #572: NOTHING. The player cards on this same tab now
-           answer what the footer's table was here to answer, and two tables
-           of one dataset make the reader prove they agree. Deleted rather
-           than left returning `null` -- a component that renders nothing is
-           an invitation to find a use for it. */
+        /* Design note #572: NOTHING. The player cards on this same tab now answer what the footer's table was here to
+           answer, and two tables of one dataset make the reader prove they agree. Deleted rather than left returning
+           `null` -- a component that renders nothing is an invitation to find a use for it. */
         null
       ) : (
         <OperatingRoundCorporationPanel gameState={gameState} marketGrid={marketGrid} />
@@ -174,14 +124,10 @@ export default ContextualSubPanel;
 /* Pre-Game Waterfall Auction: deferred to the dedicated dashboard     */
 /* ------------------------------------------------------------------ */
 
-/** `current_round_type === "WaterfallAuction"` (see design note #1's update
- *  for `RoundType`'s new third variant): this pane deliberately does NOT
- *  duplicate the six-private bid/buy/mini-auction UI here -- that lives in
- *  `WaterfallAuctionDashboard.tsx`, rendered by `App.tsx` in place of the
- *  normal board canvas for this phase (see that component's own doc
- *  comment). This is just a short pointer so the pane isn't blank or, worse,
- *  silently misrendered as an Operating Round panel the way it would have
- *  before `RoundType` gained this variant. */
+/** The auction pane deliberately does NOT duplicate the six-private bid/buy UI -- that lives in
+ *  `WaterfallAuctionDashboard.tsx`, rendered in place of the board canvas for this phase. This is a short
+ *  pointer, so the pane is not blank or, worse, silently misrendered as an Operating Round panel the way it
+ *  would have been before `RoundType` gained this variant. */
 function WaterfallAuctionNotice() {
   return (
     <>
@@ -204,38 +150,19 @@ function WaterfallAuctionNotice() {
 /* Operating Round: Corporation panel -- see design note #3           */
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================
- *  DESIGN NOTE 10: WHAT THIS TABLE CAN AND CANNOT SOURCE
- * ==================================================================
- *
- * Five of the seven columns are straight `GameStateResponse` fields. The
- * other two are worth naming because they behave differently:
- *
- *   - MARKET VALUE is not on `GameStateResponse` at all. It lives in
- *     `QueryMsg::GetMarketGrid`, which is why `marketGrid` is a separate
- *     prop; without it the column reads "--" rather than the panel
- *     substituting par value, which is a different number and would be
- *     silently wrong for every floated company.
- *
- *   - THE PRICE-CHANGE ARROW is observed, not reported. Nothing tells us
- *     "a dividend just resolved" -- so this compares the price against the
- *     last one seen and shows the direction it moved. Inside an Operating
- *     Round that inference is sound: the only thing that moves a price
- *     during an OR is the dividend decision (pay out steps right, withhold
- *     steps left). Share sales also move prices, but those happen in Stock
- *     Rounds, so the ref is cleared whenever the round changes -- an arrow
- *     never carries over from one round into the next.
- *
- *   - ROUTES / LAST RUN CANNOT BE SOURCED AT ALL. `pathfinding::
- *     trace_best_route` really does compute each corporation's revenue
- *     during an Operating Round, but no query returns it and there is no
- *     field to reconstruct it from. The column renders "--" for every row
- *     with a plain-language tooltip. It is included rather than omitted
- *     because the layout was specified with it, and a visibly empty column
- *     is a more honest placeholder than a quietly missing one -- but the
- *     dash here means "not reported", not "did not run", and no amount of
- *     frontend work changes that until a query exists.
- */
+/* Design note #10: WHAT THIS TABLE CAN AND CANNOT SOURCE. Five of seven columns are straight fields; the other
+   two behave differently:
+     MARKET VALUE is not on `GameStateResponse` at all -- it lives in `GetMarketGrid`, which is why it arrives as
+     a separate prop. Without it the column reads "--" rather than substituting par value, which is a different
+     number and would be silently wrong for every floated company.
+     THE PRICE-CHANGE ARROW is observed, not reported. Nothing says "a dividend just resolved", so this compares
+     against the last price seen -- sound inside an Operating Round, where the dividend decision is the only
+     thing that moves a price. Share sales move prices too, but those happen in Stock Rounds, so the ref is
+     cleared whenever the round changes and an arrow never carries over.
+     ROUTES / LAST RUN CANNOT BE SOURCED AT ALL. The pathfinder really does compute revenue during an Operating
+     Round, but no query returns it. The column renders "--" with a plain-language tooltip -- included rather
+     than omitted because a visibly empty column is a more honest placeholder than a quietly missing one, and
+     the dash means "not reported", not "did not run". */
 function OperatingRoundCorporationPanel({
   gameState,
   marketGrid,
@@ -293,39 +220,17 @@ function OperatingRoundCorporationPanel({
     <>
       <div style={styles.header}>
         <span style={styles.headerTitle}>Operating Round — Corporations</span>
-        {/* ==================================================================
-             DESIGN NOTE 645: BOTH SIDES OF "OF" ARE ROUND NUMBERS
-            ==================================================================
-
-             REPORTED: '"OR1.1 of 1," which should probably be updated to
-             "OR 1.1 of 1.1," and on appropriate later rounds say, e.g,
-             "OR 3.1 of 3.2".'
-
-             The old string put two different numbering systems either side of
-             one word. `1.1` is a round NAME -- cycle and index, the notation
-             the action bar, the activity log and every 1830 discussion use --
-             and the bare `1` after "of" was a COUNT of rounds in the cycle.
-             Both are correct and the sentence is not: "1.1 of 1" reads as a
-             position outside its own range, which is why it looks broken even
-             though the arithmetic is right.
-
-             NAMING THE LAST ROUND FIXES IT. `of 1.1` says the cycle ends here;
-             `of 3.2` says one more to come. The reader compares two labels of
-             the same kind rather than translating between them, and the phase
-             rule -- one Operating Round in Phase 2, two in Green, three in
-             Brown -- becomes legible from the number rather than needing to be
-             known.
-
-             THE SPACE AFTER "OR" IS THE SAME CORRECTION one level down. The
-             action bar writes "Operating Round 3.2" and `roundLabelFor` writes
-             "OR 3.2"; this alone wrote "OR3.2", so a player matching a log
-             line against this panel was comparing two spellings of one round.
-
-             NO GUARD ON THE LENGTH. It is stamped when the cycle opens
-             (design note #511) and `operatingRoundSequenceLength` floors it at
-             1, so there is no state where this renders "of 3.0" -- and if
-             there were, the honest thing is to show it rather than hide it
-             behind a fallback. */}
+        {/* Design note #645: BOTH SIDES OF "OF" ARE ROUND NUMBERS. The old string put two different numbering systems
+           either side of one word: `1.1` is a round NAME -- cycle and index, the notation the bar, the log and every
+           1830 discussion use -- and the bare `1` after "of" was a COUNT of rounds in the cycle. Both are correct and
+           the sentence is not: "1.1 of 1" reads as a position outside its own range.
+           NAMING THE LAST ROUND FIXES IT. The reader compares two labels of the same kind rather than translating
+           between them, and the phase rule -- one Operating Round in Phase 2, two in Green, three in Brown -- becomes
+           legible from the number rather than needing to be known.
+           THE SPACE AFTER "OR" IS THE SAME CORRECTION one level down: the bar writes "Operating Round 3.2" and
+           `roundLabelFor` writes "OR 3.2", and this alone wrote "OR3.2".
+           NO GUARD ON THE LENGTH: it is stamped when the cycle opens (#511) and floored at 1, and if there were such a
+           state the honest thing is to show it rather than hide it behind a fallback. */}
         <span style={styles.headerHint}>
           OR {gameState.macro_round_number}.{gameState.sub_round_index} of{" "}
           {gameState.macro_round_number}.{gameState.operating_round_sequence_length}
@@ -335,22 +240,18 @@ function OperatingRoundCorporationPanel({
       <table style={styles.table}>
         <thead>
           <tr>
-            {/* Design note #11: Corporation leads. The previous order put
-                President first, on the reasoning that an Operating Round is
-                about whose turn it is -- but the row IS a corporation, and a
-                table whose first column is not its subject reads as sorted
-                by the wrong thing. The active row is marked directly, which
-                answers "whose turn" without spending the lead column on it. */}
+            {/* Design note #11: Corporation leads. The previous order put President first, on the reasoning that an
+               Operating Round is about whose turn it is -- but the row IS a corporation, and a table whose first column is
+               not its subject reads as sorted by the wrong thing. The active row is marked directly, which answers "whose
+               turn" without spending the lead column on it. */}
             <th style={styles.thB}>Corporation</th>
             <th style={styles.thB}>President</th>
             <th style={styles.thNumB}>Market Value</th>
             <th style={styles.thNumB}>Treasury</th>
             <th style={styles.thNumB}>Last Route Payout</th>
-            {/* Design note #449: what each corporation's TREASURY owns. The
-                privates a company holds pay it every Operating Round and
-                carry the powers it may exercise on its turn, so this table
-                -- the one a player reads while deciding what to do on that
-                turn -- was the place they were missing from. */}
+            {/* Design note #449: what each corporation's TREASURY owns. The privates a company holds pay it every Operating
+               Round and carry the powers it may exercise on its turn, so this table -- the one a player reads while
+               deciding what to do on that turn -- was the place they were missing from. */}
             <th style={styles.thB}>Privates</th>
             <th style={styles.thCenterB}>Trains</th>
             <th style={styles.thCenter}>Train Limit</th>
@@ -364,34 +265,17 @@ function OperatingRoundCorporationPanel({
               </td>
             </tr>
           )}
-          {/* ==================================================
-               DESIGN NOTE 449: OPERATING ORDER, AND UNFLOATED DIMMED
-              ==================================================
-
-               REPORTED: sort strictly by operating order, and gray out
-               unfloated corporations.
-
-               The table rendered in `company_id` order -- the contract's
-               table order -- while the round it describes runs in a
-               completely different one. A player reading down this list to
-               work out who acts next was reading the wrong sequence, and
-               nothing on screen said so.
-
-               THE SAME RULE `buildOperatingOrder` USES: market price
-               descending, then par, then id. Reproduced rather than
-               imported because that function returns only the FLOATED
-               queue, and this table shows every corporation including the
-               ones that cannot operate -- so the two answer different
-               questions over the same comparison. The comparison is the
-               part that must not drift, and it is three lines.
-
-               UNFLOATED SORT LAST AND DIM. A corporation with no price is
-               not somewhere in the middle of the operating order, it is
-               absent from it, so it belongs after the queue rather than
-               interleaved by whatever par it happens to carry. Dimming is
-               the second half of the same statement: the row is context,
-               not a participant. The UNFLOATED badge stays -- the dimming
-               says "not in this round", the badge says which rule. */}
+          {/* Design note #449: OPERATING ORDER, AND UNFLOATED DIMMED. The table rendered in `company_id` order -- the
+             contract's table order -- while the round it describes runs in a completely different one, so a player
+             reading down this list to work out who acts next was reading the wrong sequence.
+             THE SAME RULE `buildOperatingOrder` USES: market price descending, then par, then id. Reproduced rather than
+             imported because that function returns only the FLOATED queue and this table shows every corporation -- so
+             the two answer different questions over the same comparison. The comparison is the part that must not drift,
+             and it is three lines.
+             UNFLOATED SORT LAST AND DIM. A corporation with no price is not somewhere in the middle of the operating
+             order, it is absent from it, so it belongs after the queue rather than interleaved by whatever par it
+             carries. Dimming is the second half of the same statement: the row is context, not a participant. The
+             UNFLOATED badge stays -- the dimming says "not in this round", the badge says which rule. */}
           {[...gameState.public_companies]
             .sort((a, b) => {
               if (a.is_floated !== b.is_floated) return Number(b.is_floated) - Number(a.is_floated);
@@ -482,11 +366,9 @@ function OperatingRoundCorporationPanel({
                   <LastRoutePayout surface="dark" revenue={company.last_route_revenue} />
                 </td>
 
-                {/* ---- Privates this corporation's treasury owns ----
-                     Design note #449. `PrivateCompanyPills` is the same
-                     component the auction table and the Ledger render, so a
-                     private looks the same wherever it is listed and its
-                     rules text is one click away here too. */}
+                {/* Privates this corporation's treasury owns -- design note #449. `PrivateCompanyPills` is the same component
+                   the auction table and the Ledger render, so a private looks the same wherever it is listed and its rules text
+                   is one click away here too. */}
                 <td style={styles.tdB}>
                   <PrivateCompanyPills privates={privates} surface="table" emptyLabel="--" />
                 </td>
@@ -523,12 +405,8 @@ function truncate(address: string, lead = 8, trail = 5): string {
 /* Inline styles                                                      */
 /* ------------------------------------------------------------------ */
 
-// Design note #5 (final visual theme pass, App.tsx item 5's "Round Detail
-// Footer" bullet): this is the structural footer pane underneath the
-// board -- text scale boosted throughout (roughly 25-40%) so the active
-// phase status ("Stock Round -- Player Index" / "Operating Round --
-// Corporations", the SR/OR round badge, the active-player/corporation
-// highlight) is clear at a glance rather than reading as fine print.
+// Design note #5 (final visual theme pass): this is the structural footer pane underneath the board -- text
+// scale boosted throughout so the active phase status is clear at a glance rather than reading as fine print.
 const styles: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
@@ -574,13 +452,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
   },
   tableScroll: { overflowX: "auto", width: "100%" },
-  /* ---- Design note #11: one header treatment for every column.
-     Uppercase, 700 weight, wide tracking -- previously `th` was 600 and
-     mixed-case while the numeric variants only overrode alignment, so a
-     seven-column row had headers of two different weights depending on
-     which cell you looked at. All four `th*` variants now differ ONLY in
-     alignment and the divider, which is the whole point of having
-     variants. ---- */
+  /* Design note #11: one header treatment for every column. Previously `th` was 600 and mixed-case while the
+     numeric variants only overrode alignment, so a seven-column row had headers of two different weights
+     depending on which cell you looked at. All four variants now differ ONLY in alignment and the divider, which
+     is the whole point of having variants. */
   th: {
     textAlign: "left",
     padding: "8px 12px",
@@ -604,21 +479,16 @@ const styles: Record<string, React.CSSProperties> = {
   trActive: {
     backgroundColor: "#1f2a1f",
   },
-  /** Design note #8: right-aligned numeric cells/headers.
-   *
-   *  ALIGNMENT-ONLY OVERRIDES -- they carry no padding, border or font, so
-   *  they must be spread OVER `th`/`td` rather than used in place of them.
-   *  Used bare, a cell silently loses its box and the row's borders break
-   *  where that column sits. The `*B` variants further down are complete
+  /** Design note #8: right-aligned numeric cells and headers. ALIGNMENT-ONLY OVERRIDES -- they carry no padding,
+   *  border or font, so they must be spread OVER `th`/`td` rather than used in place of them. Used bare, a cell
+   *  silently loses its box and the row's borders break where that column sits. The `*B` variants are complete
    *  styles precisely because that trap kept catching this table. */
   thNum: { textAlign: "right" },
   tdNum: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
 
-  /* ---- Design note #11: vertical dividers.
-     `borderRight` rather than `borderLeft` so the LAST column can use the
-     undivided variant and not draw an edge against the panel wall. Seven
-     columns is past the point where a row can be tracked by alignment
-     alone. ---- */
+  /* Design note #11: vertical dividers on `borderRight` rather than `borderLeft`, so the LAST column can use the
+     undivided variant and not draw an edge against the panel wall. Seven columns is past the point where a row
+     can be tracked by alignment alone. */
   thB: {
     textAlign: "left",
     padding: "8px 12px",
@@ -734,14 +604,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a90a0",
     whiteSpace: "nowrap",
   },
-  /** The inline Priority Deal marker -- bare text, no container. Sits in the
-   *  same cell as the boxed ACTIVE badge, and that adjacency is exactly why
-   *  it must NOT be boxed: two pills side by side read as a pair of equal
-   *  states, when one is "acting now" and the other is "acts first next
-   *  round". Different weight, different shape, different meaning.
-   *
-   *  Kept byte-identical to `FinancialLedger`'s own `priorityDealMark` so
-   *  the same indicator looks the same in both places. */
+  /** The inline Priority Deal marker -- bare text, no container. It sits in the same cell as the boxed ACTIVE
+   *  badge, and that adjacency is exactly why it must NOT be boxed: two pills side by side read as a pair of equal
+   *  states, when one is "acting now" and the other is "acts first next round".
+   *  Kept byte-identical to `FinancialLedger`'s own marker so the same indicator looks the same in both places. */
   priorityDealMark: {
     marginLeft: "6px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -761,19 +627,12 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1f7a3f",
     color: "#eafff0",
   },
-  // This key was REFERENCED at the UNFLOATED call site above but never
-  // defined, so `styles.unfloatedBadge` evaluated to `undefined` and the
-  // badge rendered as unstyled body text -- indistinguishable from the
-  // corporation's name sitting next to it.
-  //
-  // Nothing caught it because `styles` is typed `Record<string,
-  // React.CSSProperties>`, an index signature that accepts any key and so
-  // cannot tell a real style from a typo. `FinancialLedger.tsx` has the
-  // same shape and the same exposure.
-  //
-  // Colours come from `palette.ts` rather than being restated here, which
-  // is the point of that module: the Ledger's copy of this badge and this
-  // one physically cannot drift apart again.
+  // This key was REFERENCED at the UNFLOATED call site above and never DEFINED, so it evaluated to `undefined`
+  // and the badge rendered as unstyled body text -- indistinguishable from the corporation's name beside it.
+  // Nothing caught it because `styles` is typed `Record<string, React.CSSProperties>`, an index signature that
+  // accepts any key and so cannot tell a real style from a typo. `FinancialLedger.tsx` has the same exposure.
+  // Colours come from `palette.ts` rather than being restated here, which is the point of that module: the
+  // Ledger's copy of this badge and this one physically cannot drift apart again.
   unfloatedBadge: {
     marginLeft: "10px",
     fontSize: FONT_SIZE.micro,

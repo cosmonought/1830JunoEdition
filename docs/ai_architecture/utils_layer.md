@@ -237,3 +237,116 @@ private they held at closure) — that is a certificate-tree question. The *sell
 because **a closed private permanently rejects `execute_buy_private_company` (`trading.rs` module doc
 #17), so offering one would just produce a guaranteed-failing tx.** The Buy Private Company tray uses the
 second, not the first.
+
+---
+
+# `utils/gamePhase.ts`
+
+### gamePhase.ts #1 — The phase is derived, not queried — and it has to be
+**There is no `QueryMsg` that returns "the current phase".** The closest thing is `current_global_era`, which is only
+`Yellow | Green | Brown` — **three values for six phases. It cannot tell Phase 3 from Phase 4 (both Green), Phase 5
+from Phase 6 (both Brown), or describe Diesel at all. A badge built on it alone would have to print "Phase: 3 (Green)"
+during Phase 4 — a wrong number in the most prominent chrome in the app, and since `#612` put the phase number first, a
+wrong number in the position a player reads first.**
+**So the phase is derived from `owned_trains`, and this is exact rather than approximate.** In 1830 the phase advances
+the moment the first train of a new tier is BOUGHT, **and a bought train is owned by some corporation from that instant
+on. The highest tier owned by anybody therefore IS the phase, with no lag and no special cases:**
+
+- **Rusting does not break it.** A rusted train leaves `owned_trains` — **but rusting only ever happens when a HIGHER
+  tier arrives, and that higher tier is what the maximum now reads.**
+- **Trading does not break it.** A train sold between corporations stays in play and stays in somebody's list; **the
+  maximum is unmoved.**
+- **The opening state is correct by construction.** No trains owned means no train has been bought, **which is Phase 2
+  — where 1830 starts.**
+
+### gamePhase.ts #2 / #4 — The depot count is derived the same way, and is exact
+`state.rs` has a real `HARDWARE_POOL` **but no query reads it back** (the same gap the Ledger's Trains column reports).
+The count is reconstructed as `TOTAL[tier] − owned`.
+**That subtraction is only sound while no train of the tier has left play, and for THE CURRENT TIER that is
+guaranteed: a tier's trains rust only when a higher tier is bought, and buying a higher tier is exactly what stops it
+being the current tier.** So the figure the warning depends on is exact, **even though the same arithmetic applied to
+an OBSOLETE tier would over-count** — which is why the remaining count **is only ever computed for the current tier,
+and nothing exposes a per-tier depot table that would invite the unsound use.**
+**#4 — the full depot table is exact, but not by subtraction.** `#2`'s warning still stands and the inventory does not
+violate it — **it never applies that subtraction to an obsolete tier. The depot is a strict queue:** 1830 sells
+cheapest-first, **so reaching Phase 4 at all PROVES the 3-train depot is empty.** Each tier therefore has an exact
+answer with no guesswork:
+
+| | |
+|---|---|
+| below the current tier | **0**, by the queue rule |
+| the current tier | `TOTAL − owned` — **exact here** |
+| above the current tier | **`TOTAL`, untouched — none can have been sold** |
+
+**Rusted is not the same as sold out, and conflating them would mislead.** A 3-train's depot stock is exhausted the
+moment Phase 4 begins, **but every 3-train already bought keeps running until the first 6-train arrives. `soldOut` and
+`rusted` are separate flags for exactly that reason: one says "you can no longer buy this", the other says "these no
+longer exist".**
+
+### gamePhase.ts #3 — Unknown is a state, not a zero
+`owned_trains` is `string[] | null | undefined`, **and `undefined` means "a contract predating the field" — unknown,
+not empty.** If EVERY corporation reports `undefined` this module returns `known: false` and the caller shows the era
+without a train number, **rather than confidently announcing Phase 2 on a chain that simply is not telling us. One
+corporation reporting a real array is enough to trust the maximum, because a corporation with no trains legitimately
+reports `[]`.**
+
+### gamePhase.ts #5 / #6 / #7 — One countdown, one escalation
+**#5 — the phase badge and the train chips disagreed, and the badge was wrong.** In Phase 3 with one 3-train left, the
+badge read "Next buy (4-Train) triggers Phase 4" while the chip read "rusts after 2 more purchases". **The chip had it
+right: the next depot purchase is the LAST 3-TRAIN, and only the purchase after that can be a 4-train.**
+**The bug was structural, not arithmetic.** The badge's text was a static string per tier — **it could not count, so it
+defaulted to "next buy" and was correct only when the depot happened to be empty.** Both readouts now derive from one
+figure: `purchases = depotRemaining + 1` (**empty the tier, then buy the next**).
+**The phase change and the rust are the SAME purchase** — buying the first 4-train both starts Phase 4 and destroys the
+2-trains — **which is why one number serves both messages.**
+**#6 — every tier can count, not just the current one.** A chip for a 2-train wants an answer during Phase 2 as well,
+**when the 4-train that will destroy it is still two whole depot tiers away.** The queue makes that countable exactly:
+`purchases = (remaining in every tier from current up to trigger − 1) + 1`. **No estimation, and it degrades to the
+single-tier figure when the trigger is the very next tier — the two agree by construction rather than by
+coincidence.**
+**#7 — one countdown, one escalation.** `#5` made the two readouts agree on the NUMBER. **They still disagreed on the
+URGENCY**, because each derived its own severity from a different expression — the chips distinguished two thresholds
+and **the action bar fired the identical badge at two purchases and at one. So the single most consequential moment in
+an 1830 game, the last purchase before a rust, looked exactly like the moment before it. A warning that does not
+escalate is not a warning; it is a permanent fixture that players stop seeing.**
+`phaseAlertLevel` is **the ONE place that decision is made, expressed in purchases rather than depot stock so it reads
+as the question actually being asked. Every caller escalates in lockstep because there is nothing left to keep in
+sync.** `critical` is the LAST purchase before the shift, `warn` the one before; `null` for Diesel and on a chain that
+does not report ownership — **an unknown countdown must not render as an urgent one.**
+
+### gamePhase.ts #8 — A tier's fate is a property of the tier
+**Reported:** sold-out depot tiers vanish or lack phase-progression context.
+The rust outlook already computed exactly this **and the depot cards did not read it — so a tier that had sold out but
+not yet rusted said nothing at all about what was coming. That is the moment a player most needs to know: the last
+3-train has left the depot, every 3-train on the board dies when the first 6 is bought, and the card was silent.**
+Carried **on** the tier rather than looked up beside it, **so the card and the countdown cannot disagree about which
+tier rusts when.**
+Only three rust entries exist **because only three rust events exist in 1830 — Phase 2 and Phase 4 advance without
+destroying anything (Phase 5 closes privates instead, which is not a rust), and Diesel is the last phase, so nothing
+follows it.**
+
+### gamePhase.ts #612 / #632 — Naming the phase, and colouring the train
+**#612 — reported:** "our Phase marker probably is unhelpfully labeled … 18xx players generally refer not to 'Phase
+Yellow' but 'Phase 2,' 'Phase 3,' based on which trains have been last sold."
+**Correct, and the old order had the two facts exactly backwards. The PHASE NUMBER is the name of the thing — it is
+what the rulebook indexes, what a player says out loud, and what every other 18xx tool displays. The tile colour is a
+CONSEQUENCE of the phase, and a useful reminder, but it is not what the phase is called.**
+`Phase: 3 (Green)` **reads as a name with a gloss.** `Phase: Green (3-Train)` **read as a gloss with a name buried in
+it, and the "-Train" suffix made the number look like a train count rather than the phase** — the same collision
+`TrainBadges.tsx` already avoided.
+**The unknown branch still drops the number, per `#3`.** When no corporation has reported trains the tier falls back to
+the bottom of the order rather than being measured, **and printing "Phase: 2" from that would state a fact this
+function does not have. The colour survives because the board's tile colour is separately known.**
+**1830 has exactly three eras** — which is why **Diesel is `Brown` and not a fourth value: the era names a tile colour
+tier, and there is no diesel-coloured tile. Diesels arrive during the Brown era and do not start one.** The badge
+still prints `(D-Train)` **so the distinction that DOES matter — which train is in play — is not lost.**
+**#632 — instructed:** "what do you think of color-coding the trains to their color phase?" **Worth doing, and the
+mapping already exists** — the tier presentation table has carried a tint since the badge needed one. **This exports
+the lookup rather than letting `TrainPurchasePanel` write a second 2/3/4/5/6/D switch, which is how the depot would
+come to disagree with the badge about what colour Phase 4 is.**
+**The value of the coding is that it is not a new language.** Yellow, green and brown already mean tile eras on the
+map, on the badge and on the hexes themselves; **a green 3-train says "this is the train that unlocks the tiles you
+have been looking at" without teaching anybody anything.**
+**Deliberately a separate channel from availability.** The depot marks the purchasable tier with fill and border; era
+rides on the glyph. **Folding the two together — colouring only the buyable train — would make the scheme mean two
+things and answer neither reliably.**

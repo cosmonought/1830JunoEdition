@@ -1,80 +1,24 @@
 // frontend/src/utils/lobby.ts
 //
-// The off-chain half of the pre-game lobby: room discovery, seat claiming,
-// readiness, and heartbeat presence. Lives in `utils/` (not `components/`)
-// for the same reason `utils/gameState.ts` does -- it is a data layer with
-// subscription hooks, consumed by a view, and `utils/feed.ts`'s own note
-// about dependencies running the wrong way applies here too: a component
-// must never be the place a transport lives.
+// The off-chain half of the pre-game lobby: room discovery, seat claiming, readiness, and heartbeat presence.
+// In `utils/` rather than `components/` for the same reason `gameState.ts` is -- a data layer with subscription
+// hooks, consumed by a view. A component must never be the place a transport lives.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHAT IS AND IS NOT AUTHORITATIVE HERE
-// ===================================================================
+// Design note #0: WHAT IS AND IS NOT AUTHORITATIVE HERE. Everything is off-chain staging data with one job:
+// getting a group agreed on who is playing BEFORE any real JUNO moves. staging is Firestore only, at zero gas
+// and with an entirely unconfigured chain; launching is a transient state held so others see "Launching..."
+// rather than a frozen room; live means `chainGameId` is bound and the contract is the source of truth.
+// `seatCount`/`ready`/`displayName` are staging conveniences and are NOT consulted once a room is live -- a
+// player holding a Firestore seat who never anted is not in the contract's roster and cannot act.
 //
-// Read `config/firebase.ts` design note #0 first. Everything in this file
-// is off-chain staging data with exactly one job: getting a group of
-// players agreed on who is playing BEFORE any real JUNO moves. Once the
-// host launches, the contract takes over completely and this data becomes
-// a directory entry.
-//
-// The lifecycle, and which system owns each step:
-//
-//   staging   Firestore only. Players discover the room, claim seats, chat
-//             and toggle Ready. ZERO gas, no contract, works with an
-//             entirely unconfigured chain. This is the phase that exists to
-//             stop dead on-chain rooms being created for games that never
-//             fill.
-//   launching The host has broadcast `CreateGameRoom` and is awaiting the
-//             tx. A transient state, held so the other players see
-//             "Launching..." instead of a room that appears frozen.
-//   live      `chainGameId` is bound. The contract is now the source of
-//             truth. Non-host players ante in via `JoinGameRoom` and their
-//             seat is marked `onChain`.
-//   closed    Host cancelled, or the game ended.
-//
-// `seatCount`/`ready`/`displayName` are staging conveniences and are NOT
-// consulted once a room is live -- the on-chain `player_addresses` from
-// `GetGameState` is the real roster from that point on. A player who
-// somehow holds a Firestore seat but never anted simply is not in the
-// contract's roster and cannot act; Firestore cannot grant them a turn.
-//
-// ===================================================================
-//  DESIGN NOTE 1: PRESENCE IS A HEARTBEAT, AND IS CLOCK-SKEW-IMMUNE
-// ===================================================================
-//
-// HONEST LIMITATION, read this before relying on presence. Cloud Firestore
-// has NO `onDisconnect` primitive -- that is Realtime Database, a different
-// product. There is therefore no way to learn that a browser closed; the
-// only thing available is "this client stopped saying it was alive."
-//
-// So presence here is: each player writes `lastSeen` to their own seat doc
-// every PRESENCE_HEARTBEAT_MS, and a seat unseen for PRESENCE_STALE_MS is
-// shown as dropped. Consequences worth stating rather than discovering:
-//
-//   - Detection is DELAYED by up to PRESENCE_STALE_MS. A player who closes
-//     their laptop reads as online for up to a minute.
-//   - A backgrounded tab is throttled by the browser (`setInterval` in a
-//     hidden tab is clamped, often to >=1/minute). PRESENCE_STALE_MS is set
-//     to 3x the heartbeat specifically to tolerate that, and the heartbeat
-//     also fires on `visibilitychange` so returning to the tab clears a
-//     false "dropped" immediately instead of waiting for the next tick.
-//   - This is a UI HINT ONLY. It must never gate a game action. The
-//     contract has its own on-chain Inactivity Timeout Safety Valve
-//     (`state::PLAYER_JUNO_ANTE` / `execute_claim_timeout_refund`) and that
-//     is the only mechanism permitted to have consequences for a player who
-//     disappears. Presence tells the table why nobody is moving; the
-//     contract decides what to do about it.
-//
-// Staleness is measured against the NEWEST `lastSeen` in the room, not
-// against the local clock. `lastSeen` is a `serverTimestamp()`, so every
-// value comes from one clock (Google's), while `Date.now()` on the
-// observer's machine is a different and possibly badly-skewed clock.
-// Comparing the two would let a user with a wrong system time see the whole
-// table as dropped, or a genuinely dropped player as online. Since the
-// observer is themselves heartbeating, the newest server timestamp in the
-// room IS approximately "now" on the server clock -- so comparing server
-// times to server times is both simpler and correct. See
-// `derivePresence` below.
+// Design note #1: PRESENCE IS A HEARTBEAT, AND IS CLOCK-SKEW-IMMUNE. Cloud Firestore has NO `onDisconnect`
+// primitive (that is Realtime Database), so there is no way to learn a browser closed -- only that a client
+// stopped saying it was alive. Detection is DELAYED by up to the stale window; a backgrounded tab is throttled,
+// which the 3x window and a `visibilitychange` heartbeat tolerate; and THIS IS A UI HINT ONLY -- the contract's
+// own Inactivity Timeout Safety Valve is the only mechanism permitted to have consequences.
+// Staleness is measured against the NEWEST `lastSeen` in the room, not the local clock: `serverTimestamp()`
+// values all come from one clock, and comparing them to `Date.now()` would let a skewed machine see the whole
+// table as dropped. See `docs/ai_architecture/firebase_middleware.md`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -147,20 +91,13 @@ export interface RoomDoc {
    *  a single document. */
   seatCount: number;
   status: RoomStatus;
-  /** The `u64` the CONTRACT assigned, parsed from `CreateGameRoom`'s
-   *  `game_id` tx attribute. `null` until the host launches.
-   *
-   *  A pointer, not state (see `config/firebase.ts` design note #0):
-   *  write-once, and only ever used as the argument to a real on-chain
-   *  query. `firestore.rules` enforces the write-once part. */
+  /** The `u64` the CONTRACT assigned, parsed from `CreateGameRoom`'s `game_id` tx attribute. `null` until the host
+   *  launches. A pointer, not state (`config/firebase.ts #0`): write-once, and only ever used as the argument to a
+   *  real on-chain query. `firestore.rules` enforces the write-once part. */
   chainGameId: number | null;
-  /** The exact `ujuno` deposit every player must attach, as a base-denom
-   *  INTEGER STRING (never a number -- `Uint128` overflows a JS double, the
-   *  same discipline `config.ts`'s `formatNativeAmount` keeps).
-   *
-   *  Advertised here so joiners can attach the right amount up front. The
-   *  contract's Uniform Ante Rule still enforces it to the last `ujuno`
-   *  (`ContractError::InvalidAnteAmount`); this only saves a player from
+  /** The exact `ujuno` deposit every player must attach, as a base-denom INTEGER STRING -- never a number, since
+   *  `Uint128` overflows a JS double. Advertised here so joiners can attach the right amount up front; the
+   *  contract's Uniform Ante Rule still enforces it to the last `ujuno`, and this only saves a player from
    *  discovering the number by having a transaction rejected. */
   anteUjuno: string;
   /** `CreateGameRoom { virtual_bank_start }`, integer string, same reason. */
@@ -191,17 +128,11 @@ export interface SeatDoc {
 
 export type PresenceState = "online" | "dropped";
 
-/* ------------------------------------------------------------------ */
-/* Display names                                                       */
-/* ------------------------------------------------------------------ */
-//
-// Self-asserted and spoofable: Firestore is in Test Mode with no auth, so
-// nothing stops a client writing any name it likes. The WALLET ADDRESS
-// therefore remains the real identity everywhere identity matters -- turn
-// order, ownership, payouts -- all of which are on-chain anyway and never
-// read this field. A display name is a readability affordance for chat and
-// the seat list, nothing more, which is why `SeatCard` and `ChatBox` both
-// still show the truncated address alongside it.
+// Display names are self-asserted and spoofable: Firestore is in Test Mode with no auth, so nothing stops a
+// client writing any name it likes. THE WALLET ADDRESS therefore remains the real identity everywhere identity
+// matters -- turn order, ownership, payouts -- all of which are on-chain anyway and never read this field.
+// A display name is a readability affordance for chat and the seat list, which is why both surfaces still show
+// the truncated address alongside it.
 
 /** Trims, collapses whitespace and clamps to a sane length. Rejects the
  *  empty string by returning `null`, so callers fall back to the address. */
@@ -246,15 +177,9 @@ export function seatLabel(seat: Pick<SeatDoc, "address" | "displayName">): strin
   return normalizeDisplayName(seat.displayName ?? "") ?? truncateAddress(seat.address);
 }
 
-/* ------------------------------------------------------------------ */
-/* Snapshot decoding                                                   */
-/* ------------------------------------------------------------------ */
-//
-// Every field is read defensively with a fallback. This is not paranoia
-// about Firestore -- it is that Test Mode lets ANY client write ANY shape
-// to these documents, so a malformed doc is a thing that can actually
-// happen, and one bad room must not throw inside a snapshot callback and
-// tear down the whole listener for every other room.
+// Every field is read defensively with a fallback. Not paranoia about Firestore -- Test Mode lets ANY client
+// write ANY shape to these documents, so a malformed doc is a thing that can actually happen, and one bad room
+// must not throw inside a snapshot callback and tear down the whole listener for every other room.
 
 function toMillis(value: unknown): number | null {
   if (value instanceof Timestamp) return value.toMillis();
@@ -312,14 +237,10 @@ function decodeSeat(snapshot: QueryDocumentSnapshot<DocumentData>): SeatDoc {
 /* Presence derivation -- design note #1                               */
 /* ------------------------------------------------------------------ */
 
-/** Classifies every seat as online or dropped, measuring against the
- *  newest `lastSeen` in the room rather than the local clock.
- *
- *  A `null` `lastSeenMs` means the `serverTimestamp()` write is still
- *  pending locally -- which is only possible for a doc THIS client just
- *  wrote, i.e. one that is alive by definition. Treated as online, never as
- *  stale, so a player never briefly sees themselves as dropped in the
- *  moment they join. */
+/** Classifies every seat as online or dropped, measuring against the newest `lastSeen` in the room rather than
+ *  the local clock. A `null` timestamp means the `serverTimestamp()` write is still pending locally -- only
+ *  possible for a doc THIS client just wrote, i.e. one that is alive by definition. Treated as online, never as
+ *  stale, so a player never briefly sees themselves as dropped in the moment they join. */
 export function derivePresence(seats: readonly SeatDoc[]): Map<string, PresenceState> {
   const stamps = seats
     .map((seat) => seat.lastSeenMs)
@@ -356,15 +277,11 @@ export interface LobbyRoomsResult {
   available: boolean;
 }
 
-/** Live subscription to the room-discovery list.
- *
- *  Ordered by `createdAt` alone and filtered by status CLIENT-SIDE, on
- *  purpose: adding `where("status", "in", [...])` to an `orderBy` query
- *  makes it a composite query, which Firestore refuses to serve until
- *  someone manually creates a composite index in the console. A single-field
- *  `orderBy` runs on the automatic index that always exists. At
- *  ROOM_LIST_LIMIT rooms the client-side filter is free, and it keeps
- *  first-run setup to "enable Firestore" with no index step. */
+/** Live subscription to the room-discovery list. Ordered by `createdAt` alone and filtered by status
+ *  CLIENT-SIDE, on purpose: adding a `where` to an `orderBy` makes it a composite query, which Firestore refuses
+ *  to serve until someone manually creates an index in the console. A single-field `orderBy` runs on the
+ *  automatic index that always exists, the client-side filter is free at this list size, and first-run setup
+ *  stays "enable Firestore" with no index step. */
 export function useLobbyRooms(): LobbyRoomsResult {
   const [rooms, setRooms] = useState<RoomDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -415,11 +332,9 @@ export interface RoomResult {
   error: string | null;
 }
 
-/** Live subscription to one room and its seats. Two listeners rather than
- *  one: seats carry a heartbeat that rewrites every PRESENCE_HEARTBEAT_MS,
- *  and folding them into the room document would re-fire the room snapshot
- *  -- and every consumer's re-render -- several times a minute for a
- *  document whose real contents almost never change. */
+/** Live subscription to one room and its seats. Two listeners rather than one: seats carry a heartbeat that
+ *  rewrites on an interval, and folding them into the room document would re-fire the room snapshot -- and every
+ *  consumer's re-render -- several times a minute for a document whose real contents almost never change. */
 export function useRoom(roomId: string | null): RoomResult {
   const [room, setRoom] = useState<RoomDoc | null>(null);
   const [seats, setSeats] = useState<SeatDoc[]>([]);
@@ -490,17 +405,11 @@ export function useRoom(roomId: string | null): RoomResult {
 /* Heartbeat -- design note #1                                         */
 /* ------------------------------------------------------------------ */
 
-/** Keeps this player's own seat marked alive for as long as the component
- *  is mounted with a seat in `roomId`.
- *
- *  Deliberately usable from BOTH the lobby and the live game: a table needs
- *  to know the active turn-holder has dropped far more urgently mid-game
- *  than it does while waiting in a staging room. `App.tsx` mounts this for
- *  the whole session; `Lobby.tsx` mounts it while staging.
- *
- *  Writes are fire-and-forget. A failed heartbeat is not worth surfacing --
- *  it self-corrects on the next tick, and the failure it most often
- *  indicates (offline) is one the player can already see. */
+/** Keeps this player's own seat marked alive for as long as the component is mounted with a seat in the room.
+ *  Deliberately usable from BOTH the lobby and the live game: a table needs to know the active turn-holder has
+ *  dropped far more urgently mid-game than while waiting in a staging room.
+ *  Writes are fire-and-forget. A failed heartbeat is not worth surfacing -- it self-corrects on the next tick,
+ *  and the failure it most often indicates (offline) is one the player can already see. */
 export function usePresenceHeartbeat(roomId: string | null, address: string | null): void {
   const db = getFirestoreDb();
   // Held in a ref so `beat` stays referentially stable and the effect below
@@ -538,15 +447,9 @@ export function usePresenceHeartbeat(roomId: string | null, address: string | nu
   }, [db, roomId, address, beat]);
 }
 
-/* ------------------------------------------------------------------ */
-/* Mutations                                                           */
-/* ------------------------------------------------------------------ */
-//
-// Every one of these throws on failure rather than returning an error
-// value. They are all invoked from an explicit user action (a button), so
-// there is always a handler in a position to catch and display -- which is
-// the same "throw at the point of use, where the UI is alive to show it"
-// rule `config.ts` design note #0 sets out.
+// Mutations. Every one throws on failure rather than returning an error value: they are all invoked from an
+// explicit user action, so there is always a handler in a position to catch and display -- the same "throw at
+// the point of use, where the UI is alive to show it" rule `config.ts #0` sets out.
 
 function requireDb() {
   const db = getFirestoreDb();
@@ -595,19 +498,12 @@ export async function createStagingRoom(input: CreateRoomInput): Promise<string>
   return roomRef.id;
 }
 
-/** Claims a seat, atomically.
- *
- *  A transaction, not a plain write, because two players clicking Join on
- *  the last seat of a room at the same moment is an ordinary race, not an
- *  exotic one -- and the consequence of losing it is a 5-player Firestore
- *  roster for a 4-player on-chain room, discovered only when someone's ante
- *  is rejected with `ContractError::RoomFull` after they have already
- *  signed. The capacity check and the seat write have to be one operation.
- *
- *  Re-claiming a seat you already hold is a no-op refresh, not an error:
- *  reloading the page mid-staging must not read as an attempt to take a
- *  second seat. The address being the document id is what makes that
- *  distinction free. */
+/** Claims a seat, atomically. A transaction, not a plain write, because two players clicking Join on the last
+ *  seat at the same moment is an ordinary race -- and the consequence of losing it is a 5-player Firestore
+ *  roster for a 4-player on-chain room, discovered only when someone's ante is rejected with `RoomFull` after
+ *  they have already signed. The capacity check and the seat write have to be one operation.
+ *  Re-claiming a seat you already hold is a no-op refresh, not an error: reloading the page mid-staging must not
+ *  read as an attempt to take a second seat. The address being the document id is what makes that free. */
 export async function claimSeat(
   roomId: string,
   address: string,
@@ -707,14 +603,11 @@ export async function setRoomStatus(roomId: string, status: RoomStatus, launchEr
   await updateDoc(doc(db, ROOMS_COLLECTION, roomId), { status, launchError });
 }
 
-/** Binds the room to the game id the CONTRACT assigned, flipping it live.
- *
- *  `chainGameId` is write-once by convention here and by rule in
- *  `firestore.rules`. It is the single field in this entire schema that
- *  other clients act on without verifying -- they pass it to
- *  `GetGameState` -- so it is the single field worth protecting hardest.
- *  Even so, the blast radius of a bad value is a failed or wrong query, not
- *  a corrupted game: the contract cannot be talked into agreeing. */
+/** Binds the room to the game id the CONTRACT assigned, flipping it live. `chainGameId` is write-once by
+ *  convention here and by rule in `firestore.rules`. It is the single field in this schema that other clients
+ *  act on without verifying -- they pass it to `GetGameState` -- so it is the single field worth protecting
+ *  hardest. Even so, the blast radius of a bad value is a failed or wrong query, not a corrupted game: the
+ *  contract cannot be talked into agreeing. */
 export async function bindChainGameId(roomId: string, chainGameId: number): Promise<void> {
   const db = requireDb();
   if (!Number.isSafeInteger(chainGameId) || chainGameId < 0) {
@@ -737,18 +630,11 @@ export async function bindChainGameId(roomId: string, chainGameId: number): Prom
  *  Firestore room id here. */
 export function chatCollectionPath(
   roomId: string,
-  /* ==================================================================
-   *  DESIGN NOTE 644: WHICH COLLECTION THE ROOM LIVES IN
-   * ==================================================================
-   *
-   * Lobby rooms are in `games`; sandbox rooms are in `sandbox_rooms`. Both
-   * hang their transcript off the room document in the same way, so the SHAPE
-   * of the path is one decision and the collection is a parameter -- which is
-   * still this function's stated purpose, that nowhere disagrees about where
-   * chat lives.
-   *
-   * Defaulted, so every existing caller is unchanged and the lobby path
-   * cannot be got wrong by omission. */
+  /* Design note #644: WHICH COLLECTION THE ROOM LIVES IN. Lobby rooms are in `games`; sandbox rooms in
+     `sandbox_rooms`. Both hang their transcript off the room document the same way, so the SHAPE of the path is
+     one decision and the collection is a parameter -- which is still this function's stated purpose, that nowhere
+     disagrees about where chat lives. Defaulted, so every existing caller is unchanged and the lobby path cannot
+     be got wrong by omission. */
   collectionName: string = ROOMS_COLLECTION,
 ): [string, string, string] {
   return [collectionName, roomId, CHAT_SUBCOLLECTION];

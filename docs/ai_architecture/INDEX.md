@@ -93,7 +93,8 @@ These arguments appear across many notes and are worth reading once:
 | 3 | Canvas rendering + tile math (incl. the Phase 0 legacy fold) | Done |
 | 4 | Stock market + trading UI (`StockMarketRenderer`, `StockRoundPanel`, `WaterfallAuctionDashboard`, `ContextualActionBar`) | Done |
 | 5A | JSX residue (`App.tsx`, `HexGridRenderer.tsx`) + the eight heaviest tail files (`appStyles`, `RadialTileSelector`, `TrainPurchasePanel`, `gameState`, `RulesReference`, `hexContractTypes`, `TileSelectionPopup`, `FinancialLedger`) | Done |
-| 5B | The remaining ~75 frontend files | Pending |
+| 5B | The 19 heaviest remaining frontend files (`TopTicker`, `gameSetup`, `RoutePlannerPanel`, `routeAutoTrace`, `PlayerCards`, `Lobby`, `sandboxTileLegality`, `PrivatePowerPanel`, `SeatOrderTrail`, `trackReach`, `stationTokens`, `gamePhase`, `ContextualSubPanel`, `hexTileCatalog`, `PrivateTradePanel`, `lobby`, `OperatingSubPhaseStepper`, `privateCatalog`, `trackSegments`) | Done |
+| 5C | The remaining 56 small frontend files | Pending |
 | 6 | Rust contract backend | Pending |
 
 Test files (`src/tests.rs`, `frontend/src/**/*.test.ts`) are out of scope by decision — they
@@ -653,3 +654,323 @@ file is a cross-reference: that file owns the note, and this one cites it by num
 | `FinancialLedger.tsx #552` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx (smaller entries) |
 | `FinancialLedger.tsx #555` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #555 — This is arithmetic, not an estimate |
 | `FinancialLedger.tsx #559` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #405 — One Player Assets table, two places |
+
+---
+
+## Anchor index — Batch 5B
+
+Every `#N` these files cite, and where it resolves. A row whose section names a **different** source file is a
+cross-reference: that file owns the note, and this one cites it by number.
+
+### TopTicker.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `TopTicker.tsx #1` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #1–#7 — Charter |
+| `TopTicker.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `TopTicker.tsx #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `TopTicker.tsx #5` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #5 / #8 / #13 — Derived fit, clamped pan, locked baseline |
+| `TopTicker.tsx #6` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #6 — The static board is the authentic 93 hexes |
+| `TopTicker.tsx #7` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #1–#7 — Charter |
+| `TopTicker.tsx #20` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #457 — The log belongs to the chat, not to the tabs |
+| `TopTicker.tsx #21` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #1–#7 — Charter |
+| `TopTicker.tsx #425` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #425 — One string, and no pictures in it |
+| `TopTicker.tsx #457` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #457 — The log belongs to the chat, not to the tabs |
+| `TopTicker.tsx #458` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #458 — The latest line, where the player is looking |
+| `TopTicker.tsx #476` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #476 — The whole game, not the last seven lines |
+| `TopTicker.tsx #477` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #477 — The time leads |
+| `TopTicker.tsx #581` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #598 / #600 / #614 — The Chat toggle, and the row that did not know about it |
+| `TopTicker.tsx #598` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #598 / #600 / #614 — The Chat toggle, and the row that did not know about it |
+| `TopTicker.tsx #600` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #598 / #600 / #614 — The Chat toggle, and the row that did not know about it |
+| `TopTicker.tsx #614` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #598 / #600 / #614 — The Chat toggle, and the row that did not know about it |
+| `TopTicker.tsx #615` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #615 — Five rows, now that five rows is not a limit |
+| `TopTicker.tsx #616` | [ui_shell_layout.md](ui_shell_layout.md) | TopTicker.tsx #616 — Unread CHAT MESSAGES, not unread feed items |
+
+### gameSetup.ts
+
+| anchor | document | section |
+|---|---|---|
+| `gameSetup.ts #178` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #591 — Undo is an event, not a rewind |
+| `gameSetup.ts #461` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #546 / #550 — Every decision goes in the log, or it is not shared |
+| `gameSetup.ts #468` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #546 / #550 — Every decision goes in the log, or it is not shared |
+| `gameSetup.ts #492` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #538 — A room never boots the fixture's roster |
+| `gameSetup.ts #514` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #538 — A room never boots the fixture's roster |
+| `gameSetup.ts #522` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #591 — Undo is an event, not a rewind |
+| `gameSetup.ts #526` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #526 — The third copy that did not get written |
+| `gameSetup.ts #526a` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #526a / #526b — Purity, and a shuffle that runs once |
+| `gameSetup.ts #526b` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #526a / #526b — Purity, and a shuffle that runs once |
+| `gameSetup.ts #530` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #530 — The setup action is shaped like a message |
+| `gameSetup.ts #536` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #662 — An offer nobody else could see |
+| `gameSetup.ts #537a` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #538 — A room never boots the fixture's roster |
+| `gameSetup.ts #538` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #538 — A room never boots the fixture's roster |
+| `gameSetup.ts #542` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #542 — The auction is a fourth atom, and it was missed |
+| `gameSetup.ts #546` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #546 / #550 — Every decision goes in the log, or it is not shared |
+| `gameSetup.ts #549` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #546 / #550 — Every decision goes in the log, or it is not shared |
+| `gameSetup.ts #550` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #546 / #550 — Every decision goes in the log, or it is not shared |
+| `gameSetup.ts #560` | [hex_tile_math.md](hex_tile_math.md) | HexGridRenderer.tsx #134 / #560 — A hex is not a city |
+| `gameSetup.ts #569` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #570 — The bar wears whose turn it is |
+| `gameSetup.ts #573` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #573 — The resolved grant travels, not the request |
+| `gameSetup.ts #576` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #350 → #576 — Camden & Amboy, added and then un-buttoned |
+| `gameSetup.ts #578` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #662 — An offer nobody else could see |
+| `gameSetup.ts #587` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #594 — An unstarted corporation has no price either |
+| `gameSetup.ts #591` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #591 — Undo is an event, not a rewind |
+| `gameSetup.ts #594` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #594 — An unstarted corporation has no price either |
+| `gameSetup.ts #611` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #611 — The phase was a written thing too |
+| `gameSetup.ts #662` | [sandbox_reducer.md](sandbox_reducer.md) | gameSetup.ts #662 — An offer nobody else could see |
+
+### RoutePlannerPanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `RoutePlannerPanel.tsx #0` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #0 — The step was spread across three places |
+| `RoutePlannerPanel.tsx #1` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #1 → #493 — There was never a manual mode to enter |
+| `RoutePlannerPanel.tsx #2` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #2 — The run button carries the number, and its own gate |
+| `RoutePlannerPanel.tsx #3` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #3 / #4 — Why the red text is gone, and what stayed |
+| `RoutePlannerPanel.tsx #4` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #3 / #4 — Why the red text is gone, and what stayed |
+| `RoutePlannerPanel.tsx #5` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #5 — A corporation runs every train it owns |
+| `RoutePlannerPanel.tsx #6` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table |
+| `RoutePlannerPanel.tsx #7` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #1 → #493 — There was never a manual mode to enter |
+| `RoutePlannerPanel.tsx #9` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table |
+| `RoutePlannerPanel.tsx #266` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #623 — The step's primary action, on the step's toolbar |
+| `RoutePlannerPanel.tsx #274` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #274 — Which stops paid, and how much each |
+| `RoutePlannerPanel.tsx #474` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table |
+| `RoutePlannerPanel.tsx #493` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #1 → #493 — There was never a manual mode to enter |
+| `RoutePlannerPanel.tsx #494` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table |
+| `RoutePlannerPanel.tsx #499` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table |
+| `RoutePlannerPanel.tsx #619` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #619 — Say the obligation, do not only refuse it |
+| `RoutePlannerPanel.tsx #623` | [routing_pathfinding.md](routing_pathfinding.md) | RoutePlannerPanel.tsx #623 — The step's primary action, on the step's toolbar |
+
+### routeAutoTrace.ts
+
+| anchor | document | section |
+|---|---|---|
+| `routeAutoTrace.ts #0` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #0 — A client-side SUGGESTION, not an oracle |
+| `routeAutoTrace.ts #1` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #1 / #6 — The walk follows rails, and spends them |
+| `routeAutoTrace.ts #2` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #2 — Client-side catalog mirrors, not queried |
+| `routeAutoTrace.ts #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `routeAutoTrace.ts #4` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #0 — A client-side SUGGESTION, not an oracle |
+| `routeAutoTrace.ts #5` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #5 / #9 — Clicking two cities should not mean clicking nine hexes |
+| `routeAutoTrace.ts #6` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #1 / #6 — The walk follows rails, and spends them |
+| `routeAutoTrace.ts #7` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #7 / #8 — The best set, and why the optimiser must not be able to lose |
+| `routeAutoTrace.ts #8` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #7 / #8 — The best set, and why the optimiser must not be able to lose |
+| `routeAutoTrace.ts #9` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #5 / #9 — Clicking two cities should not mean clicking nine hexes |
+| `routeAutoTrace.ts #20` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #1 / #6 — The walk follows rails, and spends them |
+| `routeAutoTrace.ts #56` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #5 / #9 — Clicking two cities should not mean clicking nine hexes |
+| `routeAutoTrace.ts #216` | [routing_pathfinding.md](routing_pathfinding.md) | routeAutoTrace.ts #5 / #9 — Clicking two cities should not mean clicking nine hexes |
+
+### PlayerCards.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `PlayerCards.tsx #391` | [contract_economy.md](contract_economy.md) | WaterfallAuctionDashboard.tsx #391 — The catalog moved to `utils/privateCatalog.ts` |
+| `PlayerCards.tsx #423` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+| `PlayerCards.tsx #562` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #562 / #562a — An em dash, and the gap that is the point |
+| `PlayerCards.tsx #562a` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #562 / #562a — An em dash, and the gap that is the point |
+| `PlayerCards.tsx #563` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #563 — A table scans, a card reads |
+| `PlayerCards.tsx #563a` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #563 — A table scans, a card reads |
+| `PlayerCards.tsx #567` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #567 — What came off the card, and why |
+| `PlayerCards.tsx #568` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+| `PlayerCards.tsx #569` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #570 — The bar wears whose turn it is |
+| `PlayerCards.tsx #583` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+| `PlayerCards.tsx #593` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #593 / #595 / #606 — The cards state the turn order, they do not imply it |
+| `PlayerCards.tsx #595` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #593 / #595 / #606 — The cards state the turn order, they do not imply it |
+| `PlayerCards.tsx #606` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #593 / #595 / #606 — The cards state the turn order, they do not imply it |
+| `PlayerCards.tsx #606a` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #606 — Lifted out of the row, in the seat's own colour |
+| `PlayerCards.tsx #609` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+| `PlayerCards.tsx #611` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+| `PlayerCards.tsx #658` | [ui_shell_layout.md](ui_shell_layout.md) | PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree |
+
+### Lobby.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `Lobby.tsx #0` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #0 — Stage off-chain, launch on-chain |
+| `Lobby.tsx #1` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #1 / #2 — The ante is the contract's rule; the game id comes from the transaction |
+| `Lobby.tsx #2` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #1 / #2 — The ante is the contract's rule; the game id comes from the transaction |
+| `Lobby.tsx #3` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #3 — The silent-button bug, and the rule that replaced it |
+| `Lobby.tsx #24` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+| `Lobby.tsx #522` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+| `Lobby.tsx #524` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+| `Lobby.tsx #525` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+| `Lobby.tsx #527` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx (entry points) — Enter, spectate, sandbox |
+| `Lobby.tsx #578` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+| `Lobby.tsx #586` | [firebase_middleware.md](firebase_middleware.md) | Lobby.tsx #24 / #524 / #525 / #586 — The escape hatch, and parking the Web3 lobby |
+
+### sandboxTileLegality.ts
+
+| anchor | document | section |
+|---|---|---|
+| `sandboxTileLegality.ts #0` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #0 — Why this does not violate "no client-side re-validation" |
+| `sandboxTileLegality.ts #1` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #1 / #2 — No tile ids, and no hex coordinates either |
+| `sandboxTileLegality.ts #2` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #1 / #2 — No tile ids, and no hex coordinates either |
+| `sandboxTileLegality.ts #3` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #3 — A preprinted hex is already at a tier |
+| `sandboxTileLegality.ts #4` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #4 — Strict path preservation |
+| `sandboxTileLegality.ts #6` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #6 / #483 — An orientation has to join the network |
+| `sandboxTileLegality.ts #7` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #7 — Track cannot run off the edge of the board |
+| `sandboxTileLegality.ts #9` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #6 / #483 — An orientation has to join the network |
+| `sandboxTileLegality.ts #20` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #6 / #483 — An orientation has to join the network |
+| `sandboxTileLegality.ts #57` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #4 — Strict path preservation |
+| `sandboxTileLegality.ts #70` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #4 — Strict path preservation |
+| `sandboxTileLegality.ts #483` | [hex_tile_math.md](hex_tile_math.md) | sandboxTileLegality.ts #6 / #483 — An orientation has to join the network |
+
+### PrivatePowerPanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `PrivatePowerPanel.tsx #0` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #0 / #1 — What these buttons honestly are |
+| `PrivatePowerPanel.tsx #1` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #0 / #1 — What these buttons honestly are |
+| `PrivatePowerPanel.tsx #2` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #2 / #349 / #470 — Two gates, and how coarse they may be |
+| `PrivatePowerPanel.tsx #349` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #2 / #349 / #470 — Two gates, and how coarse they may be |
+| `PrivatePowerPanel.tsx #350` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #350 → #576 — Camden & Amboy, added and then un-buttoned |
+| `PrivatePowerPanel.tsx #387` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #441 (B&O) — The row is gone, not restricted |
+| `PrivatePowerPanel.tsx #399` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #441 (B&O) — The row is gone, not restricted |
+| `PrivatePowerPanel.tsx #441` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #441 — Who owns a power is not who owns the private |
+| `PrivatePowerPanel.tsx #442` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #442 — The D&H is two powers, and F16 is not free |
+| `PrivatePowerPanel.tsx #443` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #573b / #443 — Why it refused, and what it costs to find out |
+| `PrivatePowerPanel.tsx #470` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #2 / #349 / #470 — Two gates, and how coarse they may be |
+| `PrivatePowerPanel.tsx #573b` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #573b / #443 — Why it refused, and what it costs to find out |
+| `PrivatePowerPanel.tsx #576` | [contract_economy.md](contract_economy.md) | PrivatePowerPanel.tsx #350 → #576 — Camden & Amboy, added and then un-buttoned |
+
+### SeatOrderTrail.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `SeatOrderTrail.tsx #1` | [canvas_rendering.md](canvas_rendering.md) | HexGridRenderer.tsx #1 — Pointy-top axial geometry, reverse-engineered |
+| `SeatOrderTrail.tsx #317` | [contract_economy.md](contract_economy.md) | App.tsx #317 — During the auction, show AVAILABLE cash |
+| `SeatOrderTrail.tsx #342` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #639 — Rivals' money here, yours on your card |
+| `SeatOrderTrail.tsx #545` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualActionBar.tsx #545 — What the mini-auction chase animation meant |
+| `SeatOrderTrail.tsx #567` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597c / #599 (chips) — What the segments do not carry |
+| `SeatOrderTrail.tsx #595` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #595 — An ordinal is not an order |
+| `SeatOrderTrail.tsx #597b` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597b → #599 → #603 → #603a — Three passes to stop being five pills |
+| `SeatOrderTrail.tsx #597c` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597c / #599 (chips) — What the segments do not carry |
+| `SeatOrderTrail.tsx #599` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597b → #599 → #603 → #603a — Three passes to stop being five pills |
+| `SeatOrderTrail.tsx #603` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597b → #599 → #603 → #603a — Three passes to stop being five pills |
+| `SeatOrderTrail.tsx #603a` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #597b → #599 → #603 → #603a — Three passes to stop being five pills |
+| `SeatOrderTrail.tsx #610` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #610 — This seat has passed since anyone last acted |
+| `SeatOrderTrail.tsx #637` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #639 — Rivals' money here, yours on your card |
+| `SeatOrderTrail.tsx #639` | [ui_shell_layout.md](ui_shell_layout.md) | SeatOrderTrail.tsx #639 — Rivals' money here, yours on your card |
+
+### trackReach.ts
+
+| anchor | document | section |
+|---|---|---|
+| `trackReach.ts #0` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #0 — A hint about reach, not a ruling about legality |
+| `trackReach.ts #1` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #1 — Connectivity is checked from both sides |
+| `trackReach.ts #2` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #2 — A corporation with no token is unconstrained |
+| `trackReach.ts #3` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #3 — A tile lay extends a route; it does not touch a hex |
+| `trackReach.ts #4` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #4 — A network follows rails, not hex adjacency; and the network is shown, not hidden |
+| `trackReach.ts #20` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #4 — A network follows rails, not hex adjacency; and the network is shown, not hidden |
+| `trackReach.ts #483` | [routing_pathfinding.md](routing_pathfinding.md) | trackReach.ts #483 — A network ends at PORTS, not at hexes |
+
+### stationTokens.ts
+
+| anchor | document | section |
+|---|---|---|
+| `stationTokens.ts #0` | [contract_economy.md](contract_economy.md) | stationTokens.ts #0 — The price escalates; it was a constant |
+| `stationTokens.ts #1` | [contract_economy.md](contract_economy.md) | stationTokens.ts #1 — The allowance is per corporation, not a constant |
+| `stationTokens.ts #2` | [contract_economy.md](contract_economy.md) | stationTokens.ts #2 — Three refusals, before a signature |
+| `stationTokens.ts #221` | [contract_economy.md](contract_economy.md) | stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on |
+| `stationTokens.ts #293b` | [contract_economy.md](contract_economy.md) | App.tsx #293 / App.tsx #293b — "Owns none" is not "we were not told" |
+| `stationTokens.ts #438` | [contract_economy.md](contract_economy.md) | stationTokens.ts #438 — Why this corporation cannot place a station |
+| `stationTokens.ts #453` | [contract_economy.md](contract_economy.md) | stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on |
+| `stationTokens.ts #459` | [contract_economy.md](contract_economy.md) | stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on |
+| `stationTokens.ts #463` | [contract_economy.md](contract_economy.md) | stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on |
+| `stationTokens.ts #580` | [contract_economy.md](contract_economy.md) | stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on |
+
+### gamePhase.ts
+
+| anchor | document | section |
+|---|---|---|
+| `gamePhase.ts #1` | [utils_layer.md](utils_layer.md) | gamePhase.ts #1 — The phase is derived, not queried — and it has to be |
+| `gamePhase.ts #2` | [utils_layer.md](utils_layer.md) | gamePhase.ts #2 / #4 — The depot count is derived the same way, and is exact |
+| `gamePhase.ts #3` | [utils_layer.md](utils_layer.md) | gamePhase.ts #3 — Unknown is a state, not a zero |
+| `gamePhase.ts #4` | [utils_layer.md](utils_layer.md) | gamePhase.ts #2 / #4 — The depot count is derived the same way, and is exact |
+| `gamePhase.ts #5` | [utils_layer.md](utils_layer.md) | gamePhase.ts #5 / #6 / #7 — One countdown, one escalation |
+| `gamePhase.ts #6` | [utils_layer.md](utils_layer.md) | gamePhase.ts #5 / #6 / #7 — One countdown, one escalation |
+| `gamePhase.ts #7` | [utils_layer.md](utils_layer.md) | gamePhase.ts #5 / #6 / #7 — One countdown, one escalation |
+| `gamePhase.ts #8` | [utils_layer.md](utils_layer.md) | gamePhase.ts #8 — A tier's fate is a property of the tier |
+| `gamePhase.ts #40` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #40 — The rails must GROW, not merely exist |
+| `gamePhase.ts #612` | [utils_layer.md](utils_layer.md) | gamePhase.ts #612 / #632 — Naming the phase, and colouring the train |
+| `gamePhase.ts #632` | [utils_layer.md](utils_layer.md) | gamePhase.ts #612 / #632 — Naming the phase, and colouring the train |
+
+### ContextualSubPanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `ContextualSubPanel.tsx #1` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #1–#5 — Charter |
+| `ContextualSubPanel.tsx #2` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #1–#5 — Charter |
+| `ContextualSubPanel.tsx #3` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #3 / #7 / #10 — Anchoring a card that grew 3× wider |
+| `ContextualSubPanel.tsx #4` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #4 / #5 — No client-side re-validation, and no tile table |
+| `ContextualSubPanel.tsx #5` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #1–#5 — Charter |
+| `ContextualSubPanel.tsx #8` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #11 / #8 / #572 — Table mechanics |
+| `ContextualSubPanel.tsx #9` | [canvas_rendering.md](canvas_rendering.md) | TileSelectionPopup.tsx #9 — The artwork is the content |
+| `ContextualSubPanel.tsx #10` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #10 — What this table can and cannot source |
+| `ContextualSubPanel.tsx #11` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #11 / #8 / #572 — Table mechanics |
+| `ContextualSubPanel.tsx #170` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #170 — Show the person, not the hash |
+| `ContextualSubPanel.tsx #405` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #405 — One Player Assets table, two places |
+| `ContextualSubPanel.tsx #449` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #449 — Operating order, and unfloated dimmed |
+| `ContextualSubPanel.tsx #511` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #645 — Both sides of "of" are round numbers |
+| `ContextualSubPanel.tsx #552` | [stock_market.md](stock_market.md) | StockRoundPanel.tsx #490 / #552 — The crown, as a drawing |
+| `ContextualSubPanel.tsx #559` | [contract_economy.md](contract_economy.md) | FinancialLedger.tsx #405 — One Player Assets table, two places |
+| `ContextualSubPanel.tsx #572` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #11 / #8 / #572 — Table mechanics |
+| `ContextualSubPanel.tsx #645` | [ui_shell_layout.md](ui_shell_layout.md) | ContextualSubPanel.tsx #645 — Both sides of "of" are round numbers |
+
+### PrivateTradePanel.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `PrivateTradePanel.tsx #0` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #0 — The consent step is not on chain yet |
+| `PrivateTradePanel.tsx #1` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #1 — The price band is mirrored, not invented |
+| `PrivateTradePanel.tsx #2` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #0 — The consent step is not on chain yet |
+| `PrivateTradePanel.tsx #235` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #235 — Skip and Undo swapped lines |
+| `PrivateTradePanel.tsx #386` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #386 — Show the unsold ones, disabled |
+| `PrivateTradePanel.tsx #660` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #660a — A rule enforced in a function that never runs |
+| `PrivateTradePanel.tsx #660a` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #660a — A rule enforced in a function that never runs |
+| `PrivateTradePanel.tsx #661` | [contract_economy.md](contract_economy.md) | PrivateTradePanel.tsx #661 — A row per private, at a readable size |
+
+### lobby.ts
+
+| anchor | document | section |
+|---|---|---|
+| `lobby.ts #0` | [firebase_middleware.md](firebase_middleware.md) | lobby.ts #0 — What is and is not authoritative here |
+| `lobby.ts #1` | [firebase_middleware.md](firebase_middleware.md) | lobby.ts #1 — Presence is a heartbeat, and is clock-skew-immune |
+| `lobby.ts #644` | [firebase_middleware.md](firebase_middleware.md) | lobby.ts (schema and transport) |
+
+### OperatingSubPhaseStepper.tsx
+
+| anchor | document | section |
+|---|---|---|
+| `OperatingSubPhaseStepper.tsx #0` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #0 — This replaces a text label, and that is the point |
+| `OperatingSubPhaseStepper.tsx #1` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #1 / #212 — The strip is a read-only indicator, in every mode |
+| `OperatingSubPhaseStepper.tsx #2` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #2 — Five steps or six, depending on the era |
+| `OperatingSubPhaseStepper.tsx #142` | [contract_economy.md](contract_economy.md) | ContextualActionBar.tsx #142 / #266 — Running trains is its own phase |
+| `OperatingSubPhaseStepper.tsx #212` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #1 / #212 — The strip is a read-only indicator, in every mode |
+| `OperatingSubPhaseStepper.tsx #235` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #235 — Skip and Undo swapped lines |
+| `OperatingSubPhaseStepper.tsx #299` | [ui_shell_layout.md](ui_shell_layout.md) | appStyles.ts #299 / #456 / #46 — The tab row |
+| `OperatingSubPhaseStepper.tsx #385` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #385 — A step with nothing in it is not a step |
+| `OperatingSubPhaseStepper.tsx #613` | [state_machine.md](state_machine.md) | OperatingSubPhaseStepper.tsx #613 — The rule is a phase number, so say the phase number |
+
+### privateCatalog.ts
+
+| anchor | document | section |
+|---|---|---|
+| `privateCatalog.ts #13` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #13 — The enforcement badges are gone, and what that costs |
+| `privateCatalog.ts #312` | [contract_economy.md](contract_economy.md) | WaterfallAuctionDashboard.tsx #312 — Two privates cannot reserve one hex |
+| `privateCatalog.ts #341` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #423 — The acronym is a name, not a number |
+| `privateCatalog.ts #391` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #391 — One copy of the descriptions |
+| `privateCatalog.ts #423` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #423 — The acronym is a name, not a number |
+| `privateCatalog.ts #548` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #548 — Described, not quoted |
+| `privateCatalog.ts #660` | [sandbox_reducer.md](sandbox_reducer.md) | sandboxSession.ts #660 — The B&O is not for sale to a corporation |
+| `privateCatalog.ts #661` | [contract_economy.md](contract_economy.md) | privateCatalog.ts #661 — The power, in one line, before the paragraph |
+
+### trackSegments.ts
+
+| anchor | document | section |
+|---|---|---|
+| `trackSegments.ts #0` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #0 — A hex is not a node |
+| `trackSegments.ts #1` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #1 — The answer already existed; nothing consumed it |
+| `trackSegments.ts #2` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #2 — Where there is no artwork, everything connects |
+| `trackSegments.ts #3` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #3 — A segment key, because a hex id could not be one |
+| `trackSegments.ts #20` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #0 — A hex is not a node |
+| `trackSegments.ts #229` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts (traversals) — `null` is the whole point |
+| `trackSegments.ts #484` | [routing_pathfinding.md](routing_pathfinding.md) | trackSegments.ts #484 — A red off-board area is a terminus, not a junction |

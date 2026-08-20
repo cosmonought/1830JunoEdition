@@ -2,100 +2,21 @@
 //
 // The Run Routes step, as one panel read top to bottom.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE STEP WAS SPREAD ACROSS THREE PLACES
-// ===================================================================
+// Design note #0: THE STEP WAS SPREAD ACROSS THREE PLACES -- the two buttons that START a route in the bar's
+// far-right utilities rail, the button that FINISHES one in its centre column above the route it would
+// submit, and the readout saying whether finishing was possible in a box below both. A player following the
+// obvious top-to-bottom reading order encountered the actions in the sequence 3, 1, 2.
+// The panel now IS the sequence: re-draft, see what you built, run it for a stated amount.
 //
-// Running a train took four controls, and the Operating Round bar put them
-// in three different regions of itself:
+// Design note #2: the run button carries the NUMBER and its own gate -- the amount on the button is the
+// amount the route pays, so a mis-clicked hex shows the wrong number before committing rather than after.
+// Disabled, not hidden, below $1: hiding it would remove the only evidence that finishing is the next step.
 //
-//   "Auto Route" and "Manual Route"   -- the bar's RIGHT RAIL, the docked
-//                                        utilities column
-//   "Run Selected Route"              -- the bar's CENTRE column, among the
-//                                        sub-phase's contextual buttons
-//   the waypoint list, the stop
-//   counter, the value, "Clear Route" -- a dashed panel BELOW both, and
-//                                        only when manual mode was on
+// Design note #3: nothing here is red unless the player has done something the contract will refuse. The
+// worst offender was not a warning at all -- it reported a SUCCESS in the colour reserved for failure, on
+// the happy path, so the steady state of a working Auto Route was a red paragraph.
 //
-// Nothing about that grouping matched the order the player works in. The
-// two buttons that START a route sat furthest right; the button that
-// FINISHES one sat centre, above the route it would submit; and the readout
-// telling you whether finishing was even possible sat below both, in a box
-// that appeared and disappeared. A player following the obvious top-to-
-// bottom reading order encountered the actions in the sequence 3, 1, 2.
-//
-// The panel now IS the sequence:
-//
-//   TOP     re-draft, if you want to start over   (one action button)
-//   MIDDLE  see what you have built               (a three-row table)
-//   BOTTOM  run it, for a stated amount           (one primary button)
-//
-// ===================================================================
-//  DESIGN NOTE 1: A MODE, NOT TWO BUTTONS THAT DO DIFFERENT KINDS OF THING
-// ===================================================================
-//
-// (SUPERSEDED by design note #493, which removed the mode entirely. Kept
-// because its diagnosis was right and only its conclusion was half a step
-// short -- the two controls were indeed different CATEGORIES of thing, and
-// the fix was to keep the action and drop the mode rather than to merge
-// them into one switch.)
-//
-// "Auto Route" was an ACTION (draft a path now) and "Manual Route" was a
-// MODE (send my map clicks here), rendered as two identical buttons side by
-// side. They looked like alternatives and behaved like different categories,
-// which is why the pair needed two long tooltips to be usable at all.
-//
-// Both became positions of one segmented control: how this route gets built.
-// Choosing Auto-Route ran the tracer and filled the table; choosing Manual
-// Route handed the map back to the player -- except the map had never been
-// taken away, which is what design note #493 found. Selecting a mode also
-// ENGAGED the planner, and that engagement is now unconditional for the
-// whole sub-phase.
-//
-// EDITING AN AUTO-DRAFTED ROUTE FLIPPED THE TOGGLE TO MANUAL. The moment a
-// player clicked a hex, the path on screen was no longer the one the tracer
-// produced, and a control still reading "Auto-Route" would have been
-// claiming otherwise. That correction is what gave the toggle away: a
-// control that has to be silently rewritten by the thing it supposedly
-// governs is not governing it. The drafted path is still kept as the
-// starting point, and there is no longer a label to keep honest.
-//
-// ===================================================================
-//  DESIGN NOTE 2: THE RUN BUTTON CARRIES THE NUMBER, AND ITS OWN GATE
-// ===================================================================
-//
-// "Run Selected Route" named the action and withheld the one figure the
-// decision turns on. It now reads "Run Selected Route(s) for $180", which
-// also makes the button the confirmation: the amount on the button is the
-// amount the route pays, so a player who mis-clicked a hex sees the wrong
-// number before committing rather than after.
-//
-// It is DISABLED, not hidden, below $1. Hiding it would remove the only
-// on-screen evidence that finishing is the next step, and a player whose
-// route is not yet legal would be looking for a control that no longer
-// exists. Disabled-with-a-reason keeps the shape of the step intact and
-// says what is missing -- the reason is in the tooltip, and in the status
-// line above.
-//
-// ===================================================================
-//  DESIGN NOTE 3: WHY THE RED TEXT IS GONE
-// ===================================================================
-//
-// The panel used to stack up to four red strings: a stop-limit warning, an
-// endpoint warning, a click-rejection message, and -- after every use of
-// Auto Route -- "Auto Route drafted 5 hexes worth $180. Edit it by clicking
-// hexes, or clear it and build your own."
-//
-// That last one was the worst offender and was not a warning at all. It
-// reported a SUCCESS in the colour reserved for failure, restated two
-// figures already on screen (the hex chain, the value), and then explained
-// the panel's own controls in prose. It fired on the happy path, so the
-// steady state of a working Auto Route was a red paragraph.
-//
-// It is deleted outright. The legality problems it sat among are real and
-// are kept, but demoted: one neutral status line under the route, plus the
-// disabled run button and its tooltip. Nothing in this panel is red unless
-// the player has done something the contract will refuse.
+// Design notes #1/#4-#9/#474/#493/#499/#623: see `docs/ai_architecture/routing_pathfinding.md`.
 
 import React from "react";
 
@@ -103,37 +24,20 @@ import { FONT_SIZE } from "../styles/typography";
 // Design note #494: the same per-train ink the map's route overlay uses.
 import { routeTrainColor } from "../styles/routeLivery";
 
-/* `RouteBuildMode` is GONE -- design note #493. It was `"auto" | "manual"`,
-   and the note above it argued at length about which value the step should
-   open on. That argument is what gave the removal away: both values produced
-   the same behaviour, because `routeSelectMode` engages the builder for the
-   whole sub-phase either way. The type is deleted rather than left unused,
-   since a mode type with no modes is how the toggle grows back. */
+/* `RouteBuildMode` is GONE -- design note #493. It was `"auto" | "manual"`, and the note above it argued at
+   length about which value the step should open on. That argument is what gave the removal away: both values
+   produced the same behaviour, because `routeSelectMode` engages the builder for the whole sub-phase either
+   way. Deleted rather than left unused, since a mode type with no modes is how the toggle grows back. */
 
-/* ==================================================================
- *  DESIGN NOTE 5: A CORPORATION RUNS EVERY TRAIN IT OWNS
- * ==================================================================
- *
- * REPORTED: the router runs a single train even when the corporation owns
- * three.
- *
- * The panel modelled one route, and the props said so: `selectedTrain` was
- * a string, `hexLabels` a single chain, `value` a single number. Which is a
- * fair model of what a 1830 corporation does exactly never -- it runs ALL
- * of its trains in one Operating Round turn, each on its own route, and the
- * dividend is the sum.
- *
- * THE TRAIN LIST WAS ALSO DEDUPLICATED, which is the deeper half of the
- * bug. `runnableTrains` collapsed three 3-trains into one chip on the
- * reasoning that "two 3-trains are one CHOICE" -- true when the question is
- * "which train am I validating this single route against", and false once
- * the question is "which of my trains am I drafting for now". Three
- * 3-trains are three trains. They need three routes and three chips.
- *
- * So the panel takes DRAFTS, one per owned train, identified by their index
- * into `owned_trains` rather than by model -- the only thing that
- * distinguishes one 3-train from another.
- */
+/* Design note #5: A CORPORATION RUNS EVERY TRAIN IT OWNS. The panel modelled one route and the props said
+   so -- a fair model of what a 1830 corporation does exactly never: it runs ALL of its trains in one turn,
+   each on its own route, and the dividend is the sum.
+   THE TRAIN LIST WAS ALSO DEDUPLICATED, which is the deeper half. Three 3-trains collapsed into one chip on
+   the reasoning that "two 3-trains are one CHOICE" -- true when the question is which train to validate a
+   single route against, false once it is which of my trains am I drafting for now. Three 3-trains are three
+   trains. They need three routes and three chips.
+   So the panel takes DRAFTS, one per owned train, identified by their index into `owned_trains` -- the only
+   thing that distinguishes one 3-train from another. */
 
 /** One train's drafted route. */
 export interface TrainRouteDraft {
@@ -169,21 +73,12 @@ export interface RoutePlannerPanelProps {
    *  `null` when the corporation owns nothing to draft for. */
   activeTrainIndex: number | null;
   onSelectTrain: (trainIndex: number) => void;
-  /* ==================================================================
-   *  DESIGN NOTE 9: THE ROW'S END OF THE SHARED CURSOR
-   * ==================================================================
-   *
-   * `hexCanvasPrimitives.ts` design note #373 explains the cursor itself.
-   *
-   * DISTINCT FROM `activeTrainIndex`, and the two are easy to conflate.
-   * Active means "map clicks are drafting for this train" -- a MODE, chosen
-   * by clicking the chip, persisting until changed. Highlighted means "this
-   * is the one being looked at right now" -- transient, driven by hover,
-   * and it can point at a train that is not the active one, which is
-   * exactly what makes it useful for comparing two drafted routes.
-   *
-   * Merging them would mean hovering a row silently redirected the map's
-   * clicks, which is the kind of mode change nobody expects from a hover. */
+  /* Design note #9: THE ROW'S END OF THE SHARED CURSOR (`hexCanvasPrimitives.ts #373` explains the cursor).
+     DISTINCT FROM the active train, and the two are easy to conflate: ACTIVE means "map clicks are drafting for
+     this train" -- a mode, chosen by clicking, persisting until changed. HIGHLIGHTED means "this is the one
+     being looked at right now" -- transient, driven by hover, and it can point at a train that is not the
+     active one, which is exactly what makes it useful for comparing two drafted routes.
+     Merging them would mean hovering a row silently redirected the map's clicks. */
   highlightedTrainIndex?: number | null;
   onHighlightTrain?: (trainIndex: number | null) => void;
   /** Clears one train's route, or every train's when given `null`. */
@@ -195,96 +90,40 @@ export interface RoutePlannerPanelProps {
   /** Why running is impossible regardless of the route -- currently only
    *  "this corporation owns no trains". */
   noTrainReason: string;
-  /* ==================================================================
-   *  DESIGN NOTE 4: A REFUSED CLICK STILL HAS TO SAY SO
-   * ==================================================================
-   *
-   * Design note #3 deletes the red paragraph Auto Route emitted on SUCCESS.
-   * It does not delete the messages the builder emits when it REFUSES a
-   * click -- "F10 isn't adjacent to E11", "B20 cannot START a route" --
-   * which are the opposite case: the player did something, nothing
-   * happened, and this string is the only thing that can explain why.
-   *
-   * Dropping these was briefly the state of this refactor and it was worse
-   * than the clutter it removed. A builder that silently ignores half your
-   * clicks reads as broken, and the player's next move is to click harder.
-   *
-   * It renders in the same status slot as `blockedReason` and takes
-   * precedence over it, because a refusal is about the click just made
-   * while the blocked reason is a standing condition. Amber, not red: the
-   * route is intact and nothing has failed except one click. */
+  /* Design note #4: A REFUSED CLICK STILL HAS TO SAY SO. #3 deletes the red paragraph Auto Route emitted on
+     SUCCESS; it does not delete the messages the builder emits when it REFUSES a click, which are the opposite
+     case -- the player did something, nothing happened, and this string is the only thing that can explain why.
+     Dropping these was briefly the state of this refactor and it was worse than the clutter it removed: a
+     builder that silently ignores half your clicks reads as broken, and the player's next move is to click
+     harder.
+     It takes precedence over the standing blocked reason, because a refusal is about the click just made.
+     Amber, not red: the route is intact and nothing has failed except one click. */
   clickFeedback: string | null;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 493: THERE WAS NEVER A MANUAL MODE TO ENTER
- * ==================================================================
- *
- * REPORTED: the separate "Manual Route" button is redundant if players can
- * interact with the map natively. Remove it; clicking hexes and train chips
- * should override the auto-route suggestion with no mode toggle.
- *
- * The report is right, and the toggle was already describing a state that
- * did not exist. `routeSelectMode` -- the flag that actually routes map
- * clicks into the route builder -- is forced ON for the WHOLE Routes
- * sub-phase (App.tsx design note #266: "entering the step ENGAGES the
- * builder"), regardless of which position the toggle showed. So a player in
- * "Auto-Route" could already click hexes and edit the draft, and design note
- * #266's own `handleRouteHexClick` flipped the label to "Manual" on the
- * first click to stop the control lying about it.
- *
- * That is a toggle whose two positions did the same thing, kept in step with
- * reality by an assignment buried in a click handler. What it cost was
- * legibility: a player who wanted to edit reasonably assumed they had to
- * switch modes first, on a screen where they never did.
- *
- * WHAT REPLACES IT IS ONE BUTTON, AND THE DISTINCTION IS THE POINT.
- * `AutoRouteButton` is an ACTION -- "draft this again" -- not a mode. It has
- * no pressed state to contradict, nothing to leave switched on, and no
- * second position implying the first one disabled the map. Re-drafting is a
- * real capability worth keeping (it is how a player abandons an edit and
- * returns to the tracer's answer), so it survives the toggle rather than
- * going with it.
- *
- * `RouteBuildMode` IS DELETED, not left unused. A mode type with no modes is
- * how the toggle grows back.
- */
+/* Design note #493: THERE WAS NEVER A MANUAL MODE TO ENTER. `routeSelectMode` -- the flag that actually
+   routes map clicks into the builder -- is forced ON for the WHOLE Routes sub-phase (`App.tsx #266`),
+   regardless of which position the toggle showed. So a player in "Auto-Route" could already edit the draft,
+   and #266's click handler flipped the label to "Manual" on the first click to stop the control lying.
+   That is a toggle whose two positions did the same thing, kept in step with reality by an assignment buried
+   in a click handler -- and what it cost was legibility: a player who wanted to edit reasonably assumed they
+   had to switch modes first, on a screen where they never did.
+   WHAT REPLACES IT IS ONE BUTTON, AND THE DISTINCTION IS THE POINT. Auto-Route is an ACTION -- "draft this
+   again" -- with no pressed state to contradict and no second position implying the first disabled the map.
+   Re-drafting is how a player abandons an edit and returns to the tracer's answer, so it survives the toggle. */
 const AUTO_ROUTE_TITLE =
   "Draft routes for every train from this corporation's station tokens through its " +
   "connected network. A suggestion, not a ruling — connectivity, token access and train " +
   "limits are still the contract's to judge. Click any hex or train chip afterwards to " +
   "edit by hand; run this again to start over from the tracer's answer.";
 
-/* ==================================================================
- *  DESIGN NOTE 7: THE TOGGLE MOVED UP TO THE TOOLBAR
- * ==================================================================
- *
- * Design note #0 pulled three scattered controls into one panel and put the
- * mode toggle at its top. That fixed the reading ORDER, which was the
- * complaint, and left one thing slightly off: the toggle is the only
- * control in this panel that does not describe a route. It picks the tool.
- * Sitting inside the panel's own border, above a table of drafted routes,
- * it read as a property OF those routes rather than as the thing that
- * produces them -- and it was the only sub-phase whose primary controls
- * lived somewhere other than the action toolbar every other step uses.
- *
- * So it lifts into the toolbar, on the same line as "Skip Run Routes",
- * which is exactly the pair of choices a player has on arriving at this
- * step: pick how to build, or decline to build at all.
- *
- * THE READING ORDER IS UNCHANGED, which is why this is a refinement of
- * design note #0 rather than a reversal of it. Top to bottom is still
- * choose-the-tool, see-what-you-built, run-it -- the first of those has
- * simply moved from inside the panel to the line directly above it, and
- * the two things design note #0 actually objected to (a run button ABOVE
- * the routes it submits, a mode toggle exiled to the far-right utilities
- * rail) both stay fixed.
- *
- * IT LIVES HERE, NOT IN `App.tsx`. The markup, the palette and the two
- * tooltips are this component's, and a copy in the toolbar would be a
- * second thing to keep in step with the first -- the exact drift design
- * note #0 was cleaning up. `App.tsx` mounts it; it does not rebuild it.
- */
+/* Design note #7: THE TOGGLE MOVED UP TO THE TOOLBAR. #0 fixed the reading ORDER and left one thing off:
+   the toggle is the only control in this panel that does not describe a route -- it picks the tool. Sitting
+   inside the panel's border above a table of drafted routes, it read as a property OF those routes.
+   THE READING ORDER IS UNCHANGED, which is why this refines #0 rather than reversing it: top to bottom is
+   still choose-the-tool, see-what-you-built, run-it.
+   IT LIVES HERE, NOT IN `App.tsx`: the markup, the palette and the tooltips are this component's, and a copy
+   in the toolbar would be a second thing to keep in step -- the exact drift #0 was cleaning up. */
 export interface AutoRouteButtonProps {
   onAutoRoute: () => void;
   /** A corporation with no trains cannot draft at all -- the button goes
@@ -333,22 +172,12 @@ function isRunnableDraft(draft: TrainRouteDraft): boolean {
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 623: ONE ANSWER TO "WHAT WOULD RUN, AND FOR HOW MUCH"
- * ==================================================================
- *
- * Exported because the Run button now exists twice -- once at the bottom of
- * this panel and once on the action bar (design note #623 in
- * `ContextualActionBar.tsx`) -- and the two must not be able to disagree
- * about whether there is anything to run or what it pays.
- *
- * That is a real risk and not a theoretical one: this file's design note #5
- * settles a genuinely non-obvious rule -- invalid drafts contribute nothing
- * rather than blocking the rest, so a player with two good routes and one
- * broken one runs the two. A second implementation would have to rediscover
- * that, and the failure mode is a bar button that offers a total the panel
- * refuses to run.
- */
+/* Design note #623: ONE ANSWER TO "WHAT WOULD RUN, AND FOR HOW MUCH". Exported because the Run button now
+   exists twice -- at the bottom of this panel and on the action bar -- and the two must not be able to
+   disagree about whether there is anything to run or what it pays.
+   That is a real risk and not a theoretical one: #5 settles a genuinely non-obvious rule -- invalid drafts
+   contribute nothing rather than blocking the rest -- and the failure mode of a second implementation is a
+   bar button that offers a total the panel refuses to run. */
 export function runnableRouteSummary(drafts: readonly TrainRouteDraft[]): {
   runnable: number;
   drafted: number;
@@ -362,39 +191,17 @@ export function runnableRouteSummary(drafts: readonly TrainRouteDraft[]): {
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 623: THE STEP'S PRIMARY ACTION, ON THE STEP'S TOOLBAR
- * ==================================================================
- *
- * REPORTED: "on the sticky/trailing Action panel there is a grayed out
- * 'Auto-Route' button next to a 'Skip Run Routes' button, but there is no
- * actual 'Run Routes' button to move to the next phase. Players have to
- * scroll up to see that."
- *
- * Design note #266 moved Run out of the toolbar deliberately, and its
- * reasoning was sound: the button belongs "directly under the path it runs
- * and carrying the amount it pays", and a copy in the bar would be "a second
- * control for one action -- and the vaguer of the two, since only the panel's
- * copy knows the figure".
- *
- * WHAT THAT ARGUMENT MISSED IS THE STICKY BAR. The action bar follows the
- * player down the page; the panel does not. So on the one step whose primary
- * action lives in the panel, scrolling to look at the map takes the Run
- * button off screen and leaves a toolbar showing only Auto-Route and Skip --
- * two ways to not finish the step. Every other sub-phase keeps its finishing
- * action on that bar.
- *
- * THE "VAGUER OF THE TWO" OBJECTION IS ANSWERED RATHER THAN IGNORED. This
- * button carries the same total, from `runnableRouteSummary`, which is the
- * function the panel's own copy reads. Neither is the authority; the drafts
- * are, and both render the same derivation of them.
- *
- * AUTO-ROUTE STAYS. The report suggests replacing it -- "since auto-route is
- * the default/automatic option" -- but it is not automatic: entering the step
- * engages the builder (design note #266) and drafts nothing. Removing the
- * button would leave clicking hexes as the only way to draft a route, which
- * is the opposite of what the request wants. What it should be is
- * SUBORDINATE to Run, which is what putting Run beside it achieves. */
+/* Design note #623: THE STEP'S PRIMARY ACTION, ON THE STEP'S TOOLBAR. #266 moved Run out of the toolbar
+   deliberately and its reasoning was sound -- the button belongs under the path it runs, and a copy in the
+   bar would be the vaguer of the two since only the panel's copy knows the figure.
+   WHAT THAT ARGUMENT MISSED IS THE STICKY BAR. The bar follows the player down the page; the panel does not.
+   So on the one step whose primary action lives in the panel, scrolling to look at the map leaves a toolbar
+   showing only Auto-Route and Skip -- two ways to not finish the step. Every other sub-phase keeps its
+   finishing action on that bar.
+   THE "VAGUER OF THE TWO" OBJECTION IS ANSWERED RATHER THAN IGNORED: both read `runnableRouteSummary`.
+   Neither is the authority; the drafts are, and both render the same derivation of them.
+   AUTO-ROUTE STAYS. It is not automatic -- entering the step engages the builder and drafts nothing -- so
+   removing it would leave clicking hexes as the only way to draft. What it should be is SUBORDINATE to Run. */
 export interface RunRoutesButtonProps {
   onRunRoute: () => void;
   drafts: readonly TrainRouteDraft[];
@@ -448,11 +255,8 @@ export function RoutePlannerPanel({
   noTrainReason,
   clickFeedback,
 }: RoutePlannerPanelProps) {
-  /* Design note #6: WHICH FULL PATHS ARE OPEN.
-     Local state, keyed by train index. It is pure disclosure -- nothing
-     outside this panel cares which accordions a player has flipped, and
-     lifting it would make every parent that renders this own a preference
-     about someone else's detail rows. */
+  /* Design note #6: WHICH FULL PATHS ARE OPEN. Local state, keyed by train index -- pure disclosure, and
+     lifting it would make every parent that renders this own a preference about someone else's detail rows. */
   const [expanded, setExpanded] = React.useState<ReadonlySet<number>>(new Set());
   const toggleExpanded = (trainIndex: number) =>
     setExpanded((prev) => {
@@ -462,16 +266,12 @@ export function RoutePlannerPanel({
       return next;
     });
 
-  /* Design note #5: THE BUTTON SUMS EVERY VALID ROUTE. A corporation's
-     dividend is what all its trains earned together, so a per-train figure
-     on the run button would be the wrong number however it was chosen.
-     Invalid drafts contribute nothing rather than blocking the rest -- a
-     player who has drawn two good routes and one broken one can still run
-     the two, which is also what the contract would let them do.
-
-     Design note #623: lifted into `runnableRouteSummary`, which the action
-     bar's copy of the Run button also reads. The rule above is exactly the
-     kind a second implementation would get subtly wrong. */
+  /* Design note #5: THE BUTTON SUMS EVERY VALID ROUTE. A corporation's dividend is what all its trains earned
+     together, so a per-train figure would be the wrong number however it was chosen. Invalid drafts contribute
+     nothing rather than blocking the rest -- a player with two good routes and one broken one can still run the
+     two, which is also what the contract would let them do.
+     Design note #623: lifted into `runnableRouteSummary`, which the bar's copy also reads. The rule above is
+     exactly the kind a second implementation would get subtly wrong. */
   const {
     runnable: runnableCount,
     drafted: draftedCount,
@@ -511,41 +311,16 @@ export function RoutePlannerPanel({
       ) : (
         <div style={styles.table} role="table" aria-label="Drafted routes">
           <div style={styles.headerRow} role="row">
-            {/* ==================================================================
-                 DESIGN NOTE 499: "RUNNINGROUTE" WAS NOT A TYPO
-                ==================================================================
-
-                REPORTED: the panel listing the trains and their routes is
-                titled "Runningroute", with no space.
-
-                There is no such string, and that is the whole finding. These
-                are two adjacent COLUMN HEADERS -- "Running" over the train
-                chip, "Route" over the path -- and the first one overflowed
-                into the second, so the two words met on screen with nothing
-                between them and read as one broken title.
-
-                THE CAUSE IS A WIDTH, not a string. `headerRow`'s grid is
-                `52px 1fr 92px`, and 52px is sized for what the COLUMN holds:
-                a train chip reading "3" or "5". The word above it rendered
-                at `FONT_SIZE.small` bold uppercase with 0.05em tracking --
-                near 68px for "RUNNING" -- so it ran past its own column and
-                the 10px gap and straight into its neighbour. Editing the
-                text to "Running Route" would have made the overflow worse
-                and fixed nothing, because there was never a single label to
-                put a space into.
-
-                SO THE HEADER NAMES WHAT THE COLUMN HOLDS, and fits it.
-                "Train" is both shorter and more accurate: the cell under it
-                is a train chip, not a state of running. "Running" was
-                describing the step rather than the column, which is what led
-                to a header too wide for the thing it labels.
-
-                `minWidth: 0` and `overflow: hidden` on `tableLabel` close the
-                CLASS of bug rather than this instance: a grid item's default
-                `min-width: auto` refuses to shrink below its content, which
-                is why a too-long header silently escapes its track instead
-                of being clipped. Any future header that outgrows its column
-                now truncates inside it. */}
+            {/* Design note #499: "RUNNINGROUTE" WAS NOT A TYPO. There is no such string, and that is the whole finding --
+               these are two adjacent COLUMN HEADERS, and the first overflowed into the second so the two words met on
+               screen with nothing between them.
+               THE CAUSE IS A WIDTH, not a string. The grid track is 52px, sized for what the COLUMN holds -- a train chip
+               reading "3" or "5" -- while the word above it rendered near 68px. Editing the text to "Running Route" would
+               have made the overflow worse and fixed nothing, because there was never a single label to put a space into.
+               SO THE HEADER NAMES WHAT THE COLUMN HOLDS, and fits it. "Train" is both shorter and more accurate: the cell
+               under it is a train chip, not a state of running.
+               `minWidth: 0` and `overflow: hidden` close the CLASS of bug rather than this instance -- any future header
+               that outgrows its column now truncates inside it. */}
             <span style={styles.tableLabel} role="columnheader">
               Train
             </span>
@@ -586,19 +361,10 @@ export function RoutePlannerPanel({
                     style={{
                       ...styles.trainChip,
                       ...(isActive ? styles.trainChipActive : {}),
-                      /* Design note #494: the chip wears its own route's ink.
-                         Distinct colours on the map only help if something
-                         says WHICH train each one is, and this row is where
-                         the player is already looking -- design note #373's
-                         three-surface join, given the colour half it was
-                         always described as having.
-
-                         An underline rather than a fill: the chip's active
-                         state is a fill (`trainChipActive`), and two colour
-                         systems on one control would make "selected" and
-                         "this train's ink" compete. Reading the same
-                         `routeTrainColor` the overlay does, so the two
-                         cannot disagree. */
+                      /* Design note #494: the chip wears its own route's ink. Distinct colours on the map only help if something
+                         says WHICH train each one is, and this row is where the player is already looking.
+                         An underline rather than a fill: the chip's active state is a fill, and two colour systems on one control
+                         would make "selected" and "this train's ink" compete. Reading the same source the overlay does. */
                       borderBottom: `3px solid ${routeTrainColor(draft.trainIndex)}`,
                     }}
                     title={
@@ -751,11 +517,8 @@ export function RoutePlannerPanel({
   );
 }
 
-/** The first thing wrong with a set of drafts none of which can run.
- *
- *  One sentence rather than one per train: three broken routes usually have
- *  the same problem, and three copies of it is the clutter design note #3
- *  removed in the first place. */
+/** The first thing wrong with a set of drafts none of which can run. One sentence rather than one per train:
+ *  three broken routes usually have the same problem, and three copies of it is the clutter #3 removed. */
 function firstProblem(drafted: readonly TrainRouteDraft[]): string {
   const overLong = drafted.find((draft) => draft.exceedsMaxDistance);
   if (overLong) {
@@ -764,11 +527,10 @@ function firstProblem(drafted: readonly TrainRouteDraft[]): string {
   if (drafted.some((draft) => draft.endsOffTerminus)) {
     return "A route ends somewhere it cannot. Extend it to a city or a red off-board hex — towns only add revenue in passing.";
   }
-  /* Design note #474: reported AFTER the geometric problems above and
-     before the generic "worth nothing", because a route that misses the
-     corporation's tokens is usually a well-formed route in the wrong place
-     -- the player has drawn something valid-looking and needs to be told
-     which rule it misses rather than that it is worthless. */
+  /* Design note #474: reported AFTER the geometric problems and before the generic "worth nothing", because a
+     route that misses the corporation's tokens is usually a well-formed route in the wrong place -- the player
+     has drawn something valid-looking and needs to be told which rule it misses rather than that it is
+     worthless. */
   const tokenless = drafted.find((draft) => draft.tokenBlockReason !== null);
   if (tokenless?.tokenBlockReason) return tokenless.tokenBlockReason;
   return "No drafted route is worth anything yet — each needs at least two paying stops.";
@@ -784,15 +546,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#161922",
     border: "1px solid #2b3242",
   },
-  /* `modeRow` is GONE with design note #7 -- the centring it applied was
-     for a heading inside this panel, and the toggle is a toolbar control
-     now. The toolbar owns its own alignment.
-
-     `modeGroup` and `modeButtonActive` are GONE with design note #493.
-     The first framed two segments as one control and the second painted the
-     selected one; with a single action button there is no group to frame and
-     no selection to paint. `modeButton` survives as that button's own look,
-     which is what it always described. */
+  /* `modeRow` is GONE with design note #7 -- the centring it applied was for a heading inside this panel, and
+     the toggle is a toolbar control now.
+     `modeGroup` and `modeButtonActive` are GONE with #493: the first framed two segments as one control and the
+     second painted the selected one, and with a single action button there is no group to frame and no
+     selection to paint. `modeButton` survives as that button's own look, which is what it always described. */
   modeButton: {
     padding: "7px 20px",
     borderRadius: "8px",
@@ -908,11 +666,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     padding: "8px 10px",
   },
-  /* Design note #499: a grid item defaults to `min-width: auto`, which
-     refuses to shrink below its own content -- so a header wider than its
-     track does not clip, it OVERFLOWS into the next column. That is how
-     "Running" and "Route" came to be read as one word. These two properties
-     make a too-wide header truncate inside its own column instead. */
+  /* Design note #499: a grid item defaults to `min-width: auto`, which refuses to shrink below its own content
+     -- so a header wider than its track does not clip, it OVERFLOWS into the next column. That is how
+     "Running" and "Route" came to be read as one word. These two properties make a too-wide header truncate
+     inside its own column instead. */
   tableLabel: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,

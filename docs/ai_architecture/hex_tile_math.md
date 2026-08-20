@@ -1677,3 +1677,241 @@ rather than by the printed rule would have made the crossing free.
 > *Not a design note:* `#40` inside `TileGraphics.ts` is a **tile tray number** (the symmetric brown
 > triangle), not a note reference. Tile ids and note numbers share the `#N` shape — the surrounding text
 > disambiguates.
+
+---
+
+# The tile tray mirror — `components/hexTileCatalog.ts`
+
+Phase 1 of the `HexGridRenderer.tsx` monolith extraction. Shares the rail-map `#N` namespace.
+
+### HexGridRenderer.tsx (hexTileCatalog header) — Why this boundary first
+**The largest genuinely self-contained unit in the file and the one with the fewest inbound edges:** the catalog
+depends on nothing else in the renderer, while a great deal of that file depends on it. **Extracting a leaf is the
+only extraction that cannot create a circular import**, which makes it the right first cut — **rather than, say, the
+marker renderers, which need geometry, which needs constants, which is a three-way tangle to unpick at once.**
+It is also **the boundary that already proved itself:** `TileGraphics.ts` was extracted on exactly this principle —
+literal data plus pure functions over it — **and has needed no structural change since.**
+**What deliberately did not come with it:** `terrainBaseValue` looks like it belongs and does not — **it is a rendering
+FALLBACK for a tile with no printed revenue, consumed only by the badge pass, and moving it would drag the badge
+vocabulary into a data module.**
+**Import direction is one-way and must stay that way.** If something here ever appears to need something in the
+renderer, **the dependency is pointing the wrong way.**
+
+### HexGridRenderer.tsx #118 — Real tray numbers, and why this had to be a wholesale rewrite
+The backend catalog no longer uses this engine's old synthetic sequential ids; **it keys every entry on the tile's REAL
+physical 1830 tray number and carries the complete 46-tile manifest.** This mirror is rewritten wholesale to match.
+
+| moved | old → new |
+|---|---|
+| Green "NY" hub | 17 → **54** |
+| Green "B" hub | 16 → **53** |
+| Green "OO" hub | 15 → **59** |
+| Brown "NY" hub | 19 → **62** |
+| Brown "B" hub | 18 → **61** |
+| Brown "OO" hubs | 20–24 → **64–68** |
+| Yellow city hub | 10 → **57** |
+| Brown city hub | 14 → **63** |
+
+**Deleted outright, with no replacement:** the invented terrain artwork (old ids 4, 5, 12) and the invented green
+fillers (11, 13), plus old id 6. **Real 1830 charges terrain as a HEX property, not a tile property, so
+`hexmap::terrain_build_fee` ($80 river / $120 mountain / $0 clear) is now the only terrain-cost source.**
+
+> **⚠ DANGER, and the reason this had to be a rewrite rather than a patch: the old and new id spaces OVERLAP with
+> completely different meanings.** Old internal 16/18/19/20/23/24 were "B"/"NY"/"OO" hub artwork; **real tray
+> #16/#18/#19/#20/#23/#24 are ordinary green PLAIN track. Had this mirror been left alone, those ids would still have
+> resolved — to silently, confidently wrong artwork (a plain green curve rendered as a two-station New York hub, and
+> vice versa) rather than to the honest `undefined` placeholder path a genuinely unknown id takes.**
+
+`MountainRugged` survives in the terrain enum even though no entry carries it, **deliberately, mirroring the backend,
+which kept the variant so already-stored `Tile` records still deserialize and so this frontend enum needs no lockstep
+change.**
+**A duplicated `tileId` would silently collapse inside the lookup map and quietly shadow one of two entries** — exactly
+the class of bug the id-space overlap makes easy to introduce — **so a dev-only tripwire checks for it. It never
+throws and never runs in a production bundle.**
+
+### HexGridRenderer.tsx #49 — The "B" and "NY" hub artwork was missing entirely
+A cross-file consistency gap: **the backend catalog had tiles 16/17 since its module doc #26, and this file's mirror
+never gained a matching entry — so a laid Boston/New York Green tile fell through every catalog lookup as `undefined`:
+visibly wrong stroke colour (the "unknown tile" fallback rather than the real tier colour) and a broken picker
+thumbnail.** `BostonHub` renders like a single-station hub; `NewYorkHub` like a two-station one.
+
+### HexGridRenderer.tsx #52 — City groups are frontend-only, deliberately
+**Not mirrored from the backend, which does not need it:** the contract's simplified hex-level revenue model **never
+distinguishes which edge belongs to which city within one tile, only the flat `connections` union.** For a genuine
+two-city tile each entry is the real per-city edge group, **so each city draws its own paired curve instead of fanning
+every live edge into one shared hub — which is wrong for a tile that actually has two independent city nodes.**
+Omitted for every single-city tile, **which keeps the existing fan-to-centre rendering unchanged.**
+
+### HexGridRenderer.tsx #119 — `paths` IS real backend data, and it now covers all 46
+Unlike `cityGroups`, **this is real backend data, not a frontend embellishment** — the Rust catalog has carried it
+since Audit G-9 and `pathfinding.rs` routes on it. Each `[a, b]` is one continuous run; the union of every edge listed
+**equals `connections`, which a Rust test asserts for all 46 entries.**
+**Stale scope note, corrected in place.** The original text said this was "POPULATED ONLY FOR THE FIVE DOUBLETOWN
+TILES" — **true when written and no longer: the mirror carries `paths` for ALL 46. Counted rather than assumed.**
+**A city hub appears as the full pairwise expansion of its live edges** — #14 (edges 0/1/3/4) lists all six pairs, #63
+(all six edges) all fifteen. **That is what lets a consumer ask "does edge 0 still reach edge 3" without having to
+reason about the city sitting between them, and it is why strict upgrade path-preservation can be a plain set
+comparison.**
+*(The original scope reasoning is kept verbatim in the source for the record: the five doubletown tiles are where the
+flat mask is genuinely lossy — four live edges paired into two independent two-edge routes, one per town, **and the
+mask cannot say which edge pairs with which.**)*
+
+### HexGridRenderer.tsx #135 — The tile's own printed revenue, and why the picker needed it
+Mirrors the backend's `Option<u32>` exactly. `undefined` mirrors `None` and means **"price it from its terrain
+bucket" — which is true only of plain connector track.**
+**Why this exists, since the board already reads revenue off the chain: the TILE PICKER does not.** A tray thumbnail
+renders a tile that is not on the board yet, **so there is no `MapTileEntry` to read and no chain round-trip to make —
+and in offline mode there is no chain at all.** Those paths fell through to the flat terrain bucket, **which cannot
+express real 1830: the picker showed #62 as $40 when the tile prints $90, and #61 as $20 when it prints $60. A player
+choosing between upgrades was reading numbers the contract would never pay.**
+**Twelve of the twenty-two city/town tiles deviate from their bucket:** #14/#15 20→30, #53 20→50, #54 40→60, #61
+20→60, #62 40→90, #63 20→40, #64–#68 40→50. **The other ten happen to agree with their bucket today. They are mirrored
+ANYWAY, explicitly: "agrees with the bucket" is a coincidence of the current numbers, not a property, and leaving them
+implicit would mean the next backend revenue change silently reintroduces exactly this bug on whichever tile it
+touches.**
+**Precedence:** the chain's own `MapTileEntry.revenue` wins where there is one, then this, then the bucket. **Never the
+other way round — this is a mirror of the backend catalog, and the chain is the backend catalog.**
+A **revenue drift tripwire** checks that every tile drawing a badge carries an explicit figure: **a city/town entry
+without one silently falls through to the bucket and prints a number the contract will not pay, which is invisible
+unless you happen to know the right figure by heart.**
+
+### HexGridRenderer.tsx #626 — The column the mirror left behind
+How many physical copies of an artwork a room starts with — **the sixth field of the Rust catalog, taken from
+`g_1830/map.rb`'s TILES hash exactly as `connections`, `paths` and `revenue` were.**
+**It was always enforced and never shown.** `contract.rs` seeds a per-game tray at these counts and `REMAINING_TILES`
+decrements as tiles are laid, **so scarcity is live state rather than trivia. This mirror simply dropped the column,
+which left the UI unable to say why a lay was about to be refused — or that #57 is the ONLY yellow city tile in this
+catalog, four copies against eight corporations needing a home.**
+**The `UNLIMITED_TILE_SUPPLY` sentinel is not modelled.** `hexmap.rs` defines `u32::MAX` for a tile exempt from tray
+limits **and no current entry uses it — all 46 carry a real printed count, which a test asserts. Representing an
+unlimited case nothing produces would be a branch with no way to test it; if the backend ever uses the sentinel, that
+test fails first and this is the note to read.**
+
+---
+
+# The sandbox tile filter — `components/sandboxTileLegality.ts`
+
+### sandboxTileLegality.ts #0 — Why this does not violate "no client-side re-validation"
+`TileSelectionPopup.tsx #4` sets a hard policy: **the frontend does NOT re-validate tile legality, because
+`legal_tile_placements` already answers that question and a second copy of the rules would drift.** `hexmap.rs`'s own
+module doc #26 records the same decision from the other side.
+**That policy is about the CONTRACT-BACKED path, and this module does not touch it.**
+**The sandbox path is a different situation entirely.** There is no chain, so nothing was ever asked, **so the local
+fallback returns all 46 tiles in all 6 orientations with — in its own words — "no legality claim of any kind". This
+module is not a SECOND opinion competing with the contract's; on this path it is the ONLY opinion, and the alternative
+is not "defer to the contract", it is "offer the player a green double-city hub for a plain prairie hex". A filter
+that exists only where no authority is reachable cannot drift from an authority.**
+**The distinction that keeps this honest: the picker's provisional labelling STAYS ON. This narrows what is offered;
+it never promises the contract would accept it.**
+
+### sandboxTileLegality.ts #1 / #2 — No tile ids, and no hex coordinates either
+**Nothing in this file matches on a tile number or a hex label. Both would be a third source of truth for facts that
+already have two — and the one most likely to go stale: adding a Brown OO tile to both catalogs should make it legal
+here automatically, with no list to remember.**
+Every decision is a function of **metadata**: how many cities and towns a tile carries, how many the HEX carries, which
+letter code the hex prints, which tier either is at, and which segments a tile actually runs. **The hex-side reads all
+route through `archetypeForHex`, which resolves a hex STRUCTURALLY — a Set membership, an enum tag, an array length —
+rather than by comparing names. Reusing it means a new hex added to the board data classifies correctly here without
+this file being touched.**
+**#2 — two independent sources agree, and the filter uses the better one.** Authored markers list each revenue centre
+with its kind and cover the 22 hand-authored tiles; the terrain tag is mirrored from Rust entry for entry and covers
+all 46. **Markers win where they exist because they are the finer-grained record. The two were checked against each
+other across all 22 overlapping tiles and agree on every one, and the harness re-checks that agreement rather than
+assuming it holds — a disagreement would mean the artwork and the catalog had drifted, which is worth failing loudly
+over.**
+`MountainRugged` is retained with zero centres **because the Rust enum retains it; dropping it here would make the map
+non-total over the terrain type.**
+The letter-code lookup **used to be two hardcoded coordinate sets.** It derives the answer the same way the renderer's
+own restriction-badge pass does — **OO membership first, then a landmark's archetype, where a two-station landmark is
+"NY" and a one-station landmark is "B". Baltimore is therefore classified by the shape of its printed track rather than
+because somebody remembered to list it, and a hypothetical fourth landmark would classify correctly with no edit
+here.** It is still expressed as **terrain rather than tile ids**, matching `hexmap.rs` module doc #27.
+Station targeting is likewise **a count rather than a terrain list, so it follows the same metadata path as everything
+else** — a token needs a CITY; towns do not take tokens and neither does plain track.
+
+### sandboxTileLegality.ts #3 — A preprinted hex is already at a tier
+The labelled hexes — the four OO hexes, Boston, Baltimore and New York — **carry `printedColor: "Yellow"`: the board
+ships with their yellow tile already on it. But a preprint is not a `MapTileEntry`, so the tile grid has no row for
+them and a naive read sees them as bare ground.**
+They are **rank 0 (Yellow)**, with two consequences that are **requirements rather than conveniences:** their first
+legal upgrade is **Green** (**a yellow tile cannot be laid on a hex that already has one**), and **a Brown tile is not
+offered either until a green one is down — without the rank, a Brown-era game would have offered brown straight onto a
+still-yellow New York, skipping green entirely: `InvalidColorUpgrade` on chain.**
+
+### sandboxTileLegality.ts #4 — Strict path preservation
+An upgrade may not delete track. **The weaker form — "the new tile's live EDGE SET must be a superset of the old one's"
+— is necessary but not sufficient, and the gap is real rather than theoretical.**
+**Consider a yellow tile whose track runs edge 0→2 and, separately, 3→5: two parallel routes. A green tile with all
+four edges live but wired 0→3 and 2→5 passes the edge test perfectly while rerouting every train through the hex.
+Nothing was deleted; everything was reconnected. The edge test cannot see it, because it never looks at what connects
+to what.**
+**So the comparison is on SEGMENTS.** Each is a pair of endpoints — an edge (0–5) or `CITY` — and **every segment on
+the old tile must appear on the new one.**
+**Where the segment data comes from, in precedence order:**
+
+1. **`TileCatalogEntry.paths`** — the real backend mirror, **and in practice the only branch that ever runs. MEASURED,
+   not assumed: all 46 tiles carry it.**
+2. Authored artwork, including hub spokes as edge-to-`CITY`.
+3. A two-edge tile's mask — **unambiguous: two live edges is exactly one segment joining them.**
+
+**2 and 3 are unreachable today and are kept deliberately. They are the degradation path for a catalog entry added
+without `paths`: without them such a tile returns `null` and silently drops to the weaker edge test, with nothing to
+indicate the check had been downgraded. Described as defensive rather than as load-bearing, because they are not.**
+**How hubs are modelled, and it is better than a spoke list:** the backend expands a city hub to its full **pairwise**
+set, so #14 (edges 0/1/3/4) is `[0,1] [0,3] [0,4] [1,3] [1,4] [3,4]`. **That states directly what a spoke pair only
+implies — edge 0 reaches edge 3 THROUGH the city — and it means a comparison never has to reason about city identity at
+all.**
+**This is strictly stronger than the edge test, verified rather than asserted: tile #70 at rotation 0 passes the
+edge-superset test over #57 and is rejected by this one.**
+
+### sandboxTileLegality.ts #6 / #483 — An orientation has to join the network
+**Reported:** the tile selector rotates through configurations that are not legal here.
+`App.tsx #173` already restricted rotation to the returned angles, **so the cycle was never walking all six blindly.
+What it was missing is that every check is about the TILE and the HEX — era, centre parity, letter code, colour step,
+path preservation — and none of them asks the question a player actually has: does the track come out where my network
+is?**
+**A #9 straight laid across an empty hex beside Altoona is a legal tile on a legal hex at three of its rotations and
+connects to PRR at exactly one. Offering the other two is offering placements the contract rejects — and worse, it
+makes the rotate gesture feel arbitrary: the tile spins through angles that look identical in legality terms and are
+not.**
+**#483 — the edge, not just the hex.** The network hex set alone was not enough **and the gap is the reported bug.** The
+old check asked two questions — is the neighbour a network hex, and does it carry rail to the shared edge — **and BOTH
+are true of the far arm of a crossover the corporation cannot reach.** Tile #20 is two separate straights; **a
+corporation whose track meets edge 0 puts the hex in the network, and edge 1 is a live edge of that same hex, so an
+orientation facing edge 1 passed a filter designed to catch exactly this.**
+`trackReach`'s **ports** carry the answer the walk already had — the edges the corporation's own continuous track
+actually arrives at. **Facing a port is the real join.**
+**Supplied together or not at all.** Both come off one result, **so a caller cannot hold a fresh hex set and a stale
+port set. A caller with neither is unchecked, exactly as before** — **omitted means unchecked, so a caller without a
+network to measure gets exactly the previous behaviour rather than an empty carousel.**
+**A hex already in the network is an upgrade rather than an extension**, and an upgrade is judged by path preservation
+**rather than by needing a fresh join — so it passes unconditionally.**
+
+### sandboxTileLegality.ts #7 — Track cannot run off the edge of the board
+**Reported:** F20 and other border hexes permit rotations that run track off the playable board edge.
+**They did, because nothing in this filter had any notion of where the board ENDS.** Every other test asks about the
+tile or about the hex it is going on. **None of them asks whether the hex on the other side of a proposed connection
+exists.**
+**Measured before the fix: F20 has one edge pointing at a coordinate that is not on the board, and 34 of the 72 yellow
+tile-and-orientation combinations offered there put track on it. Thirty-four board hexes have at least one such edge,
+so this is a whole rim of the map rather than one awkward corner.**
+**A rail to nowhere is not merely untidy. It is track the corporation paid for that can never carry a train, and the
+picker was presenting those rotations beside legal ones with nothing to tell them apart.**
+**⚠ The red off-board hexes ARE on the board.** A1, F2, J2 and the rest are real coordinates that track may legally
+point at — **they are where routes terminate. So the test is membership of the board's own coordinate set, not "is this
+hex playable", and getting that backwards would forbid every connection to the map's most valuable destinations.**
+
+### sandboxTileLegality.ts (the five rules, in the contract's own order)
+1. **Era** — a tile above the room's unlocked tier is `EraLocked` on chain.
+2. **Centre match, with TOWN PARITY.** Plain takes 0 cities and 0 towns; a city hex takes a tile with cities; **a town
+   hex takes a tile with the SAME NUMBER of towns — never a swap. Parity matters because the two are different pieces
+   of board: a double-town hex prints two separate revenue stops and a one-town tile would erase one of them.**
+3. **Letter code** — a labelled hex takes only its own artwork family, **and that family is illegal anywhere else.**
+   Scoped to Green and Brown: **a labelled hex's yellow start is the ordinary shared hub artwork.**
+4. **Colour step** — exactly one tier above what is there, **with bare ground counting as −1 so "you may only start with
+   yellow" and "you may only upgrade one step" are the same rule.**
+5. **Path preservation** — `#4`. **The only rule judged per ORIENTATION rather than per tile.**
+
+**What this deliberately does NOT check, because it cannot without becoming the rules engine the project brief rules
+out:** network connectivity to the corporation, city reservation for unfloated home hexes, and tray depletion. **The
+tray is narrowed to plausible, not proven.**

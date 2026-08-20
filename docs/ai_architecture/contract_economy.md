@@ -1424,3 +1424,402 @@ headline of every card.
 - **The net-worth hook is called unconditionally** (React hook rules) even before `gameState` resolves — it no-ops
   cleanly on an empty address list, **and the fresh-array-every-render is safe because the hook depends only on the
   joined content** (`utils_layer.md`, `gameState.ts #6`).
+
+---
+
+# The privates' powers — `components/PrivatePowerPanel.tsx`
+
+### PrivatePowerPanel.tsx #0 / #1 — What these buttons honestly are
+**Reported:** there is no UI to activate a private's special ability. **True, and the privates were otherwise fully
+modelled** — auctioned, owned, paying revenue each Operating Round, closing at Phase 5. **Everything except the one
+thing that makes them interesting to own.**
+**`ExecuteMsg` has no variant for using a private's power.** There is no `UsePrivateAbility`, and
+`GAMEPLAY_MESSAGE_KEYS` — **the session key's on-chain allow-list, not merely a client convenience** — could not
+carry one if there were.
+**So a button here CANNOT dispatch to the contract, and pretending otherwise would be the worst available outcome:
+a control that broadcasts a message certain to be rejected, or worse, one that logs a success the chain never saw.
+This codebase has removed exactly that shape twice (`App.tsx #162`, `#193`).**
+These are **sandbox-only controls, and they say so.** Outside sandbox the panel does not render at all **rather than
+showing a row of dead buttons whose tooltip explains a backend gap the player cannot close.**
+**What is and is not modelled:** the reducer action marks the ability **used** and logs it. **It does not lay the
+tile, place the station or move the certificate — each of those is real map or share logic, and inventing a
+half-version is how a mock starts disagreeing with the contract.** The button exists so the surface and both gates
+can be exercised now, **and so wiring real behaviour later is filling in a handler rather than designing a UI.**
+
+### PrivatePowerPanel.tsx #2 / #349 / #470 — Two gates, and how coarse they may be
+**Ownership** is a fact about the board; **phase** is a rule. **Both are shown rather than one hiding the other:** a
+player who owns the D&H wants to know it is theirs during a Stock Round even though they cannot fire it until they
+operate. An out-of-phase ability renders **disabled with the reason**; one they do not own is **absent entirely** —
+**listing every private with five "not yours" rows would be the roster problem `TrainPurchasePanel #232` already
+fixed once.**
+**#349 — a round is not precise enough.** *Reported:* the C&SL track-lay power shows up during the Stock Round.
+**Two things were wrong and the first hid the second. It was not actually showing in a Stock Round** — it rendered
+DISABLED with "Only usable during an Operating Round". **Disabled, but present: a row with the company's name and a
+greyed button, in a panel titled Private Powers, on a screen where the power cannot be used at all.** `#2`'s
+argument for showing an out-of-phase ability **holds for a power the player will use LATER THIS ROUND — it does not
+hold across a round boundary, where the answer is simply "not now, and not for a while".**
+**And the gate was too coarse.** Even inside an Operating Round, a free tile lay is only legal during Lay Track —
+**offering it during Run Routes is offering an action the contract refuses.** The type had no way to say so, **so
+the panel could not have been right even in principle.** It now carries an optional **sub-phase**; absent means "any
+sub-phase of that round", **which is the honest default for the powers that genuinely are round-wide.**
+**#470 — the out-of-round powers leaked into the OR.** *Reported:* the panel leaks into the Operating Round action
+panel even when the acting corporation does not own the private. **`#441`'s half held.** The leak was the two
+PLAYER-scoped exchanges: their phase is `"StockRound"` and neither opted into hiding, **so during an Operating Round
+they rendered DISABLED — a Private Powers heading and two dead rows, on a panel whose entire subject is the acting
+corporation, describing privates that corporation does not own and cannot use.**
+`#349` introduced the opt-in reasoning that a disabled row is "useful context rather than noise" **when the wait is
+short. That is true of a power the viewer will use SOON on this same panel. It is not true here: the Operating
+Round's panel belongs to a corporation, and a player's personal share exchange has no relationship to it at all —
+the wait is not short, it is a different subject.**
+**So the round must match, always.** The opt-in **becomes redundant rather than wrong, and is left on the two
+entries that set it as a statement of intent; nothing now depends on it. A power is shown in its own round or not at
+all.**
+
+### PrivatePowerPanel.tsx #441 — Who owns a power is not who owns the private
+**Reported:** the PRR President sees the D&H's power even when the PRR does not own the D&H.
+The panel filtered on `priv.owner === viewerAddress` — **a PLAYER-level test — and applied it to every ability
+alike. That is right for half of them and wrong for the other half, and 1830 draws the line in the text of the
+powers themselves:**
+
+> "A **player** owning the MH may exchange it for a 10% share of NYC"
+> "A **railroad** owning the DH may lay a track tile and a station token"
+
+**The exchanges belong to a PERSON and fire on their stock turn. The track powers belong to a CORPORATION and fire
+on its operating turn.** A private sitting in a player's pocket confers no track power on anything — **the protocol
+id is null until a corporation buys it, and until then there is no railroad owning the DH for the rule to name.**
+**So the scope is a property of each ability rather than an assumption the panel makes once for all of them.**
+**Two ownership tests, one per scope.** For CORPORATION scope **both halves are load-bearing:** without the first, a
+president whose corporation does not own the D&H sees its power (the reported bug); **without the second, every
+player at the table sees a button only one of them may press.** `#470` tightens it to **exact identity** — the
+protocol id must equal the corporation currently operating, **not merely be non-null, and not the president's other
+corporation.**
+
+### PrivatePowerPanel.tsx #442 — The D&H is two powers, and F16 is not free
+**Reported:** the D&H caption is misleading and its single "Place Station" button does nothing.
+The caption read "may lay a tile AND place a station on F16 at no cost", **which is wrong twice over and wrong in
+the direction that costs a player money.** `privateCatalog.ts` carries the rule explicitly: **"The mountain costs
+$120 as usual, but laying the token is free." Only the TOKEN is free. A caption promising a free tile on a $120
+mountain hex is an invitation to a purchase the player cannot afford to have misjudged.**
+**"AND" was the second error.** The rulebook grants the tile and the token **independently** — a corporation may take
+either, both, or neither — **and one button could not express that, which is also why the one button had nothing
+coherent to do.**
+The spent-marker is therefore **keyed per ACTION, not per private: keying by `private_id` would have made either one
+consume the other.**
+
+### PrivatePowerPanel.tsx #350 → #576 — Camden & Amboy, added and then un-buttoned
+**#350 — reported:** the private that exchanges for a PRR certificate should be visible and actionable during the
+Stock Round. The comment that stood there said C&A "is granted on purchase rather than triggered", **and the auction
+catalog had described it as an exchange since it was written** — so a button was added.
+**#576 — that is not the rule.** The share arrives on **purchase**, free, **and the company STAYS OPEN and goes on
+paying $25 an Operating Round.** `privateCatalog.ts` says so, `#360` recorded it as a correction to an older
+paraphrase, and the auction now grants it where the win resolves.
+**So the row keeps its DESCRIPTION** — a player looking here should still learn what the company did for them —
+**and loses the control, because there is nothing left for the owner to trigger.** An empty action list renders the
+text without a button, **which is the honest shape for a power that has already happened.**
+**Not deleted entirely, deliberately: a C&A owner who finds no row at all would reasonably conclude the company has
+no power, which is the confusion `#350` was originally written to fix.**
+
+### PrivatePowerPanel.tsx #441 (B&O) — The row is gone, not restricted
+**Reported:** hide "Take B&O presidency" during the Stock Round — it serves no purpose once the B&O is parred.
+Its phase was `"StockRound"`, **so hiding it there hides it everywhere: the requirement is a deletion written as a
+restriction.** And it should be deleted, **because the button had already been overtaken.** `#399` moved the grant to
+the moment the private is **won** — the par prompt hands over the certificate and takes the price in one blocking
+step, **because a presided-over company with no price is a state `#387` refuses to render. By the time any Stock
+Round exists the presidency is long since granted, so this button offered to do a thing that had already happened.**
+**The B&O is still visible to its owner everywhere privates are listed. What is removed is a control, not
+information.**
+
+### PrivatePowerPanel.tsx #573b / #443 — Why it refused, and what it costs to find out
+**Reported:** "the Exchange button should return an error that they are at the limit and the power should be
+maintained for a subsequent round."
+**A disabled button would not do.** The exchange's legality depends on the player's holding in a corporation this
+panel does not otherwise read, **and the interesting refusals ("you hold 60% of the PRR", "no NYC certificate is
+available") are facts about somewhere else on the board. A greyed control with a tooltip is right when the reason is
+local; this one has to be a sentence the player can act on.**
+**Shown after the attempt rather than pre-emptively, because the attempt costs nothing** — the power stays intact on
+a refusal, **so clicking to find out is a legitimate way to ask.**
+**#443 — the revenue, where the decision is.** *Reported:* the Mohawk and Camden can be exchanged for shares, but
+their Operating Round revenue is not visible for comparison. **Both exchanges are a trade: give up a certificate that
+pays every Operating Round, receive a 10% share that pays dividends and can be sold. A player weighing that needs the
+figure they are giving up, and this panel — the one surface carrying the exchange BUTTON — was the one place on the
+tab that did not show it.**
+**It rides on the name rather than in the description because it is a NUMBER a player scans for, and a figure buried
+mid-sentence in a rules paragraph is not scannable.**
+
+---
+
+# The private trade engine — `components/PrivateTradePanel.tsx`
+
+### PrivateTradePanel.tsx #0 — The consent step is not on chain yet
+**In 1830 a corporation buying a private from a player is a NEGOTIATION.** Both sides must agree: the president names
+a price, the owner takes it or refuses. **This component implements that. `ExecuteMsg::BuyPrivateCompany` does
+not** — it is single-party, authorising the buying corporation's president, checking the phase gate, the cursor, the
+treasury and the price band, **and then moving the private. The seller is read (`private.owner`) but never asked.**
+
+| | |
+|---|---|
+| **Sandbox** | the local reducer is the only authority there is, **so the full two-party flow is real. Nothing is being faked relative to an authority, because there is no other authority.** |
+| **A live room** | **the seller CANNOT be sent this proposal.** No message carries it and no query surfaces it, **so their client would never learn it exists. Showing them an Accept button would be theatre.** The prompt is shown to the PROPOSER and labelled as what it is: a confirmation before a purchase the contract will execute unilaterally — **and `onConfirmUnilateral` is deliberately named to make a call site that treats it as consent look wrong.** |
+
+**⚠ The backend shape this needs already exists, one feature over.** Train trading between corporations with
+different presidents records a `TrainOffer` and waits for `AcceptTrainOffer`/`RejectTrainOffer`, with a rescind path
+and a `GetTrainOffers` query. **A `PrivateCompanyOffer` mirroring it would make this component's live path as real as
+its sandbox one. That is a backend change and out of scope here; recorded so the gap is actionable rather than merely
+known.**
+**#2 — why sandbox lets one person answer their own offer.** A hotseat sandbox has one wallet and one human, **and
+requiring the owner's client to answer would make this flow untestable there — which is the one place it most needs
+to be testable, since it is the only place the whole two-party sequence can currently run end to end.** The prompt
+still **names** the owner, **so the person clicking Accept is always told whose decision they are standing in for.**
+
+### PrivateTradePanel.tsx #1 — The price band is mirrored, not invented
+`trading.rs`: "Pricing guardrails: `price` must land in [50%, 200%] of face value." The input clamps to the same band
+**so a player finds out at the point of typing rather than from a rejected transaction.**
+**This is client-side validation of a rule the contract also enforces — ordinarily the thing this codebase avoids.
+It is acceptable HERE for the same reason the four static tile-lay gates are: the band is a STATIC arithmetic
+property of one number, not a stateful judgement about the board. It cannot go stale between render and dispatch, and
+the contract still has the final say.**
+**`ceil` on the floor and `floor` on the ceiling**, so a rounded bound can never fall OUTSIDE the band the contract
+checks — **rounding the other way would offer a price that looks legal here and is rejected on chain, which is the
+one failure this mirror exists to prevent.**
+
+### PrivateTradePanel.tsx #386 — Show the unsold ones, disabled
+**Reported:** the sub-phase should display all available private companies, clearly marking which player owns them.
+The strict predicate answers a narrower question — **which ones can a corporation propose for RIGHT NOW.** It excludes
+privates still unsold in the auction, because there is no seller to agree, **and that exclusion is correct for
+dispatch. It was wrong for DISPLAY, and the difference is what a player learns from an empty list:**
+
+| | |
+|---|---|
+| **filtered out** | "No private company is available" — **which reads as "there are none", when there may be four sitting in the auction that this corporation could buy next round.** |
+| **shown, disabled** | "C&SL — unsold in the auction" — **the actual state of the game, and it tells the player where the private went and what has to change.** |
+
+**The two functions stay separate rather than one function with a flag, because they answer genuinely different
+questions and the dispatch path must keep using the strict one — a display predicate that quietly became the legality
+predicate is exactly how an unsendable proposal reaches the chain.**
+**Who holds it is named** — and for an unsold private that is **also the explanation for why the row is inert, so the
+two facts are one line rather than two.**
+
+### PrivateTradePanel.tsx #660a — A rule enforced in a function that never runs
+Found while adding the B&O sale ban to it: **nothing called it.** The modal renders from the LOOSE list and decides
+what may be proposed by resolving the selection against the block-reason helper. **This function was a third answer to
+a question already answered twice, and the ban had been added to the one copy no player could reach.**
+**Which is the exact failure this codebase keeps rediscovering, caught this time by asking who the caller was before
+trusting the fix: a rule can be written, tested, and enforced in a function that never runs. `tsc` and ESLint are both
+content — the export is used, by the test that was written to prove the rule.**
+**The rule still holds, in the two places that matter:** the block-reason helper refuses the selection so the price
+field and the propose button never address the B&O, and the reducer refuses the message even if one is somehow
+written. **UI and reducer, which is where `#660` said it should be.**
+**The B&O is still shown, inert, with its reason and its power text.** `#386`'s argument for rendering an unbuyable
+row — "the whole point of showing it is that the player learns the private exists" — **applies more strongly to a
+certificate no corporation may ever buy, not less. Hiding it would leave a player wondering where it went.**
+
+### PrivateTradePanel.tsx #661 — A row per private, at a readable size
+**Instructed:** "the fonts are very small, and everything is listed in a string whereas I think it might be a little
+more digestible with some styling."
+**Both halves were true and they had one cause: every secondary fact on the row was `micro` (11px), the size the type
+scale reserves for "tiny status pills and inline tags". Face value, revenue, owner and price band are not tags, they
+are the DATA the decision is made from — and four 11px runs sitting on one line read as a single grey string however
+they are marked up. Nothing was concatenating them; they just all looked the same and none was big enough to anchor
+the eye.**
+An explicit two-column grid, **so a player scanning six rows can read down a column rather than across a paragraph —
+which is the actual difference between a list and a string.**
+**The row is a group, not a button.** The whole row used to BE the `<button>`, fine while selecting was all it did.
+**It now carries a second control — the power disclosure — and a button inside a button is invalid markup that
+browsers repair by unnesting, which would have put the toggle outside the row it belongs to.** So the row is a
+container with two real buttons: **the selectable face, and the disclosure. A player can read what a private DOES
+without selecting it — the old row made "tell me more" and "I choose this" the same click.**
+**The group carries the chrome, the face carries the click:** border, background and selected state moved to the group
+**because the row now holds two buttons and a paragraph, and a border drawn on one of the three would frame part of a
+row.**
+**The POWER is on the face of the row.** A player choosing between six privates **is choosing between six powers, and
+the face named every other attribute — price, revenue, owner, band — except the one the decision turns on.**
+
+---
+
+# The private catalog — `utils/privateCatalog.ts`
+
+### privateCatalog.ts #391 — One copy of the descriptions
+This table lived inside `WaterfallAuctionDashboard.tsx`, **which was the right home while the auction was the only
+screen that described a private. It no longer is** — the condensed stock card expands them to their rules text, and
+the Financial Ledger names them.
+**One copy, imported by both, because two copies of a rules description will eventually differ and the failure is
+silent — both read plausibly and only one matches what the game actually does.**
+**Display source only:** nothing reads this to make a decision, **and it is a hand-kept mirror of
+`auction.rs::CORE_PRIVATE_COMPANIES` that has to be updated by hand if the contract's abilities change.**
+
+### privateCatalog.ts #548 — Described, not quoted
+**Instructed:** remove the wording copied from the rules manual; rewrite and summarise instead.
+These strings used to be the published rulebook's own sentences, carried verbatim down to the curly apostrophes, **and
+the note they replace said so proudly: "normalising them to ASCII would be an edit, and once one edit is allowed the
+text stops being quotable." That was a sound argument about FIDELITY and it was answering the wrong question. Quoting
+a commercial rulebook at length in shipped software is a copyright exposure whatever its typography, and the accuracy
+it was protecting does not require the publisher's words — only their meaning.**
+**Game rules are not themselves copyrightable; the expression of them is.** Each line is written from scratch.
+**Accuracy was the point of the quotation and it is still the point.** The paraphrases the verbatim text originally
+replaced were wrong in four specific ways, **and every one is preserved here deliberately — this rewrite must not walk
+back into them:**
+
+| | |
+|---|---|
+| **D&H** | **the tile is NOT free.** The mountain costs the usual $120 and only the TOKEN is free, which is most of the value. **The tile also CONSUMES the corporation's normal placement.** |
+| **C&SL** | **the opposite** — its lay is IN ADDITION to the normal placement, so the corporation may play two tiles that turn. |
+| **M&H** | the exchange has **two conditions** (under 60% held, and an NYC share actually available) and may be taken **between other players' turns**, in either round type. |
+| **C&A** | **is not an ability the owner triggers.** The share arrives on PURCHASE and the private stays open. |
+
+**Schuylkill Valley canonically has no power at all, and its line says so outright rather than leaving a blank that
+reads as missing data.**
+
+### privateCatalog.ts #13 — The enforcement badges are gone, and what that costs
+An earlier pass rendered an "⛓ ENFORCED" / "○ NOT IN THIS RULESET" badge beside each description, **because
+`auction.rs` only implements three of the six powers. The badges are gone by explicit decision: all six privates are
+required parts of this ruleset, and the card should describe the piece rather than annotate the current state of the
+backend.**
+
+> **⚠ Consequence, recorded on purpose. Two of the descriptions now state powers this contract does NOT implement:**
+> the **Champlain & St. Lawrence**'s free tile lay on its home hex, and the **Camden & Amboy**'s exchange for a 10%
+> PRR share. D&H, M&H and B&O are genuinely enforced — **though the hex-blocking text for D&H/M&H now states the
+> official rule's two exceptions (owning corporation, or closure), and whether the contract honours BOTH of those is
+> itself an audit question.**
+> **Until those two are implemented, this UI describes an ability a player cannot exercise. That is a BACKEND gap, not
+> a display bug. Do not "fix" it by editing the text back into vagueness — fix it in `auction.rs`.**
+
+### privateCatalog.ts #661 — The power, in one line, before the paragraph
+**Instructed:** "none of the Privates are listed with their special powers, which makes knowing what to buy somewhat
+difficult … we need a short summary of each of their powers that can be clicked to expand."
+The long `ability` text is **exactly right for the powers panel, where a player has gone to LEARN the piece. It is the
+wrong length for a buying decision: six paragraphs in a modal is not a comparison, it is a reading assignment, and a
+player deciding between the D&H and the C&StL needs the difference between them in the same glance.**
+**So the summary lives here, beside the paragraph it summarises, rather than in the modal that renders it. Two
+descriptions of one power kept in two files is the arrangement that drifts — and this pair is unusually exposed to it,
+because the long text is the one that gets corrected when a rule is found wrong. Together, an edit to one is an edit
+in front of the other.**
+**Written to be scanned, not to be complete:** it names the hex, says whether the action is free, and says whether it
+costs the corporation its ordinary lay — **the three things that decide a purchase.**
+
+### privateCatalog.ts #423 — The acronym is a name, not a number
+**Reported:** replace the numeric chips with named acronym pills.
+The chips rendered `private_id` — 1 through 6 — **and `#341` defended that: "the cards above are numbered 1-6 and
+players refer to these companies by that order ('the 3'), so six chips fit where six names never would."**
+**The premise is half true and the conclusion does not follow from it.** Players do say "the 3" **while the auction
+cards are on screen and numbered, because the number is a POSITION in a list they are looking at. Away from that list
+— in the Ledger's Player Assets table, or two rounds later — `3` names nothing. It is not the company's identity, it
+is its rank in a queue that has since been consumed.**
+**The acronyms are the identity**, they are what the rulebook and every player use once the auction is over, **and
+they are short enough that the width argument never applied: `SV` is two characters against `1`'s one.**
+**Why the catalog and not the state:** `PrivateCompanyState.name` carries the full name and **the contract will never
+send an abbreviation**, so this is frontend presentation data about a fixed set of six. Keyed by `private_id` **so it
+cannot drift from `revenue` and `ability` beside it.**
+The lookup returns **`null` rather than a fallback to the number: a caller rendering a pill for an unrecognised
+private should decide for itself whether to draw nothing or to degrade, and quietly reintroducing the numeric chip
+this replaced is the one answer that should not be automatic.**
+
+---
+
+# Station tokens — `utils/stationTokens.ts`
+
+### stationTokens.ts #0 — The price escalates; it was a constant
+Every placement charged a flat $40 — **a stand-in reached for when nothing else about tokens was wired, and never
+revisited. 1830's schedule is not flat, and the shape of it is the whole decision a president makes about tokens:**
+
+- **The home token is free.** Granted automatically when the corporation floats, **so it is not bought at all.**
+- **The second costs $40.**
+- **Every one after that costs $100.**
+
+**So a corporation's third token is two and a half times its second, and the UI was quoting $40 for it. That is not a
+rounding error in a readout — it is the difference between a placement a treasury can afford and one it cannot,
+presented as though the choice were cheap.**
+**`RulesReference.tsx` already carried the correct schedule in prose**, which is worth noting: **the rules screen and
+the action button disagreed, and the rules screen was right.**
+
+### stationTokens.ts #1 — The allowance is per corporation, not a constant
+`PublicCompanyState.station_token_limit` is the authority **and this file reads it rather than restating 1830's
+table.** For reference: PRR/NYC/CPR 4, B&O/C&O/ERIE 3, NNH/B&M 2 — **home token included — which is why "how many can
+I still buy" is `limit − 1` slots deep and not a fixed three everywhere.**
+The row shows **all of them, placed and unplaced, because it is a picture of the corporation's capacity rather than a
+to-do list: seeing that two of four are spent is the point, and a row that dropped the spent ones would shrink as the
+game went on and say nothing about what had been used.**
+
+### stationTokens.ts #2 — Three refusals, before a signature
+`hexmap::execute_place_station_token` is the authority and rejects anything illegal that reaches it. **What this adds
+is the same three refusals BEFORE a transaction is signed, with a sentence saying which one bit — because a click that
+silently does nothing, or costs a signature to learn "no", is the failure this file exists to prevent:**
+
+1. **Connectivity.** The city must be one the corporation's own track already reaches. **Shares `reachableNetwork`
+   with the tile-lay veil, so the two cannot disagree about where a network ends.**
+2. **A free slot.** Every city has a fixed number of token circles; **when they are full the city is closed to new
+   tokens (and blocks other companies' trains from running THROUGH it).**
+3. **Reservations.** A corporation's home city holds a slot for it from the start. **Until that company floats and
+   places its home token, nobody else may take the reservation.**
+
+**It does NOT model the one-token-per-turn rule, the treasury check, or whose turn it is — those are elsewhere in the
+UI or on chain, and duplicating them here would be a second opinion.**
+**Slot occupancy is named rather than generalised:** a city closed by other companies' tokens **is the single most
+consequential board state in 1830 — it blocks their trains from running THROUGH — so the refusal names it rather than
+saying "illegal".**
+**The reservation is released by USE, not by floating:** a company that has floated AND placed its home token is
+**occupying** the slot rather than reserving it, and its token is already counted. **That distinction matters on the
+shared OO hexes: ERIE's home is a two-city hex, so before ERIE floats another corporation may still take the OTHER
+circle — reserving both would over-block it.**
+**Connectivity is checked LAST, deliberately.** The three above are properties of the CITY and are true for everybody;
+**this one is about the acting corporation, and a player who has been told "that city is full" does not also need to
+be told their track does not reach it.** A corporation with no token yet has no network to measure, **and its first
+placement is its home city — which the contract grants at float rather than asking for. Rather than guess, that case
+is allowed through and left to the chain.**
+Total slot counts come from the laid tile where there is one, **and from the printed cities otherwise — one circle for
+an ordinary city, two for an OO pair or New York. A hex with no city has none, which is what makes the "no city here"
+refusal fall out of the same lookup.**
+
+### stationTokens.ts #438 — Why this corporation cannot place a station
+`null` when it can. **The three blocking conditions are checked in the order a player discovers them — do I have a
+token, can I pay for it, is there anywhere to put it — so the reason reported is the first that actually stops them
+rather than whichever is cheapest to test.**
+**The topological check is the real one, and it reuses the same set the targeting veil lights.** A cheaper
+approximation — "does the network touch any city" — **would disagree with the veil about reservations, occupied slots
+and OO tiles, and the failure would be the worst kind: a step skipped for a corporation the map would have let place,
+or a player held on a step whose veil lights nothing.**
+**It is the expensive one too — it walks every board hex — so it runs last, after the two cheap facts have had their
+chance to answer.**
+**Phrased as a reason, not a boolean.** The caller puts it in an "Auto-Skip — …" log line, **and the three cases call
+for different responses: an exhausted allowance is permanent, a short treasury is fixable next turn, and no reachable
+slot is a fact about the map that a tile lay might change. A bare `true` would collapse them.**
+
+### stationTokens.ts #453 / #459 / #463 / #580 — Which city node the click landed on
+**#453:** a hex can carry more than one city — New York's #54/#62, every OO tile — **and `PlaceStationToken.city_index`
+exists precisely so a player can say which. Nothing was answering the question, so every placement omitted the field
+and the contract fell back to "lowest-indexed city with a free slot": always legal, and on a two-city hex a coin toss
+against what the player actually clicked.**
+**How it decides:** each city's slot points are already computed for drawing, **so a city's position is the centroid of
+its own slots and the click resolves to the nearest. That reuses the drawing geometry rather than describing the tile a
+second time, which is what keeps "where the token appears" and "which city you clicked" from drifting apart.**
+**Nearest, with no radius.** A click has already been established as landing inside this hex, **and every point inside
+a hex is nearer one of its cities than the other. Adding a hit radius would create dead zones between the cities where
+a click inside a legal hex resolved to nothing — a worse answer than the nearest city, and one the player cannot see
+the boundary of.**
+**`null` for "could not tell", never a defaulted `0`** — an untiled preprinted double city has no per-city geometry,
+**and guessing would send a confident wrong index; omitting the field lets the contract apply its documented
+fallback.** A one-city tile short-circuits to `0` **without measuring: its index is not a guess, there is only one.**
+**#459 — a preprinted OO hex is still two cities.** *Reported:* clicking the upper-right city on the Erie's home tile
+places the token on the lower-left one. This bailed to `null` for any hex with **no laid tile**, **true of an ordinary
+blank hex and false of the four preprinted OO hexes — E5, D10, E11 and H18 — which arrive with two station circles
+already printed. E11 is the Erie's home, so the one hex a new president is guaranteed to click was in the gap.**
+**The consequence was silent and looked like a targeting bug rather than a missing branch:** `null` means "I cannot
+tell", the caller correctly omits the index, and the contract applies its fallback of the lowest-indexed free city —
+**which is 0. So every click on either circle resolved to city 0, and the marker geometry then drew that token at the
+bottom-left circle. Two independently reasonable defaults compounding into "the upper-right node does not work".**
+Hit-testing now uses **the same tuple the board draws those two circles from, so it cannot disagree with what the
+player sees.**
+**#463 — the nodes a click can land on.** *Reported:* valid city markers do not glow, so the specific clickable node is
+not obvious. **Why this shares the hit-test's geometry, and why that is the whole point rather than mere tidiness: a
+glow is a promise about what a click will do. If the glow were drawn from one source of node positions and the
+hit-test resolved against another, the two could disagree — and the failure would be the cruellest kind: a marker that
+pulses invitingly and then places the token somewhere else.** Both read the same two branches, in the same order.
+**#580 — the other half of `#221`.** *Reported:* the placement ring sits in the middle of Baltimore's hex rather than
+on its city circle, and is slightly off both of New York's. `#221` fixed exactly this for the marker point **and
+described the cause precisely** — preprinted hexes used to draw their city at the hex CENTRE and then began rendering
+from authored artwork. **This function was never told.** It is the other answer to "where are this hex's cities", used
+by the pulsing rings and the hit-test, **and it kept both of the guesses `#221` removed: `center` for a single city,
+and the fixed NE/SW diagonal for two. That diagonal is why New York's rings are close but wrong** — the authored
+endpoints and the diagonal **happen to agree in DIRECTION while disagreeing in DISTANCE.**
+**Two functions answering one question, one of them fixed — the pattern this codebase keeps finding, and the reason the
+fix is to consult the same source rather than to copy the same maths.** The old guesses survive **only as the fallback
+for a hex with no authored artwork at all, which is the one case they were ever right about.**

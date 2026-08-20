@@ -682,3 +682,100 @@ rebuild the game on top of the state it was supposed to have discarded.
 **The automatic guards go too**, for `#475`'s reason: they exist to stop repeat firing within a turn,
 not to record history, and a replay has to be free to re-derive the consequences it derived the first
 time.
+
+---
+
+# The Operating Round stepper — `components/OperatingSubPhaseStepper.tsx`
+
+### OperatingSubPhaseStepper.tsx #0 — This replaces a text label, and that is the point
+The action bar used to render "Phase 4 of 6: Routes" as a static string. **It was accurate and nearly useless: it named
+where you were without showing what came before, what comes next, or how far through the turn you had got. A player
+learning 1830's operating sequence — which is the hardest ordering in the game to internalise — got a number and a
+word.**
+The strip shows the whole sequence at once, marks what is done, and highlights what is live: **same information the
+label had, plus the shape of the turn around it.**
+`OPERATING_SUB_PHASE_ORDER` mirrors `or_phase::OR_PHASE_ORDER`, **which is the AUTHORITY rather than a description.**
+It lives here rather than in `App.tsx` **so the stepper, the action bar and the labels all read one definition;
+`RulesReference.tsx` keeps its own independent copy on purpose — that file takes no game-state coupling at all.**
+
+### OperatingSubPhaseStepper.tsx #1 / #212 — The strip is a read-only indicator, in every mode
+The contract persists a sub-phase cursor and gates every one of these actions against it — **a client that walks a
+different order has its transactions rejected with `WrongOperatingSubPhase`. So in a live game the cursor is not the
+client's to set: jumping the UI to "Dividends" would not move the chain, it would just make the bar lie about what the
+chain would accept.**
+**#212 — the SANDBOX exception is gone.** It let a step be clicked directly, on the reasoning that with no chain to
+disagree with, a jump was safe. **It was safe and it was still wrong, for a reason that only shows up in use:**
+
+- **The sandbox is the testbed for the turn order.** 1830's operating sequence is the hardest ordering in the game to
+  internalise, **and the one thing the sandbox is for is walking it. A strip whose steps can be clicked turns the
+  sequence into a menu — and worse, it lets a tester reach a state the contract cannot reach, then report the resulting
+  behaviour as a bug in a flow that no live game can enter. A testbed that permits illegal transitions is not testing
+  the thing it appears to test.**
+- **It also skipped work silently.** Clicking `Run Routes` from `Lay Track` jumped `Station Tokens` without dispatching
+  anything, **so the corporation arrived at Routes having never been offered a token placement and nothing in the
+  Action Log recorded that it had been passed over.**
+
+**So there are now exactly three ways the cursor moves, and all three are events with a record:** forward by **acting**
+(the action completes the step); forward by **skipping** (which dispatches the real `AdvanceOperatingSubPhase` and
+moves exactly one step); backward by **Undo** (which restores the whole snapshot, cursor included).
+`onSelect` is **deleted rather than defaulted to `undefined`, so no caller can pass one: a prop that exists is a prop
+somebody eventually wires up.**
+
+### OperatingSubPhaseStepper.tsx #2 — Five steps or six, depending on the era
+`BuyPrivate` leads the turn **but does not exist before Phase 3:** the contract starts its cursor at `Track` while the
+era is Yellow, and the opening-sub-phase helper mirrors that. **Rendering a greyed-out first step that the chain says
+is not there yet would be inventing a phase.**
+So the strip is built from whichever steps apply **and NUMBERED from that filtered list rather than from a fixed
+table.** At game start that is exactly five steps, 1–5; from Phase 3, six. **The numbers always describe the turn
+actually being played.**
+
+### OperatingSubPhaseStepper.tsx #385 — A step with nothing in it is not a step
+**Reported:** Buy Private Companies requires too many manual skips when no privates are available.
+The step was gated on the ERA alone. **From Phase 3 it then appeared on every corporation's turn for the rest of the
+game, and by the mid-game it is usually empty: privates get bought into treasuries, and Phase 5 closes every one that
+is left. Six corporations each skipping a dead step every Operating Round is a lot of clicks spent proving a
+negative.**
+**A private is buyable if a player still holds it** — not closed, and not already inside a corporation. **That is the
+same predicate `PrivateTradePanel.tsx` applies, and it is deliberately the same one: the step exists to open that
+picker, so the step should be present exactly when the picker would have rows.**
+**Phase 5 needs no special case.** It closes all privates, so every entry reports `closed` and this returns false on
+its own. **Testing the phase as well would be a second rule that has to be kept in agreement with the first, and the
+first is the one that is actually true — what matters is whether anything is buyable, not why it isn't.**
+**An unknown roster shows the step.** `undefined` means the query has not resolved, **and hiding a step because data has
+not arrived would make the strip flicker as it loads — worse, it would hide a legal action from a player whose privates
+simply had not loaded yet. Absent evidence is not evidence of absence.**
+
+### OperatingSubPhaseStepper.tsx #613 — The rule is a phase number, so say the phase number
+**Instructed:** "the Buy Private subphase could be linked to only display when 'Phase: 3' 'Phase: 4' are valid, since
+Phase: 5 closes private companies."
+**That is the actual 1830 rule, stated exactly:** corporations may buy privates from the first 3-train until the first
+5-train closes them. **The old test approximated it in two hops — an era check for the lower bound, and `#385`'s "is
+anything still buyable" for the upper — and the approximation was correct only because the second hop happens to be
+true whenever the first is wrong.**
+**Why that was worth tightening even though it behaved.** The upper bound was being enforced by a **consequence** of
+Phase 5 (every private reports `closed`) **rather than by Phase 5. That is a correct reading of a state the contract
+has to have written first — so during any window where the phase has advanced and the closures have not yet arrived in
+a client's `gameState`, the step would offer itself.** Testing the phase closes that window and, more usefully, **makes
+the rule legible: a reader now sees "3 or 4" rather than inferring it from a tile colour.**
+**The era stays as the fallback, not as the rule.** `derivePhase` reports `known: false` when no corporation has
+reported trains (`gamePhase.ts #3`); **in that case there is no phase number to test and the era is the best evidence
+available, so the old path runs.**
+**`initialOrSubPhase` is deliberately unchanged.** It mirrors the contract's own `initial_sub_phase`, which decides
+where the CURSOR starts, **and a mirror that stops matching its original is worse than an imprecise one. This function
+decides what is DISPLAYED, which is the frontend's own call and the thing the request is about.**
+
+### OperatingSubPhaseStepper.tsx #235 — Skip and Undo swapped lines
+The Skip button used to render on the strip while Undo sat on the action row. **Both were in the wrong place, and the
+reason is what each control acts on:**
+
+- **Skip is a TURN ACTION.** It is the alternative to laying a tile, placing a token or running a route — "I decline
+  this step" — **and it belongs beside the actions it is an alternative to, so a player scanning the action row sees
+  every way out of the current step in one line.**
+- **Undo acts on the SUB-PHASE CURSOR.** It is the only thing that moves the turn backwards (`#1`: forward by acting or
+  skipping, backward by undoing), **so it belongs on the strip that displays that cursor — the two controls that move
+  the same pointer, together.**
+
+So this component **renders no button of its own:** it renders the strip and a `trailing` slot, and the bar supplies
+both controls in their new homes. `onAdvance` is **gone from the props rather than left unused: a callback nothing
+calls is a callback somebody re-wires.** A slot rather than a prop pair, **because this component has no opinion about
+what belongs there beyond WHERE it goes.**

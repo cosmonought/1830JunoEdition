@@ -333,3 +333,432 @@ when nothing is highlighted, so a board with no cursor draws exactly as before.
 The dividend decision belongs to the Dividends sub-phase, which is the very next step — so the revenue
 is withheld into the treasury at Routes and paid out (or not) there. Declaring a payout from the
 Routes step would make the separate Dividends buttons meaningless.
+
+---
+
+# What a train can do inside one hex — `utils/trackSegments.ts`
+
+### trackSegments.ts #0 — A hex is not a node
+Every path-walking surface in this app — the network reach that gates tile laying, the Auto-Route
+tracer, the manual waypoint bridge — asked the board the same question and got the same wrong answer:
+**"does hex A carry rail toward hex B, and B back toward A?"** That is `liveEdgesForHex` on both sides,
+**and it treats a hex as a NODE through which everything connects to everything.** Most hexes are, so
+the answer is usually right. On the ones that are not it is silently and badly wrong:
+
+- **Tile #20 is two separate straights** — edges 0–3 and 1–4, authored as two rails that cross visually
+  and do not touch. The edge test reports all four edges present and therefore all four mutually
+  reachable, **so a corporation whose track meets edge 0 was told it reaches whatever sits beyond edge
+  1.** Confirmed on the real board: a three-hex patch with #20 in the middle reported the far hex as
+  networked across two rails that never meet.
+- **The OO tiles and the double-city tiles have the same shape** — two stations, each with its own pair
+  of edges, no path between them. **New York (#54/#62) is the loudest case:** its two spurs are
+  physically disconnected, and `hexCanvasPrimitives.ts #226` already had to fix the ROUTE GLOW for
+  exactly this reason. **The connectivity layer never got the same treatment.**
+
+So this module answers the question a hex actually poses: **entering at edge E, which edges may I leave
+by, and along WHICH rail?** Both halves matter — the first is connectivity, the second is occupancy.
+
+### trackSegments.ts #1 — The answer already existed; nothing consumed it
+`pathsForTraversal` in `TileGraphics.ts` has resolved exactly this since `#217`: it returns the authored
+rail(s) joining two edges, or `[]` when they are not joined, **and it already knows that two hub spokes
+only connect if their interior ends MEET.** The route overlay has used it for several passes to stroke
+the one rail a train runs along. **This module is that primitive lifted to the whole board — no new
+geometry is invented here; the geometry was correct and only the renderer was asking.**
+
+### trackSegments.ts #2 — Where there is no artwork, everything connects
+Landmarks carry track recorded as a bare **edge list** with no per-rail structure, so there is nothing to
+be precise with and those fall back to the old behaviour. **That is the conservative direction for
+connectivity — it can only report MORE reach, never less, so it cannot hide a legal move — and it is
+stated here rather than left implicit, because it is the one place this module still gives the answer
+`#0` calls wrong.** Closing it needs that table to gain rail structure, **which is a data change rather
+than a logic one.** The same fallback covers a hex whose tile id is absent from the artwork catalog: **a
+catalog gap should not make the board less connected than it is.**
+
+### trackSegments.ts #484 — A red off-board area is a terminus, not a junction
+**Reported:** the network calculator treats red off-board areas as traversable, so a network that enters
+one is granted legal placement on every other hex touching it.
+It did, **and `#2` above is where it came from.** Off-board track is a bare edge list, so it fell through
+to the everything-connects fallback — **and that fallback is not conservative at all on a red hex,
+because the surplus reach is not a longer path through real rail. It is a WORMHOLE.**
+Chicago (F2) prints stubs on edges 0, 1 and 5 — real neighbours F4, E3 and G3 — **so a corporation whose
+rail met F4 was told it reached E3 and G3 too, and the veil lit builds on the far side of a hex no train
+may pass through. Every red zone has the same shape: A11 spliced B10 to B12, K13 spliced J14 to J12, B24
+spliced B22 to C23, J2 spliced J4 to I3. Five false junctions, each fusing two unrelated networks.**
+**1830 is unambiguous here.** A red area is a revenue destination where a route ENDS. A train runs in and
+stops. **It never runs out the far side, and two pieces of track that both meet the same red zone are not
+thereby connected to each other.**
+**So there is no traversal — not a restricted one, none.** `null` for every (entry, exit) pair, **which is
+the identical answer this function already gives for two curves that never touch.** Stating it once here
+reaches every caller.
+**The hex itself is still reached, and that distinction is the whole fix.** This function answers "may I
+pass THROUGH", not "may I get here" — `neighbourAcross` is what admits a hex to the network and is
+untouched, **so a red zone still joins the network, still renders as reached, and still counts as a
+destination worth running to. What it no longer does is hand out the hexes behind it.**
+Derived from the board's own `type: "RedOffboard"` discriminator rather than from a label table: **both
+currently name the same seven hexes, and keying off the type field means they cannot drift into
+disagreeing — which would show up as a lay the veil offers and the click handler then refuses.**
+
+### trackSegments.ts #3 — A segment key, because a hex id could not be one
+1830 forbids two of a corporation's trains from running over the same **track**. The previous drafter
+approximated that by barring whole **hexes**, documented at the time as deliberately stricter — **safe
+for a suggestion, but it forbids the commonest legal shape on a busy board: two trains crossing one hex
+on the two arms of a crossover, or reaching the two separate stations of an OO tile. On a late-game map
+that approximation costs real revenue.**
+A segment key is **`q,r#index`**, where `index` is the authored rail's own position in its hex's artwork.
+**Two trains sharing a hex are fine; two trains sharing a `q,r#index` are not.** A hex with no per-rail
+structure reports `q,r#*` — **one shared identity for the whole hex, which reproduces the old exclusion
+exactly where nothing better is knowable.**
+
+### trackSegments.ts (traversals) — `null` is the whole point
+`traversalSegments` returns the authored rails joining two edges, **or `null` when the two are not joined
+by continuous track: that is the answer `liveEdgesForHex` cannot give, and the reason `#0`'s bug
+existed.** `traversalsFrom` is **strictly port to port** — an exit appears only when an authored rail is
+found, **so two disconnected curves on one tile yield two disjoint answers rather than one junction.**
+**What it does NOT check, and a previous version of this comment wrongly claimed it did:** whether
+anything lies beyond the exit. The both-sides rule lives in `neighbourAcross` **and has to stay there —
+a tile lay extends the network across an edge with nothing behind it yet, so a caller looking for build
+sites needs the exits WITHOUT that filter. Applying it here would have hidden every extension on the
+board.**
+New York is authored outside the printed-graphics catalog (`#229`), **so it is asked for explicitly
+rather than falling through to "everything connects" — which is exactly the claim its two disconnected
+spurs must not make.**
+
+---
+
+# Where a corporation may build — `utils/trackReach.ts`
+
+### trackReach.ts #0 — A hint about reach, not a ruling about legality
+18xx.games dims the board during a tile lay and lights only the hexes you may build on. **That is a
+genuine usability feature rather than decoration: 1830's board is 100-odd hexes and a corporation can
+usually build on three or four of them, so without it the player's first move is to work out where their
+own network ends — every turn, by eye.**
+**What it does not answer, and must never grow to:** whether a given tile fits (upgrade topology, colour
+tier, path preservation, the "B"/"NY"/"OO" set — `execute_lay_tile`'s, mirrored for the picker by
+`sandboxTileLegality`); the one-tile-per-turn rule or a private's extra lay; token blocking (**a city
+whose slots are full stops a ROUTE, not a lay**); or whose turn it is.
+**The consequence of this file being wrong is a hex that is dimmed when it should not be — an
+inconvenience — rather than an illegal action being accepted. That asymmetry is why the fallback opens
+the board up rather than closing it down.**
+
+### trackReach.ts #1 — Connectivity is checked from both sides
+Two hexes are joined when A carries a live edge pointing at B **and** B carries the matching edge pointing
+back — the same rule the tracer uses, **and for the same reason: a dead-end stub (Richmond's single edge,
+New York's two disconnected spurs) otherwise reads as connected to whatever sits beyond it.**
+
+### trackReach.ts #2 — A corporation with no token is unconstrained
+A corporation that has floated but not placed its home token has no network, **so a strict reading would
+return the empty set and the UI would dim the ENTIRE board with nothing lit. The player would be told,
+wordlessly, that they may not build anywhere — which is both wrong (their first lay is the home hex) and
+indistinguishable from a broken feature.** The same applies before the first `GetGameState` resolves.
+So "I do not know where this corporation's network is" returns **unconstrained**, and the caller leaves
+the board undimmed. **The contract remains the authority either way; the only thing lost is the hint.
+Erring the other way would take the board away from the player over missing data.**
+
+### trackReach.ts #3 — A tile lay extends a route; it does not touch a hex
+**Reported:** the veil lights every hex surrounding the corporation's station.
+It did, because this was `boardNeighbours` — all six neighbours of every network hex — on the reasoning
+that "a tile lay EXTENDS a network, so adjacency is the test, not connectivity."
+**The first half of that is right and the conclusion does not follow.** The new hex has no track, true —
+**but the lay still has to join the network, and a network only offers a join where its own track ENDS AT
+AN EDGE.** PRR on H12 (Altoona, printed track on edges 0 and 3) can extend west to H10 and east to H14
+and nowhere else: **the other four sides are blank cardboard with no rail reaching them, so a tile laid
+there would touch Altoona without connecting to it.**
+**Six lit hexes where two are legal is not a small over-count. It is the feature inverted** — the player
+is told to consider four placements the contract will reject, on the one screen whose whole job is to say
+which placements are worth considering.
+**The test is one-sided, and that is the difference from the network walk.** Joining an EXISTING network
+needs both hexes to carry matching rail; **extending it needs only the network side to offer an edge,
+because the tile about to be laid supplies the other half. Using the two-sided test here would light
+nothing at all on a fresh board.**
+
+### trackReach.ts #4 — A network follows rails, not hex adjacency; and the network is shown, not hidden
+**Reported:** legal network expansion bleeds across the disconnected tracks on tiles that carry more than
+one.
+**The cause is one line further down than it looks.** The walk was hex-to-hex, which **treats a hex as a
+NODE where everything meets — true of most tiles and false of exactly the ones this matters on.** Measured
+on the real board before the fix: a three-hex patch with #20 in the middle reported the far hex as
+networked **across two rails with no connection between them.**
+**The walk is over (hex, arrival edge) states now.** Arriving by one edge only licenses the exits that
+edge actually joins. **A crossover is entered twice, once per straight, and each visit carries only its
+own onward reach.**
+**The station hexes themselves are unrestricted, and that is not a shortcut:** a route starts AT a token,
+inside the city, **so every rail leaving that city is available to it. There is no arrival edge to
+constrain a start.**
+**#4 (the veil) — reported:** the board dims aggressively and hides the corporation's own network. The
+first cut veiled everything except the legal targets, **which is the obvious reading of "dim what you
+cannot act on" and the wrong one.** A player choosing WHERE to extend is reasoning about the route the
+extension would join — **so dimming exactly that leaves the legal hexes lit and the reason for choosing
+between them in the dark.** Three tiers: the **network** at full brightness, the **extensions** lit and
+glowed, everything else receding. Returned from **one walk**, **or the two halves of one picture would
+disagree about where the network ends.**
+
+### trackReach.ts #483 — A network ends at PORTS, not at hexes
+**Reported:** the calculator traces connectivity through discontinuous track on a hex, so two separate
+curves are treated as joined and illegal placements are offered.
+**`#4` fixed HALF of this.** The BFS was made strict — a crossover entered on one straight no longer
+licenses the other — **but what it produced was still a set of HEX keys, and everything downstream then
+asked that set the hex-as-a-node question all over again:**
+
+- **The extension lookup** took a network hex and offered a build across EVERY live edge of it. **So a
+  corporation whose rail reaches edge 0 of a #20 crossover was offered lays beyond edges 1 and 4 —
+  exactly the reported bug, one layer below where the fix was applied.**
+- **The rotation filter** (`sandboxTileLegality`) did the same for rotations: it asked whether a
+  neighbour was in the network and carried rail to the shared edge, **which is true of the far arm of a
+  crossover the corporation cannot reach.**
+
+**The strictness was being computed and then thrown away. A hex key cannot express "reached, but only on
+this rail", so any consumer holding one has to re-derive the missing half — and both of them re-derived
+it wrongly.**
+**A port is the missing value:** `"q,r:edge"`, meaning the corporation's own track reaches the inside of
+this hex AT this edge. **Produced by the same walk that produces the hex set, so the two cannot
+disagree.**
+**It includes edges with nothing beyond them, deliberately.** The hex set only grows across a two-sided
+join (`#1`), because a network cannot flow into bare cardboard — **but bare cardboard is exactly where a
+tile gets laid, so the port survives where the hex does not.**
+`reachableNetwork` is **exported because two features need the same walk and must not disagree about it**
+— the tile-lay veil grows this set by one hex, and station placement tests membership directly. **A second
+BFS with its own subtly different adjacency rule is exactly how "the board says I can build here but the
+token button says I cannot" happens.**
+`connectedNeighbours` is **deleted rather than left unused so nothing can quietly start calling the old
+model again.**
+
+---
+
+# The Auto-Route tracer — `utils/routeAutoTrace.ts`
+
+### routeAutoTrace.ts #0 — A client-side SUGGESTION, not an oracle
+The Auto Route button had been disabled since Audit G-13 removed `ExecuteOperatingRound`, on the reasoning
+that the contract's own pathfinder no longer had a message reaching it. **That reasoning is correct about
+the CONTRACT and wrong about the button: a player asking for a route drawn for them is asking the UI to
+pre-fill the manual builder, which is a client-side convenience that needs no chain at all.** The result
+travels to the contract as the same `RunManualRoute` the player could have clicked out by hand.
+**The line this must not cross — `pathfinding.rs` remains the only authority on what a legal route IS.
+The list below is deliberately not a to-do:**
+
+| not checked | why it belongs to the contract |
+|---|---|
+| **Token access** | a route must run through a city the corporation has a token in, and may not pass through one whose slots are full of other companies' tokens. This starts AT a token, which satisfies the first half by construction, **and ignores the second entirely.** |
+| **City slots** | a two-city hex is one node here. Which station a train reaches is `city_node`'s question **and this never sets one.** |
+| **Train count** | the multi-train ALLOCATION problem is approximated (`#7`), not solved. |
+| **Overlap** | two trains may not reuse the same track SEGMENT. `#4` originally barred whole HEXES — **stricter and therefore safe for a suggestion, but not the rule and not to be mistaken for it.** |
+
+### routeAutoTrace.ts #1 / #6 — The walk follows rails, and spends them
+**Connectivity is checked from both sides** — checking one side only is **the classic 18xx map bug: a
+dead-end stub reads as connected to whatever happens to sit beyond it, and the tracer walks off the end of
+the rails.**
+**#6 — two changes, and they are the same change seen from two sides.**
+**It walks (hex, arrival edge) states.** The old walk treated a hex as a node where all its rails meet;
+**on #20, the OO tiles and New York that is false, and the tracer would happily route a train in one
+straight and out the other.**
+**It spends SEGMENTS, not hexes.** The whole-hex approximation **forbids the commonest legal shape on a
+built-up board**, so occupancy is keyed on the rail itself.
+**A route also may not reuse its own track**, which falls out of the same set. The old `visited` hex set
+enforced a **stronger and slightly wrong** version: **a route may legally touch a hex twice by different
+rails, and 1830 pays it once either way**, which the pricing already handles by deduplicating.
+
+### routeAutoTrace.ts #5 / #9 — Clicking two cities should not mean clicking nine hexes
+**Reported:** manual routing forces the player to click every plain track hex between two cities.
+It did, because the builder's only rule was "the next point must be a DIRECT NEIGHBOUR". **That rule is
+correct about what a route is and wrong about what a player is doing when they draw one. Nobody choosing a
+route is choosing the plain track; they are choosing the STOPS.** A five-stop route across a built-up
+board was twenty clicks, **nineteen of which had exactly one legal answer.**
+**It prefers plain track, and that is the interesting part.** The shortest path by hex count is not always
+the one the player meant: **a bridge that happens to pass through a third city silently adds that city's
+revenue AND spends one of the train's stops, neither of which was asked for.** So the search is weighted —
+crossing a revenue centre costs far more than crossing plain track. Where there is no alternative the
+centre IS included, because the train genuinely stops there, **and it then appears in the stop list with
+its value. What must never happen is a stop appearing in the total that the player cannot see.**
+**The manual click still wins** — the bridge only fills gaps the player left. `avoid` is the hexes already
+on the route: **a route is a simple path, so a bridge may not loop back through one — without this,
+clicking a city the route already passed through would produce a chain that visits a hex twice and prices
+it once, and the two would disagree.** `null` for no connected path, **which the caller reports rather
+than papering over: inventing a straight line across the board is exactly the class of plausible fiction
+`#216` deleted.**
+**#9 — the bridge walks rails too.** *Reported:* with tile #56 on G7, the router bridges H8 to F6 across
+two curves that do not touch. `trackSegments.ts #0` fixed this class of bug in the network reach and in
+the auto-tracer, **and this function was missed** — it kept its own hex-to-hex Dijkstra. **Reproduced on
+the real board with the reported hexes before the fix, which is also why the earlier audit came back
+clean: the AUTO tracer already asked the strict primitive. Only the manual bridge did not, so only manual
+routing hallucinated — and the previous report had named the auto-router.**
+The walk is over (hex, arrival edge) states now, **and the visited set is keyed on the state rather than
+the hex, because one hex may legitimately be visited twice by two different rails.** `cameFrom` stores the
+**predecessor STATE's key** — the split is load-bearing: **an earlier cut stored each node under its own
+key and walked the chain back through it, which reads a node's predecessor as itself and returned `null`
+for every connected pair on the board.**
+The destination's own value is **not charged** — the player asked for it, **so its cost is not a reason to
+route around it.**
+
+### routeAutoTrace.ts #7 / #8 — The best set, and why the optimiser must not be able to lose
+**#7 — reported:** auto-route naively assigns routes to the largest train first, missing optimal
+multi-train sets. It did, **and the note that shipped it admitted as much.** The greedy order was
+defensible and is still wrong in a way that is easy to state: **the highest-paying route for a 5-train may
+be the only route a 3-train could have run, and giving it away costs more than it gains. Greedy cannot see
+that, because it decides the 5-train's route before it has looked at the 3-train at all.**
+**An exhaustive search over a deliberately small space:** at most four trains, each proposing at most a
+dozen candidates, with every clashing branch pruned — **thousands of combinations in the worst case,
+microseconds, and exact over the candidates considered.**
+**It is still not `trace_best_route_set`.** The candidate list is generated per train by a bounded DFS, **so
+a route no train proposed cannot be chosen, and the guarantee is "the best combination of the routes we
+found" rather than "the best combination that exists". That is the honest claim for a drafting aid.**
+**Trains that get nothing are not a failure** — a three-train corporation on a network supporting two routes
+should draft two and leave the third empty, **which is what the contract would accept.**
+
+**#8 — the joint search alone is WORSE than greedy on a lot of real boards, and the reason is not obvious
+and cost a rewrite to find.** Every train's candidate list is generated against an untouched board, **so
+all of them crowd around the same few best rails. Commit the widest train to one of those and the other
+lists can be entirely conflicted out.** The sequential algorithm never had that problem: **it REGENERATES
+after each commitment, so it discovers the second-best corridor the joint search never put on the table.**
+**Measured across 150 board patches: the joint search alone tied on 100 and LOST on 50, once by $240 to
+$80. A smarter optimiser that is sometimes three times worse is not an optimiser.**
+**So both run**, plus the sequential pass in reverse order (**a narrow train choosing first sometimes leaves
+a better remainder**), and the best plan wins. **Running the old algorithm as one candidate makes "never
+worse than what we replaced" true by construction rather than by hope.**
+**A fill pass finishes the job:** any train left without a route gets one more look at the leftovers.
+**Pure upside — it can only add revenue, and it is what lets the joint search's strength combine with the
+sequential one's.**
+
+### routeAutoTrace.ts (bounds and termini)
+- **The depth cap alone is not enough:** a dense late-game board branches, and an unbounded DFS over it is
+  exponential. **The expansion budget makes the worst case a bounded amount of work rather than a frozen
+  tab** — reached, it returns the best route found so far, **a suggestion that is merely not optimal rather
+  than one that never arrives.**
+- **K candidates rather than one**, because the assignment search needs alternatives: **the single best
+  route for a 5-train may be the one that strands the 3-train, and there is no way to know that without a
+  second option on the table.** Scored by the same pricing function the readout uses, **so 1830's
+  pay-a-hex-once rule comes for free rather than being reimplemented as a running total.**
+- **A route needs two paying stops** — 1830's two-revenue-centre minimum — **and it has to END somewhere it
+  may end. Towns pay, so without the terminus test the best-paying prefix was routinely one that stopped on
+  a town, which is not a legal route.**
+- **Terminus rails are recomputed rather than copied from the transit set:** a terminus is not a transit, it
+  is discovered when the route is recorded. **Without this a route could legally end on a rail another train
+  was already using, and the assignment search would hand back a set violating the disjointness it exists to
+  enforce. Caught by the sweep across 150 board patches.**
+- **Towns count** toward a train's capacity: `City → Town → City` is three stops and a 2-train cannot run it.
+  **Verified rather than assumed.**
+- **A route runs THROUGH a token far more often than it starts at one**, so each arm is paired with a second
+  arm going the other way, joined through the shared city — **and the second arm is barred from the first's
+  rails, which is what keeps the joined path a legal single route rather than one that doubles back.**
+
+---
+
+# The Run Routes panel — `components/RoutePlannerPanel.tsx`
+
+### RoutePlannerPanel.tsx #0 — The step was spread across three places
+Running a train took four controls and the bar put them in three different regions of itself: the two
+buttons that START a route in the far-right utilities rail, the button that FINISHES one in the centre
+column **above the route it would submit**, and the readout telling you whether finishing was even possible
+in a box below both **that appeared and disappeared.** **A player following the obvious top-to-bottom
+reading order encountered the actions in the sequence 3, 1, 2.**
+The panel now **is** the sequence: **top** — re-draft if you want to start over; **middle** — see what you
+have built; **bottom** — run it, for a stated amount.
+
+### RoutePlannerPanel.tsx #1 → #493 — There was never a manual mode to enter
+**#1** diagnosed the pair correctly: "Auto Route" was an **action** and "Manual Route" was a **mode**,
+rendered as two identical buttons side by side — **they looked like alternatives and behaved like different
+categories, which is why the pair needed two long tooltips to be usable at all.**
+**#493 — reported:** remove the separate Manual button; clicking hexes should override the suggestion with
+no toggle. **The report is right, and the toggle was already describing a state that did not exist.**
+`routeSelectMode` — the flag that actually routes map clicks into the builder — **is forced ON for the WHOLE
+Routes sub-phase regardless of which position the toggle showed.** So a player in "Auto-Route" could already
+edit the draft, **and `handleRouteHexClick` flipped the label to "Manual" on the first click to stop the
+control lying about it.**
+**That is a toggle whose two positions did the same thing, kept in step with reality by an assignment buried
+in a click handler.** What it cost was legibility: **a player who wanted to edit reasonably assumed they had
+to switch modes first, on a screen where they never did.**
+**What replaces it is one button, and the distinction is the point.** Auto-Route is an ACTION — "draft this
+again" — **with no pressed state to contradict, nothing to leave switched on, and no second position implying
+the first one disabled the map.** `RouteBuildMode` is **deleted, not left unused: a mode type with no modes is
+how the toggle grows back.**
+*(Also see `#7`: while the toggle existed it lifted into the toolbar, because it was the only control in the
+panel that does not describe a route — **it picks the tool**, and inside the panel's border it read as a
+property OF those routes rather than as the thing that produces them.)*
+
+### RoutePlannerPanel.tsx #2 — The run button carries the number, and its own gate
+"Run Selected Route" named the action and withheld the one figure the decision turns on. It reads "Run
+Selected Route(s) for $180" now, **which also makes the button the confirmation: the amount on the button is
+the amount the route pays, so a player who mis-clicked a hex sees the wrong number before committing rather
+than after.**
+**Disabled, not hidden, below $1.** Hiding it would remove the only on-screen evidence that finishing is the
+next step, **and a player whose route is not yet legal would be looking for a control that no longer exists.**
+
+### RoutePlannerPanel.tsx #3 / #4 — Why the red text is gone, and what stayed
+The panel used to stack up to four red strings. **The worst offender was not a warning at all:** "Auto Route
+drafted 5 hexes worth $180. Edit it by clicking hexes, or clear it and build your own." **It reported a
+SUCCESS in the colour reserved for failure, restated two figures already on screen, and then explained the
+panel's own controls in prose. It fired on the happy path, so the steady state of a working Auto Route was a
+red paragraph.**
+**Nothing in this panel is red unless the player has done something the contract will refuse.**
+**#4 — a refused click still has to say so.** `#3` deletes the message Auto Route emitted on SUCCESS; it does
+not delete the ones the builder emits when it **refuses** a click. **Dropping these was briefly the state of
+this refactor and it was worse than the clutter it removed: a builder that silently ignores half your clicks
+reads as broken, and the player's next move is to click harder.** It takes precedence over the standing
+blocked reason **because a refusal is about the click just made while the blocked reason is a standing
+condition.** Amber, not red: **the route is intact and nothing has failed except one click.**
+
+### RoutePlannerPanel.tsx #5 — A corporation runs every train it owns
+**Reported:** the router runs a single train even when the corporation owns three.
+The panel modelled one route, and the props said so — **which is a fair model of what a 1830 corporation does
+exactly never. It runs ALL of its trains in one Operating Round turn, each on its own route, and the dividend
+is the sum.**
+**The train list was also deduplicated, which is the deeper half of the bug.** Three 3-trains collapsed into
+one chip on the reasoning that "two 3-trains are one CHOICE" — **true when the question is "which train am I
+validating this single route against", and false once the question is "which of my trains am I drafting for
+now". Three 3-trains are three trains. They need three routes and three chips.**
+So the panel takes **drafts, one per owned train, identified by their index into `owned_trains`** — **the only
+thing that distinguishes one 3-train from another.**
+**The run button sums every VALID route.** A per-train figure would be the wrong number however chosen.
+**Invalid drafts contribute nothing rather than blocking the rest** — a player with two good routes and one
+broken one can still run the two, **which is also what the contract would let them do.**
+
+### RoutePlannerPanel.tsx #623 — The step's primary action, on the step's toolbar
+**Reported:** the sticky bar shows a greyed Auto-Route beside Skip and **no Run button** — "players have to
+scroll up to see that."
+`#266` moved Run out of the toolbar deliberately, and its reasoning was sound: the button belongs under the
+path it runs, and a copy in the bar would be **"the vaguer of the two, since only the panel's copy knows the
+figure".**
+**What that argument missed is the sticky bar.** The bar follows the player down the page; the panel does not.
+**So on the one step whose primary action lives in the panel, scrolling to look at the map takes Run off screen
+and leaves a toolbar showing only Auto-Route and Skip — two ways to not finish the step. Every other sub-phase
+keeps its finishing action on that bar.**
+**The "vaguer of the two" objection is answered rather than ignored:** both buttons read the same
+`runnableRouteSummary`. **Neither is the authority; the drafts are, and both render the same derivation.**
+That shared summary matters **because `#5` settles a genuinely non-obvious rule** — invalid drafts contribute
+nothing rather than blocking the rest — **and the failure mode of a second implementation is a bar button that
+offers a total the panel refuses to run.**
+**Auto-Route stays.** The report suggests replacing it "since auto-route is the default", **but it is not
+automatic: entering the step engages the builder and drafts nothing. Removing it would leave clicking hexes as
+the only way to draft a route, which is the opposite of what the request wants.** What it should be is
+**subordinate** to Run, which is what putting Run beside it achieves.
+
+### RoutePlannerPanel.tsx #9 / #494 / #499 / #6 — The route table
+**#9 — the row's end of the shared cursor.** *Distinct from the active train, and the two are easy to
+conflate:* **active** means "map clicks are drafting for this train" — a MODE, chosen by clicking, persisting
+until changed. **Highlighted** means "this is the one being looked at right now" — transient, driven by hover,
+**and it can point at a train that is not the active one, which is exactly what makes it useful for comparing
+two drafted routes.** **Merging them would mean hovering a row silently redirected the map's clicks, which is
+the kind of mode change nobody expects from a hover.**
+**#494:** the chip wears its own route's ink. **Distinct colours on the map only help if something says WHICH
+train each one is**, and this row is where the player is already looking. **An underline rather than a fill:
+the chip's active state is a fill, and two colour systems on one control would make "selected" and "this
+train's ink" compete.**
+**#499 — "RUNNINGROUTE" was not a typo.** *Reported:* the panel is titled "Runningroute", with no space.
+**There is no such string, and that is the whole finding.** These are two adjacent COLUMN HEADERS — "Running"
+over the train chip, "Route" over the path — **and the first overflowed into the second, so the two words met
+on screen with nothing between them.**
+**The cause is a width, not a string.** The grid track is 52px, **sized for what the COLUMN holds: a train chip
+reading "3" or "5".** The word above it rendered near 68px, **so it ran past its own column and the gap and
+straight into its neighbour. Editing the text to "Running Route" would have made the overflow worse and fixed
+nothing, because there was never a single label to put a space into.**
+**So the header names what the column holds, and fits it. "Train" is both shorter and more accurate** — the
+cell under it is a train chip, not a state of running. **"Running" was describing the step rather than the
+column, which is what led to a header too wide for the thing it labels.**
+`minWidth: 0` and `overflow: hidden` close the **class** of bug rather than this instance: **a grid item's
+default `min-width: auto` refuses to shrink below its content, which is why a too-long header silently escapes
+its track instead of being clipped.**
+**#6 — which full paths are open** is local state: **pure disclosure, and lifting it would make every parent
+that renders this own a preference about someone else's detail rows.**
+**#474:** the "misses your tokens" refusal is reported **after** the geometric problems and **before** the
+generic "worth nothing", **because a route that misses the corporation's tokens is usually a well-formed route
+in the wrong place — the player has drawn something valid-looking and needs to be told which rule it misses
+rather than that it is worthless.** One sentence rather than one per train: **three broken routes usually have
+the same problem, and three copies of it is the clutter `#3` removed in the first place.**

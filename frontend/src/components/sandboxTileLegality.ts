@@ -2,81 +2,22 @@
 //
 // A LEGALITY FILTER FOR THE OFFLINE SANDBOX TILE PICKER, AND NOWHERE ELSE.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHY THIS DOES NOT VIOLATE "NO CLIENT-SIDE
-//  RE-VALIDATION" -- READ THIS BEFORE EXTENDING IT
-// ===================================================================
+// Design note #0: this does not violate `TileSelectionPopup.tsx #4`'s "no client-side re-validation" policy,
+// because that policy is about the CONTRACT-BACKED path and this module is not on it. On the sandbox path
+// there is no chain, so nothing was ever asked and the local fallback returns all 46 tiles in all 6
+// orientations with no legality claim of any kind. This is not a SECOND opinion competing with the contract's
+// -- it is the ONLY opinion, and the alternative is not "defer to the contract", it is "offer the player a
+// green double-city hub for a plain prairie hex". A filter that exists only where no authority is reachable
+// cannot drift from an authority. The picker's provisional labelling STAYS ON.
 //
-// `TileSelectionPopup.tsx`'s design note #4 sets a hard policy: the
-// frontend does NOT re-validate tile legality, because `hexmap.rs`'s
-// `legal_tile_placements` already answers that question and a second copy
-// of the rules would drift out of sync with the first. `hexmap.rs`'s own
-// module doc comment #26 records the same decision from the other side --
-// the "B"/"NY"/"OO" restrictions were deliberately NOT mirrored into this
-// frontend when they were added.
+// Design note #1: NO TILE IDs, AND NO HEX COORDINATES EITHER -- both would be a third source of truth for
+// facts that already have two. Every decision is a function of METADATA, and the hex-side reads route through
+// `archetypeForHex`, which resolves a hex STRUCTURALLY rather than by comparing names.
+// Design note #2: two independent sources of centre counts agree, and the filter uses the better one -- the
+// authored markers where they exist, the terrain tag otherwise. The harness re-checks that agreement rather
+// than assuming it holds.
 //
-// That policy is about the CONTRACT-BACKED path, and this module does not
-// touch it. The contract-backed picker still receives
-// `legal_tile_placements` verbatim; nothing here is on that code path.
-//
-// The sandbox path is a different situation entirely. There is no chain, so
-// nothing was ever asked, so `localCatalogPlacements()` returns all 46
-// tiles in all 6 orientations with -- in its own words -- "no legality
-// claim of any kind". This module is not a SECOND opinion competing with
-// the contract's; on this path it is the ONLY opinion, and the alternative
-// is not "defer to the contract", it is "offer the player a green
-// double-city hub for a plain prairie hex". A filter that exists only where
-// no authority is reachable cannot drift from an authority.
-//
-// The distinction that keeps this honest: the picker's provisional
-// labelling STAYS ON. This narrows what is offered; it never promises the
-// contract would accept it.
-//
-// ===================================================================
-//  DESIGN NOTE 1: NO TILE IDs, AND NO HEX COORDINATES EITHER
-// ===================================================================
-//
-// Nothing in this file matches on a tile number or a hex label. Both would
-// be a third source of truth for facts that already have two (the Rust
-// catalog and this frontend's mirror of it), and the one most likely to go
-// stale -- adding a Brown OO tile to both catalogs should make it legal
-// here automatically, with no list to remember.
-//
-// Every decision below is a function of METADATA:
-//
-//   - How many cities and towns a tile carries    -> `tileCentres`
-//   - How many the HEX carries                    -> `hexCentres`
-//   - Which letter code, if any, the hex prints   -> `hexLabelRestriction`
-//   - Which tier a tile or hex is at              -> `TIER_RANK`
-//   - Which track segments a tile actually runs   -> `tileSegments`
-//
-// The hex-side reads all route through `archetypeForHex`, which the
-// renderer already uses and which resolves a hex STRUCTURALLY -- a Set
-// membership, an enum tag, an array length -- rather than by comparing
-// names. Reusing it means a new hex added to the board data classifies
-// correctly here without this file being touched.
-//
-// ===================================================================
-//  DESIGN NOTE 2: WHERE THE COUNTS COME FROM
-// ===================================================================
-//
-// Two independent sources agree, and the filter uses the better one:
-//
-//   AUTHORED MARKERS. `TILE_GRAPHICS_CATALOG[id].markers` lists each
-//   revenue centre on a tile with `kind: "city" | "town"`. This is real
-//   per-tile artwork data. It covers the 22 hand-authored tiles.
-//
-//   THE TERRAIN TAG. `TileCatalogEntry.terrain` is mirrored from the Rust
-//   catalog entry for entry, and each variant implies an exact pair --
-//   `SmallTown` is one town, `DoubleCityHub` is two cities, and so on. It
-//   covers all 46.
-//
-// Markers win where they exist because they are the finer-grained record;
-// the tag covers the rest. The two were checked against each other across
-// all 22 overlapping tiles and agree on every one, and the harness for this
-// pass re-checks that agreement rather than assuming it holds -- a
-// disagreement would mean the artwork and the catalog had drifted, which is
-// worth failing loudly over.
+// Design notes #3/#4/#6/#7/#483: see `docs/ai_architecture/hex_tile_math.md`.
 
 import { TILE_CATALOG_BY_ID, type TileColorTier, type TileCatalogEntry } from "./hexTileCatalog";
 import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardData";
@@ -106,11 +47,9 @@ export interface CentreCounts {
 
 const NO_CENTRES: CentreCounts = { cities: 0, towns: 0 };
 
-/** What each terrain tag implies. Design note #2's second source.
- *
- *  `MountainRugged` is retained with zero centres because the Rust enum
- *  retains it (no tile carries it since Audit G-5/G-10); dropping it here
- *  would make this map non-total over `TerrainType`. */
+/** What each terrain tag implies -- design note #2's second source. `MountainRugged` is retained with zero
+ *  centres because the Rust enum retains it (no tile carries it since Audit G-5/G-10); dropping it here would
+ *  make this map non-total over `TerrainType`. */
 const CENTRES_FOR_TERRAIN: Readonly<Record<string, CentreCounts>> = {
   Plain: { cities: 0, towns: 0 },
   MountainRugged: { cities: 0, towns: 0 },
@@ -138,13 +77,9 @@ export function tileCentres(tileId: number): CentreCounts {
   return (entry && CENTRES_FOR_TERRAIN[entry.terrain]) ?? NO_CENTRES;
 }
 
-/** Cities and towns printed on a HEX, in the same units.
- *
- *  Read through `archetypeForHex`, so a laid tile's real terrain wins where
- *  one exists and the hex's own static designation answers otherwise --
- *  OO membership, town/city designation, a gray hex's marker kind, or a
- *  landmark's printed track structure. One classifier, shared with the
- *  renderer, rather than a second reading of the board tables. */
+/** Cities and towns printed on a HEX, in the same units. Read through `archetypeForHex`, so a laid tile's real
+ *  terrain wins where one exists and the hex's own static designation answers otherwise. One classifier, shared
+ *  with the renderer, rather than a second reading of the board tables. */
 export function hexCentres(mapGrid: MapGridResponse, q: number, r: number): CentreCounts {
   switch (archetypeForHex(mapGrid, q, r)) {
     case "SingleCity":
@@ -168,16 +103,11 @@ export function hexCentres(mapGrid: MapGridResponse, q: number, r: number): Cent
  *  it. `null` for the ordinary majority of the board. */
 export type HexLabelRestriction = "OO" | "B" | "NY";
 
-/** Which code, if any, this hex carries -- resolved STRUCTURALLY.
- *
- *  Design note #1: this used to be two hardcoded coordinate sets
- *  (`{E23, I15}` and `"G19"`). It now derives the answer the same way
- *  `HexGridRenderer`'s own restriction-badge pass does -- OO membership
- *  first, then a landmark's archetype, where a two-station landmark is "NY"
- *  and a one-station landmark is "B". Baltimore is therefore classified as
- *  a "B" hex by the shape of its printed track rather than because
- *  somebody remembered to list it, and a hypothetical fourth landmark would
- *  classify correctly with no edit here. */
+/** Which code, if any, this hex carries -- resolved STRUCTURALLY. Design note #1: this used to be two hardcoded
+ *  coordinate sets. It now derives the answer the way the renderer's restriction-badge pass does -- OO
+ *  membership first, then a landmark's archetype, where a two-station landmark is "NY" and a one-station
+ *  landmark is "B". Baltimore is classified by the shape of its printed track rather than because somebody
+ *  remembered to list it, and a hypothetical fourth landmark would classify correctly with no edit here. */
 export function hexLabelRestriction(
   mapGrid: MapGridResponse,
   q: number,
@@ -190,13 +120,9 @@ export function hexLabelRestriction(
   return archetypeForHex(mapGrid, q, r) === "DoubleCity" ? "NY" : "B";
 }
 
-/** The one terrain tag a labelled hex accepts.
- *
- *  Still expressed as terrain rather than tile ids, matching `hexmap.rs`
- *  module doc comment #27: "neither the City Reservation match logic nor
- *  `terrain_base_value` cares which specific `tile_id` backs a
- *  `BostonHub`/`NewYorkHub`/`DoubleCityHub` entry -- only the terrain tag
- *  itself." */
+/** The one terrain tag a labelled hex accepts. Still expressed as terrain rather than tile ids, matching
+ *  `hexmap.rs` module doc #27: neither the reservation match nor the base-value lookup cares which specific
+ *  `tile_id` backs a hub entry -- only the terrain tag itself. */
 const REQUIRED_TERRAIN: Readonly<Record<HexLabelRestriction, string>> = {
   OO: "DoubleCityHub",
   B: "BostonHub",
@@ -220,26 +146,13 @@ const TIER_RANK: Readonly<Record<TileColorTier, number>> = {
   Brown: 2,
 };
 
-/* ===================================================================
- *  DESIGN NOTE 3: A PREPRINTED HEX IS ALREADY AT A TIER
- * ===================================================================
- *
- * The labelled hexes -- the four OO hexes, Boston, Baltimore and New York
- * -- carry `printedColor: "Yellow"` in `STATIC_BOARD_HEXES`: the board
- * ships with their yellow tile already on it. But a preprint is not a
- * `MapTileEntry`, so `mapGrid.tiles` has no row for them and a naive read
- * sees them as bare ground.
- *
- * They are RANK 0 (Yellow), which has two consequences, and both are
- * requirements rather than conveniences:
- *
- *   - Their first legal upgrade is GREEN. Yellow is never offered, because
- *     a yellow tile cannot be laid on a hex that already has one.
- *   - A BROWN tile is not offered either until a green one is down. Without
- *     the rank, a Brown-era game would have offered brown straight onto a
- *     still-yellow New York, skipping green entirely --
- *     `InvalidColorUpgrade` on chain.
- */
+/* Design note #3: A PREPRINTED HEX IS ALREADY AT A TIER. The labelled hexes carry `printedColor: "Yellow"` --
+   the board ships with their yellow tile already on it -- but a preprint is not a `MapTileEntry`, so the tile
+   grid has no row for them and a naive read sees them as bare ground.
+   They are RANK 0, which has two consequences, both requirements rather than conveniences: their first legal
+   upgrade is GREEN, because a yellow tile cannot be laid on a hex that already has one; and a BROWN tile is
+   not offered until a green one is down -- without the rank, a Brown-era game would have offered brown
+   straight onto a still-yellow New York, which is `InvalidColorUpgrade` on chain. */
 const PREPRINTED_TIER_BY_LABEL: ReadonlyMap<string, TileColorTier> = new Map(
   STATIC_BOARD_HEXES.flatMap((hex) =>
     hex.printedColor === "Yellow" ? ([[hex.label, "Yellow"]] as [string, TileColorTier][]) : [],
@@ -250,57 +163,23 @@ const PREPRINTED_TIER_BY_LABEL: ReadonlyMap<string, TileColorTier> = new Map(
 /* Track segments -- design note #4                                   */
 /* ------------------------------------------------------------------ */
 
-/* ===================================================================
- *  DESIGN NOTE 4: STRICT PATH PRESERVATION
- * ===================================================================
- *
- * An upgrade may not delete track. The weaker form of that check -- "the
- * new tile's live EDGE SET must be a superset of the old one's" -- is
- * necessary but not sufficient, and the gap is real rather than
- * theoretical.
- *
- * Consider a yellow tile whose track runs edge 0 to edge 2 and, separately,
- * edge 3 to edge 5: two parallel routes. A green tile with all four of
- * those edges live but wired 0-to-3 and 2-to-5 passes the edge test
- * perfectly while rerouting every train through the hex. Nothing was
- * deleted; everything was reconnected. The edge test cannot see it, because
- * it never looks at what connects to what.
- *
- * So the comparison is on SEGMENTS. Each is a pair of endpoints, where an
- * endpoint is either an edge (0-5) or `CITY`, and every segment on the old
- * tile must appear on the new one.
- *
- * WHERE THE SEGMENT DATA COMES FROM, in precedence order:
- *
- *   1. `TileCatalogEntry.paths` -- the real backend mirror, and in practice
- *      the only branch that ever runs. MEASURED, not assumed: all 46 tiles
- *      carry it. That contradicts the field's own doc comment in
- *      `hexTileCatalog.ts`, which still says "POPULATED ONLY FOR THE FIVE
- *      DOUBLETOWN TILES" -- true when written, stale since the mirror was
- *      completed. That comment is corrected in place rather than left to
- *      mislead the next reader.
- *   2. Authored artwork (`tileArtworkEdgePairs`), including hub spokes as
- *      edge-to-`CITY_ENDPOINT`.
- *   3. A two-edge tile's mask -- unambiguous: two live edges is exactly one
- *      segment joining them.
- *
- * 2 AND 3 ARE UNREACHABLE TODAY and are kept deliberately. They are the
- * degradation path for a catalog entry added without `paths`: without them
- * such a tile returns `null` and silently drops to the weaker edge test,
- * with nothing to indicate the check had been downgraded. Described as
- * defensive rather than described as load-bearing, because they are not.
- *
- * HOW HUBS ARE MODELLED, and it is better than a spoke list: the backend
- * expands a city hub to its full PAIRWISE set, so #14 (edges 0/1/3/4) is
- * `[0,1] [0,3] [0,4] [1,3] [1,4] [3,4]`. That states directly what a spoke
- * pair only implies -- edge 0 reaches edge 3 THROUGH the city -- and it
- * means a comparison never has to reason about city identity at all.
- * `CITY_ENDPOINT` therefore only appears on the unreachable artwork path.
- *
- * THIS IS STRICTLY STRONGER THAN THE EDGE TEST, verified rather than
- * asserted: tile #70 at rotation 0 passes the edge-superset test over #57
- * and is rejected by this one.
- */
+/* Design note #4: STRICT PATH PRESERVATION. The weaker form -- "the new tile's live EDGE SET must be a
+   superset of the old one's" -- is necessary but not sufficient, and the gap is real: a yellow tile running
+   0-2 and 3-5 upgraded by a green tile wired 0-3 and 2-5 passes the edge test perfectly while rerouting every
+   train through the hex. Nothing was deleted; everything was reconnected, and the edge test never looks at
+   what connects to what.
+   SO THE COMPARISON IS ON SEGMENTS -- pairs of endpoints, each an edge or `CITY`, every one of the old tile's
+   appearing on the new.
+   SOURCES, in precedence order: (1) `TileCatalogEntry.paths`, the real backend mirror and in practice the only
+   branch that ever runs -- MEASURED, all 46 tiles carry it; (2) authored artwork; (3) a two-edge tile's mask.
+   2 AND 3 ARE UNREACHABLE TODAY and are kept deliberately, as the degradation path for a catalog entry added
+   without `paths`: without them such a tile returns `null` and silently drops to the weaker edge test with
+   nothing to indicate the check had been downgraded. Defensive, not load-bearing.
+   HOW HUBS ARE MODELLED, and it is better than a spoke list: the backend expands a city hub to its full
+   PAIRWISE set, which states directly what a spoke pair only implies -- edge 0 reaches edge 3 THROUGH the city
+   -- and means a comparison never has to reason about city identity at all.
+   STRICTLY STRONGER THAN THE EDGE TEST, verified rather than asserted: tile #70 at rotation 0 passes the
+   edge-superset test over #57 and is rejected by this one. */
 
 /** The non-edge endpoint of a spoke: the tile's own city/town centre. */
 export const CITY_ENDPOINT = -1;
@@ -372,13 +251,9 @@ function preservesRouting(
 /* Station tokens                                                     */
 /* ------------------------------------------------------------------ */
 
-/** Whether a station token may target this hex.
- *
- *  A token needs a CITY. Towns do not take tokens, and neither does plain
- *  track. Expressed as a count rather than a terrain list so it follows the
- *  same metadata path as everything else here --
- *  `execute_place_station_token`'s own gate is the terrain equivalent
- *  (`hexmap.rs` module doc comment #26). */
+/** Whether a station token may target this hex. A token needs a CITY -- towns do not take tokens, and neither
+ *  does plain track. Expressed as a count rather than a terrain list so it follows the same metadata path as
+ *  everything else here; `execute_place_station_token`'s own gate is the terrain equivalent. */
 export function isTokenableHex(mapGrid: MapGridResponse, q: number, r: number): boolean {
   return hexCentres(mapGrid, q, r).cities > 0;
 }
@@ -397,106 +272,43 @@ export interface SandboxLegalityContext {
    *  one phase-to-era mapping in the app, and it is the one the phase badge
    *  already displays. */
   era: TileColorTier;
-  /* ==================================================================
-   *  DESIGN NOTE 6: AN ORIENTATION HAS TO JOIN THE NETWORK
-   * ==================================================================
-   *
-   * REPORTED BUG: the tile selector rotates through configurations that are
-   * not legal here.
-   *
-   * Design note #173 (App.tsx) already restricted rotation to the angles
-   * this function returns, so the cycle was never walking all six blindly.
-   * What it was missing is that every check above is about the TILE and the
-   * HEX -- era, centre parity, letter code, colour step, path preservation --
-   * and none of them asks the question a player actually has: does the track
-   * come out where my network is?
-   *
-   * A #9 straight laid across an empty hex beside Altoona is a legal tile on
-   * a legal hex at three of its rotations and connects to PRR at exactly
-   * one. Offering the other two is offering placements the contract rejects,
-   * and worse, it makes the rotate gesture feel arbitrary: the tile spins
-   * through angles that look identical in legality terms and are not.
-   *
-   * `networkHexes` closes that. An orientation survives only if one of its
-   * live edges faces a hex in the corporation's network across an edge that
-   * network hex actually carries rail on -- the same one-sided join
-   * `trackReach`'s design note #3 describes, applied to a specific rotation
-   * rather than to the hex as a whole.
-   *
-   * OPTIONAL, and omitted means unchecked. A caller without a network to
-   * measure -- no token on the board, or a build with no game state yet --
-   * gets exactly the previous behaviour rather than an empty carousel. */
+  /* Design note #6: AN ORIENTATION HAS TO JOIN THE NETWORK. `App.tsx #173` already restricted rotation to the
+     angles this returns, so the cycle was never walking all six blindly -- what it was missing is that every
+     check above is about the TILE and the HEX, and none of them asks the question a player actually has: does
+     the track come out where my network is?
+     A #9 straight beside Altoona is a legal tile on a legal hex at three rotations and connects to PRR at
+     exactly one. Offering the other two is offering placements the contract rejects, and it makes the rotate
+     gesture feel arbitrary.
+     OPTIONAL, and omitted means unchecked: a caller with no network to measure gets exactly the previous
+     behaviour rather than an empty carousel. */
   networkHexes?: ReadonlySet<string>;
-  /* ==================================================================
-   *  DESIGN NOTE 483: THE EDGE, NOT JUST THE HEX
-   * ==================================================================
-   *
-   * `networkHexes` alone was not enough and the gap is the reported bug.
-   * The old check asked two questions -- is the neighbour a network hex,
-   * and does it carry rail to the shared edge -- and BOTH are true of the
-   * far arm of a crossover the corporation cannot reach. Tile #20 is two
-   * separate straights; a corporation whose track meets edge 0 puts the hex
-   * in `networkHexes`, and edge 1 is a live edge of that same hex, so an
-   * orientation facing edge 1 passed a filter designed to catch exactly
-   * this.
-   *
-   * `networkPorts` carries the answer the walk already had:
-   * `trackReach.portKey(q, r, edge)` for the edges the corporation's own
-   * continuous track actually arrives at. Facing a port is the real join.
-   *
-   * SUPPLIED TOGETHER OR NOT AT ALL. Both come off one `layableHexes`
-   * result, so a caller cannot hold a fresh hex set and a stale port set. A
-   * caller with neither is unchecked, exactly as before. */
+  /* Design note #483: THE EDGE, NOT JUST THE HEX. The network hex set alone was not enough. The old check asked
+     two questions -- is the neighbour a network hex, and does it carry rail to the shared edge -- and BOTH are
+     true of the far arm of a crossover the corporation cannot reach: tile #20 is two separate straights, so a
+     corporation meeting edge 0 puts the hex in the network and edge 1 is a live edge of that same hex.
+     `trackReach`'s PORTS carry the answer the walk already had -- the edges the corporation's own continuous
+     track arrives at. Facing a port is the real join.
+     SUPPLIED TOGETHER OR NOT AT ALL, so a caller cannot hold a fresh hex set and a stale port set. */
   networkPorts?: ReadonlySet<string>;
 }
 
-/**
- * Narrow the unfiltered 46-tile tray to what could plausibly be laid here.
- * Sandbox only -- see design note #0.
- *
- * Five rules, in the order the contract checks them:
- *
- *  1. ERA. A tile above the room's unlocked tier is `EraLocked` on chain.
- *
- *  2. CENTRE MATCH, with TOWN PARITY. The tile's printed centres must match
- *     the hex's: plain takes 0 cities and 0 towns, a city hex takes a tile
- *     with cities, and a town hex takes a tile with the SAME NUMBER of
- *     towns -- one town for a one-town hex, two for a two-town hex, never
- *     a swap. Parity matters because the two are different pieces of board:
- *     a double-town hex prints two separate revenue stops and a one-town
- *     tile would erase one of them.
- *
- *  3. LETTER CODE. A labelled hex takes only its own artwork family, and
- *     that family is illegal anywhere else. Scoped to Green and Brown:
- *     `hexmap.rs` #26 records that a labelled hex's "YELLOW start... remain
- *     the ordinary shared hub artwork", with the dedicated artwork existing
- *     from Green up.
- *
- *  4. COLOUR STEP. Exactly one tier above what is there, with bare ground
- *     counting as -1 so "you may only start with yellow" and "you may only
- *     upgrade one step" are the same rule. A preprinted hex counts as its
- *     printed tier -- design note #3.
- *
- *  5. PATH PRESERVATION. Every segment the old tile runs must exist on the
- *     candidate at that rotation -- design note #4. The only rule judged
- *     per ORIENTATION rather than per tile.
- *
- * What this deliberately does NOT check, because it cannot without becoming
- * the rules engine the project brief rules out: network connectivity to the
- * corporation, city reservation for unfloated home hexes, and tray
- * depletion. The tray is narrowed to plausible, not proven.
- */
-/** Whether `entry` at `orientation` on `(q, r)` puts track against the
- *  corporation's network -- design note #6.
- *
- *  ONE-SIDED, matching `trackReach`'s extension rule: the neighbour must be
- *  a network hex whose own rail reaches the shared edge. The tile being laid
- *  supplies the other half of the join, which is the whole point of laying
- *  it.
- *
- *  A hex ALREADY in the network is an upgrade rather than an extension, and
- *  an upgrade is judged by path preservation (check 5) rather than by
- *  needing a fresh join -- so it passes here unconditionally. */
+/** Narrow the unfiltered 46-tile tray to what could plausibly be laid here. Sandbox only -- design note #0.
+ *  Five rules, in the order the contract checks them:
+ *    1. ERA -- a tile above the room's unlocked tier is `EraLocked` on chain.
+ *    2. CENTRE MATCH, WITH TOWN PARITY -- a town hex takes a tile with the SAME NUMBER of towns, never a swap,
+ *       because a double-town hex prints two separate revenue stops and a one-town tile would erase one.
+ *    3. LETTER CODE -- a labelled hex takes only its own artwork family, and that family is illegal anywhere
+ *       else. Scoped to Green and Brown: a labelled hex's yellow start is the ordinary shared hub artwork.
+ *    4. COLOUR STEP -- exactly one tier above what is there, with bare ground counting as -1 so "only start
+ *       with yellow" and "only upgrade one step" are the same rule. A preprinted hex counts as its tier (#3).
+ *    5. PATH PRESERVATION (#4) -- the only rule judged per ORIENTATION rather than per tile.
+ *  What this deliberately does NOT check, because it cannot without becoming the rules engine the brief rules
+ *  out: network connectivity, city reservation for unfloated home hexes, and tray depletion. The tray is
+ *  narrowed to plausible, not proven.
+ *  The orientation join (#6) is ONE-SIDED, matching `trackReach`'s extension rule: the neighbour must be a
+ *  network hex whose own rail reaches the shared edge, and the tile being laid supplies the other half. A hex
+ *  ALREADY in the network is an upgrade rather than an extension, judged by check 5, so it passes here
+ *  unconditionally. */
 function orientationJoinsNetwork(
   mapGrid: MapGridResponse,
   q: number,
@@ -531,36 +343,17 @@ function orientationJoinsNetwork(
   return false;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 7: TRACK CANNOT RUN OFF THE EDGE OF THE BOARD
- * ==================================================================
- *
- * REPORTED: F20 and other border hexes permit rotations that run track off
- * the playable board edge.
- *
- * They did, because nothing in this filter had any notion of where the
- * board ENDS. Every other test here asks about the tile (its colour, its
- * centres, its letter code) or about the hex it is going on (what is
- * already there, what the network reaches). None of them asks whether the
- * hex on the other side of a proposed connection exists.
- *
- * Measured before the fix: F20 has one edge pointing at a coordinate that
- * is not on the board, and 34 of the 72 yellow tile-and-orientation
- * combinations offered there put track on it. Thirty-four board hexes have
- * at least one such edge, so this is a whole rim of the map rather than one
- * awkward corner.
- *
- * A rail to nowhere is not merely untidy. It is track the corporation paid
- * for that can never carry a train, and the picker was presenting those
- * rotations beside legal ones with nothing to tell them apart.
- *
- * THE RED OFF-BOARD HEXES ARE ON THE BOARD. A1, F2, J2 and the rest are
- * real coordinates in `STATIC_BOARD_HEXES` that track may legally point at
- * -- they are where routes terminate. So the test is membership of the
- * board's own coordinate set, not "is this hex playable", and getting that
- * backwards would forbid every connection to the map's most valuable
- * destinations.
- */
+/* Design note #7: TRACK CANNOT RUN OFF THE EDGE OF THE BOARD. Nothing in this filter had any notion of where
+   the board ENDS -- every other test asks about the tile or the hex it is going on, and none asks whether the
+   hex on the other side of a proposed connection exists.
+   Measured before the fix: F20 has one edge pointing at a coordinate that is not on the board, and 34 of the
+   72 yellow tile-and-orientation combinations offered there put track on it. Thirty-four board hexes have at
+   least one such edge, so this is a whole rim of the map rather than one awkward corner.
+   A rail to nowhere is track the corporation paid for that can never carry a train, presented beside legal
+   rotations with nothing to tell them apart.
+   THE RED OFF-BOARD HEXES ARE ON THE BOARD -- real coordinates that track may legally point at, since they are
+   where routes terminate. So the test is membership of the board's own coordinate set, not "is this hex
+   playable", and getting that backwards would forbid every connection to the map's most valuable destinations. */
 function staysOnBoard(
   q: number,
   r: number,

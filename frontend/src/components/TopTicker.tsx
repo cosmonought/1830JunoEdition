@@ -1,95 +1,32 @@
 // frontend/src/components/TopTicker.tsx
 //
-// Top Ticker -- now an in-place accordion header+body (Accordion Panel
-// refinement pass, see App.tsx's own design note #20), superseding
-// FeedOverlay.tsx's old modal/pop-up entirely (that file is no longer
-// imported or rendered -- see App.tsx design note #20 for the removal).
-// Still previews the single most recent Feed item when collapsed; clicking
-// the chevron now expands THIS SAME container in place to show a
-// scrollable five-line history (design note #615), rather than opening a
-// floating panel.
+// The activity ticker: a one-line status strip that expands in place into a scrollable history.
+// Supersedes `FeedOverlay.tsx`'s old modal entirely (`App.tsx #20`).
 //
-// Design notes:
-// 1. **Presentational only.** This component owns no state of its own --
-//    `latestItem`/`items`/`unreadCount`/`isExpanded` are all derived or
-//    owned by App.tsx (the single owner of `chatMessages`/`actionLog`),
-//    matching this codebase's established "App.tsx owns state, child
-//    components render it" split (e.g. Chatbox.tsx's own design note #3).
-// 2. **Preview format unchanged from before this pass.** Chat items render
-//    as `💬 {author}: "{text}"`; log items lead with `iconForLogStatus`
-//    followed by the entry's real `logLabel` (and `logDetail` when short
-//    enough to fit inline).
-// 3. **Unread badge only shows while collapsed** -- `unreadCount` is
-//    already computed by App.tsx as `0` whenever the panel is expanded
-//    (mirroring what used to gate the modal), this component still
-//    double-guards on `!isExpanded` itself so the badge can never flash
-//    visible for one render during an expand/collapse transition.
-// 4. **Prominent sizing/typography** (Top Ticker refinement pass, design
-//    note #19): taller header row, bigger `#F8FAFC` medium-weight text,
-//    unread badge/expand hint scaled up alongside it. Unchanged by this
-//    pass other than the chevron now reflecting in-place expansion instead
-//    of a modal.
-// 5. **In-place accordion body (this pass, design note #20).** `items` is
-//    the FILTERED array App.tsx already computes from `feedFilter` (the
-//    same filter driving the pills InlineQuickChat.tsx now renders) --
-//    this component renders them all, so filtering "instantly filters both
-//    the single-line preview AND the expanded history view" (this pass's
-//    own requirement) by construction: both this component's `latestItem`
-//    prop and its `items` prop come from the same filtered source in
-//    App.tsx. (It USED to slice the last `HISTORY_LINE_COUNT` entries here;
-//    design note #476 removed that -- the panel now holds the whole game.)
-//    `maxHeight` on the scroll body is sized for five compact rows
-//    (`HISTORY_LINE_COUNT * HISTORY_LINE_HEIGHT_PX`), auto-scrolled to the
-//    bottom (most recent) whenever it's open or a new filtered item
-//    arrives while it's open -- the same scroll-to-bottom convention
-//    FeedOverlay.tsx's own design note #6 established, ported here.
-// 6. **Notification Settings REMOVED (Mandatory Turn Alerts pass, see
-//    App.tsx's own design note #21).** The two toggle switches ("🔔 Tab
-//    Title Flash" / "💫 Turn Pulse Glow") this component used to render at
-//    the top of the expanded body (previously design note #6, itself
-//    ported in from FeedOverlay.tsx's old modal) are gone entirely --
-//    both turn-alert channels are now mandatory, always-on whenever
-//    `isMyTurn === true`, with no per-player opt-out anywhere in the app.
-//    The expanded body below is now JUST the scrollable history list --
-//    see design note #21's own requirement that the expanded panel show
-//    "clean, readable text logs and chat" with no settings/checkbox
-//    clutter.
-// 7. **No border-radius/shadow/backdrop.** This is no longer a floating
-//    panel -- it's an in-place section of the page flowing directly out of
-//    the active nav tab above it (App.tsx design note #20/item 3), so it
-//    intentionally has none of FeedOverlay.tsx's old "floating card" chrome.
+// Design note #1: presentational only -- every prop is derived or owned by `App.tsx`, the single owner of
+// the chat and action log. The unread badge double-guards on `!isExpanded` itself so it can never flash
+// visible for one render during a transition.
+// Design note #5: `items` is the FILTERED array `App.tsx` already computes, so filtering the preview and
+// the history is one thing by construction rather than two kept in step.
+// Design note #6: the notification toggles are gone -- both turn-alert channels are mandatory (`App.tsx
+// #21`), and the expanded body is JUST the scrollable list.
+// Design note #7: no border-radius, shadow or backdrop. This is an in-place section of the page, not a
+// floating card.
+//
+// Design notes #425/#457/#458/#476/#477/#598/#600/#614-#616: `docs/ai_architecture/ui_shell_layout.md`.
 
 import React, { useEffect, useRef } from "react";
 import type { FeedItem } from "../utils/feed";
 import { colorForAuthor } from "../utils/feed";
 import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 
-/* ==================================================================
- *  DESIGN NOTE 615: FIVE ROWS, NOW THAT FIVE ROWS IS NOT A LIMIT
- * ==================================================================
- *
- * INSTRUCTED: "now that the log scrolls, I wonder if it would be okay to
- * trim the expansion to 5 lines/entries?"
- *
- * Yes, and the question contains the reason it is safe. Seven was never
- * chosen as a good reading height -- design note #476 found this constant
- * being used to TRUNCATE the history and left it at seven while converting
- * it into a viewport. At the time the number decided what existed, so
- * shrinking it would have thrown entries away.
- *
- * It decides nothing now. The list holds the whole game and scrolls, so this
- * is purely how much screen the panel borrows while open -- and the report
- * beside this one is that it borrows too much ("the expansion of the log
- * takes up half my screen"). Five rows is roughly 230px against seven's 320,
- * which takes the open dock from about half a laptop viewport to under a
- * third.
- *
- * NOT LOWER THAN FIVE. Three or four rows would fit more comfortably and
- * would stop the panel being a place you can read a stretch of the round in
- * -- a log you have to scroll every second entry is a log you stop opening.
- * Five holds a full turn's worth of actions on one screen, which is the unit
- * a player actually wants to read back.
- */
+/* Design note #615: FIVE ROWS, NOW THAT FIVE ROWS IS NOT A LIMIT. Seven was never chosen as a reading
+   height -- #476 found this constant being used to TRUNCATE the history and left it at seven while
+   converting it into a viewport. At the time the number decided what existed, so shrinking it would have
+   thrown entries away. It decides nothing now.
+   Five rows is ~230px against seven's 320, which takes the open dock from about half a laptop viewport to
+   under a third. NOT LOWER THAN FIVE: a log you have to scroll every second entry is a log you stop
+   opening, and five holds a full turn's worth of actions on one screen. */
 const HISTORY_LINE_COUNT = 5;
 // Bumped 36 -> 46 alongside the typography scale. This is the per-row
 // figure `HISTORY_LINE_COUNT` multiplies: leaving it while row TEXT grew
@@ -101,79 +38,35 @@ export interface TopTickerProps {
   latestItem: FeedItem | null;
   /** Already filtered by the active feed filter -- see design note #5. */
   items: readonly FeedItem[];
-  /** Design note #616: unread CHAT MESSAGES, not unread feed items. Log
-   *  entries are a record to consult rather than a queue to clear, and
-   *  counting them gave a badge that read four digits and meant nothing.
-   *  Counted off the UNFILTERED feed by the caller, so a player filtered to
-   *  "log" is still told a message arrived. */
+  /** Design note #616: unread CHAT MESSAGES, not unread feed items. Log entries are a record to consult
+   *  rather than a queue to clear, and counting them gave a badge that read four digits and meant nothing.
+   *  Counted off the UNFILTERED feed by the caller, so a player filtered to "log" is still told a message
+   *  arrived. */
   unreadCount: number;
   isExpanded: boolean;
   onToggleExpand: () => void;
-  /* ==================================================================
-   *  DESIGN NOTE 598: THE DOCK IS A STATUS LINE, SO IT IS ONE LINE
-   * ==================================================================
-   *
-   * REPORTED: "the Chat/Activity log at the bottom needs to be slimmed down:
-   * it's bigger than the traveling Action bar and ostensibly less useful."
-   *
-   * Both halves of that are true and the second explains the first. Design
-   * note #581 docked this to the bottom edge precisely BECAUSE it is
-   * peripheral -- "readable without ever demanding attention" -- and then
-   * left it three rows tall: a 52px ticker, a permanent chat input, and a
-   * row of filter pills. A peripheral surface taller than the primary one is
-   * not peripheral.
-   *
-   * OPTION (b) FROM THE REPORT, taken as offered: "only show the ticker,
-   * remove the log filters, and leave a 'Chat' button that opens the text
-   * box below the ticker." The filters go with the input -- filtering is a
-   * thing you do while READING the log, so they belong in the expanded view
-   * and are noise on a one-line status strip.
-   *
-   * The toggle lives INSIDE the ticker's own header row rather than beside
-   * it, because a second row for one button would be the problem again. */
+  /* Design note #598: THE DOCK IS A STATUS LINE, SO IT IS ONE LINE. #581 docked this to the bottom edge
+     precisely BECAUSE it is peripheral -- "readable without ever demanding attention" -- and then left it
+     three rows tall. A peripheral surface taller than the primary one is not peripheral.
+     The filters go with the input: filtering is a thing you do while READING the log, so they belong in the
+     expanded view and are noise on a one-line status strip. The toggle lives INSIDE the header row, because
+     a second row for one button would be the problem again. */
   chatOpen?: boolean;
   onToggleChat?: () => void;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 425: ONE STRING, AND NO PICTURES IN IT
- * ==================================================================
- *
- * REPORTED: make the expanded history render the full text string,
- * identical to the ticker -- e.g. "[OR 1] Private Revenue — Schuylkill
- * Valley pays $5 to Alice" -- and remove every emoji and graphical badge
- * from the log, relying on clean text alone.
- *
- * TWO RENDERERS, TWO DIFFERENT SENTENCES. The collapsed ticker built its
- * line here, in `previewText`; the expanded list built a different one in
- * `LogEntry` out of separate spans. They agreed about nothing: the ticker
- * appended `logDetail` (when short enough) and the list dropped it entirely
- * in favour of a hover `title`; the list rendered a category badge the
- * ticker had never heard of; both prefixed a status emoji, from the same
- * helper, in different positions. Expanding the panel to read a line in
- * full showed the reader a line they had not been reading.
- *
- * So the string is built ONCE, here, and both surfaces render exactly it.
- * "Identical to the ticker" is now structural rather than a thing to keep
- * in step by hand.
- *
- * THE EMOJI ARE GONE, ALL OF THEM. `iconForLogStatus`'s coloured circles
- * and `iconForLogEntry`'s category glyphs are no longer called from this
- * file. They were carrying real information badly: a green circle means
- * "succeeded", which in a log of things that have already happened is true
- * of nearly every line, so the column was a near-constant costing horizontal
- * space in a one-line ticker. The category badge was worse -- it was
- * inferred by substring-matching the label ("tile", "stock", "train"), so
- * it restated a word already visible in the sentence beside it, and
- * mis-tagged whenever a label happened to contain someone else's keyword.
- *
- * ERRORS KEEP THEIR MARK, IN WORDS. Dropping the status glyph would have
- * lost the one status that is not the default, so a failed action now says
- * so in text. That is the whole of what the circles were for.
- *
- * THE ROUND PREFIX STAYS `[OR 1]` and leads the line, matching the
- * requirement's example exactly. It is the only bracketed element left, so
- * it reads as a gutter rather than as one badge among several. */
+/* Design note #425: ONE STRING, AND NO PICTURES IN IT. Two renderers built two different sentences -- the
+   ticker appended the detail when short enough while the list dropped it for a hover `title`, the list
+   rendered a category badge the ticker had never heard of, and both prefixed a status emoji in different
+   positions. Expanding the panel to read a line in full showed the reader a line they had not been reading.
+   So the string is built ONCE and both surfaces render exactly it.
+   THE EMOJI ARE GONE, ALL OF THEM. A green circle means "succeeded", which in a log of things that have
+   already happened is true of nearly every line -- a near-constant costing horizontal space in a one-line
+   ticker. The category badge was worse: inferred by substring-matching the label, so it restated a word
+   already visible beside it and mis-tagged whenever a label contained someone else's keyword.
+   ERRORS KEEP THEIR MARK, IN WORDS -- that is the whole of what the circles were for.
+   THE ROUND PREFIX STAYS `[OR 1]` and leads the line: the only bracketed element left, so it reads as a
+   gutter rather than as one badge among several. */
 export function feedItemText(item: FeedItem): string {
   if (item.kind === "chat") {
     // Design note #477: the same gutter. The log and the chat interleave in
@@ -182,51 +75,25 @@ export function feedItemText(item: FeedItem): string {
     return `${clockPrefix(item)}${item.chatAuthor}: "${item.chatText}"`;
   }
   const round = item.logRound ? `[${item.logRound}] ` : "";
-  /* Design note #425: the FULL detail, not a 40-character preview of it.
-     The truncation existed because this string had to survive in a
-     single-line ticker; the ticker clips with CSS `text-overflow` instead,
-     which shortens the DISPLAY without shortening the sentence the
-     expanded view then renders in full. */
+  /* Design note #425: the FULL detail, not a 40-character preview. The truncation existed because this string
+     had to survive in a single-line ticker; the ticker clips with CSS `text-overflow` instead, which shortens
+     the DISPLAY without shortening the sentence the expanded view then renders in full. */
   const detail = item.logDetail ? ` — ${item.logDetail}` : "";
   const failed = item.logStatus === "error" ? "Failed: " : "";
   return `${clockPrefix(item)}${round}${failed}${item.logLabel}${detail}`;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 477: THE TIME LEADS
- * ==================================================================
- *
- * REPORTED: the timestamp sits at the end of the line; the format should be
- * `[hh:mm] [Phase/Round] [Actor] [Action]`.
- *
- * WHY THE FRONT IS RIGHT and not merely requested. The expanded history is
- * now the whole game (design note #476), so it is a column of entries a
- * player scrolls to find something in. A column is scanned down its LEFT
- * edge, and the two facts that locate an entry -- when, and in which round
- * -- were the two furthest from it: the round was second, and the time was
- * past the end of a sentence of variable length, so it landed in a
- * different column on every row and could not be scanned at all.
- *
- * Leading with both puts a fixed-width gutter down the left of the log:
- * `[14:32] [OR 1]` is the same shape on every line, and the prose starts
- * where the eye already is.
- *
- * hh:mm, NOT hh:mm:ss. `timestampLabel` is a full `toLocaleTimeString()`,
- * which carries seconds -- three characters of precision nobody needs about
- * a board game and enough width to unbalance the gutter. Seconds are
- * dropped for DISPLAY only; `timestampMs` remains the sort key
- * (`feed.ts` design note on why the label was never one).
- *
- * PARSED RATHER THAN REFORMATTED FROM THE EPOCH, deliberately. The label is
- * already localised -- 12-hour with an am/pm suffix in some locales, 24-hour
- * in others -- and re-deriving it from `timestampMs` here would impose this
- * module's idea of a locale on a string the rest of the app formats
- * elsewhere. Trimming what is there keeps one formatter.
- *
- * ANY LABEL IT CANNOT PARSE IS PASSED THROUGH WHOLE. A locale this regex
- * does not anticipate produces a slightly wider gutter, which is a
- * cosmetic defect; dropping the time entirely, or emitting `[Invalid
- * Date]`, would not be. */
+/* Design note #477: THE TIME LEADS. The expanded history is the whole game now (#476), so it is a column a
+   player scrolls to find something in -- and a column is scanned down its LEFT edge, while the two facts
+   that locate an entry were the two furthest from it: the round was second, and the time sat past a
+   sentence of variable length, landing in a different column on every row.
+   Leading with both puts a fixed-width gutter down the left: `[14:32] [OR 1]` is the same shape every line.
+   hh:mm, NOT hh:mm:ss -- three characters of precision nobody needs about a board game, and enough width to
+   unbalance the gutter. Dropped for DISPLAY only; the epoch remains the sort key.
+   PARSED RATHER THAN REFORMATTED FROM THE EPOCH: the label is already localised, and re-deriving it here
+   would impose this module's idea of a locale on a string the rest of the app formats elsewhere.
+   ANY LABEL IT CANNOT PARSE IS PASSED THROUGH WHOLE. An unanticipated locale produces a slightly wider
+   gutter, which is cosmetic; dropping the time entirely, or emitting `[Invalid Date]`, would not be. */
 export function clockPrefix(item: FeedItem): string {
   const label = item.timestampLabel;
   if (!label) return "";
@@ -244,36 +111,15 @@ export function TopTicker({
   chatOpen = false,
   onToggleChat,
 }: TopTickerProps) {
-  // Design note #5: the already-filtered items, oldest-to-newest so the most
-  // recent entry reads at the bottom (the scroll body auto-scrolls there
-  // below).
-  /* ==================================================================
-   *  DESIGN NOTE 476: THE WHOLE GAME, NOT THE LAST SEVEN LINES
-   * ==================================================================
-   *
-   * REPORTED: the Activity Log truncates and retains only the last handful
-   * of entries.
-   *
-   * The STATE was never truncated -- `setActionLog` has always prepended
-   * without a cap. What threw the history away was this line: the expanded
-   * panel sliced the last `HISTORY_LINE_COUNT` items before rendering them,
-   * so everything older existed in memory and could not be reached by
-   * scrolling because it was never in the DOM to scroll to.
-   *
-   * That made the scroll container a lie. It had `overflowY: auto` and a
-   * `maxHeight` of exactly seven lines, so it looked scrollable and had
-   * nothing above the fold -- the one arrangement where a scrollbar never
-   * appears and the player concludes the log simply forgets.
-   *
-   * `HISTORY_LINE_COUNT` survives as what it always physically was: the
-   * VIEWPORT height, in lines. It sizes the box; it no longer decides what
-   * exists.
-   *
-   * THE COST IS BOUNDED IN PRACTICE. A full 1830 game is a few hundred
-   * entries, each a short string -- well inside what a list renders without
-   * complaint. If a very long session ever makes this heavy the answer is
-   * windowing, which needs the full array to window OVER; truncating the
-   * source would remain the wrong fix. */
+  // Design note #5: the already-filtered items, oldest-to-newest so the most recent reads at the bottom.
+  // Design note #476: THE WHOLE GAME, NOT THE LAST SEVEN LINES. The STATE was never truncated -- what threw
+  // the history away was this line, which sliced the last N items before rendering, so everything older
+  // existed in memory and could not be reached by scrolling because it was never in the DOM to scroll to.
+  // That made the scroll container a lie: `overflowY: auto` with a `maxHeight` of exactly seven lines is the
+  // one arrangement where a scrollbar never appears and the player concludes the log simply forgets.
+  // The constant survives as what it always physically was -- the VIEWPORT height, in lines.
+  // THE COST IS BOUNDED IN PRACTICE: a full game is a few hundred short strings. If a long session ever makes
+  // this heavy the answer is windowing, which needs the full array to window OVER.
   const historyItems = items;
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -289,23 +135,13 @@ export function TopTicker({
 
   return (
     <div style={styles.root}>
-      {/* ==================================================================
-           DESIGN NOTE 614: THE HEADER IS ITS OWN POSITIONING CONTEXT
-          ==================================================================
-
-           REPORTED: "there is a stray 'Chat' button in the expanded window".
-
-           There was, and it was the same button. Design note #598 could not
-           nest it inside the header (a button in a button is invalid markup),
-           so it went `position: absolute` against `root` -- correct while
-           `root` WAS the header row and nothing else. Expanding the log makes
-           `root` the header plus a 300px scrolling body, and an element
-           centred on that box lands halfway down the history.
-
-           So the header and its satellite get their own relatively-positioned
-           wrapper. The Chat button is then centred on the ROW it belongs to,
-           whatever the panel below it is doing -- which is what "beside
-           Collapse" meant all along. */}
+      {/* Design note #614: THE HEADER IS ITS OWN POSITIONING CONTEXT. Reported as "a stray 'Chat' button in the
+         expanded window" -- and it was the same button. #598 could not nest it inside the header (a button in a
+         button is invalid markup), so it went `position: absolute` against the root: correct while the root WAS
+         the header row and nothing else. Expanding the log makes the root the header plus a 300px scrolling body,
+         and an element centred on that box lands halfway down the history.
+         So the header and its satellite get their own relatively-positioned wrapper, and the Chat button is
+         centred on the ROW it belongs to whatever the panel below it is doing. */}
       <div style={styles.headerBand}>
         <button
           type="button"
@@ -367,32 +203,15 @@ export function TopTicker({
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 458: THE LATEST LINE, WHERE THE PLAYER IS LOOKING
- * ==================================================================
- *
- * REPORTED: the Activity Log ticker scrolls out of view when scrolling
- * down the page, so the most recent instruction is lost exactly when the
- * player is working on the map or the tables below it.
- *
- * The ticker sits in the page chrome at the top, above the tab bar, and
- * scrolls away with it. The action bar directly below is `position:
- * sticky` (design note #426) and does not. So the fix is not to make a
- * second ticker sticky -- it is to put the one line that matters inside
- * the element that already stays.
- *
- * ONE LINE, NOT THE PANEL. This renders `feedItemText` and nothing else:
- * no expansion, no history, no chat input. The full ticker is still the
- * place to read back through what happened; this answers only "what just
- * happened", which is the question a player scrolling the board has.
- *
- * IT SHARES THE FORMATTER, so the sticky copy and the ticker cannot
- * disagree about the sentence -- design note #425 made that one string for
- * exactly this class of reason, and this is the third surface to read it.
- *
- * CLICKABLE, because a player who reads a truncated line needs somewhere to
- * go. `onExpand` scrolls them back to the full ticker rather than opening a
- * second copy of it. */
+/* Design note #458: THE LATEST LINE, WHERE THE PLAYER IS LOOKING. The ticker sits in the page chrome and
+   scrolls away; the action bar below is sticky and does not. So the fix is not a second sticky ticker -- it
+   is to put the one line that matters inside the element that already stays.
+   ONE LINE, NOT THE PANEL: no expansion, no history, no chat input. The full ticker is still where you read
+   back through what happened; this answers only "what just happened".
+   IT SHARES THE FORMATTER, so the sticky copy and the ticker cannot disagree -- #425 made that one string
+   for exactly this class of reason, and this is the third surface to read it.
+   CLICKABLE, because a player who reads a truncated line needs somewhere to go: it scrolls them back to the
+   full ticker rather than opening a second copy of it. */
 export function StickyTickerLine({
   latestItem,
   onExpand,
@@ -439,15 +258,11 @@ function ChatEntry({ item }: { item: FeedItem }) {
 }
 
 function LogEntry({ item }: { item: FeedItem }) {
-  /* Design note #425: the SAME string the ticker shows, rendered whole.
-     One span, because the sentence is one sentence -- the badge, the status
-     glyph and the separately-styled round prefix are all gone, and with
-     them the four-column layout that made this row a different artefact
-     from the line it was supposed to be expanding.
-
-     `whiteSpace: normal` on `logLabelFull` is the actual "render the full
-     text" half: the collapsed ticker clips with ellipsis because it has one
-     line, and this wraps because it does not. */
+  /* Design note #425: the SAME string the ticker shows, rendered whole. One span, because the sentence is one
+     sentence -- the badge, the status glyph and the separately-styled round prefix are gone, and with them the
+     four-column layout that made this row a different artefact from the line it was expanding.
+     `whiteSpace: normal` is the actual "render the full text" half: the ticker clips because it has one line,
+     and this wraps because it does not. */
   return (
     <div style={styles.logEntry}>
       <span
@@ -470,49 +285,20 @@ function LogEntry({ item }: { item: FeedItem }) {
 /* Inline styles                                                      */
 /* ------------------------------------------------------------------ */
 
-// Design note #7: dark slate #1E293B for the header row (flowing directly
-// out of the active nav tab above it, which now shares this exact color --
-// see App.tsx design note #20/item 3), #0F172A for the recessed expanded
-// body beneath it.
-/* ==================================================================
- *  DESIGN NOTE 600: THE CHAT BUTTON WAS SITTING ON "EXPAND"
- * ==================================================================
- *
- * REPORTED: 'the "Chat" button sits on top of the Expand/Collapse words and
- * should be bumped left of that.'
- *
- * Correct, and the cause is design note #598's own fix. The Chat toggle HAS
- * to live outside the header element, because that element is a `<button>`
- * and a button cannot contain a button. #598 solved the nesting by taking
- * the toggle out of the flow entirely -- `position: absolute; right: 10px`.
- * But `expandHint` is the last flex child of that same full-width header
- * button, so it renders at the row's right edge too, 14px in. Two controls,
- * one corner, neither aware of the other. The overlap was not a near-miss;
- * it was guaranteed by construction.
- *
- * ABSOLUTE POSITIONING CANNOT BE UNDONE HERE -- the nesting rule is real, so
- * the toggle stays out of flow. What was missing is that nothing in the flow
- * KNEW about it. So the row now reserves the space: `chatToggleSlot` is an
- * empty, aria-hidden flex item of exactly the toggle's width, and the toggle
- * is positioned into it.
- *
- * WHICH MEANS THE THREE NUMBERS BELOW MUST AGREE, and that is the whole
- * reason they are named constants rather than literals at four call sites.
- * The toggle's offset from the right edge is the row's padding, plus the
- * hint's width, plus the flex gap between them -- change any one of those in
- * `headerRow` and this arithmetic has to move with it.
- *
- * `EXPAND_HINT_WIDTH` IS FIXED FOR A SECOND REASON. The label flips between
- * "▼ Expand" and "▲ Collapse", which are different widths -- so a hint sized
- * by its content would shift the reserved slot every time the panel opened,
- * dragging the Chat button sideways under the cursor mid-click. Pinning the
- * width to the longer of the two labels also stops the row twitching on
- * every toggle, which it did before and nobody had named.
- *
- * A SLOT ALSO FIXES A QUIETER BUG: `previewText` is `flex: 1` and was
- * measuring the full row, so a long activity line ellipsised UNDER the Chat
- * button rather than before it. The reserved item shortens the flex basis,
- * so the ellipsis now lands where the text actually stops being visible. */
+// Design note #7: dark slate for the header row (flowing out of the active nav tab above it, which shares
+// this exact colour), recessed slate for the expanded body beneath.
+// Design note #600: THE CHAT BUTTON WAS SITTING ON "EXPAND". The toggle HAS to live outside the header,
+// because that element is a `<button>` and a button cannot contain a button -- so #598 took it out of flow
+// entirely. But the expand hint is the last flex child of that same full-width header, so it renders at the
+// row's right edge too. Two controls, one corner, neither aware of the other: guaranteed by construction.
+// ABSOLUTE POSITIONING CANNOT BE UNDONE HERE -- the nesting rule is real. What was missing is that nothing
+// in the flow KNEW about it, so the row now reserves the space with an empty aria-hidden flex item.
+// WHICH MEANS THE THREE NUMBERS BELOW MUST AGREE, and that is why they are named constants rather than
+// literals at four call sites: the offset is the row's padding, plus the hint, plus the gap.
+// THE HINT WIDTH IS FIXED FOR A SECOND REASON: the label flips between "Expand" and "Collapse", which are
+// different widths, so a hint sized by its content would drag the Chat button sideways under the cursor.
+// A SLOT ALSO FIXES A QUIETER BUG: the preview is `flex: 1` and was measuring the full row, so a long line
+// ellipsised UNDER the Chat button rather than before it.
 const ROW_PAD_X_PX = 14;
 const ROW_GAP_PX = 10;
 /** Sized to "▲ Collapse", the longer of the two labels, at 13px/600. */
@@ -520,31 +306,13 @@ const EXPAND_HINT_WIDTH_PX = 78;
 const CHAT_TOGGLE_WIDTH_PX = 54;
 
 const styles: Record<string, React.CSSProperties> = {
-  /* ==================================================================
-   *  DESIGN NOTE 457: THE LOG BELONGS TO THE CHAT, NOT TO THE TABS
-   * ==================================================================
-   *
-   * REPORTED: the ticker's background matches the tab bar above it, so it
-   * is easy to miss.
-   *
-   * It matched because it was chosen to. Design note #20 paired the
-   * ticker's header (`#1E293B`) with the tab bar's active tab, on the
-   * reasoning that both are chrome. The consequence is that the one line on
-   * screen carrying "what just happened" reads as a continuation of the
-   * navigation -- an area the eye has already learned to skip, because
-   * nothing in it ever changes.
-   *
-   * IT BELONGS DOWNWARD. Below the ticker is `InlineQuickChat`, and the two
-   * are one conversation: the log is what the game said, the chat is what
-   * the players said, and expanding the ticker shows them interleaved in a
-   * single feed. Grouping it with the thing it is part of costs nothing and
-   * gives it an edge the tabs do not share.
-   *
-   * A LEFT ACCENT RATHER THAN A BRIGHTER FILL. Raising the whole surface
-   * would have made the newest game event the loudest thing on the page,
-   * competing with the board. A 3px rule down the live edge separates it
-   * from the tabs without shouting, and it is the same device the chat
-   * entries already use to mark an author. */
+  /* Design note #457: THE LOG BELONGS TO THE CHAT, NOT TO THE TABS. It matched the tab bar because #20 chose
+     to pair them as chrome -- and the consequence is that the one line carrying "what just happened" reads as
+     a continuation of the navigation, an area the eye has learned to skip because nothing in it ever changes.
+     IT BELONGS DOWNWARD: below is `InlineQuickChat`, and the two are one conversation -- the log is what the
+     game said, the chat is what the players said, and expanding shows them interleaved in a single feed.
+     A LEFT ACCENT RATHER THAN A BRIGHTER FILL: raising the whole surface would make the newest game event the
+     loudest thing on the page. A 3px rule down the live edge is the same device the chat entries already use. */
   root: {
     /* Design note #614: NOT `relative` any more. It was, so the Chat toggle
        could anchor here -- and that is precisely how the toggle ended up in
@@ -604,22 +372,17 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  /* Design note #600: the empty flex item the toggle is positioned into. It
-     draws nothing and is `aria-hidden` -- its entire job is to be the width
-     the toggle occupies, so the flow accounts for a control it cannot
-     contain. `flexShrink: 0` because a slot that can be squeezed is not a
-     reservation. */
+  /* Design note #600: the empty flex item the toggle is positioned into. It draws nothing and is
+     `aria-hidden` -- its entire job is to be the width the toggle occupies, so the flow accounts for a control
+     it cannot contain. `flexShrink: 0` because a slot that can be squeezed is not a reservation. */
   chatToggleSlot: {
     width: `${CHAT_TOGGLE_WIDTH_PX}px`,
     flexShrink: 0,
   },
-  /* Design note #600: parked in `chatToggleSlot`, LEFT of the expand hint --
-     `right` is the row's padding, plus the hint, plus the gap between them.
-     Design note #598's original `right: 10px` put it on top of the hint.
-
-     Vertically centred by transform rather than a magic `top: 3px`, so the
-     control stays centred if `headerRow`'s min-height or the toggle's own
-     padding ever moves. */
+  /* Design note #600: parked in the reserved slot, LEFT of the expand hint -- `right` is the row's padding,
+     plus the hint, plus the gap. #598's original put it on top of the hint.
+     Vertically centred by transform rather than a magic `top: 3px`, so the control stays centred if the row's
+     min-height or the toggle's own padding ever moves. */
   chatToggle: {
     position: "absolute",
     right: `${ROW_PAD_X_PX + EXPAND_HINT_WIDTH_PX + ROW_GAP_PX}px`,
@@ -739,21 +502,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     fontSize: FONT_SIZE.body,
   },
-  /* `logCategoryBadge`, `logStatusIcon`, `logRound` and `logLabel` were all
-     DELETED by design note #425. They were the four columns of a row that
-     no longer exists: an inferred category pill, a status emoji, a
-     separately-styled round prefix, and a one-line clipped label. The round
-     prefix survives inside the string itself, which is what makes the
-     expanded line identical to the ticker's.
-
-     Deleted rather than left unused -- an orphaned badge style is an
-     invitation to render a badge again, which is the thing this pass was
-     asked to remove. */
-  /* Design note #458: one clipped line inside the sticky action bar. It
-     must never wrap -- the bar has a fixed height band (design note #426's
-     `maxHeight`), and a two-line log entry would push the controls out of
-     it. Ellipsis rather than a scrollbar: the full text is one click away
-     and a scrolling sliver of text in a toolbar is unreadable. */
+  /* Design note #425: the four columns of the old expanded row are DELETED -- an inferred category pill, a
+     status emoji, a separately-styled round prefix and a one-line clipped label. The prefix survives inside
+     the string itself, which is what makes the expanded line identical to the ticker's. Deleted rather than
+     left unused: an orphaned badge style is an invitation to render a badge again.
+     Design note #458: one clipped line inside the sticky bar. It must never wrap -- the bar has a fixed height
+     band, and a two-line entry would push the controls out of it. Ellipsis rather than a scrollbar: the full
+     text is one click away and a scrolling sliver of text in a toolbar is unreadable. */
   stickyLine: {
     display: "flex",
     alignItems: "center",

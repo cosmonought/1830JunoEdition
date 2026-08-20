@@ -1,49 +1,28 @@
 // frontend/src/components/hexTileCatalog.ts
 //
-// PHASE 1 of the `HexGridRenderer.tsx` monolith extraction.
+// PHASE 1 of the `HexGridRenderer.tsx` monolith extraction: the frontend's hand-kept mirror of
+// `hexmap::TILE_CATALOG` -- the 46-entry 1830 tile tray -- plus the types describing an entry and the dev-only
+// drift tripwires that guard the mirror. Everything here is DATA and pure lookups over it.
 //
-// WHAT THIS IS. The frontend's hand-kept mirror of `hexmap::TILE_CATALOG` --
-// the 46-entry 1830 tile tray -- plus the types that describe an entry and
-// the dev-only drift tripwires that guard the mirror. Everything here is
-// DATA and pure lookups over it. No canvas, no React, no DOM.
+// WHY THIS BOUNDARY FIRST: it is the largest genuinely self-contained unit in the file and the one with the
+// fewest inbound edges. Extracting a leaf is the only extraction that cannot create a circular import -- unlike
+// the marker renderers, which need geometry, which needs constants, a three-way tangle to unpick at once.
+// It is also the boundary that already proved itself: `TileGraphics.ts` was extracted on exactly this
+// principle and has needed no structural change since.
 //
-// WHY THIS BOUNDARY FIRST. It is the largest genuinely self-contained unit in
-// the file and the one with the fewest inbound edges: the catalog depends on
-// nothing else in `HexGridRenderer.tsx`, while a great deal of that file
-// depends on it. Extracting a leaf is the only extraction that cannot create
-// a circular import, which makes it the right first cut and the reason this
-// is Phase 1 rather than, say, the marker renderers (which need geometry,
-// which needs constants, which is a three-way tangle to unpick at once).
+// WHAT DELIBERATELY DID NOT COME WITH IT: `terrainBaseValue` looks like it belongs and does not -- it is a
+// rendering FALLBACK consumed only by the badge pass, and moving it would drag the badge vocabulary into a
+// data module.
 //
-// It is also the boundary that already proved itself: `TileGraphics.ts` was
-// extracted on exactly this principle -- literal data plus pure functions
-// over it -- and has needed no structural change since.
+// IMPORT DIRECTION IS ONE-WAY: never import from `HexGridRenderer.tsx`.
 //
-// WHAT DELIBERATELY DID NOT COME WITH IT. `terrainBaseValue` looks like it
-// belongs here and does not: it is a rendering FALLBACK for a tile with no
-// printed revenue, consumed only by the badge pass, and moving it would drag
-// the badge vocabulary into a data module. It stays with the renderer until
-// Phase 3 gives it a better home.
-//
-// IMPORT DIRECTION IS ONE-WAY, and must stay that way: this module must never
-// import from `HexGridRenderer.tsx`. If something here ever appears to need
-// something there, the dependency is pointing the wrong way and the thing it
-// needs belongs in this file or in a module below it.
+// Design notes #49/#52/#118/#119/#135/#626: see `docs/ai_architecture/hex_tile_math.md`.
 
-/** `BostonHub`/`NewYorkHub` (design note #49; mirrors `hexmap.rs` module doc
- *  comment #26/#27, `state::TerrainType::BostonHub`/`NewYorkHub` exactly):
- *  real 1830's "B"-labeled (Boston AND Baltimore) and "NY"-labeled hub
- *  artwork -- previously missing from this frontend mirror entirely (a
- *  cross-file consistency gap: the backend catalog had tiles 16/17 since
- *  module doc comment #26, but this file's own `TILE_CATALOG`/
- *  `TerrainType` never gained a matching entry, so a laid Boston/New York
- *  Green tile fell through every `TILE_CATALOG_BY_ID.get(...)` lookup below
- *  as `undefined` -- visibly wrong stroke color (`#c0392b`, the "unknown
- *  tile" fallback, instead of the real tier color) and a broken tile-picker
- *  thumbnail). Closed as part of this pass's own "Complete the Tile
- *  Manifest" scope. `BostonHub` renders like `MajorCityHub` (one station);
- *  `NewYorkHub` renders like `DoubleCityHub` (two stations) -- see
- *  `drawTrackPath`'s own dispatch below. */
+/** Design note #49: the "B"/"NY" hub artwork, previously missing from this mirror entirely -- a cross-file
+ *  consistency gap. The backend catalog had tiles 16/17 since its module doc #26 and this file never gained a
+ *  matching entry, so a laid Boston/New York Green tile fell through every lookup as `undefined`: visibly wrong
+ *  stroke colour (the "unknown tile" fallback rather than the real tier colour) and a broken picker thumbnail.
+ *  `BostonHub` renders like a single-station hub; `NewYorkHub` like a two-station one. */
 export type TerrainType =
   | "Plain"
   | "MountainRugged"
@@ -62,158 +41,65 @@ export interface TileCatalogEntry {
   connections: number;
   terrain: TerrainType;
   color: TileColorTier;
-  /** Design note #52 -- FRONTEND-ONLY, deliberately NOT mirrored from the
-   *  backend (which doesn't need it: `pathfinding.rs`'s simplified
-   *  hex-level revenue model never distinguishes which edge belongs to
-   *  which city within one tile, only the flat `connections` union). For a
-   *  genuine two-city tile (NY, every OO variant), each entry is the real
-   *  per-city edge group (e.g. `[[0, 1], [2, 3]]` means city A owns edges
-   *  0-1 and city B owns edges 2-3) -- `drawTrackPath` uses this so each
-   *  city draws its own paired curve instead of fanning every live edge
-   *  into one shared hub, which is wrong for a tile that actually has two
-   *  independent city nodes. Omitted (`undefined`) for every single-city
-   *  tile, which keeps the existing fan-to-center rendering unchanged. */
-  /* ==================================================================
-   *  DESIGN NOTE 626: THE COLUMN THE MIRROR LEFT BEHIND
-   * ==================================================================
-   *
-   * How many physical copies of this artwork a room starts with -- the SIXTH
-   * field of `hexmap::TILE_CATALOG`, taken from `tobymao/18xx`'s
-   * `g_1830/map.rb` TILES hash exactly as `connections`, `paths` and
-   * `revenue` above were.
-   *
-   * IT WAS ALWAYS ENFORCED AND NEVER SHOWN. `contract.rs` seeds a per-game
-   * tray at these counts and `state::REMAINING_TILES` decrements as tiles are
-   * laid, so scarcity is live state rather than trivia. This mirror simply
-   * dropped the column, which left the UI unable to say why a lay was about
-   * to be refused -- or that #57 is the ONLY yellow city tile in this
-   * catalog, four copies against eight corporations needing a home.
-   *
-   * THE `UNLIMITED_TILE_SUPPLY` SENTINEL IS NOT MODELLED. `hexmap.rs`
-   * defines `u32::MAX` for a tile exempt from tray limits and no current
-   * entry uses it -- all 46 carry a real printed count, which
-   * `tileSupply.test.ts` asserts. Representing an unlimited case nothing
-   * produces would be a branch with no way to test it; if the backend ever
-   * uses the sentinel, that test fails first and this is the note to read. */
+  /** Design note #52: FRONTEND-ONLY, deliberately not mirrored -- the backend does not need it, since its
+   *  hex-level revenue model never distinguishes which edge belongs to which city within one tile. For a genuine
+   *  two-city tile each entry is the real per-city edge group, so each city draws its own paired curve instead of
+   *  fanning every live edge into one shared hub. Omitted for every single-city tile.
+   *  Design note #626: THE COLUMN THE MIRROR LEFT BEHIND -- how many physical copies of this artwork a room starts
+   *  with, the sixth field of the Rust catalog, taken from `g_1830/map.rb`'s TILES hash exactly as the others were.
+   *  IT WAS ALWAYS ENFORCED AND NEVER SHOWN: `contract.rs` seeds a per-game tray at these counts and
+   *  `REMAINING_TILES` decrements as tiles are laid, so scarcity is live state rather than trivia. This mirror
+   *  dropped the column, which left the UI unable to say why a lay was about to be refused -- or that #57 is the
+   *  ONLY yellow city tile in this catalog, four copies against eight corporations needing a home.
+   *  THE `UNLIMITED_TILE_SUPPLY` SENTINEL IS NOT MODELLED: no current entry uses it, and representing an unlimited
+   *  case nothing produces would be a branch with no way to test it. If the backend ever uses it, the supply test
+   *  fails first and this is the note to read. */
   quantity: number;
   cityGroups?: readonly (readonly number[])[];
-  /** Design note #119: this tile's DISCRETE track segments as BASE
-   *  (pre-rotation) edge pairs, mirroring `hexmap::TILE_CATALOG`'s SEVENTH
-   *  tuple element. Unlike `cityGroups` above, this one IS real backend
-   *  data, not a frontend-only embellishment -- the Rust catalog has
-   *  carried it since Audit G-9 and `pathfinding.rs` routes on it.
-   *
-   *  Each `[a, b]` is one continuous run of track between edges `a` and
-   *  `b`; `a === b` would be a terminal spur (none of the tiles mirrored
-   *  here have one). The union of every edge listed equals `connections`,
-   *  which the Rust test
-   *  `tile_catalog_paths_agree_with_connection_masks_for_all_forty_six_tiles`
-   *  asserts for all 46 entries.
-   *
-   *  STALE SCOPE NOTE, CORRECTED. The paragraph below says this is
-   *  "POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES". That was true when it
-   *  was written and is no longer: the mirror now carries `paths` for ALL
-   *  46 entries. Counted rather than assumed -- the harness for the strict
-   *  path-preservation pass walks the catalog and reports 46/46.
-   *
-   *  A CITY HUB APPEARS AS THE FULL PAIRWISE EXPANSION of its live edges:
-   *  #14 (edges 0/1/3/4) lists all six pairs, #63 (all six edges) all
-   *  fifteen. That is what lets a consumer ask "does edge 0 still reach
-   *  edge 3" without having to reason about the city sitting between them,
-   *  and it is why strict upgrade path-preservation can be a plain set
-   *  comparison. The original scope reasoning is kept verbatim below for
-   *  the record.
-   *
-   *  ORIGINALLY POPULATED ONLY FOR THE FIVE DOUBLETOWN TILES (#1, #2, #55,
-   *  #56, #69), deliberately and by scope decision. Those are the tiles where the flat
-   *  `connections` mask is genuinely lossy: four live edges paired into two
-   *  independent two-edge routes, one per town, and the mask cannot say
-   *  which edge pairs with which. Every other tile is either unambiguous
-   *  from its mask or already handled correctly by an existing branch
-   *  (`cityGroups` for two-city hubs, the 2-edge shortcut for simple
-   *  curves/straights, the fan for multi-spur junctions), so mirroring
-   *  paths for them would add a second source of truth for the same
-   *  rendering with no visible change. `pathsForTile` returns `undefined`
-   *  for those and every existing code path stays exactly as it was. */
+  /** Design note #119: this tile's DISCRETE track segments as BASE (pre-rotation) edge pairs, mirroring the
+   *  seventh tuple element. Unlike `cityGroups`, this IS real backend data -- the Rust catalog has carried it
+   *  since Audit G-9 and `pathfinding.rs` routes on it. The union of every edge listed equals `connections`, which
+   *  a Rust test asserts for all 46 entries.
+   *  STALE SCOPE NOTE, CORRECTED: the original text said this was populated only for the five doubletown tiles.
+   *  True when written, no longer -- the mirror carries `paths` for ALL 46, counted rather than assumed.
+   *  A CITY HUB APPEARS AS THE FULL PAIRWISE EXPANSION of its live edges: #14 lists all six pairs, #63 all
+   *  fifteen. That is what lets a consumer ask "does edge 0 still reach edge 3" without reasoning about the city
+   *  between them, and it is why strict upgrade path-preservation can be a plain set comparison.
+   *  (The original scope reasoning: the doubletown tiles are where the flat mask is genuinely lossy -- four live
+   *  edges paired into two independent two-edge routes, one per town, and the mask cannot say which pairs with
+   *  which.) */
   paths?: ReadonlyArray<readonly [number, number]>;
-  /** Design note #135: this tile's OWN printed revenue, mirroring
-   *  `hexmap::TILE_CATALOG`'s EIGHTH tuple element (`Option<u32>`, Audit
-   *  G-11) exactly. `undefined` mirrors the backend's `None` and means "this
-   *  tile has no printed figure, price it from its terrain bucket" -- which
-   *  is true only of plain connector track.
-   *
-   *  WHY THIS EXISTS, since the board already reads revenue off the chain:
-   *  the TILE PICKER does not. A tray thumbnail renders a tile that is not on
-   *  the board yet, so there is no `MapTileEntry` to read and no chain
-   *  round-trip to make -- and in offline mode there is no chain at all
-   *  (`localCatalogPlacements` builds the whole tray from this array). Those
-   *  paths fell through to `terrainBaseValue`, which is a flat per-terrain
-   *  bucket and cannot express real 1830: the picker showed #62 as $40 (the
-   *  `NewYorkHub` bucket) when the tile prints $90, and #61 as $20 when it
-   *  prints $60. A player choosing between upgrades was reading numbers the
-   *  contract would never pay.
-   *
-   *  Twelve of the twenty-two city/town tiles deviate from their bucket:
-   *    #14/#15  bucket 20 -> 30      #53  bucket 20 -> 50
-   *    #54      bucket 40 -> 60      #61  bucket 20 -> 60
-   *    #62      bucket 40 -> 90      #63  bucket 20 -> 40
-   *    #64-#68  bucket 40 -> 50
-   *  The other ten (#1-#4, #55-#59, #69) happen to agree with their bucket
-   *  today. They are mirrored ANYWAY, explicitly: "agrees with the bucket"
-   *  is a coincidence of the current numbers, not a property, and leaving
-   *  them implicit would mean the next backend revenue change silently
-   *  reintroduces exactly this bug on whichever tile it touches.
-   *
-   *  PRECEDENCE, resolved in `drawTileOverlays`: the chain's
-   *  `MapTileEntry.revenue` wins where there is one (a laid tile), then this,
-   *  then `terrainBaseValue`. Never the other way round -- this is a mirror
-   *  of the backend catalog, and the chain is the backend catalog. */
+  /** Design note #135: this tile's OWN printed revenue, mirroring the eighth tuple element exactly. `undefined`
+   *  mirrors the backend's `None` and means "price it from its terrain bucket", which is true only of plain track.
+   *  WHY THIS EXISTS, since the board already reads revenue off the chain: the TILE PICKER does not. A tray
+   *  thumbnail renders a tile that is not on the board yet, so there is no `MapTileEntry` to read -- and offline
+   *  there is no chain at all. Those paths fell through to the flat bucket, which cannot express real 1830: the
+   *  picker showed #62 as $40 when the tile prints $90, and #61 as $20 when it prints $60. A player choosing
+   *  between upgrades was reading numbers the contract would never pay.
+   *  Twelve of the twenty-two city/town tiles deviate from their bucket (#14/#15 20->30, #53 20->50, #54 40->60,
+   *  #61 20->60, #62 40->90, #63 20->40, #64-#68 40->50). The other ten are mirrored ANYWAY: "agrees with the
+   *  bucket" is a coincidence of the current numbers, not a property, and leaving them implicit would mean the
+   *  next backend revenue change silently reintroduces this bug on whichever tile it touches.
+   *  PRECEDENCE: the chain's `MapTileEntry.revenue` wins where there is one, then this, then the bucket. Never the
+   *  other way round -- this is a mirror of the backend catalog, and the chain is the backend catalog. */
   revenue?: number;
 }
 
-/** Hand-kept mirror of `hexmap::TILE_CATALOG` (see design note #2 above).
- *  Keep this in exact sync with that Rust array -- same `tile_id`s, same
- *  bitmasks, same terrain/color tags -- any time it changes.
- *
- *  **Design note #118: 46-Tile Tray Catalog Sync (backend Audit G-5).** The
- *  backend catalog no longer uses this engine's old synthetic, sequential
- *  internal ids (1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
- *  20-24). It now keys every entry on the tile's REAL physical 1830 tray
- *  number and carries the complete 46-tile manifest. This mirror is
- *  rewritten wholesale to match, entry for entry.
- *
- *  What moved (old internal id -> real tray number):
- *    - Green "NY" hub      17 -> 54
- *    - Green "B" hub       16 -> 53
- *    - Green "OO" hub      15 -> 59
- *    - Brown "NY" hub      19 -> 62
- *    - Brown "B" hub       18 -> 61
- *    - Brown "OO" hubs  20-24 -> 64, 65, 66, 67, 68
- *    - Yellow city hub     10 -> 57
- *    - Brown city hub      14 -> 63   (and Green city hubs are now 14/15)
- *
- *  What was DELETED outright, with no replacement: the invented terrain
- *  artwork (old ids 4, 5, 12 -- "MountainRugged" tiles) and the invented
- *  green filler tiles (old ids 11, 13), plus the old id 6 double-town.
- *  Real 1830 charges terrain as a HEX property, not a tile property, so
- *  `hexmap::terrain_build_fee(q, r)` ($80 river / $120 mountain / $0 clear)
- *  is now the only terrain-cost source -- see `TERRAIN_BUILD_COST_LABEL`.
- *
- *  DANGER, and the reason this had to be a wholesale rewrite rather than a
- *  patch: the old and new id spaces OVERLAP with completely different
- *  meanings. Old internal 16/18/19/20/23/24 were "B"/"NY"/"OO" hub artwork;
- *  real tray #16/#18/#19/#20/#23/#24 are ordinary green PLAIN track. Had
- *  this mirror been left alone, those ids would still have resolved -- to
- *  silently, confidently wrong artwork (a plain green curve rendered as a
- *  two-station New York hub, and vice versa) rather than to the honest
- *  `undefined` placeholder path that a genuinely unknown id takes.
- *
- *  `MountainRugged` survives in `TerrainType`/`TERRAIN_FILL`/
- *  `terrainBaseValue` even though no entry below carries it any more --
- *  deliberately, mirroring the backend, which kept the `state::TerrainType`
- *  variant so already-stored `Tile` records still deserialize and so this
- *  frontend enum needs no lockstep change. See `hexmap::terrain_base_value`
- *  ("Audit G-5/G-10: NO tile carries this terrain any more"). */
+/** Hand-kept mirror of `hexmap::TILE_CATALOG` -- keep this in exact sync with that Rust array any time it
+ *  changes.
+ *  Design note #118: 46-TILE TRAY CATALOG SYNC (Audit G-5). The backend no longer uses this engine's old
+ *  synthetic sequential ids; it keys every entry on the tile's REAL physical 1830 tray number. What moved:
+ *  Green NY 17->54, Green B 16->53, Green OO 15->59, Brown NY 19->62, Brown B 18->61, Brown OO 20-24->64-68,
+ *  Yellow city 10->57, Brown city 14->63.
+ *  DELETED OUTRIGHT, with no replacement: the invented terrain artwork (old 4, 5, 12) and green fillers (11,
+ *  13), plus old 6. Real 1830 charges terrain as a HEX property, not a tile property, so
+ *  `hexmap::terrain_build_fee` is now the only terrain-cost source.
+ *  DANGER, and the reason this had to be a wholesale rewrite rather than a patch: the old and new id spaces
+ *  OVERLAP with completely different meanings. Old internal 16/18/19/20/23/24 were hub artwork; real tray
+ *  #16/#18/#19/#20/#23/#24 are ordinary green PLAIN track. Left alone, those ids would still have resolved -- to
+ *  silently, confidently wrong artwork rather than to the honest `undefined` placeholder an unknown id takes.
+ *  `MountainRugged` survives in the terrain enum even though no entry carries it, deliberately, mirroring the
+ *  backend: the variant was kept so already-stored `Tile` records still deserialize. */
 export const TILE_CATALOG: readonly TileCatalogEntry[] = [
 
   /* ---- Yellow tier (12 tiles) ---- */
@@ -631,11 +517,9 @@ export const TILE_CATALOG_BY_ID: ReadonlyMap<number, TileCatalogEntry> = new Map
   TILE_CATALOG.map((entry) => [entry.tileId, entry]),
 );
 
-// Drift tripwire (design note #118). A duplicated `tileId` would silently
-// collapse inside the `Map` above and quietly shadow one of the two
-// entries, which is exactly the class of bug the old/new id-space overlap
-// makes easy to introduce. Dev-only: never throws, never runs in a
-// production bundle.
+// Drift tripwire (design note #118). A duplicated `tileId` would silently collapse inside the `Map` above and
+// quietly shadow one of the two entries, which is exactly the class of bug the old/new id-space overlap makes
+// easy to introduce. Dev-only: never throws, never runs in a production bundle.
 if (process.env.NODE_ENV !== "production") {
   if (TILE_CATALOG.length !== TILE_CATALOG_SIZE || TILE_CATALOG_BY_ID.size !== TILE_CATALOG_SIZE) {
     // eslint-disable-next-line no-console
@@ -646,12 +530,10 @@ if (process.env.NODE_ENV !== "production") {
     );
   }
 
-  // Design note #135: revenue drift tripwire. Every tile that draws a badge
-  // -- anything with a town or a city -- must carry an explicit `revenue`
-  // mirrored from the backend. A city/town entry WITHOUT one silently falls
-  // through to `terrainBaseValue` in the picker and prints a number the
-  // contract will not pay, which is precisely the bug this note fixes and is
-  // invisible unless you happen to know the right figure by heart.
+  // Design note #135: revenue drift tripwire. Every tile that draws a badge -- anything with a town or a city --
+  // must carry an explicit `revenue` mirrored from the backend. A city/town entry WITHOUT one silently falls
+  // through to `terrainBaseValue` in the picker and prints a number the contract will not pay, which is invisible
+  // unless you happen to know the right figure by heart.
   const missingRevenue = TILE_CATALOG.filter(
     (entry) => entry.terrain !== "Plain" && entry.terrain !== "MountainRugged" && entry.revenue === undefined,
   ).map((entry) => entry.tileId);

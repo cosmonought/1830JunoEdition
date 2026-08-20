@@ -1,63 +1,24 @@
 // frontend/src/components/PrivateTradePanel.tsx
 //
-// The Private Company trade engine: a corporation proposes, the owner
-// consents.
+// The Private Company trade engine: a corporation proposes, the owner consents.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE CONSENT STEP IS NOT ON CHAIN YET -- READ THIS
-// ===================================================================
+// Design note #0: THE CONSENT STEP IS NOT ON CHAIN YET -- READ THIS. In 1830 a corporation buying a private
+// from a player is a NEGOTIATION; `ExecuteMsg::BuyPrivateCompany` is single-party. It authorises the buying
+// president, checks the phase gate, the cursor, the treasury and the price band, and then moves the private:
+// the seller is READ and never asked.
+//   SANDBOX -- the local reducer is the only authority there is, so the full two-party flow is real.
+//   A LIVE ROOM -- the seller CANNOT be sent this proposal. No message carries it and no query surfaces it, so
+//   showing them an Accept button would be theatre. The prompt goes to the PROPOSER and is labelled as what it
+//   is; `onConfirmUnilateral` is deliberately named to make a call site that treats it as consent look wrong.
+// THE BACKEND SHAPE THIS NEEDS ALREADY EXISTS, one feature over: train trading records a `TrainOffer` and waits
+// for accept/reject, with a rescind path and a query. A `PrivateCompanyOffer` mirroring it would make this
+// component's live path as real as its sandbox one. Recorded so the gap is actionable rather than merely known.
 //
-// In 1830 a corporation buying a private company from a player is a
-// NEGOTIATION. Both sides must agree: the president names a price, the
-// owner takes it or refuses. This component implements that.
+// Design note #1: the price band is MIRRORED, not invented -- [50%, 200%] of face value. Acceptable client-side
+// validation only because the band is a STATIC arithmetic property of one number, not a stateful judgement
+// about the board: it cannot go stale between render and dispatch, and the contract still has the final say.
 //
-// `ExecuteMsg::BuyPrivateCompany { game_id, protocol_id, private_id, price }`
-// DOES NOT. It is single-party -- `trading.rs::execute_buy_private_company`
-// authorises the buying corporation's president, checks the phase gate, the
-// sub-phase cursor, the treasury and the price band, and then moves the
-// private. The seller is read (`private.owner`) but never asked.
-//
-// So the proposal below is CLIENT-SIDE STATE, and the two deployments
-// differ in what that can honestly mean:
-//
-//   SANDBOX -- the local reducer is the only authority there is, so the
-//   full two-party flow is real. The proposal is raised, the prompt
-//   appears, and accepting settles the trade. Nothing is being faked
-//   relative to an authority, because there is no other authority.
-//
-//   A LIVE ROOM -- the seller CANNOT be sent this proposal. No message
-//   carries it and no query surfaces it, so their client would never learn
-//   it exists. Showing them an Accept button would be theatre. The prompt
-//   is therefore shown to the PROPOSER and labelled as what it actually is:
-//   a confirmation step before a purchase the contract will execute
-//   unilaterally. `onConfirmUnilateral` is deliberately named to make a
-//   call site that treats it as consent look wrong.
-//
-// THE BACKEND SHAPE THIS NEEDS ALREADY EXISTS, one feature over. Train
-// trading between corporations with different presidents records a
-// `TrainOffer` and waits for `AcceptTrainOffer`/`RejectTrainOffer`, with
-// `RescindTrainOffer` and a `GetTrainOffers` query
-// (`msg.rs`). A `PrivateCompanyOffer` mirroring it would make this
-// component's live path as real as its sandbox one. That is a backend
-// change and out of scope here; recorded so the gap is actionable rather
-// than merely known.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE PRICE BAND IS MIRRORED, NOT INVENTED
-// ===================================================================
-//
-// `trading.rs`: "Pricing guardrails: `price` must land in [50%, 200%] of
-// face value". The input below clamps to the same band and says so, so a
-// player finds out at the point of typing rather than from a rejected
-// transaction.
-//
-// This is client-side validation of a rule the contract also enforces --
-// ordinarily the thing this codebase avoids. It is acceptable HERE for the
-// same reason `evaluateHexForTileLaying`'s four gates are (`hexGeometry.ts`
-// design note on click eligibility): the band is a STATIC arithmetic
-// property of one number, not a stateful judgement about the board. It
-// cannot go stale between render and dispatch, and the contract still has
-// the final say.
+// Design notes #2/#386/#660a/#661: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useMemo, useState } from "react";
 
@@ -85,78 +46,39 @@ export const PRIVATE_PRICE_MIN_FACTOR = 0.5;
 export const PRIVATE_PRICE_MAX_FACTOR = 2;
 
 export function privatePriceBounds(faceValue: number): { min: number; max: number } {
-  // Integer VGP either side. `ceil` on the floor and `floor` on the ceiling
-  // so a rounded bound can never fall OUTSIDE the band the contract checks
-  // -- rounding the other way would offer a price that looks legal here and
-  // is rejected on chain, which is the one failure this mirror exists to
-  // prevent.
+  // Integer VGP either side. `ceil` on the floor and `floor` on the ceiling, so a rounded bound can never fall
+  // OUTSIDE the band the contract checks -- rounding the other way would offer a price that looks legal here and
+  // is rejected on chain, which is the one failure this mirror exists to prevent.
   return {
     min: Math.ceil(faceValue * PRIVATE_PRICE_MIN_FACTOR),
     max: Math.floor(faceValue * PRIVATE_PRICE_MAX_FACTOR),
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 660a: `eligiblePrivatesForPurchase` DELETED
- * ==================================================================
- *
- * Found while adding the B&O sale ban to it. Nothing called it. The modal
- * renders from `purchasablePrivatesInPlay` -- the LOOSE list, which shows an
- * unsold or unbuyable private as an inert row -- and decides what may
- * actually be proposed by resolving the selection against
- * `privatePurchaseBlockReason`. This function was a third answer to a
- * question already answered twice, and the ban had been added to the one
- * copy no player could reach.
- *
- * Which is the exact failure this codebase keeps rediscovering, caught this
- * time by asking who the caller was before trusting the fix: a rule can be
- * written, tested, and enforced in a function that never runs. `tsc` and
- * ESLint are both content -- the export is used, by the test that was
- * written to prove the rule.
- *
- * THE RULE STILL HOLDS, in the two places that matter.
- * `privatePurchaseBlockReason` refuses the selection so the price field and
- * the propose button never address the B&O, and `applySandboxAction` refuses
- * the message even if one is somehow written. UI and reducer, which is where
- * design note #660 said it should be.
- *
- * THE B&O IS STILL SHOWN, inert, with its reason and its power text. Design
- * note #386's argument for rendering an unbuyable row -- "the whole point of
- * showing it is that the player learns the private exists" -- applies more
- * strongly to a certificate no corporation may ever buy, not less. Hiding it
- * would leave a player wondering where it went. */
+/* Design note #660a: `eligiblePrivatesForPurchase` DELETED. Found while adding the B&O sale ban to it: nothing
+   called it. The modal renders from the LOOSE list and decides what may be proposed by resolving the selection
+   against `privatePurchaseBlockReason` -- so this was a third answer to a question already answered twice, and
+   the ban had been added to the one copy no player could reach.
+   Which is the exact failure this codebase keeps rediscovering, caught this time by asking who the caller was
+   before trusting the fix: a rule can be written, tested and enforced in a function that never runs. `tsc` and
+   ESLint are both content -- the export is used, by the test written to prove the rule.
+   THE RULE STILL HOLDS in the two places that matter: the block-reason helper refuses the selection, and the
+   reducer refuses the message even if one is somehow written.
+   THE B&O IS STILL SHOWN, inert, with its reason and its power text. #386's argument for rendering an unbuyable
+   row applies more strongly to a certificate no corporation may ever buy, not less. */
 
-/**
- * Privates the step is ABOUT -- everything still in play.
- *
- * ==================================================================
- *  DESIGN NOTE 386: SHOW THE UNSOLD ONES, DISABLED
- * ==================================================================
- *
- * REPORTED: the sub-phase should display all available private companies --
- * those not closed and not already owned by another corporation -- clearly
- * marking which player owns them.
- *
- * `eligiblePrivatesForPurchase` above answers a narrower question: which
- * ones can a corporation propose for RIGHT NOW. It excludes privates still
- * unsold in the auction, because there is no seller to agree, and that
- * exclusion is correct for dispatch. It was wrong for DISPLAY, and the
- * difference is what a player learns from an empty list:
- *
- *   FILTERED OUT   "No private company is available" -- which reads as
- *                  "there are none", when there may be four sitting in the
- *                  auction that this corporation could buy next round.
- *   SHOWN, DISABLED "C&SL -- unsold in the auction" -- which is the actual
- *                  state of the game, and tells the player where the
- *                  private went and what has to change.
- *
- * So this returns the wider set and the picker renders both, with the
- * un-proposable ones inert and captioned. The two functions stay separate
- * rather than one function with a flag, because they answer genuinely
- * different questions and the dispatch path must keep using the strict one
- * -- a display predicate that quietly became the legality predicate is
- * exactly how an unsendable proposal reaches the chain.
- */
+/** Privates the step is ABOUT -- everything still in play.
+ *  Design note #386: SHOW THE UNSOLD ONES, DISABLED. The strict predicate answers a narrower question -- which
+ *  ones can a corporation propose for RIGHT NOW -- and excludes privates still unsold in the auction, because
+ *  there is no seller to agree. Correct for dispatch, wrong for DISPLAY, and the difference is what a player
+ *  learns from an empty list:
+ *    FILTERED OUT: "No private company is available" -- which reads as "there are none", when there may be four
+ *    sitting in the auction that this corporation could buy next round.
+ *    SHOWN, DISABLED: "C&SL -- unsold in the auction" -- the actual state of the game, telling the player where
+ *    the private went and what has to change.
+ *  The two functions stay separate rather than one function with a flag, because they answer genuinely different
+ *  questions and the dispatch path must keep using the strict one -- a display predicate that quietly became the
+ *  legality predicate is exactly how an unsendable proposal reaches the chain. */
 export function purchasablePrivatesInPlay(
   privates: readonly PrivateCompanyState[],
 ): PrivateCompanyState[] {
@@ -285,22 +207,13 @@ export function ProposePrivatePurchase({
               const isExpanded = expandedIds.has(entry.private_id);
               const detailId = `private-power-${entry.private_id}`;
               return (
-                /* ==================================================
-                     DESIGN NOTE 661: THE ROW IS A GROUP, NOT A BUTTON
-                    ==================================================
-
-                   The whole row used to BE the `<button>`, which was fine
-                   while selecting was the only thing it did. It now carries
-                   a second control -- the power disclosure -- and a button
-                   inside a button is invalid markup that browsers repair by
-                   unnesting, which would have put the toggle outside the row
-                   it belongs to.
-
-                   So the row is a container with two real buttons in it: the
-                   selectable face, and the disclosure. A player can read what
-                   a private DOES without selecting it, which is the point --
-                   the old row made "tell me more" and "I choose this" the
-                   same click. */
+                /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON. The whole row used to BE the `<button>`, fine while
+                   selecting was the only thing it did. It now carries a second control -- the power disclosure -- and a button
+                   inside a button is invalid markup that browsers repair by unnesting, which would have put the toggle outside
+                   the row it belongs to.
+                   So the row is a container with two real buttons: the selectable face, and the disclosure. A player can read
+                   what a private DOES without selecting it, which is the point -- the old row made "tell me more" and "I choose
+                   this" the same click. */
                 <div
                   key={entry.private_id}
                   style={{
@@ -338,21 +251,17 @@ export function ProposePrivatePurchase({
                     <span style={styles.rowMeta}>
                       face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
                     </span>
-                    {/* Design note #386: WHO HOLDS IT, named. This is the
-                        requirement's "clearly marking which player currently
-                        owns them" -- and for an unsold private it is also the
-                        explanation for why the row is inert, so the two facts
-                        are one line rather than two. */}
+                    {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player currently owns
+                       them". For an unsold private it is also the explanation for why the row is inert, so the two facts are one
+                       line rather than two. */}
                     <span style={styles.rowOwner}>
                       {entry.owner
                         ? `held by ${labelForAddress(entry.owner)}`
                         : "unsold in the auction"}
                     </span>
-                    {/* Design note #661: the POWER, on the face of the row.
-                        A player choosing between six privates is choosing
-                        between six powers, and the face of the row named
-                        every other attribute -- price, revenue, owner, band
-                        -- except the one the decision turns on. */}
+                    {/* Design note #661: the POWER, on the face of the row. A player choosing between six privates is choosing
+                       between six powers, and the face named every other attribute -- price, revenue, owner, band -- except the one
+                       the decision turns on. */}
                     {catalog && (
                       <span style={styles.rowPower}>{catalog.abilitySummary}</span>
                     )}
@@ -457,20 +366,12 @@ export interface PrivateTradePromptProps {
   onReject: () => void;
 }
 
-/* ===================================================================
- *  DESIGN NOTE 2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER
- * ===================================================================
- *
- * A hotseat sandbox has one wallet and one human. Requiring the owner's
- * client to answer would make this flow untestable there -- which is the
- * one place it most needs to be testable, since it is the only place the
- * whole two-party sequence can currently run end to end.
- *
- * So in sandbox the prompt is shown to whoever is looking, and the seat
- * switcher already establishes that "who you are" is a local choice there.
- * The prompt still NAMES the owner, so the person clicking Accept is
- * always told whose decision they are standing in for.
- */
+/* Design note #2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER. A hotseat sandbox has one wallet and one
+   human, so requiring the owner's client to answer would make this flow untestable there -- which is the one
+   place it most needs to be testable, since it is the only place the whole two-party sequence can currently run
+   end to end.
+   The prompt still NAMES the owner, so the person clicking Accept is always told whose decision they are
+   standing in for. */
 export function PrivateTradePrompt({
   proposal,
   viewerIsOwner,
@@ -586,32 +487,16 @@ const styles: Record<string, React.CSSProperties> = {
   body: { margin: 0, fontSize: FONT_SIZE.body, color: "#aab0bc", lineHeight: 1.55 },
   empty: { margin: 0, fontSize: FONT_SIZE.body, color: "#c9b98a", lineHeight: 1.55 },
   list: { display: "flex", flexDirection: "column", gap: "8px" },
-  /* ==================================================================
-   *  DESIGN NOTE 661: A ROW PER PRIVATE, AT A READABLE SIZE
-   * ==================================================================
-   *
-   * INSTRUCTED: "the fonts are very small, and everything is listed in a
-   * string whereas I think it might be a little more digestible with some
-   * styling."
-   *
-   * Both halves were true and they had one cause: every secondary fact on
-   * the row was `micro` (11px), the size the type scale reserves for "tiny
-   * status pills and inline tags". Face value, revenue, owner and price band
-   * are not tags, they are the DATA the decision is made from -- and four
-   * 11px runs sitting on one line read as a single grey string however they
-   * are marked up. Nothing was concatenating them; they just all looked the
-   * same and none was big enough to anchor the eye.
-   *
-   * `small` (12px) for the facts and `body` (13px) for the power summary,
-   * with the row laid out as an explicit two-column grid so each fact lands
-   * in a fixed place. A player scanning six rows can now read down a column
-   * rather than across a paragraph, which is the actual difference between
-   * a list and a string.
-   *
-   * THE GROUP CARRIES THE CHROME, THE FACE CARRIES THE CLICK. Border,
-   * background and selected state moved to `rowGroup` because the row now
-   * holds two buttons and a paragraph, and a border drawn on one of the
-   * three would frame part of a row. */
+  /* Design note #661: A ROW PER PRIVATE, AT A READABLE SIZE. Both halves of the report were true and they had
+     one cause: every secondary fact was `micro` (11px), the size the type scale reserves for tiny status pills.
+     Face value, revenue, owner and price band are not tags, they are the DATA the decision is made from -- and
+     four 11px runs on one line read as a single grey string however they are marked up. Nothing was concatenating
+     them; they just all looked the same and none was big enough to anchor the eye.
+     An explicit two-column grid, so a player scanning six rows can read down a column rather than across a
+     paragraph -- the actual difference between a list and a string.
+     THE GROUP CARRIES THE CHROME, THE FACE CARRIES THE CLICK: border, background and selected state moved to the
+     group because the row now holds two buttons and a paragraph, and a border drawn on one of the three would
+     frame part of a row. */
   rowGroup: {
     display: "flex",
     flexDirection: "column",

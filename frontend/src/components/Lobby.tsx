@@ -1,81 +1,22 @@
 // frontend/src/components/Lobby.tsx
 //
-// The pre-game screen: room discovery, the off-chain staging room, and the
-// one moment this whole flow exists to defer -- the host's Launch, which is
-// where a Firestore room becomes a real on-chain game.
+// The pre-game screen: room discovery, the off-chain staging room, and the host's Launch -- where a Firestore
+// room becomes a real on-chain game. This is what produces the real `gameId` `AppShell` takes.
 //
-// This closes `App.tsx` design note #1's acknowledged gap ("No game/room
-// selection UI yet ... `MOCK_GAME_ID` stands in for the currently open
-// room"). `MOCK_GAME_ID` is gone; `AppShell` now takes a real `gameId`
-// prop, and this component is what produces it.
+// Design note #0: STAGE OFF-CHAIN, LAUNCH ON-CHAIN. Creating a room does not touch the chain; signing on
+// Create was rejected because it litters the contract with dead rooms holding real JUNO, and because it would
+// make the lobby unusable without a deployed contract. The cost: a Firestore seat is a RESERVATION, not a
+// commitment, which is why the seat list distinguishes "Ready" from "Anted" -- only the second means anything.
 //
-// ===================================================================
-//  DESIGN NOTE 0: STAGE OFF-CHAIN, LAUNCH ON-CHAIN
-// ===================================================================
+// Design note #1: the uniform ante is the CONTRACT's rule. The advertised figure is a convenience, not a
+// validation -- the contract never reads it, so a rewritten value only gets the joiner rejected. Amounts are
+// base-denom INTEGER STRINGS throughout, never numbers.
 //
-// Creating a room does NOT touch the chain. A room lives in Firestore
-// through its entire gathering phase -- players discover it, take seats,
-// chat, and toggle Ready -- at zero gas, and only when the host clicks
-// "Launch Game" does anything sign anything.
+// Design note #2: the `game_id` comes from the TRANSACTION. The client cannot predict `NEXT_GAME_ID`, and a
+// failed parse leaves the room in an explicit error state rather than being guessed at -- the transaction
+// succeeded and real JUNO has moved, so silently retrying would create a SECOND paid room.
 //
-// The alternative (sign `CreateGameRoom` the instant someone clicks Create)
-// was rejected for two concrete reasons:
-//
-//   - It litters the contract with dead rooms. Every abandoned "let me see
-//     what this does" click becomes a permanent on-chain `GameSession` with
-//     real JUNO locked in it, recoverable only through the Inactivity
-//     Timeout Safety Valve. Rooms that never fill should cost nothing and
-//     leave no trace.
-//   - It makes the lobby unusable without a deployed contract, which would
-//     quietly kill the Offline Sandbox Mode that `config.ts` design note #0
-//     goes to considerable length to protect.
-//
-// What that buys, and the cost: the gathering phase is free and works with
-// an entirely unconfigured chain, but a Firestore seat is a RESERVATION,
-// not a commitment -- nothing stops a player claiming a seat and vanishing
-// before they ante. That is why `SeatDoc.onChain` exists and why the seat
-// list distinguishes "Ready" (staging intent) from "Anted" (actually in the
-// contract's roster). Only the second one means anything.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE UNIFORM ANTE RULE IS THE CONTRACT'S, NOT OURS
-// ===================================================================
-//
-// `contract::execute_join_game_room` requires every joiner to attach
-// EXACTLY the amount the creator deposited -- down to the last `ujuno`,
-// with no funds and merely-close amounts both rejected as
-// `ContractError::InvalidAnteAmount`. So the host sets the ante once, at
-// create time, and `RoomDoc.anteUjuno` advertises it to everyone else.
-//
-// That advertisement is a CONVENIENCE, not a validation. Firestore is not
-// deciding what a legal ante is; it is saving a player from discovering the
-// number by having a signed transaction rejected. If a malicious client
-// rewrote `anteUjuno`, the only consequence is that joiners would attach
-// the wrong amount and the CONTRACT would reject them -- the boundary holds
-// because the contract never reads this field.
-//
-// Amounts are handled as base-denom INTEGER STRINGS throughout, never
-// numbers. Same discipline, same reason as `config.ts`'s
-// `formatNativeAmount`: a `Uint128` above 2^53 silently loses precision as
-// an IEEE-754 double, and the value being mangled is the player's own
-// money. `toBaseAmount` below is the inverse conversion and is likewise
-// pure string manipulation -- `Number("0.1") * 1e6` is 100000.00000000001,
-// which is not a valid `Uint128` and would be rejected on chain.
-//
-// ===================================================================
-//  DESIGN NOTE 2: THE game_id COMES FROM THE TRANSACTION, NOT FROM US
-// ===================================================================
-//
-// `NEXT_GAME_ID` lives in contract storage; the client cannot predict it,
-// and guessing (or using the Firestore doc id) would bind the room to a
-// game that does not exist or, worse, to somebody else's. The contract
-// emits it as a `game_id` attribute on `create_game_room`, so `Launch`
-// parses the confirmed transaction's own events and binds THAT.
-//
-// If the parse fails, the room is deliberately left in an explicit error
-// state rather than being guessed at: the transaction succeeded and real
-// JUNO has moved, so silently retrying would create a SECOND paid room.
-// The error text carries the tx hash so the id can be recovered by hand.
+// Design notes #3/#24/#524/#525/#527/#586: see `docs/ai_architecture/firebase_middleware.md`.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Coin } from "@cosmjs/stargate";
@@ -132,66 +73,24 @@ import {
   type SeatDoc,
 } from "../utils/lobby";
 
-/* ==================================================================== */
-/*  DESIGN NOTE 3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT  */
-/* ==================================================================== */
-//
-// Symptom as reported: clicking "Create Room" did nothing at all. No UI
-// change, no error banner, and -- the detail that identifies the cause --
-// NOTHING in the browser console. Not a caught error, not a warning, not a
-// failed request.
-//
-// Cause: the button was `disabled`.
-//
-//     disabled={!available || !address || !anteValid || busy !== null}
-//
-// With no wallet connected, `!address` is true, so the button was disabled
-// and the browser DISCARDED THE CLICK BEFORE REACT SAW IT. No handler ran,
-// so there was nothing to log, nothing to catch, and nothing to display.
-// A silent no-op is the correct behaviour for a disabled button; the bug is
-// that it did not look disabled.
-//
-// It did not look disabled because this codebase styles with inline
-// `React.CSSProperties` objects, and INLINE STYLES CANNOT EXPRESS
-// `:disabled`. A pseudo-class needs a stylesheet. So `styles.primaryButton`
-// rendered a full-contrast, pointer-cursor, entirely clickable-looking
-// button whose clicks went nowhere. Eleven buttons in this file were
-// disabled somewhere in their lifecycle and not one had any disabled
-// appearance -- so this was not one broken button, it was eleven identical
-// traps, and Create Room simply happened to be the one clicked first.
-//
-// Two rules now, and the second matters more than the first:
-//
-//   1. NEVER `disabled` WITHOUT `disabledButtonStyle`. Every `disabled`
-//      prop in this file is paired with a style computed through that
-//      helper, so a disabled control is always visibly disabled.
-//
-//   2. PREFER A LOUD FAILURE TO A DISABLED CONTROL. Disabling is now
-//      reserved for "an action is already in flight" (`busy`), which is
-//      genuinely transient and self-explanatory. Every OTHER precondition
-//      -- no wallet, no Firebase, malformed ante -- leaves the button
-//      ENABLED and reports the specific reason when clicked, via the same
-//      error banner every other failure uses.
-//
-//      This inverts the usual instinct, so here is the justification: a
-//      disabled button answers "can I do this?" with silence, and the user
-//      is left to guess which of four preconditions they have missed. An
-//      enabled button that says "Connect a wallet first -- the room is
-//      stored under your address as host" answers the question they
-//      actually have. The precondition is still enforced (in
-//      `handleCreate`, which throws), so nothing invalid gets through; the
-//      only thing that changed is that refusing now explains itself.
-//
-// `blockedReason` below is the shared shape for rule 2: a nullable string
-// that is both rendered inline under the control AND raised into the error
-// banner on click.
+// Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
+// nothing -- no UI change, no error banner, and NOTHING in the console. Cause: the button was `disabled`, so
+// the browser DISCARDED THE CLICK BEFORE REACT SAW IT. A silent no-op is correct for a disabled button; the
+// bug is that it did not look disabled -- and it could not, because inline `React.CSSProperties` cannot
+// express `:disabled`. Eleven buttons here were disabled somewhere in their lifecycle and none looked it, so
+// this was eleven identical traps.
+// TWO RULES NOW, AND THE SECOND MATTERS MORE:
+//   1. Never `disabled` without the disabled style.
+//   2. PREFER A LOUD FAILURE TO A DISABLED CONTROL. Disabling is reserved for "already in flight"; every other
+//      precondition leaves the button ENABLED and reports the specific reason when clicked.
+// This inverts the usual instinct: a disabled button answers "can I do this?" with silence and leaves the user
+// guessing which of four preconditions they missed, while an enabled button that says "Connect a wallet first
+// -- the room is stored under your address as host" answers the question they actually have. The precondition
+// is still enforced in the handler; the only change is that refusing now explains itself.
 
-/** Visibly greys out a disabled control -- see design note #3, rule 1.
- *
- *  `pointerEvents` is deliberately NOT set to `none`: the click must still
- *  reach React so a genuinely disabled (busy) control can be distinguished
- *  from a dead one during debugging, and so the `title` tooltip still
- *  appears on hover. `cursor: not-allowed` is what communicates it. */
+/** Visibly greys out a disabled control -- design note #3, rule 1. `pointerEvents` is deliberately NOT `none`:
+ *  the click must still reach React so a genuinely disabled (busy) control can be distinguished from a dead one
+ *  during debugging, and so the `title` still appears on hover. `cursor: not-allowed` is what communicates it. */
 function disabledButtonStyle(
   base: React.CSSProperties,
   disabled: boolean,
@@ -221,49 +120,32 @@ export interface LobbyProps {
    *  still needs the Firestore room for chat and presence -- the two ids
    *  are different things and both are load-bearing after this point. */
   onEnterGame: (chainGameId: number, roomId: string) => void;
-  /** Opens a game the viewer is NOT playing in, read-only.
-   *
-   *  A separate callback rather than a flag on `onEnterGame`, because the
-   *  two are different in kind and confusing them would be expensive:
-   *  entering means "I am in this contract's roster and may act", and
-   *  spectating means "I may look and may not". Keeping them as distinct
-   *  entry points means a caller cannot accidentally open a playable board
-   *  by forgetting a boolean. */
+  /** Opens a game the viewer is NOT playing in, read-only. A separate callback rather than a flag, because the
+   *  two are different in kind and confusing them would be expensive: entering means "I am in this contract's
+   *  roster and may act", spectating means "I may look and may not". Distinct entry points mean a caller cannot
+   *  accidentally open a playable board by forgetting a boolean. */
   onSpectateGame: (chainGameId: number, roomId: string) => void;
-  /** The escape hatch -- opens the board against local mock state with no
-   *  chain, no wallet and no Firestore room. See `App.tsx` design note #24
-   *  for why this exists: with a mock contract address you cannot launch,
-   *  and with a fresh Firebase there is nothing to spectate, so without
-   *  this the lobby has no exit at all and `HexGridRenderer` is
-   *  unreachable. */
-  /** Design note #524: carries the Firebase sandbox room code, or `null`
-   *  for an ordinary solo sandbox. */
+  /** The escape hatch -- `App.tsx #24`. With a mock contract address you cannot launch, and with a fresh Firebase
+   *  there is nothing to spectate, so without this the lobby has no exit at all.
+   *  Design note #524: carries the Firebase sandbox room code, or `null` for an ordinary solo sandbox. */
   onEnterSandbox: (sandboxRoomCode?: string | null) => void;
 }
 
 /** Which half of the room browser is showing.
- *
- *  NAMING NOTE: the requested filter for the second tab was
- *  `status: "active"`. This schema has no `"active"` -- the equivalent is
- *  `"live"` (see `RoomStatus` in `utils/lobby.ts`), meaning "launched, bound
- *  to an on-chain `game_id`, contract is now in charge". A second status
- *  string meaning the same thing as an existing one is exactly the kind of
- *  drift `config.ts` design note #1 is about, so the tab is LABELLED "Live
- *  Games" and filters on `"live"` rather than introducing an alias. The
- *  contract's own `GameStateResponse.is_active` is a different flag again --
- *  it distinguishes a running game from a finished one, which is a question
- *  only the chain can answer and Firestore deliberately does not mirror. */
+ *  NAMING NOTE: the requested filter was `status: "active"`. This schema has no `"active"` -- the equivalent is
+ *  `"live"`, and a second status string meaning the same thing as an existing one is exactly the drift
+ *  `config.ts #1` is about, so the tab is LABELLED "Live Games" and filters on `"live"`. The contract's own
+ *  `is_active` is a different flag again -- running versus finished, a question only the chain can answer and
+ *  Firestore deliberately does not mirror. */
 type BrowserTab = "open" | "live";
 
 /* ------------------------------------------------------------------ */
 /* Amount conversion -- design note #1, integer string math only       */
 /* ------------------------------------------------------------------ */
 
-/** Display units (`"1.5"` JUNO) -> base-denom integer string
- *  (`"1500000"` ujuno). Returns `null` for anything malformed, including
- *  more fractional digits than the denom actually has -- silently
- *  truncating a player's stated amount is not an acceptable failure mode
- *  when the amount is a deposit. */
+/** Display units -> base-denom integer string. Returns `null` for anything malformed, including more fractional
+ *  digits than the denom actually has -- silently truncating a player's stated amount is not an acceptable
+ *  failure mode when the amount is a deposit. */
 export function toBaseAmount(display: string): string | null {
   const trimmed = display.trim();
   if (!/^\d+(\.\d*)?$/.test(trimmed)) return null;
@@ -280,13 +162,9 @@ export function toBaseAmount(display: string): string | null {
 /* Transaction event parsing -- design note #2                         */
 /* ------------------------------------------------------------------ */
 
-/** Pulls the contract-assigned `game_id` out of a confirmed
- *  `CreateGameRoom` transaction.
- *
- *  Reads the `wasm` event specifically. Every attribute a CosmWasm contract
- *  adds via `Response::add_attribute` is emitted under that event type, and
- *  scoping to it avoids picking up a same-named attribute from an unrelated
- *  module in a multi-message transaction. */
+/** Pulls the contract-assigned `game_id` out of a confirmed `CreateGameRoom` transaction. Reads the `wasm`
+ *  event specifically: every attribute a CosmWasm contract adds is emitted under that type, and scoping to it
+ *  avoids picking up a same-named attribute from an unrelated module in a multi-message transaction. */
 export function parseGameIdFromExecuteResult(result: ExecuteResult): number | null {
   for (const event of result.events ?? []) {
     if (event.type !== "wasm") continue;
@@ -303,11 +181,9 @@ export function parseGameIdFromExecuteResult(result: ExecuteResult): number | nu
 /* Lobby                                                               */
 /* ------------------------------------------------------------------ */
 
-/* Design note #525: the Web3 lobby's on-switch. `false` parks the room
-   browser and the staging room together for sandbox playtesting; `true`
-   restores the screen exactly as it was. One flag, one place, no other
-   edits -- so turning it back on is a one-character change rather than a
-   revert somebody has to reconstruct. */
+/* Design note #525: the Web3 lobby's on-switch. `false` parks the room browser and the staging room together
+   for sandbox playtesting; `true` restores the screen exactly as it was. One flag, one place, no other edits --
+   so turning it back on is a one-character change rather than a revert somebody has to reconstruct. */
 const WEB3_LOBBY_ENABLED = false;
 
 export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProps) {
@@ -344,18 +220,13 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       setSandboxRoomBusy(true);
       setSandboxRoomError(null);
       try {
-        /* Read the log once purely to TELL THE PLAYER whether the room is
-           real before the board opens. An empty log and a wrong code are
-           indistinguishable once you are inside, and the second is a much
-           more common mistake than the first. The replay itself belongs to
-           the shell's listener; doing it here would apply the history
-           twice. */
+        /* Read the log once purely to TELL THE PLAYER whether the room is real before the board opens. An empty log
+           and a wrong code are indistinguishable once you are inside, and the second is a much more common mistake.
+           The replay itself belongs to the shell's listener; doing it here would apply the history twice. */
         await readSandboxLog(code);
-        /* Design note #527: joining means taking a seat in the anteroom.
-           Done here rather than in the waiting room so a player who joins
-           and then closes the tab has still been seen -- and so the room's
-           roster is correct the moment the screen opens rather than one
-           round trip later. */
+        /* Design note #527: joining means taking a seat in the anteroom. Done here rather than in the waiting room so
+           a player who joins and then closes the tab has still been seen -- and so the room's roster is correct the
+           moment the screen opens rather than one round trip later. */
         await upsertSandboxPlayer(code, {
           id: localPlayerId(),
           nickname: "Player",
@@ -430,13 +301,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setActionError(message);
-        // Design note #3: ALSO log. The banner is for the user; this is for
-        // the next person debugging with the console open. The original
-        // report of this screen failing came with "there are no errors in
-        // the console", which was true and was itself the clue -- an empty
-        // console should mean nothing ran, never that something failed
-        // quietly. Anything that goes wrong here is now visible in both
-        // places.
+        // Design note #3: ALSO log. The banner is for the user; this is for the next person debugging with the console
+        // open. The original report came with "there are no errors in the console", which was true and was itself the
+        // clue -- an empty console should mean nothing ran, never that something failed quietly.
         // eslint-disable-next-line no-console
         console.error(`[lobby] ${label} failed:`, error);
       } finally {
@@ -505,11 +372,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     [address, displayName, runAction],
   );
 
-  /** Opens a live game read-only. Deliberately claims NO seat and requires
-   *  NO wallet -- a spectator is not a participant in either system. They
-   *  are not in the contract's roster, so the chain would reject any action
-   *  from them regardless, and they get no Firestore seat doc, so they never
-   *  appear in the table's player list or occupy capacity. */
+  /** Opens a live game read-only. Deliberately claims NO seat and requires NO wallet -- a spectator is not a
+   *  participant in either system. They are not in the contract's roster, so the chain would reject any action
+   *  from them regardless, and they get no seat doc, so they never appear in the player list or occupy capacity. */
   const handleSpectate = useCallback(
     (target: RoomDoc) => {
       if (target.chainGameId === null) {
@@ -706,11 +571,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               </button>
             </>
           ) : (
-            // The burner-wallet security recommendation ships with the
-            // button (see `ConnectWalletButton.tsx` design note #0), so the
-            // lobby's connect path shows it just like the in-game top bar's
-            // does. Calling `wallet.connect()` directly here is exactly the
-            // omission that component exists to make impossible.
+            // The burner-wallet security recommendation ships with the button (`ConnectWalletButton.tsx #0`), so the
+            // lobby's connect path shows it just like the in-game top bar's does. Calling `wallet.connect()` directly here
+            // is exactly the omission that component exists to make impossible.
             <ConnectWalletButton
               buttonStyle={disabledButtonStyle(
                 styles.primaryButton,
@@ -735,55 +598,26 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       {roomsError && <Banner tone="error" text={roomsError} />}
       {roomError && <Banner tone="error" text={roomError} />}
 
-      {/* ---- The escape hatch (App.tsx design note #24) ----------------
-          Placed OUTSIDE the room-browser/staging-room branch below, so it
-          is reachable in every state this screen can be in -- including
-          the states that motivated it: Firebase unconfigured, no wallet,
-          no rooms, or stuck in a staging room that can never launch
-          because the contract address is a placeholder.
+      {/* The escape hatch (`App.tsx #24`), placed OUTSIDE the room-browser branch so it is reachable in every state
+         this screen can be in -- including the states that motivated it: Firebase unconfigured, no wallet, no rooms,
+         or stuck in a staging room that can never launch because the contract address is a placeholder.
+         Deliberately has NO `disabled` condition of any kind. It is the one control on this screen that must work
+         when everything else is broken, which is exactly why it must never be gated on any of the things that might
+         be broken. */}
+      {/* Design note #586: THE OFFLINE STRIP IS GONE. #578 removed solo sandbox and this button outlived it by one
+         pass -- so the Lobby went on offering an "Offline Sandbox" that landed on a screen asking the player to host
+         a room. A door labelled for a room that no longer exists.
+         NOTHING TO MERGE: both strips called the same handler, and that single handler is the only path into the
+         shell. There was never a second branch behind the second button -- which is why deleting the button is the
+         whole change. */}
 
-          Deliberately has NO `disabled` condition of any kind. It is the
-          one control on this screen that must work when everything else is
-          broken, which is exactly why it must never be gated on any of the
-          things that might be broken. */}
-      {/* ==================================================================
-           DESIGN NOTE 586: THE OFFLINE STRIP IS GONE
-          ==================================================================
-
-           Design note #578 removed solo sandbox, and this button outlived it
-           by one pass -- so the Lobby went on offering an "Offline Sandbox"
-           that landed on a screen asking the player to host a room. A door
-           labelled for a room that no longer exists.
-
-           NOTHING TO MERGE. Both strips called the same `onEnterSandbox`,
-           the offline one passing `null` and the multiplayer one passing a
-           code, and that single handler is the only path into the shell.
-           There was never a second branch behind the second button -- which
-           is why deleting the button is the whole change. */}
-
-      {/* ==================================================================
-           DESIGN NOTE 524: THE MULTIPLAYER DECISION IS A LOBBY DECISION
-          ==================================================================
-
-           Design note #522 mounted this strip inside the game shell, which
-           put "host or join" BEHIND "enter the sandbox". Two playtesters
-           therefore had to open the board separately, find a strip neither
-           knew was there, and only then discover each other -- a
-           multiplayer feature whose first step was for everyone to go and
-           play alone.
-
-           It sits with the other lobby decisions now, directly under the
-           sandbox entry it modifies. The plain "Enter Offline Sandbox"
-           button above is untouched and still opens a solo session, so the
-           escape hatch that note #24 built keeps its own promise: it has no
-           `disabled` condition and does not depend on Firestore.
-
-           HOSTING ENTERS IMMEDIATELY. The alternative -- show the code, wait
-           for a "start" -- is a staging room, and the Web3 lobby already has
-           one of those for a flow that genuinely needs it (an ante, a
-           contract call, a launch). A sandbox room needs none of that: the
-           code is visible on the board's own strip, and a joiner can arrive
-           at any point because the log replays. */}
+      {/* Design note #524: THE MULTIPLAYER DECISION IS A LOBBY DECISION. #522 mounted this strip inside the game
+         shell, which put "host or join" BEHIND "enter the sandbox" -- so two playtesters had to open the board
+         separately, find a strip neither knew was there, and only then discover each other: a multiplayer feature
+         whose first step was for everyone to go and play alone.
+         HOSTING ENTERS IMMEDIATELY. The alternative -- show the code, wait for a start -- is a staging room, and the
+         Web3 lobby already has one for a flow that genuinely needs it. A sandbox room needs none of that: the code is
+         on the board's own strip, and a joiner can arrive at any point because the log replays. */}
       <section style={styles.sandboxStrip}>
         <div style={styles.sandboxCopy}>
           <span style={styles.sandboxTitle}>👥 Sandbox Multiplayer</span>
@@ -804,33 +638,14 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         />
       </section>
 
-      {/* ==================================================================
-           DESIGN NOTE 525: THE WEB3 LOBBY IS PARKED, NOT DELETED
-          ==================================================================
-
-           REPORTED: hide the Web3 "Create Room" lobby while the Firebase
-           middleware is being playtested, so testers do not click it and hit
-           a "No wallet connected" wall.
-
-           It is gated behind ONE flag rather than removed, and the constant
-           is at the top of this file where it can be found. Deleting a
-           working staging room -- seats, ready checks, the ante, the
-           contract launch -- to run a playtest would cost far more to
-           rebuild than it costs to switch off, and this file's own design
-           note #24 already records what happens when the lobby becomes
-           unreachable by accident.
-
-           WHAT IS HIDDEN IS THE WHOLE BRANCH, browser and staging room
-           alike. Hiding only the create button would leave a room list that
-           cannot be joined, which is a worse trap than the one being
-           removed: a control that looks live and refuses is harder to
-           dismiss than one that is absent.
-
-           THE SANDBOX PATHS ARE OUTSIDE IT and unaffected -- both strips sit
-           above this branch, so the escape hatch and the new multiplayer
-           entry keep working exactly as they did. That is the same placement
-           argument note #24 made for putting the hatch outside the branch in
-           the first place. */}
+      {/* Design note #525: THE WEB3 LOBBY IS PARKED, NOT DELETED. Gated behind ONE flag rather than removed, and the
+         constant is at the top of this file where it can be found -- deleting a working staging room to run a
+         playtest would cost far more to rebuild than it costs to switch off, and #24 already records what happens
+         when the lobby becomes unreachable by accident.
+         WHAT IS HIDDEN IS THE WHOLE BRANCH, browser and staging room alike. Hiding only the create button would leave
+         a room list that cannot be joined, which is a worse trap than the one being removed: a control that looks
+         live and refuses is harder to dismiss than one that is absent.
+         THE SANDBOX PATHS ARE OUTSIDE IT and unaffected -- the same placement argument #24 made for the hatch. */}
       {!WEB3_LOBBY_ENABLED ? (
         <section style={styles.sandboxStrip}>
           <div style={styles.sandboxCopy}>
@@ -915,13 +730,9 @@ function RoomBrowser({
   const anteBase = toBaseAmount(ante);
   const anteValid = anteBase !== null;
 
-  /** Why creating is currently impossible, or `null` if it is possible.
-   *
-   *  Ordered most-fundamental first, so the message names the thing to fix
-   *  FIRST rather than the last check that happened to fail. Each string is
-   *  written to be actionable on its own -- "Connect a wallet" rather than
-   *  "wallet required" -- because this is the entire explanation the user
-   *  gets. */
+  /** Why creating is currently impossible, or `null` if it is possible. Ordered most-fundamental first, so the
+   *  message names the thing to fix FIRST rather than the last check that happened to fail -- and each string is
+   *  written to be actionable on its own, because this is the entire explanation the user gets. */
   const createBlockedReason: string | null = !available
     ? "The real-time lobby is offline, so a room cannot be created. Check the REACT_APP_FIREBASE_* values in frontend/.env, then restart the dev server."
     : !address
@@ -938,12 +749,10 @@ function RoomBrowser({
     const live: RoomDoc[] = [];
     for (const room of rooms) {
       if (room.status === "staging") open.push(room);
-      // `launching` belongs here, not in Open Lobbies: the host has already
-      // signed, so the room is no longer joinable -- but it has no
-      // `chainGameId` yet, so it is not watchable either. It appears in this
-      // tab with Spectate disabled, which is the honest representation of a
-      // transient state, rather than vanishing from both tabs for the
-      // duration of a block time.
+      // `launching` belongs here, not in Open Lobbies: the host has already signed, so the room is no longer
+      // joinable -- but it has no `chainGameId` yet, so it is not watchable either. It appears in this tab with
+      // Spectate disabled, which is the honest representation of a transient state, rather than vanishing from both
+      // tabs for the duration of a block time.
       else if (room.status === "live" || room.status === "launching") live.push(room);
     }
     return { openRooms: open, liveRooms: live };
@@ -1145,12 +954,8 @@ function OpenLobbyRow({
   );
 }
 
-/** One row in the Live Games tab.
- *
- *  No wallet check on Spectate, unlike Join: watching requires no identity
- *  because it performs no write in either system -- no seat is claimed and
- *  no transaction is signed. See `AppShell`'s own read-only query client for
- *  how the board is populated without a connected wallet. */
+/** One row in the Live Games tab. No wallet check on Spectate, unlike Join: watching requires no identity
+ *  because it performs no write in either system -- no seat is claimed and no transaction is signed. */
 function LiveGameRow({ room, onSpectate }: { room: RoomDoc; onSpectate: () => void }) {
   const launching = room.status === "launching" || room.chainGameId === null;
 
@@ -1590,15 +1395,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "12px 20px",
-    // Longhand, NOT the `borderBottom` shorthand. This pair is what
-    // produced the reported console warning: the base style set the
-    // `borderBottom` SHORTHAND while `tabButtonActive` overrode only the
-    // `borderBottomColor` LONGHAND. On a tab switch React removes the
-    // longhand from the outgoing element while the shorthand is still
-    // present, and the order in which a browser applies that combination is
-    // not guaranteed -- hence "can lead to styling bugs". Expressing all
-    // three parts as longhands means the active variant overrides exactly
-    // one property that was already there, with nothing to reconcile.
+    // Longhand, NOT the `borderBottom` shorthand. This pair produced the reported console warning: the base style
+    // set the SHORTHAND while the active variant overrode only the `borderBottomColor` LONGHAND, and on a tab
+    // switch React removes the longhand from the outgoing element while the shorthand is still present -- the
+    // order in which a browser applies that combination is not guaranteed. Expressing all three parts as longhands
+    // means the active variant overrides exactly one property that was already there.
     borderWidth: "0",
     borderStyle: "solid",
     borderColor: "transparent",

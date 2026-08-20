@@ -1630,3 +1630,511 @@ pill reads as a tag ABOUT something; the thing itself is a rectangle.**
 ### FinancialLedger.tsx #170 — See `ContextualSubPanel.tsx #170`
 A name beats a truncated hash, **and the resolver returns `null` for a real wallet so live rooms are
 unchanged.** (`#559` is the room-aware version this file actually imports.)
+
+---
+
+# The ticker and the dock — `components/TopTicker.tsx`
+
+### TopTicker.tsx #1–#7 — Charter
+**Presentational only** — every prop is derived or owned by `App.tsx`, the single owner of the chat and
+action log. **The unread badge double-guards on `!isExpanded` itself** so it can never flash visible for one
+render during a transition. **No border-radius, shadow or backdrop:** this is no longer a floating panel but
+an in-place section flowing out of the active nav tab, **so it intentionally has none of the old modal's
+chrome.**
+**Notification settings are gone entirely (`App.tsx #21`)** — both turn-alert channels are mandatory with no
+per-player opt-out, **and the expanded body is JUST the scrollable history.**
+
+### TopTicker.tsx #476 — The whole game, not the last seven lines
+**Reported:** the Activity Log truncates and retains only the last handful of entries.
+**The STATE was never truncated** — the log has always prepended without a cap. **What threw the history away
+was one line:** the expanded panel sliced the last N items before rendering, **so everything older existed in
+memory and could not be reached by scrolling because it was never in the DOM to scroll to.**
+**That made the scroll container a lie.** It had `overflowY: auto` and a `maxHeight` of exactly seven lines,
+**so it looked scrollable and had nothing above the fold — the one arrangement where a scrollbar never appears
+and the player concludes the log simply forgets.**
+The constant survives as what it always physically was: **the VIEWPORT height, in lines. It sizes the box; it
+no longer decides what exists.**
+**The cost is bounded in practice** — a full 1830 game is a few hundred short strings. **If a long session ever
+makes this heavy the answer is windowing, which needs the full array to window OVER; truncating the source
+would remain the wrong fix.**
+
+### TopTicker.tsx #615 — Five rows, now that five rows is not a limit
+**Instructed:** "now that the log scrolls, I wonder if it would be okay to trim the expansion to 5 lines?"
+**Yes, and the question contains the reason it is safe.** Seven was never chosen as a good reading height —
+`#476` found the constant being used to TRUNCATE and left it at seven while converting it into a viewport.
+**At the time the number decided what existed, so shrinking it would have thrown entries away. It decides
+nothing now.** Five rows is roughly 230px against seven's 320, **which takes the open dock from about half a
+laptop viewport to under a third.**
+**Not lower than five.** Three or four would fit more comfortably **and would stop the panel being a place you
+can read a stretch of the round in — a log you have to scroll every second entry is a log you stop opening.
+Five holds a full turn's worth of actions on one screen, which is the unit a player actually wants to read
+back.**
+
+### TopTicker.tsx #425 — One string, and no pictures in it
+**Reported:** make the expanded history render the full text string, identical to the ticker, and remove every
+emoji and graphical badge.
+**Two renderers, two different sentences.** The collapsed ticker built its line in one place; the expanded list
+built a different one out of separate spans. **They agreed about nothing:** the ticker appended the detail when
+short enough and the list dropped it in favour of a hover `title`; the list rendered a category badge the
+ticker had never heard of; **both prefixed a status emoji, from the same helper, in different positions.
+Expanding the panel to read a line in full showed the reader a line they had not been reading.**
+**So the string is built ONCE and both surfaces render exactly it. "Identical to the ticker" is now structural
+rather than a thing to keep in step by hand.**
+**The emoji are gone, all of them.** They were carrying real information badly: **a green circle means
+"succeeded", which in a log of things that have already happened is true of nearly every line, so the column
+was a near-constant costing horizontal space in a one-line ticker.** The category badge was worse — **inferred
+by substring-matching the label ("tile", "stock", "train"), so it restated a word already visible in the
+sentence beside it, and mis-tagged whenever a label happened to contain someone else's keyword.**
+**Errors keep their mark, in words.** Dropping the status glyph would have lost the one status that is not the
+default. **That is the whole of what the circles were for.**
+**The round prefix stays `[OR 1]` and leads the line.** It is the only bracketed element left, **so it reads as
+a gutter rather than as one badge among several.**
+The detail is carried in **full, not as a 40-character preview** — the truncation existed because the string had
+to survive in a single-line ticker, **and the ticker clips with CSS `text-overflow` instead, which shortens the
+DISPLAY without shortening the sentence the expanded view then renders in full.** `whiteSpace: normal` on the
+expanded line is the other half: **the ticker clips because it has one line, and this wraps because it does
+not.**
+The four styles those columns used are **deleted rather than left unused — an orphaned badge style is an
+invitation to render a badge again, which is the thing this pass was asked to remove.**
+
+### TopTicker.tsx #477 — The time leads
+**Reported:** the timestamp sits at the end of the line; the format should be
+`[hh:mm] [Phase/Round] [Actor] [Action]`.
+**Why the front is right and not merely requested.** The expanded history is now the whole game (`#476`), **so
+it is a column of entries a player scrolls to find something in. A column is scanned down its LEFT edge, and
+the two facts that locate an entry — when, and in which round — were the two furthest from it:** the round was
+second, and the time was past the end of a sentence of variable length, **so it landed in a different column on
+every row and could not be scanned at all.**
+Leading with both puts a **fixed-width gutter** down the left: `[14:32] [OR 1]` is the same shape on every line.
+**hh:mm, not hh:mm:ss** — a full locale time string carries seconds, **three characters of precision nobody
+needs about a board game and enough width to unbalance the gutter.** Dropped for DISPLAY only; the epoch
+remains the sort key.
+**Parsed rather than reformatted from the epoch, deliberately.** The label is already localised — 12-hour with
+an am/pm suffix in some locales, 24-hour in others — **and re-deriving it here would impose this module's idea
+of a locale on a string the rest of the app formats elsewhere. Trimming what is there keeps one formatter.**
+**Any label it cannot parse is passed through whole.** A locale this regex does not anticipate produces a
+slightly wider gutter, **which is a cosmetic defect; dropping the time entirely, or emitting `[Invalid Date]`,
+would not be.**
+
+### TopTicker.tsx #616 — Unread CHAT MESSAGES, not unread feed items
+**Log entries are a record to consult rather than a queue to clear, and counting them gave a badge that read
+four digits and meant nothing.** Counted off the **unfiltered** feed by the caller, **so a player filtered to
+"log" is still told a message arrived.**
+
+### TopTicker.tsx #458 — The latest line, where the player is looking
+**Reported:** the ticker scrolls out of view when scrolling down the page, **so the most recent instruction is
+lost exactly when the player is working on the map.**
+The ticker sits in the page chrome and scrolls away with it; the action bar directly below is sticky and does
+not. **So the fix is not to make a second ticker sticky — it is to put the one line that matters inside the
+element that already stays.**
+**One line, not the panel:** no expansion, no history, no chat input. **The full ticker is still the place to
+read back through what happened; this answers only "what just happened", which is the question a player
+scrolling the board has.**
+**It shares the formatter, so the sticky copy and the ticker cannot disagree** — `#425` made that one string for
+exactly this class of reason, **and this is the third surface to read it.**
+**Clickable, because a player who reads a truncated line needs somewhere to go** — it scrolls them back to the
+full ticker rather than opening a second copy. **It must never wrap:** the bar has a fixed height band, **and a
+two-line log entry would push the controls out of it.** Ellipsis rather than a scrollbar — **the full text is
+one click away and a scrolling sliver of text in a toolbar is unreadable.**
+
+### TopTicker.tsx #457 — The log belongs to the chat, not to the tabs
+**Reported:** the ticker's background matches the tab bar above it, so it is easy to miss.
+**It matched because it was chosen to.** `#20` paired the header with the active tab on the reasoning that both
+are chrome. **The consequence is that the one line carrying "what just happened" reads as a continuation of the
+navigation — an area the eye has already learned to skip, because nothing in it ever changes.**
+**It belongs downward.** Below is `InlineQuickChat`, **and the two are one conversation: the log is what the
+game said, the chat is what the players said, and expanding the ticker shows them interleaved in a single
+feed.**
+**A left accent rather than a brighter fill.** Raising the whole surface would have made the newest game event
+the loudest thing on the page, competing with the board. **A 3px rule down the live edge separates it from the
+tabs without shouting, and it is the same device the chat entries already use to mark an author.**
+
+### TopTicker.tsx #598 / #600 / #614 — The Chat toggle, and the row that did not know about it
+**#598 — the dock is a status line, so it is one line.** *Reported:* "the Chat/Activity log at the bottom needs
+to be slimmed down: it's bigger than the traveling Action bar and ostensibly less useful." **Both halves are
+true and the second explains the first.** `#581` docked this to the bottom edge precisely BECAUSE it is
+peripheral, **and then left it three rows tall. A peripheral surface taller than the primary one is not
+peripheral.** The filters go with the input — **filtering is a thing you do while READING the log, so they
+belong in the expanded view and are noise on a one-line status strip.** The toggle lives INSIDE the header row,
+**because a second row for one button would be the problem again.**
+**#600 — the Chat button was sitting on "Expand".** *Reported, and the cause is `#598`'s own fix.* The toggle
+HAS to live outside the header element, **because that element is a `<button>` and a button cannot contain a
+button.** `#598` solved the nesting by taking it out of flow entirely — **but the expand hint is the last flex
+child of that same full-width header, so it renders at the row's right edge too. Two controls, one corner,
+neither aware of the other. The overlap was not a near-miss; it was guaranteed by construction.**
+**Absolute positioning cannot be undone here** — the nesting rule is real. **What was missing is that nothing in
+the flow KNEW about it.** So the row **reserves the space**: an empty, `aria-hidden` flex item of exactly the
+toggle's width, with the toggle positioned into it. **`flexShrink: 0` because a slot that can be squeezed is not
+a reservation.**
+**Which means three numbers must agree, and that is why they are named constants rather than literals at four
+call sites:** the toggle's offset is the row's padding, plus the hint's width, plus the flex gap.
+**The hint's width is fixed for a second reason.** The label flips between "▼ Expand" and "▲ Collapse", **which
+are different widths — so a hint sized by its content would shift the reserved slot every time the panel opened,
+dragging the Chat button sideways under the cursor mid-click.**
+**A slot also fixes a quieter bug:** the preview text is `flex: 1` and was measuring the full row, **so a long
+activity line ellipsised UNDER the Chat button rather than before it.**
+**#614 — the header is its own positioning context.** *Reported:* "there is a stray 'Chat' button in the expanded
+window". **There was, and it was the same button.** `#598` positioned it against the root — **correct while the
+root WAS the header row and nothing else. Expanding the log makes the root the header plus a 300px scrolling
+body, and an element centred on that box lands halfway down the history.** So the header and its satellite get
+their own relatively-positioned wrapper.
+Vertically centred **by transform rather than a magic `top: 3px`, so the control stays centred if the row's
+min-height or the toggle's padding ever moves.**
+
+---
+
+# The player cards — `components/PlayerCards.tsx`
+
+### PlayerCards.tsx #563 — A table scans, a card reads
+**Instructed:** "while I love the table/spreadsheet in Game Ledger for Player Assets, I wonder if in the Stock
+Round it would be better to create tiles/cards like we did for the corporations but for players instead."
+**Both, and for a stated reason rather than as a compromise. The two screens ask different questions of the same
+data:**
+
+| | |
+|---|---|
+| **The ledger** | "how does everyone compare" — a **ranking** question, answered by a column of aligned figures you read **down**. A table is the right shape and the existing one stays untouched. |
+| **The Stock Round** | "what is this player holding, and what can they afford" — a question about **one person at a time**, answered by a block you read **across**. Their corporations, privates and spending power belong together, **and a table splits them across columns that cannot show a per-corporation breakdown at all.** |
+
+**So the card matches the corporation card deliberately** — same livery stripe, same two-column figure tables,
+same private table at the foot. **A Stock Round is a screen of cards, and a player card that looked like a
+different kind of object would read as a different kind of thing.**
+**#563a — the private table is absent, not empty.** *Instructed explicitly, and worth keeping as a rule:* **an
+empty table with headers is a promise of data that is not there, and four of them on one screen is most of the
+screen saying nothing. A card with no private section is shorter, which is itself the information.**
+**The same is NOT done for the holdings table, and the difference is the point:** every player has cash and
+certificates, **so a player with no shares has an empty holdings list which is a real and readable state
+("bought nothing yet"). Owning no privates after the auction is equally real, but the auction is over by then
+and the table has no further story to tell.**
+The Priority Deal lives in the **stripe**, because it is a property of the SEAT rather than of the portfolio —
+**it says who opens the next Stock Round, not what this player owns. Everything below the stripe is holdings;
+this is not.**
+
+### PlayerCards.tsx #567 — What came off the card, and why
+The first pass carried three marks that each looked like information and were not, **and the playtest found all
+three:**
+
+- **The heralds.** A corporate logo beside a three-letter ticker **identifies nothing the ticker had not already
+  identified, at 14px where the artwork is a smudge.** They earn their place on a corporation CARD, which is
+  about one company and has room to be about it.
+- **The "YOU" badge.** Every player is reading their own screen; **the card that is theirs is the one they
+  already know.** It is worth drawing **only when two players share a display name**, which is the sole case
+  where the reader genuinely cannot tell — **so that is exactly when it appears.**
+- **"PD".** An abbreviation invented to fit a space that turned out not to be tight. **"Priority Deal" is two
+  words and the stripe holds them.**
+
+The crown moved to the **right** of the acronym for the same family of reason: **on the left it pushed every
+ticker in the column out of alignment by the width of a glyph most rows do not have, so the one column that
+should scan cleanly was ragged in proportion to how many presidencies were on screen.**
+
+### PlayerCards.tsx #593 / #595 / #606 — The cards state the turn order, they do not imply it
+**Instructed:** replace the Auction's Seating Order table with these cards — "the tables make it easy to see
+turn order, whereas the cards are less direct about that. Is there a solution?"
+**There is, and it is not "rely on the order they are laid out in". The grid reflows** — six players wrap on any
+window narrower than about 1600px — **and the moment it wraps, left-to-right stops meaning anything and the seat
+after the last card on row one is the FIRST card on row two. A reader would have to know the wrap point to read
+the order.** So the position is written down.
+**Only where seats take turns.** Omitted during an Operating Round, **where the queue names corporations and a
+seat ordinal would be answering a question nobody is asking.**
+**#606 — the flag's job no longer exists.** The ordinals became "ON TURN" and "ON TURN" became the lift, **so the
+last thing that boolean gated is gone. It is not replaced by another flag, because `activeAddress` already
+carries the same fact: a round with no seat on turn passes `null`, every card compares unequal, and nothing is
+marked. A second prop saying "and mean it this time" was always redundant with that.**
+
+### PlayerCards.tsx #606 — Lifted out of the row, in the seat's own colour
+**Instructed:** "rather than an 'on turn' tag, would it make more sense to desaturate the inactive cards and
+slightly 'lift'/raise the active one?" — and, on the ring: **"the green border is maybe a little weird because it
+doesn't coordinate to the player color or anything else."**
+**The green was inherited, not chosen.** It came from the roster pills, **where green was the only colour
+available because pills had no seat identity of their own. These cards do:** the stripe two pixels above the ring
+is the player's colour, and the action bar's trail lights the acting seat in that same colour. **So the green was
+a third colour system on a surface that already had one, asserting "on turn" in a hue that means "positive"
+everywhere else and nothing about WHO.**
+**The lift is a real lift.** `-2px` was a nudge no reader would name; **the request describes the card-game
+gesture, where a chosen card rises clear of the row.** `-10px` against a 10px grid gap clears roughly a card's own
+edge.
+**The shadow is doing half the work.** A translate alone reads as a card that has drifted; **a translate plus a
+deeper, softer shadow reads as one that has been picked up.** The two are one `box-shadow` declaration **and
+cannot be split**, so both are cast at the call site with the ring.
+**The lift needs somewhere to go.** A card rising 10px out of a row with a 10px gap lands exactly on the edge of
+the row above, **and its ring and shadow then overlap the card behind it — which reads as collision rather than
+elevation.** `rowGap` only, **not `gap`: the clearance wanted is vertical, and widening the columns to buy it
+would push a six-player grid to a second row sooner.** `paddingTop` is the same clearance for the first row,
+**which has no row above it to borrow from.**
+**The raise only reads as a card being picked up if it takes time.** Snapped instantly it is just a card drawn
+10px higher, **which a reader interprets as a layout bug before they interpret it as a state. The movement is the
+message.** `transform` and `box-shadow` only, **never `all`** — the stripe's saturation is on a different element
+and wants no transition (**a fading colour during a turn handover reads as loading, not as handover**), and `all`
+would sweep up every future property anyone adds.
+**Reduced motion keeps the answer, loses the movement:** the card still sits raised with its ring and shadow, **it
+simply arrives there. Switching motion off must never cost the reader the fact the motion was carrying.**
+**#606a — the turn still has to be spoken.** Deleting the "ON TURN" tag deletes it for screen readers too, **and a
+lift, a ring and a saturation step are all invisible to one. Colour and elevation are never the sole carrier of a
+fact** — the label says it in words and `aria-current` marks it in the one attribute assistive technology already
+looks for.
+**The idle stripes step back.** *Instructed:* "just to desaturate the color stripes, not to the point that they
+can't be distinguished." **Taken literally, and the literal reading is the correct one: this is on the STRIPE, not
+on the card.** Everything below the stripe is what a player is comparing across seats while deciding a bid, **and
+dimming a rival's balance to advertise that it is not their turn would trade a fact for a decoration.**
+**`saturate`, not `opacity`:** opacity would wash the stripe toward the card's cream and pull the label's contrast
+down with it; **`saturate` leaves lightness and hue in place, so the black-or-white ink choice stays valid.**
+**0.55 is the whole brief.** The seat colours are already mid-saturation, **so this lands them near 25% — muted,
+but slate blue, brick, moss, plum, ochre and teal all still read as themselves side by side. It is the one number
+to move, and moving it far in either direction breaks a different half of the request.**
+
+### PlayerCards.tsx #583 / #609 / #658 — Two tables that have to agree
+**#583:** the gap widened and the columns are no longer equal — **the % column is fixed at three characters, so
+the holdings table needs far less width than an even split gives it**, and the reported symptom was the Corp
+column sitting "barely separated" from the figures on its left.
+**#609 — the holdings column takes what it needs.** *Reported:* "the 'Corp %' column is stretching to take up the
+same space as the left column. This is unnecessary." **It was, and `0.85fr` is why — a fractional track claims its
+share whether or not it has anything to put there.** Splitting the card 58/42 gave the narrow column room it could
+not use and squeezed the wide one. **`auto` sizes to content and hands the remainder to the figures**, per card —
+**a player holding one corporation is not held to the width of a player holding five.**
+**#609 (spacer row) — instructed:** "can we fix the header line for 'Corp' and '%' at the same row as the 'Cash'
+row?" `#583` had put an empty header row here so the two BODIES started level. **That worked, and bought it by
+opening the left column with a blank line — so the card's top-left corner, where a reader's eye lands first, was
+whitespace.** **There was never a row-for-row correspondence to preserve** — five fixed figures against a
+variable-length holdings list — **so aligning the bodies was aligning two things that do not correspond.**
+**#658 — a grid item stretches, and a table obeys.** *Reported:* "the two double-column tables 'start' at
+different heights … PRR and C&O seem to be widely spaced apart to fill up the size of the table."
+**Both halves of that are one line of CSS.** The body is a grid, grid items default to `align-self: stretch`, and
+the row is as tall as the FIGURES table. **The holdings table is stretched to match, and an HTML table given more
+height than it needs does not sit at the top of it: it distributes the surplus across its own rows.** With a
+header and two holdings that is three tall rows with centred text — **so `Corp.` sinks to somewhere between `Cash`
+and `Net Worth`, and PRR and C&O drift apart. Nothing was positioning them; they were being inflated.**
+`alignItems: "start"` is the whole fix.
+**Why `#611` did not catch this:** that note aligned the two tables' **headers**, and **it was right about the
+markup** — the figures table has no `<thead>`, so its first row and the holdings header genuinely are both row
+one. **The alignment it describes is real and is what the DOM says. It just never survived layout, because the
+note was reasoning about row ORDER while the defect was in row HEIGHT. Two elements can be in the same row of the
+same grid and still not appear on the same line.**
+**One row metric, spread into every cell of both tables.** The two tables aligning **is not a coincidence to be
+re-established each time somebody edits one of them — it is the point of the layout, so it is a value rather than
+a convention. Six style keys agreeing by hand is exactly the arrangement that drifts:** the holdings header was
+missing the 2px the figures rows carried, **and nothing could have reported that.** `verticalAlign: "top"` rides
+along because the same intent explains it — **a cell that centres its text re-introduces the reported symptom the
+moment any row is taller than its neighbour, and top-aligned cells simply cannot.**
+**#568:** the private's NUMBER stays, on instruction — "referring to Private Company 1 is easier than remembering
+some of the names". **`#423` removed the numeric chips because a bare `3` names nothing away from the auction's
+numbered list; a number IN FRONT OF the name is the opposite trade and costs two characters.**
+
+### PlayerCards.tsx #562 / #562a — An em dash, and the gap that is the point
+**#562 — an em dash, never "$0".** A missing figure and a figure that is genuinely zero **are different facts
+about a player's position, and only one of them means they are broke.**
+**#562a — LIQUIDITY versus NET WORTH: the gap between them is what the card exists to show.** Liquidity is cash
+plus **only the shares that could legally be sold right now** — a president's block cannot be sold unless
+another player already holds 20%. `sellableHoldings` (`utils/playerFinance.ts`) owns the presidency and
+pool-cap rules, **so this only has to add up its answer — and the two surfaces that ask "what can this player
+pay with" (the emergency-funding modal and this card) get the same number by construction rather than by
+agreement.**
+
+---
+
+# The turn-order trail — `components/SeatOrderTrail.tsx`
+
+### SeatOrderTrail.tsx #595 — An ordinal is not an order
+**Reported:** '"1st," "2nd," etc may be confusing if they think the Players cards are referencing final score' —
+and, in the same breath, the better idea: **"what if we grab the subphase tracker from the Operating Round and
+show P1 > P2 > P3 in the Stock/Auction Action panel?"**
+**Both halves are right.** "1st" beside a player's name in a game with a score is genuinely ambiguous — **in 1830
+the thing players most want ranked IS net worth, so a card reading "1st Ada $2,400" invites exactly the wrong
+reading.** And a grid of pills can only imply sequence through layout, **which stops meaning anything the moment
+the grid wraps.**
+**A chevron trail says it out loud.** `Ada › Ben › Cai` is not a ranking, **it is a queue: the separator carries
+the meaning that position alone could not, and no reader mistakes a chevron for a scoreboard.**
+**The same component shape as the Operating Round's step trail, deliberately.** A player has already learned to
+read `Track › Tokens › Routes` as "here is the sequence, here is where we are". **Reusing that grammar costs them
+nothing to learn, and the two rounds stop having two different ways of answering one question.**
+**Not a copy of that component, though.** The stepper knows about eras, private companies and which steps exist
+this phase; **none of that is true of seats, and inheriting it to reuse a chevron would drag a rules engine into a
+list of names.**
+
+### SeatOrderTrail.tsx #597b → #599 → #603 → #603a — Three passes to stop being five pills
+**#597b — the par ladder's shape, not a pill.** *Instructed:* "Rather than each player having a pill, what if we
+used the rectangle from the Par selector and instead of / between players we used a >?" **Better than the pills for
+a reason the request implies rather than states: the par ladder is a row of INTERCHANGEABLE options of which
+exactly one is lit, which is precisely the shape of a turn queue.** A pill is a self-contained badge — **five of
+them read as five separate objects that happen to be adjacent, and the rounded ends fight the chevron's attempt to
+join them into a sequence.**
+Padding is **this file's own, slightly larger than the ladder's:** that value is defended in `StockRoundPanel` by a
+specific width budget, **and a name is longer than a par value. Copying the number rather than the intent would
+make the ladder's constraint govern a row it knows nothing about.**
+**#599 — one rectangle, not five objects.** `#597b` restyled the SEGMENTS and left the container a bare flex row
+with a 2px gap — **the half that matters least. A row of transparent segments floating on the bar's own surface has
+no edge to belong to, so the eye still groups by the only boundary it can find — the lit fill — and reads five loose
+objects.**
+**A drawn border is the thing that was missing.** Once the row has one outline **the segments stop being candidates
+for grouping: they are subdivisions of a single object, and a subdivision that fills with colour is unmistakably
+"the live one". This is why the par ladder works and why copying only its segment padding did not.**
+**`gap: 0`. The segments must be FLUSH** — a gap reintroduces the whitespace that made them read as separate chips,
+**and it is the one value that cannot be tuned by taste: any non-zero gap undoes the border.**
+**#603 — the fill has to reach the edges.** *Reported:* "each player is still given their own pill in the
+rectangle." `#599` **stopped one step short AGAIN, for the same reason, one level in.** The container had 2px of
+padding and the segments a 4px radius, **so the lit fill floated clear of the rectangle's own edges on all four
+sides. A shape that does not touch its container is a shape sitting INSIDE its container, which is the definition of
+the pill this was supposed to stop being. Two pixels of padding were doing all the damage.**
+No padding, no radius, `alignItems: stretch`. **The lit segment runs border to border — a slice of the object rather
+than an object on a tray — and that is what makes the chevrons read as pointing OUT of the filled block.**
+**`overflow: hidden` is what lets both be true at once:** the segments stay square **and the first and last are
+clipped by the container's own radius. Without it a lit end seat would poke square corners through the rounded
+frame.**
+**No wrap.** A wrapped row would leave a half-width second line inside the frame, **and the segments-of-one-bar
+reading dies the moment the bar has two rows.**
+**#603a — the chevron is the point, so it gets to be seen.** *Reported:* it is "both small and indistinct as a
+colour". **Both true, and both were deliberate in a way that turned out to be wrong:** `#597b` styled it as
+punctuation. **But this glyph is not punctuation here — it is the ONLY thing on the bar that says the row is a
+sequence rather than a list. `#595` is explicit that the separator carries the meaning position alone could not, and
+then `#597b` styled it like it carried none.**
+**So it moves up the scale, not just in colour** — 12px reads as a comma at this weight **no matter what colour it
+is.** Still dimmer than the lit segment, **which is the one hierarchy worth keeping.**
+
+### SeatOrderTrail.tsx #639 — Rivals' money here, yours on your card
+**Instructed:** "perhaps it makes sense to re-insert inactive player's treasury amounts in that ordering, and leave
+the active player's in their player card."
+**That is the right split and it resolves what `#637` removed and what `#637` admitted it was losing.** Taking the
+figures off entirely was the correct answer to a duplication problem — **but it also took away every OTHER seat's,
+which was never duplicated anywhere on the sticky bar. `#342`'s rule survives after all: "in an auction the question
+that decides a bid is what can THEY spend."**
+**So the figure is suppressed on exactly one segment — the lit one.** The card below states it in full, labelled,
+with escrow spelled out; **the trail would be repeating it two inches away in a compressed form that caused the
+"+$200 looks like earnings" reading in the first place.**
+**It also keeps six seats fitting** — the acting segment is the one that carries a colour fill, **so dropping ~35px
+from it is width bought back exactly where the row is busiest.**
+**Escrow rides with it and is likewise inactive-only:** it is the number that decides whether a rival can still
+raise, **which is the whole reason to look across the row.**
+
+### SeatOrderTrail.tsx #610 — This seat has passed since anyone last acted
+**Instructed:** stamp "PASSED" over a player's name, with the worry that **"this might make some new people think
+that that player has permanently passed"** — and the answer to it, "if we remove the stamp on the player's next turn
+that might mitigate it."
+**The mitigation is structural rather than a rule this component enforces:** the passed set derives from
+`consecutive_passes`, **which the reducer zeroes the instant anybody buys or sells. So the stamps cannot outlive the
+round of passing that produced them, and no timer, no local state and no cleanup pass is involved.**
+**What it costs is one reading, and it is worth it.** "PASSED" beside four names is a picture of **how far round the
+table the passing has got — which is what the auction header's "3 consecutive pass(es) so far" was trying to say in
+prose, against a roster the reader then had to map it onto themselves.**
+**The stamp is not a stamp.** The request's word means the rotated, distressed overprint, **which is the right IDEA
+and the wrong artefact for a 24px-tall segment read left-to-right at speed: rotated text in a row this dense costs
+legibility on the name underneath it, which is the thing being marked.** Small caps, wide tracking, a warning tint,
+after a struck-through name — **the same thing at the same glance, in about 34px.**
+**Amber, not red.** Passing is an ordinary move in both these rounds — **in the Stock Round it is very often the
+correct one — and red would grade it. Amber marks a state without judging it, and stays clear of the green this app
+spends on positive figures.**
+**Struck through as well as tagged, so the two cues agree:** a strike alone would be ambiguous (**eliminated?
+bankrupt?**); the tag alone is four small capitals in a crowded row.
+**The names now clip rather than push.** The trail is `nowrap` inside a frame with `overflow: hidden`, **so before
+the PASSED tags existed an over-wide row would have silently lost a whole end segment. Truncating a long nickname is
+a far better failure than dropping a player off the queue, and the full name is in the `title`.**
+
+### SeatOrderTrail.tsx #597c / #599 (chips) — What the segments do not carry
+**Instructed:** "the Action bar player pills do not need 'PD' or '(you)' in them, these are just making the pills
+larger." **Both were mine and both were paying for themselves in width on the one row that has least of it.** And
+neither was needed: **the player CARD already marks the Priority Deal in its stripe, and a player does not need
+telling which seat is theirs on a screen they are looking at** — `#567` reached that same conclusion about the YOU
+badge two passes earlier **and I put it back on the trail without noticing.**
+`viewerAddress` **stays on the interface, unused by the render, because a caller passing it is stating something
+true** — and removing the prop would make re-adding the distinction a plumbing job rather than a styling one.
+**The seat's colour DOT is gone (`#599`):** it was doing identity work the fill now does for the one seat that
+matters, **and on the four seats it survived on it was a third token in a segment the request asks to hold two.**
+The name span carries **no styling of its own** — it exists so the name and the treasury are two flex items on one
+baseline. **Deliberately NO `overflow: hidden`: on an inline-level box that moves the baseline to the bottom margin
+edge, and the figure beside it would stop lining up.**
+
+---
+
+# The round-detail footer — `components/ContextualSubPanel.tsx`
+
+### ContextualSubPanel.tsx #1–#5 — Charter
+Driven **entirely** by `current_round_type` and nothing else. The branch covers all three real variants explicitly
+— **rather than letting the Waterfall Auction genesis phase fall through into the Operating Round branch by
+accident.** The auction pane is deliberately a **short pointer**, not a duplicate of the dashboard: **without it the
+pane would be blank or, worse, silently misrendered as an Operating Round panel.**
+**Routes and train sheets are NOT fabricated** — `state.rs` genuinely models hardware ownership and
+`pathfinding.rs` genuinely traces routes, **but no `QueryMsg` exposes either** (`gameState.ts #2`). **This panel
+says so directly rather than inventing plausible-looking numbers.**
+Before a real query resolves it renders **one honest placeholder row instead of an empty or broken-looking table.**
+
+### ContextualSubPanel.tsx #170 — Show the person, not the hash
+The President column rendered a raw bech32 address clipped to something like `juno1san…0000`. **In the sandbox
+every seat's address shares a prefix and a run of zeroes, so all four players truncated to a near-identical string
+and the column became four rows of visually indistinguishable noise. A player could not tell which corporation was
+theirs from the one panel whose job is to say so.**
+The label resolver **returns `null` for anything it does not recognise — which is exactly the right shape here: a
+live room's real wallet falls through to truncation unchanged, so this improves the sandbox without inventing a name
+for a stranger.**
+
+### ContextualSubPanel.tsx #10 — What this table can and cannot source
+Five of seven columns are straight `GameStateResponse` fields. **The other two behave differently:**
+
+- **Market value is not on `GameStateResponse` at all.** It lives in `GetMarketGrid`, which is why it arrives as a
+  separate prop — **and without it the column reads "--" rather than substituting par value, which is a different
+  number and would be silently wrong for every floated company.**
+- **The price-change arrow is observed, not reported.** Nothing says "a dividend just resolved", **so this compares
+  the price against the last one seen.** Inside an Operating Round that inference is sound: **the only thing that
+  moves a price during an OR is the dividend decision.** Share sales also move prices, **but those happen in Stock
+  Rounds, so the ref is cleared whenever the round changes — an arrow never carries over from one round into the
+  next.**
+- **Routes / last run cannot be sourced at all.** The pathfinder really does compute revenue during an Operating
+  Round, **but no query returns it and there is no field to reconstruct it from.** The column renders "--" with a
+  plain-language tooltip — **included rather than omitted because the layout was specified with it, and a visibly
+  empty column is a more honest placeholder than a quietly missing one. The dash means "not reported", not "did not
+  run".**
+
+### ContextualSubPanel.tsx #449 — Operating order, and unfloated dimmed
+**Reported:** sort strictly by operating order, and grey out unfloated corporations.
+The table rendered in `company_id` order — **the contract's table order — while the round it describes runs in a
+completely different one. A player reading down this list to work out who acts next was reading the wrong sequence,
+and nothing on screen said so.**
+**The same rule the operating-order builder uses:** market price descending, then par, then id. **Reproduced rather
+than imported because that function returns only the FLOATED queue, and this table shows every corporation including
+the ones that cannot operate — so the two answer different questions over the same comparison. The comparison is the
+part that must not drift, and it is three lines.**
+**Unfloated sort last and dim.** A corporation with no price **is not somewhere in the middle of the operating
+order, it is absent from it**, so it belongs after the queue rather than interleaved by whatever par it happens to
+carry. **Dimming is the second half of the same statement: the row is context, not a participant.** The UNFLOATED
+badge stays — **the dimming says "not in this round", the badge says which rule.**
+The privates a corporation's **treasury** owns are listed here too: **they pay it every Operating Round and carry
+the powers it may exercise on its turn, so this table — the one a player reads while deciding what to do on that
+turn — was the place they were missing from.**
+
+### ContextualSubPanel.tsx #645 — Both sides of "of" are round numbers
+**Reported:** '"OR1.1 of 1," which should probably be "OR 1.1 of 1.1," and later "OR 3.1 of 3.2".'
+**The old string put two different numbering systems either side of one word.** `1.1` is a round **name** — cycle
+and index, the notation the bar, the log and every 1830 discussion use — **and the bare `1` after "of" was a COUNT
+of rounds in the cycle. Both are correct and the sentence is not: "1.1 of 1" reads as a position outside its own
+range, which is why it looks broken even though the arithmetic is right.**
+**Naming the last round fixes it.** The reader compares two labels of the same kind rather than translating between
+them, **and the phase rule — one Operating Round in Phase 2, two in Green, three in Brown — becomes legible from the
+number rather than needing to be known.**
+**The space after "OR" is the same correction one level down.** The bar writes "Operating Round 3.2" and the label
+helper writes "OR 3.2"; **this alone wrote "OR3.2", so a player matching a log line against this panel was comparing
+two spellings of one round.**
+**No guard on the length.** It is stamped when the cycle opens (`#511`) and the helper floors it at 1, **and if there
+were such a state the honest thing is to show it rather than hide it behind a fallback.**
+
+### ContextualSubPanel.tsx #11 / #8 / #572 — Table mechanics
+**#11 — corporation leads.** The previous order put President first, on the reasoning that an Operating Round is
+about whose turn it is — **but the row IS a corporation, and a table whose first column is not its subject reads as
+sorted by the wrong thing. The active row is marked directly, which answers "whose turn" without spending the lead
+column on it.**
+**One header treatment for every column.** Previously `th` was 600 and mixed-case while the numeric variants only
+overrode alignment, **so a seven-column row had headers of two different weights depending on which cell you looked
+at. All four variants now differ ONLY in alignment and the divider, which is the whole point of having variants.**
+**#8 — the alignment-only overrides carry no padding, border or font, so they must be spread OVER `th`/`td` rather
+than used in place of them.** Used bare, **a cell silently loses its box and the row's borders break where that
+column sits. The `*B` variants are complete styles precisely because that trap kept catching this table.**
+Dividers on `borderRight` rather than `borderLeft` **so the LAST column can use the undivided variant and not draw
+an edge against the panel wall. Seven columns is past the point where a row can be tracked by alignment alone.**
+**#572 — the footer's own table renders NOTHING now.** The player cards on the same tab answer what it was there to
+answer, **and two tables of one dataset make the reader prove they agree. Deleted rather than left returning `null`
+— a component that renders nothing is an invitation to find a use for it.**
+The Priority Deal marker is **bare text in the same cell as the boxed ACTIVE badge, and that adjacency is exactly why
+it must NOT be boxed: two pills side by side read as a pair of equal states, when one is "acting now" and the other
+is "acts first next round".** Kept **byte-identical** to the ledger's, **so the same indicator looks the same in both
+places.**
+**The unfloated badge key was REFERENCED and never DEFINED**, so it evaluated to `undefined` and the badge rendered
+as unstyled body text — **indistinguishable from the corporation's name beside it. Nothing caught it because
+`styles` is typed `Record<string, React.CSSProperties>`, an index signature that accepts any key and so cannot tell
+a real style from a typo.** Colours come from `palette.ts` **so the ledger's copy of this badge and this one
+physically cannot drift apart again.** *(Same class as `appStyles.ts #619`.)*

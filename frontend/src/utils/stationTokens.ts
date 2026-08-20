@@ -2,63 +2,22 @@
 //
 // What a station token costs, and where one may go.
 //
-// ===================================================================
-//  DESIGN NOTE 0: THE PRICE ESCALATES; IT WAS A CONSTANT
-// ===================================================================
+// Design note #0: THE PRICE ESCALATES; IT WAS A CONSTANT. Every placement charged a flat $40 -- a stand-in
+// reached for when nothing else about tokens was wired. 1830's schedule is not flat, and the shape of it is
+// the whole decision: the HOME token is FREE (granted at float, not bought), the SECOND costs $40, and EVERY
+// ONE AFTER THAT costs $100. So a corporation's third token is two and a half times its second and the UI was
+// quoting $40 -- the difference between a placement a treasury can afford and one it cannot, presented as
+// though the choice were cheap. `RulesReference.tsx` already carried the correct schedule in prose: the rules
+// screen and the action button disagreed, and the rules screen was right.
 //
-// Every station placement charged `SANDBOX_NOMINAL_TOKEN_COST` -- a flat $40
-// reached for as a stand-in when nothing else about tokens was wired, and
-// never revisited. 1830's schedule is not flat, and the shape of it is the
-// whole decision a president makes about tokens:
+// Design note #1: the allowance is PER CORPORATION -- `station_token_limit` is the authority and this file
+// reads it rather than restating 1830's table (PRR/NYC/CPR 4, B&O/C&O/ERIE 3, NNH/B&M 2, home included).
 //
-//   THE HOME TOKEN IS FREE. It is granted automatically when the corporation
-//   floats, so it is not bought at all. $0.
-//   THE SECOND COSTS $40.
-//   EVERY ONE AFTER THAT COSTS $100.
+// Design note #2: what this enforces and what stays the contract's -- connectivity, a free slot, and
+// reservations, refused BEFORE a transaction is signed with a sentence saying which one bit. It does NOT model
+// the one-token-per-turn rule, the treasury check, or whose turn it is.
 //
-// So a corporation's third token is two and a half times its second, and the
-// UI was quoting $40 for it. That is not a rounding error in a readout -- it
-// is the difference between a placement a treasury can afford and one it
-// cannot, presented as though the choice were cheap.
-//
-// `RulesReference.tsx` already carried the correct schedule in prose ("The
-// next one placed costs $40 from the company treasury, and every one after
-// that costs $100"), which is worth noting: the rules screen and the action
-// button disagreed, and the rules screen was right.
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE ALLOWANCE IS PER CORPORATION, NOT A CONSTANT
-// ===================================================================
-//
-// `PublicCompanyState.station_token_limit` is the authority and this file
-// reads it rather than restating 1830's table. For reference, that table is
-// PRR/NYC/CPR 4, B&O/C&O/ERIE 3, NNH/B&M 2 -- home token included -- which
-// is why "how many can I still buy" is `limit - 1` slots deep and not a
-// fixed three everywhere.
-//
-// ===================================================================
-//  DESIGN NOTE 2: WHAT THIS ENFORCES, AND WHAT STAYS THE CONTRACT'S
-// ===================================================================
-//
-// `hexmap::execute_place_station_token` is the authority on placement and
-// rejects anything illegal that reaches it. What this adds is the same three
-// refusals BEFORE a transaction is signed, with a sentence saying which one
-// bit -- because a click that silently does nothing, or costs a signature to
-// learn "no", is the failure this file exists to prevent:
-//
-//   a) CONNECTIVITY. The city must be one the corporation's own track
-//      already reaches. Shares `reachableNetwork` with the tile-lay veil, so
-//      the two cannot disagree about where a network ends.
-//   b) A FREE SLOT. Every city has a fixed number of token circles; when
-//      they are full the city is closed to new tokens (and blocks other
-//      companies' trains from running THROUGH it).
-//   c) RESERVATIONS. A corporation's home city holds a slot for it from the
-//      start of the game. Until that company floats and places its home
-//      token, nobody else may take the reservation.
-//
-// It does NOT model the one-token-per-turn rule, the treasury check, or
-// whether it is this corporation's turn -- those are elsewhere in the UI or
-// on chain, and duplicating them here would be a second opinion.
+// Design notes #438/#453/#459/#463/#580: see `docs/ai_architecture/contract_economy.md`.
 
 import {
   archetypeForHex,
@@ -110,12 +69,10 @@ export interface StationTokenCompanyLike {
   station_token_limit: number;
 }
 
-/** The corporation's whole allowance, one entry per token -- design note #1.
- *
- *  ALL of them, placed and unplaced, because the row is a picture of the
- *  corporation's capacity rather than a to-do list: seeing that two of four
- *  are spent is the point, and a row that dropped the spent ones would shrink
- *  as the game went on and say nothing about what had been used. */
+/** The corporation's whole allowance, one entry per token -- design note #1. ALL of them, placed and unplaced,
+ *  because the row is a picture of the corporation's capacity rather than a to-do list: seeing that two of four
+ *  are spent is the point, and a row that dropped the spent ones would shrink as the game went on and say
+ *  nothing about what had been used. */
 export function stationTokenSlots(
   company: StationTokenCompanyLike | null | undefined,
 ): StationTokenSlot[] {
@@ -148,13 +105,10 @@ export function nextStationTokenCost(
 /* Placement legality -- design note #2                                */
 /* ------------------------------------------------------------------ */
 
-/** How many token circles this hex has in total, across all its cities.
- *
- *  A laid tile knows its own slot counts (`tileCitySlotCounts`, mirrored
- *  from `hexmap::tile_city_slot_counts`). A preprinted hex has one circle
- *  per printed city -- one for an ordinary city, two for an "OO" pair or
- *  New York. A hex with no city has none, which is what makes the "no city
- *  here" refusal fall out of the same lookup. */
+/** How many token circles this hex has in total, across all its cities. A laid tile knows its own slot counts
+ *  (mirrored from `hexmap::tile_city_slot_counts`); a preprinted hex has one circle per printed city -- one for
+ *  an ordinary city, two for an "OO" pair or New York. A hex with no city has none, which is what makes the "no
+ *  city here" refusal fall out of the same lookup. */
 export function stationSlotCount(mapGrid: MapGridResponse, q: number, r: number): number {
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laid) {
@@ -225,11 +179,8 @@ export function evaluateStationPlacement(
     };
   }
 
-  // ---- Slot occupancy. ----
-  //
-  // A city closed by other companies' tokens is the single most consequential
-  // board state in 1830 -- it blocks their trains from running THROUGH -- so
-  // the refusal names it rather than saying "illegal".
+  // Slot occupancy. A city closed by other companies' tokens is the single most consequential board state in
+  // 1830 -- it blocks their trains from running THROUGH -- so the refusal names it rather than saying "illegal".
   const occupied = allCompanies.filter((entry) => here(entry.station_token_hexes)).length;
   if (occupied >= slots) {
     return {
@@ -241,20 +192,12 @@ export function evaluateStationPlacement(
     };
   }
 
-  /* ---- Reservations. ----
-   *
-   * Every corporation's home city holds a slot for it from the start of the
-   * game, whether or not it has floated. `STATION_HOME_HEXES` is that table.
-   *
-   * THE RESERVATION IS RELEASED BY USE, not by floating: a company that has
-   * floated AND placed its home token is occupying the slot rather than
-   * reserving it, and its token is already counted above. So the test is
-   * "does this hex reserve a slot for somebody who has not taken it yet",
-   * and each such reservation consumes one of the remaining slots.
-   *
-   * That distinction matters on the shared OO hexes: ERIE's home is a
-   * two-city hex, so before ERIE floats another corporation may still take
-   * the OTHER circle -- reserving both would over-block it. */
+  /* Reservations. Every corporation's home city holds a slot for it from the start of the game, floated or not.
+     THE RESERVATION IS RELEASED BY USE, not by floating: a company that has floated AND placed its home token is
+     occupying the slot rather than reserving it, and its token is already counted above. So the test is "does
+     this hex reserve a slot for somebody who has not taken it yet".
+     That distinction matters on the shared OO hexes: ERIE's home is a two-city hex, so before ERIE floats another
+     corporation may still take the OTHER circle -- reserving both would over-block it. */
   const unclaimedReservations = STATION_HOME_HEXES.filter((home) => {
     if (home.q !== q || home.r !== r) return false;
     if (home.companyId === company.company_id) return false;
@@ -276,17 +219,11 @@ export function evaluateStationPlacement(
     };
   }
 
-  /* ---- Connectivity. ----
-   *
-   * Last, deliberately. The three refusals above are properties of the CITY
-   * and are true for everybody; this one is about the acting corporation, and
-   * a player who has been told "that city is full" does not also need to be
-   * told their track does not reach it.
-   *
-   * A corporation with no token yet has no network to measure, and its first
-   * placement is its home city -- which the contract grants at float rather
-   * than asking for. Rather than guess, that case is allowed through and left
-   * to the chain. */
+  /* Connectivity, LAST and deliberately. The three refusals above are properties of the CITY and are true for
+     everybody; this one is about the acting corporation, and a player who has been told "that city is full" does
+     not also need to be told their track does not reach it.
+     A corporation with no token yet has no network to measure, and its first placement is its home city -- which
+     the contract grants at float rather than asking for. Rather than guess, that case is allowed through. */
   if (company.station_token_hexes.length > 0) {
     const network = reachableNetwork(mapGrid, company.station_token_hexes);
     if (!network.has(hexKey(q, r))) {
@@ -322,31 +259,17 @@ export function placeableStationHexes(input: {
   return out;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 438: WHY THIS CORPORATION CANNOT PLACE A STATION
- * ==================================================================
- *
- * `null` when it can. The three blocking conditions are checked in the
- * order a player discovers them -- do I have a token, can I pay for it, is
- * there anywhere to put it -- so the reason reported is the first that
- * actually stops them rather than whichever is cheapest to test.
- *
- * THE TOPOLOGICAL CHECK IS THE REAL ONE, and it reuses
- * `placeableStationHexes`, which is the same set the targeting veil lights
- * (App design note #240). A cheaper approximation -- "does the network
- * touch any city" -- would disagree with the veil about reservations,
- * occupied slots and OO tiles, and the failure would be the worst kind: a
- * step skipped for a corporation the map would have let place, or a player
- * held on a step whose veil lights nothing.
- *
- * IT IS THE EXPENSIVE ONE TOO -- it walks every board hex -- so it runs
- * last, after the two cheap facts have had their chance to answer.
- *
- * PHRASED AS A REASON, NOT A BOOLEAN. The caller puts this in an
- * "Auto-Skip — ..." log line, and the three cases call for different
- * responses: an exhausted allowance is permanent, a short treasury is
- * fixable next turn, and no reachable slot is a fact about the map that a
- * tile lay might change. A bare `true` would collapse them. */
+/* Design note #438: WHY THIS CORPORATION CANNOT PLACE A STATION. `null` when it can. The three blocking
+   conditions are checked in the order a player discovers them -- do I have a token, can I pay for it, is there
+   anywhere to put it -- so the reason reported is the first that actually stops them.
+   THE TOPOLOGICAL CHECK IS THE REAL ONE, and it reuses the same set the targeting veil lights. A cheaper
+   approximation -- "does the network touch any city" -- would disagree with the veil about reservations,
+   occupied slots and OO tiles, and the failure would be the worst kind: a step skipped for a corporation the
+   map would have let place, or a player held on a step whose veil lights nothing.
+   IT IS THE EXPENSIVE ONE TOO -- it walks every board hex -- so it runs last.
+   PHRASED AS A REASON, NOT A BOOLEAN: an exhausted allowance is permanent, a short treasury is fixable next
+   turn, and no reachable slot is a fact about the map that a tile lay might change. A bare `true` would
+   collapse them. */
 export function stationPlacementBlockReason(input: {
   mapGrid: MapGridResponse;
   company: (StationPlacementCompany & { treasury: string }) | null | undefined;
@@ -376,43 +299,19 @@ export function stationPlacementBlockReason(input: {
   return null;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 453: WHICH CITY NODE THE POINTER LANDED ON
- * ==================================================================
- *
- * A hex can carry more than one city -- New York's #54/#62, every OO tile --
- * and `PlaceStationToken.city_index` exists precisely so a player can say
- * which. Nothing was answering the question, so every placement omitted the
- * field and the contract fell back to "lowest-indexed city with a free
- * slot": always legal, and on a two-city hex a coin toss against what the
- * player actually clicked.
- *
- * HOW IT DECIDES. Each city's slot points are already computed for drawing
- * (`tileCitySlotPoints` -- the same geometry that positions the tokens), so
- * a city's position is the centroid of its own slots. The click resolves to
- * whichever centroid is nearest. That reuses the drawing geometry rather
- * than describing the tile a second time, which is what keeps "where the
- * token appears" and "which city you clicked" from drifting apart.
- *
- * NEAREST, WITH NO RADIUS. A click has already been established as landing
- * inside this hex before this runs, and every point inside a hex is nearer
- * one of its cities than the other. Adding a hit radius would create dead
- * zones between the cities where a click inside a legal hex resolved to
- * nothing -- a worse answer than the nearest city, and one the player
- * cannot see the boundary of.
- *
- * `null` FOR "COULD NOT TELL", never a defaulted `0`:
- *
- *   - no tile laid. An untiled preprinted double city (New York before it
- *     is tiled) has no per-city geometry to measure against. Guessing here
- *     would send a confident wrong index; omitting the field lets the
- *     contract apply its documented fallback.
- *   - a tile this catalog does not know, or one with no cities at all.
- *
- * A ONE-CITY TILE SHORT-CIRCUITS TO `0` without measuring. Its index is not
- * a guess -- there is only one -- and the arithmetic would be wasted on the
- * overwhelming majority of hexes.
- */
+/* Design note #453: WHICH CITY NODE THE POINTER LANDED ON. A hex can carry more than one city, and
+   `PlaceStationToken.city_index` exists precisely so a player can say which -- but nothing was answering the
+   question, so every placement omitted the field and the contract fell back to "lowest-indexed city with a free
+   slot": always legal, and on a two-city hex a coin toss against what the player actually clicked.
+   HOW IT DECIDES: each city's slot points are already computed for drawing, so a city's position is the
+   centroid of its own slots and the click resolves to the nearest -- which reuses the drawing geometry rather
+   than describing the tile a second time.
+   NEAREST, WITH NO RADIUS: a click has already been established as landing inside this hex, and every point
+   inside a hex is nearer one of its cities than the other. A hit radius would create dead zones between the
+   cities where a click inside a legal hex resolved to nothing.
+   `null` FOR "COULD NOT TELL", never a defaulted `0` -- an untiled preprinted double city has no per-city
+   geometry, and guessing would send a confident wrong index. A ONE-CITY TILE SHORT-CIRCUITS TO `0` without
+   measuring: its index is not a guess, there is only one. */
 export function cityIndexAtPoint(
   mapGrid: MapGridResponse,
   q: number,
@@ -424,34 +323,17 @@ export function cityIndexAtPoint(
   const center = axialToPixel(q, r, hexSize);
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
 
-  /* ==================================================================
-   *  DESIGN NOTE 459: A PREPRINTED OO HEX IS STILL TWO CITIES
-   * ==================================================================
-   *
-   * REPORTED: clicking the upper-right city on the Erie's home tile places
-   * the token on the lower-left one.
-   *
-   * This function bailed to `null` for any hex with no LAID tile, on the
-   * reasoning that an untiled hex has no per-city geometry to measure. That
-   * is true of an ordinary blank hex and false of the four preprinted OO
-   * hexes -- E5, D10, E11 and H18 -- which arrive with two station circles
-   * already printed on them. E11 is the Erie's home, so the one hex a new
-   * president is guaranteed to click was in the gap.
-   *
-   * The consequence was silent and looked like a targeting bug rather than
-   * a missing branch: `null` means "I cannot tell", the caller correctly
-   * omits `city_index`, and the contract applies its documented fallback of
-   * the lowest-indexed free city -- which is 0. So every click on either
-   * circle resolved to city 0, and `stationMarkerPoint`'s own OO branch
-   * then drew that token at the BOTTOM-LEFT circle. Two independently
-   * reasonable defaults compounding into "the upper-right node does not
-   * work".
-   *
-   * `twoNodePositions` is the tuple the board actually draws those two
-   * circles from (`drawOOCityMarkers` reads the same one), so hit-testing
-   * against it cannot disagree with what the player sees. Index 0 is the
-   * north-east circle and index 1 the south-west, which is the order the
-   * geometry module documents and the order the city indices follow. */
+  /* Design note #459: A PREPRINTED OO HEX IS STILL TWO CITIES. This bailed to `null` for any hex with no LAID
+     tile -- true of an ordinary blank hex and false of the four preprinted OO hexes (E5, D10, E11, H18), which
+     arrive with two station circles already printed. E11 is the Erie's home, so the one hex a new president is
+     guaranteed to click was in the gap.
+     The consequence was silent and looked like a targeting bug rather than a missing branch: `null` means "I
+     cannot tell", the caller correctly omits `city_index`, and the contract applies its fallback of the
+     lowest-indexed free city -- which is 0. So every click on either circle resolved to city 0, and
+     `stationMarkerPoint`'s OO branch drew that token at the BOTTOM-LEFT circle. Two independently reasonable
+     defaults compounding into "the upper-right node does not work".
+     `twoNodePositions` is the tuple the board actually draws those circles from, so hit-testing against it cannot
+     disagree with what the player sees. Index 0 is the north-east circle, index 1 the south-west. */
   if (!laid) {
     if (archetypeForHex(mapGrid, q, r) !== "DoubleCity") return null;
     const nodes = twoNodePositions(center, hexSize);
@@ -479,31 +361,12 @@ export function cityIndexAtPoint(
   return best?.index ?? null;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 463: THE NODES A CLICK CAN LAND ON
- * ==================================================================
- *
- * Every city node on a hex, as points in the hex layer's own coordinate
- * space, in CITY INDEX ORDER.
- *
- * REPORTED: valid city markers do not glow, so the specific node that can
- * be clicked is not obvious -- NNH's home is the case named, and every
- * two-city hex has the same problem.
- *
- * WHY THIS SHARES `cityIndexAtPoint`'S GEOMETRY, and why that is the whole
- * point rather than mere tidiness. A glow is a promise about what a click
- * will do. If the glow were drawn from one source of node positions and the
- * hit-test resolved against another, the two could disagree -- and the
- * failure would be the cruellest kind: a marker that pulses invitingly and
- * then places the token somewhere else. Both now read the same two
- * branches, in the same order:
- *
- *   LAID TILE      `tileCitySlotPoints` per city, centroid per city.
- *   PREPRINTED OO  `twoNodePositions`, index 0 north-east, 1 south-west.
- *
- * `[]` for a hex with no cities, which draws nothing -- correct, and the
- * same silence the hit-test's `null` produces.
- */
+/* Design note #463: THE NODES A CLICK CAN LAND ON -- every city node on a hex, in CITY INDEX ORDER.
+   WHY THIS SHARES `cityIndexAtPoint`'S GEOMETRY, and why that is the whole point rather than mere tidiness: a
+   glow is a promise about what a click will do. If the glow were drawn from one source of node positions and
+   the hit-test resolved against another, the failure would be the cruellest kind -- a marker that pulses
+   invitingly and then places the token somewhere else. Both read the same two branches, in the same order.
+   `[]` for a hex with no cities, which draws nothing -- the same silence the hit-test's `null` produces. */
 export function cityNodePoints(
   mapGrid: MapGridResponse,
   q: number,
@@ -514,37 +377,17 @@ export function cityNodePoints(
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
 
   if (!laid) {
-    /* ==================================================================
-     *  DESIGN NOTE 580: THE OTHER HALF OF DESIGN NOTE #221
-     * ==================================================================
-     *
-     * REPORTED: the placement ring sits in the middle of Baltimore's hex
-     * rather than on its city circle, and is slightly off both of New
-     * York's.
-     *
-     * Design note #221 fixed exactly this, for `stationMarkerPoint`, and
-     * described the cause precisely: preprinted hexes used to draw their
-     * city at the hex CENTRE, then began rendering from authored artwork --
-     * "Cleveland's circle is half a hex radius south of centre, ...
-     * Baltimore's south-east" -- and any function still returning `center`
-     * went on pointing at empty tile fill beside the circle.
-     *
-     * THIS FUNCTION WAS NEVER TOLD. It is the other answer to "where are
-     * this hex's cities", used by the pulsing placement rings and by the
-     * click hit-test, and it kept both of the guesses #221 removed: `center`
-     * for a single city, and `twoNodePositions`' fixed NE/SW diagonal for
-     * two. That diagonal is why New York's rings are close but wrong --
-     * `hexCanvasPrimitives` already records that its stubs "come off edges 1
-     * and 4, so the authored endpoints and the diagonal happen to agree in
-     * DIRECTION while disagreeing in DISTANCE."
-     *
-     * So it reads the artwork, from the same tables `stationMarkerPoint`
-     * reads. Two functions answering one question, one of them fixed --
-     * the pattern this codebase keeps finding, and the reason the fix is
-     * to consult the same source rather than to copy the same maths.
-     *
-     * THE FALLBACKS SURVIVE for a hex with no authored artwork at all,
-     * which is the only case the old guesses were ever right about. */
+    /* Design note #580: THE OTHER HALF OF DESIGN NOTE #221. That note fixed `stationMarkerPoint` and described the
+       cause precisely -- preprinted hexes used to draw their city at the hex CENTRE and then began rendering from
+       authored artwork, so any function still returning `center` went on pointing at empty tile fill.
+       THIS FUNCTION WAS NEVER TOLD. It is the other answer to "where are this hex's cities", used by the pulsing
+       placement rings and the click hit-test, and it kept both of the guesses #221 removed: `center` for a single
+       city, and `twoNodePositions`' fixed NE/SW diagonal for two. That diagonal is why New York's rings are close
+       but wrong -- the authored endpoints and the diagonal agree in DIRECTION while disagreeing in DISTANCE.
+       So it reads the artwork, from the same tables `stationMarkerPoint` reads. Two functions answering one
+       question, one of them fixed -- the pattern this codebase keeps finding, and the reason the fix is to consult
+       the same source rather than to copy the same maths.
+       THE FALLBACKS SURVIVE for a hex with no authored artwork at all, the only case the old guesses were right. */
     const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
     const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
     const label = hex?.label ?? landmark?.label;

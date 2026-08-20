@@ -1,58 +1,27 @@
 // frontend/src/utils/gameSetup.ts
 //
-// What a player count decides: starting cash, and the certificate limit.
+// What a player count decides: starting cash, and the certificate limit -- plus the dealer that writes them
+// and the sandbox-only event types that carry a room's shared decisions.
 //
-// ===================================================================
-//  DESIGN NOTE 526: THE THIRD COPY THAT DID NOT GET WRITTEN
-// ===================================================================
+// Design note #526: THE THIRD COPY THAT DID NOT GET WRITTEN. 1830 sets two numbers from the size of the
+// table and this codebase already held each of them twice, one a hand-kept mirror whose own doc comment said
+// so -- a correctness requirement enforced by a sentence. This is the single home; `gameState.ts` delegates
+// and `RulesReference` renders from here.
 //
-// 1830 sets two numbers from the size of the table, and this codebase
-// already held each of them twice:
+// Design note #526a: the limits are APPLIED, not just reported -- and `initialiseSandboxGame` is a pure
+// function of `(state, players)`, because every client runs it on the same setup action and must arrive at
+// byte-identical state.
+// Design note #526b: the turn order is randomised BY THE HOST and travels in the payload, because randomness
+// is the one thing an event-sourced log cannot replay.
 //
-//   `RulesReference.tsx`  `CERT_LIMIT_BY_PLAYERS`, `STARTING_CASH_BY_PLAYERS`
-//   `utils/gameState.ts`  `CERT_LIMIT_BY_PLAYER_COUNT`
-//
-// The second is a hand-kept mirror and says so in its own doc comment --
-// "Mirrors `RulesReference.tsx`'s `CERT_LIMIT_BY_PLAYERS`". That is a
-// correctness requirement enforced by a sentence, which is precisely the
-// arrangement TD-1 catalogued for the corporation palette and design note
-// #507 for the ownership column: two places encoding one fact, one of them
-// updated.
-//
-// Multiplayer initialisation needs both tables, so the choice was a third
-// copy or a single home. This is the single home. `gameState.ts` delegates
-// and `RulesReference` renders from here, so the rules screen, the
-// certificate counter and the game that gets dealt cannot disagree about
-// what a five-player game is.
-//
-// ===================================================================
-//  DESIGN NOTE 526a: WHY THE LIMITS ARE APPLIED, NOT JUST REPORTED
-// ===================================================================
-//
-// `certificateLimit` has always been a READOUT -- it tells the ledger what
-// ceiling to print. Nothing dealt a game, because the sandbox opened from a
-// fixture with a fixed roster.
-//
-// A room with a variable number of humans cannot do that: four players who
-// sat down expecting $600 each must actually hold $600, and the bank must
-// hold what it has left. So `initialiseSandboxGame` below WRITES the
-// numbers, and it is deliberately a pure function of `(state, players)` --
-// every client runs it on the same setup action and must arrive at
-// byte-identical state, which is only guaranteed if nothing in it reads a
-// clock, a random source or anything local.
-//
-// THE TURN ORDER IS RANDOMISED BY THE HOST, NOT HERE, and that is the same
-// argument from the other side: a shuffle inside this function would give
-// every client a different order from the same input. The host rolls once,
-// puts the result in the payload, and this function honours it.
+// Design notes #530/#538/#542/#546/#550/#573/#591/#594/#611/#662:
+// see `docs/ai_architecture/sandbox_reducer.md`.
 
 import type { GameplayExecuteMsg } from "./sessionKey";
-/* TYPE-ONLY, and deliberately: `gameState.ts` imports `certLimitForPlayers`
-   from here, so a value import would be a real cycle. A type import is
-   erased at compile time, so this direction costs nothing at runtime and
-   keeps `withEmptyRoster` exact about the shape it returns -- a structural
-   generic was the first attempt and it widened the corporation and private
-   arrays to `Record<string, unknown>`, which no caller could then use. */
+/* TYPE-ONLY, and deliberately: `gameState.ts` imports from here, so a value import would be a real cycle. A
+   type import is erased at compile time, and it keeps the roster stripper exact about the shape it returns --
+   a structural generic was the first attempt and it widened the corporation and private arrays to
+   `Record<string, unknown>`, which no caller could then use. */
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 
 /** The printed 1830 tables. Sourced from the physical rulebook's own setup
@@ -107,12 +76,9 @@ export interface SetupPlayer {
   color?: string;
 }
 
-/** What the host publishes when it starts the game.
- *
- *  `players` IS ALREADY IN TURN ORDER. See design note #526a: the shuffle
- *  happens once, on the host, and travels in the payload -- so every client
- *  deals the same table rather than each shuffling the same list
- *  differently. */
+/** What the host publishes when it starts the game. `players` IS ALREADY IN TURN ORDER (design note #526a):
+ *  the shuffle happens once, on the host, and travels in the payload -- so every client deals the same table
+ *  rather than each shuffling the same list differently. */
 export interface SandboxSetup {
   players: readonly SetupPlayer[];
 }
@@ -129,12 +95,9 @@ export interface DealtGame {
   startingCash: number;
 }
 
-/** Deals a game for exactly these players, or `null` when the count is one
- *  1830 does not define.
- *
- *  PURE, and the purity is load-bearing rather than stylistic: every client
- *  runs this on the same setup action and the results must be identical, so
- *  it reads no clock, no random source and nothing local. */
+/** Deals a game for exactly these players, or `null` when the count is one 1830 does not define.
+ *  PURE, and the purity is load-bearing rather than stylistic: every client runs this on the same setup
+ *  action and the results must be identical, so it reads no clock, no random source and nothing local. */
 export function dealSandboxGame(setup: SandboxSetup): DealtGame | null {
   const count = setup.players.length;
   if (!isLegalPlayerCount(count)) return null;
@@ -158,22 +121,14 @@ export function dealSandboxGame(setup: SandboxSetup): DealtGame | null {
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 526b: A DETERMINISTIC SHUFFLE, RUN ONCE
- * ==================================================================
- *
- * Turn order is random in 1830, and randomness is the one thing an
- * event-sourced log cannot replay. So the host shuffles ONCE, before the
- * action is written, and the order travels as data.
- *
- * This lives here rather than in the host's click handler because the
- * pairing matters: the function that deals a game and the function that
- * decides who deals first are the same rule, and separating them is how a
- * later pass "helpfully" reshuffles on replay.
- *
- * A PLAIN FISHER-YATES over `Math.random`. There is no need for a seeded
- * generator: the result is recorded, not reproduced.
- */
+/* Design note #526b: A DETERMINISTIC SHUFFLE, RUN ONCE. Turn order is random in 1830, and randomness is the
+   one thing an event-sourced log cannot replay -- so the host shuffles ONCE, before the action is written,
+   and the order travels as data.
+   This lives here rather than in the host's click handler because the pairing matters: the function that
+   deals a game and the function that decides who deals first are the same rule, and separating them is how a
+   later pass "helpfully" reshuffles on replay.
+   A plain Fisher-Yates over `Math.random` -- no seeded generator is needed, because the result is recorded,
+   not reproduced. */
 export function shuffleForTurnOrder(players: readonly SetupPlayer[]): SetupPlayer[] {
   const out = [...players];
   for (let i = out.length - 1; i > 0; i -= 1) {
@@ -183,23 +138,13 @@ export function shuffleForTurnOrder(players: readonly SetupPlayer[]): SetupPlaye
   return out;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 530: THE SETUP ACTION IS SHAPED LIKE A MESSAGE
- * ==================================================================
- *
- * `{ SetupGame: { ... } }` -- a single-key object, exactly like every
- * `GameplayExecuteMsg` variant. That is not cosmetic: the whole dispatch
- * pipeline discriminates with `"LayTile" in msg`, so a setup action wearing
- * the same shape flows through `runGameplayAction`, the log, the replay and
- * the intercept without any of them learning a second convention.
- *
- * IT IS NOT A `GameplayExecuteMsg`, and must never become one. That type is
- * the contract's own message set -- `sessionKey.ts` maintains it as the
- * authz allow-list, and a variant the chain has never heard of appearing in
- * it would be a lie about what the wallet may sign. This is a SANDBOX-ONLY
- * event that shares a shape, which is why the union below lives here and the
- * two halves stay separately named.
- */
+/* Design note #530: THE SETUP ACTION IS SHAPED LIKE A MESSAGE. A single-key object, exactly like every
+   `GameplayExecuteMsg` variant -- not cosmetic: the dispatch pipeline discriminates with `"LayTile" in msg`,
+   so a setup action wearing the same shape flows through `runGameplayAction`, the log, the replay and the
+   intercept without any of them learning a second convention.
+   IT IS NOT A `GameplayExecuteMsg`, and must never become one. That type is the contract's own message set --
+   `sessionKey.ts` maintains it as the authz allow-list, and a variant the chain has never heard of appearing
+   in it would be a lie about what the wallet may sign. */
 export interface SetupGameMsg {
   SetupGame: {
     /** Already shuffled, by the host, once -- design note #526b. */
@@ -207,73 +152,30 @@ export interface SetupGameMsg {
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 546: CLOSING THE AUCTION IS A TABLE DECISION
- * ==================================================================
- *
- * `handleProceedToStockRound` used to write `current_round_type` straight
- * into local state. In solo sandbox that is exactly right -- there is one
- * client and it owns its own round cursor.
- *
- * In a room it advanced ONE BROWSER. The others stayed in the auction, and
- * the divergence was not merely cosmetic: every later action replays into
- * whatever round the receiving client believes it is in, so two clients
- * holding different `current_round_type` values are two clients running two
- * different reducers over one log. That is the deepest kind of desync
- * available here, and it would surface later as unexplainable state rather
- * than as a visible failure at the moment it happened.
- *
- * The fix follows `SetupGame` (design note #526b) exactly: the decision goes
- * into the log, every client replays it, and the round turns over for the
- * whole table at once.
- *
- * IDEMPOTENT ON PURPOSE, which is what lets every client offer the button
- * rather than electing one owner. Applying it twice sets the same round type
- * to the same value; a second copy in the log is noise, not a bug. The
- * alternative -- nominating one player to close the auction -- strands the
- * table whenever that player walks away, and the auction's end has no
- * decision in it worth protecting.
- */
+/* Design note #546: CLOSING THE AUCTION IS A TABLE DECISION. Writing `current_round_type` straight into
+   local state is exactly right in solo sandbox and advances ONE BROWSER in a room -- and the divergence is
+   not cosmetic: every later action replays into whatever round the receiving client believes it is in, so
+   two clients holding different values are two clients running two different reducers over one log. That is
+   the deepest desync available here, and it surfaces later as unexplainable state rather than as a visible
+   failure at the moment it happened.
+   IDEMPOTENT ON PURPOSE, which is what lets every client offer the button rather than electing one owner. A
+   second copy in the log is noise, not a bug; nominating one player strands the table when they walk away. */
 export interface OpenStockRoundMsg {
   OpenStockRound: Record<string, never>;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 550: EVERY DECISION GOES IN THE LOG, OR IT IS NOT SHARED
- * ==================================================================
- *
- * REPORTED: Player 1 won the B&O and set its par. Player 1 could see
- * themselves as president. Player 2 could not -- and then tried to buy the
- * same president's certificate.
- *
- * `handleConfirmBoPar` wrote the presidency, the par and the market mark
- * straight into local state. Its own design note (#461/#468) said so plainly
- * and treated it as a curiosity: "a par set here does not pass through
- * `runGameplayAction`, so the diff that normally creates a market mark never
- * sees it". True, and in a solo sandbox harmless. In a room it means the one
- * client that answered the prompt is the only client that ever learns the
- * answer.
- *
- * `commitFreeStationPlacement` had the identical shape, and would have been
- * reported next: a home station is a genuine choice about a shared board.
- *
- * THIS IS THE THIRD TIME. `handleProceedToStockRound` was the same bug
- * (design note #546) and was fixed one pass earlier without anyone checking
- * for siblings -- so the rule is worth stating as a rule rather than as
- * three fixes: IN A ROOM, ANY WRITE TO SANDBOX STATE THAT DOES NOT GO
- * THROUGH `runGameplayAction` IS A WRITE ONLY ONE PLAYER SEES. There is no
- * warning, no error and no visible failure at the moment it happens; the
- * clients simply stop being the same game, and design note #549 explains why
- * the damage then compounds silently rather than staying local to the thing
- * that was skipped.
- *
- * (`payPrivateRevenue` is deliberately NOT in this list. It is not a
- * decision -- it is a derived payout fired by the round transition on every
- * client from state they all share, so each computes the same result
- * independently. It stays local, and the distinction is the test to apply to
- * the next one of these: a CHOICE must be logged, a CONSEQUENCE need not
- * be.)
- */
+/* Design note #550: EVERY DECISION GOES IN THE LOG, OR IT IS NOT SHARED. Reported: P1 won the B&O and set
+   its par, P1 could see themselves as president, P2 could not -- and then tried to buy the same certificate.
+   The handler wrote the presidency, the par and the market mark straight into local state, and its own note
+   (#461/#468) said so plainly and treated it as a curiosity. In a room it means the one client that answered
+   the prompt is the only client that ever learns the answer. The free-station handler had the identical
+   shape and would have been reported next.
+   THIS IS THE THIRD TIME -- #546 was the same bug, fixed one pass earlier without anyone checking for
+   siblings. So the rule, stated as a rule: IN A ROOM, ANY WRITE TO SANDBOX STATE THAT DOES NOT GO THROUGH
+   `runGameplayAction` IS A WRITE ONLY ONE PLAYER SEES. No warning, no error, no visible failure -- the
+   clients simply stop being the same game, and #549 explains why the damage then compounds silently.
+   (`payPrivateRevenue` is deliberately not in this list: it is a derived payout fired by the round
+   transition on every client from state they all share. A CHOICE must be logged, a CONSEQUENCE need not be.) */
 export interface SetBoParMsg {
   SetBoPar: {
     /** The winning player, carried explicitly rather than inferred from the
@@ -285,51 +187,21 @@ export interface SetBoParMsg {
   };
 }
 
-/** Design note #573: the Mohawk & Hudson's and Camden & Amboy's exchanges.
- *  Sandbox-only, and logged because it is a CHOICE (design note #550) --
- *  a share arriving in one browser only is the same class of bug as the B&O
- *  presidency was.
- *
- *  The RESOLVED grant travels, not the request. Legality is decided once, on
- *  the acting client, against the state it can see; replaying the decision
- *  rather than re-deciding it means every client applies the same result
- *  even if their view of the IPO differs by a share -- the property design
- *  note #549 is about. */
-/* ==================================================================
- *  DESIGN NOTE 591: UNDO IS AN EVENT, NOT A REWIND
- * ==================================================================
- *
- * REPORTED: Undo in the Stock Round does nothing -- "Nothing to undo, this
- * is the start of the round" -- and "if a player accidentally buys a share
- * and needs to undo their turn, there's no way to do it."
- *
- * It could not have worked, and the reason is structural rather than a bug.
- * Undo was a per-client SNAPSHOT STACK (design note #178): every dispatch
- * pushed the outgoing state, and Undo popped it. In a solo sandbox that is
- * exact and free. In a room it is incoherent -- each browser has its own
- * stack, holding only the actions IT dispatched, so popping would rewind one
- * screen and leave the others playing a game that had not been undone. The
- * stack also bypasses the log entirely, and the log is the game (design note
- * #522).
- *
- * SO UNDO APPENDS. `RevertTo { index }` means "every action from `index`
- * onward did not happen". Every client replays it, drops those actions, and
- * rebuilds from the seed -- so the table undoes together, a player who
- * rejoins later sees the corrected history, and the reverted actions are
- * still ON the log as a record of what was taken back.
- *
- * NOTHING IS DELETED, which is the property that makes this safe. Firestore
- * documents are never removed; the log grows forward even when the game goes
- * backward. A revert that was itself a mistake can therefore be reverted --
- * and, more importantly, two clients cannot disagree about what was undone,
- * because the undo is as much a logged fact as the buy it cancels.
- *
- * REBUILDING IS CHEAP AND IS THE POINT. Replaying a few hundred actions from
- * the fixture costs milliseconds and reaches EXACTLY the state the log
- * describes. The alternative -- inverting each message -- needs one correct
- * inverse per message type and gets subtly wrong for anything that touched
- * the market, the era or a cascade. A replay has no inverses to get wrong.
- */
+/** Design note #573: the Mohawk & Hudson's and Camden & Amboy's exchanges. Sandbox-only, and logged because
+ *  it is a CHOICE (#550) -- a share arriving in one browser only is the same class of bug as the B&O
+ *  presidency was. The RESOLVED grant travels, not the request: legality is decided once, on the acting
+ *  client, so every client applies the same result even if their view of the IPO differs by a share.
+ *  Design note #591: UNDO IS AN EVENT, NOT A REWIND. Undo was a per-client SNAPSHOT STACK (#178) -- exact and
+ *  free in a solo sandbox, incoherent in a room, where each browser holds only the actions IT dispatched, so
+ *  popping would rewind one screen and leave the others playing a game that had not been undone. The stack
+ *  also bypasses the log entirely, and the log is the game (#522).
+ *  SO UNDO APPENDS. `RevertTo { index }` means "every action from `index` onward did not happen"; every client
+ *  replays it, drops those actions and rebuilds from the seed.
+ *  NOTHING IS DELETED, which is the property that makes this safe -- the log grows forward even when the game
+ *  goes backward, so a bad revert can itself be reverted and two clients cannot disagree about what was undone.
+ *  REBUILDING IS CHEAP AND IS THE POINT: a replay reaches EXACTLY the state the log describes, where inverting
+ *  each message needs one correct inverse per type and gets subtly wrong for anything that touched the market,
+ *  the era or a cascade. */
 export interface RevertToMsg {
   RevertTo: {
     /** The first log index that no longer counts. Everything from here
@@ -377,36 +249,17 @@ export interface PlaceHomeStationMsg {
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 662: AN OFFER NOBODY ELSE COULD SEE
- * ==================================================================
- *
- * REPORTED: "P1 sent an offer to buy P2's Private Company, but the decision
- * modal appeared on P1's screen and allowed them to accept it."
- *
- * Both halves were the same cause. The proposal was `privateProposal`, React
- * state in `App.tsx`, and design note #205 says exactly why: the local
- * stand-in exists "for exactly ONE deployment: the offline sandbox, which
- * has no chain to record an offer in and no second client to show it to."
- *
- * THAT PREMISE EXPIRED. Design note #578 removed solo mode and the sandbox
- * became the multiplayer mode; #536 settled that "a room is not a hotseat".
- * There IS a second client now. The offer stayed on the buyer's machine, so
- * the seller was never asked -- and `viewerIsOwner={sandbox || ...}` forced
- * the consent check open for the same expired reason, which is why the buyer
- * could answer their own offer.
- *
- * TWO MESSAGES, not one. A proposal and its answer are separate events with
- * different authors, and collapsing them into a single "sale" message would
- * lose the interval in which the offer is pending -- which is the only part
- * of this flow the other player experiences.
- *
- * SANDBOX-ONLY, alongside `ExchangePrivate` and for the same reason: the
- * contract's `BuyPrivateCompany` is single-party. It reads `private.owner`
- * and never asks them (`PrivateTradePanel` design note #0). Until the
- * contract grows an accept step, consent is a rule this frontend keeps by
- * itself, and a rule kept by one client is not kept at all.
- */
+/* Design note #662: AN OFFER NOBODY ELSE COULD SEE. The proposal was React state in `App.tsx`, and #205 says
+   exactly why: the local stand-in existed "for exactly ONE deployment: the offline sandbox, which has no
+   chain to record an offer in and no second client to show it to."
+   THAT PREMISE EXPIRED. #578 removed solo mode and #536 settled that "a room is not a hotseat". There IS a
+   second client now -- so the seller was never asked, and the sandbox override forced the consent check open
+   for the same expired reason, which is why the buyer could answer their own offer.
+   TWO MESSAGES, not one: a proposal and its answer are separate events with different authors, and collapsing
+   them would lose the interval in which the offer is pending -- the only part of this flow the other player
+   experiences.
+   SANDBOX-ONLY, because the contract's `BuyPrivateCompany` is single-party. Until it grows an accept step,
+   consent is a rule this frontend keeps by itself, and a rule kept by one client is not kept at all. */
 export interface ProposePrivatePurchaseMsg {
   ProposePrivatePurchase: {
     private_id: number;
@@ -512,33 +365,16 @@ export function isSandboxOnlyMsg(
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 538: A ROOM NEVER BOOTS THE FIXTURE'S ROSTER
- * ==================================================================
- *
- * Two passes tried to make `SetupGame` OVERWRITE the four mock players, and
- * both failed in the same way: the fixture is the initial value, so any path
- * where the setup event does not land -- dropped, late, replayed against a
- * re-seed, mis-ordered -- leaves four strangers on the board, and leaves
- * them silently. The game looks dealt. It is just dealt for people who are
- * not in the room.
- *
- * Overwriting was the wrong shape of fix. A room's roster is not "the
- * fixture, corrected"; it is "nothing, until the log says otherwise". So the
- * fixture roster is never loaded in the first place, and this strips it.
- *
- * THE FAILURE MODE IS NOW VISIBLE. If setup does not arrive, the room shows
- * ZERO players -- obviously broken, in the direction that gets reported --
- * rather than four plausible ones nobody notices are wrong. That asymmetry
- * is the whole point: this codebase has hit the "wrong but plausible" class
- * repeatedly (design notes #492, #514, #537a), and an empty table cannot be
- * mistaken for a correct one.
- *
- * THE BOARD SURVIVES. Corporations, privates, the map and the market are
- * what a room plays WITH -- only the links to players are cut. The same cuts
- * the setup handler makes, applied earlier so there is no window in which
- * they have not been.
- */
+/* Design note #538: A ROOM NEVER BOOTS THE FIXTURE'S ROSTER. Two passes tried to OVERWRITE the four mock
+   players and both failed the same way: the fixture is the initial value, so any path where the setup event
+   does not land leaves four strangers on the board, silently. The game looks dealt. It is just dealt for
+   people who are not in the room.
+   A room's roster is not "the fixture, corrected"; it is "nothing, until the log says otherwise".
+   THE FAILURE MODE IS NOW VISIBLE: no setup means ZERO players -- obviously broken, in the direction that
+   gets reported -- rather than four plausible ones nobody notices are wrong. This codebase has hit the
+   "wrong but plausible" class repeatedly (#492, #514, #537a), and an empty table cannot be mistaken for a
+   correct one.
+   THE BOARD SURVIVES: corporations, privates, the map and the market are what a room plays WITH. */
 export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
   return {
     ...state,
@@ -551,70 +387,26 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
     max_players: 0,
     active_player_index: 0,
     priority_deal_index: 0,
-    /* ==================================================================
-     *  DESIGN NOTE 594: AN UNSTARTED CORPORATION HAS NO PRICE EITHER
-     * ==================================================================
-     *
-     * REPORTED: "The par for PRR was not correctly recorded: $82 became
-     * $100" -- and the player who founded it received neither the crown nor
-     * the right to set the price.
-     *
-     * This stripped the roster and stopped: president, holdings, float. It
-     * left `par_value` alone, and the fixture is a MID-GAME testbed whose
-     * corporations are already parred. So a room booted with eight companies
-     * that had a price nobody had set -- and design note #587 had just made
-     * `par_value === null` the test for "may this purchase found the
-     * company". Every corporation therefore read as already started: the
-     * founding buy granted no presidency, set no par, and `company.par_value
-     * ?? ...` kept the fixture's figure instead of the player's.
-     *
-     * THE SHARE POOLS GO TOO, for the same reason and before it is reported
-     * separately: a fixture corporation has already sold shares, so an
-     * untouched `ipo_pool_percentage` would let a room's first buyer draw
-     * from a pile that a game which never happened had already emptied.
-     *
-     * THE RULE THIS KEEPS ARRIVING AT (design notes #538, #542, now this):
-     * a room does not start from "the fixture, corrected". It starts from
-     * the fixture's BOARD -- the map, the tiles, the printed companies --
-     * with every trace of a played game removed. Anything a game WROTE has
-     * to be reset here, and `par_value` was a written thing that looked like
-     * a printed one. */
-    /* ==================================================================
-     *  DESIGN NOTE 611: THE PHASE WAS A WRITTEN THING TOO
-     * ==================================================================
-     *
-     * REPORTED: "the Operating Round now begins in 'Buy Private', but this
-     * action is unavailable until Phase 3. The first Operating Round always
-     * begins in Phase 2."
-     *
-     * Both true, and the cause is design note #594's own paragraph above,
-     * two fields over. `current_global_era` and `owned_trains` are written
-     * by a game being played -- the era advances when a train tier is first
-     * bought, and the trains are bought -- and neither was reset. The
-     * fixture is a GREEN MID-GAME TESTBED whose corporations already hold
-     * 3-trains, so every room booted straight into it: `current_global_era`
-     * said `"Green"`, `initialOrSubPhase` correctly answered `"BuyPrivate"`
-     * for Phase 3, and the first Operating Round of a brand-new game opened
-     * on a step the rules do not offer until two phases later.
-     *
-     * NOTHING WAS WRONG WITH THE SUB-PHASE LOGIC, which is why this took a
-     * report to find. `initialOrSubPhase`, `visibleSubPhases` and the
-     * contract cursor all behaved correctly for the phase they were told
-     * they were in. They were told the wrong phase.
-     *
-     * BOTH FIELDS, NOT JUST THE ERA. Resetting the era alone would fix the
-     * reported symptom and leave a room whose corporations own trains they
-     * never bought -- which sets the train limit, the rust outlook, the
-     * depot count and the phase badge from a game that did not happen.
-     * `derivePhase` reads `owned_trains`, so the two have to agree or the
-     * badge and the sub-phase strip would disagree about the phase.
-     *
-     * `[]`, NOT DELETED. Design note #3 in `gamePhase.ts` distinguishes "no
-     * corporation reported trains" (unknown -- omit the number) from "this
-     * corporation owns none" (a real answer). A fresh board is the second,
-     * and clearing to `undefined` would make the badge disclaim a phase it
-     * knows perfectly well. */
-    // Design note #611: 1830 opens in Phase 2, which is Yellow tiles.
+    // Design note #594: AN UNSTARTED CORPORATION HAS NO PRICE EITHER. This stripped president, holdings and
+    // float and left `par_value` alone -- and the fixture is a MID-GAME testbed whose corporations are already
+    // parred. So every corporation read as already started under #587's `par_value === null` test: the founding
+    // buy granted no presidency, set no par, and the fallback kept the fixture's figure instead of the player's.
+    // THE SHARE POOLS GO TOO: a fixture corporation has already sold shares, so an untouched IPO pool would let
+    // a room's first buyer draw from a pile a game which never happened had already emptied.
+    // THE RULE THIS KEEPS ARRIVING AT (#538, #542, this): a room starts from the fixture's BOARD with every trace
+    // of a played game removed. Anything a game WROTE has to be reset here, and `par_value` was a written thing
+    // that looked like a printed one.
+    // Design note #611: THE PHASE WAS A WRITTEN THING TOO. `current_global_era` and `owned_trains` are written by
+    // a game being played and neither was reset -- so a room booted into the fixture's Green mid-game state, the
+    // opening-sub-phase rule correctly answered "BuyPrivate" for Phase 3, and the first Operating Round of a new
+    // game opened on a step the rules do not offer until two phases later.
+    // NOTHING WAS WRONG WITH THE SUB-PHASE LOGIC, which is why this took a report to find. Every consumer behaved
+    // correctly for the phase they were told they were in. They were told the wrong phase.
+    // BOTH FIELDS, NOT JUST THE ERA -- resetting the era alone leaves a room whose corporations own trains they
+    // never bought, which sets the train limit, the rust outlook, the depot count and the phase badge from a game
+    // that did not happen.
+    // `[]`, NOT DELETED: `gamePhase.ts #3` distinguishes "no corporation reported trains" from "this corporation
+    // owns none", and a fresh board is the second.
     current_global_era: "Yellow",
     public_companies: state.public_companies.map((company) => ({
       ...company,
@@ -626,11 +418,9 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
       bank_pool_percentage: 0,
       // Design note #611: nobody has bought a train yet.
       owned_trains: [],
-      /* `treasury`, NOT `treasury_vgp`. The first version of this line
-         invented the second name -- a spread accepts any extra key, so
-         nothing complained and the real treasury went on carrying the
-         fixture's balance. Only a TEST reading the field caught it, which is
-         the argument for asserting the reset rather than trusting the
+      /* `treasury`, NOT `treasury_vgp`. The first version of this line invented the second name -- a spread accepts
+         any extra key, so nothing complained and the real treasury went on carrying the fixture's balance. Only a
+         TEST reading the field caught it, which is the argument for asserting the reset rather than trusting the
          write. */
       treasury: "0",
     })),
@@ -642,38 +432,18 @@ export function withEmptyRoster(state: GameStateResponse): GameStateResponse {
   };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 542: THE AUCTION IS A FOURTH ATOM, AND IT WAS MISSED
- * ==================================================================
- *
- * REPORTED: the Action Bar's turn order is right, but the bottom Seating
- * Order is wrong and the bid labels name the wrong people.
- *
- * Two different atoms, and only one of them had been cleaned. `App.tsx`'s
- * own design note above `sandboxWaterfall` says it outright -- the sandbox
- * "keeps its game state in FOUR atoms, not one" -- and `withEmptyRoster`
- * plus the `SetupGame` handler between them touched exactly one:
- * `sandboxState`. The Action Bar reads that, so it was correct. The auction
- * dashboard reads `sandboxWaterfall`, which was still the fixture: mock
- * seating, mock bidders, mock `current_turn`.
- *
- * That is the same class of miss as the one before it, one atom over. The
- * lesson worth recording is that "the roster" is not a place in this
- * codebase -- it is a fact repeated across four independent stores, and a
- * fix applied to any one of them looks complete on whichever screen the
- * author happened to be looking at.
- *
- * A ROOM'S AUCTION STARTS CLEAN. No bids, nobody having passed, the turn on
- * the first seat in the dealt order. The fixture's half-finished auction is
- * a testbed for rendering a mid-auction screen alone; it is not an opening
- * position, and inheriting somebody else's bids is worse than inheriting
- * their names because the bids are ACTIONABLE.
- */
+/* Design note #542: THE AUCTION IS A FOURTH ATOM, AND IT WAS MISSED. Reported: the Action Bar's turn order is
+   right, the Seating Order is wrong and the bid labels name the wrong people. Two different atoms, and only
+   one had been cleaned -- the bar reads `sandboxState`, so it was correct; the dashboard reads
+   `sandboxWaterfall`, which was still the fixture.
+   The lesson worth recording is that "the roster" is not a place in this codebase -- it is a fact repeated
+   across four independent stores, and a fix applied to any one of them looks complete on whichever screen the
+   author happened to be looking at.
+   A ROOM'S AUCTION STARTS CLEAN. Inheriting somebody else's bids is worse than inheriting their names, because
+   the bids are ACTIONABLE. */
 export function waterfallForRoster(
-  /* NULL-SAFE, because `sandboxWaterfallState` returns `null` outside the
-     auction phase -- a room that starts mid-game has no auction atom at all.
-     Handling it here rather than at each call site keeps the two seeding
-     points identical, which is the property that let them drift apart in the
+  /* NULL-SAFE, because the waterfall atom is `null` outside the auction phase. Handled here rather than at each
+     call site, which keeps the two seeding points identical -- the property that let them drift apart in the
      first place. */
   base: WaterfallStateResponse | null,
   playerAddresses: readonly string[],

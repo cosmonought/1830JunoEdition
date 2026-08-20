@@ -2,59 +2,21 @@
 //
 // The Auto Route button's tracer -- a client-side SUGGESTION, not an oracle.
 //
-// ===================================================================
-//  DESIGN NOTE 0: WHAT THIS IS, AND THE ONE THING IT MUST NEVER BECOME
-// ===================================================================
+// Design note #0: a player asking for a route drawn for them is asking the UI to pre-fill the manual builder,
+// which needs no chain at all. The result still travels to the contract as the same `RunManualRoute` the
+// player could have clicked out by hand, and the contract still validates it.
 //
-// The Auto Route button had been disabled since Audit G-13 removed
-// `ExecuteOperatingRound`, on the reasoning that the contract's own
-// pathfinder (`pathfinding::trace_best_route_set`) no longer had a message
-// reaching it. That reasoning is correct about the CONTRACT and wrong about
-// the button: a player asking for a route drawn for them is asking the UI to
-// pre-fill the manual builder, which is a client-side convenience that needs
-// no chain at all. The result still travels to the contract as the same
-// `RunManualRoute` the player could have clicked out by hand, and the
-// contract still validates it.
+// THE LINE THIS MUST NOT CROSS. `pathfinding.rs` remains the only authority on what a legal route IS, and
+// the following are deliberately NOT a to-do list: TOKEN ACCESS (this starts AT a token, which satisfies half
+// by construction, and ignores city-slot blocking entirely); CITY SLOTS (a two-city hex is one node here);
+// TRAIN COUNT (#7 approximates the allocation problem, it does not solve it); OVERLAP (#4 bars rails, which
+// is the rule -- an earlier pass barred whole hexes, which was stricter and therefore safe for a suggestion,
+// but was not the rule and must not be mistaken for it).
 //
-// So this fills in `routePoints`. It does not decide revenue, it does not
-// authorise anything, and its answer is explicitly labelled a suggestion in
-// the UI. `sandboxRouteBreakdown` prices whatever comes out, exactly as it
-// prices a hand-built chain.
+// Design note #1: connectivity is checked from BOTH SIDES. Checking one side only is the classic 18xx map
+// bug -- a dead-end stub reads as connected to whatever sits beyond it, and the tracer walks off the rails.
 //
-// THE LINE THIS MUST NOT CROSS. `pathfinding.rs` remains the only authority
-// on what a legal route IS. The list of things below is deliberately not a
-// to-do:
-//
-//   - TOKEN ACCESS. A route must run through a city the corporation has a
-//     token in, and may not pass through a city whose slots are full of
-//     other companies' tokens. This starts AT a token hex, which satisfies
-//     the first half by construction, and ignores the second entirely.
-//   - CITY SLOTS. A two-city hex is one node here. Which of its stations a
-//     train actually reaches is `city_node`'s question and this never sets
-//     one.
-//   - TRAIN COUNT. One route, for one train. The multi-train ALLOCATION
-//     problem (`trace_best_route_set`) -- choosing the best SET of routes
-//     jointly -- is still not attempted. The caller drafts one train at a
-//     time and hands each one the hexes its predecessors took (design note
-//     #4), which is a greedy approximation of that search, not the search.
-//   - OVERLAP. Two trains may not reuse the same track SEGMENT. Design note
-//     #4 bars whole HEXES instead, which is stricter and therefore safe for
-//     a suggestion, but it is not the rule and must not be mistaken for it.
-//
-// ===================================================================
-//  DESIGN NOTE 1: CONNECTIVITY IS CHECKED FROM BOTH SIDES
-// ===================================================================
-//
-// Two hexes are joined when A carries a live edge pointing at B AND B
-// carries the matching live edge pointing back. Checking one side only is
-// the classic 18xx map bug: a dead-end stub (Richmond's single edge, New
-// York's two disconnected one-edge stubs) reads as connected to whatever
-// happens to sit beyond it, and the tracer walks off the end of the rails.
-//
-// `liveEdgesForHex` already resolves the four sources of track -- a laid
-// tile's rotated mask, a preprinted gray hex, an off-board terminal's stub,
-// a landmark's segments -- so this file asks it rather than knowing about
-// any of them.
+// Design notes #2-#9: see `docs/ai_architecture/routing_pathfinding.md`.
 
 import {
   HEX_NEIGHBOR_OFFSETS,
@@ -88,75 +50,38 @@ function labelFor(q: number, r: number): string | null {
   return LABEL_BY_COORD.get(`${q},${r}`) ?? null;
 }
 
-/* `connectedNeighbours` is GONE with design note #9 -- it was this file's
-   last hex-as-a-node walker, and `bridgeWaypoints` was its last caller.
-   `trackSegments.neighbourAcross` keeps the both-sides rule and
+/* `connectedNeighbours` is GONE with design note #9 -- it was this file's last hex-as-a-node walker, and the
+   waypoint bridge was its last caller. `trackSegments.neighbourAcross` keeps the both-sides rule and
    `traversalsFrom` supplies the half it never had: WHICH rail.
-
-   Deleted rather than left unused. It survived the tracer's conversion
-   because nothing pointed at it from there any more, and one function
-   still quietly calling it is exactly how tile #56 kept bridging its two
+   Deleted rather than left unused. It survived the tracer's conversion because nothing pointed at it from
+   there any more, and one function still quietly calling it is exactly how tile #56 kept bridging its two
    curves for a whole chunk after the bug was declared fixed. */
 
-/* ==================================================================
- *  DESIGN NOTE 5: CLICKING TWO CITIES SHOULD NOT MEAN CLICKING NINE HEXES
- * ==================================================================
- *
- * REPORTED: manual routing forces the player to click every plain track hex
- * between two cities.
- *
- * It did, because the builder's only connectivity rule was "the next point
- * must be a DIRECT NEIGHBOUR of the last one". That rule is correct about
- * what a route is -- a connected chain of hexes -- and wrong about what a
- * player is doing when they draw one. Nobody choosing a route is choosing
- * the plain track; they are choosing the STOPS, and the track between them
- * is a consequence. A five-stop route across a built-up board was twenty
- * clicks, nineteen of which had exactly one legal answer.
- *
- * `bridgeWaypoints` resolves that consequence. Click a city, click the next
- * city, and the hexes in between are filled in.
- *
- * IT PREFERS PLAIN TRACK, AND THAT IS THE INTERESTING PART. The shortest
- * path by hex count is not always the one the player meant: a bridge that
- * happens to pass through a third city silently adds that city's revenue
- * AND spends one of the train's stops, neither of which was asked for. So
- * the search is weighted -- crossing a revenue centre costs far more than
- * crossing plain track, so a detour of several blank hexes is preferred to
- * a shortcut through a city. Where there is no alternative the centre IS
- * included, because the train genuinely stops there; it then appears in the
- * panel's stop list with its value, which is the honest outcome. What must
- * never happen is a stop appearing in the total that the player cannot see.
- *
- * THE MANUAL CLICK STILL WINS. Any hex the player clicks is added exactly
- * as before when it is adjacent, so disambiguating a branch by clicking
- * through it works unchanged -- the bridge only fills gaps the player left.
- *
- * WHAT THIS IS NOT. It does not check token access, city slot capacity, or
- * whether another train has already used this track. Same list as design
- * note #0, same owner: `pathfinding.rs`. This finds A connected path over
- * live rails, and the contract still judges whether the route is legal.
- */
+/* Design note #5: CLICKING TWO CITIES SHOULD NOT MEAN CLICKING NINE HEXES. The builder's only connectivity
+   rule was "the next point must be a DIRECT NEIGHBOUR" -- correct about what a route is, wrong about what a
+   player is doing when they draw one. Nobody choosing a route is choosing the plain track; they are choosing
+   the STOPS. A five-stop route was twenty clicks, nineteen of which had exactly one legal answer.
+   IT PREFERS PLAIN TRACK, AND THAT IS THE INTERESTING PART. A bridge that passes through a third city
+   silently adds that city's revenue AND spends one of the train's stops, neither of which was asked for -- so
+   crossing a revenue centre costs far more than crossing plain track. Where there is no alternative the
+   centre IS included, because the train genuinely stops there, and it appears in the stop list with its
+   value. What must never happen is a stop appearing in the total that the player cannot see.
+   THE MANUAL CLICK STILL WINS: the bridge only fills gaps the player left.
+   WHAT THIS IS NOT: token access, city slot capacity, or whether another train has used this track. Same
+   list as #0, same owner. */
 
 /** The cost of routing a bridge THROUGH a revenue centre, in units of plain
  *  hexes. Large enough that no realistic detour outweighs it, finite so an
  *  unavoidable centre is still crossed rather than the bridge failing. */
 const CENTRE_DETOUR_COST = 1000;
 
-/**
- * The hexes joining `from` to `to` over live track, `to` included and
- * `from` excluded -- ready to append to a route that currently ends at
- * `from`.
- *
- * `null` when no connected path exists, which the caller reports rather
- * than papering over: two hexes with no rails between them are not a route,
- * and inventing a straight line across the board is exactly the class of
- * plausible fiction design note #216 deleted.
- *
- * `avoid` is the hexes already on this route. A route is a simple path, so
- * a bridge may not loop back through one -- without this, clicking a city
- * the route already passed through would produce a chain that visits a hex
- * twice and prices it once, and the two would disagree.
- */
+/** The hexes joining `from` to `to` over live track, `to` included and `from` excluded.
+ *  `null` when no connected path exists, which the caller reports rather than papering over: two hexes with no
+ *  rails between them are not a route, and inventing a straight line across the board is exactly the class of
+ *  plausible fiction #216 deleted.
+ *  `avoid` is the hexes already on this route. A route is a simple path, so a bridge may not loop back through
+ *  one -- without this, clicking a city the route already passed through would produce a chain that visits a
+ *  hex twice and prices it once, and the two would disagree. */
 export function bridgeWaypoints(
   mapGrid: MapGridResponse,
   from: TracedHex,
@@ -167,33 +92,15 @@ export function bridgeWaypoints(
   const toKey = `${to.q},${to.r}`;
   if (fromKey === toKey) return null;
 
-  /* ==================================================================
-   *  DESIGN NOTE 9: THE BRIDGE WALKS RAILS TOO
-   * ==================================================================
-   *
-   * REPORTED: with tile #56 on G7, the router bridges H8 to F6 -- across
-   * two curves that do not touch.
-   *
-   * `trackSegments.ts` design note #0 fixed exactly this class of bug in
-   * the network reach and in the auto-tracer, and this function was missed.
-   * It kept its own hex-to-hex Dijkstra over `connectedNeighbours` -- "does
-   * this hex carry rail toward that one" -- which is the hex-as-a-node
-   * model that cannot see a crossover. Tile #56 is two separate curves
-   * (0-2 and 1-3), and at the orientation where G7's live edges are
-   * [0,1,2,5], entering from H8 at edge 5 can only leave by edge 1. The
-   * bridge left by edge 2 and reached F6 over track that is not there.
-   *
-   * Reproduced on the real board with the reported hexes before the fix,
-   * which is also why the earlier audit came back clean: `traversalSegments`
-   * refuses that crossing at every orientation, and the AUTO tracer asks
-   * it. Only the manual bridge did not, so only manual routing hallucinated
-   * -- and the previous report had named the auto-router.
-   *
-   * The walk is over (HEX, ARRIVAL EDGE) states now, exactly as
-   * `candidatePathsFrom` is. One hex may legitimately be visited twice by
-   * two different rails, so the visited set is keyed on the state rather
-   * than the hex.
-   */
+  /* Design note #9: THE BRIDGE WALKS RAILS TOO. Reported: with tile #56 on G7, the router bridges H8 to F6
+     across two curves that do not touch. `trackSegments.ts #0` fixed this class of bug in the network reach and
+     in the auto-tracer, and this function was missed -- it kept its own hex-to-hex Dijkstra, which is the
+     hex-as-a-node model that cannot see a crossover.
+     Reproduced on the real board with the reported hexes before the fix, which is also why the earlier audit
+     came back clean: the AUTO tracer asks the strict primitive. Only the manual bridge did not, so only manual
+     routing hallucinated -- and the previous report had named the auto-router.
+     The walk is over (HEX, ARRIVAL EDGE) states now. One hex may legitimately be visited twice by two different
+     rails, so the visited set is keyed on the state rather than the hex. */
   interface BridgeState {
     q: number;
     r: number;
@@ -206,11 +113,9 @@ export function bridgeWaypoints(
 
   const startState: BridgeState = { q: from.q, r: from.r, arrivalEdge: null };
   const dist = new Map<string, number>([[stateKey(startState), 0]]);
-  /* Design note #9: `cameFrom` is the predecessor STATE's key, and `nodeAt`
-     turns a key back into a hex. The split is load-bearing -- an earlier
-     cut stored each node under its own key and walked the chain back
-     through it, which reads a node's predecessor as itself and returned
-     `null` for every connected pair on the board. */
+  /* Design note #9: `cameFrom` is the predecessor STATE's key, and `nodeAt` turns a key back into a hex. The
+     split is load-bearing -- an earlier cut stored each node under its own key and walked the chain back
+     through it, which reads a node's predecessor as itself and returned `null` for every connected pair. */
   const cameFrom = new Map<string, string>();
   const stateAt = new Map<string, BridgeState>([[stateKey(startState), startState]]);
   const nodeAt = new Map<string, TracedHex>([[stateKey(startState), from]]);
@@ -260,13 +165,10 @@ export function bridgeWaypoints(
       const key = stateKey(nextState);
       if (settled.has(key)) continue;
 
-      /* The DESTINATION's own value is not charged: the player asked for
-         it, so its cost is not a reason to route around it. Only hexes the
-         bridge passes THROUGH are weighted.
-
-         `hexRouteValue` is `null` for a hex off the value table and `0` for
-         plain track; both mean "pays nothing", and only a positive value is
-         a revenue centre worth detouring around. */
+      /* The DESTINATION's own value is not charged: the player asked for it, so its cost is not a reason to route
+         around it. Only hexes the bridge passes THROUGH are weighted.
+         `hexRouteValue` is `null` off the value table and `0` for plain track -- both mean "pays nothing", and only
+         a positive value is a revenue centre worth detouring around. */
       const paysHere = (hexRouteValue(next.q, next.r, mapGrid) ?? 0) > 0;
       const step = isDestination || !paysHere ? 1 : CENTRE_DETOUR_COST + 1;
       const cost = bestCost + step;
@@ -300,13 +202,10 @@ export function bridgeWaypoints(
 /** No simple path over the authentic board can be longer than the board. */
 const MAX_BRIDGE_HEXES = 120;
 
-/** How far the search may wander, and how much work it may do getting there.
- *
- *  A depth cap alone is not enough: a dense late-game board branches, and an
- *  unbounded depth-first search over it is exponential. The expansion budget
- *  makes the worst case a bounded amount of work rather than a frozen tab --
- *  reached, it simply returns the best route found so far, which is a
- *  suggestion that is merely not optimal rather than one that never arrives. */
+/** How far the search may wander, and how much work it may do getting there. A depth cap alone is not enough:
+ *  a dense late-game board branches, and an unbounded DFS over it is exponential. The expansion budget makes
+ *  the worst case a bounded amount of work rather than a frozen tab -- reached, it returns the best route
+ *  found so far, which is a suggestion that is merely not optimal rather than one that never arrives. */
 const MAX_PATH_HEXES = 14;
 const MAX_EXPANSIONS = 20_000;
 
@@ -315,42 +214,21 @@ interface SearchResult {
   revenue: number;
 }
 
-/* ==================================================================
- *  DESIGN NOTE 6: THE WALK FOLLOWS RAILS, AND SPENDS THEM
- * ==================================================================
- *
- * Two changes to the search, and they are the same change seen from two
- * sides.
- *
- * IT WALKS (HEX, ARRIVAL EDGE) STATES. The old walk asked
- * `connectedNeighbours` for every hex carrying rail toward a neighbour,
- * which treats a hex as a node where all its rails meet. On #20 (two
- * separate straights), the OO tiles and New York that is false, and the
- * tracer would happily route a train in one straight and out the other.
- * `traversalsFrom` resolves the authored rail instead -- see
- * `trackSegments.ts` design note #0 for the whole argument.
- *
- * IT SPENDS SEGMENTS, NOT HEXES. 1830 forbids two of a corporation's trains
- * from reusing the same TRACK. The previous drafter approximated that by
- * barring whole hexes, documented at the time as deliberately stricter than
- * the rule -- and that approximation forbids the commonest legal shape on a
- * built-up board: two trains crossing one hex on two different curves, or
- * reaching the two separate stations of an OO tile. Occupancy is now keyed
- * on the rail itself.
- *
- * A ROUTE ALSO MAY NOT REUSE ITS OWN TRACK, which falls out of the same
- * set: the walk adds each transit's rails to `used` and refuses any step
- * whose rails are already there. The old `visited` hex set enforced a
- * stronger and slightly wrong version of this -- a route may legally touch
- * a hex twice by different rails, and 1830 pays it once either way, which
- * `sandboxRouteBreakdown` already handles by deduplicating.
- */
+/* Design note #6: THE WALK FOLLOWS RAILS, AND SPENDS THEM -- two changes that are the same change seen from
+   two sides.
+   IT WALKS (HEX, ARRIVAL EDGE) STATES. The old walk treated a hex as a node where all its rails meet; on #20
+   (two separate straights), the OO tiles and New York that is false, and the tracer would route a train in
+   one straight and out the other. `traversalsFrom` resolves the authored rail instead.
+   IT SPENDS SEGMENTS, NOT HEXES. Barring whole hexes forbids the commonest legal shape on a built-up board --
+   two trains crossing one hex on two different curves, or reaching the two stations of an OO tile -- and on a
+   late-game map that approximation was leaving real revenue unrouted.
+   A ROUTE ALSO MAY NOT REUSE ITS OWN TRACK, which falls out of the same set. The old `visited` hex set
+   enforced a stronger and slightly wrong version: a route may legally touch a hex twice by different rails,
+   and 1830 pays it once either way. */
 
-/** Every rail a finished route occupies, endpoints included.
- *
- *  Exported because occupancy is a fact about a route that two different
- *  callers need -- the assignment search below, and any caller wanting to
- *  know whether two drafted routes actually conflict. */
+/** Every rail a finished route occupies, endpoints included. Exported because occupancy is a fact about a
+ *  route that two callers need -- the assignment search, and any caller wanting to know whether two drafted
+ *  routes actually conflict. */
 export function routeSegments(
   mapGrid: MapGridResponse,
   path: readonly TracedHex[],
@@ -392,17 +270,11 @@ interface SearchResult {
   segments: Set<SegmentKey>;
 }
 
-/** The K best simple paths starting at `start`, bounded by `maxCentres`
- *  revenue centres and by the caps above.
- *
- *  K RATHER THAN ONE, because the assignment search (design note #7) needs
- *  alternatives to choose between: the single best route for a 5-train may
- *  be the one that strands the 3-train, and there is no way to know that
- *  without a second option on the table.
- *
- *  Scored by `sandboxRouteBreakdown` so the tracer and the readout price a
- *  route the same way, and so 1830's pay-a-hex-once rule comes for free
- *  rather than being reimplemented as a running total. */
+/** The K best simple paths from `start`, bounded by revenue centres and by the caps above.
+ *  K RATHER THAN ONE, because the assignment search (#7) needs alternatives: the single best route for a
+ *  5-train may be the one that strands the 3-train, and there is no way to know that without a second option.
+ *  Scored by `sandboxRouteBreakdown`, so the tracer and the readout price a route the same way and 1830's
+ *  pay-a-hex-once rule comes for free rather than being reimplemented as a running total. */
 function candidatePathsFrom(
   mapGrid: MapGridResponse,
   era: TileColorTier,
@@ -447,28 +319,20 @@ function candidatePathsFrom(
       era,
     );
 
-    /* A route needs two paying stops to be a route at all -- 1830's
-       two-revenue-centre minimum, which the contract enforces too -- and
-       design note #3: it has to END somewhere it may end. Towns pay, so
-       without the terminus test the best-paying prefix was routinely one
-       that stopped on a town, which is not a legal route. */
+    /* A route needs two paying stops to be a route at all -- 1830's two-revenue-centre minimum, which the
+       contract enforces too -- and design note #3: it has to END somewhere it may end. Towns pay, so without the
+       terminus test the best-paying prefix was routinely one that stopped on a town. */
     if (
       path.length >= 2 &&
       breakdown.centres >= 2 &&
       breakdown.centres <= maxCentres &&
       isRouteTerminusHex(mapGrid, at.hexLabel)
     ) {
-      /* Recomputed rather than copied from `used`: that set holds the
-         TRANSITS taken so far, and a route also holds the rails it STARTS
-         and STOPS on.
-
-         Those two are why this check is here and not only in the walk. The
-         walk prunes each transit against `occupied`, but a terminus is not
-         a transit -- it is discovered at the moment the route is recorded.
-         Without this, a route could legally end on a rail another train was
-         already using, and the assignment search would hand back a set that
-         violated the disjointness it exists to enforce. Caught by the sweep
-         across 150 board patches, which reported the overlap directly. */
+      /* Recomputed rather than copied from `used`: that set holds the TRANSITS taken so far, and a route also holds
+         the rails it STARTS and STOPS on. A terminus is not a transit -- it is discovered at the moment the route
+         is recorded -- so without this a route could legally end on a rail another train was already using, and the
+         assignment search would hand back a set that violated the disjointness it exists to enforce. Caught by the
+         sweep across 150 board patches, which reported the overlap directly. */
       const segments = routeSegments(mapGrid, path);
       let clashes = false;
       segments.forEach((key) => {
@@ -521,30 +385,17 @@ export interface AutoTraceInput {
   /** The corporation's station token hexes. A route must touch one, so these
    *  are the only legal places to start looking. */
   startHexes: ReadonlyArray<readonly [number, number]>;
-  /** The train's capacity in REVENUE CENTRES -- design note #156 in
-   *  `sandboxSession.ts`. `999` (the Diesel) is treated as uncapped.
-   *
-   *  TOWNS COUNT. `sandboxRouteBreakdown` counts every hex that pays as a
-   *  centre, towns included, so `City -> Town -> City` is three stops and a
-   *  2-train cannot run it. Verified rather than assumed -- see the
-   *  regression tests. */
+  /** The train's capacity in REVENUE CENTRES (`sandboxSession.ts #156`); the Diesel is treated as uncapped.
+   *  TOWNS COUNT: every hex that pays is a centre, so `City -> Town -> City` is three stops and a 2-train cannot
+   *  run it. Verified rather than assumed -- see the regression tests. */
   maxRevenueCentres: number;
-  /* ==================================================================
-   *  DESIGN NOTE 4: TRACK ANOTHER TRAIN HAS ALREADY TAKEN
-   * ==================================================================
-   *
-   * A corporation runs EVERY train it owns, each on its own route, and two
-   * of its trains may not run over the same track.
-   *
-   * THIS USED TO BAR WHOLE HEXES, and said so: "stricter than the rule,
-   * which is the safe direction for a drafting aid". Safe, and expensive --
-   * it forbids the commonest legal shape on a built-up board. Two trains
-   * may cross one hex on two different curves (#20's straights), and may
-   * reach the two separate stations of an OO tile, and 1830 permits both.
-   * On a late-game map the approximation was leaving real revenue unrouted.
-   *
-   * Occupancy is per RAIL now -- see `trackSegments.ts` design note #3 for
-   * what a segment key is and why a hex id could not be one. */
+  /* Design note #4: TRACK ANOTHER TRAIN HAS ALREADY TAKEN. A corporation runs every train it owns, each on its
+     own route, and two of its trains may not run over the same track.
+     THIS USED TO BAR WHOLE HEXES and said so -- "stricter than the rule, which is the safe direction for a
+     drafting aid". Safe, and expensive: it forbids two trains crossing one hex on two different curves, and
+     reaching the two separate stations of an OO tile, both of which 1830 permits.
+     Occupancy is per RAIL now -- `trackSegments.ts #3` for what a segment key is and why a hex id could not be
+     one. */
   excludeSegments?: ReadonlySet<SegmentKey>;
 }
 
@@ -579,12 +430,10 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
     const oneArm = candidatePathsFrom(mapGrid, era, token, cap, occupied, CANDIDATES_PER_TOKEN);
     all.push(...oneArm);
 
-    /* Design note #2: A ROUTE RUNS THROUGH A TOKEN far more often than it
-       starts at one, so each arm is paired with a second arm going the
-       other way and joined through the shared city.
-       The second arm is barred from the FIRST arm's rails, which is what
-       keeps the joined path a legal single route rather than one that
-       doubles back over itself. */
+    /* Design note #2: A ROUTE RUNS THROUGH A TOKEN far more often than it starts at one, so each arm is paired
+       with a second arm going the other way and joined through the shared city. The second arm is barred from the
+       FIRST arm's rails, which is what keeps the joined path a legal single route rather than one that doubles
+       back over itself. */
     for (const armA of oneArm) {
       const barred = new Set<SegmentKey>();
       occupied.forEach((key) => barred.add(key));
@@ -643,43 +492,18 @@ export function autoTraceRoute(input: AutoTraceInput): AutoTraceResult {
   return { path: best.path, revenue: best.revenue, segments: best.segments, reason: null };
 }
 
-/* ==================================================================
- *  DESIGN NOTE 7: THE BEST SET, NOT THE BEST ROUTE REPEATED
- * ==================================================================
- *
- * REPORTED: auto-route naively assigns routes to the largest train first,
- * missing optimal multi-train sets.
- *
- * It did, and the note that shipped it admitted as much -- "a greedy
- * approximation of that search, not the search". The greedy order was
- * defensible (a big train picks while the network is untouched) and it is
- * still wrong in a way that is easy to state: the highest-paying route for
- * a 5-train may be the only route a 3-train could have run, and giving it
- * away costs more than it gains. Greedy cannot see that, because it decides
- * the 5-train's route before it has looked at the 3-train at all.
- *
- * So each train now proposes SEVERAL candidate routes and the set is chosen
- * jointly, maximising the combined payout under segment disjointness.
- *
- * IT IS AN EXHAUSTIVE SEARCH OVER A DELIBERATELY SMALL SPACE. A corporation
- * holds at most four trains (1830's own limit), each proposing at most a
- * dozen candidates, and the recursion prunes every branch whose rails
- * already clash. That is thousands of combinations in the worst case --
- * microseconds -- and it is exact over the candidates considered.
- *
- * IT IS STILL NOT `trace_best_route_set`. The candidate list is generated
- * per train by a bounded depth-first search, so a route no train proposed
- * cannot be chosen, and the guarantee is "the best combination of the
- * routes we found" rather than "the best combination that exists". That is
- * the honest claim for a drafting aid, and the contract remains the
- * authority on what any of it is worth. Design note #0's list of things
- * this does not check is unchanged.
- *
- * TRAINS THAT GET NOTHING ARE NOT A FAILURE. A three-train corporation on a
- * network supporting two routes should draft two and leave the third empty,
- * which is what the contract would accept. The search treats "no route" as
- * a zero-revenue option for every train rather than a dead end.
- */
+/* Design note #7: THE BEST SET, NOT THE BEST ROUTE REPEATED. The greedy order was defensible and is still
+   wrong in a way that is easy to state: the highest-paying route for a 5-train may be the only route a
+   3-train could have run, and giving it away costs more than it gains. Greedy cannot see that, because it
+   decides the 5-train's route before it has looked at the 3-train at all.
+   AN EXHAUSTIVE SEARCH OVER A DELIBERATELY SMALL SPACE: at most four trains, at most a dozen candidates each,
+   every clashing branch pruned. Thousands of combinations in the worst case -- microseconds -- and exact over
+   the candidates considered.
+   IT IS STILL NOT `trace_best_route_set`. Candidates are generated per train by a bounded DFS, so a route no
+   train proposed cannot be chosen: the guarantee is "the best combination of the routes we found", which is
+   the honest claim for a drafting aid.
+   TRAINS THAT GET NOTHING ARE NOT A FAILURE -- a three-train corporation on a network supporting two routes
+   should draft two and leave the third empty, which is what the contract would accept. */
 export interface RouteSetTrain {
   /** Caller's own identity for this train -- returned untouched. */
   trainIndex: number;
@@ -724,12 +548,8 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
       excludeSegments: occupied,
     });
 
-  /* ------------------------------------------------------------------
-   * STRATEGY A: sequential, in a given train order.
-   *
-   * This is the OLD algorithm, kept deliberately -- see design note #8 for
-   * why the optimiser needs it rather than merely beating it.
-   * ------------------------------------------------------------------ */
+  /* STRATEGY A: sequential, in a given train order. This is the OLD algorithm, kept deliberately -- see design
+     note #8 for why the optimiser needs it rather than merely beating it. */
   const sequential = (order: readonly RouteSetTrain[]): Plan => {
     const used = new Set<SegmentKey>();
     const choices: Choice[] = [];
@@ -744,13 +564,9 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     return { choices, total };
   };
 
-  /* ------------------------------------------------------------------
-   * STRATEGY B: the joint combination search.
-   *
-   * Every train proposes against an UNTOUCHED board, and the set is chosen
-   * together -- which is the only way to see that the big train's best
-   * route is the small train's only route.
-   * ------------------------------------------------------------------ */
+  /* STRATEGY B: the joint combination search. Every train proposes against an UNTOUCHED board and the set is
+     chosen together, which is the only way to see that the big train's best route is the small train's only
+     route. */
   const joint = (): Plan => {
     const perTrain = trains
       .map((train) => ({ train, options: optionsFor(train, EMPTY_SEGMENTS) }))
@@ -798,38 +614,19 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     return { choices: bestChoices, total: Math.max(0, bestTotal) };
   };
 
-  /* ==================================================================
-   *  DESIGN NOTE 8: THE OPTIMISER MUST NOT BE ABLE TO LOSE
-   * ==================================================================
-   *
-   * The joint search alone is WORSE than greedy on a lot of real boards,
-   * and the reason is worth recording because it is not obvious and it cost
-   * a rewrite to find.
-   *
-   * Every train's candidate list is generated against an untouched board,
-   * so all of them crowd around the same few best rails. Commit the widest
-   * train to one of those and the other lists can be entirely conflicted
-   * out -- every option they proposed used track that is now taken. The
-   * sequential algorithm never had that problem: it REGENERATES after each
-   * commitment, so it discovers the second-best corridor that the joint
-   * search never put on the table.
-   *
-   * Measured across 150 board patches: the joint search alone tied on 100
-   * and LOST on 50, once by $240 to $80. A smarter optimiser that is
-   * sometimes three times worse is not an optimiser.
-   *
-   * So both run, plus the sequential pass in reverse order (a narrow train
-   * choosing first sometimes leaves a better remainder), and the best plan
-   * wins. Running the old algorithm as one candidate makes "never worse
-   * than what we replaced" true by construction rather than by hope --
-   * and the joint search still supplies the wins it was added for.
-   *
-   * A FILL PASS FINISHES THE JOB. Whichever plan wins, any train left
-   * without a route gets one more look at what is left over. That is pure
-   * upside: it can only add revenue, and it is what lets the joint search's
-   * strength (a better core assignment) combine with the sequential one's
-   * (finding routes in the leftovers).
-   */
+  /* Design note #8: THE OPTIMISER MUST NOT BE ABLE TO LOSE. The joint search alone is WORSE than greedy on a
+     lot of real boards, and the reason is not obvious and cost a rewrite to find: every train's candidates are
+     generated against an untouched board, so all of them crowd around the same few best rails -- commit the
+     widest train to one and the other lists can be entirely conflicted out. The sequential algorithm
+     REGENERATES after each commitment, so it discovers the second-best corridor the joint search never put on
+     the table.
+     Measured across 150 board patches: the joint search alone tied on 100 and LOST on 50, once by $240 to $80.
+     A smarter optimiser that is sometimes three times worse is not an optimiser.
+     So both run, plus the sequential pass in reverse order (a narrow train choosing first sometimes leaves a
+     better remainder), and the best plan wins -- which makes "never worse than what we replaced" true by
+     construction rather than by hope.
+     A FILL PASS FINISHES THE JOB: any train left without a route gets one more look at what is left over. Pure
+     upside, and it is what lets the joint search's strength combine with the sequential one's. */
   const widestFirst = [...trains].sort((a, b) => b.maxRevenueCentres - a.maxRevenueCentres);
   const plans: Plan[] = [
     sequential(widestFirst),

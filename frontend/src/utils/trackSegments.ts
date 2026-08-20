@@ -2,82 +2,22 @@
 //
 // What a train can actually do inside one hex.
 //
-// ===================================================================
-//  DESIGN NOTE 0: A HEX IS NOT A NODE
-// ===================================================================
+// Design note #0: A HEX IS NOT A NODE. Every path-walking surface asked "does hex A carry rail toward hex B,
+// and B back toward A?" -- which is `liveEdgesForHex` on both sides, and treats a hex as a NODE through which
+// everything connects to everything. Most hexes are, so the answer is usually right; on the ones that are not
+// it is silently and badly wrong. Tile #20 is TWO SEPARATE STRAIGHTS authored as two rails that cross visually
+// and do not touch, so a corporation meeting edge 0 was told it reached whatever sits beyond edge 1 --
+// confirmed on the real board. The OO and double-city tiles have the same shape, and New York's two spurs are
+// the loudest case: `hexCanvasPrimitives.ts #226` already had to fix the ROUTE GLOW for exactly this reason,
+// and the connectivity layer never got the same treatment.
+// So this module answers the question a hex actually poses: entering at edge E, which edges may I leave by,
+// and along WHICH rail? The first half is connectivity, the second is occupancy.
 //
-// Every path-walking surface in this app -- the network reach used to gate
-// tile laying, the Auto-Route tracer, the manual waypoint bridge -- asked
-// the same question of the board and got the same wrong answer:
+// Design note #1: the answer already existed and nothing consumed it -- `pathsForTraversal` in
+// `TileGraphics.ts` has resolved this since #217. No new geometry is invented here; the geometry was correct
+// and only the renderer was asking.
 //
-//     "does hex A carry rail toward hex B, and B back toward A?"
-//
-// That is `liveEdgesForHex` on both sides, and it treats a hex as a NODE
-// through which everything connects to everything. Most hexes are, so the
-// answer is usually right. On the ones that are not, it is silently and
-// badly wrong:
-//
-//   TILE #20 IS TWO SEPARATE STRAIGHTS -- edges 0-3 and 1-4, authored as
-//   two rails that cross visually and do not touch. The edge test reports
-//   all four edges present and therefore all four mutually reachable, so a
-//   corporation whose track meets edge 0 was told it reaches whatever sits
-//   beyond edge 1. Confirmed on the real board before this file existed: a
-//   three-hex patch with #20 in the middle reported the far hex as part of
-//   the network across two rails that never meet.
-//
-//   THE OO TILES AND THE DOUBLE-CITY TILES have the same shape -- two
-//   stations, each with its own pair of edges, no path between them. New
-//   York (#54/#62) is the loudest case: its two spurs are physically
-//   disconnected, and design note #226 in `hexCanvasPrimitives.ts` already
-//   had to fix the ROUTE GLOW for exactly this reason. The connectivity
-//   layer never got the same treatment.
-//
-// So this module answers the question a hex actually poses: entering at
-// edge E, which edges may I leave by, and along WHICH rail? Both halves
-// matter -- the first is connectivity (design note #1), the second is
-// occupancy (design note #2).
-//
-// ===================================================================
-//  DESIGN NOTE 1: THE ANSWER ALREADY EXISTED; NOTHING CONSUMED IT
-// ===================================================================
-//
-// `pathsForTraversal` in `TileGraphics.ts` has resolved exactly this since
-// design note #217 -- it returns the authored rail(s) joining two edges, or
-// `[]` when they are not joined, and it already knows that two hub spokes
-// only connect if their interior ends MEET. The route overlay has used it
-// for several passes to stroke the one rail a train runs along.
-//
-// This module is that primitive lifted to the whole board: laid tile,
-// preprinted hex, or neither, one call. No new geometry is invented here;
-// the geometry was correct and only the renderer was asking.
-//
-// ===================================================================
-//  DESIGN NOTE 2: WHERE THERE IS NO ARTWORK, EVERYTHING CONNECTS
-// ===================================================================
-//
-// Landmarks carry track that `hexBoardData` records as a bare EDGE LIST --
-// `LANDMARK_TRACKS` -- with no per-rail structure at all. There is nothing
-// to be precise with, so those fall back to the old behaviour: every live
-// edge connects to every other.
-//
-// That is the conservative direction for connectivity (it can only report
-// MORE reach, never less, so it cannot hide a legal move) and it is stated
-// here rather than left implicit, because it is the one place this module
-// still gives the answer design note #0 calls wrong. Closing it needs that
-// table to gain rail structure, which is a data change rather than a logic
-// one.
-//
-// RED OFF-BOARD HEXES USED TO BE COVERED BY THIS PARAGRAPH AND NO LONGER
-// ARE -- see design note #484. `OFFBOARD_TRACKS` is a bare edge list too, so
-// they fell here by the same route, but the "conservative" argument above
-// does not hold for them: surplus reach across a red hex is not a longer
-// path through real rail, it is a connection between two networks that 1830
-// says are separate. They are terminal now, and the fallback below covers
-// landmarks and catalog gaps only.
-//
-// The same fallback covers a hex whose tile id is absent from the artwork
-// catalog -- a catalog gap should not make the board less connected than it
-// is, and `TILE_CATALOG_SIZE` already guards against gaps appearing.
+// Design notes #2/#3/#484: see `docs/ai_architecture/routing_pathfinding.md`.
 
 import {
   HEX_NEIGHBOR_OFFSETS,
@@ -102,56 +42,21 @@ const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
   STATIC_BOARD_HEXES.map((hex) => [hexKey(hex.q, hex.r), hex.label]),
 );
 
-/* ==================================================================
- *  DESIGN NOTE 484: A RED OFF-BOARD AREA IS A TERMINUS, NOT A JUNCTION
- * ==================================================================
- *
- * REPORTED: the network calculator treats red off-board areas as
- * traversable nodes, so a network that enters one is granted legal tile
- * placement on every other hex touching it.
- *
- * It did, and design note #2 above is where it came from. Off-board track is
- * a bare edge list in `OFFBOARD_TRACKS` with no per-rail structure, so it
- * fell through to the "every live edge connects to every other" fallback.
- * That fallback is the conservative direction for ORDINARY track -- claiming
- * more reach than exists can only offer a move the contract then refuses.
- * On a red hex it is not conservative at all, because the surplus reach is
- * not a longer path through real rail. It is a WORMHOLE.
- *
- * Chicago (F2) prints stubs on edges 0, 1 and 5 -- real neighbours F4, E3
- * and G3. Under the fallback a corporation whose rail met F4 was told it
- * reached E3 and G3 too, so the veil lit builds on the far side of a hex no
- * train may pass through. Every red zone has the same shape: A11 spliced
- * B10 to B12, K13 spliced J14 to J12, B24 spliced B22 to C23, J2 spliced J4
- * to I3. Five false junctions, each fusing two unrelated networks into one.
- *
- * 1830 IS UNAMBIGUOUS HERE. A red area is a revenue destination where a
- * route ENDS. A train runs in and stops. It never runs out the far side, and
- * two pieces of track that both meet the same red zone are not thereby
- * connected to each other.
- *
- * SO THERE IS NO TRAVERSAL -- not a restricted one, none. `null` for every
- * (entry, exit) pair on a red hex, which is the identical answer this
- * function already gives for two curves that never touch. Stating it once
- * here reaches every caller: `traversalsFrom` returns `[]` so both the reach
- * walk and the Auto-Route tracer halt on arrival, and `segmentsTouchingEdge`
- * falls through to its dead-end branch and reports the whole-hex identity a
- * train stopping there occupies.
- *
- * THE HEX ITSELF IS STILL REACHED, and that distinction is the whole fix.
- * This function answers "may I pass THROUGH", not "may I get here".
- * `neighbourAcross` is what admits a hex to the network and it is untouched,
- * so a red zone still joins the network, still renders as reached, and still
- * counts as a destination worth running to. What it no longer does is hand
- * out the hexes behind it.
- *
- * DERIVED FROM `type: "RedOffboard"`, the same discriminator
- * `evaluateHexForTileLaying` gates on, rather than from `OFFBOARD_LABELS`.
- * Both tables currently name the same seven hexes; keying off the board's
- * own type field means they cannot drift into disagreeing about which hexes
- * are red -- which would show up as a lay the veil offers and the click
- * handler then refuses.
- */
+/* Design note #484: A RED OFF-BOARD AREA IS A TERMINUS, NOT A JUNCTION. Off-board track is a bare edge list
+   with no per-rail structure, so it fell through to #2's "every live edge connects to every other" fallback --
+   which is the conservative direction for ORDINARY track and is not conservative at all here, because the
+   surplus reach is not a longer path through real rail. It is a WORMHOLE.
+   Chicago (F2) prints stubs on edges 0, 1 and 5, so a corporation whose rail met F4 was told it reached E3 and
+   G3 too. Every red zone has the same shape -- A11 spliced B10 to B12, K13 spliced J14 to J12, B24 spliced B22
+   to C23, J2 spliced J4 to I3: five false junctions, each fusing two unrelated networks into one.
+   1830 IS UNAMBIGUOUS HERE: a red area is a revenue destination where a route ENDS. A train runs in and stops.
+   SO THERE IS NO TRAVERSAL -- not a restricted one, none -- which is the identical answer this function already
+   gives for two curves that never touch. Stating it once here reaches every caller.
+   THE HEX ITSELF IS STILL REACHED, and that distinction is the whole fix: this answers "may I pass THROUGH",
+   not "may I get here". `neighbourAcross` is untouched, so a red zone still joins the network and still counts
+   as a destination. What it no longer does is hand out the hexes behind it.
+   DERIVED FROM `type: "RedOffboard"`, the same discriminator `evaluateHexForTileLaying` gates on, so the two
+   tables cannot drift into disagreeing about which hexes are red. */
 const OFFBOARD_TERMINAL_COORDS: ReadonlySet<string> = new Set(
   STATIC_BOARD_HEXES.filter((hex) => hex.type === "RedOffboard").map((hex) =>
     hexKey(hex.q, hex.r),
@@ -173,27 +78,15 @@ export function boardLabelAt(q: number, r: number): string | undefined {
   return LABEL_BY_COORD.get(hexKey(q, r));
 }
 
-/**
- * A single, board-wide identity for one piece of rail.
- *
- * DESIGN NOTE 3: WHY OCCUPANCY NEEDS THIS AND HEX IDs DO NOT SUFFICE.
- *
- * 1830 forbids two of a corporation's trains from running over the same
- * track. The previous drafter approximated that by barring whole HEXES,
- * documented at the time as deliberately stricter than the rule -- safe for
- * a suggestion, but it forbids the commonest legal shape on a busy board:
- * two trains crossing the same hex on the two arms of a crossover, or
- * reaching the two separate stations of an OO tile. On a late-game map that
- * approximation costs real revenue.
- *
- * A segment key is `q,r#index`, where `index` is the authored rail's own
- * position in its hex's artwork. Two trains sharing a hex are fine; two
- * trains sharing a `q,r#index` are not.
- *
- * A hex with no per-rail structure (design note #2) reports `q,r#*` -- one
- * shared identity for the whole hex, which reproduces the old whole-hex
- * exclusion exactly where nothing better is knowable.
- */
+/** A single, board-wide identity for one piece of rail -- design note #3.
+ *  1830 forbids two of a corporation's trains from running over the same track. Barring whole HEXES was
+ *  documented as deliberately stricter than the rule, and it forbids the commonest legal shape on a busy board:
+ *  two trains crossing the same hex on the two arms of a crossover, or reaching the two separate stations of an
+ *  OO tile. On a late-game map that costs real revenue.
+ *  A segment key is `q,r#index`, where `index` is the authored rail's own position in its hex's artwork. Two
+ *  trains sharing a hex are fine; two trains sharing a `q,r#index` are not.
+ *  A hex with no per-rail structure (design note #2) reports `q,r#*` -- one shared identity for the whole hex,
+ *  reproducing the old exclusion exactly where nothing better is knowable. */
 export type SegmentKey = string;
 
 const WHOLE_HEX_SEGMENT = "*";
@@ -211,11 +104,9 @@ export interface HexTraversal {
   segments: readonly SegmentKey[];
 }
 
-/** The authored rails joining `entryEdge` to `exitEdge` on this hex, or
- *  `null` when the two are not joined by continuous track.
- *
- *  `null` is the whole point: it is the answer `liveEdgesForHex` cannot
- *  give, and the reason design note #0's bug existed. */
+/** The authored rails joining `entryEdge` to `exitEdge` on this hex, or `null` when the two are not joined by
+ *  continuous track. `null` is the whole point: it is the answer `liveEdgesForHex` cannot give, and the reason
+ *  design note #0's bug existed. */
 export function traversalSegments(
   mapGrid: MapGridResponse,
   q: number,
@@ -242,11 +133,10 @@ export function traversalSegments(
     const indices = printedPathsForTraversal(label, entryEdge, exitEdge);
     return indices.length === 0 ? null : indices.map((index) => segmentKey(q, r, index));
   }
-  // New York is authored outside `PRINTED_GRAPHICS_CATALOG` (design note
-  // #229), and `printedPathsForTraversal` already resolves it -- but
-  // `printedArtwork` does not see it, so it is asked for explicitly rather
-  // than falling through to "everything connects", which is exactly the
-  // claim its two disconnected spurs must not make.
+  // New York is authored outside `PRINTED_GRAPHICS_CATALOG` (design note #229), and `printedPathsForTraversal`
+  // already resolves it -- but `printedArtwork` does not see it, so it is asked for explicitly rather than
+  // falling through to "everything connects", which is exactly the claim its two disconnected spurs must not
+  // make.
   if (label === "G19") {
     const indices = printedPathsForTraversal(label, entryEdge, exitEdge);
     return indices.length === 0 ? null : indices.map((index) => segmentKey(q, r, index));
@@ -259,19 +149,13 @@ export function traversalSegments(
   return [segmentKey(q, r, WHOLE_HEX_SEGMENT)];
 }
 
-/** Every way out of this hex, having entered at `entryEdge`.
- *
- *  STRICTLY PORT TO PORT: an exit appears only when `traversalSegments`
- *  finds an authored rail joining the two edges, so two disconnected curves
- *  on one tile yield two disjoint answers rather than one junction.
- *
- *  WHAT THIS DOES NOT CHECK, and the previous version of this comment
- *  wrongly claimed it did: whether anything lies beyond the exit. The
- *  both-sides rule (`trackReach`'s design note #1) lives in
- *  `neighbourAcross`, and it has to stay there -- a tile lay extends the
- *  network across an edge with nothing behind it yet, so a caller looking
- *  for build sites needs the exits this returns WITHOUT that filter.
- *  Applying it here would have hidden every extension on the board. */
+/** Every way out of this hex, having entered at `entryEdge`. STRICTLY PORT TO PORT: an exit appears only when
+ *  an authored rail joins the two edges, so two disconnected curves on one tile yield two disjoint answers
+ *  rather than one junction.
+ *  WHAT THIS DOES NOT CHECK, and the previous version of this comment wrongly claimed it did: whether anything
+ *  lies beyond the exit. The both-sides rule lives in `neighbourAcross` and has to stay there -- a tile lay
+ *  extends the network across an edge with nothing behind it yet, so a caller looking for build sites needs the
+ *  exits WITHOUT that filter. Applying it here would have hidden every extension on the board. */
 export function traversalsFrom(
   mapGrid: MapGridResponse,
   q: number,
@@ -318,12 +202,10 @@ export function segmentsTouchingEdge(
   r: number,
   edge: number,
 ): readonly SegmentKey[] {
-  /* Derived by asking which exits this edge reaches: the rails carrying
-     those transits are the rails touching it. A terminus on a hub uses only
-     its own spoke, so the entry spoke is the intersection of every
-     traversal's segment list -- but taking the FIRST traversal's first
-     segment is both simpler and correct, because `pathsForTraversal`
-     always returns the entry rail first. */
+  /* Derived by asking which exits this edge reaches: the rails carrying those transits are the rails touching it.
+     A terminus on a hub uses only its own spoke, so the entry spoke is the intersection of every traversal's
+     segment list -- but taking the FIRST traversal's first segment is both simpler and correct, because
+     `pathsForTraversal` always returns the entry rail first. */
   for (const exitEdge of liveEdgesForHex(mapGrid, q, r)) {
     if (exitEdge === edge) continue;
     const segments = traversalSegments(mapGrid, q, r, edge, exitEdge);

@@ -1,24 +1,15 @@
 // frontend/src/components/HexGridRenderer.tsx
 //
-// Milestone 3: the 2D Canvas Graphics Engine's hex-map layer.
+// The 2D canvas rail-map layer: terrain fills, decoded track, landmarks,
+// station tokens, badges, nameplates, route overlays and the click interceptor.
 //
-// ===================================================================
-//  THE DESIGN NOTES FOR THIS FILE LIVE IN
-//      ./HexGridRenderer.design-notes.md
-// ===================================================================
+// Design history -- notes #1 through #600+ -- lives in
+// docs/ai_architecture/canvas_rendering.md (this component) and
+// docs/ai_architecture/hex_tile_math.md (the four modules split out of it).
 //
-// That document holds the full numbered design-note history this header used
-// to carry inline -- ~3,180 lines of it, 26% of this file, all of it sitting
-// above the first `import`. Every `design note #N` reference in this file and
-// elsewhere in the codebase resolves to an entry there, under its original
-// number.
-//
-// Moved rather than deleted (monolith split, Phase 0): the notes are the
-// record of WHY this renderer is shaped the way it is, and several of them
-// document bugs that are easy to reintroduce. They are worth more in a file
-// you can read as prose than as a wall a code reader has to scroll past.
-//
-// NEW DESIGN NOTES GO IN THAT FILE, not back here.
+// The five rail-map modules share ONE note-numbering space: the monolith split
+// moved code and its notes together, so #209 means the same note wherever it
+// is cited. New notes go in docs/ai_architecture/, not back in this header.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
@@ -28,17 +19,9 @@ import {
   tileCitySlotPoints,
   tileCityTokenRadius,
 } from "./TileGraphics";
-// Monolith split, Phase 1. Imported under their own names because this file's
-// own code refers to them unqualified throughout; the matching
-// `export ... from` re-export further down keeps them on this module's public
-// surface for `App.tsx` / `TileSelectionPopup.tsx`. A re-export creates no
-// local binding, so the two statements do not collide.
-//
-// MUST live here, at the top, not beside that re-export: ESLint's
-// `import/first` requires every `import` to precede all other statements, and
-// this file's first statement is ~3,300 lines below its own header comment,
-// which makes "next to the thing it relates to" and "at the top" look like
-// the same place when they are not.
+// Imported here AND re-exported below: the re-export keeps App.tsx's and
+// TileSelectionPopup's import paths working, and creates no local binding so the two
+// do not collide. MUST be at the top -- ESLint import/first.
 import {
   TILE_CATALOG_BY_ID,
   type TileColorTier,
@@ -158,19 +141,8 @@ import {
 /* Contract data mirrors -- see design note #2                        */
 /* ------------------------------------------------------------------ */
 
-/* ------------------------------------------------------------------ */
-/* Contract mirrors -- EXTRACTED (monolith split, Phase 3a)             */
-/* ------------------------------------------------------------------ */
-//
-// `MapTileEntry`, `MapGridResponse`, `QueryCapableClient`,
-// `StationTokenCompany`, `LegalTilePlacement(sResponse)`,
-// `HexClickQueryState` and their helpers now live in `./hexContractTypes`.
-// Extracted ahead of the geometry (Phase 3) because the slot engine takes
-// these types and would otherwise have imported back into this file.
-//
-// Re-exported below: `App.tsx` and `TileSelectionPopup.tsx` import several of
-// these from THIS module, so the re-export keeps every existing import path
-// working and makes the move verifiable as a pure relocation.
+// Contract mirrors extracted to ./hexContractTypes (Phase 3a), ahead of the geometry because the slot engine takes these types and would otherwise import back into this file.
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
 export type {
   HexClickQueryState,
   LegalTilePlacement,
@@ -181,58 +153,17 @@ export type {
 } from "./hexContractTypes";
 export type { RouteOverlay } from "./hexCanvasPrimitives";
 
-/** `DoubleTown` (item 1/2, structural calibration pass): a single hex
- *  printing TWO independent town stops -- Akron & Canton (G7), Reading &
- *  Allentown (G17), New Haven & Hartford (F20) on the real board. Mirrors
- *  `state::TerrainType::DoubleTown` in the Rust backend exactly.
- *
- *  `DoubleCityHub` (Tile Selection Catalog verification pass): the same
- *  "two stops, one hex" pattern as `DoubleTown`, but for the four
- *  preprinted OO double-city hexes (`YELLOW_OO_HEXES`) instead of an
- *  ordinary town. Mirrors `state::TerrainType::DoubleCityHub` exactly --
- *  see `hexmap.rs` module doc comment #18 for the full backend enforcement
- *  this terrain now drives (an OO hex can only ever be upgraded with this
- *  terrain's tile, never plain `MajorCityHub`). */
-/* ------------------------------------------------------------------ */
-/* Tile catalog -- EXTRACTED (monolith split, Phase 1)                  */
-/* ------------------------------------------------------------------ */
-//
-// `TerrainType`, `TileColorTier`, `TileCatalogEntry`, the 46-entry
-// `TILE_CATALOG` mirror of `hexmap::TILE_CATALOG`, `TILE_CATALOG_BY_ID` and
-// both dev-only drift tripwires now live in `./hexTileCatalog`.
-//
-// Re-exported here rather than merely imported, because these are part of
-// this component's PUBLIC surface -- `App.tsx` and `TileSelectionPopup.tsx`
-// both import `TerrainType`/`TileCatalogEntry` from this module today. A
-// re-export keeps every existing import path working, so the extraction is
-// invisible to consumers and can be verified as a pure move: no call site
-// changed, and `tsc` proves the graph still resolves.
-//
-// The matching `import` of the same names is at the TOP of this file, not
-// here -- `import/first`. Only these `export ... from` statements may sit in
-// the module body.
+// DoubleTown/DoubleCityHub mirror state::TerrainType exactly. Tile catalog extracted to ./hexTileCatalog (Phase 1); re-exported because these are part of this component's public surface.
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
 export type { TerrainType, TileColorTier, TileCatalogEntry } from "./hexTileCatalog";
 export { TILE_CATALOG_SIZE, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 
-/* ------------------------------------------------------------------ */
-/* Board data -- EXTRACTED (monolith split, Phase 2)                    */
-/* ------------------------------------------------------------------ */
-//
-// Every static table describing the 1830 board -- hexes, landmarks, gray
-// hexes, off-board terminals, palettes, terrain fees -- now lives in
-// `./hexBoardData`, along with the pure lookups over them. The `import` is at
-// the TOP of this file, not here: `import/first` requires every import to
-// precede all other statements.
+// Board data extracted to ./hexBoardData (Phase 2). The import is at the top of the file -- import/first.
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
 
 
-/* ------------------------------------------------------------------ */
-/* Hex geometry + slot engine -- EXTRACTED (monolith split, Phase 3)    */
-/* ------------------------------------------------------------------ */
-//
-// The axial coordinate system, board topology, the archetype classifier, the
-// 13-slot perimeter placement engine and the hex naming/valuation lookups all
-// live in `./hexGeometry` now. The `import` is at the top of this file, with
-// the others -- `import/first`.
+// Geometry and the 13-slot engine extracted to ./hexGeometry (Phase 3).
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
 
 // `RouteOverlay` moved to `./hexCanvasPrimitives` alongside its only consumer,
 // `drawRouteOverlays`. Re-exported below so `App.tsx`'s import path is unchanged.
@@ -242,133 +173,26 @@ export interface HexGridRendererProps {
   mapGrid: MapGridResponse;
   /** Pixel radius (center to corner) of one hex. Default 42. */
   hexSize?: number;
-  /** Explicit pixel size override. Omit both (the default, and the expected
-   *  usage per design note #19/Request F item 3, refined by design note
-   *  #27/item 1) to let this component measure its own wrapping `<div>`'s
-   *  available WIDTH via `ResizeObserver` and flex-fill that; `height` in
-   *  that case is no longer independently measured -- it's DERIVED from the
-   *  real board's own aspect ratio at that width, so the canvas always
-   *  renders at its true full proportional size instead of being cropped to
-   *  fit a bounded ancestor pane. Provide both explicitly to keep the old
-   *  fixed-pixel, independently-set-dimensions behavior. */
+  /** Omit both to measure the wrapper's WIDTH and derive height from the board's own aspect ratio, so the canvas renders at true full proportional scale instead of being cropped to a bounded ancestor.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #27 */
   width?: number;
   height?: number;
   className?: string;
-  /** Enables the click interceptor (design note #7): when all four of
-   *  `queryClient`/`contractAddress`/`gameId`/`protocolId` are provided, a
-   *  genuine click on a hex (as opposed to a pan drag -- see
-   *  `handlePointerUp`) converts the pixel to `(q, r)` and fires
-   *  `GetLegalTilePlacements` against `queryClient`. Omit any of them to
-   *  keep this component's original pan/zoom-only, query-free behavior. */
+  /** All four interceptor props together enable the click -> GetLegalTilePlacements path; omit any to keep pan/zoom-only, query-free behaviour.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #7 */
   queryClient?: QueryCapableClient;
   contractAddress?: string;
   gameId?: number;
   protocolId?: number;
-  /** Traced train routes to draw over the rail map -- design note #137
-   *  (F-1). One entry per train; omit or pass `[]` for no overlay.
-   *
-   *  This is the layer the board previously had NO equivalent of: track was
-   *  drawn, but which track a train actually RAN was never shown, so a player
-   *  building a manual route had no visual confirmation of the path they were
-   *  assembling. */
+  /** Traced train routes to draw over the map. The layer the board had no equivalent of: track was drawn, but which track a train RAN was never shown.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #137 */
   routeOverlays?: readonly RouteOverlay[];
-  /* ==================================================================
-   *  DESIGN NOTE 374: THE MAP DRIVES THE CURSOR TOO
-   * ==================================================================
-   *
-   * `hexCanvasPrimitives.ts` design note #373 explains the shared cursor.
-   * This is the map's end of it, and it is the only one of the three
-   * surfaces that has to WORK for the connection: on a canvas there are no
-   * elements to hover, so a route path cannot raise an event by itself.
-   *
-   * THE HIT TEST IS HEX-GRAINED, deliberately. `handlePointerMove` already
-   * resolves the pointer to an axial `(q, r)` for the tooltip and the hover
-   * highlight; asking which overlays contain that hex is a lookup against
-   * data already in hand. Pixel-perfect proximity to the drawn spline would
-   * mean re-deriving every authored `Path2D` under its transform and
-   * running `isPointInStroke` per frame, for a gain the player cannot see:
-   * routes run along rails, and a rail occupies its hex.
-   *
-   * A HEX ON TWO ROUTES HIGHLIGHTS NEITHER. Overlapping routes are the
-   * common case in 1830 -- that is why they have separate colours at all --
-   * and picking one arbitrarily would be worse than picking none: the
-   * player would hover a shared segment, see a highlight, and conclude the
-   * wrong train ran it. Ambiguity resolves to no answer.
-   */
+  /* The map's end of the shared route cursor, and the only surface that has to work -- on a canvas there are no elements to hover. Hex-grained hit test; a hex on two routes highlights neither.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #374 */
   highlightedTrainIndex?: number | null;
   onHighlightRoute?: (trainIndex: number | null) => void;
-  /* ==================================================================
-   *  DESIGN NOTE 223: THE WILD BLUE YONDER
-   * ==================================================================
-   *
-   * REPORTED BUG: "players can currently click anywhere to lay track."
-   *
-   * They could. The click path's only board-level gate is
-   * `evaluateHexForTileLaying`, which answers a STATIC question -- is this a
-   * real hex, and is it the kind of hex a tile may ever go on -- and knows
-   * nothing about the corporation doing the laying. So every buildable hex
-   * on the board opened the picker, including ones on the far side of the
-   * map from any track the company owns.
-   *
-   * When this set is supplied the board renders 18xx.games-style: hexes the
-   * acting corporation's network reaches keep their normal brightness and
-   * take a highlight ring, everything else is veiled, and a click outside
-   * the set is reported as `"blocked"` with a reason rather than opening a
-   * picker the contract would refuse.
-   *
-   * KEYED `"q,r"`, matching `utils/trackReach.ts`'s `hexKey`. A `Set` rather
-   * than an array because the draw loop tests every hex on the board on
-   * every frame, and a linear scan per hex is quadratic on a 100-hex map.
-   *
-   * OMITTED means NO DIMMING AND NO GATE -- the previous behaviour exactly.
-   * That is what every phase other than Lay Track passes, and what Lay Track
-   * itself passes when the corporation's reach cannot be determined (see
-   * `LayableHexResult.unconstrained`): a board dimmed on a guess would take
-   * the map away from the player over missing data. */
-  /* ==================================================================
-   *  DESIGN NOTE 241: THREE TIERS, NOT TWO
-   * ==================================================================
-   *
-   * This was a single `ReadonlySet` of legal hexes: anything in it kept its
-   * brightness, everything else was veiled. Two reports came out of that
-   * shape and both are about the same missing tier.
-   *
-   *   THE NETWORK VANISHED. A player choosing where to extend is reasoning
-   *   about the route the extension joins -- and that route was in the dark,
-   *   because it is not itself a legal target. `visible` is the fix: the
-   *   corporation's own track stays lit alongside the placements.
-   *
-   *   THE HIGHLIGHT WAS A BORDER. A crisp green ring reads as a hard UI
-   *   chrome element stamped over the cardboard. `highlighted` still marks
-   *   the legal set, but it is drawn as a soft bloom (see the draw pass) so
-   *   it reads as the board glowing rather than as a box drawn on it.
-   *
-   * `highlighted` MUST BE A SUBSET OF `visible` -- a hex that is legal but
-   * dimmed would be the worst of both. The caller unions them rather than
-   * this asserting it, since the caller is the one with both sets in hand.
-   */
-  /* ==================================================================
-   *  DESIGN NOTE 269: ONE THING ON A HEX AT A TIME
-   * ==================================================================
-   *
-   * REPORTED: clicking a hex during Lay Track opens the tile selector AND
-   * leaves the hover tooltip sitting on top of it.
-   *
-   * Both are anchored to the same hex, so they do not merely overlap by
-   * accident -- they are drawn at the same point by design, one over the
-   * other. The tooltip is also the less useful of the two by a distance:
-   * it names a hex the player has just deliberately clicked, and the
-   * selector directly above it already says which hex it is for.
-   *
-   * The tooltip is HOVER state, and the picker is a MODAL surface, so the
-   * renderer cannot work this out for itself: the ring is mounted by
-   * `App.tsx`, outside this component. Hence a prop rather than internal
-   * logic -- the owner of the modal is the only one who knows it is open.
-   *
-   * `handlePointerMove` refuses to set the tooltip while this is on, and an
-   * effect clears any tooltip already showing when it goes on. Both are
-   * needed: the first stops it reappearing on the next mouse move, the
-   * second removes the one that was on screen at the moment of the click. */
+  /* layFocus dims what the acting corporation cannot reach. #241: three tiers, not two -- the corporation's own network stays lit alongside the legal placements, and highlighted must be a subset of visible. #269: one thing on a hex at a time.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #223 */
   suppressHoverTooltip?: boolean;
   layFocus?: {
     /** Not dimmed: the corporation's network plus its legal targets. */
@@ -379,100 +203,21 @@ export interface HexGridRendererProps {
      *  the board, the toolbar and the route line agree about whose turn it
      *  is. Omitted falls back to the neutral highlight ink. */
     glowColor?: string;
-    /* ==================================================================
-     *  DESIGN NOTE 585: THE SLOT RINGS ARE FOR HOME STATIONS ONLY
-     * ==================================================================
-     *
-     * INSTRUCTED: "let's restrict the token station glow to the home station
-     * placements."
-     *
-     * The reasoning in the request is the part worth keeping. A home station
-     * is ONE hex with one or two nodes -- a bounded problem, and the moment a
-     * new player has least idea what is being asked of them. A built-up
-     * corporation's Tokens step is the opposite: many legal tiles, each a
-     * fresh chance for the geometry to be wrong (it has been wrong three
-     * times: design notes #515, #557, #580), and by then the player placing
-     * their fourth token does not need the hint.
-     *
-     * So the rings are earned where they help and dropped where they were
-     * mostly a maintenance liability. `undefined` draws none, which is now
-     * every case except the one flag below.
-     *
-     * ONE SLOT, NOT ALL OF THEM. When set, only the node the corporation's
-     * home token actually belongs in glows -- resolved by asking
-     * `stationMarkerPoint` (design note #584) rather than by a second table
-     * of home cities. */
+    /* Slot rings are for HOME placements only, and only the home slot -- resolved by asking stationMarkerPoint (#584) rather than a second table of home cities.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #585 */
     homeSlotGlow?: boolean;
-    /* ==================================================================
-     *  DESIGN NOTE 377: THE VEIL IS BACK, FOR ONE PLAYER
-     * ==================================================================
-     *
-     * Design note #367 removed the Lay Track veil outright on two
-     * objections. Only one of them survives, and it needed a condition
-     * rather than a deletion:
-     *
-     *   RIGHT: "it dimmed the board for EVERYONE." `layFocus` describes ONE
-     *   corporation's reach and every player sees the same canvas, so three
-     *   of four watched the map grey out for a restriction that was not
-     *   theirs. That is what this flag fixes -- the veil now belongs to the
-     *   player whose turn it is.
-     *
-     *   OVERSTATED: "it suppressed the board to emphasise a subset." True
-     *   at `0.55`, where more than half the light went. The active player
-     *   genuinely does want contrast against their own legal set, and the
-     *   answer is a lighter overlay (`LAY_TRACK_DIM_ALPHA`, now `0.22`),
-     *   not none. Deleting it removed the contrast along with the problem.
-     *
-     * SET BY THE SHELL, from `isMyTurn`, because only the shell knows who
-     * is watching -- the renderer has a board and no identity. In hotseat
-     * it is true by construction (whoever is at the keyboard holds the
-     * turn) and correctly goes false when a tester pins the view to another
-     * seat, which is how the passive-player case is reachable in sandbox.
-     *
-     * DEFAULT `false`: a caller that has not thought about whose turn it is
-     * gets the undimmed board, which is the safe half of the asymmetry. */
+    /* The veil belongs to the player whose turn it is. Set by the shell from isMyTurn, because the renderer has a board and no identity. Default false -- the undimmed board is the safe half.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #377 */
     dim?: boolean;
-    /* ==================================================================
-     *  DESIGN NOTE 472: THE HEX BEING DECIDED, RIGHT NOW
-     * ==================================================================
-     *
-     * `"q,r"` of the hex whose tile selector is open, or omitted when none
-     * is. Everything else on the board -- including the OTHER legal
-     * placements -- veils at `LAY_TRACK_FOCUS_DIM_ALPHA` instead of the
-     * ordinary one.
-     *
-     * A KEY RATHER THAN A SET, deliberately. Exactly one radial menu can be
-     * open at a time (`radialSelector` is a single nullable object), so a
-     * set would be a shape that permits a state the app cannot reach, and
-     * the first reader would wonder what two focused hexes look like.
-     *
-     * SET BY THE SHELL, like `dim`, because only the shell knows a ring is
-     * open -- the renderer draws a board and has no idea a menu exists over
-     * it. */
+    /* A KEY, not a set: exactly one radial menu can be open, so a set would permit a state the app cannot reach.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #472 */
     soleFocusKey?: string;
   };
-  /** Design note #159: the pointer's meaning right now.
-   *
-   *  `"token"` puts the canvas in station-token targeting mode: a crosshair
-   *  cursor, so the board visibly stops being a place you click to lay
-   *  track and becomes a place you click to drop a token. A mode with no
-   *  cursor change is a mode players forget they are in, and then every
-   *  subsequent click does something they did not intend. */
+  /** A mode with no cursor change is a mode players forget they are in, and then every later click does something they did not intend.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #159 */
   cursorMode?: "default" | "token";
-  /** Design note #496: whose token the `"token"` cursor is placing. The
-   *  cursor composites this corporation's herald over its livery, so the
-   *  pointer is the piece rather than a generic disc.
-   *
-   *  BOTH FIELDS TOGETHER, rather than a ticker this component then looks a
-   *  colour up for: `stationTickerColor` is keyed by `company_id`, and the
-   *  caller is the one holding that id. Deriving it here would mean either a
-   *  second ticker-to-colour table or a reverse lookup, and design note #428
-   *  spent a whole pass removing the last duplicate of that mapping.
-   *
-   *  OMITTED KEEPS THE GENERIC ICON, deliberately: every caller that arms
-   *  targeting without knowing the corporation (a preview, a thumbnail) gets
-   *  exactly the previous behaviour rather than a cursor in some default
-   *  company's colours. */
+  /** Both fields together rather than a ticker this component looks a colour up for -- #428 spent a whole pass removing the last duplicate of that mapping. Omitted keeps the generic icon.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496 */
   tokenCursor?: { ticker: string; color: string } | null;
   /** Design note #318: the live private company roster, for the reservation
    *  badges. Omitted draws none -- a board with no roster must not invent a
@@ -488,30 +233,8 @@ export interface HexGridRendererProps {
      *  to the cursor. */
     centroidX: number;
     centroidY: number;
-    /* ==================================================================
-     *  DESIGN NOTE 516: THE NODE'S OWN POINT, NOT THE HEX'S
-     * ==================================================================
-     *
-     * REPORTED: the placement ring and preview token snap to the hex
-     * centroid, which fails on dual-city and OO tiles where the city nodes
-     * are offset from it.
-     *
-     * The centroid is the right anchor for a TILE picker -- that ring
-     * surrounds the whole hex, because the whole hex is being replaced. It
-     * is the wrong anchor for a STATION confirmation, which is about one
-     * slot on that hex, and design note #453 had already made the click
-     * resolve WHICH slot (`cityIndex`) without giving the caller anywhere
-     * to draw it. So the ring knew the answer and still floated at the
-     * middle.
-     *
-     * `nodeX`/`nodeY` are that slot's centre, in the same canvas-CSS space
-     * and through the same transform as `centroidX`/`centroidY`, so a
-     * caller swaps one pair for the other with no further maths.
-     *
-     * THEY FALL BACK TO THE CENTROID rather than being nullable. A hex with
-     * no resolvable city node has exactly one sensible anchor and it is the
-     * centre -- making the caller handle `null` would push a decision
-     * outward that has only one correct answer. */
+    /* The centroid is right for a TILE picker and wrong for a STATION confirmation. Falls back to the centroid rather than being nullable: a hex with no resolvable node has exactly one sensible anchor.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #516 */
     nodeX: number;
     nodeY: number;
     q: number;
@@ -522,27 +245,8 @@ export interface HexGridRendererProps {
     /** The hex's canonical board label -- "G19". `null` for a coordinate
      *  that is not a real board hex. THIS is the identifier. */
     boardLabel: string | null;
-    /* ==================================================================
-     *  DESIGN NOTE 453: WHICH CITY, NOT JUST WHICH HEX
-     * ==================================================================
-     *
-     * REPORTED: clicking a hex to place a station ignores the specific city
-     * node the user clicked.
-     *
-     * It did, because this payload had no way to say. `PlaceStationToken`
-     * carries an optional `city_index` and `sessionKey.ts` records exactly
-     * why it matters: "a hex carrying two separate cities (New York #54/#62,
-     * the OO tiles) needs it to be answerable at all". Every caller omitted
-     * it, so the contract fell back to "lowest-indexed city with a free
-     * slot" -- which is always legal and, on a double-city hex, is a coin
-     * toss against what the player clicked.
-     *
-     * `null` MEANS "COULD NOT TELL", NOT "CITY ZERO", and the distinction is
-     * the whole reason this is nullable. On an untiled preprinted double
-     * city there is no per-city geometry to hit-test against, so the honest
-     * answer is nothing -- and omitting the field lets the contract apply
-     * its documented fallback rather than having this file guess and send a
-     * wrong index with full confidence. */
+    /* null means "could not tell", NOT "city zero" -- omitting lets the contract apply its documented fallback rather than sending a guessed index with full confidence.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #453 */
     cityIndex: number | null;
     clientX: number;
     clientY: number;
@@ -554,22 +258,11 @@ export interface HexGridRendererProps {
    *  `tileId` at `orientation` on hex `(q, r)` -- the live map preview (see
    *  design note #7 / item 3 of the popup feature). */
   previewTile?: { q: number; r: number; tileId: number; orientation: number } | null;
-  /** The room's live `GameStateResponse.current_global_era` -- see design
-   *  note #15/item 4. Drives which single off-board revenue tier renders
-   *  inside each red off-board hex. Defaults to `"Yellow"` (every new
-   *  game's real starting era) so this component still renders sensibly
-   *  when the host app hasn't wired a live `GetGameState` query yet. */
+  /** The live current_global_era, driving which off-board revenue tier renders. Defaults to Yellow so this still renders before a live query is wired.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
   currentEra?: TileColorTier;
-  /** The room's live `GameStateResponse.public_companies`, verbatim (or a
-   *  `StationTokenCompany[]` subset of it) -- see design note #36. Drives
-   *  the Station Token marker rendering pass: a muted preprinted marker at
-   *  each `STATION_HOME_HEXES` entry for any company not yet `is_floated`,
-   *  and a real ticker-labeled marker at every one of a floated company's
-   *  own `station_token_hexes`. Defaults to an empty array, so this
-   *  component still renders its existing city circles sensibly (just with
-   *  no Station Token overlay at all) when the host app hasn't wired a
-   *  live `GetGameState` query yet -- the same fallback pattern `currentEra`
-   *  above already establishes. */
+  /** The live public_companies, driving the station-token pass. Defaults to an empty array -- the same fallback pattern currentEra establishes.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
   publicCompanies?: StationTokenCompany[];
 }
 
@@ -583,39 +276,12 @@ const DEFAULT_HEX_SIZE = 42;
 const DEFAULT_WIDTH = 900;
 const DEFAULT_HEIGHT = 640;
 
-/** Design note #36/item 1: was a flat `MAX_ZOOM = 3` ABSOLUTE cap, applied
- *  not just to the interactive zoom-in handlers below but to `minZoom`
- *  itself (the baseline board-fit zoom) -- on a wide-enough viewport,
- *  `fitZoom = width / boundsWidth` legitimately exceeds `3`, and that old
- *  absolute cap would silently clamp the baseline fit back DOWN to `3`,
- *  leaving real unused width on a widescreen pane instead of letting the
- *  board's true full-width scale (this item's "static max/min scale
- *  fraction override" that "compresses our map"). Redefined as a
- *  MULTIPLIER on `minZoom` instead of an absolute pixel-density constant --
- *  every use site below now computes `minZoom * MAX_ZOOM_MULTIPLIER`
- *  fresh, so the interactive "zoom in past the fit baseline" ceiling always
- *  scales WITH the baseline instead of ever being able to sit below it
- *  (the old absolute constant could invert -- a `minZoom` of `4` on a very
- *  wide viewport with the old `MAX_ZOOM = 3` would have made the
- *  "detail zoom" ceiling literally SMALLER than the baseline fit, an
- *  impossible zoomed-OUT "zoom in" button). `3` is kept as the multiplier's
- *  own value -- unrelated to the old absolute-pixel-density meaning, it
- *  just happens to be a reasonable "3x closer than the full-board fit"
- *  interactive zoom-in ceiling either way. */
+/** MAX_ZOOM is a MULTIPLIER on minZoom, not an absolute cap: the old constant could clamp the baseline fit down on a wide viewport, and could invert outright.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
 const MAX_ZOOM_MULTIPLIER = 3;
 
-/** Design note #43: how far BELOW the fit-to-screen scale a player may zoom.
- *
- *  `minZoom` is the scale at which the board exactly fills the pane, and it
- *  was also used as the hard lower bound -- so "Fit to Screen" WAS the zoom
- *  floor and the "-" button became a no-op the moment you reached it. That
- *  is wrong for a board this wide: pulling back past the fit to see the
- *  whole map with margin around it, while judging a long route, is a normal
- *  thing to want and there was no way to do it.
- *
- *  0.4 lets the board shrink to roughly a third of the pane width, which is
- *  far enough to be useful and near enough that the map is still legible.
- *  `ABSOLUTE_MIN_ZOOM_FLOOR` still backstops a degenerate viewport. */
+/** How far BELOW the fit a player may zoom. minZoom was also the hard floor, so "Fit to Screen" WAS the floor and "-" became a no-op there.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #43 */
 const MIN_ZOOM_MULTIPLIER = 0.4;
 /** Absolute safety floor under the dynamically-computed board-fit minimum
  *  zoom (design note #8) -- guards only against a degenerate near-zero
@@ -623,23 +289,8 @@ const MIN_ZOOM_MULTIPLIER = 0.4;
  *  below is always well above this. */
 const ABSOLUTE_MIN_ZOOM_FLOOR = 0.1;
 
-/** Rail Map Overhaul (design note #42): "Clean Up Control Overlay Overlaps."
- *  The old separate "Toggle Detailed View" button (design note #13) is
- *  removed outright per that item's explicit instruction -- `detailedView`
- *  itself is UNCHANGED (still gates pan/zoom, design note #13), it's just no
- *  longer toggled by its own dedicated button; `handleZoomStep` (design note
- *  #17) already flips it on by itself the moment "+"/"-" is pressed, and
- *  "Fit to Screen" already re-locks it back off, so removing this one
- *  redundant control loses no capability. The former "+"/"-"/"Fit to
- *  Screen" stack is consolidated into ONE floating "clean container" (this
- *  panel) -- a single bordered/backed card holding City Names/"-"/"+"/"Fit
- *  to Screen" as a horizontal row -- instead of two separate overlay
- *  clusters. Positioned top-right (the corner the old toggle button used to
- *  occupy) with a generous `20px` margin inset -- larger than the old
- *  16px -- specifically so this single compact row sits further inside the
- *  canvas, away from `drawBoardMarginLabels`' own row-letter/column-number
- *  text, which (design note #28) is drawn deliberately close to the true
- *  board edge. */
+/** The consolidated top-right control card, inset 20px so it clears drawBoardMarginLabels' own text (#28 draws those deliberately close to the board edge).
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #42 */
 const MAP_CONTROLS_PANEL_STYLE: React.CSSProperties = {
   // Design note #44: static, below the map. Was `absolute; top/right: 20px`
   // over the canvas, covering the coordinate labels.
@@ -675,35 +326,8 @@ const CAMERA_CONTROL_BUTTON_STYLE: React.CSSProperties = {
   textAlign: "center",
 };
 
-/** The floating "G19: New York (Value: $20)"-style coordinate+value
- *  tooltip -- see design note #21, scaled up and value-enriched by design
- *  note #26/item 2. `position: fixed` since it tracks the raw viewport
- *  pointer position (`clientX`/`clientY`), not anything relative to the
- *  wrapping panel. `pointerEvents: "none"` so it can never itself intercept
- *  the pointer events it's reporting on. Padding/font size roughly doubled
- *  from the original coordinate-only tooltip (design note #21) so the now-
- *  longer "{label}: {name} (Value: $X)" string stays fully legible instead
- *  of reading as a cramped afterthought. */
-/* ==================================================================
- *  DESIGN NOTE 29: THE HOVER CARD WAS A HEADING WITH A BOX AROUND IT
- * ==================================================================
- *
- * REPORTED: hover cards and tooltips render at massive dimensions.
- *
- * This one was the worst offender on the board, and for a specific
- * reason: it drew at `FONT_SIZE.heading` -- the SECTION HEADING step, the
- * same size a panel title uses -- with `whiteSpace: "nowrap"` and no
- * maximum width. So a hover over New York produced a single unbroken line
- * at heading size carrying the hex name, its value, its terrain cost and
- * every station on it, and the card grew until the sentence ended. On a
- * 1080p screen that is a band most of the way across the map.
- *
- * A tooltip is ANNOTATION. It sits over the thing it describes and should
- * be the smallest readable thing on screen, not the largest -- so it takes
- * the `small` step, a hard 280px ceiling, and wraps rather than growing.
- *
- * `nowrap` went with the width cap, necessarily: a cap on a line that
- * cannot break is a cap that does nothing. */
+/** A tooltip is ANNOTATION -- the smallest readable thing on screen, not the largest. This drew at heading size with nowrap and no max width. nowrap went with the cap: a cap on a line that cannot break does nothing.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #29 */
 const HOVER_TOOLTIP_STYLE: React.CSSProperties = {
   position: "fixed",
   zIndex: 20,
@@ -728,15 +352,8 @@ interface BoardContentBounds {
   maxY: number;
 }
 
-/** The `[lo, hi]` pan range, along one axis, that keeps the board's own
- *  footprint from ever being fully dragged out of the canvas viewport at a
- *  given zoom level -- see design note #8. A single formula handles both
- *  the "board bigger than the viewport" case (keep the viewport inside the
- *  board) and the "board smaller than the viewport" case (keep the board
- *  inside the viewport): the two raw candidate bounds swap their min/max
- *  ordering exactly at the point where the board's scaled size crosses the
- *  viewport size, so sorting them always produces the correct pair either
- *  way, with no branching needed. */
+/** One reflected min/max formula covers both cases without branching -- the two candidate bounds swap ordering exactly where the scaled board crosses the viewport size, so sorting always yields the right pair.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8 */
 function panClampRange(
   boundMin: number,
   boundMax: number,
@@ -766,52 +383,19 @@ function clampPanToBoard(
   };
 }
 
-/** Stable empty-array default for the `publicCompanies` prop (design note
- *  #36) -- a fresh `[]` literal in the destructuring default below would
- *  be a NEW array reference on every render, which would in turn make
- *  `draw`'s own `useCallback` dependency array (which includes
- *  `publicCompanies`) see a "changed" dependency every render and rebuild
- *  the callback needlessly. One shared module-level reference avoids that.
- *  Typed as plain (non-`readonly`) `StationTokenCompany[]`, matching the
- *  prop's own declared type exactly -- never actually mutated, but a
- *  `readonly` array literal here would not be assignable to that
- *  destructuring default. */
+/** One shared module-level empty array: a fresh [] in the destructuring default would be a new reference every render and rebuild draw's useCallback.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
 const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
 /** Same reasoning: a stable identity so an omitted roster does not remount
  *  the memo that derives the reservations. */
 const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
 
-/** Design note #365: how long a pointer must rest on a hex before its
- *  tooltip appears.
- *
- *  Design note #383: 2000ms -> 1200ms, reported as slightly too long. The
- *  delay exists so that sweeping the pointer across the board does not trail
- *  a queue of tooltips behind it, and 1200ms still clears that bar -- a
- *  deliberate pause reads as roughly a second, while a sweep crosses a hex
- *  in a fraction of one. What 2000ms additionally cost was the case the
- *  delay is FOR: a player who stops on a hex intending to read it waited
- *  long enough to wonder whether anything was coming. */
+/** 2000ms -> 1200ms. The delay stops a sweep trailing tooltips; 2000ms additionally cost the case the delay is FOR -- a player who stopped waited long enough to wonder if anything was coming.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #383 */
 export const HEX_TOOLTIP_DELAY_MS = 1200;
 
-/* ==================================================================
- *  DESIGN NOTE 366: THE RESERVATION, IN THE TOOLTIP
- * ==================================================================
- *
- * The badge (design note #364) says a hex is spoken for; it does not have
- * room to say by whom in words, and two or three letters on a corner are
- * only legible to somebody who already knows the abbreviation.
- *
- * The tooltip is where that gets spelled out, and it is now worth reading:
- * design note #365 made it something a player deliberately waits for rather
- * than something that flashes past, so a line appended here is a line
- * somebody asked for.
- *
- * ONE SHORT CLAUSE, appended rather than substituted. The hex's own
- * description -- its name, its terrain, its value -- is why the player
- * hovered; the reservation is a qualifier on it. "Reserved by CSL" is four
- * words and matches the badge exactly, so the mark on the board and the
- * text under the cursor teach each other.
- */
+/* The badge says a hex is spoken for; the tooltip says by whom. One short clause, APPENDED rather than substituted -- the hex's description is why the player hovered.
+   See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #366 */
 export function withReservationNote(
   description: string,
   reservation: { initials: string } | null,
@@ -872,26 +456,8 @@ export function HexGridRenderer({
       const entry = entries[0];
       if (!entry) return;
       const { width: observedWidth, height: observedHeight } = entry.contentRect;
-      // Guard against a transient near-zero-size measurement clobbering the
-      // last known-good `measuredSize` (design note #34/item 1). Originally
-      // just `< 1`, which only caught a literal zero -- too narrow to catch
-      // the actual reported bug: switching away from this component's tab
-      // and back (a React re-render that toggles the host pane's display,
-      // not an unmount) can report a transient SINGLE-DIGIT pixel size for
-      // one observation (e.g. a hidden pane briefly reporting `contentRect`
-      // as `{width: 4, height: 2}` mid-swap, before layout settles back to
-      // its real size) -- comfortably past the old `< 1` gate, so it used to
-      // sail through and collapse `measuredSize` (and therefore `hexSize`/
-      // `minZoom`/the whole camera fit) down to that near-zero size, which
-      // is the "crashing the layout down to zero" this item reports.
-      // Widened to `<= 10`: still small enough that no real, usable board
-      // pane will ever legitimately measure at or under it, but comfortably
-      // covers the transient tab-swap readings actually seen. Simply
-      // `return`ing here (skipping `setMeasuredSize` entirely) is already
-      // exactly the "preserve last known valid ... settings" behavior this
-      // item asks for -- React state isn't touched, so `measuredSize` stays
-      // at whatever it was before this bad reading, with zero extra state
-      // needed to "remember" it separately.
+      // Widened from < 1 to <= 10: a tab swap can report a transient single-digit contentRect that sails past the old gate and collapses the whole camera fit. Returning without setState already IS "preserve last known valid".
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #34
       if (observedWidth <= 10 || observedHeight <= 10) return;
       setMeasuredSize((prev) => {
         if (prev.width === observedWidth && prev.height === observedHeight) return prev;
@@ -902,44 +468,15 @@ export function HexGridRenderer({
     return () => observer.disconnect();
   }, [widthProp, heightProp]);
 
-  // The board's own fixed, unscaled footprint -- deliberately memoized on
-  // `hexSize` alone, NOT on `mapGrid.tiles` (design note #8): the
-  // clampable/fittable area is the physical board, not whatever happens to
-  // be laid on it yet. MOVED above the `width`/`height` derivation below
-  // (design note #27/item 1) -- `height` is now DERIVED from this board's
-  // own aspect ratio, so it has to exist first.
+  // Memoised on hexSize ALONE, not on mapGrid.tiles -- the fittable area is the physical board, not what is laid on it. Moved above the height derivation (#27), which reads it.
+  // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8
   const boardContentBounds = useMemo<BoardContentBounds>(() => {
     const points = [
       ...STATIC_BOARD_HEXES.map((h) => axialToPixel(h.q, h.r, hexSize)),
       ...LANDMARK_HEXES.map((l) => axialToPixel(l.q, l.r, hexSize)),
     ];
-    // Design note #26: tightened to the hexes' own true outermost
-    // coordinate edges -- `hexSize` is the exact center-to-corner radius
-    // (see `pointOnCircle(center, size, cornerAngleRad(i))` in
-    // `drawHexPath`), so padding by exactly `hexSize` is the tight,
-    // mathematically-derived bound against each edge hex's real corner,
-    // not an arbitrary buffer. The previous `hexSize * 2.5` term (extra
-    // clearance reserved for the margin labels drawn outside the board)
-    // has been removed outright per that item's explicit "completely
-    // remove any large hardcoded pixel padding" instruction -- see design
-    // note #26 for the accepted margin-label tradeoff this creates.
-    //
-    // FOLLOW-UP ("Camera Padding Must Reserve Room For Margin Labels"):
-    // design note #26's tight `hexSize`-only padding left literally ZERO
-    // slack beyond each edge hex's own corner point -- fine for the board
-    // itself, but it meant there was no room at all left over for the
-    // margin labels drawn just outside that corner, which is the deeper
-    // reason column-number labels kept overlapping the top/bottom hexes
-    // even after `computeBoardMarginLabels`'s own width-vs-height
-    // measurement bug was fixed (that fix corrected WHICH dimension the
-    // label's clearance came from, but there was no budget left in that
-    // dimension to spend). `marginLabelReserve` adds back a small,
-    // proportional reservation -- NOT the old flat `hexSize * 2.5` -- sized
-    // off `hexSize`/font size alone so it stays a minimal, formula-derived
-    // top-up rather than the "large hardcoded pixel padding" that note #26
-    // was written to remove. `computeBoardMarginLabels` MUST keep deriving
-    // its own `hexEdgePadding` from this exact same total (see its own
-    // comment) or the two fall back out of sync.
+    // Padded by exactly hexSize -- the hexes' own centre-to-corner radius, a geometry correctness floor, not a cosmetic buffer. marginLabelReserve adds back a small proportional top-up; computeBoardMarginLabels MUST derive from the same total.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
     const hexEdgePadding = hexSize + marginLabelReserve(hexSize);
     return {
       minX: Math.min(...points.map((p) => p.x)) - hexEdgePadding,
@@ -950,48 +487,8 @@ export function HexGridRenderer({
   }, [hexSize]);
 
   const width = widthProp ?? measuredSize.width;
-  /** ITEM 1 FIX (design note #27): `height` used to come straight from the
-   *  `ResizeObserver`'s own measured container height -- which only ever
-   *  reflected whatever fixed/clamped height an ancestor pane imposed (see
-   *  `App.tsx` design note #13), i.e. exactly the "tiny panel box" this item
-   *  reports. Now that no ancestor imposes one, that measurement would be
-   *  meaningless (a `height: auto` box just mirrors back whatever this
-   *  component itself renders -- circular). `height` is now DERIVED from
-   *  the board's own true aspect ratio (`boardContentBounds`) at the
-   *  available `width`, so the canvas always renders at its full natural
-   *  proportional height for that width -- "true maximum proportional scale
-   *  bounds," not vertically cropped/shrunk to fit whatever bounded
-   *  viewport happened to be available. Ancestors are now free to just grow
-   *  to match (`App.tsx` design note #13), letting the BROWSER's own page
-   *  scrollbar carry the rest. */
-  /* ==================================================================
-   *  DESIGN NOTE 30: REVERTED -- THE BOARD IS NOT A SCROLL WINDOW
-   * ==================================================================
-   *
-   * This briefly capped the height at 72% of the viewport, on the
-   * reasoning that a board taller than the window pushes the action bar
-   * and the status panels off screen.
-   *
-   * It was wrong, and the way it was wrong is worth keeping. The
-   * assumption was that a canvas shorter than the board's aspect ratio
-   * would LETTERBOX -- that `fitView` would refit the map into whatever
-   * box it was given and leave margin at the sides. It does not: the
-   * camera holds a locked baseline pose (design note #8), so a shorter
-   * canvas simply shows less of the board. The map was cropped top and
-   * bottom, and the only way to see the missing rows was to pan inside the
-   * canvas -- a scroll window nested inside a scrolling page, which is
-   * worse than the problem it replaced.
-   *
-   * Design note #27 had already settled this, and design note #13 in
-   * `App.tsx` dropped `overflow: auto` from the board's ancestors on
-   * purpose so the PAGE scrollbar carries the map. The height is derived
-   * from the board's own aspect ratio at the available width, the wrapper
-   * grows to match, and the whole board is reachable by scrolling the page
-   * exactly like any other tall content.
-   *
-   * If the chrome being pushed down is worth solving later, the fix is a
-   * smaller board -- fewer pixels per hex -- not a smaller window onto the
-   * same board. */
+  /** height is DERIVED from the board's aspect ratio at the measured width, not measured -- a height:auto box just mirrors back what this renders. #30: a shorter canvas does not letterbox, it shows LESS of the board.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #27 */
   const height = useMemo(() => {
     if (heightProp !== undefined) return heightProp;
     const boundsWidth = Math.max(boardContentBounds.maxX - boardContentBounds.minX, 1);
@@ -1016,22 +513,8 @@ export function HexGridRenderer({
     originPanY: number;
   } | null>(null);
 
-  /** The zoom level used for the locked baseline camera pose -- see design
-   *  note #8, tightened by design note #26.
-   *
-   *  ITEM 1 FIX (design note #27, supersedes the structural calibration
-   *  pass's `Math.max(width / boundsWidth, height / boundsHeight)` "fill
-   *  both edge-to-edge, crop whichever axis doesn't fit" formula): now that
-   *  `height` (above) is DERIVED to always match `boundsWidth`'s own aspect
-   *  ratio at this `width`, fitting to `width` alone is exactly equivalent
-   *  to fitting to both axes -- there is no longer a mismatched-aspect-ratio
-   *  viewport to crop against, because the viewport's own aspect ratio now
-   *  always matches the board's. This is what "true maximum proportional
-   *  scale bounds" means concretely: the hex size that makes the board's
-   *  full width exactly fill the available `width`, with zero cropping on
-   *  either axis, rather than the previous pass's deliberate crop-to-fill.
-   *  Toggling "Detailed View" still lets a player pan/zoom in past this for
-   *  a closer look, same as before. */
+  /** Fitting to width alone is now exactly equivalent to fitting both axes, because height matches width's implied aspect ratio by construction.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #27 */
   const minZoom = useMemo(() => {
     const boundsWidth = Math.max(boardContentBounds.maxX - boardContentBounds.minX, 1);
     const fitZoom = width / boundsWidth;
@@ -1042,13 +525,8 @@ export function HexGridRenderer({
     return Math.max(ABSOLUTE_MIN_ZOOM_FLOOR, fitZoom);
   }, [boardContentBounds, width]);
 
-  /** The locked "100% view" camera pose -- see design note #13. Exactly
-   *  `minZoom`, centered on the board's own bounds, i.e. the same
-   *  computation the one-shot auto-fit (design note #5) already used. This
-   *  is now also the camera's permanent baseline pose: with
-   *  `detailedView === false`, `view` is always exactly this (drag/wheel
-   *  handlers are no-ops at baseline), and toggling detailed view back off
-   *  snaps the camera back to precisely this pose. */
+  /** The locked "100% view" pose -- exactly minZoom, centred on the board's own bounds.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13 */
   const fitView = useMemo<ViewTransform>(() => {
     const centerX = (boardContentBounds.minX + boardContentBounds.maxX) / 2;
     const centerY = (boardContentBounds.minY + boardContentBounds.maxY) / 2;
@@ -1059,78 +537,26 @@ export function HexGridRenderer({
     };
   }, [boardContentBounds, minZoom, width, height]);
 
-  /** `false` (the default): the camera is locked at exactly `fitView` --
-   *  the "100% view", the whole board framed in the viewport -- and pan/
-   *  zoom input is ignored (see design note #13). `true`: the "Toggle
-   *  Detailed View" button was clicked -- the camera jumped to a closer,
-   *  zoomed-in pose and drag-pan/wheel-zoom are both live so the player can
-   *  inspect close details manually. */
+  /** false locks the camera at fitView and ignores pan/zoom input; true unlocks both.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13 */
   const [detailedView, setDetailedView] = useState(false);
 
-  /** Rail Map Overhaul (design note #42): "City Nameplate Visibility
-   *  Toggle." `true` (the default): city/landmark name plates render
-   *  normally, exactly as before this item. `false`: `draw()`'s every
-   *  name-label pass (landmark names, gray/OO hex names, the stacked
-   *  dual-city/dual-town name pairs, and the off-board zone nameplates) is
-   *  skipped outright -- station tokens, revenue/value badges, and every
-   *  track spline are all drawn by entirely separate passes earlier in
-   *  `draw()` and are completely unaffected either way, per this item's own
-   *  explicit "while maintaining station tokens, revenue badges, and track
-   *  splines" wording. */
+  /** City Nameplate Visibility toggle gates every NAME pass only -- station tokens, value badges and track splines are separate unconditional passes.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #42 */
   const [showCityNames, setShowCityNames] = useState(true);
 
-  /** The off-board hex currently under the pointer, if any -- see design
-   *  note #15/item 4. Tracked independently of drag/`detailedView` state
-   *  (hover works at the locked 100% baseline too, not just in detailed
-   *  view): `handlePointerMove` updates this on every move, `handlePointerUp`
-   *  (also wired to `onPointerLeave`) clears it. Stored as the hovered
-   *  hex's own axial `(q, r)`, not a pixel/label, so it stays correct
-   *  across zoom/pan changes without needing to be recomputed. */
+  /** The hovered off-board hex, stored as axial (q,r) not a pixel, so it stays correct across zoom/pan. Tracked independently of drag/detailedView.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
   const [hoveredOffboardHex, setHoveredOffboardHex] = useState<{ q: number; r: number } | null>(
     null,
   );
 
-  /** The hex currently under the pointer, if any -- see item 7 ("Muted Base
-   *  Text with Hover Glow"). Deliberately separate from `hoveredOffboardHex`
-   *  above (which only ever populates for an off-board zone hex, for that
-   *  feature's own narrower tooltip purpose): this one is set on EVERY
-   *  pointer move regardless of what kind of hex is under it, so `draw()`'s
-   *  city/town/landmark name-label passes can look it up to decide whether
-   *  that specific hex's label should render in its bright, bold, 100%-
-   *  opaque hover style instead of its default muted/translucent one. */
+  /** Set on EVERY pointer move regardless of hex kind, so the name-label passes can look it up for hover styling.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
   const [hoveredHexCoord, setHoveredHexCoord] = useState<{ q: number; r: number } | null>(null);
 
-  /* ==================================================================
-   *  DESIGN NOTE 365: THE TOOLTIP WAITS
-   * ==================================================================
-   *
-   * REPORTED: map tooltips appear instantly, causing visual fatigue while
-   * scanning the board.
-   *
-   * They did, and the cost compounds with the board's density: dragging the
-   * pointer across the map fired a tooltip on every hex it crossed, so
-   * moving from one side to the other flashed a dozen panels the player had
-   * not asked for. An instant tooltip is right for a control whose meaning
-   * is unclear; it is wrong for a hundred adjacent things you are looking
-   * PAST on your way somewhere.
-   *
-   * TWO SECONDS, which is long by tooltip conventions and correct here: the
-   * point is that a hex you are merely crossing never shows one, and the
-   * pointer crosses a hex in a fraction of a second. The delay only expires
-   * when a player has genuinely stopped on something.
-   *
-   * WHAT IS NOT DELAYED: `hoveredHexCoord`, the highlight the board draws
-   * under the cursor. That is FEEDBACK -- it tells the player what they are
-   * pointing at -- and delaying it would make the map feel unresponsive.
-   * Only the text panel waits.
-   *
-   * THE TIMER IS RESTARTED, not merely started, on every move onto a new
-   * hex, which is what makes the delay per-hex rather than per-entry: a
-   * slow sweep across five hexes shows nothing until the pointer settles.
-   */
-  /* Design note #380: the last repaint's route stroke geometry, in board
-     pixels. `null` until the first draw, which is the state the pointer
-     handler treats as "no pixel answer available". */
+  /* The tooltip WAITS. What is not delayed is hoveredHexCoord -- that is feedback about what you are pointing at, and delaying it would make the map feel unresponsive. The timer is RESTARTED per hex. #380: the last repaint's route geometry, in board pixels.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #365 */
   const routeHitRef = useRef<RouteHitPaths | null>(null);
 
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1143,23 +569,8 @@ export function HexGridRenderer({
   // Cleared on unmount, so a pending tooltip cannot fire into a dead tree.
   useEffect(() => cancelTooltipTimer, [cancelTooltipTimer]);
 
-  /** The active-coordinate hover tooltip's live state -- see design note
-   *  #21. `label` is the same board-label string `describeHex` would
-   *  produce (a landmark's name + label, an off-board zone's name + label,
-   *  or a plain board label like `"G19"`); `null` whenever the pointer
-   *  isn't over a real hex of the authentic board at all, which hides the
-   *  tooltip entirely rather than reporting a meaningless "off the board"
-   *  string. `clientX`/`clientY` are the raw viewport pointer coordinates
-   *  (NOT canvas-relative), so the DOM tooltip below can position itself
-   *  with plain `position: fixed` math. `preferLeft`/`preferAbove` (design
-   *  note #75) mirror `drawOffboardTooltip`'s own "ADAPTIVE QUADRANT"
-   *  pattern for this file's OTHER tooltip -- reported: this one always
-   *  anchored down-right of the cursor regardless of available room, so it
-   *  ran off the panel for any hex near the panel's own right/bottom edge
-   *  (Boston, Fall River). Set once per pointer move, from the cursor's
-   *  position within the CANVAS's own bounding rect (i.e. the panel), not
-   *  the browser window -- so the flip threshold tracks the panel's actual
-   *  edges even if the canvas doesn't fill the whole viewport. */
+  /** clientX/clientY are raw viewport coords for position:fixed. preferLeft/preferAbove flip toward whichever side of the CANVAS still has room -- not the browser window.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #75 */
   const [hoveredCoordLabel, setHoveredCoordLabel] = useState<{
     label: string;
     clientX: number;
@@ -1168,35 +579,8 @@ export function HexGridRenderer({
     preferAbove: boolean;
   } | null>(null);
 
-  /** The full draw pass: background, landmark shading, every laid tile's
-   *  fill + track path, then landmark labels on top so they stay legible
-   *  regardless of what's drawn beneath them. */
-  /* ==================================================================
-   *  DESIGN NOTE 463: A REPAINT LOOP, AND ONLY WHEN IT EARNS ITS KEEP
-   * ==================================================================
-   *
-   * This canvas has never had an animation loop -- it repaints on prop
-   * change and on pan/zoom, which is exactly right for a board that only
-   * moves when something happens to it. A pulsing glow needs frames.
-   *
-   * So the loop exists and is GATED: it runs only while a token placement
-   * is armed (`cursorMode === "token"`), which is a few seconds of a turn
-   * rather than the whole game. Outside that the canvas is as static as it
-   * always was, and `pulsePhase` holds still at 0 so the draw path costs
-   * nothing extra.
-   *
-   * `prefers-reduced-motion` STOPS THE LOOP ENTIRELY rather than shortening
-   * it. The glow's job is to say "these nodes"; a ring at its steady
-   * mid-swell says that perfectly well without moving, and honouring the
-   * preference by animating more gently would be missing its point.
-   *
-   * A 1.6s cycle: slow enough to read as breathing rather than blinking,
-   * which is the difference between a hint and an alarm. */
-  /* Design note #496: the station-placement pointer, composited from the
-     acting corporation's herald. Called unconditionally -- it is a hook, and
-     it costs nothing when `tokenCursorTicker` is null (which is every render
-     outside a token step, since the prop is only supplied while one is
-     armed). */
+  /** The repaint loop is GATED on cursorMode === "token": a pulsing glow needs frames, the rest of the board does not. prefers-reduced-motion stops it entirely rather than shortening it. #496: the station cursor hook costs nothing when no corporation is armed.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #463 */
   const stationCursor = useStationCursor(
     cursorMode === "token" ? (tokenCursor?.ticker ?? null) : null,
     cursorMode === "token" ? (tokenCursor?.color ?? null) : null,
@@ -1273,12 +657,8 @@ export function HexGridRenderer({
         ? PRINTED_HEX_STROKE[hex.printedColor]
         : BOARD_HEX_STROKE[hex.type];
       ctx.lineWidth = 1;
-      // Design note #26/item 3: I1/J2 (Gulf) suppress their one shared
-      // interior edge here so the two hexes read as a single merged region
-      // -- `drawHexEdges` re-strokes the OTHER five edges individually
-      // instead of `ctx.stroke()`ing the full closed path `drawHexPath`
-      // just traced above. Item 9: A9/A11 (Canadian West) get the identical
-      // treatment via `CANADIAN_WEST_HIDDEN_EDGE`.
+      // Gulf (I1/J2) and Canadian West (A9/A11) suppress their one shared interior edge so each reads as a single merged region.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
       const hiddenEdge = GULF_HIDDEN_EDGE[hex.label] ?? CANADIAN_WEST_HIDDEN_EDGE[hex.label];
       if (hiddenEdge !== undefined) {
         drawHexEdges(ctx, center, hexSize, new Set([hiddenEdge]));
@@ -1287,64 +667,20 @@ export function HexGridRenderer({
       }
     }
 
-    // Design note #72: ONE claimed-slot ledger, shared by every one of this
-    // render's slot-picking passes (terrain icon, restriction badge,
-    // terrain-cost label, revenue badge) in their existing draw order --
-    // see `claimHexSlot`'s own doc comment for why this exists (New York/
-    // G19's badge, cost label, and icon all independently picking the same
-    // one open corner). Declared fresh here, at the top of this whole block
-    // of passes, and threaded through every one of them below.
+    // ONE claimed-slot ledger per render, threaded through every slot-picking pass in draw order -- New York's badge, cost label and icon all independently picked the same open corner.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #72
     const claimedHexSlots = new Map<string, Set<number>>();
 
-    // Design note #72: the SE-edge-first preference a complex hex's terrain
-    // icon/cost share -- pulled out to a shared constant so both stay in
-    // visual agreement about which corner/edge is "the bottom-right
-    // quadrant". Design note #87: RENAMED from `DOUBLE_CITY_TERRAIN_SLOT_PREFERENCE`
-    // (unchanged values) now that it's used by every complex hex's ONE
-    // compound [icon+cost] badge claim, not just DoubleCity's separate
-    // icon-slot claim.
-    //
-    // Design note #105: REORDERED, per direct request -- now leads with
-    // (what the request calls) "Vertex 2" and "Vertex 4", this system's
-    // own slot 9 (Lower-Right corner) and slot 11 (Lower-Left corner)
-    // respectively, before falling through to the original SE-edge/
-    // Bottom-Point pair (slots 3/10) as before.
+    // The complex-hex terrain preference, shared by the icon and cost so both agree which quadrant is "bottom-right". #105 reordered it to lead with the two lower corners.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #105
     const COMPLEX_HEX_TERRAIN_SLOT_PREFERENCE: readonly number[] = [9, 11, 3, 10];
 
-    // ---- Buildable terrain icons (design note #9; SPLIT from its own cost
-    // label by design note #55's Strict Canvas Layering Hierarchy -- a cost
-    // label is Layer 4 (text) content and now draws in that section further
-    // below, alongside every other badge/label; only the Layer 1 terrain
-    // VECTOR itself belongs this early). Mountain hexes get a brown
-    // twin-peak icon, River hexes get a blue river-line icon -- both now sit
-    // on the standard land fill drawn above, so they read as "buildable, at
-    // a cost" rather than "impassable obstacle".
-    //
-    // Design note #87: a "complex" hex -- one with a city/town archetype OR
-    // real live track -- no longer draws a standalone icon here AT ALL.
-    // GENERALIZED from the old DoubleCity-only check, which missed the
-    // SingleCity `cityDesignation` River hexes (Toledo/F4, Providence/F22,
-    // Washington D.C./J14) -- those rendered a FULL-SIZE, dead-CENTERED
-    // icon directly under their own revenue badge/nameplate, since
-    // `isDoubleCityHex` was false for them. Every complex hex's icon is now
-    // drawn together with its cost, as ONE compound badge, by the
-    // terrain-cost pass further below (Layer 4) -- claiming exactly ONE
-    // slot there, instead of the two separate claims (one here, one there)
-    // a DoubleCity hex used to make.
+    // A complex hex draws NO standalone Layer-1 icon -- it is folded into the compound [icon+cost] badge below, claiming ONE slot instead of two. Generalised past the old DoubleCity-only check, which missed the SingleCity River hexes.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #87
     for (const hex of STATIC_BOARD_HEXES) {
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
-      // Design note #150: A LAID TILE COVERS THE PREPRINT.
-      //
-      // On the physical board a tile is a piece of cardboard placed ON TOP
-      // of the printed hex; the mountain artwork underneath is not visible
-      // through it. This renderer drew both, so a tiled mountain showed the
-      // tile's track AND the mountain icon it was supposedly covering.
-      //
-      // The `isComplexHex` test below already skipped most tiled hexes as a
-      // side effect (a laid tile has live edges), but only incidentally --
-      // it is asking "is this hex visually busy", not "is it covered". The
-      // explicit check states the actual rule, and covers the case the
-      // incidental one missed.
+      // A LAID TILE COVERS THE PREPRINT. The isComplexHex test already skipped most tiled hexes as a SIDE EFFECT -- it asks "is this busy", not "is it covered".
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
       if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       const center = axialToPixel(hex.q, hex.r, hexSize);
@@ -1359,88 +695,11 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Landmark dashed outline (drawn next, so a laid hub tile there,
-    // and the label drawn later, both sit visibly on top of it).
-    // ITEM 1 FIX (color calibration pass, "Unify All Board Yellow
-    // Shades"): this loop used to ALSO re-fill each landmark hex with its
-    // own translucent per-city tint (`LANDMARK_FILL` -- a ~20%-alpha red/
-    // blue/green painted over that hex's ordinary cream `BOARD_HEX_FILL.Plain`
-    // base from the static-background pass above), which is exactly the
-    // "lighter pastel/cream" look this item reports -- visually distinct
-    // from every other real pre-printed yellow hex on the board. Design
-    // note #12 already established, from the same sourced data as the
-    // pre-printed yellow "OO" hexes, that New York/Boston/Baltimore ARE
-    // real pre-printed yellow hexes too -- so `STATIC_BOARD_HEXES`'s own
-    // entries for G19/E23/I15 now carry `printedColor: "Yellow"` just like
-    // every OO hex, which means the static-background pass above already
-    // fills them with the exact same shared `PRINTED_HEX_FILL.Yellow`
-    // constant an OO hex gets -- genuinely "the exact same... fill color"
-    // this item asks for, not just a matching hex string. FACTUAL
-    // CORRECTION: this item's own suggested `#FFCC00` example doesn't match
-    // what this file actually uses for OO/catalog yellow anywhere --
-    // `PRINTED_HEX_FILL.Yellow` is `#e8d488`, a deliberately muted
-    // "cardstock" gold (design note #12), not a bright saturated color; no
-    // bright/saturated yellow fill exists anywhere else in this file to
-    // match. Using the literal `#FFCC00` example instead would have
-    // introduced a FOURTH distinct yellow shade rather than unifying to the
-    // three hexes that already share one -- so this pass points landmarks
-    // at the real shared constant instead, which is what actually delivers
-    // this item's own stated goal ("a uniform visual look across the map").
-    // This loop's own `LANDMARK_FILL` fill is removed outright (the base
-    // pass already paints the correct fill); only the dashed white outline
-    // -- which still usefully flags "this hex is a landmark station",
-    // unrelated to fill color uniformity -- remains here.
-    /* REMOVED (design note #160): the dashed white perimeter this loop drew
-       around Boston, Baltimore and New York.
+    // The dashed landmark outline is REMOVED: dashes already mean "provisional" in this renderer (the ghost preview, the unknown-tile placeholder), and ringing three ordinary preprinted yellow hexes drew a distinction the board does not make.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #160
 
-       It was the last survivor of a treatment whose other half -- the
-       per-landmark translucent fill -- the comment above records being
-       deleted for making these three hexes look unlike every other
-       preprinted yellow hex. The outline had exactly the same effect for
-       exactly the same reason: G19/E23/I15 are ordinary preprinted yellow
-       hexes that happen to carry a letter code, and ringing them in dashes
-       drew a distinction the board itself does not make.
-
-       Dashes also already MEAN something else in this renderer -- both other
-       users are "provisional": the ghost tile preview and
-       `drawUnknownTilePlaceholder`. A permanent feature drawn in the
-       provisional idiom reads as unfinished.
-
-       Nothing is lost. The "B"/"NY" corner restriction badges still mark
-       these hexes, say WHICH code each carries rather than merely that one
-       exists, and persist across every tier (design note #49). */
-
-    // ---- Every laid tile: fill, outline, and its decoded track path.
-    // Landmark hexes (New York/Boston/Baltimore) skip the generic
-    // bitmask-driven `drawTrackPath` entirely -- their authentic
-    // pre-printed track is drawn unconditionally in a dedicated pass below
-    // instead (see design note #6b). The fill/outline (including any
-    // color-tier upgrade) still draws here either way.
-    // BUG FIX ("Unify All Board Yellow Shades" follow-up -- reported: I15/
-    // G19/E23 render a visibly different shade of yellow from every other
-    // pre-printed yellow hex). The earlier pass fixed the STATIC background
-    // fill (`STATIC_BOARD_HEXES`'s own `printedColor: "Yellow"` entries,
-    // painted with `PRINTED_HEX_FILL.Yellow` = `#e8d488` before any tile is
-    // laid), but this loop repaints right over that base the moment a real
-    // `mapGrid.tiles` entry exists at that hex -- which, for a landmark, is
-    // basically always true (a `MajorCityHub`/`DoubleCityHub` tile is
-    // required there per the backend's landmark reservation, not an
-    // optional player upgrade), using `ERA_TILE_FILL[catalogEntry.color]` (design note #122)
-    // instead -- `TERRAIN_FILL.MajorCityHub`/`DoubleCityHub` is `#e8d9c0`, a
-    // distinctly lighter/less-saturated tan than `#e8d488`, which is
-    // exactly the "different shade of yellow" this reports. The same latent
-    // mismatch applies to the four `YELLOW_OO_HEXES` once THEY receive a
-    // laid `DoubleCityHub` tile too (tile 15) -- they just hadn't yet in
-    // this game state, which is why only the landmarks showed it. Elsewhere
-    // in this file, a laid tile's FILL is deliberately terrain-only, with
-    // color-tier (Yellow/Green/Brown) conveyed purely through the stroke
-    // below (`COLOR_TIER_STROKE`) -- never the fill -- so this keeps that
-    // same convention for these hexes: any hex whose `STATIC_BOARD_HEXES`
-    // entry is `printedColor: "Yellow"` (landmarks AND OO hexes alike) always
-    // keeps the shared `PRINTED_HEX_FILL.Yellow` fill regardless of which
-    // hub tile ends up laid there or what tier it's since been upgraded to
-    // -- exactly mirroring how the pre-laid static pass already treats it,
-    // and how an ordinary buildable hex's fill never encodes tier either.
+    // A printedColor:"Yellow" hex no longer keeps its yellow fill once upgraded -- ERA wins everywhere, which is what tells a player the hex has actually moved tier.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #122
 
     for (const tile of mapGrid.tiles) {
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
@@ -1456,51 +715,16 @@ export function HexGridRenderer({
       ctx.stroke();
 
       if (catalogEntry) {
-        // Design note #133: the `!landmarkAt(...)` guard that used to sit
-        // here is GONE, and its removal is the real fix for the reported
-        // "tile 62 draws crossing track with a station dumped on the
-        // intersection".
-        //
-        // New York, Boston and Baltimore are `LANDMARK_HEXES`. The guard
-        // meant a laid tile on one of them never called `drawTrackPath` at
-        // all -- so #54/#62 (NY) and #53/#61 (B) could never reach the
-        // hardcoded artwork catalog no matter what was in it. What the
-        // player saw on G19 instead was the PRE-PRINTED landmark track
-        // from `drawLandmarkTrack`, whose two stubs run to
-        // `twoNodePositions`' fixed NE/SW diagonal: a stub from the NW
-        // edge sweeping down to the SW node crosses the other stub, and
-        // the station sits on the crossing. Exactly the reported symptom,
-        // and entirely upstream of the #62 path strings -- those are
-        // provably non-crossing (see `TILE_GRAPHICS_CATALOG`'s #62 note:
-        // the two arcs occupy x >= 0.366 and x <= -0.366 respectively).
-        //
-        // The pre-printed track pass below is now the one that yields,
-        // which is the correct direction: printed artwork is what a hex
-        // shows UNTIL a tile covers it.
-        // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
+        // The !landmarkAt guard is GONE, and its removal is the real fix: it meant a laid tile on a landmark never called drawTrackPath, so what the player saw was the PRE-PRINTED stubs crossing with a station on the intersection.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
         withHexClip(ctx, center, hexSize, () => {
-          // Design note #121: no longer passes `tile.paths`. Double-town
-          // artwork now comes from the explicit `DOUBLE_TOWN_ROUTES` table
-          // keyed on `tile_id`, and every other tile was always drawn from
-          // `connections` alone -- so there is nothing left for the
-          // per-tile query value to feed. The contract still sends it and
-          // `MapTileEntry.paths` still types it; this renderer just has no
-          // use for it now.
-          // Design note #486: `showRestriction` false, for the same reason
-          // `showRevenue` is. The hex-level `drawRestrictionBadge` pass below
-          // already labels every B/NY/OO hex and persists across upgrades
-          // (design note #49), and a restricted tile can only be laid on the
-          // hex carrying that badge -- so a tile-level label here is a second
-          // copy of the same letter a slot away, not a second statement.
+          // No longer passes tile.paths -- double-town artwork comes from the explicit DOUBLE_TOWN_ROUTES table. #486: showRestriction false, because the hex badge already labels it one slot away.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #121
           drawTrackPath(ctx, center, hexSize, catalogEntry, tile.orientation, false, undefined, false);
         });
       } else {
-        // Unknown tile_id -- see design notes #2 and #118. Renders generic
-        // provisional artwork rather than silently drawing nothing (or,
-        // as previously, an alarming bare red "?" that read as an error
-        // state). Every one of the backend's 46 real tray tiles IS in the
-        // mirror above, so reaching this path means the mirror has fallen
-        // behind a further backend change -- degraded, but never a crash.
+        // Unknown tile_id draws readable provisional artwork rather than an alarming bare red "?" that read as an error state.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #118
         withHexClip(ctx, center, hexSize, () => {
           drawUnknownTilePlaceholder(ctx, center, hexSize, tile.tile_id);
         });
@@ -1512,11 +736,8 @@ export function HexGridRenderer({
     // landmark-shading pass) so a laid hub tile's own opaque fill -- drawn
     // in that loop above -- can never paint over this authentic track.
     for (const landmark of LANDMARK_HEXES) {
-      // Design note #133: "always drawn" was the bug's other half. A
-      // landmark's pre-printed track is its STARTING artwork, not a
-      // permanent overlay -- once a real tile is laid the printed stubs are
-      // physically covered by it. Continuing to draw them on top of a laid
-      // #62 stacked two different renderings of New York in the same hex.
+      // A landmark's printed track is STARTING artwork, not a permanent overlay -- once a tile is laid the stubs are physically covered.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
       if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
@@ -1527,11 +748,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Off-board pre-printed track, always drawn (see design note #10)
-    // -- symmetric with the landmark track pass above. No laid-tile loop
-    // ever needs to skip over these coordinates the way it does for
-    // landmarks: `hexmap::OffboardHexNotBuildable` makes it impossible for
-    // `mapGrid.tiles` to ever contain an entry here in the first place.
+    // Off-board printed track is always drawn; OffboardHexNotBuildable makes it impossible for mapGrid.tiles to ever hold an entry here.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #10
     for (const hex of STATIC_BOARD_HEXES) {
       const edges = OFFBOARD_TRACKS[hex.label];
       if (!edges) continue;
@@ -1560,17 +778,8 @@ export function HexGridRenderer({
     // board prints none there either).
     for (const hex of STATIC_BOARD_HEXES) {
       if (!YELLOW_OO_HEXES.has(hex.label)) continue;
-      // Design note #150. "Always drawn" (#12) was written when nothing
-      // could be laid on these four hexes. Now that green #59 and the five
-      // brown OO tiles can be, "always" produced the worst ghost on the
-      // board: #59 draws its OWN two stations, so an upgraded Philadelphia
-      // & Trenton rendered FOUR station circles -- two of them belonging to
-      // a preprint the tile was sitting on top of.
-      //
-      // NOT to be confused with the "OO" corner RESTRICTION badge further
-      // down, which design note #49 deliberately keeps visible across every
-      // tier. That badge says what MAY be laid here; these circles claim
-      // what IS here, and only the second claim goes stale.
+      // "Always drawn" was written when nothing could be laid on these four hexes. Once green #59 could be, an upgraded OO hex rendered FOUR station circles. Not to be confused with the corner OO RESTRICTION badge, which #49 keeps across every tier.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
       if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
@@ -1580,14 +789,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Item 1/8 (structural calibration pass): ordinary white Town/
-    // Double-Town-DESIGNATED hexes get their dark dit marker(s) drawn even
-    // though they carry no printed track of their own (see
-    // `BoardHex.townDesignation`'s doc comment) -- a single dark dit for a
-    // Single-Town designation, two side-by-side dark dits (mirroring
-    // `drawOOCityMarkers`'s two-station layout) for a Double-Town
-    // designation, so a player can see at a glance which blank hexes are
-    // reserved for a Town/Double-Town tile rather than ordinary track.
+    // Blank Town/Double-Town designated hexes get their dit marker(s) even with no printed track, so a player can see which blank hexes are reserved for a town tile.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
     for (const hex of STATIC_BOARD_HEXES) {
       if (!hex.townDesignation) continue;
       // Design note #150: a laid tile carries its own town/city artwork, so
@@ -1599,12 +802,8 @@ export function HexGridRenderer({
       // dit markers -- previously only track/text calls were wrapped.
       withHexClip(ctx, center, hexSize, () => {
         if (hex.townDesignation === "double") {
-          // Design note #54/#55/#58: Unified Diagonal Node Geometry -- the
-          // SAME shared `twoNodePositions` tuple `drawOOCityMarkers` uses
-          // for its two station circles, not an independently-tuned
-          // side-by-side layout, so every two-node hex on the board reads
-          // identically. Index 0/1 map straight onto the two `drawDitMarker`
-          // calls, first slot then second, with no re-sorting.
+          // The SAME shared twoNodePositions tuple drawOOCityMarkers uses, indexed 0/1 with no re-sorting -- every two-node hex reads identically.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #58
           const [node0, node1] = twoNodePositions(center, hexSize);
           drawDitMarker(ctx, node0, hexSize * 0.85); // index 0: top-right
           drawDitMarker(ctx, node1, hexSize * 0.85); // index 1: bottom-left
@@ -1614,25 +813,12 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Design note #34/item 2: ordinary white single-CITY-DESIGNATED
-    // hexes (Toledo/Providence/Pittsburgh/Columbus/Washington/Lancaster/
-    // Ottawa/Barrie) get the same "marker with no printed track" treatment
-    // as the Town/Double-Town pass just above, but using the SAME
-    // `drawStationCircle` (white fill, dark stroke) every other real city
-    // marker in this file uses -- landmarks, `GRAY_HEXES` cities, OO
-    // stations, laid `MajorCityHub` tiles -- rather than `drawDitMarker`, so
-    // these read as genuine cities rather than minor town stops, matching
-    // this item's own explicit "correct white station circles" ask. All
-    // eight are single-city hexes on the real board (none of them a
-    // double-city pair like `YELLOW_OO_HEXES`), so this is always one
-    // centered circle, no offset pair needed.
+    // Blank city-designated hexes use drawStationCircle, the same primitive every real city marker uses, so they read as genuine cities rather than town stops.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #34
     for (const hex of STATIC_BOARD_HEXES) {
       if (!hex.cityDesignation) continue;
-      // Design note #150: same as the Town pass above. A laid `MajorCityHub`
-      // tile draws its own station circle in the same place, so without this
-      // the two stack -- producing a subtly heavier, off-centre circle
-      // rather than an obviously doubled one, which is worse: it reads as a
-      // rendering imprecision rather than as a bug.
+      // A laid MajorCityHub draws its own circle in the same place; stacking two reads as a rendering imprecision rather than an obvious bug, which is worse.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
       if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
@@ -1642,28 +828,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Traced train routes (design note #137 / F-1). ----
-    //
-    // POSITION IN THE PASS ORDER IS DELIBERATE, and is the whole reason this
-    // sits here rather than at the end: AFTER every track pass, so a route
-    // reads as running ON the rails rather than under them; BEFORE station
-    // tokens, city circles and every badge, so the overlay can never bury the
-    // markers a player needs in order to read the board. A route is an
-    // annotation over the map, not a replacement for it.
-    // Design note #155: hand the overlay the laid tiles so it can trace each
-    // hex's real authored rail. A plain lookup closure rather than the whole
-    // grid -- the primitive has no business knowing what a `MapGridResponse`
-    // is, and this keeps it a pure drawing function.
-    // Design note #195: the SECOND lookup is the one that fixes preprinted
-    // track. `tilesAt` above can only ever answer for a hex carrying a laid
-    // `MapTileEntry`; every gray hex, all three landmarks and every off-board
-    // terminal have real rails and no tile record, so the overlay had nothing
-    // to follow and fell back to a straight edge-to-centre spoke. This hands
-    // the glow the same four sources the four track passes above draw from,
-    // in the same precedence order they run in.
-    /* Design note #373: emphasis is computed HERE, where the cursor is
-       known, and handed down as data. `drawRouteOverlays` stays a pure
-       renderer of what it is given. */
+    // Route overlays draw AFTER every track pass (so a route runs ON the rails) and BEFORE tokens and badges (so it never buries the markers). #195: the second lookup is what fixes preprinted track. #373: emphasis is computed here and handed down as data.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #137
     const emphasised = routeOverlays.map((overlay) => ({
       ...overlay,
       emphasis:
@@ -1674,24 +840,15 @@ export function HexGridRenderer({
             : ("muted" as const),
     }));
 
-    /* Design note #380: the draw hands back the flattened stroke geometry
-       it just painted, one path per train, for the pointer to test against.
-       Stashed in a ref rather than state -- it changes on every repaint,
-       and re-rendering React because the hit geometry moved would repaint
-       the canvas, which would rebuild the geometry. */
+    /* The draw hands back the flattened stroke geometry for the pointer to test against. A ref, not state -- re-rendering because the hit geometry moved would repaint the canvas, which rebuilds the geometry.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #380 */
     routeHitRef.current = drawRouteOverlays(
       ctx,
       hexSize,
       emphasised,
       (q, r) => mapGrid.tiles.find((tile) => tile.q === q && tile.r === r),
-      // Design note #226: the whole-hex `railsAt` lookup is gone. Endpoints
-      // resolve to a single authored rail now, so there is no branch left
-      // that needs to know how a hex was drawn -- only which path to stroke.
-      // Design note #215: the printed label, so a route crossing a gray hex
-      // or a landmark highlights the ONE rail it runs along rather than
-      // every rail on the hex. Only hexes with authored printed artwork
-      // qualify -- an off-board terminal has stubs rather than a traversable
-      // path, and falls through to the whole-hex trace above.
+      // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
       (q, r) => {
         const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
         if (boardHex && GRAY_HEXES[boardHex.label]) return boardHex.label;
@@ -1700,31 +857,8 @@ export function HexGridRenderer({
       },
     );
 
-    /* ==================================================================
-     *  DESIGN NOTE 222: TOKENS ARE DRAWN LAST, NOT MERELY LATE
-     * ==================================================================
-     *
-     * REPORTED BUG: badges render on top of and obscure tracks and cities.
-     *
-     * This pass used to run HERE, immediately after the city-circle passes,
-     * on the reasoning recorded in its own comment: "layered on TOP of every
-     * white/gray/OO station circle drawn above." True of the circles, and
-     * false of everything that came after -- the value badges, the "B"/"NY"/
-     * "OO" restriction badges and every nameplate pass all draw further down
-     * this function, so all of them landed on top of the tokens.
-     *
-     * A badge covering a token is worse than a badge covering track: a token
-     * is the one marker that says WHOSE network this is, and a route's
-     * legality turns on it. The value badge sitting over it is information
-     * the player can get from the tooltip; the token is not.
-     *
-     * The pass is now a closure invoked after every badge and label pass, so
-     * the marker z-order ends: track -> route glow -> city circles ->
-     * badges/labels -> STATION TOKENS -> live tile preview. Deferred rather
-     * than physically relocated because it reads `claimedHexSlots` and the
-     * company map built alongside the passes above; moving the code would
-     * have meant moving those too, and the ordering is the whole change.
-     */
+    /* Tokens are drawn LAST, not merely late. A badge covering a token is worse than a badge covering track: a token says whose network this is, and a route's legality turns on it.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #222 */
     const drawStationTokenPass = () =>
     {
       const companiesById = new Map<number, StationTokenCompany>();
@@ -1734,34 +868,8 @@ export function HexGridRenderer({
 
       for (const home of STATION_HOME_HEXES) {
         const company = companiesById.get(home.companyId);
-        /* ==================================================================
-         *  DESIGN NOTE 608: FLOATING IS NOT PLACING
-         * ==================================================================
-         *
-         * REPORTED: "the corporation actually placing its home station token
-         * does not see its preprinted home station reservation marker" --
-         * while every other corporation's marker renders normally.
-         *
-         * This line said `is_floated`, on the reasoning in the old comment:
-         * once a company has floated, the real token pass below draws it, so
-         * drawing the reserved badge too would double up. True -- but only
-         * AFTER the token exists, and in 1830 those are two separate moments.
-         * A corporation floats, and then its president is prompted to place
-         * the home station. In the window between, `is_floated` is already
-         * true and there is no token yet, so this skipped the badge and the
-         * pass below had nothing to draw: the hex went blank.
-         *
-         * WHICH IS THE WORST POSSIBLE HEX TO BLANK. That window is exactly
-         * when the Place Home Station prompt is open, so the one player who
-         * needs to see where their home is reserved is the only player on the
-         * table who cannot -- and the marker is visibly there for everyone
-         * else, which makes it read as "this corporation has no reservation"
-         * rather than as a rendering gap.
-         *
-         * SO THE TEST IS THE TOKEN, which is the fact the old comment
-         * actually meant. `station_tokens` carries the placed ones; if this
-         * home hex is among them the pass below draws the real marker and
-         * this one stands down. Floating no longer comes into it. */
+        /* The test is the TOKEN, not is_floated. Between floating and placing, is_floated is already true and no token exists -- so the badge was skipped and the pass below had nothing to draw, blanking exactly the hex the Place Home Station prompt is about.
+           See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #608 */
         const homePlaced =
           company?.station_tokens?.some(([tq, tr]) => tq === home.q && tr === home.r) ?? false;
         if (homePlaced) continue; // the real token is drawn by the pass below instead
@@ -1779,18 +887,8 @@ export function HexGridRenderer({
         // `(q, r)`, not which of the two corners was chosen, so the real
         // marker keeps its existing left-circle convention.
         const homeCenter = axialToPixel(home.q, home.r, hexSize);
-        // Design note #106 (E11/Dunkirk & Buffalo only): reported the
-        // reserved marker's straight-down margin point slightly overlaps
-        // the bottom city marker there -- moved to Vertex 2/slot9
-        // (Lower-Right), the requested destination, via `hexSlotDirection`
-        // at the SAME `0.46 * hexSize` magnitude as the original
-        // straight-down point (direction changed, distance from center
-        // unchanged, per the user's own separate observation that these
-        // offset magnitudes may already be too large -- no reason to make
-        // this one any larger while fixing its direction). The other three
-        // `YELLOW_OO_HEXES` (Detroit & Windsor/E5, Hamilton & Toronto/D10,
-        // H18) were NOT reported and keep the original straight-down point
-        // unchanged.
+        // E11 only: the reserved marker's straight-down point overlapped the bottom city marker, moved to Vertex 2 at the SAME magnitude. The other three OO hexes were not reported and are unchanged.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #106
         const erieVertex2 = hexSlotDirection(9);
         const point =
           home.label === "E11"
@@ -1806,13 +904,8 @@ export function HexGridRenderer({
             ctx,
             point,
             hexSize,
-            // Corporate Acronym Overlay guarantee (design note #45): prefer
-            // a live `company.ticker` when `publicCompanies` has already
-            // loaded this company, but fall back to the static
-            // `stationTickerLabel` table (never an empty string) so every
-            // reserved/unfloated home badge draws its acronym
-            // unconditionally, regardless of query timing -- see that
-            // table's own doc comment.
+            // Prefer the live ticker, fall back to the static table -- never an empty string, so every reserved badge draws its acronym regardless of query timing.
+            // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #45
             company?.ticker || stationTickerLabel(home.companyId),
             stationTickerColor(home.companyId),
             true,
@@ -1820,21 +913,8 @@ export function HexGridRenderer({
         });
       }
 
-      // ---- Design note #134: PER-SLOT token placement. ----
-      //
-      // A 2-slot city draws a pill with one ring per slot, so a token has to
-      // land ON a ring rather than at the pill's centre -- two tokens at the
-      // centre of one pill stack on top of each other and hide a real,
-      // decision-relevant fact (whether that city still has room).
-      //
-      // The chain records WHICH CITY a token is in (`station_tokens`,
-      // backend Audit G-12) but not which SLOT, because a slot has no
-      // meaning in the rules -- capacity is a count, and two tokens in one
-      // city are interchangeable. So slot order is chosen here, by ascending
-      // `company_id`. That is deterministic and identical on every client
-      // and every re-render, which is the property that actually matters; it
-      // just isn't authoritative about which physical circle a company
-      // "owns", and nothing downstream should read it as though it were.
+      // PER-SLOT placement: two tokens at a pill's centre stack and hide whether the city still has room. The chain records WHICH CITY but not which SLOT, because a slot has no meaning in the rules -- so order is chosen here, deterministically, and nothing downstream should read it as authoritative.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #134
       const occupantsByCity = new Map<string, StationTokenCompany[]>();
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
@@ -1872,33 +952,8 @@ export function HexGridRenderer({
           // the legacy `size * 0.22` is the correct answer.
           let dockRadius: number | undefined;
 
-          /* ==================================================================
-           *  DESIGN NOTE 251: A PILL HAS SLOTS; DOCK INTO ONE
-           * ==================================================================
-           *
-           * REPORTED BUG: a token placed on a double-station "pill" city
-           * snaps to the exact centre of the pill instead of into one of its
-           * circular slots.
-           *
-           * The slot machinery below has always been right. What gated it was
-           * `chainCity !== undefined` -- `tokenCityIndex` returns `undefined`
-           * whenever the chain omits `station_tokens`, which the sandbox does
-           * and any contract predating Audit G-12 does. So every token on
-           * every laid tile fell through to `stationMarkerPoint`, which
-           * answers per HEX and therefore returns the pill's centre anchor.
-           * Two companies sharing a 2-slot city stacked on the same point.
-           *
-           * The original caution behind that gate is real and is preserved:
-           * on a genuinely TWO-CITY tile (#54/#62's New York, the OO tiles) a
-           * guess about WHICH city would draw a token in the wrong station,
-           * which is worse than drawing it centrally. But that risk does not
-           * exist on a one-city tile -- #14, #15, #63 and every pill in the
-           * game have exactly one city, so its index is 0 and there is
-           * nothing to guess.
-           *
-           * So the inference is made only where it is not a guess: one city
-           * means city 0, more than one means fall back exactly as before.
-           */
+          /* The slot machinery was always right; what gated it was chainCity !== undefined. The original caution holds for a genuinely TWO-city tile, but a one-city tile's index is 0 and there is nothing to guess.
+             See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251 */
           const cityCount = laidTile ? tileCitySlotCounts(laidTile.tile_id).length : 0;
           const resolvedCity = chainCity ?? (cityCount === 1 ? 0 : undefined);
 
@@ -1912,11 +967,8 @@ export function HexGridRenderer({
             );
             const bucket = occupantsByCity.get(`${q},${r},${resolvedCity}`) ?? [];
             const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
-            // A bucket longer than the city has slots means the chain and
-            // this mirror disagree about capacity (see
-            // `tileCitySlotCounts`' own note). Clamping to the last real
-            // slot keeps the token visible and stacked rather than
-            // vanishing, which is the more debuggable failure.
+            // A bucket longer than the city has slots means chain and mirror disagree about capacity; clamping keeps the token visible rather than vanishing -- the more debuggable failure.
+            // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251
             point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
             // Only when a real slot point was found. If `slotPoints` came
             // back empty the token falls through to the per-hex anchor
@@ -1925,14 +977,8 @@ export function HexGridRenderer({
             if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize);
           }
 
-          // Fallback: a pre-G-12 chain, an unknown tile, or an untiled
-          // preprinted city -- all cases where there is no per-slot answer
-          // to be had, so the legacy per-hex anchor is the honest one.
-          /* Design note #459: the city travels to the fallback too. On an
-             UNLAID preprinted OO hex there is no tile artwork to anchor to,
-             so this is the only thing that can tell the two printed circles
-             apart -- without it a token placed in the north-east city was
-             drawn in the south-west one. */
+          // The city travels to the fallback too: on an UNLAID preprinted OO hex there is no artwork to anchor to, so without it a token in the north-east city was drawn in the south-west one.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #459
           const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile, chainCity);
           withHexClip(ctx, tokenCenter, hexSize, () => {
             drawStationTokenMarker(
@@ -1949,37 +995,15 @@ export function HexGridRenderer({
       }
     };
 
-    // ---- Landmark labels, always on top. Font size responsively shrinks
-    // (see design note #3b / `fitFontSize`) so the name never overflows
-    // the hex's own flat-to-flat width or collides with the track above.
-    // Item 3 (Three-Tier Local Deflection Stack): drawn in the hex's UPPER
-    // third (negative offset), clear of the station circle locked at
-    // absolute center and the terrain-cost slot in the lower third. Item 7
-    // (Muted Base Text with Hover Glow): styling/hover-pop now handled by
-    // `drawHexNameLabel`, shared with the gray/OO name pass below.
-    // Universal Canvas Layout Engine (design note #55): a landmark's
-    // nameplate anchor/format is now derived from its ARCHETYPE
-    // (`archetypeForHex`), not a name check -- Boston/Baltimore
-    // (SingleCity) get the shared Archetype A upper-left wedge anchor
-    // (`singleNodeNameplateAnchor`), while New York (DoubleCity, per its
-    // own real "two disconnected stations" `LANDMARK_TRACKS` shape) gets
-    // the shared Archetype B dead-center anchor, splitting into the same
-    // compact 2-line "A & B" stacked format the OO pass below uses whenever
-    // a name actually contains " & " (dropping the ampersand) -- New York's
-    // own name has no ampersand, so it renders as a single centered line,
-    // but the ANCHOR POINT and formatting RULE are identical to every other
-    // DoubleCity hex, not a special case of its own.
+    // A landmark's nameplate anchor is derived from its ARCHETYPE, not a name check -- Boston/Baltimore take the SingleCity wedge, New York the DoubleCity dead-centre anchor.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
     for (const landmark of LANDMARK_HEXES) {
       // Rail Map Overhaul (design note #42): City Nameplate Visibility
       // Toggle -- station tokens/badges/tracks are all drawn by separate
       // passes above and are unaffected by this skip.
       if (!showCityNames) continue;
-      // Dynamic City Nameplate Suppression (design note #47): once a real
-      // tile is laid here, physical-board parity says its preprinted name
-      // is covered -- see `hexHasLaidTile`'s own doc comment. The name
-      // stays 100% available on hover (`describeHex`, extended this same
-      // pass to cover every `NAMED_HEX_LABELS` city too, not just
-      // landmarks/off-board zones).
+      // Dynamic City Nameplate Suppression: a laid tile physically covers the printed name. The name stays available on hover, which is why describeHex was extended to cover every named hex.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #47
       if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       const isHovered = Boolean(
@@ -1990,11 +1014,8 @@ export function HexGridRenderer({
       // has one (New York -> "New York & Newark"), falling back to the real
       // structural `name` otherwise -- see that field's own doc comment.
       const displayName = landmark.displayName ?? landmark.name;
-      // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
-      // text -- `withHexClip` (design note #42) previously only wrapped
-      // track-drawing calls; a nameplate positioned close to a hex's own
-      // edge could still bleed its text into the neighboring hex. Now every
-      // `drawHexNameLabel` call site is wrapped the same way.
+      // withHexClip extended to nameplate text -- a name near a hex's edge could bleed into the neighbour.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #53
       withHexClip(ctx, center, hexSize, () => {
         if (archetype === "DoubleCity") {
           const parts = displayName.split(" & ");
@@ -2018,14 +1039,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Pre-printed gray hex name labels (design note #12), also always
-    // on top. Item 3 (Three-Tier Local Deflection Stack): UPPER third, same
-    // as the landmark pass above. Item 7: styling/hover-pop via
-    // `drawHexNameLabel`. Item 4 (Split Dual-City Labels): the four
-    // `YELLOW_OO_HEXES` are deliberately EXCLUDED here -- a single centered
-    // string through a hex with two independent stations is exactly what
-    // item 4 asks to stop doing -- and get their own split-label pass right
-    // below instead.
+    // Gray hex names, upper third. The four OO hexes are excluded here and get their own split-label pass -- one centred string through a hex with two stations is what that pass exists to stop.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #12
     for (const hex of STATIC_BOARD_HEXES) {
       // Rail Map Overhaul (design note #42): City Nameplate Visibility
       // Toggle.
@@ -2047,13 +1062,8 @@ export function HexGridRenderer({
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
       );
-      // Design note #55: Universal Canvas Layout Engine -- every hex this
-      // pass ever reaches (a real GRAY single-city hex, an ordinary white
-      // `cityDesignation` hex, or a real GRAY single-town hex) resolves to
-      // the SingleCity or SingleTown archetype, both of which share the
-      // Archetype A upper-left wedge anchor (`singleNodeNameplateAnchor`) --
-      // REPLACING the previous upper-CENTER anchor. Design note #70: now
-      // dynamically slot-aware, see that function's own doc comment.
+      // Every hex this pass reaches resolves to SingleCity or SingleTown, both sharing the upper-left wedge anchor. #70: now dynamically slot-aware.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
       const anchor = singleNodeNameplateAnchor(center, hexSize, mapGrid, hex.q, hex.r, claimedHexSlots);
       // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
       // text -- see the landmark pass above for the full reasoning.
@@ -2062,27 +1072,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Item 4 (Split Dual-City Labels), STACKED (design note #41), REPOSITIONED
-    // to dead-center by design note #49: the four preprinted yellow "OO"
-    // double-city hexes (Detroit & Windsor, Hamilton & Toronto, Dunkirk &
-    // Buffalo, Philadelphia & Trenton) get TWO independent name labels
-    // instead of one string through the center -- one line directly above
-    // the other. Design note #49 moved this pass from the upper-third band
-    // (shared with every other name label, `center.y - hexSize * 0.58`) to
-    // TRUE HEX CENTER, per the OO Double-City Layout & Geometry Refactor's
-    // explicit request: with the two station circles now on a top-right/
-    // bottom-left diagonal (`ooCityMarkerOffset`, was left/right), the open
-    // space actually available for a nameplate is the center of the hex,
-    // between the two circles, not the upper third (which the top-right
-    // circle now partly occupies). Reported for the original side-by-side
-    // layout: each half squeezed into less than half the hex's own width
-    // (`hexFlatWidth * 0.42`), which a longer name like "Philadelphia" or
-    // "Hamilton" overflowed and visibly collided with -- unreadable.
-    // Stacking instead gives each line the hex's (nearly) full width to
-    // itself. Each half still independently uses `drawHexNameLabel` (item
-    // 7's muted/hover-glow styling), and each half's own hover state is
-    // judged by the SAME shared hex coordinate -- the two stations aren't
-    // separately hoverable, only the hex as a whole is.
+    // OO names are SPLIT and STACKED at true hex centre: with the two circles on a diagonal, the open space is the middle of the hex, not the top. Side-by-side squeezed each half into less than half the hex's width.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #49
     for (const hex of STATIC_BOARD_HEXES) {
       // Rail Map Overhaul (design note #42): City Nameplate Visibility
       // Toggle.
@@ -2100,26 +1091,15 @@ export function HexGridRenderer({
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
       );
       const lineMaxWidth = hexFlatWidth * 0.85;
-      // Design note #84: line spacing (`NAMEPLATE_LINE_HEIGHT_PX / 2`) is
-      // now derived inside `drawStackedNameLabel` itself, from the SAME
-      // constant design note #51 tuned here -- no longer computed at this
-      // call site.
-      // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
-      // text -- see the landmark pass above for the full reasoning.
+      // Line spacing is derived inside drawStackedNameLabel from the same constant, no longer computed at this call site.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #84
       withHexClip(ctx, center, hexSize, () => {
         drawStackedNameLabel(ctx, [primaryName, secondaryName], center, lineMaxWidth, isHovered);
       });
     }
 
-    // ---- Stacked Dual-Name Labels (design note #41), part 2: the three
-    // double-town hexes -- Akron & Canton (G7), Reading & Allentown (G17),
-    // New Haven & Hartford (F20) -- each name TWO independent town stops
-    // sharing one hex, exactly the same "A & B" shape as the four OO
-    // double-city hexes above, but previously still rendered as a single
-    // un-split "A & B" string via the generic single-name pass above
-    // (before this pass excluded `townDesignation === "double"` from it).
-    // Split and stacked the identical way the OO pass just above is, for
-    // the same readability reason.
+    // The three double-town hexes split the same "A & B" way as the OO pass, for the same readability reason.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #41
     for (const hex of STATIC_BOARD_HEXES) {
       // Rail Map Overhaul (design note #42): City Nameplate Visibility
       // Toggle.
@@ -2137,73 +1117,22 @@ export function HexGridRenderer({
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
       );
       const lineMaxWidth = hexFlatWidth * 0.85;
-      // Design note #84: line spacing now derived inside
-      // `drawStackedNameLabel` itself -- no longer computed at this call
-      // site (was design note #51's same font-size-relative spacing the
-      // OO pass above also used).
-      // Design note #54: Compact Stacked Nameplate Centering -- moved from
-      // the upper-third band (`center.y - hexSize * 0.58 +/- lineOffset`,
-      // shared with every single-name label) to TRUE HEX CENTER, mirroring
-      // design note #49's identical repositioning for the OO pass just
-      // above. Now that the two dit markers sit on the same diagonal
-      // top-right/bottom-left layout OO uses (this same design note), true
-      // center is the open channel between them, not the upper third (which
-      // the top-right marker now partly occupies) -- so this pass no longer
-      // needs its own separate "no station circles to clear" carve-out.
-      // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
-      // text -- see the landmark pass above for the full reasoning.
+      // Moved to TRUE HEX CENTRE, mirroring #49's OO repositioning -- with the dits now diagonal, centre is the open channel between them.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #54
       withHexClip(ctx, center, hexSize, () => {
         drawStackedNameLabel(ctx, [primaryName, secondaryName], center, lineMaxWidth, isHovered);
       });
     }
 
-    // ---- Red off-board revenue zone labels ("Chicago", "Gulf", etc.) plus
-    // ONLY the currently active era's value, now as a circular color-coded
-    // badge rather than a second text plate (design note #22) -- see design
-    // note #6 / OFFBOARD_LABELS. Same responsive font-fit treatment as the
-    // landmark labels above. The name plate sits above center (pushed up
-    // slightly further than before -- design note #22's "explicit offset
-    // padding" ask) and the value badge sits below, so both stay clear of
-    // the pre-printed track stubs (design note #10) converging toward
-    // center. The FULL Yellow/Green/Brown progression is still available --
-    // via the floating hover tooltip card drawn later in this function, see
-    // design note #15/item 4.
-    //
-    // Factored into a small closure (design note #26/item 3) so the SAME
-    // nameplate-plus-badge drawing can be pointed at an arbitrary center --
-    // needed below to draw Gulf's single merged nameplate at the I1/J2
-    // midpoint instead of twice, once per hex, like every other zone here.
-    //
-    // Design note #78: name line(s) and revenue badge are now computed and
-    // laid out as ONE combined block, anchored so the BLOCK's own vertical
-    // center (not each piece independently) lands on `center` -- REPLACING
-    // the previous two fixed hex-relative offsets (name pinned `hexSize *
-    // 0.42` above center, badge pinned `hexSize * 0.44` below, regardless of
-    // whether the name was one line or two). The badge sits a small
-    // proportional gap directly beneath the name block. Also picks up the
-    // shared white translucent shield (`NAMEPLATE_SHIELD_FILL`/`_HOVERED`)
-    // and the standardized regular-weight `NAMEPLATE_FONT_SIZE_PX`/`_MIN_PX`
-    // scale, same as every other nameplate on the board.
+    // Name lines and revenue badge lay out as ONE combined block centred on the hex, replacing two fixed offsets that only looked adjacent for a one-line name.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #78
     const drawOffboardNameplate = (
       center: { x: number; y: number },
       offboardName: string,
       isHovered: boolean,
     ) => {
-      // Rail Map Overhaul (design note #42): City Nameplate Visibility
-      // Toggle gates ONLY the name text -- the value badge below is drawn
-      // unconditionally, per that item's explicit "maintaining ... revenue
-      // badges" requirement (so a hidden-name hex still shows a
-      // badge-only block, centered on the hex).
-      //
-      // Design note #83: wraps onto two stacked lines ONLY for "Maritime
-      // Provinces" -- the one explicitly named exception, too long to fit
-      // its single hex on one line despite naming only one place -- via
-      // `offboardNameplateLines` below. Every other off-board zone name
-      // ("Chicago", "Gulf", "Canadian West", "Deep South") now stays a
-      // single line, REVERSING #47's old "every multi-word name wraps"
-      // rule: per explicit request, wrapping is reserved for names that
-      // either denote two separate cities (an ampersand -- none of this
-      // file's off-board zones have one) or are this one named exception.
+      // Wraps onto two lines ONLY for "Maritime Provinces" -- the one named exception. Every other zone name stays single-line, reversing #47's "every multi-word name wraps".
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #83
       const nameLines: readonly string[] = showCityNames ? offboardNameplateLines(offboardName) : [];
       const nameBlockHeight = nameLines.length * NAMEPLATE_LINE_HEIGHT_PX;
 
@@ -2211,11 +1140,8 @@ export function HexGridRenderer({
       // Design note #66: `$` prefix DROPPED, same reasoning as
       // `drawValueBadge`'s own comment.
       const activeValue = tiers ? `${offboardValueForEra(tiers, currentEra)}` : "";
-      // Design note #63/#64/#65/#66: Text-Driven Badge Sizing -- see
-      // `drawValueBadge`'s own comment for the shared font/padding/floor
-      // reasoning behind this exact formula. Badge text stays BOLD --
-      // design note #78 scopes the regular-weight typography change to
-      // nameplate TEXT, not revenue/terrain-cost badge figures.
+      // Text-driven badge sizing; badge text stays BOLD, since #78's regular-weight change is scoped to nameplate TEXT.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #63
       const offboardFontSizePx = Math.max(9, hexSize * 0.24) - 1;
       let badgeRadius = 0;
       if (tiers) {
@@ -2223,11 +1149,8 @@ export function HexGridRenderer({
         badgeRadius = badgeRadiusForLabel(ctx.measureText(activeValue), offboardFontSizePx, "square", 2, 1.5, 5);
       }
       const badgeDiameter = badgeRadius * 2;
-      // Small proportional gap between the badge's own bottom and the name
-      // block's own top (design note #85 flipped which sits on top) --
-      // only when BOTH are actually present, so a name-only (era has no
-      // revenue -- doesn't happen today, but kept correct) or badge-only
-      // (`showCityNames` off) block doesn't carry a stray empty gap.
+      // The gap is only drawn when both pieces are present, so a badge-only block carries no stray empty gap.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #85
       const gap = nameLines.length > 0 && tiers ? hexSize * 0.08 : 0;
       const totalHeight = nameBlockHeight + gap + badgeDiameter;
       const blockTop = center.y - totalHeight / 2;
@@ -2254,14 +1177,8 @@ export function HexGridRenderer({
         ctx.fillText(activeValue, badgeCenter.x, badgeCenter.y);
       }
 
-      // Design note #84: a 2-line name (only "Maritime Provinces", per #83)
-      // draws through `drawStackedNameLabel` for its ONE shared background
-      // shield, instead of each line painting its own box independently
-      // (the overlap-darkening seam that fixed). A 1-line name (every other
-      // off-board zone, now, per #83) draws through the ordinary
-      // `drawHexNameLabel`, same as every on-board single-line nameplate.
-      // Design note #85: now positioned at `nameBlockStart` (beneath the
-      // badge), not at `blockTop` (was the top of the block).
+      // A two-line name draws through drawStackedNameLabel for ONE shared shield -- two independent 0.55-alpha boxes composited into a visibly darker seam.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #84
       if (nameLines.length === 2) {
         const linesCenterY = nameBlockStart + NAMEPLATE_LINE_HEIGHT_PX;
         drawStackedNameLabel(ctx, [nameLines[0], nameLines[1]], { x: center.x, y: linesCenterY }, hexFlatWidth * 0.92, isHovered);
@@ -2290,18 +1207,8 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Gulf's and Canadian West's single merged nameplates (design note
-    // #26/item 3, generalized by item 9) -- drawn once, at the midpoint
-    // between each zone's two hex centers, instead of the per-hex loop
-    // above's usual one-nameplate-per-hex treatment. Matches the merged
-    // single-region border stroke drawn in the static board background pass
-    // above. Deliberately NOT wrapped in a single-hex `withHexClip` (design
-    // note #55's otherwise-universal clipping requirement) -- the midpoint
-    // sits ON the shared border between the two real hexes this nameplate
-    // spans, by design (the same "merged region" treatment
-    // `GULF_HIDDEN_EDGE`/`CANADIAN_WEST_HIDDEN_EDGE` gives their shared
-    // border stroke above); clipping to either ONE hex's boundary alone
-    // would incorrectly slice the text in half instead of protecting it.
+    // Gulf's and Canadian West's merged nameplates draw once at the two hexes' midpoint. Deliberately NOT withHexClip'd: the midpoint sits ON the shared border, and clipping to either hex would slice the text in half.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
     for (const [labelA, labelB, name] of [
       ["I1", "J2", "Gulf"],
       ["A9", "A11", "Canadian West"],
@@ -2321,36 +1228,12 @@ export function HexGridRenderer({
       }
     }
 
-    // ---- Terrain build-cost labels (design note #9, RELOCATED here by
-    // design note #55's Strict Canvas Layering Hierarchy -- Layer 4/text
-    // content, drawn after every Layer 1-3 pass rather than immediately
-    // after the Layer 1 terrain icon that used to sit right next to it).
-    // RECOLORED by design note #68: solid red box + white text (was the
-    // same tier-colored shield box every other text element on the board
-    // uses, `nameplateBoxFillFor`) -- reported: terrain costs needed to
-    // read as visually distinct from revenue badges (#62-#66's white
-    // squares), and a red box unambiguously reads as "cost," not
-    // "revenue." Tight 2px padding/radius unchanged.
+    // Terrain cost is a solid RED box with white text -- a different shape AND a different colour from the white revenue squares, so a cost cannot be read as revenue.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #68
     for (const hex of STATIC_BOARD_HEXES) {
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
-      // Design note #150, and this one is a CORRECTNESS fix rather than a
-      // cosmetic one.
-      //
-      // `hexmap.rs`'s `execute_lay_tile` charges terrain from the hex, once:
-      //
-      //     let effective_terrain_cost =
-      //         if is_upgrade { Uint128::zero() } else { terrain_build_fee(q, r) };
-      //
-      // with the stated rule "a hex's printed terrain fee is paid exactly
-      // once, when that hex is first built on -- every later colour upgrade
-      // of the same hex is free". So once this hex carries a tile, the $80
-      // or $120 on the badge is not what the next lay costs. It is what the
-      // LAST one cost, rendered as though it were a live price.
-      //
-      // Design note #136 established that this label and the contract's fee
-      // must be the same lookup. Keeping the badge after the first lay broke
-      // that guarantee in the one direction #136 could not see: the lookup
-      // was right, the precondition was not.
+      // A CORRECTNESS fix: execute_lay_tile charges terrain ONCE, on first build. Keeping the badge after that renders what the LAST lay cost as though it were a live price.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
       if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       // Design note #136 (F-2): the printed figure comes from the
@@ -2360,36 +1243,13 @@ export function HexGridRenderer({
       if (terrainFee <= 0) continue;
       const costLabel = String(terrainFee);
       const center = axialToPixel(hex.q, hex.r, hexSize);
-      // Design note #87: GENERALIZED past the old DoubleCity-only
-      // `isDoubleCityHex` check -- see the terrain-icon pass above's own
-      // comment for why (SingleCity `cityDesignation` River hexes like
-      // Toledo/Providence/Washington, D.C. needed the same treatment and
-      // weren't getting it). This is the SAME `isComplexHex` test that
-      // pass uses, so the two always agree on which hexes are complex.
+      // The SAME isComplexHex test the icon pass uses, so the two always agree on which hexes are complex.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #87
       const isComplexHex =
         archetypeForHex(mapGrid, hex.q, hex.r) !== "Plain" ||
         liveEdgesForHex(mapGrid, hex.q, hex.r).length > 0;
-      // Design note #70 (13-Slot Perimeter Anchor System): Item 3's old
-      // fixed "lower third" / "bottom-right quadrant" literals are now
-      // resolved through the shared slot engine per Requirement 4 ("Tile
-      // IDs... anchor along open outer edge faces such as the bottom
-      // vertex or lower edge margins, clear of track entry points") --
-      // terrain cost labels are the closest existing on-board element to
-      // that description (see this task's closing summary for why no
-      // actual tile-ID number is rendered on the board today), so they're
-      // the one refactored against it. Default (simple hex) prefers the
-      // true BOTTOM POINT (slot 10, straight down -- byte-identical
-      // direction to the old fixed `{x: center.x, y: center.y +
-      // hexSize*0.58}`, so the overwhelmingly common unblocked case looks
-      // unchanged), then the two lower edges (4/SW, 3/SE), then the two
-      // lower corners as a last resort. Any complex hex keeps its own
-      // distinct bottom-RIGHT preference by starting at the SE edge (slot
-      // 3) instead of the bottom point.
-      // Design note #87: this is now the ONLY slot claim for a complex
-      // hex's terrain icon+cost -- REPLACES the old two-claim split (one
-      // here, a separate one in the icon pass above) with a SINGLE
-      // `claimHexSlot` call for the whole compound badge. A simple hex's
-      // claim is unchanged from before.
+      // Slot-resolved rather than a fixed lower-third literal. A simple hex prefers the true bottom point -- byte-identical direction to the old fixed offset -- and a complex hex the SE edge. #87: ONE claim for the whole compound badge.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #70
       const blockedCostSlots = hexBlockedSlots(mapGrid, hex.q, hex.r);
       const deadCostSlots = slotsBlockedByEdges(deadEdgesAt(hex.q, hex.r), false);
       const costOverride = resolveSlotOverride(hex.q, hex.r, "terrain");
@@ -2413,14 +1273,8 @@ export function HexGridRenderer({
         x: center.x + costDirection.x * hexSize * 0.58,
         y: center.y + costDirection.y * hexSize * 0.58,
       };
-      // Design note #122: the compound [icon+cost] badge's own anchor,
-      // offset at `0.65` instead of the plain cost box's `0.58` above --
-      // matches `drawValueBadge`'s own `REVENUE_BADGE_OFFSET` (design note
-      // #109) exactly, per direct request to give the (recently shrunk,
-      // design note #121) compound badge the same offset treatment the
-      // revenue badge already has. Scoped to ONLY the compound badge --
-      // `point` above (the plain-hex cost box's own anchor) is untouched,
-      // same "only the compound badge" scope #121's own shrink used.
+      // The compound badge sits at 0.65, matching REVENUE_BADGE_OFFSET exactly. Scoped to the compound badge only -- the plain cost box's anchor is untouched.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #122
       const COMPOUND_BADGE_OFFSET = 0.65;
       const compoundBadgePoint = {
         x: center.x + costDirection.x * hexSize * COMPOUND_BADGE_OFFSET,
@@ -2428,24 +1282,13 @@ export function HexGridRenderer({
       };
       withHexClip(ctx, center, hexSize, () => {
         if (isComplexHex) {
-          // Design note #87: ONE compound [icon+cost] pill, REPLACING the
-          // plain cost-only box below for every complex hex -- the
-          // standalone icon pass above already skipped drawing anything
-          // for this hex, so this is the ONLY place its terrain icon
-          // renders at all.
+          // ONE compound [icon+cost] pill; the standalone icon pass already skipped this hex, so this is the only place its terrain icon renders.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #87
           drawTerrainCompoundBadge(ctx, terrainType, costLabel, compoundBadgePoint, hexFlatWidth * 0.85);
           return;
         }
-        // Design note #68: font dropped 1pt (base `9` instead of `10`) as
-        // part of the same terrain-cost-vs-revenue-badge distinction pass.
-        // Design note #92: dropped another 1pt (base `8`) on top of #91's
-        // tightened box padding (kept, not reverted) -- per direct request,
-        // both changes now apply together.
-        // Design note #95: raised back 1pt (base `9`) now that the `$`
-        // prefix is gone (#94) -- freed-up horizontal room lets the number
-        // read at its original size again.
-        // Design note #99: raised another 1pt (base `10`), per direct
-        // request.
+        // Font history: 10 -> 9 (#68) -> 8 (#92) -> 9 (#95, once the $ was dropped) -> 10 (#99).
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #99
         ctx.font = fitFontSize(ctx, costLabel, 10, hexFlatWidth * 0.85, 6, "bold");
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -2468,45 +1311,17 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- City/town route-value badges (design note #26/item 5) -- a
-    // small, color-coded $-value plate next to every printed destination
-    // city/town circle: the three landmark cities, every pre-printed gray
-    // hex city/town marker, every yellow "OO" hex, and any laid
-    // SmallTown/MajorCityHub tile. FACTUAL NOTE (see design note #26): the
-    // request that asked for this called the value "phase-dependent...
-    // based on the current game phase tier," but `terrainBaseValue` (this
-    // file's mirror of the actual `hexmap::terrain_base_value` rule
-    // `RunManualRoute`'s payout math uses) is flat and terrain-only -- a
-    // hex's value never changes as the game advances through color tiers.
-    // The two example numbers that request gave ($10 towns / $20 base
-    // cities) DO match this flat table, so they're used here verbatim; a
-    // second, era-varying value for the same hex was NOT implemented,
-    // since the backend has no such rule to mirror (unlike the off-board
-    // zones' badges above, which genuinely are era-tiered).
-    // Design note #35/items 2-3: a hex listed in `HEX_START_VALUE_OVERRIDE`
-    // uses its real sourced $ figure instead of the flat terrain default --
-    // and if that real figure is exactly `$0` (the four `YELLOW_OO_HEXES`,
-    // and all eight `cityDesignation` hexes), the badge is skipped
-    // entirely rather than drawn showing "$0", per this item's own "fully
-    // hiding or removing" instruction. `undefined` (a hex absent from the
-    // override table entirely) falls through to `drawValueBadge`'s own
-    // unchanged flat-by-terrain default.
+    // A hex in HEX_START_VALUE_OVERRIDE uses its real sourced figure; an exact $0 SKIPS the badge entirely rather than printing "$0". terrainBaseValue is flat and terrain-only -- a hex's value never changes with the colour tier.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #35
     for (const landmark of LANDMARK_HEXES) {
-      // Design note #133: same yield as the track pass above, and for the
-      // same reason one step further on -- `HEX_START_VALUE_OVERRIDE` is
-      // this hex's PRINTED starting value. Once a tile is laid, the tile's
-      // own chain revenue is the figure that pays (a laid #62 pays $90, not
-      // New York's printed starting value), and the laid-tile badge loop
-      // below now prints it.
+      // Same yield as the track pass, one step on: once a tile is laid its own chain revenue is the figure that pays, not the hex's printed starting value.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
       if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
       const override = HEX_START_VALUE_OVERRIDE[landmark.label];
       if (override === 0) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
-      // ADAPTIVE PLACEMENT (see `drawValueBadge`'s own doc comment): this
-      // landmark's own real printed track edges, flattened out of
-      // `LANDMARK_TRACKS`'s per-segment shape -- exactly the data that lets
-      // New York's badge dodge its NE stub (edge 1) instead of sitting on
-      // top of it, which is the G19 collision this pass was reported for.
+      // The landmark's own printed edges, flattened -- exactly the data that lets New York's badge dodge its NE stub instead of sitting on it.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #39
       const landmarkEdges = (LANDMARK_TRACKS[landmark.name] ?? []).flatMap((segment) => segment.edges);
       // Design note #55: Strict Hex Boundary Clipping, extended to value
       // badges -- previously only track/text calls were wrapped.
@@ -2554,32 +1369,8 @@ export function HexGridRenderer({
           });
         }
       }
-      // REVERTED (this pass, "Only Real-Track Towns Show Revenue" --
-      // reported: every blank Town/Double-Town-designated hex shows a
-      // revenue badge, when only the three hexes with REAL pre-printed
-      // track -- Kingston C15, Atlantic City I19, Fall River F24, the
-      // `GRAY_HEXES`/`grayTrack.marker !== "none"` branch above -- should).
-      // The item 1 fix this reverts gave every blank `townDesignation` hex
-      // (London E7, Burlington B20, Flint D4, Erie F10, Akron & Canton G7,
-      // Reading & Allentown G17, New Haven & Hartford F20 -- see
-      // `TOWN_DESIGNATED_HEXES`'s own doc comment in `hexmap.rs` for the
-      // full sourcing) the same flat SmallTown/DoubleTown badge as a REAL
-      // printed town, even though these seven have no printed track at all
-      // -- a bare town PLACEHOLDER, not a scored destination, until a
-      // player actually lays a real tile there. `hexRouteValue`'s own
-      // matching fallback (used by the hover tooltip) is fixed the same way
-      // just below. The backend (`pathfinding::effective_tile_and_value`)
-      // was independently verified to already treat these seven correctly
-      // -- `gray_preprinted_name_at` only ever matches the twelve REAL gray
-      // hexes (the six cities, C15/I19/F24, and the three bare connectors),
-      // never these seven blank placeholders, so a route can't pass through
-      // or score value at one of them until a real tile is laid; this was a
-      // frontend-only display bug, nothing to change on-chain.
-      // Design note #34/item 2, values corrected by design note #35/item 3:
-      // the blank single-CITY-designated hexes' real printed value is $0
-      // (bare `city`/`city=revenue:0` source entries, no track), so their
-      // badge is skipped entirely -- `override` is always exactly `0` for
-      // every one of these eight hexes (see `HEX_START_VALUE_OVERRIDE`).
+      // REVERTED: only the three gray hexes with REAL printed track show a town badge. The seven blank town-designated hexes are placeholders, not scored destinations, until a tile is laid -- the backend already treats them that way, so this was a frontend-only display bug.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #35
       if (hex.cityDesignation && override !== 0) {
         const center = axialToPixel(hex.q, hex.r, hexSize);
         withHexClip(ctx, center, hexSize, () => {
@@ -2590,30 +1381,8 @@ export function HexGridRenderer({
     for (const tile of mapGrid.tiles) {
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
       if (!catalogEntry) continue;
-      /* ==================================================================
-       *  DESIGN NOTE 288: THE LANDMARK HUBS UPGRADE LIKE ANYTHING ELSE
-       * ==================================================================
-       *
-       * REPORTED: G19's green upgrade has no revenue badge.
-       *
-       * `NewYorkHub` and `BostonHub` were deliberately excluded here, on
-       * the reasoning recorded below: "both terrains only ever occur at a
-       * LANDMARK_HEXES hex, which the landmark badge pass always catches
-       * first". That was true when written and stopped being true one
-       * design note later -- #133 made the landmark pass YIELD as soon as a
-       * tile is laid, precisely so the laid tile could draw its own badge.
-       *
-       * Which left the two hub terrains falling between the passes: the
-       * landmark pass stood aside for the tile, and the tile pass did not
-       * accept the terrain. Lay tile #54 on G19 and its $60 vanished --
-       * every other upgrade on the board gained a badge and the busiest hex
-       * in the game lost one.
-       *
-       * `drawValueBadge`'s parameter is widened to match rather than the
-       * terrains being mapped onto a narrower lookalike: a NewYorkHub is
-       * not a DoubleCityHub, and pretending otherwise to satisfy a type
-       * would be the kind of near-enough this file's notes keep unpicking.
-       */
+      /* NewYorkHub/BostonHub were excluded because the landmark pass "always catches them first" -- true when written and false one note later, once #133 made that pass yield to a laid tile. The parameter is widened rather than the terrains mapped onto a lookalike.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #288 */
       if (
         catalogEntry.terrain !== "SmallTown" &&
         catalogEntry.terrain !== "DoubleTown" &&
@@ -2624,40 +1393,19 @@ export function HexGridRenderer({
       ) {
         continue;
       }
-      // design note #49: `BostonHub`/`NewYorkHub` are deliberately NOT
-      // added to the allow-list above (even though they're now real
-      // `TerrainType` members, closing the gap described in that type's own
-      // doc comment) -- both terrains only ever occur at a `LANDMARK_HEXES`
-      // hex, which the `landmarkAt` skip just below always catches first,
-      // and `drawValueBadge`'s own `terrain` parameter is intentionally
-      // typed to the narrower `SmallTown | DoubleTown | MajorCityHub |
-      // DoubleCityHub` union it's always accepted -- widening the allow-list
-      // above would widen `catalogEntry.terrain`'s narrowed type past what
-      // `drawValueBadge` accepts for no functional benefit (this branch is
-      // unreachable for a landmark hex either way).
-      // Design note #133: no longer skipped for a landmark hex. The
-      // landmark badge pass above now yields whenever a tile is laid, so
-      // exactly one badge is drawn either way -- the printed value while the
-      // hex is bare, the chain's `MapTileEntry.revenue` once it is not.
+      // No longer skipped for a landmark hex: the landmark badge pass yields once a tile is laid, so exactly one badge is drawn either way.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
       const center = axialToPixel(tile.q, tile.r, hexSize);
       // Local `const` so the allow-list narrowing above (`catalogEntry.terrain
       // !== ...`) survives being read inside the `withHexClip` closure below
       // -- TS does not carry property-access narrowing across a function
       // boundary, only a local variable's.
       const terrain = catalogEntry.terrain;
-      // ADAPTIVE PLACEMENT (see `drawValueBadge`'s own doc comment): this
-      // laid tile's actual live edges at its current orientation -- the
-      // same `rotateConnections`/`liveEdges` pair `drawTrackPath` itself
-      // uses to draw the real track, so the badge dodges exactly what's
-      // actually drawn, not the tile's unrotated base artwork.
+      // The laid tile's ACTUAL live edges at its current orientation -- the same rotateConnections pair drawTrackPath uses, so the badge dodges what is actually drawn.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #39
       const tileEdges = liveEdges(rotateConnections(catalogEntry.connections, tile.orientation));
-      // Design note #132: THE revenue figure, read off `MapTileEntry.revenue`
-      // -- `hexmap::tile_base_value`, the same call `pathfinding::HexInfo`
-      // and `operations::execute_run_manual_route` price a route through.
-      // What is printed here is therefore what the contract will actually
-      // pay, by construction. It is no longer computed on the frontend at
-      // all; `drawValueBadge`'s existing `valueOverride` parameter is the
-      // channel, so nothing about badge placement or styling changes.
+      // THE revenue figure, off MapTileEntry.revenue -- the same call the contract prices a route through, so what is printed is what will actually be paid.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #132
       const chainRevenue = chainTileRevenue(tile);
       // `0` is a real chain answer -- plain connector track pays nothing --
       // and a `$0` badge is noise, so suppress it. `undefined` (a pre-G-11
@@ -2668,35 +1416,13 @@ export function HexGridRenderer({
       });
     }
 
-    // ---- Canonical Tile Upgrade Restriction badges ("B"/"NY"/"OO", design
-    // note #47, REVISED by design note #49, mirroring `hexmap.rs` module
-    // doc comment #26/#27): Boston AND Baltimore each get a "B" corner
-    // badge (Baltimore added by #49 -- real 1830 prints the "B" label on
-    // both hexes, not just Boston, see #27's own Verification Status
-    // paragraph), New York gets "NY", and each of the four
-    // `YELLOW_OO_HEXES` gets "OO" -- see `drawRestrictionBadge`'s own doc
-    // comment for the fixed-corner-and-plain-text styling. Drawn right
-    // after the landmark name pass, so it layers on top of the printed
-    // track/station circle beneath it but stays visually distinct from the
-    // (possibly now-suppressed) name label above center.
-    //
-    // PERSISTENCE (design note #49, REVERSING #47): #47 gated both loops
-    // below on `!hexHasLaidTile`, hiding each badge once its hex was tiled.
-    // This request explicitly asks these labels to "remain visible across
-    // ALL tile upgrade phases (un-tiled preprinted hexes, yellow tiles,
-    // green tiles, and brown tiles)" -- the opposite of #47's own framing
-    // ("before tiles are laid"). Both `hexHasLaidTile` checks are removed
-    // outright; #47 itself is left in place, unedited, as the historical
-    // record of the original (now-superseded) decision, per this file's own
-    // convention of never silently deleting a prior pass's reasoning.
+    // B/NY/OO badges persist across EVERY tier, reversing #47's "before tiles are laid" gate. #47 is left in place as the record of the superseded decision.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #49
     for (const landmark of LANDMARK_HEXES) {
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       const archetype = archetypeForHex(mapGrid, landmark.q, landmark.r);
-      // Badge TEXT content ("B" vs "NY") is genuine per-hex DATA (which
-      // letter a real landmark prints), read the same structural way
-      // `archetypeForHex` itself classifies the hex -- not a separate name
-      // check -- so a DoubleCity landmark always gets "NY" and a
-      // SingleCity landmark always gets "B", by construction.
+      // Badge TEXT is genuine per-hex data read the same structural way archetypeForHex classifies the hex -- not a separate name check.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
       const badgeText = archetype === "DoubleCity" ? "NY" : "B";
       withHexClip(ctx, center, hexSize, () => {
         drawRestrictionBadge(
@@ -2720,109 +1446,33 @@ export function HexGridRenderer({
       });
     }
 
-    /* ---- Design note #318: private company reservations. -------------
-       Drawn after the printed restriction badges and before the station
-       token pass, which puts it in the same band as every other
-       game-state-derived mark: above the cardboard, below the pieces.
-
-       NOT clipped to the hex. Every pass above is, because printed artwork
-       belongs inside its own hex -- but this is a marker sitting on the
-       board, and a pill wide enough to carry "C&SL" legibly would be sliced
-       by the boundary at the smaller zoom levels. It is the only mark here
-       allowed to overhang, which is also what makes it read as a piece. */
-    // `forEach` rather than `for...of` over `.values()`: this build targets
-    // ES5 without `--downlevelIteration`, so iterating a Map's iterator does
-    // not compile. Same workaround the Set spreads in this file use.
+    // Private company reservations, drawn above the cardboard and below the pieces. NOT clipped to the hex: it is a marker sitting ON the board, and a pill wide enough for "C&SL" would be sliced at smaller zooms. forEach, not for...of -- ES5 target without downlevelIteration.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #318
     reservations.forEach((reservation) => {
       const center = axialToPixel(reservation.q, reservation.r, hexSize);
       drawReservationBadge(ctx, center, hexSize, reservation.initials, reservation.slot);
     });
 
-    // ---- Impassable border edges (design note #38): a fixed set of four
-    // board crossings (E7/F8, D12/C11, D12/C13, C17/B16) across which track
-    // may never be built, marked with a thick red bar. Drawn after every
-    // tile/badge pass above so the bar is never hidden underneath a laid
-    // tile's own track or fill, but before the live preview ghost tile
-    // below, so a player actively previewing a placement there still sees
-    // their own tentative track on top.
+    // Four fixed board crossings track may never be built over, drawn after every tile pass so the bar is never hidden, but before the preview ghost.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #38
     for (const border of IMPASSABLE_BORDER_EDGES) {
       const center = axialToPixel(border.q, border.r, hexSize);
       drawImpassableBorderEdge(ctx, center, hexSize, border.edge);
     }
 
 
-    /* ==================================================================
-     *  DESIGN NOTE 588: THE VEIL WAS PAINTING OVER THE TOKENS
-     * ==================================================================
-     *
-     * REPORTED: during a Place Home Station action the preprinted home
-     * station reservation markers disappear.
-     *
-     * They were drawn -- and then buried. `drawStationTokenPass()` ran HERE,
-     * and the focus veil runs in the loop BELOW it, so the veil's fill
-     * landed on top of every token on the board. A reservation badge is
-     * already drawn at 0.45 alpha by design (note #116: a ghost, not a
-     * piece); under the deep focus veil the product of the two is
-     * effectively nothing.
-     *
-     * SO THE PASS MOVED AFTER THE VEIL, which is what design note #222 was
-     * already arguing for and stopped one pass short of: "a badge covering a
-     * token is worse than a badge covering track -- a token is the one
-     * marker that says WHOSE network this is, and a route's legality turns
-     * on it." A veil is a badge over the whole hex.
-     *
-     * THE VEIL STILL DOES ITS JOB. It pushes back the track, the cities and
-     * the labels, which is what makes the one open hex findable. What it no
-     * longer does is hide the piece a player is being asked to reason about
-     * -- and during a home placement the reservation markers are exactly
-     * that: they say which hexes are already spoken for. */
+    /* The token pass moved AFTER the veil: a reservation badge is already at 0.45 alpha, and under the deep focus veil the product of the two is effectively nothing. A veil is a badge over the whole hex.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #588 */
 
-    /* ==================================================================
-     *  DESIGN NOTE 367: THE VEIL IS GONE
-     * ==================================================================
-     *
-     * REPORTED: during Lay Track the entire map dims, for all players. It
-     * is visually confusing and unnecessary.
-     *
-     * Design note #223 introduced it to answer a real bug -- "players can
-     * click anywhere to lay track" -- by making unreachable hexes read as
-     * unreachable. It over-answered. Two things were wrong with it:
-     *
-     *   IT DIMMED THE BOARD FOR EVERYONE. The veil is drawn from
-     *   `layFocus`, which describes ONE corporation's reach, and every
-     *   player at the table sees the same canvas. So three of four players
-     *   watched the map grey out for a restriction that was not theirs and
-     *   could not act on it either way.
-     *
-     *   IT SUPPRESSED THE BOARD TO EMPHASISE A SUBSET. An 1830 player
-     *   reading the map during a tile lay is looking at the whole network
-     *   -- where rivals are, where the route wants to go next -- and the
-     *   veil took that away at the moment it was most wanted, to mark
-     *   something the glow already marks.
-     *
-     * WHAT REMAINS is design note #252's outer glow on the legal hexes, in
-     * the acting corporation's own colour. That is ADDITIVE: it draws the
-     * eye to the legal set without taking the rest of the board away, and
-     * it is the half of the pair that was doing the work.
-     *
-     * THE CLICK GATE IS UNAFFECTED. `layFocus.highlighted` still decides
-     * which hexes open the picker (see `handlePointerUp`), so the original
-     * "click anywhere" bug stays fixed -- it was always enforced by the
-     * set, never by the dimming. */
+    /* The veil was deleted here on two objections; only one survived -- it dimmed the board for EVERYONE. The remedy was a CONDITION, not a deletion. The click gate was never the veil's job.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #367 */
     if (layFocus) {
       for (const hex of STATIC_BOARD_HEXES) {
         const key = `${hex.q},${hex.r}`;
         const center = axialToPixel(hex.q, hex.r, hexSize);
 
-        /* Design note #377: dimmed only for the player on turn, and only
-           the hexes outside their reach. `visible` carries the network as
-           well as the legal targets (design note #241), so the route an
-           extension joins stays lit alongside the placements. */
-        /* Design note #472: two veils, one pass.
-           - A ring is open  -> every hex but that one goes to the deep
-             alpha, legal or not. The decision is about ONE hex now.
-           - No ring open    -> the ordinary survey veil, on the hexes
-             outside the corporation's reach. */
+        /* Two veils, one pass: a ring open means every other hex goes to the deep alpha, legal or not; no ring means the ordinary survey veil.
+           See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #472 */
         const focused = layFocus.soleFocusKey !== undefined;
         const veiled = focused
           ? key !== layFocus.soleFocusKey
@@ -2834,88 +1484,12 @@ export function HexGridRenderer({
           drawHexPath(ctx, center, hexSize);
           ctx.fill();
           ctx.restore();
-          /* NOT `continue`. Design note #367 deleted the veil and with it
-             the early-exit that used to sit here, and the exit was a second
-             bug in its own right: a hex could be dimmed OR glowed, never
-             both. A legal target is always inside `visible`, so the two
-             never actually collided -- but the structure said they might,
-             and falling through means the glow below is reached on every
-             hex regardless of what this branch did. */
+          /* NOT continue. The old early-exit meant a hex could be dimmed OR glowed, never both -- the two never actually collided, but the structure said they might.
+             See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #367 */
         }
 
-        /* ==================================================================
-         *  DESIGN NOTE 252: AN OUTER GLOW, NOT A RING WITH A SHADOW
-         * ==================================================================
-         *
-         * REPORTED BUG: the legal-placement highlight is a thick solid green
-         * border with no actual glow.
-         *
-         * Two things made it read that way, and the second is the one that
-         * mattered.
-         *
-         *   THE LINE WAS TOO HEAVY. `hexSize * 0.13` is wider than the track
-         *   artwork itself (`0.12`), so whatever the alpha, the eye read it
-         *   as a drawn border. It is now `hexSize * 0.02` -- a reduction of
-         *   roughly 85%, floored at one pixel so it never vanishes at small
-         *   zoom.
-         *
-         *   THE SHADOW BLOOMED BOTH WAYS. `ctx.shadowBlur` spreads a halo
-         *   symmetrically, so half of every "glow" was painted INSIDE the
-         *   hex, over the cardboard. Inward bloom on a hex-sized ring fills
-         *   the hex -- which is exactly what turns a glow into a solid tint,
-         *   and then reads as a border with a muddy interior rather than as
-         *   light coming off an edge.
-         *
-         * A true outer glow needs the inside masked. The clip below is a
-         * generous rect MINUS this hex, built as one path and clipped
-         * `evenodd`; stroking the hex through it discards everything on the
-         * inward side and leaves only the halo escaping outward. That is
-         * what a glow is -- light spilling out of a shape, not a ring drawn
-         * around it.
-         *
-         * THE COLOUR IS THE CORPORATION'S, matching the action toolbar and
-         * the route line so "PRR is acting" is one colour across the screen
-         * -- with a fallback for a brand colour too dark to register as
-         * light, since a glow that cannot be seen is not a glow.
-         *
-         * Design note #367 removed the veil this used to be seen against,
-         * which makes the glow the ONLY guide to the legal set. The three
-         * falloff passes below matter more for that reason, not less: it
-         * now has to carry the signal alone. */
-        /* ==================================================================
-         *  DESIGN NOTE 463: THE NODE, NOT JUST THE HEX
-         * ==================================================================
-         *
-         * REPORTED: valid city markers do not glow, so which node to click
-         * is not obvious.
-         *
-         * The hex-level glow below marks WHERE, and on a one-city hex that
-         * is the whole answer. On a two-city hex it is not: the player is
-         * told this hex, and then has to guess which of two printed circles
-         * the click means. NNH's home is the case reported and every OO hex
-         * has it.
-         *
-         * So while a token placement is armed, each city node on a
-         * highlighted hex gets its own pulsing ring. `cityNodePoints` is the
-         * SAME geometry `cityIndexAtPoint` resolves a click against, which
-         * is what makes the glow a promise rather than a decoration -- a
-         * marker cannot pulse somewhere a click would not land.
-         *
-         * ONLY WHILE TARGETING IS ARMED (`cursorMode === "token"`). This is
-         * a strong, moving signal; during an ordinary tile lay it would be
-         * noise about an action the player is not taking.
-         *
-         * THE PULSE IS DRAWN, NOT ANIMATED IN CSS, because this is a canvas
-         * -- see `pulsePhase` for the repaint loop and why it only runs
-         * while it is needed. */
-        /* Design note #472: the node glow stands down under a focus veil.
-           It marks a SET of candidate nodes, and while a ring is open the
-           set has collapsed to one hex -- pulsing rings on the veiled
-           remainder would be inviting clicks the player has just moved
-           past. */
-        /* Design note #585: home placements only, and only the home slot.
-           `cursorMode === "token"` alone lit every legal node of every
-           highlighted hex, which is the Tokens step this no longer serves. */
+        /* An OUTER glow needs the inside masked: shadowBlur blooms symmetrically, so half of every "glow" was painted inside the hex, which is what turns a glow into a solid tint. #463: node rings while a placement is armed, on the SAME geometry a click resolves against. #585: home slots only.
+           See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #252 */
         if (
           cursorMode === "token" &&
           layFocus.homeSlotGlow === true &&
@@ -2926,30 +1500,8 @@ export function HexGridRenderer({
           // 0..1..0 over the cycle, so the ring breathes rather than
           // stepping. `pulsePhase` is a plain 0..1 ramp from the loop.
           const swell = Math.sin(pulsePhase * Math.PI * 2) * 0.5 + 0.5;
-          /* ==================================================================
-           *  DESIGN NOTE 515: THE RING FRAMES THE SLOT, NOT THE HEX
-           * ==================================================================
-           *
-           * REPORTED: the pulse has too large an orbit and radiates outward
-           * rather than marking the node.
-           *
-           * Every term here was a fraction of `hexSize`, which is the wrong
-           * unit for a mark on a CITY SLOT. On a plain single-city hex the
-           * token is `hexSize * 0.22` and a 0.24-0.30 ring frames it; on a
-           * laid multi-city tile the token docks at `tileCityTokenRadius`,
-           * which is roughly half that -- so the same ring drew a halo at
-           * twice the radius of the thing it was pointing at, on precisely
-           * the tiles where saying WHICH node is the whole job.
-           *
-           * So the radius comes from the token that will land there, and the
-           * pulse is a tight band around it rather than a wide sweep. The
-           * blur shrinks with it: a shadow reaching 0.40 of a hex is the
-           * "radiating wildly" the report describes, and most of it fell
-           * outside any plausible reading of "this slot".
-           *
-           * `tileCityTokenRadius` is the same helper the real token docks
-           * against (design note #151), so the ring cannot frame a size the
-           * token will not be. */
+          /* The ring's radius comes from the TOKEN that will land there, not from hexSize -- on a laid multi-city tile the same ring drew a halo at twice the radius of the thing it was pointing at.
+             See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #515 */
           const laidHere = mapGrid.tiles.find((tile) => tile.q === hex.q && tile.r === hex.r);
           const slotRadius =
             (laidHere ? tileCityTokenRadius(laidHere.tile_id, hexSize) : undefined) ??
@@ -3016,31 +1568,8 @@ export function HexGridRenderer({
        nameplate AND the focus veil. */
     drawStationTokenPass();
 
-    // ---- Live preview tile, drawn last so it sits on top of everything.
-    //
-    // DESIGN NOTE 167: FULLY OPAQUE, and the ghost styling is gone.
-    //
-    // It used to render at `globalAlpha = 0.65` so it would "clearly read as
-    // a not-yet-confirmed preview". That reasoning came from a flow where
-    // the preview was the ONLY signal that something was pending -- there
-    // was no explicit confirm, so the tile itself had to look tentative.
-    //
-    // The radial selector changed that: a green check and a red X float
-    // directly above the hex whenever a preview is live, and nothing is
-    // committed until the check is pressed. The pending state is stated by
-    // a control, not implied by transparency -- and transparency was
-    // costing the one thing the preview exists for. At 0.65 the board
-    // colours underneath bled through the tile, which on the new saturated
-    // palette turned a yellow tile over a green hex into a muddy third
-    // colour and made the track hard to trace against its neighbours. The
-    // whole point of an in-situ preview is judging whether the tile FITS,
-    // and it was being judged through a veil.
-    //
-    // The DASHED outline stays. It is the cheap half of the old signal --
-    // it costs no legibility, keeps working for anyone who cannot see the
-    // buttons (they sit above the hex, which may be off-screen on a panned
-    // board), and matches this renderer's existing idiom for provisional
-    // artwork.
+    // The preview is FULLY OPAQUE. Transparency was costing the one thing it exists for: at 0.65 the board bled through and a yellow tile over a green hex became a muddy third colour. The dashed outline stays -- the cheap half of the old signal.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #167
     if (previewTile) {
       const previewCatalogEntry = TILE_CATALOG_BY_ID.get(previewTile.tileId);
       const previewCenter = axialToPixel(previewTile.q, previewTile.r, hexSize);
@@ -3058,18 +1587,8 @@ export function HexGridRenderer({
       if (previewCatalogEntry) {
         // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
         withHexClip(ctx, previewCenter, hexSize, () => {
-          // No query paths to pass (design note #119): `previewTile` is a
-          // ghost of a tile the player is CONSIDERING, built client-side by
-          // `TileSelectionPopup` from a `GetLegalTilePlacements` pairing --
-          // it isn't on the board, so no `MapTileEntry` describes it.
-          // `pathsForTile` falls back to the catalog mirror, which is why
-          // the mirror had to carry `paths` too: a previewed double-town
-          // must draw identically to the same tile once it is laid.
-          // Design note #486: the ghost sits ON a board hex, so it collides
-          // with that hex's own restriction badge exactly as a laid tile
-          // does. `showRevenue` stays true -- the ghost is not on the board
-          // yet, so `drawValueBadge`'s laid-tile pass never reaches it and
-          // this is the only thing that can show its value.
+          // previewTile is a tile being CONSIDERED, so no MapTileEntry describes it; the catalog mirror is why it must carry paths. #486: showRevenue stays true -- the ghost is not on the board, so nothing else can show its value.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #119
           drawTrackPath(
             ctx,
             previewCenter,
@@ -3096,11 +1615,8 @@ export function HexGridRenderer({
       const tiers = offboardName ? OFFBOARD_REVENUE[offboardName] : undefined;
       if (hex && offboardName && tiers) {
         const center = axialToPixel(hex.q, hex.r, hexSize);
-        // Point the card back toward the board's own interior (see
-        // `drawOffboardTooltip`'s "ADAPTIVE QUADRANT" doc comment) rather
-        // than always up-right, so zones near the top/right edge (Canadian
-        // West, Maritime Provinces) get room to render instead of clipping
-        // off the visible canvas.
+        // Point the card back toward the board's interior rather than always up-right, so zones near the top/right edge get room instead of clipping.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15
         const boardCenterX = (boardContentBounds.minX + boardContentBounds.maxX) / 2;
         const boardCenterY = (boardContentBounds.minY + boardContentBounds.maxY) / 2;
         const preferLeft = center.x > boardCenterX;
@@ -3130,32 +1646,8 @@ export function HexGridRenderer({
     // reachable set has to repaint. Omitted, the board would keep the
     // dimming from whichever corporation was acting when it was last drawn.
     layFocus,
-    // `mapGrid`, not `mapGrid.tiles` (react-hooks/exhaustive-deps).
-    //
-    // The body reads the WHOLE object, not just the array: `hexHasLaidTile`,
-    // `archetypeForHex`, `liveEdgesForHex`, `hexBlockedSlots` and
-    // `singleNodeNameplateAnchor` all take `mapGrid` itself. Depending only
-    // on `.tiles` was a narrower key than the closure actually needs, which
-    // is the definition of a stale-closure hazard: any change to `mapGrid`
-    // that did not also replace `.tiles` would leave this callback painting
-    // from the previous board.
-    //
-    // It costs nothing to widen. A live `GetMapGrid` response is freshly
-    // parsed per poll, so `mapGrid` and `mapGrid.tiles` get new identities
-    // together -- the narrow key only ever helped in the one case where a
-    // parent reuses the tiles array inside a new wrapper object, which no
-    // caller does.
-    //
-    // WHY THIS WAS INVISIBLE: `App.tsx` currently supplies
-    // `useMemo(() => MOCK_MAP_GRID, [])` -- a frozen mock that never changes
-    // at all, so neither the stale read nor any extra repaint could be
-    // observed. The hazard only becomes real when this is wired to the live
-    // poll, which is exactly when it would have been hardest to diagnose.
-    //
-    // NOTE FOR CALLERS: pass a STABLE `mapGrid` reference (memoised or
-    // straight from the polling hook). An object literal built inline in JSX
-    // gets a new identity every render and would repaint the canvas on every
-    // render of the parent.
+    // mapGrid, not mapGrid.tiles -- the body reads the whole object. Invisible today because App.tsx supplies a frozen mock; the hazard becomes real exactly when this is wired to the live poll. Callers must pass a STABLE reference.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #138
     mapGrid,
     hexSize,
     width,
@@ -3209,37 +1701,8 @@ export function HexGridRenderer({
     };
   }, []);
 
-  // BUG FIX ("Tab-Switch Shrink" -- reported: returning to the Rail Map tab
-  // after visiting another tab renders the board shrunk, fixed only by
-  // manually clicking "Fit to Screen"). This used to be a ONE-SHOT auto-fit
-  // effect (guarded by `hasAutoFitRef`, empty deps, "must run exactly once")
-  // that snapped `view` to `fitView` a single time on mount. That's the bug:
-  // `App.tsx` fully unmounts/remounts this component on every Rail Map <->
-  // Stock Market tab switch (a plain ternary, not a CSS display toggle), so
-  // "on mount" happens on every single return trip, not just first page
-  // load -- and on this component's very first render after each such
-  // mount, `width` is still seeded with the small `DEFAULT_WIDTH` fallback,
-  // because the `ResizeObserver` above hasn't reported its real, larger
-  // measurement yet (that callback fires asynchronously, after this
-  // synchronous first paint). The one-shot effect fired at that exact
-  // moment, captured a `fitView` computed from the too-small fallback
-  // width, and then never ran again -- so `view` stayed locked to that
-  // stale shrunk fit even after `measuredSize`/`width`/`fitView` corrected
-  // themselves moments later once the `ResizeObserver`'s real reading
-  // arrived. Clicking "Fit to Screen" happened to fix it only because that
-  // handler independently re-reads the CURRENT `fitView` at click time.
-  //
-  // Fixed by re-running on every `fitView` change instead of once -- this
-  // is also just what design note #13's own stated invariant already
-  // claims ("with detailedView === false, `view` is always exactly
-  // `fitView`"), now actually enforced continuously instead of only at two
-  // isolated trigger points (mount, and toggling detailed view off).
-  // Gated on `!detailedView` so it never fights a player's own free pan/
-  // zoom while inspecting details; `handlePointerMove`/`handleWheel`
-  // already independently no-op pan/zoom mutations at that baseline (see
-  // design note #13), so this effect is the only writer to `view` while
-  // `detailedView` is false, and cannot loop (`fitView` itself doesn't
-  // depend on `view`).
+  // Re-runs on every fitView change rather than once. The one-shot version fired on the first render after each remount, capturing a fitView from the DEFAULT_WIDTH fallback before the ResizeObserver reported -- and never ran again.
+  // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13
   useEffect(() => {
     if (detailedView) return;
     setView(fitView);
@@ -3247,11 +1710,8 @@ export function HexGridRenderer({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      // Always tracked, even at the locked 100% baseline (design note #13)
-      // -- `dragStateRef` doubles as the click-vs-drag distance check
-      // `handlePointerUp`'s click interceptor (design note #7) relies on,
-      // so a genuine click must still register at baseline even though the
-      // pan itself is disabled there (see `handlePointerMove` below).
+      // Always tracked, even at the locked baseline: dragStateRef doubles as the click-vs-drag check the interceptor relies on.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13
       dragStateRef.current = {
         startX: event.clientX,
         startY: event.clientY,
@@ -3265,13 +1725,8 @@ export function HexGridRenderer({
 
   const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      // Off-board hover tracking (design note #15/item 4) -- runs on EVERY
-      // pointer move, independent of drag/`detailedView` state, so the
-      // tooltip works even at the locked 100% baseline and even when no
-      // button is pressed at all (ordinary hover, not a drag gesture).
-      // Reuses the SAME transform-undo math `handlePointerUp`'s click
-      // interceptor already uses to convert a raw pointer position into an
-      // axial `(q, r)`.
+      // Off-board hover runs on EVERY move, independent of drag state, reusing the same transform-undo math the click interceptor uses.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15
       const rect = event.currentTarget.getBoundingClientRect();
       const cssX = event.clientX - rect.left;
       const cssY = event.clientY - rect.top;
@@ -3290,28 +1745,8 @@ export function HexGridRenderer({
         return { q: hoverQ, r: hoverR };
       });
 
-      /* ==============================================================
-       *  DESIGN NOTE 380 (pointer half): THE LINE, NOT THE HEX
-       * ==============================================================
-       *
-       * `drawRouteOverlays` returns the exact stroke geometry it painted,
-       * so "is the pointer on this route" is a question about the curve
-       * rather than about the hex containing it. Two trains sharing a hex
-       * now resolve to whichever line is actually under the cursor, which
-       * is the case design note #374 had to give up on.
-       *
-       * THE TRANSFORM, THE PEN AND THE POINT SPACE all have to match the
-       * draw, and the argument for each is long enough that it lives with
-       * the draw rather than here -- see `hitTestRoutes` and design note
-       * #381 in `hexCanvasPrimitives.ts`. This handler's job is to supply
-       * the pointer, the view and the device ratio.
-       *
-       * NO HEX FALLBACK when the paths exist. Hovering inside a hex but
-       * not on any line now highlights nothing, and that is correct: the
-       * whole point is that the hex is no longer the unit. The fallback
-       * survives only for the case where the mechanism itself is missing
-       * (`DOMMatrix`, checked at draw time), where hex-grained hover is
-       * better than none. */
+      /* THE LINE, NOT THE HEX. Two trains sharing a hex now resolve to whichever line is under the cursor. No hex fallback when the paths exist -- the whole point is that the hex is no longer the unit.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #380 */
       if (onHighlightRoute) {
         const hit = routeHitRef.current;
         const ctx2d = event.currentTarget.getContext("2d");
@@ -3343,33 +1778,16 @@ export function HexGridRenderer({
         return prev === null ? prev : null;
       });
 
-      // Active coordinate + value hover tooltip (design note #21, enriched
-      // by design note #26/item 2) -- `describeHexWithValue` builds on
-      // `describeHex` (still used, unchanged, by the click interceptor) so
-      // the tooltip's naming still matches this file's one existing
-      // hex-naming convention, with a "(Value: $X)" suffix appended. Only
-      // shown over a real hex of the authentic board (a landmark or a
-      // `STATIC_BOARD_HEXES` entry); the plain charcoal workspace outside
-      // the board (design note #18) shows no tooltip at all.
+      // describeHexWithValue builds on describeHex so naming matches the one existing convention. Shown only over a real hex; the charcoal workspace outside the board shows nothing.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
       const hoveredLandmark = LANDMARK_HEXES.find((l) => l.q === hoverQ && l.r === hoverR);
       // Design note #269: a picker is open on a hex -- it owns the anchor.
       if (suppressHoverTooltip) {
         cancelTooltipTimer();
         setHoveredCoordLabel((prev) => (prev === null ? prev : null));
       } else if (hoveredLandmark || hoveredBoardHex) {
-        // Design note #75: flip toward whichever side of the PANEL (this
-        // canvas's own `rect`, already computed above for the hex-hit-test)
-        // still has room, mirroring `drawOffboardTooltip`'s own adaptive
-        // quadrant logic -- `cssX`/`cssY` are the cursor's position relative
-        // to the canvas's own top-left corner, so comparing them against
-        // half the canvas's own width/height (not `window.innerWidth`/
-        // `innerHeight`) keeps this correct even when the canvas doesn't
-        // fill the whole browser viewport.
-        /* Design note #365: everything the panel needs is captured NOW and
-           shown later. Reading `event` inside the timeout would be a use
-           after React has pooled it, and re-deriving the hex would risk
-           describing whatever is under the pointer two seconds later
-           rather than the hex the player actually stopped on. */
+        // Flip toward whichever side of the CANVAS still has room, not the browser window. #365: everything the panel needs is captured NOW -- reading the event later would be a use after React pooled it.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #75
         const pending = {
           // Design note #366: the reservation note, appended while it stands.
           label: withReservationNote(
@@ -3393,19 +1811,13 @@ export function HexGridRenderer({
 
       const drag = dragStateRef.current;
       if (!drag) return;
-      // Design note #13: pan is only live in detailed view -- at the locked
-      // 100% baseline, pointer movement is still tracked above (so
-      // `handlePointerUp`'s click-vs-drag distance check, and therefore the
-      // click interceptor, keeps working) but never actually updates
-      // `view.panX`/`panY`.
+      // Pan is only live in detailed view; movement is still tracked at baseline so the click-vs-drag check keeps working.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13
       if (!detailedView) return;
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
-      // Design note #8: rigid boundary clamping on drag displacement --
-      // `clampPanToBoard` stops the raw drag-following pan the instant it
-      // would pull the board's own edge past the viewport edge, rather
-      // than letting the map drift into empty canvas space and relying on
-      // the user to notice and drag back.
+      // Rigid boundary clamping on drag: stop the pan the instant it would pull the board's edge past the viewport, rather than letting the map drift into empty space.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8
       setView((prev) => {
         const clamped = clampPanToBoard(
           drag.originPanX + dx,
@@ -3447,27 +1859,8 @@ export function HexGridRenderer({
          because the delay timer is cleared through it and an omitted
          stable dep is still a dep. */
       cancelTooltipTimer,
-      // Design note #138: `mapGrid` and `currentEra` added. The comment that
-      // stood here previously acknowledged both were missing and deferred
-      // them as "out of scope"; they are in scope now, and both were real
-      // staleness bugs rather than lint noise.
-      //
-      // All three feed the SAME call -- `describeHexWithValue(hoverQ, hoverR,
-      // mapGrid, currentEra, publicCompanies)` -- which builds the hover
-      // tooltip, so a stale closure here does not fail loudly. It quietly
-      // reports outdated numbers, indefinitely:
-      //
-      //   - `currentEra` is the worse of the two. It selects which off-board
-      //     revenue TIER the tooltip prints, and it advances Yellow -> Green
-      //     -> Brown as the game progresses. Frozen at first render, every
-      //     off-board hover would show Yellow-era revenue for the entire rest
-      //     of the game -- a number the contract stopped paying rounds ago.
-      //   - `mapGrid` selects the hex's own value. Frozen, hovering a hex
-      //     someone just upgraded reports its PRE-tile value.
-      //
-      // Cheap to fix: this is an `onPointerMove` prop, so a new identity just
-      // swaps the handler React has attached. Nothing re-subscribes, and
-      // nothing here writes state that could feed back into these deps.
+      // mapGrid and currentEra were real staleness bugs, not lint noise: frozen at first render, every off-board hover would report Yellow-era revenue for the rest of the game.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #138
       mapGrid,
       currentEra,
       // Design note #269: same class of staleness as the three above, and
@@ -3478,11 +1871,8 @@ export function HexGridRenderer({
     ],
   );
 
-  /** Canvas Click Interceptor (design note #7 / item 1). Pointer-up is used
-   *  rather than a native `click` event so this can distinguish a genuine
-   *  click from the tail end of a pan drag using the SAME `dragStateRef`
-   *  already tracked for panning, instead of a second parallel gesture
-   *  tracker. */
+  /** Pointer-up rather than a native click, so a genuine click is told from the tail of a pan drag using the SAME dragStateRef already tracked for panning.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #7 */
   const handlePointerUp = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       const drag = dragStateRef.current;
@@ -3510,65 +1900,28 @@ export function HexGridRenderer({
       const { q, r } = pixelToAxial(contentX, contentY, hexSize);
       const hexLabel = describeHex(q, r);
 
-      // Tile Selection Catalog verification pass, item 1 ("Expose Selection
-      // Logs"): fires the instant a player clicks a hex to open the tile
-      // picker -- BEFORE the async `GetLegalTilePlacements` query below even
-      // starts, since the hex's own coordinate/preprinted terrain/
-      // designation is already known synchronously at this point. The
-      // "complete filtered array of allowed tile_ids" this item also asks
-      // for genuinely can't be logged here too: it doesn't exist yet until
-      // that query resolves (this is a live on-chain query, not a local
-      // filter) -- see the second `console.log` in the `.then` handler
-      // below for that half, fired the moment the response actually arrives.
+      // Click-time log: the hex's coordinate and preprinted terrain are known synchronously.
+      // The legal tile_ids cannot be logged here -- they do not exist until the query resolves.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #7
       // eslint-disable-next-line no-console
       console.log("[TileSelection] hex clicked", {
         hex_coordinate: { q, r, hex_label: hexLabel },
         preprinted: describeHexDesignationForLog(q, r),
       });
 
-      /* ---- Design note #141: the four static board gates ---------------
-       *
-       * Split deliberately either side of `onHexClick`, because the two
-       * halves answer different questions and only one of them is about
-       * laying a tile.
-       *
-       * GATE 1 RUNS FIRST, BEFORE `onHexClick`. "This coordinate is not a
-       * hex" is not a tile-laying rule, it is the absence of a target.
-       * `pixelToAxial` maps every point in the canvas to SOME axial
-       * coordinate -- including the wide empty margins around the board and
-       * the real gaps inside its non-convex outline (row A has no A13/A15)
-       * -- so without this, clicking blank background is indistinguishable
-       * from clicking a hex. Nothing downstream should react to it: not the
-       * picker, and not route-point selection either, which would otherwise
-       * happily append a route point in the middle of the Atlantic.
-       */
-      // Design note #171: computed once, here, so every report below --
-      // `onHexClick` and all six `onHexClickQuery` statuses -- carries the
-      // same centre. Above the gate, because `"not-a-hex"` reports it too.
+      // Gate 1 runs BEFORE onHexClick: "not a hex" is the absence of a target, not a tile-laying rule. pixelToAxial maps every canvas point to SOME coordinate, including the margins and the board's real interior gaps. #171: the centre is computed once so every report carries the same one.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #141
       const centre = axialToPixel(q, r, hexSize);
       const centroidX = centre.x * view.zoom + view.panX;
       const centroidY = centre.y * view.zoom + view.panY;
-      /* Design note #506: the hex's on-screen radius, reported alongside its
-         on-screen centre and for the same reason -- `hexSize` is the board's
-         unit and says nothing about how big the hex actually looks. The
-         radial ring has to clear this hex, and a clearance computed from the
-         unscaled constant is wrong by exactly the zoom factor. */
+      /* The hex's ON-SCREEN radius: hexSize is the board's unit and says nothing about how big the hex looks, so a clearance computed from it is wrong by exactly the zoom factor.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #506 */
       const hexRadiusPx = hexSize * view.zoom;
 
       const eligibility = evaluateHexForTileLaying(q, r, mapGrid);
       if (eligibility.reason === "not-a-hex") {
-        // Design note #172: SAY SO, rather than returning silently.
-        //
-        // This returned with no signal at all, which was right when the only
-        // consumer was the tile picker -- there is nothing to open over open
-        // water. It stopped being right once something could already be
-        // OPEN: a radial menu anchored to a previous hex stayed up while the
-        // player clicked around the ocean trying to dismiss it, because the
-        // one gesture that obviously means "never mind" produced no event.
-        //
-        // `"not-a-hex"` is now a real reported status. It carries no
-        // placements and opens nothing; its entire job is to let a listener
-        // close what it opened.
+        // "not-a-hex" is a real reported status. Returning silently was right when only the picker listened; it stopped being right once a ring could already be OPEN and the obvious dismissal gesture produced no event.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #172
         onHexClickQuery?.({
           status: "not-a-hex",
           q,
@@ -3583,58 +1936,15 @@ export function HexGridRenderer({
         return;
       }
 
-      // Design note #171: the hex's own CENTRE, in canvas-CSS pixels.
-      //
-      // Callers were anchoring UI to `clientX`/`clientY` -- the cursor. A
-      // radial menu built on that opens wherever the pointer happened to
-      // land, so clicking a hex near its rim produced a ring visibly off
-      // its own hex, and two clicks on the same hex produced two different
-      // rings. Anchoring wants the HEX, and the hex's centre is a property
-      // of the grid, not of the click.
-      //
-      // Projected through the SAME transform `draw()` applies
-      // (`translate(pan)` then `scale(zoom)`), which is the inverse of the
-      // `contentX`/`contentY` computation above -- so it tracks pan and
-      // zoom for free rather than needing its own correction.
-      /* Design note #453: which city node the pointer actually landed on.
-         Measured in CONTENT space (`contentX`/`contentY`) because that is
-         where `tileCitySlotPoints` returns its points -- the same
-         untransformed layer `pixelToAxial` reads, so the answer tracks pan
-         and zoom without its own correction. */
+      // The hex's own CENTRE, not the cursor: a ring built on clientX/Y opens wherever the pointer landed, so two clicks on one hex produced two different rings. #453: the city node, measured in content space.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #171
       const cityIndex = cityIndexAtPoint(mapGrid, q, r, contentX, contentY, hexSize);
 
-      /* Design note #516: the chosen slot's centre, put through the same
-         transform as the centroid above. `cityNodePoints` is the SAME
-         geometry `cityIndexAtPoint` just resolved the click against and the
-         same the pulse ring draws on, so the confirmation lands exactly
-         where the glow promised and where the token will sit. */
+      /* The chosen slot's centre, through the same transform -- the SAME geometry the click resolved against and the pulse drew on, so the confirmation lands where the glow promised.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #516 */
       const nodes = cityNodePoints(mapGrid, q, r, hexSize);
-      /* ==================================================================
-       *  DESIGN NOTE 557: ONE CITY IS NOT AN AMBIGUOUS CITY
-       * ==================================================================
-       *
-       * REPORTED: on a single-city hex the placement ring lands in the
-       * middle of the hex even when the city marker plainly is not there
-       * (the B&O's I15, whose city sits off-centre).
-       *
-       * `cityIndexAtPoint` answers "which slot did the pointer land ON",
-       * hit-testing against each city circle -- so a click anywhere else on
-       * the hex returns `null`, and the anchor fell back to the centroid.
-       * That fallback is right when it means "the geometry cannot say":
-       * design note #516 added it for hexes with no resolvable node at all.
-       *
-       * It is wrong when there is exactly ONE node, because then nothing was
-       * ambiguous. The player did not fail to indicate which city they
-       * meant; there is only one, and they are about to place a token in it
-       * whatever part of the hex they clicked. Drawing the ring at the
-       * centroid there promises a position the token will not occupy.
-       *
-       * THE ANCHOR ONLY. `cityIndex` itself is deliberately left as it was
-       * and still travels as `null`: it answers a different question -- "was
-       * this a click ON a city" -- which other board modes use to decide
-       * between opening the tile picker and targeting a slot. Widening it
-       * here would change what a click MEANS on every single-city hex in
-       * the app, to fix where a ring is drawn. */
+      /* ONE CITY IS NOT AN AMBIGUOUS CITY. The centroid fallback is right when the geometry cannot say, and wrong when there is exactly one node. THE ANCHOR ONLY -- cityIndex still travels as null, because it answers a different question that other board modes read.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #557 */
       const soleNode = nodes.length === 1 ? nodes[0] : undefined;
       const chosenNode = (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
       const nodeX = chosenNode ? chosenNode.x * view.zoom + view.panX : centroidX;
@@ -3653,136 +1963,21 @@ export function HexGridRenderer({
         centroidY,
         nodeX,
         nodeY,
-        /* Design note #506: `hexRadiusPx` is deliberately NOT reported here.
-           `onHexClick` is the raw click notification -- route points, token
-           placement, the sandbox lay -- and none of its consumers position a
-           surface that has to clear the hex. Only the tile picker does, and
-           it reads `onHexClickQuery`. Adding a field to both would widen a
-           callback for a reader that does not exist. */
+        /* hexRadiusPx is deliberately NOT reported here: none of onHexClick's consumers position a surface that has to clear the hex.
+           See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #506 */
       });
 
-      // Design note #120: this guard used to be a single condition covering
-      // all four interceptor props, and it is now split in two, because the
-      // props go missing for two completely different reasons that were
-      // being treated identically.
-      //
-      // FIRST: the interceptor is switched OFF deliberately. `App.tsx`'s
-      // route-select mode omits `gameId`/`protocolId` (and `contractAddress`
-      // and `queryClient`) specifically so a route-point click doesn't also
-      // pop the LayTile picker open underneath it -- see design note #7 and
-      // App.tsx design note #11. That must keep bailing out silently.
-      //
-      // REGRESSION FIX (design note #139): `!contractAddress` USED TO BE PART
-      // OF THIS GUARD, and moving it out is the entire fix for "clicking a
-      // hex no longer opens the tile picker offline".
-      //
-      // A contract address is a CHAIN concern, not a "which hex am I laying
-      // on" concern, so it never belonged in the deliberately-off test. It
-      // survived here only because it was never previously falsy: the address
-      // was a hardcoded placeholder string (`"juno1...eighteencosmos..."`)
-      // that was invalid but TRUTHY, so this guard always passed and control
-      // always reached the offline fallback below. Offline mode was, without
-      // anyone intending it, load-bearing on a fake constant being truthy.
-      //
-      // F-4 moved the address into the environment, where an unset variable
-      // is correctly `undefined` -- and this guard, unchanged, began swallowing
-      // every hex click in exactly the sandbox mode that has no address by
-      // design. Silent, too: `onHexClick` had already fired, so the
-      // "[TileSelection] hex clicked" log above still printed while the popup
-      // never opened.
-      //
-      // `gameId`/`protocolId` are the honest discriminator: `App.tsx` supplies
-      // both in normal mode and omits both in route-select mode, and neither
-      // has anything to do with whether a chain is reachable.
+      // The guard is SPLIT, because the props go missing for two unrelated reasons. #139: !contractAddress moved out -- it survived here only because the address was a truthy placeholder, so offline mode was load-bearing on a fake constant.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #120
       if (gameId === undefined || protocolId === undefined) {
         return;
       }
 
-      /* ==================================================================
-       *  DESIGN NOTE 257: A DIMMED HEX SAYS IT ALREADY
-       * ==================================================================
-       *
-       * REPORTED: clicking a dimmed hex during Lay Track pops up an
-       * unnecessary explainer.
-       *
-       * This used to report a `"blocked"` status carrying a sentence about
-       * the corporation's reach, which `App` rendered as a floating amber
-       * cue near the cursor. That was the right call when the board gave no
-       * other signal -- design note #141's own reasoning, that this codebase
-       * had twice shipped a hex click that logged and then silently did
-       * nothing.
-       *
-       * The veil changed the premise. When `layFocus` is active the hex the
-       * player just clicked is VISIBLY dimmed and the legal ones are
-       * VISIBLY glowing, so the explainer restates in words what the board
-       * has already said in light -- and it does so as a popup that follows
-       * the cursor, which is a lot of ceremony for "not there". Worse, it
-       * fires on every stray click during the one step where a player is
-       * most likely to be clicking around the map deciding.
-       *
-       * So under the veil the click is simply ignored. The status is still
-       * SUPERSEDED (`clickQuerySeqRef`) so a late response for a previous
-       * hex cannot open a picker over the one just refused -- silence must
-       * not mean "and also let the last thing through".
-       *
-       * WITHOUT A VEIL NOTHING CHANGES. Gates 2 and 3 below still report
-       * their reasons, because with no dimming those hexes look identical to
-       * legal ones and the cue is the only feedback there is. */
-      /* ==================================================================
-       *  DESIGN NOTE 469: LOOKING IS NEVER GATED
-       * ==================================================================
-       *
-       * REPORTED: spectators are restricted to clicking only the active
-       * player's valid hexes; any hex should open the tile selector for
-       * planning, while execution stays blocked.
-       *
-       * THE GATE THAT STOOD HERE IS GONE. Design note #257 silenced clicks
-       * on veiled hexes, and #437 narrowed that silence to the acting player
-       * (`layFocus?.dim`). Both were answering "how do we refuse this click
-       * without a popup" -- and the honest answer is that opening a PICKER
-       * is not a click that needs refusing. It shows candidate tiles. It
-       * commits nothing.
-       *
-       * So every viewer, on every hex, during an Operating Round, can open
-       * it. A player planning next turn can read what a hex will accept; a
-       * spectator can follow what the options were; the acting player can
-       * look past their own reach without the board going quiet on them.
-       *
-       * EXECUTION IS UNTOUCHED AND WAS NEVER HERE. `canLayTileNow` gates the
-       * ring's confirm button and refuses a spectator, the wrong sub-phase,
-       * the wrong turn and an out-of-reach hex -- with the reason ON the
-       * disabled button (`tileLayDisabledReason`). That is strictly better
-       * feedback than the silence this replaces: a player who clicks a hex
-       * they cannot build on now learns why, instead of wondering whether
-       * the click registered.
-       *
-       * THE VEIL STILL DOES ITS JOB. Dimming and the glow continue to mark
-       * the acting corporation's legal set, so "where may I build" is still
-       * answered at a glance. What is no longer true is that the board
-       * refuses to talk about anywhere else. */
+      /* LOOKING IS NEVER GATED. Opening a picker is not a click that needs refusing -- it shows candidates and commits nothing. Execution is untouched: canLayTileNow gates the confirm button, with the reason ON it.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #469 */
 
-      /* ---- Gates 2 and 3 -- design note #141 ---------------------------
-       *
-       * These run AFTER `onHexClick` and after the route-select bail-out,
-       * both on purpose.
-       *
-       * After `onHexClick`, because off-board and gray hexes are perfectly
-       * legal things for a ROUTE to run through -- that is what red
-       * terminals and gray connector hexes are FOR. These gates say "no
-       * tile may be laid here", which is a different claim from "nothing
-       * may happen here", and conflating the two would break the manual
-       * route-point tool (App.tsx design note #11) for precisely the hexes
-       * it most needs to reach.
-       *
-       * After the route-select bail-out, because in that mode the picker is
-       * switched off entirely and reporting a blocked status would put a
-       * tooltip on screen for a picker that was never going to open.
-       *
-       * Reported rather than silently dropped: `"blocked"` carries the
-       * reason to the UI. This codebase has shipped a silent-hex-click bug
-       * twice already (design notes #120 and #139) and both times the
-       * symptom was a click that logged and then did nothing.
-       */
+      /* Gates 2 and 3 run AFTER onHexClick and after the route bail-out, both on purpose: off-board and gray hexes are legal things for a ROUTE to run through. Reported rather than dropped -- this codebase has shipped a silent hex click twice.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #141 */
       if (!eligibility.eligible) {
         // eslint-disable-next-line no-console
         console.log("[TileSelection] hex blocked -- picker suppressed", {
@@ -3811,30 +2006,8 @@ export function HexGridRenderer({
         return;
       }
 
-      // SECOND: the interceptor is ON -- the caller supplied the hex's
-      // identity -- but there is no chain client to ask. In practice that
-      // means the app is running without a connected wallet or node, which
-      // is the ordinary state of `npm start` against no backend.
-      //
-      // THE BUG THIS FIXES: the old combined guard returned here too, so
-      // `onHexClickQuery` never fired, `App.tsx`'s `hexClickQuery` stayed
-      // `null`, and its `hexClickQuery?.status === "success"` gate never
-      // rendered the popup. The picker appeared completely dead on click --
-      // no popup, no error, no exception, and the "[TileSelection] hex
-      // clicked" log above still printing perfectly, because the handler had
-      // genuinely run and then decided there was nothing to do. Nothing was
-      // hanging and no promise was pending; the flow simply had no offline
-      // path at all.
-      //
-      // Now it falls back to the local catalog mirror so the picker still
-      // opens and the tray still renders. `localCatalogPlacements` filters by
-      // era ONLY -- see its doc comment -- so the result is explicitly
-      // provisional and goes out under `status: "offline"`, which the UI is
-      // required to label as such and must not dispatch from.
-      // Design note #139: `!contractAddress` now sits HERE, alongside
-      // `!queryClient`, because the two mean the same thing -- there is no
-      // chain to ask. Either one missing takes the offline path, which is the
-      // behaviour the sandbox has always needed and only accidentally had.
+      // The offline path: no chain client means fall back to the local catalog mirror and report status "offline", which the UI must label and must not dispatch from.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #120
       if (!queryClient || !contractAddress) {
         const placements = localCatalogPlacements();
         // eslint-disable-next-line no-console
@@ -3884,12 +2057,8 @@ export function HexGridRenderer({
           // resolve after a newer click's -- only the latest matters.
           if (clickQuerySeqRef.current !== seq) return;
 
-          // Tile Selection Catalog verification pass, item 1 (continued):
-          // the "complete filtered array of allowed tile_ids" half of this
-          // item's log, fired now that the upgrade catalog module
-          // (`hexmap::legal_tile_placements` on-chain) has actually
-          // returned it -- each entry is a `(tile_id, orientation)` pairing
-          // the live `LayTile` call would currently accept at this hex.
+          // The resolved legal (tile_id, orientation) pairings, logged the moment the query returns.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #7
           // eslint-disable-next-line no-console
           console.log("[TileSelection] legal placements resolved", {
             hex_coordinate: { q, r, hex_label: hexLabel },
@@ -3927,14 +2096,8 @@ export function HexGridRenderer({
         });
     },
     [
-      /* `layFocus` DROPPED by design note #469. Design note #223 listed it
-         because this handler gated clicks against the corporation's reach:
-         "a stale set here would gate clicks against the PREVIOUS
-         corporation's reach". There is no gate any more -- opening a picker
-         commits nothing, so it is not refused -- and the veil that still
-         reads `layFocus` lives in `draw`, which has its own dependency on
-         it. Keeping it here would re-create this callback on every reach
-         change for no behaviour that reads it. */
+      /* layFocus DROPPED: there is no gate any more, and the veil that still reads it lives in draw, which has its own dependency.
+         See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #469 */
       view.panX,
       view.panY,
       view.zoom,
@@ -3945,11 +2108,8 @@ export function HexGridRenderer({
       protocolId,
       onHexClick,
       onHexClickQuery,
-      // Design note #141: gate 3 reads the laid tile at the clicked hex out
-      // of `mapGrid`, so a stale closure here would keep judging a hex by
-      // whatever was on it when the handler was last built -- meaning a hex
-      // upgraded to Brown during play would go on opening the picker until
-      // something unrelated forced a re-render.
+      // Gate 3 reads the laid tile out of mapGrid, so a stale closure would keep judging a hex by whatever was on it when the handler was built.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #141
       mapGrid,
       // Design note #125 dropped `currentEra` from here: the offline
       // fallback no longer filters by era, so the handler has nothing
@@ -3958,36 +2118,14 @@ export function HexGridRenderer({
     ],
   );
 
-  /** Design note #67: Scroll-Wheel Zoom Disabled. Previously zoomed the
-   *  board around the cursor (`deltaY < 0` -> `factor = 1.1`, else `1 /
-   *  1.1`, the exact same `setView`/`clampPanToBoard` update the "+"/"-"
-   *  camera buttons below still use) -- reported: the ONLY way to zoom
-   *  should be those manual buttons, not an incidental scroll-wheel
-   *  gesture while the cursor happens to be over the map. The zoom
-   *  math/state update is REMOVED entirely (not merely gated off, so
-   *  there's no dead `minZoom`/`MAX_ZOOM_MULTIPLIER`/`clampPanToBoard`
-   *  zoom-on-wheel path left to accidentally re-enable) -- `handleWheel`
-   *  now does exactly one thing: `preventDefault()`, still unconditional,
-   *  still purely to stop the page itself from scrolling while the cursor
-   *  is over the canvas (design note #13's own reasoning, UNCHANGED by
-   *  this pass -- that's a scroll-containment concern, not a zoom one). */
+  /** Scroll-wheel zoom REMOVED entirely, not merely gated, so no dead path can be re-enabled. preventDefault stays -- scroll containment, not zoom.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #67 */
   const handleWheel = useCallback((event: React.WheelEvent<HTMLCanvasElement>) => {
     event.preventDefault();
   }, []);
 
-  /** "+"/"-" camera overlay button handler -- see design note #17.
-   *  Zooms by `factor` around the canvas's own screen-space center (a
-   *  button click has no cursor position to anchor on, unlike
-   *  `handleWheel`'s mouse-anchored zoom), clamped to
-   *  `[minZoom, minZoom * MAX_ZOOM_MULTIPLIER]` (design note #36/item 1 --
-   *  relative to `minZoom`, not the old absolute `MAX_ZOOM`)
-   *  and pan-clamped to the board exactly like every other zoom path here.
-   *  If the camera is still at the locked `fitView` baseline
-   *  (`detailedView === false`), this ALSO flips `detailedView` on -- these
-   *  buttons are meant to work standalone, without first requiring a
-   *  separate "Toggle Detailed View" click, so the very first "+"/"-"
-   *  press starts from `fitView`'s own zoom/pan (captured via the
-   *  `detailedView` dependency below) rather than being a no-op. */
+  /** Zooms around the canvas's own centre, since a button has no cursor to anchor on. Flips detailedView on itself so the first press is not a no-op.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #17 */
   const handleZoomStep = useCallback(
     (factor: number) => {
       setDetailedView(true);
@@ -4022,55 +2160,16 @@ export function HexGridRenderer({
   const handleZoomIn = useCallback(() => handleZoomStep(1.25), [handleZoomStep]);
   const handleZoomOut = useCallback(() => handleZoomStep(1 / 1.25), [handleZoomStep]);
 
-  /** "Fit to Screen" camera overlay button handler -- see design note #17
-   *  (button removed and consolidated per design note #42, handler logic
-   *  unchanged). Unconditionally snaps the camera back to exactly `fitView`
-   *  and re-locks it (`detailedView` false) -- idempotent and always
-   *  available as its own explicit action, regardless of whether the camera
-   *  got to its current pose via drag/wheel or the "+"/"-" buttons above. */
+  /** An idempotent, always-available snap back to exactly fitView, re-locking the camera.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #17 */
   const handleFitToScreen = useCallback(() => {
     setDetailedView(false);
     setView(fitView);
     scheduleDraw();
   }, [fitView, scheduleDraw]);
 
-  /* Design note #269, the other half: the tooltip on screen AT THE MOMENT
-     the picker opens. The guard in `handlePointerMove` only stops the next
-     one from being set, and a click does not move the pointer -- so without
-     this the stale tooltip would sit under the ring until the player
-     happened to move the mouse.
-
-     ==================================================================
-      DESIGN NOTE 505: THE THIRD TOOLTIP -- THE ONE NOT YET SHOWING
-     ==================================================================
-
-     REPORTED: clicking a hex to open the tile selector still pops a dense
-     tooltip over the active hex, blocking the radial UI.
-
-     Design note #269 built exactly the right two guards and missed a third
-     state. It reasoned about the tooltip as either ALREADY SHOWING (cleared
-     by this effect) or ABOUT TO BE SET BY A MOUSE MOVE (refused by
-     `handlePointerMove`). There is a state between them: ARMED BUT NOT YET
-     FIRED.
-
-     Design note #365 gives the tooltip a two-second dwell, so a hover
-     schedules `tooltipTimerRef` and returns. Click at 1.9 seconds and the
-     ring opens, this effect clears a `hoveredCoordLabel` that is still
-     `null`, and 100ms later the timer fires and sets it -- on top of the
-     open ring, which is precisely the report.
-
-     It survived #269 because it is TIMING-DEPENDENT and both natural ways
-     to test it pass: click after the tooltip has appeared and the clear
-     works; click before the dwell elapses and nothing was ever armed. Only
-     the narrow window in between reproduces it, and the window is exactly as
-     wide as a player's hesitation before committing to a hex -- which is to
-     say, the most common way this hex gets clicked.
-
-     `cancelTooltipTimer()` closes it at the cause. The render gate below is
-     the belt to this braces: it makes "no tooltip while a picker owns the
-     hex" a property of what is DRAWN rather than a property of three state
-     transitions all being handled, so a fourth path to setting the label
-     cannot reintroduce this. */
+  /* THE THIRD TOOLTIP -- the one armed but not yet fired. #269 handled "already showing" and "about to be set"; a click during #365's dwell fires the timer ON TOP of the open ring. It survived because both natural ways to test it pass.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #505 */
   useEffect(() => {
     if (!suppressHoverTooltip) return;
     cancelTooltipTimer();
@@ -4078,11 +2177,8 @@ export function HexGridRenderer({
     setHoveredOffboardHex((prev) => (prev === null ? prev : null));
   }, [suppressHoverTooltip, cancelTooltipTimer]);
 
-  /** The pointer has left the canvas entirely -- clears the off-board hover
-   *  tooltip (design note #15/item 4) in addition to `handlePointerUp`'s own
-   *  drag-release handling, since `handlePointerMove` (the only other place
-   *  that updates `hoveredOffboardHex`) stops firing once the pointer is
-   *  outside the element. */
+  /** Pointer left the canvas: clears the off-board hover, since handlePointerMove stops firing outside the element.
+   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       setHoveredOffboardHex(null);
@@ -4096,17 +2192,8 @@ export function HexGridRenderer({
     [handlePointerUp, cancelTooltipTimer, onHighlightRoute],
   );
 
-  /* Design note #44: the control cluster moved OUT of the canvas.
-   *
-   * It was `position: absolute; top/right: 20px` inside the canvas
-   * container, which put it directly on top of the board's top-right
-   * coordinate labels -- the one part of the map that is pure reference
-   * text and therefore the worst thing to cover. There is no placement
-   * inside a full-bleed canvas that does not cover SOMETHING, so the
-   * controls leave the canvas entirely and sit in normal flow underneath
-   * it. The canvas keeps its own `position: relative` wrapper (the tooltip
-   * and click-indicator overlays still need it); this just adds a column
-   * around the pair. */
+  /* The control cluster moved OUT of the canvas: absolutely positioned, it sat on the board's own coordinate labels -- the one part of the map that is pure reference text.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #44 */
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px", width: widthProp ?? "100%" }}>
     <div
@@ -4118,15 +2205,8 @@ export function HexGridRenderer({
         // the pixel width that resolves to); an explicit override keeps the
         // old fixed-pixel behavior.
         width: widthProp ?? "100%",
-        // ITEM 1 FIX (design note #27): was `heightProp ?? "100%"` -- a
-        // percentage height only ever resolves against an ANCESTOR's own
-        // definite height, which no longer exists once `App.tsx` (design
-        // note #13) stops imposing one. This is now the same computed pixel
-        // `height` the `<canvas>` below uses (derived from the board's own
-        // aspect ratio, not measured), so this wrapper's real DOM box is
-        // exactly as tall as its content actually needs -- letting that
-        // height propagate straight up through every unconstrained ancestor
-        // to the page itself.
+        // A computed pixel height, not "100%": a percentage only resolves against an ancestor's definite height, which no longer exists.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #27
         height: `${height}px`,
       }}
       className={className}
@@ -4145,30 +2225,8 @@ export function HexGridRenderer({
           width,
           height,
           touchAction: "none",
-          // Design note #159: targeting beats panning. While a token is
-          // being placed the crosshair is the more important signal -- the
-          // player can still pan, they just need to know what a click does.
-          // Design note #183: a STATION TOKEN, not a bare crosshair.
-          //
-          // `crosshair` says "you are about to click precisely somewhere",
-          // which is true of route-point selection and tile laying too --
-          // it marked that a mode was active without saying WHICH. An
-          // inline SVG cursor showing the token itself names the mode at
-          // the pointer, where the player is actually looking.
-          //
-          // Data-URI rather than a file: it is nine elements, it must not
-          // race a network fetch (a cursor that arrives late is a cursor
-          // that flickers), and the hotspot has to be declared in the same
-          // breath as the art. `16 16` centres it, because a token is
-          // placed AT a point rather than pointed at from a corner.
-          //
-          // `, crosshair` is the fallback, not decoration: a browser that
-          // rejects the URI keeps the old behaviour instead of silently
-          // reverting to an arrow that says nothing.
-          // Design note #496: `stationCursor` is the acting corporation's
-          // herald on its own livery, or the generic disc when no
-          // corporation was supplied. The hotspot and the `crosshair`
-          // fallback are unchanged from design note #183.
+          // The cursor is the PIECE: a composed PNG rather than the .webp direct, because cursor:url() has no error path and a broken herald would silently become a crosshair -- the feature would look unbuilt rather than broken. Hotspot 16 16, because a token is placed AT a point.
+          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496
           cursor:
             cursorMode === "token"
               ? `url("${stationCursor}") 16 16, crosshair`
@@ -4249,13 +2307,8 @@ export function HexGridRenderer({
     </div>
   );
 }
-/* ------------------------------------------------------------------ */
-/* Canvas primitives -- EXTRACTED (monolith split, Phase 4)             */
-/* ------------------------------------------------------------------ */
-//
-// Every drawing function moved to `./hexCanvasPrimitives`. With that, this
-// file holds only the React component: lifecycle, state, events and the
-// orchestration of the draw passes. The `import` is at the top -- `import/first`.
+// Every drawing function extracted to ./hexCanvasPrimitives (Phase 4). This file now holds only the React component.
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
 
 /* ------------------------------------------------------------------ */
 /* Tile preview thumbnail -- for TileSelectionPopup.tsx (design note #7) */
@@ -4270,103 +2323,25 @@ export interface TilePreviewThumbnailProps {
   orientation?: number;
   /** Overall canvas size in CSS pixels (square). Default 96. */
   size?: number;
-  /* ==================================================================
-   *  DESIGN NOTE 368: THE HEX HAS TO FIT ITS OWN CANVAS
-   * ==================================================================
-   *
-   * REPORTED: the radial tile selector shows its previews as rectangles
-   * instead of hexagons, so the artwork looks clipped.
-   *
-   * It was clipped, and by exactly one number. This defaulted to a FIXED
-   * radius of 40 while `size` defaulted to 96, and the two were only
-   * compatible by luck: `drawHexPath` draws a POINTY-TOP hex, whose height
-   * is 2R and whose width is √3·R, so a radius of 40 needs an 80px canvas.
-   *
-   * `RadialTileSelector` passes `size={38}` and left `hexSize` alone. A
-   * 40-radius hex is 80px tall inside a 38px canvas, so five sixths of it
-   * -- every vertex, top and bottom -- fell outside the bitmap and what
-   * survived was the middle band: a rectangle. Not a styling problem at
-   * all, and not visible from the CSS, which is why it reads as one.
-   *
-   * DERIVED, so the two can never disagree again. `(size - 2) / 2` is the
-   * largest radius whose 2px tier stroke still lands inside the canvas;
-   * height is the binding dimension for a pointy-top hex, and the √3/2
-   * width then fits with room to spare. `TileSelectionPopup` passes both
-   * explicitly (150/64, which fits) and is unaffected.
-   *
-   * A DEFAULT RATHER THAN A COMPUTATION AT THE CALL SITE, because the
-   * relationship is a property of the drawing, not of any one caller --
-   * and the bug was a caller being asked to know it. */
+  /* hexSize is DERIVED from size so the two cannot disagree: a pointy-top hex is 2R tall, so a radius of 40 needs an 80px canvas -- five sixths of it fell outside a 38px bitmap and what survived was a rectangle.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #368 */
   hexSize?: number;
   className?: string;
-  /* ==================================================================
-   *  DESIGN NOTE 488: SHOW THE PIECES, NOT JUST A SENTENCE ABOUT THEM
-   * ==================================================================
-   *
-   * REPORTED: upgrading a multi-city tile gives no way to tell which city
-   * node the player's station ends up on.
-   *
-   * Design note #271b in `RadialTileSelector` answered this in WORDS -- the
-   * `tokenNote` caption, "PRR to city 2 of 2". That was the right first
-   * move and it is not enough on an OO upgrade, because the question is
-   * spatial: which of the two circles I am looking at. A caption asks the
-   * player to hold "city 2" in their head, work out which circle the
-   * catalog calls city 2, and check it against artwork they have not seen
-   * yet. The marker just shows them.
-   *
-   * DRAWN FROM `tileCityAnchors`, which is what the BOARD draws laid tokens
-   * against (`stationMarkerPoint`'s own laid-tile branch). That is the
-   * whole point of using it rather than a preview-only approximation: the
-   * circle the player sees here is computed by the same function that will
-   * place the real token, so the preview cannot promise a node the board
-   * then disagrees with. `utils/tokenMigration.ts` design note #1 already
-   * anticipated this ("it is what `tileCityAnchors` already draws against
-   * -- so the preview shows the marker the token will actually occupy
-   * rather than a promise about one"); this is that sentence's caller.
-   *
-   * EMPTY OR OMITTED ON EVERY ORDINARY HEX, which is most of them. A tile
-   * with nothing standing on it draws exactly what it drew before. */
+  /* SHOW THE PIECES. A caption asks the player to hold "city 2" in their head and check it against artwork they have not seen; the marker just shows them. Drawn from tileCityAnchors, the same function that places the real token.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #488 */
   stationMarkers?: readonly StationPreviewMarker[];
 }
 
-/** One station token to draw onto a previewed tile -- design note #488.
- *
- *  `cityIndex` is the destination city on the CANDIDATE tile, not the
- *  current one. Resolving it is `utils/tokenMigration.ts`' job and
- *  deliberately not this component's: the caption and the marker have to
- *  come from one computation or they can disagree, which is the precise
- *  failure TD-1 catalogued for the corporation palette. */
+/** cityIndex is the destination on the CANDIDATE tile; resolving it is tokenMigration's job, so the caption and the marker come from one computation.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #488 */
 export interface StationPreviewMarker {
   cityIndex: number;
   ticker: string;
   color: string;
 }
 
-/** A small, self-contained canvas that renders exactly one catalog tile in
- *  isolation -- terrain fill, color-tier outline, and its decoded track
- *  path at the given `orientation` -- reusing this file's own
- *  `TILE_CATALOG_BY_ID`/`drawHexPath`/`drawTrackPath` rather than a second
- *  hand-kept catalog mirror (see design note #2's "DESIGN GAP" discipline).
- *  Built for `TileSelectionPopup.tsx`'s carousel thumbnails and its larger
- *  rotation preview; has no wallet/session/query dependency of its own,
- *  matching this file's presentational-only design. */
-/** Design note #183: the station-token placement cursor.
- *
- *  A white disc with a dark rim and a centre dot -- the same vocabulary
- *  `drawStationTokenMarker` uses on the board, so the pointer looks like
- *  the thing it is about to place. The outer dark ring keeps it visible on
- *  the light tile colours (`#FDE900` especially) as well as on the dark
- *  board chrome, which a plain white disc would not manage. */
-/** Design note #488: the token radius at which a corporate ticker is still
- *  worth drawing. Below it the marker renders as a plain liveried disc.
- *
- *  9px is `drawStationTokenMarker`'s own font floor (design note #46), and
- *  a two-to-three character bold ticker needs roughly its own height again
- *  in radius to sit inside the disc rather than across its edge -- so the
- *  threshold is that floor, not a tuned constant. It is compared against the
- *  MEASURED docking radius rather than against `size`, which is the property
- *  TD-2 called for: it stays correct as the thumbnail is resized, and design
- *  note #471 has already resized it once (38 -> 54). */
+/** An isolated single-tile canvas for the picker, reusing this file's own catalog and draw functions rather than a second mirror. The cursor disc uses the same vocabulary drawStationTokenMarker uses on the board.
+ *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #183 */
 const TICKER_LEGIBLE_RADIUS = 9;
 
 const STATION_TOKEN_CURSOR =
@@ -4379,54 +2354,8 @@ const STATION_TOKEN_CURSOR =
       "</svg>",
   );
 
-/* ==================================================================
- *  DESIGN NOTE 496: THE CURSOR IS THE PIECE IN YOUR HAND
- * ==================================================================
- *
- * REPORTED: the "Place Station" action uses a generic cursor icon. Render
- * the active corporation's herald instead, to reinforce whose token is
- * being placed.
- *
- * `STATION_TOKEN_CURSOR` above is that generic icon -- a white disc with a
- * dark rim and crosshair ticks, identical for all eight corporations. It was
- * right about the GESTURE (design note #183 matched it to
- * `drawStationTokenMarker`, so the pointer looks like the thing it places)
- * and said nothing about WHOSE gesture it is. On a board where the token
- * about to land is liveried and lettered, the pointer that places it was the
- * one unliveried thing in the interaction.
- *
- * A COMPOSED PNG, not the `.webp` referenced directly. Three reasons, and
- * the first is the one that decides it:
- *
- *   `cursor: url(...)` HAS NO ERROR PATH. An `<img>` gets `onError` and
- *   falls back to the ticker -- which is exactly what `CorporateLogo` does
- *   and why a missing herald degrades gracefully everywhere else. A CSS
- *   cursor that fails to decode falls through to the keyword after the
- *   comma, so a broken herald would silently become `crosshair` and the
- *   feature would look unbuilt rather than broken. That is the precise
- *   failure mode `CorporateLogo`'s own header warns about at length.
- *
- *   WEBP-AS-CURSOR IS NOT UNIFORMLY SUPPORTED. The heralds are WebP wearing
- *   a corrected extension (see that file). PNG is the format every engine
- *   accepts in a cursor.
- *
- *   THE HERALD ALONE IS NOT A TOKEN. It is artwork on a transparent field;
- *   a station token is a liveried disc with a rim. Compositing lets the
- *   cursor be the PIECE -- ring in the corporation's colour, herald inside
- *   it -- rather than a floating logo.
- *
- * SO: draw into a 32px canvas, `toDataURL("image/png")`, and hand that to
- * CSS. The image load is asynchronous, so this is state rather than a
- * derivation, and the FALLBACK IS RENDERED FIRST -- a liveried disc with the
- * ticker, using the same `bestContrastTextColor` the real token does. The
- * cursor is therefore correct and corporation-specific from the first frame
- * and merely gets sharper when the herald arrives, instead of flickering
- * from generic to branded.
- *
- * 32px because browsers cap cursors (Chrome refuses past 128) and 32 is the
- * size every engine honours without scaling. The hotspot stays `16 16`:
- * design note #183's point that a token is placed AT a point rather than
- * pointed at from a corner is unchanged. */
+/* The fallback is rendered FIRST -- a liveried disc with the ticker -- so the cursor is corporation-specific from the first frame and merely gets sharper, instead of flickering from generic to branded. 32px because browsers cap cursors.
+   See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496 */
 const CURSOR_PX = 32;
 
 function drawCursorDisc(
@@ -4563,37 +2492,20 @@ export function TilePreviewThumbnail({
     if (catalogEntry) {
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
-        // Mirror-only, by construction (design note #119): this component
-        // renders an UN-LAID tile in the picker carousel and has no query
-        // row for it -- see this file's `pathsForTile`. It is also the
-        // reason the mirror carries `paths` at all rather than the backend
-        // being the single source: a tile has to render correctly before it
-        // exists on the board.
+        // Mirror-only by construction: this renders an UN-LAID tile with no query row, which is why the mirror carries paths at all.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #119
         drawTrackPath(ctx, center, hexSize, catalogEntry, orientation);
       });
     } else {
-      // Unknown tile_id -- see design notes #2/#118 -- same generic
-      // provisional artwork as the main board renderer, rather than
-      // silently drawing nothing. This path matters more here than on the
-      // board: `TileSelectionPopup`'s carousel renders one of these per
-      // legal placement the contract returned, so an id this mirror hasn't
-      // caught up to is still a real, clickable, submittable choice and
-      // needs to at least show its own number.
+      // An unknown id matters more here than on the board: the carousel renders one per legal placement the contract returned, so it is still a clickable, submittable choice.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #118
       withHexClip(ctx, center, hexSize, () => {
         drawUnknownTilePlaceholder(ctx, center, hexSize, tileId);
       });
     }
 
-    /* Design note #488: the tokens already standing on the hex, drawn where
-       this candidate would put them. AFTER the artwork and outside the clip
-       for the same reason the board draws its own token pass last -- a token
-       is a piece sitting on the cardboard, not part of it.
-
-       `tileCityAnchors` returns city nodes in `city_index` order, so the
-       index carried by the marker indexes it directly. An out-of-range index
-       draws nothing rather than falling back to node 0: a token silently
-       shown on the wrong circle is worse than one not shown, since the whole
-       point of this pass is to be believed. */
+    /* An out-of-range index draws NOTHING rather than falling back to node 0 -- a token silently shown on the wrong circle is worse than one not shown, since the point of this pass is to be believed.
+       See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #488 */
     if (stationMarkers && stationMarkers.length > 0) {
       const anchors = tileCityAnchors(tileId, orientation, center, hexSize);
       // Docked radius, so the marker sits inside the city circle the artwork
@@ -4603,20 +2515,8 @@ export function TilePreviewThumbnail({
       for (const marker of stationMarkers) {
         const point = anchors[marker.cityIndex];
         if (!point) continue;
-        /* THE TICKER IS GATED ON MEASURED SIZE, following the judgement
-           TD-2 recorded for the market chart's occupant tokens and the map's
-           18px station tokens: below a threshold the acronym stops being
-           text and becomes a smudge, and a smudge reads as a rendering
-           fault where a plain disc reads as a decision.
-
-           `drawStationTokenMarker` floors its font at 9px (design note #46)
-           and does not shrink past it, so on a 54px candidate thumbnail --
-           token radius around 5px -- a three-letter ticker would spill well
-           outside its own disc. Passing an empty ticker takes that
-           function's own existing early return after the fill and ring, so
-           this is the same primitive at both sizes rather than a second
-           marker renderer. Position and colour still answer the question
-           this pass exists for: WHICH circle. */
+        /* The ticker is gated on MEASURED size: below a threshold an acronym becomes a smudge, and a smudge reads as a rendering fault where a plain disc reads as a decision.
+           See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #488 */
         const radius = dockRadius ?? hexSize * 0.22;
         const ticker = radius >= TICKER_LEGIBLE_RADIUS ? marker.ticker : "";
         drawStationTokenMarker(ctx, point, hexSize, ticker, marker.color, false, radius);
@@ -4626,17 +2526,8 @@ export function TilePreviewThumbnail({
     ctx.restore();
   }, [tileId, orientation, size, hexSize, stationMarkers]);
 
-  /* Design note #368: the element's own bounds are the hexagon too, not
-     just the artwork inside it. The canvas is transparent outside the hex
-     either way, but a square element means any chrome BEHIND it -- the
-     radial ring's button background, a hover fill -- shows through the
-     corners and frames the tile as a card. Clipping the element makes the
-     preview read as a game piece.
-
-     The polygon is a pointy-top hex inscribed in the square, height-bound:
-     ±(√3/2)/2 = ±43.3% horizontally, the full height vertically. Same
-     proportions as `drawHexPath`, so the clip lands exactly on the stroke
-     rather than shaving it. */
+  /* The ELEMENT is clipped to the hexagon too: a square element lets chrome behind it show through the corners and frames the tile as a card.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #368 */
   return (
     <canvas
       ref={canvasRef}

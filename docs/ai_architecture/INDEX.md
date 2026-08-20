@@ -4,6 +4,11 @@ Extracted design commentary for **1830: Juno Edition** (React/Canvas frontend, R
 backend, Firebase middleware). This directory is the archive that source files used to carry
 inline. Code keeps a 1–2 line comment naming the note; the reasoning lives here.
 
+> **One exception to per-file numbering:** the five rail-map modules
+> (`HexGridRenderer.tsx`, `hexCanvasPrimitives.ts`, `hexGeometry.ts`, `TileGraphics.ts`,
+> `hexBoardData.ts`) share a **single** `#N` space, because the monolith split moved code *and* its
+> notes out of one original file. All five are anchored `HexGridRenderer.tsx #N`.
+
 ## How to use this
 
 Source comments reference notes by number, e.g. `// see design note #481`. Every note in this
@@ -25,7 +30,8 @@ directory is anchored as **`<source file> #<N>`**, so:
 | [state_machine.md](state_machine.md) | Round types, Operating Round sub-phase cursor, turn gating, auto-skip, float events, home stations, undo/revert semantics |
 | [sandbox_reducer.md](sandbox_reducer.md) | The local reducer's charter, the Operating Round machine, determinism under replay, and the fixtures (`sandboxSession.ts`, `sandboxState.ts`) |
 | [firebase_middleware.md](firebase_middleware.md) | Event-sourced room log, replay drain, setup event, presence, chat transport, the chain/Firestore boundary, room codes, Firebase config |
-| [canvas_rendering.md](canvas_rendering.md) | Radial tile selector, board veil/dimming, cursor modes, tile preview and rotation, token migration markers, board click routing |
+| [canvas_rendering.md](canvas_rendering.md) | The rail map renderer: radial tile selector, board veil/dimming, cursor modes, tile preview, the camera, margin labels, layer order, route overlays |
+| [hex_tile_math.md](hex_tile_math.md) | Bezier track splines, the hand-authored artwork catalog, the 13-slot placement engine, station/token docking geometry, board data and palettes |
 | [stock_market.md](stock_market.md) | Par values, IPO vs bank pool pricing, market chart marks and moves, stock round cards |
 | [contract_economy.md](contract_economy.md) | Treasuries, token pricing, train purchase and the depot queue, emergency funding, bankruptcy, private companies, the waterfall auction |
 | [routing_pathfinding.md](routing_pathfinding.md) | Route drafting, waypoints and bridging, revenue centres vs hexes, train capacity, auto-route |
@@ -72,7 +78,7 @@ These arguments appear across many notes and are worth reading once:
 | 0 | Scaffold this directory | Done |
 | 1 | `frontend/src/App.tsx` | Done |
 | 2 | Firebase middleware (`sandboxSession`, `sandboxState`, `sandboxRoom`, `config/firebase`, `actionLog`, `feed`) | Done |
-| 3 | Canvas rendering + tile math | Pending |
+| 3 | Canvas rendering + tile math (incl. the Phase 0 legacy fold) | Done |
 | 4 | Stock market + trading UI | Pending |
 | 5 | Remaining frontend files | Pending |
 | 6 | Rust contract backend | Pending |

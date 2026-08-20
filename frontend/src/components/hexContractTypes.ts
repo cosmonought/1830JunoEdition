@@ -193,8 +193,8 @@ export const STATION_HOME_HEXES: ReadonlyArray<{
  * `STATION_FALLBACK_TICKER_COLOR` and `stationTickerColor` have eight-plus
  * call sites across `App.tsx`, `HexGridRenderer`, `hexCanvasPrimitives`,
  * `ContextualSubPanel`, `FinancialLedger`, `TrainPurchasePanel`,
- * `StationTokenRow` and `ContextualActionBar`, plus a design-notes markdown
- * that references them by name. Renaming all of that in the same pass that
+ * `StationTokenRow` and `ContextualActionBar`, plus docs/ai_architecture/ notes
+ * that reference them by name. Renaming all of that in the same pass that
  * moves the data would make one behavioural change indistinguishable from
  * forty mechanical ones in review.
  *

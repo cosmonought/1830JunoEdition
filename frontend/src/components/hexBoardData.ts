@@ -1,157 +1,41 @@
 // frontend/src/components/hexBoardData.ts
 //
-// PHASE 2 of the `HexGridRenderer.tsx` monolith extraction.
+// PHASE 2 of the HexGridRenderer monolith split: the 1830 board itself, as
+// data -- every hex and its terrain, the landmarks and their printed track,
+// gray hexes, off-board terminals and era tiers, impassable borders, OO hexes,
+// palettes, terrain fees, and the small pure lookups over them.
 //
-// WHAT THIS IS. The 1830 board itself, as data: every hex and its terrain,
-// the three landmark cities and their pre-printed track, the gray hexes, the
-// off-board revenue terminals and their era tiers, the impassable borders,
-// the OO hexes, the display palettes, and the small pure lookups over them
-// (`offboardValueForEra`, `terrainBuildFeeAt`).
+// Extracted second because it is the next leaf up: it depends on exactly one
+// thing outside itself. Leaf-first extraction is what kept every step free of
+// circular imports.
 //
-// No canvas, no React, no DOM. Every export is either a literal table or a
-// pure function of one.
+// SOURCING. Almost every table was verbatim-sourced from tobymao/18xx's
+// g_1830/map.rb and cross-checked against the Rust constants. The comments
+// travel WITH the data deliberately: a coordinate table with no provenance is
+// unauditable, and several entries exist because an earlier pass got them wrong.
 //
-// WHY THIS BOUNDARY, AND WHY SECOND. Phase 1 took the tile catalog because it
-// was a leaf -- nothing in the file it depended on. This is the next leaf up:
-// the board data depends on exactly ONE thing outside itself,
-// `TileColorTier`, which Phase 1 already moved. Extracting strictly
-// leaf-first is what keeps every step free of circular imports, and it is why
-// geometry (which reads these tables) and the canvas primitives (which read
-// geometry) come after rather than before.
-//
-// SOURCING. Almost every table here was verbatim-sourced from
-// `tobymao/18xx`'s `g_1830/map.rb` and cross-checked against the Rust
-// backend's own constants -- see the individual doc comments, and the
-// numbered design notes in `./HexGridRenderer.design-notes.md`, for which
-// entries were corrected and why. The comments travel WITH the data
-// deliberately: a coordinate table with no provenance is unauditable, and
-// several of these entries exist because an earlier pass got them wrong.
-//
-// IMPORT DIRECTION IS ONE-WAY. This module must never import from
-// `HexGridRenderer.tsx`. If something here appears to need something there,
-// the dependency is pointing the wrong way.
+// IMPORT DIRECTION IS ONE-WAY. See docs/ai_architecture/hex_tile_math.md
 
 import type { TileColorTier } from "./hexTileCatalog";
 
-/** The three reserved 1830 landmark cities, at their VERIFIED REAL board
- *  coordinates (New York = G19, Boston = E23, Baltimore = I15 -- see design
- *  note #6 for sources and the coordinate transform). CROSS-FILE
- *  CONSISTENCY: RESOLVED -- `hexmap::LANDMARK_HEXES` in the Rust backend was
- *  updated to these same real coordinates (New York `(6, 6)`, Boston
- *  `(9, 4)`, Baltimore `(3, 8)`); this file's coordinates were the source of
- *  truth that pass aligned the backend to. */
-// Design note #78: `displayName` is an OPTIONAL cosmetic override for the
-// on-canvas nameplate ONLY -- `name` itself stays "New York" (structural,
-// used as `LANDMARK_TRACKS`'s lookup key, and by every other place in this
-// file that keys off a landmark's real name) so this doesn't ripple into
-// `liveEdgesForHex`/`archetypeForHex`/etc. New York's real printed tile
-// covers two cities, "New York & Newark" -- `displayName` lets the
-// nameplate pass show that full name (and, since it contains " & ", pick
-// up the SAME stacked two-line format the OO/double-town passes already
-// use for other double-city names) without touching the structural key.
+// The three landmarks at their VERIFIED real coordinates; the backend was later aligned to these. displayName is a cosmetic nameplate override only -- name stays structural, so it does not ripple into the lookups keyed on it.
+// See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #78
 export const LANDMARK_HEXES: ReadonlyArray<{ name: string; displayName?: string; q: number; r: number; label: string }> = [
   { name: "New York", displayName: "New York & Newark", q: 6, r: 6, label: "G19" },
   { name: "Boston", q: 9, r: 4, label: "E23" },
   { name: "Baltimore", q: 3, r: 8, label: "I15" },
 ];
 
-/** Each landmark's authentic, fixed starting track -- see design note #6b
- *  for the sourced 18xx.games tile-definition strings and the compass-edge
- *  translation method. Each segment is an independent path with its own
- *  station: New York is modeled as TWO one-edge stub segments (its
- *  signature "one hex, two disconnected stations" design), while Boston and
- *  Baltimore are each a single two-edge through-route with one shared
- *  station. Edge numbers here are this file's own convention (design note
- *  #1: 0=E, 1=NE, 2=NW, 3=W, 4=SW, 5=SE), already translated from the
- *  source engine's differently-numbered edges. */
-/** REVERTED (this pass, item 3 -- see design note #29 for the full
- *  investigation). The structural calibration pass's "CORRECTED... direct
- *  IDENTITY" edit below this comment (edges `[3]`/`[0]` for New York, `[3,
- *  5]` for Boston) put New York's edge-0/E stub at axial `(7, 6)` -- label
- *  "G21", which does not exist in `STATIC_BOARD_HEXES` at all (row G's real
- *  hexes stop at G19, New York itself) -- the same "points at a nonexistent
- *  hex" red flag design note #6b's own reflection derivation was built to
- *  catch, now catching the identity claim instead. Reflection is its own
- *  inverse, so re-applying the ORIGINAL, design-note-#6b-verified formula
- *  (`our_edge = ((4 - their_edge) % 6 + 6) % 6`) to the identity pass's
- *  edge values exactly recovers the values this file had before that pass:
- *  New York back to `[1]`/`[4]` (edge 1/NE -> F20 "New Haven & Hartford",
- *  edge 4/SW -> H18 "Philadelphia & Trenton" -- both real, named,
- *  already-modeled hexes in this same file, per design note #6b), Boston
- *  back to `[1, 5]`, Baltimore unchanged at `[0, 4]` (that set is its own
- *  reflection either way, per the identity pass's own correct observation).
- */
+/** Each landmark's authentic printed track, translated by the verified reflection formula. REVERTED from a claimed IDENTITY mapping that put New York's stub on "G21", a hex that does not exist -- the same red flag that caught the ORIGINAL bug. Reflection is its own inverse, so re-applying it recovers the verified values exactly.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #29 */
 export const LANDMARK_TRACKS: Readonly<Record<string, ReadonlyArray<{ edges: readonly number[] }>>> = {
   "New York": [{ edges: [1] }, { edges: [4] }],
   Boston: [{ edges: [1, 5] }],
   Baltimore: [{ edges: [0, 4] }],
 };
 
-/** THE tile background colour, by era tier -- design note #122.
- *
- *  One constant per era, full stop. Previously a laid tile's fill came from
- *  `TERRAIN_FILL` below, which is keyed on TERRAIN, so tiles of the same era
- *  painted different colours purely because of what was printed on them: a
- *  plain #9 came out `#f4ecd8`, a town #4 `#f0d9a0`, and the yellow city #57
- *  `#e8d9c0`. #57 sits on nearly every city hex on the board, so the single
- *  most-placed tile in the game was also the most visibly off-tray. Real
- *  1830 cardboard is one stock colour per era; the artwork on top varies,
- *  the card does not.
- *
- *  A second source of divergence went with it: the board loop used to
- *  override the fill to `PRINTED_HEX_FILL.Yellow` for any hex whose static
- *  entry was `printedColor: "Yellow"` (the landmarks and the four OO hexes),
- *  so an upgraded Green or Brown tile on one of those hexes kept painting
- *  yellow forever. Era now wins everywhere, which is also what tells a
- *  player at a glance that a hex has actually been upgraded.
- *
- *  Gray and Red are NOT here on purpose: they are properties of preprinted
- *  BOARD hexes, not of layable tile stock, and keep their own
- *  `BOARD_HEX_FILL`/`PRINTED_HEX_FILL` entries. `TileColorTier` has exactly
- *  three members and this map is total over them. */
-/* ===================================================================
- *  DESIGN NOTE 152: THE THREE TIERS MUST BE TELLABLE APART AT A GLANCE
- * ===================================================================
- *
- * The old set was Yellow `#f0d9a0`, Green `#c9e0b4`, Brown `#d8bc9a` --
- * three desaturated pastels within a few points of each other. Yellow and
- * Brown in particular (`#f0d9a0` vs `#d8bc9a`) differ by about as much as
- * two shades of the same beige, which on a board where the tier IS the
- * information -- which era a hex has reached, and therefore what may be
- * laid on it next -- is the one distinction that must never be subtle.
- *
- * Yellow is now a real saturated yellow and Brown a real brown, so the
- * three tiers separate on HUE and LIGHTNESS at once rather than on a few
- * points of warmth.
- *
- * GREEN IS DELIBERATELY UNCHANGED. It was never part of the reported
- * confusion, it already separates cleanly from both new values, and
- * restyling it would be an unrequested change to a third of the board.
- */
-/* ===================================================================
- *  DESIGN NOTE 161: THE CANONICAL 1830 PALETTE
- * ===================================================================
- *
- * These are the physical game's own three tile colours, specified directly
- * rather than approximated. They supersede design note #152's set, which
- * was chosen to solve a narrower problem (Yellow and Brown were nearly
- * indistinguishable) and picked plausible values rather than the real ones.
- *
- * Green moves for the first time here. #152 deliberately left it alone
- * because it was not part of that confusion; this note is a full palette
- * specification, so all three change together and the earlier reasoning no
- * longer applies.
- *
- * ONE MEASUREMENT WORTH KNOWING, since it is not fixable by choosing
- * better values: Green and Brown sit at a 1.47:1 LUMINANCE ratio and are
- * separated almost entirely by hue. For a red-green colourblind viewer
- * those two tiers are close to indistinguishable by fill alone. The tier is
- * also carried by the rim colours below, by the tile number in the picker,
- * and by the fact that a hex's available upgrades are filtered to its tier
- * -- so no decision in this app depends on telling those two fills apart by
- * eye. Recorded because it is a real property of the canonical colours, not
- * something introduced here.
- */
+/** Tile fill is per-ERA, not per-terrain: keyed on terrain, tiles of one era painted different colours because of what was printed on them, and #57 sits on nearly every city hex. Real cardboard is one stock colour per era. #152 separated the tiers on hue AND lightness; #161 specifies the canonical palette. Green and Brown sit at 1.47:1 luminance and are separated almost entirely by hue -- recorded because no decision here depends on telling them apart by eye.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #161 */
 export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
   // Unified with `PRINTED_HEX_FILL.Yellow` below -- see its own note. A
   // preprinted yellow hex and a laid yellow tile are the same tier and must
@@ -162,61 +46,13 @@ export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
   Brown: "#CB7745",
 };
 
-/* ===================================================================
- *  DESIGN NOTE 153: TRACK INK IS PER-TIER, AND HAS TO BE
- * ===================================================================
- *
- * Every tile in this renderer strokes its track `#2b2b2b`, near-black. That
- * is correct on the two light tiers and unreadable on the new Brown:
- * `#2b2b2b` on `#713f12` is roughly a 1.6:1 contrast ratio, which is below
- * the threshold at which a thin line is visible at all. Darkening Brown
- * without moving the ink would have traded one confusion (which tier is
- * this?) for a worse one (where does the track go?).
- *
- * So the ink follows the tier. Warm off-white on Brown lands near 7:1,
- * comfortably legible, and reads as the same drawn line rather than as a
- * different kind of track.
- *
- * Only the TRACK moves. Station circles are white discs with their own dark
- * rim and gain contrast on a dark tile; dit markers never appear on Brown
- * (no Brown tile carries `SmallTown`/`DoubleTown` terrain); revenue badges
- * paint their own background.
- */
-/* ==================================================================
- *  DESIGN NOTE 473: ONE TRACK INK, NAMED
- * ==================================================================
- *
- * The colour track is drawn in. Design note #161 unified it across all
- * three tiers and left the value inlined three times in the table below --
- * fine while the table was the only consumer, and not fine once the
- * off-board stubs had to match it (they were on the older `#2b2b2b` and the
- * seam showed exactly where a player traces a route off the map).
- *
- * Naming it makes "the off-board track matches tile track" a fact the code
- * states rather than a coincidence of two literals agreeing. The tier table
- * still exists and still maps each tier separately -- #161's reasoning for
- * keeping it holds: it is what makes "ink is a function of the tier"
- * structural, and it is what caught the problem the last time a fill moved. */
+/* One named track ink. #153 split it per tier when Brown was dark enough that near-black measured ~1.6:1; #161's lighter canonical Brown made dark ink correct on all three again. THE TABLE STAYS even though the values agree -- it is what makes "ink is a function of the tier" structural, and it caught the problem the last time a fill moved.
+   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #473 */
 export const STANDARD_TRACK_INK = "#1a1a1a";
 
 export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
-  // Design note #161 UNIFIED THESE AGAIN, and the reason is worth keeping.
-  //
-  // #153 split the ink per tier because Brown was then `#713f12`, dark
-  // enough that near-black track on it measured ~1.6:1 and effectively
-  // disappeared. The canonical Brown `#CB7745` is a much lighter clay, so
-  // dark ink is correct on all three again: 13.9:1 on Yellow, 7.7:1 on
-  // Green, 5.2:1 on Brown -- comfortably past the 3:1 a thick graphical
-  // line needs, on every tier.
-  //
-  // THE TABLE STAYS even though all three values now agree. It is what
-  // makes "ink is a function of the tier" a structural fact rather than a
-  // coincidence, and it is the thing that caught the problem the last time
-  // a fill moved. A future palette change edits one table instead of
-  // hunting `strokeStyle` literals through the renderer.
-  //
-  // Slightly deeper than the old `#2b2b2b` (the non-tile default below),
-  // which buys Brown a full contrast step for free.
+  // 13.9:1 on Yellow, 7.7:1 on Green, 5.2:1 on Brown -- comfortably past the 3:1 a thick graphical line needs.
+  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #161
   Yellow: STANDARD_TRACK_INK,
   Green: STANDARD_TRACK_INK,
   Brown: STANDARD_TRACK_INK,
@@ -228,25 +64,12 @@ export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
  *  stubs) is byte-identical to before. */
 export const DEFAULT_TRACK_INK = "#2b2b2b";
 
-/* Design note #122 deleted `TERRAIN_FILL` from here. It mapped each
-   TerrainType to its own tile background, and was the direct cause of the
-   reported colour drift: same era, different card colour, depending on what
-   was printed on the tile. `ERA_TILE_FILL` above replaced its last three
-   call sites (board loop, ghost preview, picker thumbnail) and nothing else
-   referenced it. Unlaid BOARD hexes were never its business -- those have
-   always used `BOARD_HEX_FILL`/`PRINTED_HEX_FILL`, which are untouched. */
+/* TERRAIN_FILL deleted: it mapped each terrain to its own tile background and was the direct cause of the reported colour drift. Unlaid BOARD hexes were never its business.
+   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #122 */
 
 
-/** The rim around a laid tile. Design note #161: each is a darkened form of
- *  its own fill, so the edge reads as that tile's own outline rather than as
- *  a separate colour laid over it.
- *
- *  Tuned against the FILL rather than against the board, because the rim's
- *  job is to bound the tile: neighbouring hexes are themselves tiles far
- *  more often than they are empty board, so a rim tuned for the dark
- *  backdrop would be the wrong choice everywhere the board is actually
- *  built up. Yellow lands at 4.3:1 on its own fill, Green 3.4:1, Brown
- *  3.4:1 -- all past the 3:1 a graphical boundary needs. */
+/** Each rim is a darkened form of its OWN fill, so the edge bounds the tile rather than reading as a separate colour laid over it -- tuned against the fill because neighbouring hexes are themselves tiles far more often than empty board.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #161 */
 export const COLOR_TIER_STROKE: Readonly<Record<TileColorTier, string>> = {
   Yellow: "#7a6a00",
   Green: "#2f5e1a",
@@ -267,65 +90,19 @@ export interface BoardHex {
   q: number;
   r: number;
   type: BoardHexType;
-  /** Set on hexes that are pre-printed GRAY (fixed, non-upgradeable) or
-   *  pre-printed YELLOW (a real starting yellow tile, not a blank buildable
-   *  hex) on the real board -- see design note #12 and `GRAY_HEXES`/
-   *  `YELLOW_OO_HEXES` below. Overrides `BOARD_HEX_FILL[type]`'s fill/
-   *  stroke (via `PRINTED_HEX_FILL`/`PRINTED_HEX_STROKE`) without changing
-   *  `type` itself, so a hex like E5 can be BOTH a pre-printed yellow city
-   *  AND a River (still gets its river icon/cost label -- both are true on
-   *  the real board simultaneously). Undefined on ordinary blank/buildable
-   *  hexes, which keep rendering exactly as before this pass. */
+  /** printedColor overrides the fill WITHOUT changing type, so a hex can be both a pre-printed yellow city AND a River with its icon and cost label -- both are true on the real board simultaneously.
+   *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #12 */
   printedColor?: "Gray" | "Yellow";
-  /** Item 1 (structural calibration pass, Map Content Completion): set on
-   *  the real board's ordinary WHITE (buildable, no printed track) hexes
-   *  that nonetheless carry a preprinted Town/Double-Town DESIGNATION --
-   *  verbatim-sourced from `tobymao/18xx`'s `g_1830/map.rb` `HEXES` `white:`
-   *  section (`town=revenue:0` / `town=revenue:0;town=revenue:0` entries).
-   *  `"single"`: London (E7), Burlington (B20), Flint (D4), Erie (F10) --
-   *  four hexes, matching the real sourced count of preprinted Single-Town
-   *  hexes. `"double"`: Akron & Canton (G7), Reading & Allentown (G17), New
-   *  Haven & Hartford (F20) -- three hexes, matching the real sourced count
-   *  of preprinted Double-Town hexes. Distinct from `GRAY_HEXES`'s
-   *  `marker: "town"` entries (C15/I19/F24), which are real pre-printed GRAY
-   *  hexes with FIXED starting track, not blank buildable hexes -- kept in
-   *  lockstep with the Rust backend's `hexmap::TOWN_DESIGNATED_HEXES`
-   *  (module doc comment #16), which enforces the matching on-chain
-   *  placement rule. Undefined on every other hex. */
+  /** Blank WHITE hexes carrying a preprinted town designation, verbatim-sourced. Distinct from the gray hexes' town markers, which have FIXED starting track. Kept in lockstep with the backend's own list.
+   *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #12 */
   townDesignation?: "single" | "double";
-  /** Design note #34/item 2 ("Complete 1830 Baseline City Database"): the
-   *  city-marker counterpart to `townDesignation` above -- set on ordinary
-   *  WHITE (buildable, no printed track) hexes that carry a preprinted
-   *  single-city marker on the real board, verbatim-sourced (and
-   *  independently re-derived three times against the raw source text) from
-   *  `tobymao/18xx`'s `g_1830/map.rb` `HEXES` `white:` section's plain
-   *  `city=revenue:0` / `city` entries: Toledo (F4), Providence (F22),
-   *  Pittsburgh (H10), Columbus (H4), Washington (J14), Lancaster (H16),
-   *  Ottawa (B16), and Barrie (B10). Deliberately NOT modeled as a
-   *  `GRAY_HEXES` entry: the real source has no `path=` data at all for any
-   *  of these eight hexes (unlike an actual `GRAY_HEXES` city, which prints
-   *  real fixed track), so -- exactly like `townDesignation` -- this draws
-   *  only a placement-guide marker (`drawStationCircle`, no track), NOT
-   *  real pre-printed track. UNLIKE `townDesignation`'s SmallTown/DoubleTown
-   *  value, though, this DOES get the flat `MajorCityHub` ($20) pre-tile
-   *  route value/badge, matching `townDesignation`'s own already-established
-   *  precedent (added after design note #26/item 5's original city/town
-   *  badge pass) of giving every printed destination marker -- including
-   *  ordinary blank designated hexes with no real track yet -- a flat
-   *  placeholder value, plus this item's own explicit "$20 base track
-   *  value" ask. See design note #34 for the two corrections this uncovered
-   *  (B16 is really Ottawa, not "Barrington"; F24 is really Mansfield, not
-   *  "River Falls"). Undefined on every other hex. */
+  /** Blank white hexes with a preprinted single-city marker, independently re-derived three times against the raw source. Deliberately NOT gray entries: the source has no path data for any of them, so this draws a marker and no track. Two of the request's own specifics were not applied -- B16 is Ottawa, F24 is Mansfield.
+   *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #35 */
   cityDesignation?: boolean;
 }
 
-/** The complete, real 93-hex 1830 board -- see design note #6 for sources
- *  and the row-letter/column-number -> axial `(q, r)` transform this array
- *  was generated from. Unlike the previous illustrative pass, this is NOT
- *  a per-row `[qMin, qMax]` span generator: the real board's outline is
- *  genuinely non-convex (e.g. row A has a gap between columns 11 and 17 --
- *  hexes A13/A15 simply don't exist), so every one of the 93 real hexes is
- *  listed explicitly rather than approximated by a range. */
+/** All 93 real hexes listed explicitly rather than generated per-row: the board's outline is genuinely non-convex, and row A simply has no A13 or A15.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #6 */
 export const STATIC_BOARD_HEXES: readonly BoardHex[] = [
   // Row A
   { label: "A9", q: 4, r: 0, type: "RedOffboard" }, // Canadian West
@@ -392,11 +169,8 @@ export const STATIC_BOARD_HEXES: readonly BoardHex[] = [
   { label: "F10", q: 2, r: 5, type: "Plain", townDesignation: "single" }, // Erie
   { label: "F12", q: 3, r: 5, type: "Plain" },
   { label: "F14", q: 4, r: 5, type: "Plain" },
-  // Scranton -- missed city, added by design note #123. Same
-  // `cityDesignation: true` pattern as F4/Toledo (a blank, no-real-track
-  // hex with a terrain type), the one existing precedent for a printed
-  // terrain type PLUS a city marker together -- Toledo's is River
-  // ("water"), this one is Mountain, the requested analog.
+  // Scranton -- a missed city, added as the same blank-hex-plus-terrain pattern Toledo already established, Mountain rather than River.
+  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #123
   { label: "F16", q: 5, r: 5, type: "Mountain", cityDesignation: true }, // Scranton
   { label: "F18", q: 6, r: 5, type: "Plain" },
   { label: "F20", q: 7, r: 5, type: "Plain", townDesignation: "double" }, // New Haven & Hartford
@@ -452,12 +226,8 @@ export const STATIC_BOARD_HEXES: readonly BoardHex[] = [
   { label: "K15", q: 2, r: 10, type: "Plain", printedColor: "Gray" }, // Richmond
 ];
 
-/** Off-board revenue terminal display names, keyed by real board label --
- *  see design note #6. `A9`/`I1` are the real board's auxiliary "hidden"
- *  continuation hexes for the Canadian West / Gulf zones respectively (each
- *  off-board zone spans two hexes on the physical board and shares one
- *  revenue value between them); labeling both with their zone's name is
- *  more honest than picking one arbitrarily to omit. */
+/** Each off-board zone spans two hexes sharing one revenue value; labelling both is more honest than picking one arbitrarily to omit.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #6 */
 export const OFFBOARD_LABELS: Readonly<Record<string, string>> = {
   F2: "Chicago",
   A9: "Canadian West",
@@ -481,50 +251,22 @@ export const OFFBOARD_TRACKS: Readonly<Record<string, readonly number[]>> = {
   B24: [3, 4], // Maritime Provinces -- real neighbors B22, C23
 };
 
-/** Design note #26/item 3: the Gulf off-board zone's two hexes (I1/J2, both
- *  labeled "Gulf" above) are drawn as one visually merged region -- their
- *  shared interior edge's border stroke is suppressed (see `drawHexEdges`
- *  below) and they get a single centered nameplate instead of two. `I1`
- *  sits at `(q, r)` and `J2` at `(q, r + 1)` (edge index 5's direction, per
- *  `edgeAngleRad`'s `(dq, dr) = (0, +1)` neighbor -- confirmed against
- *  `OFFBOARD_TRACKS`'s own "real neighbor I3" comments above, which land on
- *  the same shared edge from both sides: I1's remaining live edge 0 points
- *  at I3, and J2's edge 1 also points at I3), so I1's edge 5 / J2's edge 2
- *  is the one shared interior edge to hide. */
+/** Gulf's two hexes read as one merged region: the shared interior edge's stroke is suppressed and one centred nameplate replaces two. Derived from axial adjacency and cross-checked against the tracks table's own real-neighbour comments, which land on the same shared edge from both sides.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #26 */
 export const GULF_HIDDEN_EDGE: Readonly<Record<string, number>> = {
   I1: 5,
   J2: 2,
 };
 
-/** Item 9 (structural calibration pass, Merge Canadian West): applies the
- *  identical technique `GULF_HIDDEN_EDGE` above already established to the
- *  Canadian West off-board zone's own two hexes (A9/A11, both labeled
- *  "Canadian West" in `OFFBOARD_LABELS`) -- their shared interior edge's
- *  border stroke suppressed, one merged nameplate instead of two. `A9` sits
- *  at `(q, r) = (4, 0)` and `A11` at `(q, r) = (5, 0)`, a `(dq, dr) = (+1,
- *  0)` neighbor pair -- edge index 0 per `edgeAngleRad`'s convention -- so
- *  A9's edge 0 (facing A11) and A11's opposite edge 3 (facing A9) are the
- *  one shared interior edge to hide on each side. Real off-board terminal
- *  hexes carry no printed path connecting the two halves of a zone at all
- *  (they're a permanently-fixed, unbuildable revenue box, not track a
- *  Protocol lays) -- `OFFBOARD_TRACKS`'s own A9/A11 entries are each hex's
- *  stub toward its real neighboring PLAYABLE hex (B10/B12), a completely
- *  separate edge from this purely geometric shared-border seam, so this
- *  hidden-edge pair is derived straight from axial adjacency, the same way
- *  `GULF_HIDDEN_EDGE` was cross-checked, rather than from any `path=`
- *  source data. */
+/** The identical technique for Canadian West. Real off-board hexes carry NO printed path connecting the halves of a zone, so this seam is purely geometric and derived from adjacency rather than from source path data.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #26 */
 export const CANADIAN_WEST_HIDDEN_EDGE: Readonly<Record<string, number>> = {
   A9: 0,
   A11: 3,
 };
 
-/** Each off-board destination's real printed Yellow/Brown revenue -- see
- *  design note #11 for the source and why there's no separate Green tier
- *  printed on the physical board. Keyed by the same display name
- *  `OFFBOARD_LABELS` uses. Restructured from a single display string into
- *  numeric tiers for design note #15/item 4: era-adaptive rendering needs
- *  the actual numbers, not a pre-formatted "$40/$70" string, to pick out
- *  just the currently-active era's value. */
+/** Each destination's real printed Yellow/Brown revenue; there is no separate Green tier printed on the board. Structured as numeric tiers rather than a formatted string, since era-adaptive rendering needs the numbers.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #11 */
 export interface OffboardRevenueTiers {
   yellow: number;
   brown: number;
@@ -538,141 +280,18 @@ export const OFFBOARD_REVENUE: Readonly<Record<string, OffboardRevenueTiers>> = 
   "Maritime Provinces": { yellow: 20, brown: 30 },
 };
 
-/** Resolves `tiers` to the single value that applies at `era` -- see design
- *  note #15. Real 1830 off-board boxes only ever print two numbers (see
- *  design note #11): the "Yellow" figure keeps applying through the Green
- *  era too (there's no distinct printed Green value), and the "Brown"
- *  figure takes over once Brown is reached. */
+/** Yellow keeps applying through Green -- there is no distinct printed Green value -- and Brown takes over once reached.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #15 */
 export function offboardValueForEra(tiers: OffboardRevenueTiers, era: TileColorTier): number {
   return era === "Brown" ? tiers.brown : tiers.yellow;
 }
 
-/** Representative build cost for each buildable-but-costly terrain type --
- *  the real 1830 printed terrain costs (see design note #9).
- *
- *  PROMOTED (design note #118, backend Audit G-5/G-10): these two figures are
- *  no longer merely a legibility label that happened to sit next to the real
- *  number. Terrain is now charged as a HEX property, exactly as real 1830
- *  charges it -- `hexmap::execute_lay_tile` reads the fee from
- *  `terrain_build_fee(q, r)` ($80 river / $120 mountain / $0 clear land),
- *  paid once when a hex is first built on and free on every later colour
- *  upgrade. Every entry in `hexmap::TILE_CATALOG` now carries a `0` cost
- *  field, and the invented "river"/"mountain pass" tile artwork that used to
- *  carry the charge (old internal ids 4, 5, 12) is deleted. That closed both
- *  halves of the old exploit: laying an ordinary plain tile onto a real
- *  river or mountain hex used to be free, and laying the invented mountain
- *  artwork onto flat grassland used to charge $80 for nothing. So what this
- *  table shows is now the actual enforced figure for the hex beneath it.
- *
- *  Design note #94: `$` dropped from both values, per direct request --
- *  the red box itself (design note #68) already unambiguously marks this
- *  as a cost figure, so the bare number reads cleanly on its own. Feeds
- *  BOTH render paths (the plain-hex box and `drawTerrainCompoundBadge`)
- *  unchanged, since both just render whatever string this constant holds. */
-/** Real 1830's printed water/river build fee, in.
- *  Mirrors `hexmap::RIVER_BUILD_FEE` exactly. */
-/* ==================================================================
- *  DESIGN NOTE 223: THE LAY TRACK VEIL'S THREE VALUES
- * ==================================================================
- *
- * `HexGridRenderer` dims every hex the acting corporation cannot build on
- * during the Lay Track sub-phase. These are its constants, here rather than
- * inline in the draw pass for the same reason every other board colour is:
- * a value used once today is a value copied twice tomorrow.
- *
- * THE ALPHA IS THE WHOLE DESIGN DECISION. 0.55 is deliberately a veil rather
- * than a blackout: a player judging whether to extend north still needs to
- * READ the dimmed board -- where the cities are, which hexes already carry
- * track, where the mountains are -- because that is what makes the choice
- * between the lit hexes. 18xx.games dims to roughly this depth for the same
- * reason. Opaque would turn a highlight into a blindfold.
- *
- * The ink is the board's own deep navy rather than neutral black, so the
- * veil reads as the map receding rather than as a grey sheet over it.
-
-/* ==================================================================
- *  THE LAY TRACK VEIL: DELETED, THEN RESTORED ASYMMETRICALLY
- * ==================================================================
- *
- * These were deleted by `HexGridRenderer.tsx` design note #367 and brought
- * back by #377. That note carries the reasoning; the short version is that
- * #367 was right about one of its two objections and the remedy for it was
- * a CONDITION, not a deletion -- the veil now applies to the player whose
- * turn it is and to nobody else.
- *
- * THE ALPHA IS THE OTHER HALF OF THE FIX. It was 0.55: more than half the
- * board's light gone, which is what turned a legitimate emphasis into the
- * map being taken away. At 0.22 a veiled hex still reads as cardboard --
- * its colour, its track and its tokens all survive -- and the glow on the
- * legal set has something to be brighter THAN.
- *
- * The deletion note warned that "a dimming constant sitting in the board
- * palette is a standing invitation to reintroduce a global overlay". That
- * risk is real and is answered where it can be: the renderer cannot dim
- * without `layFocus.dim`, which only the shell sets, and only from
- * `isMyTurn`. */
-/* ==================================================================
- *  DESIGN NOTE 420: 0.22 WAS A DIMMING NOBODY COULD SEE
- * ==================================================================
- *
- * REPORTED: reintroduce the dimming during Lay Tile, so only the valid
- * hexes stay lit.
- *
- * The mechanism was never missing -- `HexGridRenderer` has painted this
- * veil over every out-of-reach hex all along. What was missing was the
- * EFFECT, and the reason is arithmetic rather than logic: `#070b14` is
- * near-black, this board's unlit surface is already very dark, and 22% of
- * near-black over near-black is a difference of a few RGB points. The
- * overlay was drawing, correctly, and was invisible.
- *
- * That is how a working feature comes to be reported as absent, and it is
- * why this constant moved rather than the code around it.
- *
- * THE HISTORY MATTERS HERE, because both previous values were reactions to
- * each other. `0.55` was judged to "suppress the board to emphasise a
- * subset" and was deleted outright; `0.22` reinstated the veil while
- * over-correcting past the point of visibility. `0.42` is chosen between
- * them, and the test it has to pass is the one both endpoints failed: a
- * veiled hex must still read as CARDBOARD -- its colour, its track and its
- * tokens all legible -- while being unmistakably behind the lit set at a
- * glance, without the player hunting for the difference.
- *
- * The click gate is unaffected and always was: `layFocus.highlighted`
- * decides which hexes open the picker, so no value here can make an
- * illegal hex clickable or a legal one dead. This constant governs
- * appearance only, which is what makes tuning it safe. */
+/** The real printed terrain costs, now the actual ENFORCED figure: terrain is charged as a HEX property, paid once on first build and free on every later upgrade. That closed both halves of the old exploit. The veil alphas live here for the same reason every other board colour does. #420: 0.22 was a dimming nobody could see -- 22% of near-black over near-black is a few RGB points.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #472 */
 export const LAY_TRACK_DIM_ALPHA = 0.55;
 
-/* ==================================================================
- *  DESIGN NOTE 472: 0.42 -> 0.55, AND A SECOND, HARDER VEIL
- * ==================================================================
- *
- * REPORTED: darken the base veil by a further 30% during Lay Track so the
- * candidate tiles stand out; and when a hex is opened, severely dim every
- * OTHER hex -- including the other valid placements -- so the focus is
- * entirely on the one being decided.
- *
- * The base value takes design note #420's 0.42 up by ~30% to 0.55. #420
- * settled 0.42 by arguing a veiled hex must "still read as cardboard"; that
- * test still passes here -- colour, track and tokens remain legible -- and
- * the lit set now separates from it at a glance rather than on inspection.
- *
- * THE SECOND ALPHA IS A DIFFERENT STATEMENT, not a darker version of the
- * first, which is why it is its own constant rather than a multiplier.
- *
- *   THE BASE VEIL answers "where MAY I build" -- it is a survey, and every
- *   legal hex has to stay comparable against every other, so the unlit ones
- *   are pushed back but the board is still a board.
- *
- *   THE FOCUS VEIL answers "what am I deciding RIGHT NOW". A radial menu is
- *   open over one hex and the player is choosing between tiles for it; the
- *   other legal placements have stopped being options this second and
- *   become distractions competing with a ring of thumbnails. At 0.82 they
- *   recede to context.
- *
- * Deliberately NOT opaque. Even here the board must be visible enough to
- * judge a tile against its neighbours -- which is the whole reason the
- * player opened this hex rather than another. */
+/* 0.42 -> 0.55, plus a SECOND, harder veil as its own constant rather than a multiplier: the base answers "where may I build" (a survey, so every legal hex stays comparable), the focus answers "what am I deciding right now". Deliberately not opaque even at 0.82 -- the board must stay visible enough to judge a tile against its neighbours.
+   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #472 */
 export const LAY_TRACK_FOCUS_DIM_ALPHA = 0.82;
 export const LAY_TRACK_DIM_INK = "#070b14";
 /** The ring on a buildable hex. Green, matching the tile picker's own
@@ -680,32 +299,8 @@ export const LAY_TRACK_DIM_INK = "#070b14";
  *  across the board and the ring that appears when you click it. */
 export const LAY_TRACK_HIGHLIGHT_INK = "#4ade80";
 
-/* ==================================================================
- *  DESIGN NOTE 561: A LEGALITY CUE IS NOT A LIVERY
- * ==================================================================
- *
- * REPORTED: placing ERIE's home station, both slots glow correctly -- but
- * it is hard to tell, because it is yellow on yellow.
- *
- * The glow was derived from the placing corporation's own colour, on the
- * reasoning that the highlight should say WHOSE token is coming. It does say
- * that, and it says it against a board that also uses colour to mean
- * something: tiles are yellow, green and brown by era. ERIE is yellow and
- * lays on a yellow tile; the CNJ is a pale peach; the B&O green sits on
- * green track. Roughly a third of the roster has a livery that collides with
- * some tile tier, and each collision hides the one cue the player needs at
- * the moment they need it.
- *
- * WHITE, because the question the ring answers is "may I click here", which
- * has nothing to do with which corporation is asking -- and identity is
- * already carried twice over by the cursor (design note #496) and by the
- * confirmation ring's own livery swatch (#462). A third channel for identity
- * that costs legibility is a bad trade; the same information for free is not
- * information.
- *
- * It is also the highest-contrast ink available against all three tile
- * tiers at once, which is the property that actually matters for a cue
- * drawn over artwork the app does not control. */
+/* A LEGALITY CUE IS NOT A LIVERY. Deriving the glow from the placing corporation's colour collides with a board that also uses colour by era -- roughly a third of the roster hides the one cue the player needs. White, because "may I click here" has nothing to do with who is asking, and identity is already carried twice over.
+   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #561 */
 export const STATION_PLACEMENT_HIGHLIGHT_INK = "#ffffff";
 
 export const RIVER_BUILD_FEE = 80;
@@ -714,39 +309,8 @@ export const RIVER_BUILD_FEE = 80;
  *  Mirrors `hexmap::MOUNTAIN_BUILD_FEE` exactly. */
 export const MOUNTAIN_BUILD_FEE = 120;
 
-/** What laying track on hex `(q, r)` costs in terrain fees -- design note
- *  #136 (F-2).
- *
- *  A DIRECT MIRROR of `hexmap::terrain_build_fee(q, r)`, structured the same
- *  way it is: look the hex up in the river set, then the mountain set, then
- *  charge nothing. `0` for ordinary clear ground, which is a real answer, not
- *  a missing one.
- *
- *  WHY BY COORDINATE RATHER THAN BY TERRAIN TYPE. This used to be a
- *  `Record<BoardHexType, string>` keyed on the hex's `type` field, which made
- *  the fee a property of a rendering CATEGORY. In real 1830 -- and in the
- *  contract since backend G-10 -- terrain cost is a property of the HEX:
- *  `hexmap::terrain_build_fee` takes `(q, r)` and consults
- *  `RIVER_HEXES`/`MOUNTAIN_HEXES`. Keying on a display type meant the two
- *  models could disagree about any hex whose rendering category and terrain
- *  membership ever diverged, and it made the frontend's number look like a
- *  UI constant rather than a mirrored contract value.
- *
- *  THE FIGURES ARE THE CONTRACT'S, AND THE SPEC DOCUMENT IS WRONG.
- *  `AUDIT_PART2_FRONTEND.md`'s F-2 records the spec as saying "$20 River /
- *  $80 Mountain". That is not real 1830 and not what this contract charges:
- *  `hexmap::RIVER_BUILD_FEE = 80` and `hexmap::MOUNTAIN_BUILD_FEE = 120`,
- *  which is also what the physical board prints. The renderer already showed
- *  $80/$120; the reconciliation needed was to the SPEC, not to the code, and
- *  the resolution is that the contract is the authority. These constants are
- *  named after their backend counterparts so the correspondence is checkable
- *  by grep rather than by memory.
- *
- *  STILL A MIRROR, and worth being honest about: no query surfaces
- *  `terrain_build_fee`, so this cannot read the figure off the chain the way
- *  `MapTileEntry.revenue` now does for tile revenue. If terrain fees ever
- *  become player-visible in a way that affects a decision beyond a label,
- *  they should be surfaced on a query and read from there. */
+/** A direct mirror of hexmap::terrain_build_fee, BY COORDINATE rather than by rendering category -- keying on a display type meant the two models could disagree about any hex whose category and terrain membership diverged. THE SPEC DOCUMENT IS WRONG: the contract charges 80/120, which is also what the board prints.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #136 */
 export function terrainBuildFeeAt(q: number, r: number): number {
   const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
   if (!hex) return 0;
@@ -777,21 +341,12 @@ export const BOARD_HEX_STROKE: Readonly<Record<BoardHexType, string>> = {
 /* Pre-printed gray & yellow hexes -- see design note #12              */
 /* ------------------------------------------------------------------ */
 
-/** Overrides `BOARD_HEX_FILL`/`BOARD_HEX_STROKE` on any `BoardHex` carrying
- *  a `printedColor` -- see design note #12 and the `BoardHex.printedColor`
- *  doc comment. `Gray` approximates the real board's pre-printed gray tile
- *  cardstock; `Yellow` approximates a real starting yellow tile (matching
- *  `COLOR_TIER_STROKE.Yellow`'s gold stroke used for laid yellow tiles
- *  elsewhere in this file, for visual consistency). */
+/** Overrides the ordinary fill/stroke for any hex carrying a printedColor, approximating the real board's gray cardstock and starting yellow tile.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #12 */
 export const PRINTED_HEX_FILL: Readonly<Record<"Gray" | "Yellow", string>> = {
   Gray: "#8a8f94",
-  // Design note #152: THE SAME VALUE as `ERA_TILE_FILL.Yellow`, not a
-  // near-match. These two paint the same claim -- "this hex is at the
-  // Yellow tier" -- and differed only because they were tuned in separate
-  // passes. Written as the literal rather than referencing `ERA_TILE_FILL`
-  // so this table stays a plain lookup with no import cycle; the note is
-  // what keeps them together, and the sandbox legality filter's
-  // `PREPRINTED_TIER_BY_LABEL` already treats them as one tier.
+  // THE SAME VALUE as the Yellow era fill, not a near-match: both paint the same claim and differed only because they were tuned in separate passes. Written as a literal rather than a reference to keep this table import-cycle-free.
+  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #152
   Yellow: "#FDE900",
 };
 export const PRINTED_HEX_STROKE: Readonly<Record<"Gray" | "Yellow", string>> = {
@@ -799,49 +354,13 @@ export const PRINTED_HEX_STROKE: Readonly<Record<"Gray" | "Yellow", string>> = {
   Yellow: "#7a6a00",
 };
 
-/** One pre-printed gray hex's fixed track + city/town marker -- see design
- *  note #12 for the source (`tobymao/18xx`'s `HEXES` `gray:` block).
- *  REVERTED (this pass, item 3 -- see design note #29). The structural
- *  calibration pass's "CORRECTED... direct IDENTITY" edit (edges kept as
- *  the source engine's own raw numbers) put Montreal's (A19) edge-0/E stub
- *  at axial `(10, 0)` -- label "A21", which does not exist in
- *  `STATIC_BOARD_HEXES` at all (row A's real hexes stop at A19, Montreal
- *  itself) -- literally running that track off the printed board's own
- *  eastern edge. Since the identity bug applied to this whole table (not
- *  just the named cities), and reflection is its own inverse, every entry
- *  below is reverted by re-applying the ORIGINAL, design-note-#6b-verified
- *  formula (`our_edge = ((4 - their_edge) % 6 + 6) % 6`) to the identity
- *  pass's stored values -- each entry's own comment shows the before (last
- *  pass) -> after (this pass, reverted) edges. `marker`/interior comments
- *  are otherwise unchanged: `path=a:N,b:_0` is a stub from edge `N` into
- *  the hex's own station node; `path=a:N,b:M` with no `_0` is a bare
- *  through-connector with no station at all -- the `E9`/`A17`/`D24`
- *  "none"-marker hexes. `marker` selects which station glyph
- *  `drawPrintedTrack` paints: `"city"` (large white station circle), `"town"`
- *  (small dark dit marker), or `"none"` (no passenger stop). Two gray hexes
- *  (H12 Altoona, D14 Rochester) have a third real path in the source that
- *  bypasses their own city circle entirely (a real 1830 "some trains skip
- *  this stop" rule) -- simplified away here, same as this file's other
- *  "track rendering is this component's own convention" simplifications
- *  (design note #3): the city's own through-connection is still drawn, just
- *  not the separate bypass-only path. */
+/** Every entry REVERTED by re-applying the verified reflection formula -- the identity pass put Montreal's stub on "A21", running the track off the board's eastern edge. Two gray hexes have a real "some trains skip this stop" bypass path; only Altoona's is drawn.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #29 */
 export interface GrayHexTrack {
   edges: readonly number[];
   marker: "city" | "town" | "none";
-  /** Item (Precise Geometric Track Calibration pass): the real source has a
-   *  THIRD path for this hex -- `path=a:1,b:4` for Altoona (18xx.games edge
-   *  numbering) -- that connects the same two edges as the main line but
-   *  does NOT touch the `_0` city node (`b:_0` is absent from that specific
-   *  path entry), i.e. a real 1830 "some trains skip this stop" bypass.
-   *  Translated via this file's own `our_edge = ((4 - their_edge) % 6 + 6) %
-   *  6` formula (design note #6b), edges 1/4 land on this file's edges
-   *  3/0 -- the SAME pair as `edges` below for H12, just drawn as a second,
-   *  separate curve that visibly loops clear of the station circle instead
-   *  of passing through it. Previously simplified away (see design note #12
-   *  doc comment above); reinstated here since it was asked for by name.
-   *  Rochester (D14) has the identical real bypass in the source and is
-   *  NOT given one here -- out of scope for this pass, flagged rather than
-   *  silently matched. */
+  /** Altoona's real bypass, reinstated because it was asked for by name. Rochester has the identical bypass in the source and is deliberately NOT given one -- flagged rather than silently matched.
+   *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #29 */
   bypass?: boolean;
 }
 
@@ -860,19 +379,8 @@ export const GRAY_HEXES: Readonly<Record<string, GrayHexTrack>> = {
   D24: { edges: [3, 4], marker: "none" }, // pure connector, no city -- was [0, 1]
 };
 
-/** Fixed set of board-edge crossings across which track may never be built
- *  (design note #38) -- the frontend's drawing-only mirror of the backend's
- *  `hexmap::IMPASSABLE_HEX_EDGES` (module doc comment #22), which enforces
- *  the actual placement legality; this table exists purely so `draw()` can
- *  paint a thick red bar across each blocked crossing. Each entry is one
- *  representative `(q, r, edge)` per border -- unlike the backend's table,
- *  which lists BOTH hexes' own edge (since it needs to reject a lay attempt
- *  from either side), this only needs to draw the line once, so only one
- *  side of each border is listed here. `q`/`r` match `STATIC_BOARD_HEXES`'
- *  own entries for that label exactly (E7 `{q:1,r:4}`, D12 `{q:4,r:3}`, C17
- *  `{q:7,r:2}`); `edge` is this file's own 0-5 convention (`edgeAngleRad`),
- *  independently cross-checked against the backend's identical derivation
- *  from `HEX_NEIGHBOR_OFFSETS`. */
+/** A drawing-only mirror of the backend's enforcement table. Unlike the backend, which lists BOTH hexes' edge so it can reject a lay from either side, this only needs to draw the line once. Edge indices independently cross-checked against the backend's identical derivation.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #38 */
 export const IMPASSABLE_BORDER_EDGES: ReadonlyArray<{ q: number; r: number; edge: number; label: string }> = [
   { q: 1, r: 4, edge: 5, label: "E7 / F8" },
   { q: 4, r: 3, edge: 2, label: "D12 / C11" },
@@ -880,50 +388,12 @@ export const IMPASSABLE_BORDER_EDGES: ReadonlyArray<{ q: number; r: number; edge
   { q: 7, r: 2, edge: 2, label: "C17 / B16" },
 ];
 
-/** Pre-printed YELLOW "OO" double-city hexes -- two real, separately
- *  revenue-earning cities sharing one hex, printed with NO connecting track
- *  between them at all (verbatim-confirmed: none of these four hexes' real
- *  tile-definition strings contain a `path=` entry) -- players must
- *  eventually upgrade past this starting tile to actually connect the two
- *  stations. `drawOOCityMarkers` renders exactly that: two independent
- *  station circles, no track. `hasWaterCost` hexes (Detroit & Windsor,
- *  Hamilton & Toronto) also carry a real `$80` water upgrade cost --
- *  already modeled by this file's existing River terrain/icon/cost-label
- *  system (see `BoardHex.printedColor`'s doc comment: these hexes keep
- *  `type: "River"` alongside `printedColor: "Yellow"`), so no separate
- *  field is needed here for that. */
+/** Two separately revenue-earning cities on one hex with NO connecting track at all -- verbatim-confirmed that none of the four has a path entry. Players must upgrade past the starting tile to connect them.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #12 */
 export const YELLOW_OO_HEXES: ReadonlySet<string> = new Set(["E5", "D10", "E11", "H18"]);
 
-/** Display names for every named gray/yellow-OO hex -- see design note #12.
- *  Sourced verbatim from `tobymao/18xx`'s `LOCATION_NAMES` table. E9, A17,
- *  and D24 are intentionally absent: they're real hexes with real
- *  pre-printed track (see `GRAY_HEXES` above) but no city/town at all, and
- *  `LOCATION_NAMES` itself has no entry for them either.
- *
- *  Item 1 (structural calibration pass, Map Content Completion) adds the
- *  seven ordinary white Town/Double-Town-designated hexes' names too (see
- *  `BoardHex.townDesignation`'s doc comment for the source and the exact
- *  4 Single-Town / 3 Double-Town split).
- *
- *  Design note #34/item 2 adds the eight ordinary white single-city-
- *  designated hexes' names too (see `BoardHex.cityDesignation`'s doc
- *  comment for the source) -- Toledo/Providence/Pittsburgh/Columbus/
- *  Washington/Lancaster/Barrie, plus Ottawa (B16, corrected from an earlier
- *  pass's own suggested "Barrington", which doesn't match the source; see
- *  design note #34).
- *
- *  F24 below is "Fall River", NOT the real board's own "Mansfield" name --
- *  design note #36/item 3 explicitly asked for this as "our preferred
- *  title" (contrasted, in that same request, with B16's explicitly
- *  "authentic rulebook name" Ottawa), i.e. a deliberate house-rule cosmetic
- *  override, not a claim that "Fall River" is what the sourced 18xx data
- *  actually says -- unlike an EARLIER pass's "River Falls" ask, which WAS
- *  framed as factual and was correctly declined (design note #34) since it
- *  didn't match the source. This one is honored as-given: the real board
- *  name is still "Mansfield" (`GRAY_HEXES`' own F24 entry/comment, and
- *  `hexmap.rs`'s `TOWN_DESIGNATED_HEXES`, are both left saying so in their
- *  own comments for the historical record), but the display name here is
- *  now the requested custom override. */
+/** Display names sourced verbatim; three real hexes have printed track but no city or town and are intentionally absent. F24 is "Fall River" -- a deliberate house-rule cosmetic override, explicitly contrasted in the same request with B16's authentic "Ottawa", unlike an earlier ask framed as factual and correctly declined.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #39 */
 export const NAMED_HEX_LABELS: Readonly<Record<string, string>> = {
   D2: "Lansing",
   F6: "Cleveland",
@@ -949,12 +419,8 @@ export const NAMED_HEX_LABELS: Readonly<Record<string, string>> = {
   F22: "Providence",
   H10: "Pittsburgh",
   H4: "Columbus",
-  // Design note #106: reverted to the bare "Washington" -- reported the
-  // longer "Washington, D.C." (design note #47's own explicit request,
-  // above) extends off the hex, and the fix requested was specifically to
-  // drop "D.C." rather than relocate the nameplate to a different slot
-  // ("To make absolutely sure there's room, let's remove 'DC' from the
-  // nameplate").
+  // Reverted to bare "Washington": the longer form extended off the hex, and the fix requested was specifically to drop the suffix rather than relocate the nameplate.
+  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #106
   J14: "Washington",
   H16: "Lancaster",
   B16: "Ottawa",
@@ -963,75 +429,8 @@ export const NAMED_HEX_LABELS: Readonly<Record<string, string>> = {
   F16: "Scranton", // design note #123 -- missed city, added
 };
 
-/** Design note #35/items 2-3 ("Accurate 1830 Base Value Corrections" /
- *  "Zero-Value for Preprinted OO, Gray, and Landmark Additions"): per-hex
- *  overrides to the flat `terrainBaseValue("MajorCityHub") = $20` this file
- *  otherwise uses uniformly for every city-marker hex, keyed by real board
- *  label. Consulted by `hexRouteValue` (tooltip) and the value-badge drawing
- *  passes below BEFORE their existing flat-by-terrain fallback, so any hex
- *  NOT listed here (Lansing D2, Rochester D14, Richmond K15 -- three of the
- *  `GRAY_HEXES` city markers with no individually-sourced figure verified
- *  yet -- plus every `townDesignation` hex) is completely unaffected, still
- *  flat $20/$10 as before. Altoona H12 WAS one of these four originally,
- *  but a later pass (Rigid Global Gray-Hex Lockout, backend `hexmap.rs`
- *  module doc comment #20) independently sourced its real figure at $10 --
- *  see that entry below, and the FACTUAL CORRECTION paragraph after this
- *  one for the paired Town-reclassification claim that same pass rejected.
- *
- *  SOURCE VERIFICATION (independently re-derived twice against the raw
- *  `tobymao/18xx` `g_1830/map.rb` source text this file has cited
- *  throughout -- design notes #6/#12/#34): New York's real printed starting
- *  track is `'city=revenue:40;city=revenue:40;...'` (two $40 stations --
- *  this file's own `LANDMARK_TRACKS` doc comment already cited this exact
- *  string, just never wired it into the value-badge system before now),
- *  Boston is `'city=revenue:30;...'`, Baltimore is `'city=revenue:30;...'`,
- *  Montreal (A19) is `'city=revenue:40;...'`. FACTUAL CORRECTION: this
- *  item's own request labeled F6 "Chicago" -- F6 is real, verified Cleveland
- *  (`'city=revenue:30;...'`, confirmed against the same source's
- *  `LOCATION_NAMES` table too); Chicago is the real off-board hex F2, a
- *  completely different hex already modeled by `OFFBOARD_LABELS`/
- *  `OFFBOARD_REVENUE` on its own, era-tiered value system. Applied
- *  Cleveland's real $30 at F6, not a "Chicago" entry that would have been
- *  meaningless (F6 isn't Chicago, and Chicago already has its own value
- *  system this table doesn't touch).
- *
- *  The four `YELLOW_OO_HEXES` (design note #12) are ALSO independently
- *  confirmed at real `$0`: their source strings are
- *  `'city=revenue:0;city=revenue:0;label=OO;...'` -- both stations on EVERY
- *  one of these four hexes are printed with an explicit `revenue:0`, not
- *  merely an unspecified/default value, so `$0` here is the hex's genuine
- *  printed value, not an approximation. The eight `cityDesignation` hexes
- *  (design note #34) were already independently confirmed at `$0` last pass
- *  (bare `city`/`city=revenue:0` entries, no revenue figure at all) --
- *  restated here as the single source of truth the badge/tooltip code
- *  actually reads, superseding design note #34's own decision to show a
- *  flat $20 there (that decision predates this more precise source read).
- *
- *  FACTUAL CORRECTION (count): this item's own list of "8 newly injected
- *  city hubs" actually named nine hexes, including "River Falls F24" --
- *  F24 is NOT one of design note #34's eight `cityDesignation` hexes at
- *  all; it's Mansfield, a `GRAY_HEXES` `marker: "town"` hex (a real
- *  pre-printed Single-Town, `SmallTown` terrain, already correctly valued
- *  at its own flat $10 town rate since design note #12, long before design
- *  note #34's city-hub pass existed). Zeroing it out here would have
- *  silently overwritten an already-correct, independently-sourced $10 with
- *  an inapplicable city-hub $0 override. F24 is deliberately absent from
- *  this table; the eight hexes below are the real, complete
- *  `cityDesignation` set. B16 is, again, really Ottawa, not "Barrington"
- *  (design note #34) -- restated rather than silently re-applied.
- *
- *  ALTOONA (H12) CORRECTION (Rigid Global Gray-Hex Lockout pass): a request
- *  asked to reclassify Altoona from `MajorCityHub`/City to a Town, citing
- *  a paired $10 value. Independently re-verified TWICE against the real
- *  `tobymao/18xx` `g_1830/map.rb` source: H12's actual entry is
- *  `'city=revenue:10,loc:2.5;path=a:1,b:_0;path=a:4,b:_0;path=a:1,b:4'` --
- *  an explicit `city=` entry, not `town=`. Altoona genuinely IS a City on
- *  the real board; the $10 VALUE is correct (cities aren't always $20 --
- *  Cleveland/Boston/Baltimore above are real $30 cities, for the same
- *  reason), but the Town reclassification is not. Applied here as a value
- *  override only -- `GRAY_HEXES.H12`'s `marker: "city"` stays unchanged
- *  (white station circle, not a dark town dit), and no `TerrainType`
- *  changes on the backend either (`hexmap.rs` module doc comment #20). */
+/** Per-hex value overrides, independently re-derived twice against the raw source. Two factual corrections: F6 is Cleveland, not Chicago (an unrelated off-board hex on its own era-tiered system); and the request's "8 city hubs" list named nine, including a Town hex already correctly valued. Altoona is a real $10 CITY -- the value was right, the Town reclassification was not.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #35 */
 export const HEX_START_VALUE_OVERRIDE: Readonly<Record<string, number>> = {
   G19: 40, // New York
   E23: 30, // Boston

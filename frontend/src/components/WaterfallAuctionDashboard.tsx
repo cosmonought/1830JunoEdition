@@ -1,84 +1,16 @@
 // frontend/src/components/WaterfallAuctionDashboard.tsx
 //
-// Pre-Game Waterfall Auction Engine (`waterfall.rs`) -- the interactive
-// dashboard for allocating 1830's six private companies before Stock Round 1
-// opens. `App.tsx` renders this in place of the normal contextual action bar
-// + board canvas + contextual sub-panel for the ENTIRE duration of
-// `GameStateResponse.current_round_type === "WaterfallAuction"` (see that
-// file's own wiring, and `ContextualSubPanel.tsx`'s `WaterfallAuctionNotice`
-// for the short pointer it shows instead of duplicating this UI). There is
-// no board or stock market to look at yet during this phase, so this
-// component is the room's entire canvas, not a small tray bolted onto the
-// existing layout.
+// Pre-game Waterfall Auction engine (`waterfall.rs`) -- the dashboard for allocating 1830's six
+// private companies before Stock Round 1. `App.tsx` renders this in place of the action bar, board
+// canvas and sub-panel for the whole of `current_round_type === "WaterfallAuction"`, so this
+// component is the room's entire canvas rather than a tray bolted onto the layout.
 //
-// LAYOUT (design notes #11/#17/#20). The six private-company cards own the
-// full width at the top and ARE the interface: each carries its own action
-// on its face -- Buy for the lowest-offered private, Place Bid for the
-// rest, Raise/Drop-out for one under a live mini-auction -- with the
-// buttons bottom-anchored so they align across all six. Underneath sits a
-// slim strip showing whose turn it is and the seating order.
+// Six private-company cards own the full width and ARE the interface -- each carries its own action
+// (Buy for the lowest offer, Place Bid otherwise, Raise/Drop-out under a live mini-auction), buttons
+// bottom-anchored so they align. Pass and Undo are turn-level and live in the single app-wide
+// `ContextualActionBar` (design note #31 there).
 //
-// Three earlier layouts are superseded. A right-hand action rail beside the
-// cards squeezed six columns into the leftover width and made shared
-// controls read as belonging to whichever card they were level with. A
-// full-width tray below them fixed that ambiguity but left the cards
-// read-only, so choosing a company and acting on it happened in two places
-// connected only by a dropdown. Then an accordion per card, which put a
-// click in front of every single-button action.
-//
-// Pass and Undo are NOT here at all -- they are turn-level actions and live
-// in the single app-wide action bar `App.tsx` renders above every active tab
-// (`ContextualActionBar`, design note #31 there).
-//
-// Design notes:
-// 1. **Driven entirely by `QueryMsg::GetWaterfallState`.** `waterfallState`
-//    is `utils/gameState.ts`'s `useWaterfallStatePolling` result, already
-//    gated by `App.tsx` to only actually poll while this phase is current
-//    (see that hook's own doc comment, design note #7 in `gameState.ts`).
-//    This component itself does no gating of its own beyond a loading/error
-//    placeholder -- it trusts the caller only renders it during the
-//    Waterfall Auction.
-// 2. **Private company grid, always all six, in the order the query
-//    already returns them (ascending face value).** Reflows from six across
-//    down to three or two as the window narrows (design note #11 -- a hard
-//    six-column grid was unreadable below about 1500px). Each card shows its own
-//    live bid list (`WaterfallBidEntry[]`), highlighting the connected
-//    wallet's own standing bid if it has one, and a gold "LOWEST OFFER"
-//    badge on whichever one `is_lowest_offered` marks -- the only one
-//    `WaterfallBuyLowest` can currently target, and the only one that can
-//    never be bid on (mirrors `waterfall.rs`'s own `CannotBidOnLowest`
-//    rejection). A private disappears from this row entirely once owned
-//    (mirrors `query::query_waterfall_state`'s own "still-unowned only"
-//    scope) -- there's no owned-private card state to render.
-// 3. **Turn gating mirrors `ContextualActionBar`'s own `sessionReady`
-//    convention exactly**, plus a second, Waterfall-specific gate: every
-//    action button is ALSO disabled unless it's actually the connected
-//    wallet's turn (`waterfallState.current_turn` for the three main turn
-//    actions, `mini_auction.current_turn` for the two mini-auction actions)
-//    -- both because the contract itself will reject an out-of-turn call
-//    (`NotYourTurn`/`NotYourMiniAuctionTurn`), and so the room's other
-//    players get a clear, honest "not your turn yet" instead of a
-//    guaranteed-failing button. The Pass button additionally disables
-//    `waterfall.rs`'s `PassNotAllowed` legality rule (module doc comment
-//    #1) is still mirrored client-side, but now by the global action bar
-//    that owns the Pass button -- `App.tsx` computes it from
-//    `waterfallState` and hands this component nothing to do with passing.
-// 4. **Bid amount defaults, doesn't lock.** Every bid/raise input auto-fills
-//    to the live legal minimum (face value, or standing high bid + the $5
-//    `auction::MIN_BID_INCREMENT`) and re-floors itself whenever a rival bid
-//    moves that minimum underneath it -- so a player never hand-computes the
-//    floor -- but stays a normal editable number input, since bidding above
-//    the minimum is always legal too.
-// 5. **Mini-auction controls live in the contested card**, not in a
-//    separate panel. A mini-auction pauses the WHOLE waterfall for every
-//    player (`waterfall.rs` module doc comment #3). Raise/Drop-out are
-//    gated by `mini_auction.current_turn` -- the leader's own turn is never
-//    offered because the backend (`waterfall::skip_leader_turns`) never
-//    points `current_turn` at them, so no client-side "you're the leader"
-//    guard is needed.
-// 6. **ONE standings table per card** (design note #19). The card's bid
-//    list is the only table; during a mini-auction it gains TURN and LEADER
-//    tags rather than being shadowed by a second list of the same people.
+// Design notes: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
@@ -118,22 +50,9 @@ const MIN_BID_INCREMENT = 5;
    only its address changed. */
 
 
-/* ==================================================================
- *  DESIGN NOTE 314: WHOSE MONEY THE CONTROLS ARE ABOUT TO SPEND
- * ==================================================================
- *
- * The Available Cash figure and the bid gates have to agree on one seat,
- * and which seat that is differs by mode.
- *
- * ONLINE the answer is the connected wallet, always -- a player watching
- * somebody else's turn still wants to see what THEY can afford, and the
- * controls are disabled anyway.
- *
- * HOTSEAT has no wallet, so the only seat the controls could be acting for
- * is the one on turn, and during a mini-auction that is the mini-auction's
- * cursor rather than the main one. Getting this wrong is not cosmetic: it
- * would gate Alice's raise against Bob's balance.
- */
+/* Design note #314: whose money the controls are about to spend. Online it is always the connected
+   wallet; hotseat has none, so it is the seat on turn -- and during a mini-auction that is the
+   mini-auction's cursor, not the main one. Getting this wrong gates Alice's raise against Bob's balance. */
 function miniAuctionSeat(
   waterfall: WaterfallStateResponse | null,
   hotseat: boolean,
@@ -155,49 +74,23 @@ export interface WaterfallAuctionDashboardProps {
   /** Optional address -> display name, matching `StockRoundPanel`'s prop of
    *  the same name. Used only by the sold badge. */
   playerLabel?: (address: string) => string | null;
-  /* ==================================================================
-   *  DESIGN NOTE 30: HOTSEAT HAS NO WALLET TO COMPARE AGAINST
-   * ==================================================================
-   *
-   * REPORTED: the Auction round is completely non-interactive in Sandbox.
-   *
-   * Every control here is gated on `current_turn === connectedWalletAddress`
-   * -- correct online, where the question "is this my turn" means "is the
-   * seat on turn the one I signed in as". The sandbox has no wallet, so
-   * `connectedWalletAddress` is empty, the comparison is false for every
-   * seat, and the whole screen renders as somebody else's turn forever.
-   *
-   * Pass-and-play asks a different question: not "is this seat mine" but
-   * "is anyone at this keyboard allowed to act for the seat on turn". In
-   * hotseat the answer is always yes -- that is what pass-and-play IS.
-   *
-   * A SEPARATE FLAG RATHER THAN A FAKE ADDRESS. The tempting shortcut is to
-   * hand the sandbox `connectedWalletAddress = current_turn` and let the
-   * existing comparison pass. That would also make every "YOU" badge and
-   * own-bid highlight follow the turn around the table, which is exactly
-   * the confusion requirement 1 is about -- the seats would stop being
-   * distinguishable again. `hotseat` unlocks the CONTROLS and leaves the
-   * identity comparisons alone. */
+  /* Design note #30: hotseat has no wallet to compare against. Every control gated on
+     `current_turn === connectedWalletAddress` renders as somebody else's turn forever in the sandbox.
+     Pass-and-play asks a different question: not "is this seat mine" but "is anyone at this keyboard
+     allowed to act for the seat on turn".
+     A SEPARATE FLAG RATHER THAN A FAKE ADDRESS -- handing the sandbox `connectedWalletAddress =
+     current_turn` would make every "YOU" badge follow the turn around the table. `hotseat` unlocks the
+     CONTROLS and leaves the identity comparisons alone. */
   hotseat?: boolean;
   /** Design note #303 (`App.tsx`): what each private actually SOLD for, by
    *  id. A mini-auction settles above face value, and the sold card used to
    *  quote the face value with a tooltip apologising for it. Empty on a
    *  live chain, where the card falls back to face value as before. */
   settledPrices?: Readonly<Record<number, number>>;
-  /* ==================================================================
-   *  DESIGN NOTE 306: "IS CONCLUDING" IS NOT A STATE A PLAYER CAN LEAVE
-   * ==================================================================
-   *
-   * With every private allocated the grid said "the Waterfall Auction is
-   * concluding" and offered nothing. That is a progress message for a
-   * process the player is waiting on -- but nothing was in progress: the
-   * auction was over and the round needed advancing, which is an action
-   * somebody has to take.
-   *
-   * So the message states what happens next and the button does it.
-   * Omitted (`undefined`) leaves the message without a control, which is
-   * the right shape on a live chain where the contract advances the round
-   * on its own and a client-side button would be a lie. */
+  /* Design note #306: "is concluding" is not a state a player can leave. With every private allocated the
+     grid offered nothing while nothing was in progress -- the round needed advancing, which is an action.
+     `undefined` leaves the message without a control, the right shape on a live chain where the contract
+     advances the round itself and a client-side button would be a lie. */
   onProceedToStockRound?: () => void;
   /** Dispatches `ExecuteMsg::WaterfallBuyLowest`. */
   onBuyLowest: () => void;
@@ -207,100 +100,30 @@ export interface WaterfallAuctionDashboardProps {
   onMiniAuctionRaise: (bidAmountVgp: number) => void;
   /** Dispatches `ExecuteMsg::WaterfallMiniAuctionPass`. */
   onMiniAuctionPass: () => void;
-  /* ==================================================================
-   *  DESIGN NOTE 604: THE PLAYER CARDS ARRIVE AS A NODE
-   * ==================================================================
-   *
-   * The same conduit shape `ContextualActionBar` uses for `seatOrderTrail`,
-   * and for the same reason: this dashboard has no business knowing how a
-   * player card is built, what finances feed it, or which round it belongs
-   * to. It knows only WHERE on the auction screen the players go, which is
-   * the one fact `App.tsx` cannot state from outside.
-   *
-   * Passing the built element rather than the data also keeps the Stock
-   * Round and the auction rendering one component instance shape -- design
-   * note #602 hoisted it to a single definition precisely so the two
-   * surfaces could not drift, and re-deriving it from props here would hand
-   * that back.
-   *
-   * `undefined` renders nothing, which is what a caller with no cards to
-   * show should be able to say without a second flag. */
+  /* Design note #604: the player cards arrive as a NODE -- the same conduit `ContextualActionBar` uses for
+     `seatOrderTrail`. This dashboard knows only WHERE on the screen the players go, which is the one fact
+     `App.tsx` cannot state from outside. Passing the built element also keeps the Stock Round and the
+     auction rendering one component instance shape (#602). `undefined` renders nothing. */
   playersPanel?: React.ReactNode;
 }
 
-/** Design note #32: injected keyframes. Inline `React.CSSProperties` cannot
- *  express `@keyframes`, so this follows the same `<style>`-tag convention
- *  `App.tsx` already uses for its turn-pulse animation. */
-/* ==================================================================
- *  DESIGN NOTE 320: AN EVENT, NOT AN EMERGENCY
- * ==================================================================
- *
- * REPORTED: the mini-auction card's border glow should be an animated
- * multicolour chaser rather than a warning hue.
- *
- * The old ring pulsed red, and red on this screen already means something
- * else. `phaseShiftBadgeCritical`, the rust chips and every disabled-reason
- * tooltip use the warning palette for things that are going WRONG or are
- * about to; a mini-auction is the most interesting thing that can happen in
- * the auction and nothing is wrong at all. A player who has learned that
- * red means trouble reads the liveliest card on the board as an alert.
- *
- * HOW IT IS BUILT. Two background layers on one element: an opaque fill
- * clipped to the PADDING box, and the gradient clipped to the BORDER box.
- * The fill covers the middle, so the only gradient left visible is the
- * 3px ring -- a real animated border with no pseudo-element and no
- * stacking-context tricks.
- *
- * WHY NOT A ROTATING `conic-gradient` ON A `::before`, which is the usual
- * recipe: a rotating rectangle does not cover its own bounding box at the
- * corners, so the ring tears diagonally four times per turn unless the
- * layer is oversized into a square and re-centred. `background-position` on
- * a repeating linear gradient has no such geometry, animates a property
- * every engine interpolates, and needs no `@property` registration.
- *
- * THE PALETTE deliberately runs the full hue circle rather than a two- or
- * three-stop blend: the point is that it is unmistakably not any of the
- * status colours this UI already assigns meaning to.
- *
- * REDUCED MOTION keeps design note #26's bargain -- the ring stays, in a
- * static multicolour, so the card is still identifiable without the spin.
- * A cue that cannot be switched off is an accessibility problem; a cue
- * that DISAPPEARS when motion is reduced is an information problem, and
- * turning the animation off must not cost the player the answer to "which
- * card is live". */
-/* ==================================================================
- *  DESIGN NOTE 344: THE CHASER HAD A DARK GAP EVERY CYCLE
- * ==================================================================
- *
- * REPORTED: the chaser pulses briefly, goes dark and restarts instead of
- * flowing continuously.
- *
- * The animation was right; the TILING was not. The gradient layer carried
- * `background-repeat: no-repeat`, so as the keyframes translated it the
- * single painted tile slid off the border and left bare transparent border
- * behind it. The ring lit up, drained to dark as the tile departed, then
- * snapped back when the iteration restarted -- exactly "pulses, goes dark,
- * restarts", and it was one word away from correct the whole time.
- *
- * TWO CONDITIONS MAKE IT SEAMLESS, and both have to hold:
- *
- *   1. THE TILE REPEATS. `background-repeat: no-repeat, repeat` -- the
- *      opaque fill must NOT repeat (it is sized to the box), the gradient
- *      must, so there is always another copy arriving behind the one
- *      leaving.
- *
- *   2. ONE CYCLE MOVES EXACTLY ONE TILE. A percentage in
- *      `background-position` is a fraction of (positioning area - image
- *      width), NOT of the area -- so with `background-size: 200%` the
- *      image is 2W wide, the base is (W - 2W) = -W, and `200%` resolves to
- *      -2W. The tile is 2W. One tile exactly, and the W cancels, so it
- *      holds at every card width. Change the 200% in `background-size`
- *      without changing the 200% in the keyframe and the loop visibly
- *      stutters once per cycle.
- *
- * The palette's first and last stops are the SAME colour for the same
- * reason: the tile has to butt against its own copy without a seam.
- */
+/** Design note #32: injected keyframes -- inline `React.CSSProperties` cannot express `@keyframes`, so
+ *  this follows `App.tsx`'s existing `<style>`-tag convention.
+ *  Design note #320: AN EVENT, NOT AN EMERGENCY. The ring pulsed red, and red already means something
+ *  going wrong on this screen; a mini-auction is the most interesting thing that can happen and nothing
+ *  is wrong. Built as two background layers on one element -- an opaque fill clipped to the PADDING box,
+ *  the gradient clipped to the BORDER box -- so the only gradient visible is the ring: a real animated
+ *  border with no pseudo-element. A rotating `conic-gradient` on a `::before` tears at the corners four
+ *  times per turn unless oversized and re-centred; `background-position` on a repeating linear gradient
+ *  has no such geometry and needs no `@property`. The palette runs the full hue circle so it is
+ *  unmistakably not any status colour. Reduced motion keeps the ring, static -- a cue that DISAPPEARS
+ *  when motion is reduced is an information problem (design note #26).
+ *  Design note #344: THE CHASER HAD A DARK GAP -- the animation was right, the TILING was not. Two
+ *  conditions, both required: (1) `background-repeat: no-repeat, repeat` -- the fill must not repeat, the
+ *  gradient must; (2) one cycle moves exactly one tile. A percentage in `background-position` is a
+ *  fraction of (positioning area - image width), so at `background-size: 200%` the base is -W and `200%`
+ *  resolves to -2W = one tile, with W cancelling at every card width. Change one 200% without the other
+ *  and the loop stutters once per cycle. The palette's first and last stops match for the same reason. */
 const MINI_AUCTION_GLOW_KEYFRAMES = `
 @keyframes waterfall-miniauction-chase {
   from { background-position: 0 0, 0 0; }
@@ -357,29 +180,18 @@ export function WaterfallAuctionDashboard({
   playersPanel = null,
 }: WaterfallAuctionDashboardProps) {
   const privates = waterfallState?.privates ?? [];
-  /* Design note #314: the seat whose money the controls spend. In hotseat
-     that is whoever is on turn (there is no wallet to compare against);
-     online it is the connected player, whose funds stay on screen even
-     while somebody else acts. */
-  /* Design note #593: `ownedPrivatesFor` went with the seating table it fed.
-   The player cards list a seat's privates from `playerFinances`, which reads
-   the same state -- and is now the only place computing it. */
+  /* Design note #314: the seat whose money the controls spend -- in hotseat whoever is on turn, online the
+     connected player, whose funds stay on screen while somebody else acts.
+     Design note #593: `ownedPrivatesFor` went with the seating table it fed; the player cards list a seat's
+     privates from `playerFinances`, which reads the same state and is now the only place computing it. */
 
   const fundsSeat =
     (miniAuctionSeat(waterfallState, hotseat) ?? connectedWalletAddress) ?? null;
   const viewerFunds = fundsSeat ? auctionFunds(gameState, waterfallState, fundsSeat) : null;
-  /* ---- Design note #30: ONE ORDERED GRID, sold cards in place --------
-   *
-   * Sold privates were appended AFTER the live ones, which pushed them to
-   * the end of the grid -- so winning the cheapest private visually moved
-   * it to the far right, past companies worth ten times as much. The
-   * waterfall's whole structure is its ascending face-value order; a card
-   * that jumps position on being sold destroys the one thing the layout is
-   * communicating.
-   *
-   * Live and sold are now merged and sorted by face value, so every card
-   * holds its waterfall slot for the entire auction and simply greys out
-   * when it is won. */
+  /* Design note #30: ONE ORDERED GRID, sold cards in place. Sold privates were appended AFTER the live
+     ones, so winning the cheapest visually moved it past companies worth ten times as much -- and the
+     waterfall's whole structure is its ascending face-value order. Merged and sorted by face value, so
+     every card holds its slot and simply greys out when won. */
   const soldPrivates = (gameState?.private_companies ?? []).filter((priv) => priv.owner !== null);
 
   type GridEntry =
@@ -404,29 +216,13 @@ export function WaterfallAuctionDashboard({
   // `is_lowest_offered` flag -- so the parent no longer needs to partition
   // the list to feed a dropdown that no longer exists.
 
-  /* ---- Design note #17: FLAT ACTIONS, NO ACCORDION -------------------
-   *
-   * Two shapes were tried before this one and both were wrong in opposite
-   * directions.
-   *
-   * A shared bid tray at the bottom (design note #11) made the six cards a
-   * read-only display: you picked a company by name in a dropdown, then
-   * typed a number somewhere else, with nothing connecting the two but your
-   * own attention.
-   *
-   * Making each card an accordion (design note #14) fixed that ambiguity
-   * and introduced a worse one -- a click to open before any action, on a
-   * screen where there are only six cards and every one of them has exactly
-   * ONE legal action. An accordion earns its keep when the hidden content
-   * is large or rarely wanted. Here it hid a single button behind a click,
-   * six times over, on the screen a player uses most rapidly.
-   *
-   * So the action lives on the card face. Every card shows either Buy (the
-   * lowest-offered private, bought outright) or Place Bid with its input,
-   * and a card under a live mini-auction shows Raise and Drop-out in the
-   * same place. Nothing is hidden and nothing needs opening. */
-  /* Design note #30: in hotseat the seat on turn is always actionable; the
-     wallet comparison only decides it when there IS a wallet. */
+  /* Design note #17: FLAT ACTIONS, NO ACCORDION. Two shapes were tried and both were wrong in opposite
+     directions -- a shared bid tray (#11) made the cards read-only, with a dropdown and an input connected
+     only by the player's attention; an accordion per card (#14) fixed that and put a click in front of a
+     single button, six times over, on a screen where every card has exactly ONE legal action.
+     So the action lives on the card face. Nothing is hidden and nothing needs opening.
+     Design note #30: in hotseat the seat on turn is always actionable; the wallet comparison only decides
+     it when there IS a wallet. */
   const isMyMainTurn =
     !!waterfallState &&
     !miniAuction &&
@@ -456,39 +252,14 @@ export function WaterfallAuctionDashboard({
   return (
     <div style={styles.root}>
       <style>{MINI_AUCTION_GLOW_KEYFRAMES}</style>
-      {/* ==================================================================
-           DESIGN NOTE 305: ONE LINE, NOT THREE SAYING THE SAME THING
-          ==================================================================
-
-          The header was a title ("Auction"), a subtitle ("Pre-game private
-          company waterfall") and a hint ("Allocating six private companies
-          before Stock Round 1") -- three restatements of the same fact
-          stacked vertically, followed by the one piece of live information
-          in the row.
-
-          A player reads a header once. Everything above the pass count was
-          telling them where they already knew they were, and it cost three
-          lines at the top of the screen the map is trying to use. */}
-      {/* ==================================================================
-           DESIGN NOTE 610: THE PASS COUNTER MOVED TO THE SEATS IT COUNTED
-          ==================================================================
-
-           INSTRUCTED, alongside the PASSED stamps on the action bar: "this
-           would allow us to remove the odd counter in the string after the
-           PRIVATE COMPANY WATERFALL AUCTION header: 'no passes yet.' It
-           would give players a visual cue as to how many people have passed
-           before them."
-
-           Deleted here: `\u2014 3 consecutive pass(es) so far` / `\u2014 no passes
-           yet`. It was a number describing a roster that was elsewhere on
-           the screen, so reading it meant counting backwards round the table
-           yourself to work out whether it had reached you. The stamps ARE
-           that count, drawn on the seats it is about -- and "no passes yet"
-           was a whole clause spent saying that nothing had happened.
-
-           `consecutive_waterfall_passes` is still read, by `App.tsx`'s
-           `passedSeats` (design note #610). The figure did not stop
-           mattering; it stopped being prose. */}
+      {/* Design note #305: ONE LINE, NOT THREE SAYING THE SAME THING. A title, a subtitle and a hint were
+         three restatements of the same fact stacked above the one piece of live information in the row.
+         A player reads a header once, and this cost three lines at the top of the screen. */}
+      {/* Design note #610: the pass counter moved to the seats it counted. "3 consecutive pass(es) so far" was
+         a number describing a roster elsewhere on the screen, so reading it meant counting backwards round the
+         table to work out whether it had reached you -- and "no passes yet" was a clause spent saying nothing
+         had happened. The PASSED stamps ARE that count, drawn on the seats.
+         `consecutive_waterfall_passes` is still read by `App.tsx`'s `passedSeats`; it stopped being prose. */}
       <div style={styles.header}>
         <span style={styles.headerTitle}>Private Company Waterfall Auction</span>
         {error && (
@@ -532,13 +303,9 @@ export function WaterfallAuctionDashboard({
           )}
         </div>
 
-        {/* Design note #547: the BUTTON moved to `AuctionPromptModal`. It sat
-            at the foot of a scrolling six-card grid -- the last place a
-            player who has finished reading is still looking -- which is the
-            visible form of the problem design note #306 named: the round was
-            waiting on an action nobody could see they had to take. The
-            banner stays, because the grid still needs to say why it is
-            empty. */}
+        {/* Design note #547: the BUTTON moved to `AuctionPromptModal`. It sat at the foot of a scrolling six-card
+           grid, which is the visible form of the problem #306 named -- the round was waiting on an action nobody
+           could see they had to take. The banner stays, because the grid still needs to say why it is empty. */}
         {privates.length === 0 && (
           <div style={styles.auctionOverBanner}>
             <span style={styles.auctionOverText}>
@@ -547,82 +314,23 @@ export function WaterfallAuctionDashboard({
           </div>
         )}
 
-        {/* ---- Seating + hint -- design notes #11/#14 -----------------
-            All the BUY/BID/PASS controls moved into the cards above. What
-            remains here is the one thing that is genuinely global rather
-            than per-company: the seating order, and who in it is up.
-
-            ==================================================================
-             DESIGN NOTE 322: ONE ANSWER TO "WHOSE TURN IS IT"
-            ==================================================================
-
-            REPORTED: the standalone Turn panel in the auction footer is
-            redundant.
-
-            It was, and it had become so by accretion rather than by
-            design. The panel was built when the footer was the only place
-            the turn appeared -- then design note #32 added `ON TURN` to
-            the seating rows, and design note #308 put the acting player's
-            name and cash on the action bar at the top of the screen. Three
-            surfaces, one fact, and the panel was the weakest of the three:
-            it named the seat without saying where that seat sat in the
-            order, which is the question a player in an auction actually
-            has.
-
-            The seating table answers both at once, so the banner goes and
-            the table stays. What does NOT go is the hint line -- it says
-            where the controls are, which nothing else on this screen
-            does, and it was merely housed in the same panel. */}
-        {/* ==================================================================
-             DESIGN NOTE 341: THE TABLE IS THE PANEL
-            ==================================================================
-
-            REPORTED: remove the large text-explanation panel at the bottom
-            of the Auction tab; expand the Seating Order to the full width
-            and add a column for the privates each player owns.
-
-            The hint block was the last survivor of the old footer (design
-            note #322 removed the Turn banner beside it), and it had the
-            same weakness: it was prose about where the controls are, on a
-            screen where the controls are on the cards a few inches above
-            and labelled. It cost half the footer's width to say something
-            a player learns once.
-
-            What replaces it is not empty space. The seating table takes the
-            whole width and spends it on the column the auction was missing:
-            WHO OWNS WHAT. Cash says what a player can still bid; the
-            privates say what they have already committed to and what income
-            they are drawing -- and until now the only way to see another
-            player's holdings was to read the sold cards and remember four
-            names. */}
-        {/* ==================================================
-             DESIGN NOTE 604: THE PANEL THE SEATING TABLE LEFT BEHIND
-            ==================================================
-
-             REPORTED: "the player cards HAVE moved to the bottom of the
-             Auction tab screen, but there is an empty panel above them /
-             below the Private Company cards, which is where they should
-             actually be."
-
-             Exactly right, and the empty panel was mine. Design note #593
-             deleted the seating TABLE and left its container standing: an
-             `actionRail` wrapping an `actionRailFull` wrapping a
-             `seatingCard` whose entire contents had become the comment
-             explaining why there were no contents. Three nested bordered
-             divs rendering a 12px-padded void on every auction screen.
-
-             "REMOVED RATHER THAN HIDDEN" is what that note claimed. It
-             removed the rows and hid nothing -- the chrome stayed, and a
-             bordered empty box is not less confusing than a table. It is
-             more: a table at least says what it is.
-
-             THE CARDS GO WHERE THE TABLE WAS, which is what #593 intended
-             all along ("the Player cards should REPLACE the Seating Order
-             panel"). Not inside the old card chrome, though -- the player
-             cards bring their own borders, and nesting them in
-             `seatingCard` would double-frame every one of them. The rail
-             and its two wrappers go with the table they were built to
-             hold. */}
+        {/* Design notes #11/#14: all BUY/BID/PASS controls moved into the cards; what remains here is the one
+           genuinely global thing -- the seating order and who in it is up.
+           Design note #322: ONE ANSWER TO "WHOSE TURN IS IT". The standalone Turn panel had become redundant by
+           accretion -- #32 added `ON TURN` to the seating rows and #308 put the acting player on the action bar,
+           leaving three surfaces for one fact with the panel the weakest: it named the seat without saying where
+           that seat sat in the order. The hint line is NOT redundant -- it says where the controls are. */}
+        {/* Design note #341: THE TABLE IS THE PANEL. The hint block was prose about where the controls are, on a
+           screen where they are on the cards a few inches above and labelled -- half the footer's width to say
+           something a player learns once.
+           The seating table takes the whole width and spends it on the column the auction was missing: WHO OWNS
+           WHAT. Cash says what a player can still bid; the privates say what they have already committed to. */}
+        {/* Design note #604: the panel the seating table left behind. #593 deleted the seating TABLE and left its
+           container standing -- three nested bordered divs rendering a padded void on every auction screen. It
+           claimed "removed rather than hidden"; it removed the rows and hid nothing, and a bordered empty box is
+           not less confusing than a table.
+           The cards go where the table was, which is what #593 intended -- but NOT inside the old card chrome,
+           since the player cards bring their own borders and nesting would double-frame every one. */}
         {playersPanel}
       </div>
     </div>
@@ -674,54 +382,28 @@ function PrivateCard({
   const catalogEntry = PRIVATE_COMPANY_CATALOG[priv.private_id];
   const sortedBids = priv.bids.slice().sort((a, b) => Number(b.bid_amount) - Number(a.bid_amount));
 
-  // Status indicators -- grounded directly in `waterfall.rs`'s own real
-  // cascade semantics (module doc comment #3), not fabricated logic: 0 bids
-  // leaves a private simply open, exactly 1 bid is what the next cascade
-  // run auto-resolves to that sole bidder ("auto-award"), 2+ bids is what
-  // starts (or, if already running, IS) a mini-auction.
+  // Status indicators, grounded in `waterfall.rs`'s cascade semantics (module doc #3): 0 bids leaves a
+  // private open, exactly 1 is what the next cascade auto-awards, 2+ starts (or IS) a mini-auction.
   const isCompetingInMiniAuction = miniAuction?.private_id === priv.private_id;
   const isAutoAwardPending = !priv.is_lowest_offered && priv.bids.length === 1;
   const isCompetingBid = !priv.is_lowest_offered && (priv.bids.length >= 2 || isCompetingInMiniAuction);
 
-  /* ---- Which action this card offers -- design note #14 --------------
-   *
-   * Mirrors `waterfall.rs`'s own legality rules rather than inventing a
-   * scheme: the lowest-offered private is the ONLY one `WaterfallBuyLowest`
-   * can target and the only one that can never be bid on
-   * (`CannotBidOnLowest`); every other still-unowned private takes bids at
-   * face value or +$5 over the standing high. So each card offers exactly
-   * one of three things, and never a choice between them. */
-  /* Design note #22: the OPENING bid is face value PLUS the increment, not
-   * face value itself.
-   *
-   * A bid at face value would be worth exactly what the lowest-offered
-   * private can be bought outright for, so it offers the seller nothing and
-   * the bidder no advantage -- bidding starts one increment above. Every
-   * subsequent bid then adds another increment over the standing high,
-   * which is the same rule applied twice rather than two rules. */
+  /* Design note #14: which action this card offers -- mirrors `waterfall.rs`'s own legality rules. The
+     lowest-offered private is the only `WaterfallBuyLowest` target and the only one that can never be bid
+     on (`CannotBidOnLowest`); every other takes bids. Each card offers exactly one of three things.
+     Design note #22: the OPENING bid is face value PLUS the increment. A bid at face value is worth what
+     the lowest offer can be bought outright for, so it offers the seller nothing and the bidder no
+     advantage -- the same rule applied twice rather than two rules. */
   const standingHigh = priv.bids.reduce((max, b) => Math.max(max, Number(b.bid_amount)), 0);
   const minimumBid =
     (standingHigh > 0 ? standingHigh : Number(priv.face_value)) + MIN_BID_INCREMENT;
   const minimumRaise = miniAuction ? Number(miniAuction.high_bid) + MIN_BID_INCREMENT : 0;
 
-  /* ---- Design note #23: AUTO-SCROLL TO THE TURN PLAYER ----------------
-   *
-   * The bid table caps at ~3.5 rows and scrolls (design note #21), which
-   * bounded the card but created a new way to miss the thing that matters:
-   * with six bidders, whoever is on turn is as likely as not below the fold
-   * -- and during a mini-auction that row is the only one anyone is waiting
-   * on.
-   *
-   * `scrollTop` is set directly rather than `scrollIntoView()`. The latter
-   * scrolls every scrollable ANCESTOR, so a row near the bottom of a card
-   * would also jog the whole page -- which on a six-card grid means the
-   * board jumps whenever the turn passes. Setting `scrollTop` on the
-   * container itself moves exactly one scroller and nothing else.
-   *
-   * `offsetTop` is measured relative to the scroll container because the
-   * container is the row's `offsetParent` (it is `position: relative`), so
-   * the subtraction is what pins the row to the TOP of the window rather
-   * than merely somewhere inside it. */
+  /* Design note #23: auto-scroll to the turn player. The bid table caps at ~3.5 rows (#21), so with six
+     bidders whoever is on turn is as likely as not below the fold.
+     `scrollTop` is set directly rather than `scrollIntoView()`, which scrolls every scrollable ANCESTOR --
+     on a six-card grid that jogs the whole page whenever the turn passes. `offsetTop` is relative to the
+     container because the container is the row's `offsetParent`, so the subtraction pins the row to the TOP. */
   const bidListRef = useRef<HTMLDivElement>(null);
   const turnRowRef = useRef<HTMLDivElement>(null);
   const turnBidder = isCompetingInMiniAuction ? miniAuction?.current_turn ?? null : null;
@@ -744,58 +426,26 @@ function PrivateCard({
 
   const canBuyOutright = priv.is_lowest_offered;
 
-  /* ---- Design note #315: THE AFFORDABILITY GATE ----------------------
-   *
-   * Both money gates, computed here so the button's `disabled` and its
-   * tooltip are driven by one expression -- a control that is off for a
-   * reason it does not state is the shape this codebase has removed
-   * repeatedly.
-   *
-   * The RAISE case subtracts the bid this player already has standing in
-   * this contest. That money is escrowed against this very private, so a
-   * raise only has to fund the increment; charging the full new figure
-   * against available cash would stop a player from defending a bid they
-   * have already paid for, which gets the position exactly backwards.
-   *
-   * BUYING OUTRIGHT is gated on available cash too, not on the total. A
-   * player's escrow elsewhere is refundable in principle, but it is not
-   * refunded YET -- the note is under another certificate and cannot also
-   * be handed over for this one. `WaterfallBuyLowest` settles immediately,
-   * so available is the only figure that can honestly fund it. */
+  /* Design note #315: THE AFFORDABILITY GATE. Both money gates in one expression, so `disabled` and the
+     tooltip are driven by one thing.
+     RAISE subtracts this seat's standing bid -- that money is already escrowed against this private, so a
+     raise funds only the increment; charging the full figure would stop a player defending a bid they have
+     already paid for. BUYING OUTRIGHT is gated on AVAILABLE cash: escrow elsewhere is refundable in
+     principle but is not refunded YET, and `WaterfallBuyLowest` settles immediately. */
   const ownRaiseEscrow = fundsSeat
     ? priv.bids
         .filter((bid) => bid.bidder === fundsSeat)
         .reduce((sum, bid) => sum + (Number(bid.bid_amount) || 0), 0)
     : 0;
-  /* ==================================================================
-   *  DESIGN NOTE 384: ONE BID PER PRIVATE, IN THE WATERFALL PROPER
-   * ==================================================================
-   *
-   * REPORTED: players can spam bids on the same private before a
-   * mini-auction.
-   *
-   * They could, and each one escrowed more of their cash against the same
-   * certificate. `ownRaiseEscrow` just above is the evidence: it sums a
-   * seat's bids on one private, and it only needs to SUM because a seat
-   * could have several. A second bid on a private you are already the
-   * standing bidder on is a player bidding against themselves; a second bid
-   * behind someone else's is the move that should be a raise, and raising
-   * is what the mini-auction exists for.
-   *
-   * SO THE GATE IS "HAVE I BID HERE", not "am I winning here". Both cases
-   * are the same mistake and both are refused with the same sentence.
-   *
-   * THE MINI-AUCTION LIFTS IT, which is the whole point of the exception.
-   * Once a contest is triggered on this private the control below is no
-   * longer Place Bid but Raise, and raising repeatedly is how the contest
-   * is fought -- `ownRaiseEscrow` then does its real job of charging only
-   * the increment. Gating that would make a triggered auction unwinnable by
-   * anyone who opened it.
-   *
-   * `ownRaiseEscrow > 0` is the test rather than a separate scan of
-   * `priv.bids`, because it is already exactly "this seat's money standing
-   * on this private" -- deriving the same fact twice is how the two answers
-   * start to disagree. */
+  /* Design note #384: ONE BID PER PRIVATE, in the waterfall proper. Players could spam bids, each
+     escrowing more cash against the same certificate -- `ownRaiseEscrow` only needs to SUM because a seat
+     could have several. A second bid where you already lead is bidding against yourself; a second bid
+     behind someone else is the move that should be a raise.
+     SO THE GATE IS "HAVE I BID HERE", not "am I winning here" -- same mistake, same refusal.
+     THE MINI-AUCTION LIFTS IT, which is the point of the exception: raising repeatedly is how a contest is
+     fought, and gating that would make a triggered auction unwinnable by whoever opened it.
+     `ownRaiseEscrow > 0` rather than a second scan of `priv.bids` -- deriving the same fact twice is how
+     two answers start to disagree. */
   const alreadyBidHere = !isCompetingInMiniAuction && ownRaiseEscrow > 0;
   const repeatBidReason = alreadyBidHere
     ? `You already have a $${ownRaiseEscrow} bid on ${priv.name}. One bid per private company — if someone outbids you, a mini-auction opens and you can raise there.`
@@ -827,22 +477,14 @@ function PrivateCard({
     >
       {/* The whole header is the accordion toggle. */}
       <div style={styles.privateCardToggle}>
-        {/* Design note #31: ONE badge slot, directly under the name.
-            LOWEST OFFER already sat here; COMPETING BIDS and MINI-AUCTION
-            LIVE were further down beside the bid list, so the same class of
-            information appeared at two different heights depending on which
-            state a card was in -- and the eye had to search each card
-            separately. All three now occupy the same row.
-
-            They are mutually exclusive in practice: the lowest-offered
-            private can never be bid on (`CannotBidOnLowest`), so a card is
-            at most one of these. */}
+        {/* Design note #31: ONE badge slot, directly under the name. LOWEST OFFER sat here while COMPETING BIDS
+           and MINI-AUCTION LIVE sat further down, so the same class of information appeared at two heights
+           depending on the card's state. They are mutually exclusive in practice -- the lowest-offered private can
+           never be bid on. */}
         <div style={styles.privateCardHeader}>
-          {/* Design note #304: the printed number. 1830's privates are
-              known by order as much as by name -- "the 3" is how players
-              refer to the Delaware & Hudson -- and the waterfall IS that
-              order, so the grid was showing a sequence with its index
-              filed off. */}
+          {/* Design note #304: the printed number. 1830's privates are known by order as much as by name -- "the 3"
+             is how players refer to the Delaware & Hudson -- and the waterfall IS that order, so the grid was
+             showing a sequence with its index filed off. */}
           <span style={styles.privateCardName}>
             <span style={styles.privateCardNumber}>{priv.private_id}.</span> {priv.name}
           </span>
@@ -902,16 +544,10 @@ function PrivateCard({
         </div>
       )}
 
-      {/* ---- ONE standings table -- design note #19 --------------------
-          This card used to render two: a "standing bids" list here, and a
-          second "mini-auction bidders" list inside the action area, listing
-          the SAME people during a mini-auction with different columns. Two
-          tables of the same fact, a few pixels apart, is a reader's problem
-          -- the obvious question is which one is current, and there was no
-          answer because both were.
-
-          There is now one table. During a mini-auction it gains the TURN and
-          LEADER tags rather than being duplicated by a table that has them. */}
+      {/* Design note #19: ONE standings table. This card rendered two -- a standing-bids list and a
+         mini-auction bidders list a few pixels apart, showing the SAME people with different columns. The
+         obvious question is which one is current, and there was no answer because both were.
+         During a mini-auction the one table gains TURN and LEADER tags rather than being duplicated. */}
       <div style={styles.privateCardBids} ref={bidListRef}>
         {priv.bids.length === 0 ? (
           <span style={styles.noBidsText}>
@@ -932,29 +568,10 @@ function PrivateCard({
                 <span style={styles.bidRowName}>
                   {nameFor(bid.bidder, playerLabel, 6, 4)}
                   {isTurn && <span style={styles.youBadge}>TURN</span>}
-                  {/* ==================================================
-                       DESIGN NOTE 321: A STAR, NOT A WORD
-                      ==================================================
-
-                      Design note #302 put "LEADING" here and was right
-                      about WHO it belongs on -- `high_bidder` is and always
-                      was the real leader. What is wrong is the shape.
-
-                      The bid row is a name, a badge and a figure inside a
-                      card that has to fit six across, and "LEADING" is
-                      seven characters of chrome saying what the largest
-                      number in the column already says. Worse, it sat next
-                      to "TURN" in the same slot, so the busiest row on the
-                      screen carried two shouted words competing for the
-                      same glance.
-
-                      A gold star is the universal "this one is winning"
-                      mark, it costs one character, and it needs no
-                      translation. The word survives as the `title`, so the
-                      meaning is still one hover away and screen readers get
-                      a sentence rather than a glyph -- which is why the
-                      `aria-label` is the sentence and the star itself is
-                      `aria-hidden`. */}
+                  {/* Design note #321: A STAR, NOT A WORD. #302 was right about WHO it belongs on and wrong about the
+                     shape: "LEADING" is seven characters saying what the largest number in the column already says, and it
+                     sat next to "TURN", so the busiest row carried two shouted words competing for one glance.
+                     The word survives as the `title`, and the `aria-label` is the sentence while the star is `aria-hidden`. */}
                   {isLeader && (
                     <span
                       style={styles.leadingStar}
@@ -991,12 +608,9 @@ function PrivateCard({
                 ${minimumRaise}
               </span>
 
-              {/* Design note #27: input, Raise and Drop Out on ONE line.
-                  They were three stacked blocks with a hint between them,
-                  which read as three unrelated decisions and cost four rows
-                  in a card that has to fit six across. They are one
-                  decision -- how much, or not at all -- so they sit on one
-                  row, with the minimum folded into the line above. */}
+              {/* Design note #27: input, Raise and Drop Out on ONE line. Three stacked blocks with a hint between them
+                 read as three unrelated decisions and cost four rows in a card that has to fit six across. They are one
+                 decision -- how much, or not at all. */}
               <div style={styles.inlineActionRow}>
                 <input
                   type="number"
@@ -1074,11 +688,8 @@ function PrivateCard({
                   step={MIN_BID_INCREMENT}
                   value={bidAmount}
                   onChange={(e) => setBidAmount(Number(e.target.value))}
-                  // Design note #384: the FIELD goes too, not just the
-                  // button. A live input above a dead button invites the
-                  // player to type a figure and then discover it cannot be
-                  // sent, which is a worse refusal than one that never
-                  // took the keystrokes.
+                  // Design note #384: the FIELD goes too, not just the button. A live input above a dead button invites the
+                  // player to type a figure and then discover it cannot be sent.
                   disabled={!sessionReady || !isMyMainTurn || alreadyBidHere}
                   aria-label={`Bid amount for ${priv.name}`}
                 />
@@ -1095,12 +706,9 @@ function PrivateCard({
                   Place Bid
                 </button>
               </div>
-              {/* Design note #22: the backend explanation moved OFF the card
-                  and onto the button's tooltip. It was three lines of
-                  `waterfall.rs` reference sitting permanently at the bottom
-                  of every card -- read once, then pure noise occupying the
-                  space six cards needed. The number a player actually needs
-                  stays visible; the reasoning is one hover away. */}
+              {/* Design note #22: the backend explanation moved onto the button's tooltip. Three lines of `waterfall.rs`
+                 reference sat permanently at the bottom of every card -- read once, then pure noise occupying space six
+                 cards needed. The number stays visible; the reasoning is one hover away. */}
               <span style={styles.cardActionsHint}>
                 {/* Design note #384: when the bid is refused for being a
                     repeat, the hint says so instead of reciting a minimum
@@ -1122,18 +730,12 @@ function PrivateCard({
   );
 }
 
-/**
- * A private that has been won -- design notes #28/#30.
- *
- * Holds its waterfall slot and greys out rather than being removed or
- * moved. `GetWaterfallState.privates` only reports STILL-UNOWNED companies,
- * so this is fed from `GameStateResponse.private_companies` instead.
- *
- * ⚠ THE PRICE IS FACE VALUE, not the winning bid. `PrivateCompanyState`
- * exposes `cost` and `owner` and nothing else -- the settled price is not
- * in any query response, so a private won in a mini-auction shows less than
- * was actually paid. Exposing it is a backend change; the tooltip says so.
- */
+/** A private that has been won -- design notes #28/#30. Holds its waterfall slot and greys out.
+ *  `GetWaterfallState.privates` reports only STILL-UNOWNED companies, so this is fed from
+ *  `GameStateResponse.private_companies`.
+ *  THE PRICE IS FACE VALUE, not the winning bid: `PrivateCompanyState` exposes `cost` and `owner` and
+ *  nothing else, so a private won in a mini-auction shows less than was paid. Exposing the settled price
+ *  is a backend change; the tooltip says so. */
 function SoldPrivateCard({
   sold,
   playerLabel,
@@ -1146,29 +748,11 @@ function SoldPrivateCard({
 }) {
   const ownerLabel = nameFor(sold.owner ?? "", playerLabel, 6, 4);
   const paid = settledPrice ?? Number(sold.cost);
-  /* ==================================================================
-   *  DESIGN NOTE 340: WINNING A COMPANY SHOULD NOT ERASE IT
-   * ==================================================================
-   *
-   * REPORTED: sold private companies lose all their information -- powers,
-   * text -- keeping only the name and face value.
-   *
-   * They did. This card rendered a header, one figure and the sold badge,
-   * while the live card beside it rendered the same header, TWO figures
-   * (face value and revenue per OR) and the special-power block. So the
-   * moment a player won a company, the description of what they had just
-   * bought disappeared.
-   *
-   * That is exactly backwards. Before the sale the ability text is
-   * shopping information; after it, it is the owner's REFERENCE -- the
-   * thing they consult when deciding whether they can lay a free tile this
-   * turn, or what their income is. The auction grid stays on screen for the
-   * whole auction and the sold cards hold their slots (design note #30), so
-   * this was six cards progressively turning into blanks.
-   *
-   * The catalog lookup is by `private_id`, the same key the live card uses,
-   * so there is one source for the text and no chance of the two cards
-   * describing the same company differently. */
+  /* Design note #340: winning a company should not erase it. The sold card rendered a header, one figure
+     and a badge while the live card beside it rendered two figures and the special-power block -- so
+     winning a company deleted the description of what had just been bought.
+     That is backwards: before the sale the ability text is shopping information, after it it is the owner's
+     REFERENCE. The catalog lookup is by `private_id`, the same key the live card uses. */
   const catalogEntry = PRIVATE_COMPANY_CATALOG[sold.private_id];
   return (
     <div style={styles.privateCardSold}>
@@ -1196,11 +780,9 @@ function SoldPrivateCard({
         </div>
       )}
       <div style={styles.soldBadgeWrap}>
-        {/* Design note #30: the badge WRAPS. It was a single nowrap line, so
-            a long name plus a price overflowed the card and sat on the page
-            behind it. Two stacked lines with `overflowWrap` keep even the
-            longest name ("Champlain & St. Lawrence") inside the border at
-            the narrowest grid column. */}
+        {/* Design note #30: the badge WRAPS. As a single nowrap line a long name plus a price overflowed the card
+           and sat on the page behind it. Two stacked lines with `overflowWrap` keep "Champlain & St. Lawrence"
+           inside the border at the narrowest grid column. */}
         <span
           style={styles.soldBadge}
           title={
@@ -1221,30 +803,12 @@ function SoldPrivateCard({
 /* Small helpers                                                      */
 /* ------------------------------------------------------------------ */
 
-/* ==================================================================
- *  DESIGN NOTE 31: THE SANDBOX SEATS WERE DISTINCT AND LOOKED IDENTICAL
- * ==================================================================
- *
- * REPORTED: players and turn order all display as a generic `juno...00`
- * address instead of Alice, Bob, Carol.
- *
- * The addresses were never the problem -- `SANDBOX_PLAYERS` holds four
- * genuinely different strings and `sandboxPlayerLabel` maps them to names.
- * What collapsed them was TRUNCATION. All four are the same literal prefix
- * padded to the same length with zeros, so `truncate` takes `juno1san` from
- * the front and `0000` from the back of every one and returns the identical
- * string four times.
- *
- * `playerLabel` was already threaded into this component -- and used in
- * exactly one place, the sold-private owner. The turn banner, the seating
- * list, the bid rows and the mini-auction lines all called `truncate`
- * directly, which is why the screen the player actually reads was the one
- * showing four identical addresses.
- *
- * `nameFor` is now the only way an address reaches the DOM here. It falls
- * through to truncation for a real wallet, which is the right answer there
- * -- a live game has no name table and 8/5 of a real address IS
- * distinguishing. */
+/* Design note #31: the sandbox seats were distinct and looked identical. The addresses were never the
+   problem -- TRUNCATION was: all four share a literal prefix padded with zeros, so `truncate` returned
+   the same string four times. `playerLabel` existed and was used in exactly one place, while the turn
+   banner, seating list, bid rows and mini-auction lines all called `truncate` directly.
+   `nameFor` is now the only way an address reaches the DOM here, falling through to truncation for a real
+   wallet -- a live game has no name table and 8/5 of a real address IS distinguishing. */
 function nameFor(
   address: string,
   playerLabel: ((address: string) => string | null) | undefined,
@@ -1311,19 +875,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#6f7480",
     margin: 0,
   },
-  // ---- Design note #11: STACKED, not side by side. ----
-  //
-  // `body` used to be `flexDirection: "row"` with the six private cards
-  // squeezed into whatever width a fixed 300px action rail left over. Two
-  // problems, and the second is the one that mattered: at six columns the
-  // cards were far too narrow to read, and -- worse -- the rail sat
-  // immediately beside them, so "Your Turn Actions" and "Seating Order"
-  // read as if they belonged to whichever card they happened to be level
-  // with. The auction has one shared action rail for all six privates, and
-  // the layout was implying six.
-  //
-  // Now: the privates own the full width at the top, and every interactive
-  // surface lives in one clearly separated band underneath.
+  // Design note #11: STACKED, not side by side. Six cards squeezed beside a fixed 300px rail were too
+  // narrow to read, and -- worse -- the rail sat immediately beside them, so shared controls read as
+  // belonging to whichever card they were level with. The auction has one rail for all six privates and the
+  // layout was implying six. The privates now own the full width and every interactive surface lives in one
+  // separated band underneath.
   body: {
     display: "flex",
     flexDirection: "column",
@@ -1343,33 +899,12 @@ const styles: Record<string, React.CSSProperties> = {
     // horizontal line across all six.
     alignItems: "stretch",
   },
-  /* ---- Design note #12: the cards have to look like certificates ----
-   *
-   * The old `#1b1f29` on the panel's own `#161922` was a four-point
-   * lightness difference -- effectively invisible, so the six privates read
-   * as one undifferentiated block of text rather than as six things you
-   * choose between. These are the objects being auctioned and they should
-   * look like objects.
-   *
-   * The treatment is a warm parchment-toned slate with a gold left edge --
-   * a stock-certificate cue, and deliberately the only warm surface on an
-   * otherwise cold blue-grey screen, so the auction reads as its own kind
-   * of thing. The lowest-offered card then goes brighter gold still, which
-   * keeps the one genuinely special card distinguishable from the other
-   * five now that all six are raised. */
-  /* ---- Design note #18: ONE FILL, STATE AT THE EDGES -----------------
-   *
-   * All three variants now share `CARD_SURFACE`. They previously had three
-   * different near-whites -- plain, a warmer lowest-offer, a pink
-   * mini-auction -- which together with the Stock Round's two more made
-   * five almost-but-not-quite-matching paper tones across two screens. The
-   * effect was not "colour-coded", it was "inconsistently grubby".
-   *
-   * State is now carried entirely by the border, the left accent stripe and
-   * the badges, which is enough signal precisely because the fill is
-   * constant: a gold edge reads as gold against identical paper, where
-   * before it competed with a gold-tinted fill. See `styles/palette.ts` for
-   * why the shared value lives there rather than being typed twice. */
+  /* Design note #12: the cards have to look like certificates. Four points of lightness on the panel made
+     six privates read as one block of text rather than six things you choose between.
+     Design note #18: ONE FILL, STATE AT THE EDGES. Three near-whites here plus the Stock Round's two made
+     five almost-matching paper tones -- not "colour-coded" but "inconsistently grubby". State is carried by
+     the border, the accent stripe and the badges, which is enough signal precisely BECAUSE the fill is
+     constant. Shared value in `styles/palette.ts` rather than typed twice. */
   privateCard: {
     display: "flex",
     flexDirection: "column",
@@ -1387,15 +922,9 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     boxShadow: "0 3px 14px rgba(0,0,0,0.45)",
   },
-  /* Design note #38: the lowest-offered card's border is NEUTRAL.
-     It briefly wore the gold active border and a matching glow, and adding
-     a green Buy button and green badge on top of that made one card carry
-     three competing emphases at once -- the tile shouted before the player
-     had read what it was.
-     The green is now doing the whole job, confined to the two elements a
-     player actually acts on: the LOWEST OFFER badge says which card, the
-     Buy button says what you can do. The card underneath them is plain,
-     which is what lets them read. */
+  /* Design note #38: the lowest-offered card's border is NEUTRAL. With a gold border, a gold glow, a green
+     badge and a green button it carried three competing emphases and shouted before the player had read
+     what it was. The green does the whole job, confined to the two elements a player acts on. */
   privateCardLowest: {
     display: "flex",
     flexDirection: "column",
@@ -1475,16 +1004,10 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: "260px",
     boxSizing: "border-box",
   },
-  /** Wrapper for the header + figures block. A plain div since design note
-   *  #17 removed the accordion; kept as its own element so the card's
-   *  internal spacing did not have to change with it.
-   *
-   *  Design note #319: `cursor: pointer` came off with the accordion, five
-   *  notes late. It was the last trace of a control that no longer exists:
-   *  the block is a `<div>` with no `onClick`, so the hand cursor was
-   *  promising a click that does nothing -- and on a screen of six cards
-   *  where the real actions are buttons an inch below, a player who tries
-   *  it learns to distrust the cursor everywhere else. */
+  /** Wrapper for the header + figures block -- a plain div since design note #17 removed the accordion.
+   *  Design note #319: `cursor: pointer` came off with it, five notes late. The block has no `onClick`, so
+   *  the hand cursor promised a click that does nothing -- and a player who tries it learns to distrust the
+   *  cursor everywhere else. */
   privateCardToggle: {
     display: "flex",
     flexDirection: "column",
@@ -1534,19 +1057,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a90a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  /* ---- Design note #21: THE BID TABLE MUST NOT GROW THE CARD ---------
-   *
-   * Up to six players can bid on one private, and the table sits between
-   * fixed content above (name, figures, special power) and the
-   * bottom-anchored action block below. Left unbounded, a six-bidder table
-   * pushes the card past its siblings' height -- and because the grid rows
-   * stretch, ONE contested company would inflate every card in its row,
-   * with the action buttons dragged down out of alignment.
-   *
-   * Capped and scrolled instead. ~3.5 rows visible, which is enough to see
-   * the leader plus the chase and enough of a cut-off edge to show there is
-   * more. `flexShrink: 0` on the action block below keeps the buttons
-   * anchored rather than being compressed by a full table. */
+  /* Design note #21: THE BID TABLE MUST NOT GROW THE CARD. Six bidders push the card past its siblings'
+     height, and because grid rows stretch, ONE contested company inflates every card in its row and drags
+     the buttons out of alignment. Capped at ~3.5 rows -- the leader plus the chase, with a cut-off edge to
+     show there is more. `flexShrink: 0` on the action block keeps the buttons anchored. */
   privateCardBids: {
     maxHeight: "104px",
     overflowY: "auto",
@@ -1683,11 +1197,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 6px",
     whiteSpace: "nowrap",
   },
-  /** Design note #29: ORANGE. Competing bids and a live mini-auction are
-   *  different states -- one is "this will need resolving", the other is
-   *  "this is being resolved right now, and the whole waterfall is paused
-   *  on it". Both were red, which flattened that distinction; red is now
-   *  reserved for the live one. */
+  /** Design note #29: ORANGE. Competing bids and a live mini-auction are different states -- "this will
+   *  need resolving" versus "this is being resolved now, and the whole waterfall is paused on it". Both were
+   *  red, which flattened the distinction; red is reserved for the live one. */
   statusBadgeCompeting: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
@@ -1703,24 +1215,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK_MUTED,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  // Design note #11: the interaction band, now a horizontal row BELOW the
-  // privates rather than a column beside them. The heavy top border and
-  // recessed background are doing real work -- they are the visual
-  // statement that this is a separate area serving all six cards above,
-  // which is exactly the confusion the old side-by-side layout caused.
-  /* ---- Expanded action drawer inside a card (design note #14) ----
-   * A recessed warm-grey well, separated by a rule, so the controls read as
-   * a distinct region of the card rather than more card content. */
+  // Design note #11: the interaction band, a horizontal row BELOW the privates. The heavy top border and
+  // recessed background state that this area serves all six cards above, which is exactly the confusion the
+  // old side-by-side layout caused.
+  // Design note #14: the expanded action drawer inside a card -- a recessed well, separated by a rule.
   cardActions: {
     display: "flex",
     flexDirection: "column",
     gap: "8px",
-    // Design note #20: THE BUTTONS FORM A LINE. `marginTop: auto` in a
-    // full-height flex column pushes this block to the card's bottom edge,
-    // so the six action buttons align horizontally instead of floating at
-    // whatever height each private's special-power text happens to end at
-    // -- descriptions run from one line to three, which previously put the
-    // buttons at six different heights.
+    // Design note #20: THE BUTTONS FORM A LINE. `marginTop: auto` in a full-height flex column pushes this
+    // to the card's bottom edge, so six buttons align instead of following each private's special-power text,
+    // which runs from one line to three.
     marginTop: "auto",
     // Design note #21: never compressed by a long bid table above it.
     flexShrink: 0,
@@ -1862,11 +1367,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     color: "#8a90a0",
   },
-  /* Design note #422: prominent, and no longer shouting. `ON TURN` was
-     tracked-out uppercase because it was a status tag at the end of a row;
-     "Your turn" is a sentence fragment addressed to the reader, so it
-     drops the letter-spacing and keeps the high-contrast green fill that
-     made it findable. */
+  /* Design note #422: prominent, and no longer shouting. `ON TURN` was tracked-out uppercase because it
+     was a status tag at the end of a row; "Your turn" is a sentence fragment addressed to the reader. */
   turnBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
@@ -1884,12 +1386,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "4px",
     padding: "1px 5px",
   },
-  /* Design note #302: red, per the brief. It marks the player everyone
-     else must outbid -- an alarm for the other bidders rather than a
-     decoration for the leader. */
-  /* Design note #306: the end-of-auction step. Full width and green -- it
-     is the only thing to do on this screen once the grid is empty, and a
-     quiet control in that position reads as decoration. */
+  /* Design note #302: red. It marks the player everyone else must outbid -- an alarm for the other bidders
+     rather than a decoration for the leader.
+     Design note #306: the end-of-auction step. Full width and green -- it is the only thing to do on this
+     screen once the grid is empty, and a quiet control in that position reads as decoration. */
   auctionOverBanner: {
     display: "flex",
     flexDirection: "row",
@@ -1915,11 +1415,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  /* Design note #321: standalone glyph, no plate. A pill around a single
-     character reads as a badge that has lost its label; the star carries
-     itself. Sized a step above the body text so it is findable at a glance
-     down a column, and given a soft gold shadow so it holds up against the
-     card's own surface without a background. */
+  /* Design note #321: standalone glyph, no plate. A pill around a single character reads as a badge that
+     has lost its label. Sized a step above body text so it is findable down a column, with a soft gold
+     shadow so it holds against the card without a background. */
   leadingStar: {
     fontSize: FONT_SIZE.control,
     lineHeight: 1,

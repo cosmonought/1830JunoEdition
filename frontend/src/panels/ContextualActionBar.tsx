@@ -1,34 +1,18 @@
 // frontend/src/panels/ContextualActionBar.tsx
 //
-// THE CONTEXTUAL TOP ACTION BAR -- the strip that swaps its controls to match
-// the live round type and Operating Round sub-phase. Moved out of `App.tsx`
-// unchanged.
+// THE CONTEXTUAL TOP ACTION BAR -- the strip that swaps its controls to match the live round type and
+// Operating Round sub-phase. Moved out of `App.tsx` unchanged.
 //
-// At 1,440 lines this was the single largest extractable block in that file,
-// and it is the clearest case for a `panels/` directory rather than
-// `components/`: this is not a reusable widget but one named region of the
-// game screen, assembled from widgets that DO live in `components/`. The
-// distinction is worth a directory, because it tells the next reader which
-// files they may freely reuse and which are one-of-a-kind surfaces.
+// `panels/` rather than `components/` because this is not a reusable widget but one named region of
+// the game screen, assembled from widgets that DO live in `components/`. The distinction is worth a
+// directory: it tells the next reader which files they may freely reuse.
 //
-// WHAT TRAVELLED WITH IT, and why each one belongs here rather than in a
-// shared module:
+// `ActionBarButton`, `useCondensedOnScroll`, `ZonedPrice` and `MarketMoveLine` travelled with it --
+// each had exactly one consumer and that consumer is this file. Leaving any behind would have meant
+// `App.tsx` exporting a helper solely so this panel could import it back.
 //
-//   `ActionBarButton`       the shape of one button in this bar; nothing else
-//                           constructs one.
-//   `useCondensedOnScroll`  exists solely to collapse THIS bar when the page
-//                           scrolls (design note #268 in `App.tsx`).
-//   `ZonedPrice`            renders one market price with its zone tint; used
-//                           only by `MarketMoveLine`.
-//   `MarketMoveLine`        the dividend projection line, used only by this
-//                           bar.
-//
-// Each had exactly one consumer, and that consumer is in this file. Leaving
-// any of them behind would have meant `App.tsx` exporting a helper solely so
-// this panel could import it back -- the shape that makes a monolith
-// structural rather than incidental.
-//
-// NOTHING ELSE CHANGED. Same props, same order, same branches, same comments.
+// Design notes: shell/layout in `docs/ai_architecture/ui_shell_layout.md`, economics in
+// `contract_economy.md`, the market-move line in `stock_market.md`.
 
 import React from "react";
 
@@ -47,14 +31,10 @@ import TrainPurchasePanel, {
 import type { TrainRouteDraft } from "../components/RoutePlannerPanel";
 import StationTokenRow from "../components/StationTokenRow";
 import {
-  /* Design note #481: `OperatingSubPhaseStepper` itself is no longer
-     imported. The strip it renders became an inline phrase here; the
-     component is left in place rather than deleted because it is a correct,
-     self-contained rendering of the turn sequence and the rules reference is
-     the natural home for one. `visibleSubPhases` is what this file needs
-     from it now -- the same era/privates filtering the strip did, so the
-     count beside the title is "2 of 5" in the Yellow era and "2 of 6" from
-     Phase 3, rather than a fixed six. */
+  /* Design note #481: `OperatingSubPhaseStepper` is no longer imported -- the strip it renders became an
+     inline phrase. The component is kept because it is a correct rendering of the turn sequence and the
+     rules reference is the natural home for one. `visibleSubPhases` is what this file needs from it now,
+     so the count reads "2 of 5" in the Yellow era and "2 of 6" from Phase 3 rather than a fixed six. */
   OPERATING_SUB_PHASE_LABELS,
   visibleSubPhases,
   type OperatingSubPhase,
@@ -114,34 +94,13 @@ interface ActionBarButton {
 
 
 
-/* ===================================================================
- *  DESIGN NOTE 197: THE MARKET MOVE LINE
- * ===================================================================
- *
- * Two changes, and the second is a rules affordance rather than styling.
- *
- * FORMAT. It read "Market move: ↗ to $82", which states the destination and
- * hides the departure -- the one comparison the dividend decision turns on.
- * It now reads "Market move: $76 ⬆ $82": both prices, the arrow between
- * them, in the direction the token travels.
- *
- * COLOUR AND TOOLTIP. A price that lands in a Yellow, Orange or Brown cell
- * carries real rule consequences -- certificate-limit exemption, the 60%
- * ownership cap, multi-share bank-pool buys -- and the chart has always
- * shown that by tinting the cell. A player reading this panel is looking at
- * a NUMBER, not at the chart, so the fact was invisible exactly when it
- * mattered: paying out to step from a Normal cell into the Yellow zone is a
- * different decision from stepping to any other cell, and nothing said so.
- *
- * Each price is therefore tinted with its own zone's ink and carries that
- * zone's rule as a tooltip. `marketZoneForPrice` is the same lookup the
- * chart colours itself from, so this panel and the board can never disagree
- * about which prices are Brown -- see design note #196 for why the flat text
- * ink is a separate export from the cell gradient.
- *
- * THE TWO PRICES ARE TINTED INDEPENDENTLY, which is the whole point: the
- * interesting case is precisely the one where they differ.
- */
+/* Design note #197: THE MARKET MOVE LINE. "Market move: to $82" stated the destination and hid the
+   departure -- the one comparison the dividend decision turns on. It reads `$76 -> $82` now.
+   Each price is tinted with its own zone's ink and carries that zone's rule as a tooltip: a player
+   reading this panel is looking at a NUMBER, not the chart, so stepping into the Yellow zone was
+   invisible exactly when it mattered. `marketZoneForPrice` is the same lookup the chart colours itself
+   from, so the panel and the board cannot disagree (see #196 for why the flat ink is a separate export).
+   The two prices are tinted INDEPENDENTLY -- the interesting case is the one where they differ. */
 function ZonedPrice({ price }: { price: number | null }) {
   if (price === null) return <>--</>;
   const zone = marketZoneForPrice(price);
@@ -167,70 +126,17 @@ function MarketMoveLine({
   /** Which way the token travels: paying out steps right, withholding left. */
   direction: "pay" | "withhold";
 }) {
-  /* ================================================================
-   *  DESIGN NOTE 214: THE ARROW CARRIES THE MEANING
-   * ================================================================
-   *
-   * (Superseded in its GLYPH choice by design note #489 below; the colour
-   * argument it makes is unchanged and still the reason the arrow is tinted
-   * at all.)
-   *
-   * The arrows were a vertical pair -- U+2B06 UP and U+2B07 DOWN -- in the
-   * same neutral grey as the surrounding text. Two problems, and the second
-   * is the one that mattered.
-   *
-   * DIRECTIONALITY. 1830's chart moves a token ALONG ITS ROW: paying out
-   * steps right, withholding steps left. A purely vertical arrow describes
-   * neither of those, and on a chart where vertical movement is what
-   * SELLING does, an up arrow is actively the wrong gesture. The diagonals
-   * (U+2197 up-right, U+2198 down-right) read as "onward and better" versus
-   * "onward and worse", which is what the two choices actually are.
-   *
-   * COLOUR. Both arrows were grey, so at a glance the two columns of this
-   * panel looked identical and the player had to read the prices to tell
-   * which was which. Green for the rise and red for the fall is the one
-   * colour convention every player already has, and it lets the choice be
-   * made peripherally.
-   *
-   * THE PRICES KEEP THEIR OWN COLOURS. Design note #197 tints each price by
-   * its market ZONE -- a rules fact -- and that must not be overwritten by
-   * the direction, which is a different fact about a different thing. So the
-   * arrow is the only glyph the direction colours, and it is deliberately
-   * heavier than the text around it so it wins the glance without needing
-   * the prices to shout.
-   *
-   * ================================================================
-   *  DESIGN NOTE 489: THE MONEY MOVED, NOT THE CARDBOARD
-   * ================================================================
-   *
-   * REPORTED: the diagonal arrows are confusing. Use a plain
-   * `[old] -> [new]`, green for an increase and red for a decrease,
-   * ignoring the physical grid direction.
-   *
-   * #214 chose diagonals to describe the token's TRAVEL on the chart, and
-   * that is the thing this line was never actually about. A player reading
-   * a payout panel is deciding between two amounts of money. The chart's
-   * geometry -- rightward along a row, leftward on a withhold -- is how the
-   * board implements that consequence, not the consequence itself, and
-   * spending a glyph on it made the reader translate a direction into a
-   * value every time.
-   *
-   * SO THE ARROW IS STRAIGHT (U+2794) and says only "becomes". The
-   * comparison it used to carry moves into the colour, where it is read
-   * without being decoded.
-   *
-   * AND THE COLOUR IS COMPUTED FROM THE PRICES, which is the part that
-   * fixes a real bug rather than restyling one. `rising` was
-   * `direction === "pay"` -- an assumption that paying out always raises
-   * the price. It does not at the RIGHT-HAND END OF A ROW, where the token
-   * cannot advance: `projection.moves` is false, `projection.price` equals
-   * `currentPrice`, and the old line rendered a confident green up-arrow
-   * between two identical numbers. Same in mirror image for a withhold at
-   * the left edge. Comparing the two numbers cannot produce that, because
-   * the numbers are what the player is being asked about.
-   *
-   * FLAT IS ITS OWN CASE, neither green nor red. A ceiling is not a gain,
-   * and colouring it as one is the misreport this note exists to remove. */
+  /* Design note #214: THE ARROW CARRIES THE MEANING (glyph superseded by #489; the colour argument
+     stands). Grey arrows made the two columns look identical at a glance, so green for the rise and red
+     for the fall lets the choice be made peripherally. The PRICES keep their own zone colours -- a rules
+     fact that must not be overwritten by the direction.
+     Design note #489: THE MONEY MOVED, NOT THE CARDBOARD. #214 chose diagonals to describe the token's
+     TRAVEL, which is the thing this line was never about -- a player reading a payout panel is deciding
+     between two amounts of money, and the chart's geometry is how the board implements that consequence.
+     So the arrow is straight and says only "becomes".
+     AND THE COLOUR IS COMPUTED FROM THE PRICES, which fixes a real bug: `rising` was `direction === "pay"`,
+     an assumption that paying always raises the price. It does not at the RIGHT-HAND END OF A ROW, where
+     the old line drew a confident green up-arrow between two identical numbers. FLAT IS ITS OWN CASE. */
   const movement = marketMoveDirection(currentPrice, projection?.price);
 
   // No chart position at all -- an unfloated corporation, or a price the
@@ -266,12 +172,9 @@ function MarketMoveLine({
         &#10132;
       </span>{" "}
       <ZonedPrice price={projection.price} />
-      {/* The edge of the chart. Both prices and the arrow are still there
-          and simply equal, with the reason appended -- a line reading
-          "$100 ➔ $100" with no explanation looks like a bug rather than a
-          ceiling. Which edge is a fact about the TOKEN's travel, so this is
-          the one place `direction` is still the right thing to read: at a
-          flat move the prices cannot say which end of the row was hit. */}
+      {/* The edge of the chart: both prices and the arrow are still there and simply equal, with the reason
+         appended -- "$100 -> $100" with no explanation looks like a bug rather than a ceiling. WHICH edge is a
+         fact about the token's travel, so this is the one place `direction` is still the right thing to read. */}
       {!projection.moves && (
         <span style={styles.dividendMoveNote}>
           {direction === "pay"
@@ -283,51 +186,16 @@ function MarketMoveLine({
   );
 }
 
-/* ==================================================================
- *  DESIGN NOTE 298: WHAT A PINNED BAR IS ALLOWED TO KEEP
- * ==================================================================
- *
- * A sticky bar costs the map its height for the whole scroll, so the
- * pinned form has to earn every row it occupies. The rule applied is: keep
- * what a player needs WHILE LOOKING AT THE BOARD, drop what they only need
- * when deciding what to do next.
- *
- *   KEPT   the phase badge, the acting corporation, its treasury and train
- *          limit, and every action button. These are the inputs to "can I
- *          click that hex", which is the question being asked while the map
- *          is on screen.
- *   DROPPED the station-token row, the president's name, the train chips
- *          and the sub-phase stepper. All are orientation -- they answer
- *          "where am I in the turn", which the player has already answered
- *          by the time they are scrolling the map.
- *
- * The stepper is the one worth defending: it is a progress indicator, and a
- * progress indicator that is always visible stops being read. It comes back
- * the moment the bar unsticks.
- */
-/* ==================================================================
- *  DESIGN NOTE 480 (cont.): MEASURE THE PANEL, NOT THE PAGE
- * ==================================================================
- *
- * This used to be `window.scrollY > 24` -- see `utils/stickyCollapse.ts`
- * for why that collapsed the bar while it was still sitting in the middle
- * of the viewport with nothing to gain by it.
- *
- * The hook now hands back a ref as well as the flag, because the question
- * it answers is about a specific element and cannot be answered without
- * one. Both of this component's root branches attach it; only one is ever
- * mounted, so there is no contention.
- *
- * THE rAF IS KEPT and matters more than it did. The old body read one
- * number off `window`; this one calls `getBoundingClientRect`, which forces
- * layout. Doing that on every pixel of a wheel gesture is the difference
- * between a cheap scroll handler and a janky one, so the read is coalesced
- * to at most one per frame.
- *
- * `resize` IS LISTENED TO ALONGSIDE `scroll`, because a window resize can
- * reflow everything above the panel and move its pin line without the
- * scroll position changing by a pixel. The sticky offset is re-read then
- * too -- a media query is entitled to change it. */
+/* Design note #298: what a pinned bar is allowed to keep. A sticky bar costs the map its height for the
+   whole scroll, so the rule was: keep what a player needs WHILE LOOKING AT THE BOARD (the phase badge,
+   the acting corporation, treasury, train limit, every action button), drop what only answers "where am
+   I in the turn". Superseded by #590, which found the premise -- that space is scarce -- untrue.
+   Design note #480: MEASURE THE PANEL, NOT THE PAGE. `window.scrollY > 24` collapsed the bar while it
+   still sat mid-viewport (`utils/stickyCollapse.ts`), so the hook hands back a ref as well as the flag.
+   The rAF matters more now: this calls `getBoundingClientRect`, which forces layout, so the read is
+   coalesced to one per frame. `resize` is listened to alongside `scroll` because a reflow above the
+   panel moves its pin line without the scroll position changing -- and a media query may change the
+   sticky offset too. */
 function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean] {
   const ref = React.useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = React.useState(false);
@@ -481,11 +349,9 @@ export default function ContextualActionBar({
    *  parent. */
   tokenTargetMode: boolean;
   setTokenTargetMode: (on: boolean) => void;
-  /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`
-   *  message. Every skip is now an on-chain, replayable event -- the old
-   *  client-only `setOrSubPhase` calls advanced the UI while the contract's
-   *  cursor stayed put, which under G-14 enforcement would have desynced the
-   *  bar from what the chain would actually accept. */
+  /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`, so every skip is an on-chain,
+   *  replayable event. The old client-only `setOrSubPhase` advanced the UI while the contract's cursor
+   *  stayed put, which under G-14 enforcement would desync the bar from what the chain accepts. */
   onSkipSubPhase: () => void;
   /** Opens the propose-purchase sheet -- design note #165. */
   onOpenPrivateTrade: () => void;
@@ -495,65 +361,29 @@ export default function ContextualActionBar({
    *  1830's mandatory purchase applies. Distinct from `!ownsAnyTrain`,
    *  which is also true when the chain simply did not say. */
   mustBuyTrain: boolean;
-  /* ==================================================================
-   *  DESIGN NOTE 300: THE PLAYER'S OWN MONEY WAS NOWHERE ON THIS PANEL
-   * ==================================================================
-   *
-   * The bar reports the CORPORATION's treasury, which is what pays for
-   * track, tokens and trains -- and says nothing about the player's own
-   * cash, which is what pays for shares, private companies, and the
-   * president's emergency train purchase this app now enforces (design
-   * note #293).
-   *
-   * Those are different pockets and both are spent from this screen. A
-   * president told "you must buy a train" with no way to see whether they
-   * can personally cover it is being asked a question the UI is refusing
-   * to answer.
-   *
-   * It stays in the CONDENSED form too. Design note #298's rule is "keep
-   * what a player needs while looking at the board" -- and whether they can
-   * afford the thing they are about to click is exactly that. */
+  /* Design note #300: the player's own money was nowhere on this panel. The bar reports the CORPORATION's
+     treasury -- what pays for track, tokens and trains -- and said nothing about the player's own cash,
+     which pays for shares, privates and the president's emergency purchase (#293). Both pockets are spent
+     from this screen, and a president told "you must buy a train" with no way to see whether they can
+     cover it is being asked a question the UI refuses to answer. */
   activePlayerName: string | null;
   /** Design note #317: AVAILABLE cash during the auction, total otherwise. */
   activePlayerCash: number | null;
   /** How much of their money is standing on bids. `0` outside the auction. */
   activePlayerEscrow: number;
-  /** Design note #342: every seat, in order, with its spendable cash.
-   *  Empty falls back to the single acting-player badge. */
-  /* ==================================================================
-   *  DESIGN NOTE 570: THE BAR WEARS WHOSE TURN IT IS
-   * ==================================================================
-   *
-   * REPORTED: players do not find the Action panel especially visible during
-   * the Auction and Stock Rounds -- and, unprompted, that they DO find it
-   * easy to see during an Operating Round.
-   *
-   * That pairing is the answer. An Operating Round bar carries the acting
-   * corporation's livery as a full-height block of colour, and a block of
-   * colour is what makes a panel findable at a glance. The two seat-driven
-   * rounds have no corporation, so the bar falls back to the same dark
-   * chrome as everything around it and stops being a distinct object on the
-   * screen.
-   *
-   * They do have an acting PLAYER. Design note #569 gave every seat a
-   * colour; this spends it. Same mechanism, same meaning -- "this belongs to
-   * whoever is up" -- extended to the rounds that were missing it, rather
-   * than a new decoration invented for them.
-   *
-   * A STRIPE, NOT A FILL. The corporation's livery fills a card inside the
-   * bar because an Operating Round turn is ABOUT that corporation. A Stock
-   * Round turn is not about the player in the same way -- they are choosing
-   * among eight companies -- so the seat's colour runs as an edge rather
-   * than taking over the panel. Enough to locate, not enough to claim.
-   *
-   * `null` OUTSIDE THOSE ROUNDS, so an Operating Round is untouched and
-   * cannot end up wearing two identities at once. */
+  /** Design note #342: every seat, in order, with its spendable cash. Empty falls back to the acting-player
+   *  badge.
+   *  Design note #570: THE BAR WEARS WHOSE TURN IT IS. Players found the panel easy to see during an
+   *  Operating Round and hard to see otherwise -- and that pairing is the answer: an OR bar carries the
+   *  acting corporation's livery as a block of colour, and a block of colour is what makes a panel findable.
+   *  The seat-driven rounds have an acting PLAYER; #569 gave every seat a colour and this spends it.
+   *  A STRIPE, NOT A FILL: an OR turn is ABOUT a corporation, while a Stock Round turn is a player choosing
+   *  among eight companies. Enough to locate, not enough to claim. `null` outside those rounds, so an
+   *  Operating Round cannot wear two identities at once. */
   actingSeatColor?: string | null;
-  /* Design note #601: `playerRoster` gone. The bar never read it except in
-     the unreachable pill branch -- `App.tsx` still computes the figures, but
-     hands them straight to `SeatOrderTrail`, which is the only thing that
-     ever rendered them. */
-  /** Design note #0 in `PrivatePowerPanel.tsx`. */
+  /* Design note #601: `playerRoster` is gone. The bar never read it except in the unreachable pill branch
+     -- `App.tsx` still computes the figures and hands them straight to `SeatOrderTrail`.
+     Design note #0 in `PrivatePowerPanel.tsx`. */
   privateCompanies: readonly PrivateCompanyState[];
   privatePowerViewer: string | null;
   sandboxMode: boolean;
@@ -566,25 +396,15 @@ export default function ContextualActionBar({
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
-  /* Design note #510: `onJumpToTrainPurchase` is GONE with the button it
-     drove -- see the render site. */
-  /** Design note #517: which Operating Round this is, as the board counts
-   *  them -- `macro_round_number` and `sub_round_index`, rendered "3.2".
-   *
-   *  PASSED RATHER THAN DERIVED, because this bar has no game state: it
-   *  takes a `roundType` and a sub-phase and knows nothing about round
-   *  numbering. `null` before the first poll resolves, which keeps the bare
-   *  "Operating Round" wording rather than printing a placeholder pair. */
+  /* Design note #510: `onJumpToTrainPurchase` is gone with the button it drove -- see the render site.
+     Design note #517: which Operating Round this is, as the board counts them (`macro_round_number` and
+     `sub_round_index`, rendered "3.2"). PASSED RATHER THAN DERIVED, because this bar has no game state.
+     `null` before the first poll keeps the bare "Operating Round" wording rather than a placeholder pair. */
   orSequence?: { cycle: number; index: number } | null;
-  /** Design note #508: everything `TrainPurchasePanel` needs, as one object.
-   *
-   *  ONE PROP RATHER THAN EIGHT, deliberately. These are not facts this bar
-   *  reasons about -- it neither reads nor derives any of them -- they are a
-   *  child's props passing through. Spreading them across the bar's own
-   *  interface would put eight train-shaped fields next to the round type
-   *  and the sub-phase, implying the bar has an opinion about the depot.
-   *
-   *  `null` OUTSIDE THE STEP, which renders nothing. */
+  /** Design note #508: everything `TrainPurchasePanel` needs, as ONE object. These are not facts this bar
+   *  reasons about -- it neither reads nor derives any of them -- they are a child's props passing through,
+   *  and spreading them across the bar's interface would imply the bar has an opinion about the depot.
+   *  `null` outside the step renders nothing. */
   trainPurchase?: {
     depot: readonly DepotTier[];
     buyer: TrainPurchaseCompany | null;
@@ -620,25 +440,11 @@ export default function ContextualActionBar({
   selectedHardwareModel: string;
   onEndOperatingTurn: () => void;
   onUndoLastAction: () => void;
-  /* ==================================================================
-   *  DESIGN NOTE 592c: ONE UNDO BUTTON, NOT TWO
-   * ==================================================================
-   *
-   * The previous pass gave the host a second "Undo Round" control, arguing
-   * that taking back a whole round is a different decision from taking back
-   * one action and should not hide behind the same button.
-   *
-   * INSTRUCTED otherwise, and the instruction is better: "Can the Host's Undo
-   * button simply reverse through every player's actions? We can include a
-   * note in the tutorial." A host who presses Undo four times has taken back
-   * four actions and knows it -- the button says what it will take back each
-   * time. A second control asked them to decide, before pressing anything,
-   * how far they intended to go, which is not how anybody uses undo.
-   *
-   * So there is one button. It steps back one action at a time, and for the
-   * host that step may land in somebody else's turn. */
-  /** Design note #592c: the reason the single Undo cannot fire, or `null`
-   *  when it can. Shown on the button rather than left to a dead click. */
+  /* Design note #592c: ONE UNDO BUTTON, NOT TWO. A second "Undo Round" control asked the host to decide,
+     before pressing anything, how far they intended to go -- which is not how anybody uses undo. Instructed:
+     "Can the Host's Undo button simply reverse through every player's actions?" So there is one button; it
+     steps back one action at a time, and for the host that step may land in somebody else's turn.
+     The reason it cannot fire is shown on the button rather than left to a dead click. */
   undoBlockedReason?: string | null;
   /** Design note #595: the seat-order trail, for the two seat-driven rounds.
    *  `null` in an Operating Round, whose turn belongs to a corporation and
@@ -681,13 +487,10 @@ export default function ContextualActionBar({
    *  JSX call site for where that `<style>` tag is injected) to this bar's
    *  own outer wrapper. */
   isMyTurn: boolean;
-  /* Design note #500: `latestFeedItem` and `onOpenActivityLog` are GONE.
-     They fed a one-line echo of `TopTicker`'s newest entry inside this
-     panel; the ticker itself is on the same screen. Removed rather than
-     left unread, because an unused prop is an invitation to render it
-     again. */
-  /** Derived phase (`utils/gamePhase.ts`) for the far-right badge -- see
-   *  design note #40 for why it moved here from the header. */
+  /* Design note #500: `latestFeedItem` and `onOpenActivityLog` are GONE. They fed a one-line echo of
+     `TopTicker`'s newest entry inside this panel, and the ticker is on the same screen. Removed rather than
+     left unread -- an unused prop is an invitation to render it again.
+     Derived phase (`utils/gamePhase.ts`) for the far-right badge -- design note #40 for why it moved here. */
   phase?: GamePhase | null;
 }) {
   // Design note #7 (`gamePhase.ts`): the ONE severity decision, shared with
@@ -716,35 +519,21 @@ export default function ContextualActionBar({
       label: OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel,
       position: index + 1,
       total: steps.length,
-      /* Design note #518: the whole sequence, for the expanded breadcrumb.
-         The SAME `visibleSubPhases` result the position is measured against,
-         so the trail and the counter cannot disagree about how many steps
-         this era has -- which is exactly the two-numbers-for-one-step fault
-         the note above the round label records. */
+      /* Design note #518: the whole sequence, for the expanded breadcrumb -- measured against the SAME
+         `visibleSubPhases` result the position is, so the trail and the counter cannot disagree about how many
+         steps this era has. */
       steps,
     };
   }, [currentGlobalEra, privateCompanies, orSubPhase, phase]);
 
-  /* Design note #236: the acting corporation's own colours, resolved once.
-   *
-   * `bestContrastTextColor` is the same per-fill choice the map's station
-   * tokens make for their acronyms, so this bar and the tokens it describes
-   * agree about what is legible on that brand colour -- rather than this
-   * asserting white and being wrong on C&O's orange.
-   *
-   * SECONDARY TEXT IS THE SAME INK AT REDUCED ALPHA, never a fixed grey. A
-   * grey that reads as "quieter" on PRR's dark red is nearly invisible on
-   * C&O's orange; alpha over the actual background holds its relationship to
-   * whatever is behind it.
-   *
-   * NO CORPORATION -> the neutral dark this bar always had. That state is
-   * reachable before the first `GetGameState` resolves, and colouring it
-   * from `stationTickerColor(0)`'s fallback grey would dress an empty bar as
-   * though a company were acting. */
-  /* Design note #631: the same secondary-ink rule `corporationBarInk` below
-     applies, factored out because the seat card needs it too. Alpha over the
-     real background rather than a fixed grey -- a grey that reads as
-     "quieter" on slate blue is nearly invisible on ochre. */
+  /* Design note #236: the acting corporation's own colours, resolved once. `bestContrastTextColor` is the
+     same per-fill choice the map's station tokens make, so the bar and the tokens agree about what is
+     legible on that brand colour rather than this asserting white and being wrong on C&O's orange.
+     SECONDARY TEXT IS THE SAME INK AT REDUCED ALPHA, never a fixed grey -- a grey that reads as quieter on
+     PRR's dark red is nearly invisible on C&O's orange.
+     NO CORPORATION -> the neutral dark this bar always had. That state is reachable before the first
+     `GetGameState` resolves, and a fallback grey would dress an empty bar as though a company were acting.
+     Design note #631: the same secondary-ink rule, factored out because the seat card needs it too. */
   const seatInkMuted = React.useCallback(
     (background: string) =>
       bestContrastTextColor(background) === "#FFFFFF"
@@ -776,17 +565,12 @@ export default function ContextualActionBar({
     };
   }, [activeCorporation]);
 
-  // Round-type-specific buttons -- see design note #8 for exactly which
-  // real ExecuteMsg each one dispatches, and why "Place Station Token" is
-  // deliberately non-dispatching. Design note #10/item 2: within an
-  // Operating Round, the button set ALSO swaps per `orSubPhase`, walking the
-  // player through a corporation's turn in the real 1830 legal order --
-  // Track -> Tokens -> Dividends -> Hardware -- one step at a time, rather
-  // than exposing every OR action at once regardless of where the
-  // corporation actually is in its turn.
-  /* Design note #390: `null` when the player is where the action is, or is
-     on a reference tab. `onSelectTab` is part of the condition because a
-     redirect button with nothing to dispatch is a dead end, not a fix. */
+  // Round-type-specific buttons -- design note #8 for which real `ExecuteMsg` each dispatches, and why
+  // "Place Station Token" is deliberately non-dispatching. Design note #10/item 2: within an Operating
+  // Round the set also swaps per `orSubPhase`, walking the player through the real 1830 legal order
+  // (Track -> Tokens -> Dividends -> Hardware) rather than exposing every action at once.
+  // Design note #390: `null` when the player is where the action is, or on a reference tab. `onSelectTab`
+  // is part of the condition because a redirect button with nothing to dispatch is a dead end, not a fix.
   const misplacedTab =
     activeTab !== undefined && onSelectTab !== undefined
       ? misplacedSurfaceTab(activeTab, roundType)
@@ -801,24 +585,11 @@ export default function ContextualActionBar({
           ? "The Operating Round"
           : "This round";
 
-  /* ==================================================================
-   *  DESIGN NOTE 485a: ONE REVENUE FIGURE, FOUR SURFACES
-   * ==================================================================
-   *
-   * What this turn's declaration is actually worth. `dividendRevenue` is
-   * the corporation's `last_route_revenue`, which is a PREVIOUS turn's
-   * figure for a corporation that skipped Routes -- design note #278
-   * established that and used it to hide the Pay button, then left the
-   * number itself in circulation.
-   *
-   * Four surfaces quote it: the Pay label, the Pay tooltip, the Withhold
-   * label/tooltip, and the consequence panel's "Pay out $N · $M/share"
-   * heading. Three of them were quoting the stale one, so a corporation
-   * that ran nothing displayed a payout table for a run that did not
-   * happen. Derived once, here, above every reader -- through the same
-   * `dividendDeclaration` App uses for the dispatch (design note #486), so
-   * the number on the button and the number in the message are one
-   * derivation rather than two that agree today. */
+  /* Design note #485a: ONE REVENUE FIGURE, FOUR SURFACES. `dividendRevenue` is `last_route_revenue`, which
+     is a PREVIOUS turn's figure for a corporation that skipped Routes (#278) -- and three of the four
+     surfaces quoting it were quoting the stale one, so a corporation that ran nothing displayed a payout
+     table for a run that did not happen. Derived once, above every reader, through the same
+     `dividendDeclaration` App uses for the dispatch (#486). */
   const declaration = dividendDeclaration({
     lastRouteRevenue: dividendRevenue,
     skippedRoutes: !dividendRevenueIsThisTurn,
@@ -826,11 +597,10 @@ export default function ContextualActionBar({
   const declaredRevenue = declaration.revenue;
   const declaredPerShare = declaration.perShare;
 
-  /* Design note #509a: the two ends of the withhold, and the ink for the
-     herald beside them. `dividendPanel` sits on the panel's own dark
-     surface rather than on the corporation's livery, so the logo's text
-     FALLBACK takes the panel ink -- not `bestContrastTextColor`, which
-     answers a different question (what is legible ON the brand colour). */
+  /* Design note #509a: the two ends of the withhold, and the ink for the herald beside them. The dividend
+     panel sits on the bar's own dark surface rather than the corporation's livery, so the logo's text
+     FALLBACK takes the panel ink -- not `bestContrastTextColor`, which answers what is legible ON the
+     brand colour. */
   const treasuryNow = activeCorporation?.treasury ?? 0;
   const treasuryAfterWithhold = treasuryNow + declaredRevenue;
   const corporationInk = "#e2e6ee";
@@ -870,50 +640,23 @@ export default function ContextualActionBar({
         ];
         break;
       case "Routes":
-        /* Design note #142: its own phase. Running trains is what PRODUCES
-           the revenue figure; the dividend decision below is what is done
-           with it.
-
-           NO CONTEXTUAL BUTTON -- design note #266. "Run Selected Route"
-           used to sit here, in the centre column, ABOVE the panel showing
-           the route it would submit and the readout saying whether that
-           route was legal. It is now the bottom row of `RoutePlannerPanel`,
-           directly under the path it runs and carrying the amount it pays.
-           Leaving a copy here would be a second control for one action --
-           and the vaguer of the two, since only the panel's copy knows the
-           figure. */
+        /* Design note #142: its own phase. Running trains PRODUCES the revenue; the dividend decision below is
+           what is done with it.
+           Design note #266: NO CONTEXTUAL BUTTON. "Run Selected Route" sat here, ABOVE the panel showing the
+           route it would submit; it is now the bottom row of `RoutePlannerPanel`, under the path it runs and
+           carrying the amount it pays. A copy here would be a second control for one action, and the vaguer of
+           the two, since only the panel's copy knows the figure. */
         contextualButtons = [];
         break;
       case "Dividends":
-        /* ==================================================================
-           DESIGN NOTE 414: THERE IS NO SUCH THING AS PAYING $0
-          ==================================================================
-
-           REPORTED: a corporation with no earnable revenue is still offered
-           "Pay Dividends", quoting $0 per share.
-
-           1830 has no such declaration. A corporation that earned nothing
-           withholds -- that is the whole decision, and it is the one that
-           steps the share price left. Offering Pay beside Withhold at $0
-           presents a binary where the rules have a single outcome, and the
-           two buttons do not even differ in effect: paying nothing and
-           withholding nothing move the same zero. The only thing the player
-           could get wrong is the market move, and Pay gets it wrong
-           silently -- the marker stays put, the price never falls, and
-           nothing on screen says a rule was skipped.
-
-           So at zero the choice collapses to the one legal action. `App`'s
-           forced-withhold effect (design note #414 there) will normally have
-           declared it before this renders; this is the same rule expressed
-           on the control, so a player who reaches the step during the poll
-           interval that precedes the auto-declaration cannot click the
-           button that should not exist.
-
-           THE TEST IS THE REVENUE, NOT THE TRAIN. `dividendRevenue` is
-           already what the pay button spends and what its per-share figure
-           divides, so gating on it cannot disagree with the label beside it
-           -- and it covers the stranded-train case, the trainless case and
-           the ran-a-worthless-route case without naming any of them. */
+        /* Design note #414: THERE IS NO SUCH THING AS PAYING $0. 1830 has no such declaration -- a corporation
+           that earned nothing withholds, and that is what steps the share price left. Offering Pay beside
+           Withhold at $0 presents a binary where the rules have one outcome, and the two do not even differ in
+           effect; the only thing a player could get wrong is the market move, and Pay gets it wrong SILENTLY.
+           `App`'s forced-withhold effect normally declares it first; this is the same rule on the control, so a
+           player arriving during the poll interval cannot click a button that should not exist.
+           THE TEST IS THE REVENUE, NOT THE TRAIN -- it covers the stranded-train, trainless and worthless-route
+           cases without naming any of them, and cannot disagree with the label beside it. */
         contextualButtons = [
           ...(declaration.mayPay
             ? [
@@ -945,35 +688,16 @@ export default function ContextualActionBar({
         break;
       case "Hardware":
         contextualButtons = [
-          // Both ways of acquiring a train live in `TrainPurchasePanel`
-          // (design note #203), which is the only place that knows what the
-          // depot will sell and which corporations hold what. Duplicating
-          // either here as a generic "Buy Train" would be a second control
+          // Both ways of acquiring a train live in `TrainPurchasePanel` (#203), the only place that knows what the
+          // depot will sell and which corporations hold what. A generic "Buy Train" here would be a second control
           // for one action, and the vaguer of the two.
-          /* ==================================================================
-             DESIGN NOTE 293: A CORPORATION MUST OWN A TRAIN
-            ==================================================================
-
-             REPORTED: a corporation with no trains can click End Turn in the
-             Buy Trains step without buying one.
-
-             1830 does not let it. A corporation that owns no train MUST buy
-             one, and if its treasury cannot cover the cheapest in the depot
-             the president pays the difference personally -- the emergency
-             purchase. There is no branch of that rule where the turn simply
-             ends.
-
-             THE POVERTY CASE IS THE ONE THAT MATTERS, and it is why this is
-             not merely disabled when the corporation could afford a train.
-             Being unable to pay is precisely when a player wants the exit,
-             and precisely when 1830 refuses it: the obligation falls to the
-             president rather than lapsing. So the button stays disabled on
-             an empty treasury too, and the tooltip names the president's
-             purchase rather than implying the step is stuck.
-
-             The gate is "owns a train", not "has bought one this turn" --
-             a corporation that acquired one by trade has satisfied the rule
-             just as completely. */
+          // Design note #293: A CORPORATION MUST OWN A TRAIN. 1830 does not let one end its turn trainless: it MUST
+          // buy, and if the treasury cannot cover the cheapest in the depot the president pays the difference
+          // personally. There is no branch of that rule where the turn simply ends.
+          // THE POVERTY CASE IS THE ONE THAT MATTERS -- being unable to pay is precisely when a player wants the
+          // exit and precisely when 1830 refuses it, so the button stays disabled on an empty treasury too and the
+          // tooltip names the president's purchase rather than implying the step is stuck.
+          // The gate is "owns a train", not "has bought one this turn" -- one acquired by trade satisfies the rule.
           {
             key: "end-turn",
             label: "End Turn",
@@ -987,216 +711,70 @@ export default function ContextualActionBar({
         break;
     }
   } else {
-    // Stock & Auction: Buy/Sell live entirely in `StockRoundPanel`'s own
-    // corporation cards, so there is never a duplicate control surface.
-    //
-    // Design note #29: `onBuyShare`/`onSellShares` are no longer props of
-    // this component at all. They were kept in the interface after the
-    // controls moved out, unused, "to keep this a minimal-footprint
-    // change" -- and then their signature changed to take a company id,
-    // and four call sites failed to typecheck for a prop nobody reads.
-    // Dead props are not free; they are a type error waiting for the real
+    // Stock & Auction: Buy/Sell live entirely in `StockRoundPanel`'s corporation cards, so there is never a
+    // duplicate control surface.
+    // Design note #29: `onBuyShare`/`onSellShares` are no longer props at all. They were kept unused "to keep
+    // this a minimal-footprint change", then their signature changed to take a company id and four call sites
+    // failed to typecheck for a prop nobody reads. Dead props are a type error waiting for the real
     // implementation to move.
     contextualButtons = [];
   }
 
-  /* ==================================================================
-   *  DESIGN NOTE 413: THE BAR NOW ASKS WHOSE TURN IT IS
-   * ==================================================================
-   *
-   * REPORTED: during an Operating Round the acting corporation's president
-   * is locked out of Lay Tile, while every player who is NOT acting can see
-   * and click Skip.
-   *
-   * Both halves at once, which is what makes it look contradictory and what
-   * gives it away: the authorisation was not merely wrong, it was ABSENT
-   * from one surface and correct-but-starved on the other.
-   *
-   *   THE LOCKOUT was `actingSeatIndex` returning `null` because
-   *   `active_operating_order` was empty -- see `sandboxSession.ts` design
-   *   note #411. "Nobody may act" is the correct reading of an empty queue,
-   *   and `tileLayDisabledReason` correctly refused everyone including the
-   *   president. Fixed at the source; nothing in this file caused it.
-   *
-   *   THE SKIP BUTTON is this file's. Every control below was gated on
-   *   `sessionReady` alone -- "is there a signing session", not "may this
-   *   player act" -- so a bar rendered for a spectator or for the four
-   *   players waiting their turn carried live buttons that dispatched real
-   *   messages. The chain would refuse them, but only after a signature and
-   *   a round trip, and the sandbox has no chain to refuse anything.
-   *
-   * `isMyTurn` was already computed, already correct, and already passed to
-   * this component -- and used for exactly one thing: a decorative pulse on
-   * the wrapper (design note #4's turn alert). The predicate the bar needed
-   * was sitting in its own props being used as a CSS class.
-   *
-   * HIDDEN, NOT DISABLED, and that is a departure from how this file treats
-   * every other unavailable control. A disabled button with a reason is the
-   * right shape when the player COULD act and something specific stops them
-   * -- design note #293's End Turn, which explains the train they must buy.
-   * It is the wrong shape for "this is not your turn", because there is no
-   * action for the player to take, nothing they can change, and eight
-   * greyed buttons on four players' screens is an entire panel of noise
-   * describing somebody else's decision. The acting corporation is already
-   * named across the top of the bar; that is the answer to why the controls
-   * are absent, and it is already on screen.
-   *
-   * SCOPED TO OPERATING ROUNDS, because that is the round whose turn belongs
-   * to a corporation rather than a seat, and the round this bar carries
-   * action buttons in. The Stock Round and the auction put their controls in
-   * their own panels (`contextualButtons` is empty for both), so widening
-   * this would gate a set that is already empty while risking the auction's
-   * own flow. */
+  /* Design note #413: THE BAR NOW ASKS WHOSE TURN IT IS. Reported as the president being locked out of Lay
+     Tile while every non-acting player could click Skip -- both halves at once, which is what gives it away.
+     THE LOCKOUT was `actingSeatIndex` returning `null` on an empty `active_operating_order`
+     (`sandboxSession.ts #411`); fixed at the source, nothing here caused it. THE SKIP BUTTON is this file's:
+     every control was gated on `sessionReady` alone -- "is there a signing session", not "may this player
+     act" -- so spectators and waiting players carried live buttons that dispatched real messages.
+     `isMyTurn` was already computed, already correct and already passed in, and used for exactly one thing:
+     a decorative pulse. The predicate the bar needed was in its own props being used as a CSS class.
+     HIDDEN, NOT DISABLED, and a departure from how this file treats every other unavailable control. A
+     disabled button with a reason fits when the player COULD act (#293's End Turn); it is the wrong shape
+     for "this is not your turn", where there is no action to take and eight greyed buttons on four screens
+     describe somebody else's decision. The acting corporation is already named across the top of the bar.
+     SCOPED TO OPERATING ROUNDS -- the round whose turn belongs to a corporation rather than a seat, and the
+     only one this bar carries action buttons in. */
   const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;
   if (!mayActThisTurn) contextualButtons = [];
 
 
-  /* ==================================================================
-   *  DESIGN NOTE 33: THE ROUTE TOGGLE IS A RUN-TRAINS TOOL, NOT A
-   *  GLOBAL ONE
-   * ==================================================================
-   *
-   * `Routes` is this UI's name for the contract's run-trains sub-phase
-   * (`OPERATING_SUB_PHASE_LABELS.Routes` renders as "Run Trains", mirroring
-   * `or_phase::OR_PHASE_ORDER`). Sketching a route is only meaningful while
-   * a corporation is about to run one, so that is the only time the toggle
-   * exists now.
-   *
-   * Design note #11 argued the toggle was "harmless to leave on" outside
-   * that phase. It was not, for two reasons that only show up in use:
-   *
-   *   1. IT SILENTLY DISARMS THE MAP. Leaving route mode on rewires the
-   *      Rail Map's click handling -- look at the `queryClient`/
-   *      `contractAddress`/`gameId`/`onHexClick` props below, every one of
-   *      which is switched to `undefined` while `routeSelectMode` is true.
-   *      A player who flipped the switch during Routes, moved to Track next
-   *      turn and clicked a hex to lay tile would get a route point and no
-   *      tile picker, with nothing on screen explaining why.
-   *   2. IT ADVERTISED A CONTROL FOR A PHASE THE PLAYER WAS NOT IN, on the
-   *      Auction and Stock Round tabs where there is no train to run at all.
-   *
-   * Hiding the button alone would have left hazard (1) intact -- the mode
-   * would just become unreachable while still ON. So the owning component
-   * force-clears `routeSelectMode` whenever this condition goes false; see
-   * the `useEffect` next to the `routeSelectMode` state declaration. */
+  /* Design note #33: THE ROUTE TOGGLE IS A RUN-TRAINS TOOL, NOT A GLOBAL ONE. `Routes` is this UI's name
+     for the contract's run-trains sub-phase, and sketching a route is only meaningful while a corporation
+     is about to run one.
+     #11 argued the toggle was harmless to leave on. It was not: (1) IT SILENTLY DISARMS THE MAP -- route
+     mode switches `queryClient`/`contractAddress`/`gameId`/`onHexClick` to `undefined`, so a player who
+     left it on and clicked a hex next turn got a route point and no tile picker with nothing explaining
+     why; (2) it advertised a control for a phase the player was not in.
+     Hiding the button alone would leave hazard (1) intact -- the mode would just become unreachable while
+     still ON -- so the owning component force-clears `routeSelectMode` when this condition goes false. */
   const showRouteToggle = roundType === "OperatingRound" && orSubPhase === "Routes";
 
-  /* Design note #278: the Dividends step's Pay-or-Withhold binary. Derived
-     here rather than passed in, because both halves -- the step and the
-     revenue -- are already props, and a second boolean saying what they
-     jointly mean is a thing that can disagree with them.
-
-     ==================================================================
-      DESIGN NOTE 436: $0 IS A DECISION TOO, AND SKIP IS NOT IT
-     ==================================================================
-
-     REPORTED: at $0 route revenue, hide Skip and offer only Withhold.
-
-     `dividendRevenue > 0` used to gate this, and design note #422's own
-     text argued for the exception: "IT STAYS AT $0, which is the case the
-     rule does not cover. A corporation that ran nothing has no money to
-     allocate and no reason to be held on this step; `DeclareDividends` for
-     zero is a message with no effect, so Skip is the honest control there."
-
-     The premise is wrong, and design note #414 had already established why
-     one step over: a $0 declaration is NOT a message with no effect. It is
-     the withhold that steps the share price one cell LEFT, which is the
-     single most consequential thing that happens to a corporation that
-     could not run. Skip dispatches `AdvanceOperatingSubPhase` -- it moves
-     the cursor and settles nothing -- so at $0 the two controls did
-     visibly similar things and only one of them obeyed the rules.
-
-     Worse, Skip was the more prominent of the pair by position, so the
-     easiest action on the screen was the one that silently omitted a
-     mandatory market move. That is how a corporation's price stays put
-     through a round it should have fallen in.
-
-     So the step is forced at $0 as well. `App`'s auto-withhold effect
-     (design note #414) will usually have declared it before the player
-     sees this, and the two agree by construction now rather than by
-     coincidence: both treat "nothing was earned" as a decision to make,
-     not a step to step past. */
-  /* ==================================================================
-   *  DESIGN NOTE 485: SKIP IS NEVER A DIVIDEND DECLARATION
-   * ==================================================================
-   *
-   * REPORTED: a corporation landing on Dividends with $0 revenue must not
-   * be offered Skip -- only "Withhold $0".
-   *
-   * `dividendRevenueIsThisTurn` was the third clause, and it is false in
-   * precisely the situation the report is about: a corporation that skipped
-   * Routes (design note #278 sets it that way so a stale
-   * `last_route_revenue` cannot be paid out). So the one corporation
-   * guaranteed to have $0 was the one the Skip button was kept alive for.
-   *
-   * The clause is gone rather than inverted, because there is no state of
-   * an Operating Round in which Skip is the right control here. 1830
-   * requires a declaration every turn: revenue splits or it is withheld,
-   * and $0 withheld is what steps the marker LEFT. `AdvanceOperatingSubPhase`
-   * settles nothing and moves no marker, so offering it on this step offers
-   * a way to omit a mandatory market move -- which design note #436 already
-   * argued for the $0 case without following it to the case where the
-   * revenue figure is not this turn's.
-   *
-   * Skip remains correct on Track, Tokens and Routes, all of which are
-   * genuinely declinable. This is the one step that is not. */
+  /* Design note #278: the Dividends step's Pay-or-Withhold binary, derived here because both halves are
+     already props and a second boolean saying what they jointly mean can disagree with them.
+     Design note #436: $0 IS A DECISION TOO, AND SKIP IS NOT IT. #278 argued a $0 declaration is "a message
+     with no effect" -- the premise is wrong, and #414 had established why one step over: it is the withhold
+     that steps the share price one cell LEFT, the most consequential thing that happens to a corporation
+     that could not run. Skip dispatches `AdvanceOperatingSubPhase` and settles nothing, and it was the more
+     prominent of the pair by position -- so the easiest action on screen silently omitted a mandatory move.
+     Design note #485: SKIP IS NEVER A DIVIDEND DECLARATION. `dividendRevenueIsThisTurn` was the third
+     clause and it is false in precisely the reported situation -- a corporation that skipped Routes -- so
+     the one corporation guaranteed to have $0 was the one Skip was kept alive for. Gone rather than
+     inverted: 1830 requires a declaration every turn. Skip remains correct on Track, Tokens and Routes. */
   const dividendChoiceForced =
     roundType === "OperatingRound" && orSubPhase === "Dividends";
 
-  /* ==================================================================
-   *  DESIGN NOTE 31: ONE BAR, EVERYWHERE
-   * ==================================================================
-   *
-   * This is now the app's ONLY action bar, and it renders on every active
-   * tab. Two separate bars existed: this one (chunky, inside the workspace,
-   * carrying the operating-round buttons plus Undo) and a slim
-   * `GlobalActionBar` added at the top of the phase tab for Pass/Undo. On
-   * the phase tab during a Stock Round BOTH rendered, one above the other,
-   * with two Undo buttons -- because the phase tab falls through to this
-   * component's branch as well.
-   *
-   * `GlobalActionBar` is deleted. This component absorbed Pass, kept Undo,
-   * and was restyled slim, so there is exactly one strip of turn controls
-   * no matter which tab is showing.
-   *
-   * PASS IS PHASE-ROUTED, and this is the part worth not getting wrong:
-   * `WaterfallPass` and `PassTurn` are different contract messages, not one
-   * action with two names. The caller decides which; this component just
-   * renders the button and shows `passDisabledReason` when passing is
-   * illegal (the waterfall forbids it while no bid stands anywhere).
-   *
-   * THE THREE TRAYS BELOW ARE NOT PART OF THE BAR. The hardware
-   * marketplace, the Buy Private Company tray and the route-point readout
-   * used to sit inside the bar's own container, which is most of what made
-   * it "chunky" -- they are panels, not buttons, and one of them contains a
-   * price slider. They now render UNDER the slim strip as their own blocks,
-   * so the bar stays one row tall while the trays keep working. */
-  /* ==================================================================
-   *  DESIGN NOTE 390 (panel half): ONE BUTTON, AND NOTHING ELSE
-   * ==================================================================
-   *
-   * When the player is on any tab other than the one this round is played
-   * on, the entire bar is replaced by a single control that takes them
-   * back. Replaced rather than prefixed, and that is the requirement's
-   * word: a bar that showed the redirect ALONGSIDE the usual buttons would
-   * leave live controls for a round being played on a screen the player
-   * cannot see, which is how you get an action dispatched against a board
-   * you are not looking at.
-   *
-   * DESIGN NOTE 404: THIS NOW COVERS THE REFERENCE TABS TOO -- Ledger,
-   * Rules and the market chart. `misplacedSurfaceTab` used to exempt them
-   * so that reading did not cost a player their controls; playtest found
-   * the cost of the exemption, which is that Pass and Undo sat live on a
-   * screen nobody was acting from and turns were being spent by accident.
-   *
-   * The replacement is what makes the reversal safe. A reference tab keeps
-   * an action bar -- so the player stays oriented and the layout does not
-   * jump -- and that bar has exactly one control, which cannot end a turn.
-   *
-   * THE COPY DISTINGUISHES THE TWO CASES. Standing on another round's
-   * PLAYING surface is a player who may be waiting for something that will
-   * never happen there; standing on a reference tab is a player who is
-   * deliberately reading. Same button, different sentence. */
+  /* Design note #31: ONE BAR, EVERYWHERE. Two bars existed and on the phase tab during a Stock Round BOTH
+     rendered, with two Undo buttons. `GlobalActionBar` is deleted; this component absorbed Pass, kept Undo
+     and was restyled slim.
+     PASS IS PHASE-ROUTED: `WaterfallPass` and `PassTurn` are different contract messages, not one action
+     with two names. The caller decides which; this renders the button and shows `passDisabledReason`.
+     THE THREE TRAYS BELOW ARE NOT PART OF THE BAR -- they are panels, not buttons, and one contains a price
+     slider. They render under the slim strip as their own blocks.
+     Design note #390: ONE BUTTON, AND NOTHING ELSE. On any other tab the entire bar is REPLACED by a single
+     control that takes the player back -- alongside would leave live controls for a round being played on a
+     screen the player cannot see. #404 extends this to the reference tabs: the exemption cost turns spent
+     by accident, and the replacement is what makes the reversal safe, since that one control cannot end a
+     turn. The copy distinguishes standing on another round's PLAYING surface from deliberately reading. */
   if (misplacedTab !== null) {
     return (
       <div
@@ -1229,55 +807,29 @@ export default function ContextualActionBar({
       ref={actionBarRef}
       style={{
         ...styles.actionBar,
-        /* Design note #597: the CONTINUOUS pulse stays and is now the
-           quieter of two cues. It says "it is still your turn" -- a sustained
-           state, correctly rendered by a sustained animation. The band's
-           sweep says "your turn just began", which is the arrival the report
-           is about and the thing a continuous animation can never carry. */
+        /* Design note #597: the CONTINUOUS pulse stays and is now the quieter of two cues -- it says "it is still
+           your turn", a sustained state correctly rendered by a sustained animation. The band's sweep says "your
+           turn just began", which a continuous animation can never carry. */
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
-        /* ==================================================================
-         *  DESIGN NOTE 597a: `sticky` IS ALREADY A POSITIONED ELEMENT
-         * ==================================================================
-         *
-         * REPORTED: "the Action bar no longer travels down the screen as the
-         * player scrolls."
-         *
-         * That was this line. The previous pass added `position: relative`
-         * so the band could pin itself to the top edge -- and the comment
-         * even claimed it did so "without the bar's own sticky positioning
-         * being disturbed", which is exactly what it disturbed. `relative`
-         * replaced `sticky` outright, so the bar stopped following the
-         * scroll on every round that has an acting seat.
-         *
-         * IT WAS NEVER NEEDED. `position: sticky` already establishes a
-         * containing block for absolutely positioned children, so the band
-         * pins to the bar with no help. The override bought nothing and cost
-         * the one behaviour the bar exists to have. */
+        /* Design note #597a: `sticky` IS ALREADY A POSITIONED ELEMENT. Reported as the bar no longer travelling
+           with the scroll -- that was this line. A previous pass added `position: relative` so the band could pin
+           itself, claiming it did so "without the bar's own sticky positioning being disturbed", which is exactly
+           what it disturbed. `position: sticky` already establishes a containing block for absolutely positioned
+           children, so the band pins with no help: the override bought nothing and cost the bar's whole purpose. */
       }}
     >
-      {/* ==================================================================
-           DESIGN NOTE 597: THE HANDOFF BAND
-          ==================================================================
-
-           `key` IS THE MECHANISM, not a React formality. Changing it on every
-           new acting seat makes React replace this element, which restarts
-           the CSS animation -- so the sweep fires once per handoff and then
-           stops. Without the key the element would persist and the animation
-           would run exactly once, on mount, for the whole game.
-
-           `aria-hidden`: it is a decoration of a fact the bar already states
-           in words. A screen reader announcing a colour change on every turn
-           would be noise. */}
+      {/* Design note #597: THE HANDOFF BAND. `key` IS THE MECHANISM, not a React formality -- changing it on
+         every new acting seat makes React replace the element, which RESTARTS the CSS animation, so the sweep
+         fires once per handoff. Without it the animation would run once on mount for the whole game.
+         `aria-hidden`: it decorates a fact the bar already states in words. */}
       {actingSeatColor && (
         <>
           <style>{TURN_HANDOFF_SWEEP_CSS}</style>
           <span
-            /* Keyed on the SEAT, not just the colour. Colour is unique per
-               seat today and would work -- but it is a proxy for identity,
-               and a proxy that silently stops being one (a seventh player, a
-               duplicate pick) would leave the sweep never firing with no
-               visible cause. The name is what actually changed. */
+            /* Keyed on the SEAT, not the colour. Colour is unique per seat today and would work, but it is a proxy
+               for identity -- and a proxy that silently stops being one (a seventh player, a duplicate pick) would
+               leave the sweep never firing with no visible cause. The name is what actually changed. */
             key={`${activePlayerName ?? ""}:${actingSeatColor}:${isMyTurn ? "mine" : "theirs"}`}
             className={`app-turn-band${isMyTurn ? " app-turn-band-mine" : ""}`}
             style={{ backgroundColor: actingSeatColor }}
@@ -1285,35 +837,18 @@ export default function ContextualActionBar({
           />
         </>
       )}
-      {/* The "Phase N of 6: Track" suffix is GONE, and its removal is the
-          point rather than a simplification.
-
-          The stepper below numbers from the steps this era actually has
-          (design note #2 there): five in the Yellow era, six from Phase 3.
-          This label numbered from the fixed six-entry table. So the moment
-          the stepper shipped, the bar read "Phase 2 of 6: Track" directly
-          above a strip whose first chip said "1 Lay Track" -- two different
-          numbers for the same step, six inches apart.
-
-          Reconciling them would mean two places computing one position.
-          The strip already shows the position, the progress AND the
-          sequence, so the text is redundant as well as contradictory; the
-          honest fix is for one of them to stop making the claim. */}
-      {/* Design note #339: the auction is a ROUND, and the bar said it was
-          not. `roundType` has four values and this branch covered two, so
-          the Waterfall Auction -- the phase every game opens in -- fell
-          through to "No live round" while the auction dashboard was on
-          screen beneath it. A player's first impression of the app was a
-          header denying that anything was happening.
-
-          `null` keeps the honest wording: before the first `GetGameState`
-          resolves there genuinely is no round yet. */}
-      {/* Design note #517: the round's own number. "Operating Round" alone
-          named the KIND of round in a game that runs several of them back to
-          back -- so a player checking which one they were in, or reading a
-          log line about "OR 3.2", had nothing on the panel to match it
-          against. `cycle.index` is the board's own notation and the same
-          pair `ContextualSubPanel` already prints. */}
+      {/* The "Phase N of 6" suffix is GONE, and its removal is the point. The stepper numbers from the steps
+         this era actually has -- five in the Yellow era, six from Phase 3 -- while this label numbered from the
+         fixed six-entry table, so the bar read "Phase 2 of 6: Track" directly above a strip whose first chip
+         said "1 Lay Track": two numbers for one step, six inches apart. Reconciling them would mean two places
+         computing one position, so the honest fix is for one of them to stop making the claim. */}
+      {/* Design note #339: the auction is a ROUND, and the bar said it was not. `roundType` has four values and
+         this branch covered two, so the Waterfall Auction -- the phase every game opens in -- fell through to
+         "No live round" while the auction dashboard was on screen beneath it. `null` keeps the honest wording:
+         before the first `GetGameState` resolves there genuinely is no round yet. */}
+      {/* Design note #517: the round's own number. "Operating Round" alone named the KIND of round in a game
+         that runs several back to back, so a player reading a log line about "OR 3.2" had nothing to match it
+         against. `cycle.index` is the board's own notation and the same pair `ContextualSubPanel` prints. */}
       <span style={styles.actionBarRoundLabel}>
         {roundType === "OperatingRound"
           ? orSequence
@@ -1325,47 +860,19 @@ export default function ContextualActionBar({
               ? "Auction Round"
               : "No live round"}
       </span>
-      {/* Design note #481: the sub-phase, inline. Operating Round only --
-          there is no sub-phase sequence in a Stock Round or the auction,
-          and a step counter next to those titles would be inventing
-          structure the round does not have.
-
-          IT SURVIVES THE COLLAPSE, unlike the strip it replaces. Design
-          note #298 dropped the stepper when pinned on the grounds that it
-          is orientation rather than input, and that a progress indicator
-          which is always on screen stops being read. Neither objection
-          survives the change of form: at three words it costs the board
-          nothing, and it is now the ONLY thing naming the current step in
-          the header, so dropping it when pinned would leave a player who
-          scrolled unable to tell Lay Track from Station Tokens. */}
-      {/* ==================================================================
-           DESIGN NOTE 518: THE TRAIL, WHEN THERE IS ROOM FOR IT
-          ==================================================================
-
-           REPORTED: the expanded header shows the current sub-phase as a
-           bare string. Replace it with a horizontal list of every OR
-           sub-phase, styled as connected boxes, with the active one
-           emphasised and the rest dimmed. Keep the compact string when the
-           panel collapses.
-
-           This restores what design note #481 removed, and the reason it is
-           not a reversal is the CONDITION. #481 replaced a full stepper with
-           an inline phrase because the strip cost a row of the panel in
-           every state including the pinned one, and #298's rule is that a
-           pinned bar must earn every row. That argument is about the PINNED
-           form and was applied to both.
-
-           So the two forms split rather than one replacing the other. The
-           expanded panel has the room and shows the whole trail -- which
-           answers "what is still to come", a question a bare label cannot;
-           the pinned form keeps #481's phrase, which answers "where am I"
-           in three words. Neither state gains a row it was not already
-           spending.
-
-           THE COUNTER GOES WITH THE TRAIL. "4/6" beside six visible boxes
-           is the redundancy the round label's own note objects to -- two
-           renderings of one position, inches apart. The compact form keeps
-           it, because there it is the only thing carrying the position. */}
+      {/* Design note #481: the sub-phase, inline. Operating Round only -- there is no sub-phase sequence in a
+         Stock Round or the auction, and a step counter beside those titles would invent structure.
+         IT SURVIVES THE COLLAPSE, unlike the strip it replaces. #298 dropped the stepper when pinned as
+         orientation rather than input; neither objection survives the change of form -- at three words it costs
+         the board nothing, and it is now the ONLY thing naming the current step in the header. */}
+      {/* Design note #518: THE TRAIL, WHEN THERE IS ROOM FOR IT. This restores what #481 removed, and the
+         reason it is not a reversal is the CONDITION: #481's argument was about the PINNED form (a pinned bar
+         must earn every row) and was applied to both.
+         So the two forms split. The expanded panel shows the whole trail, which answers "what is still to
+         come"; the pinned form keeps #481's phrase, which answers "where am I" in three words. Neither state
+         gains a row it was not already spending.
+         THE COUNTER GOES WITH THE TRAIL -- "4/6" beside six visible boxes is two renderings of one position.
+         The compact form keeps it, because there it is the only thing carrying the position. */}
       {roundType === "OperatingRound" && orSubPhaseProgress && (
         condensed ? (
           <span
@@ -1412,45 +919,21 @@ export default function ContextualActionBar({
           </span>
         )
       )}
-      {/* ==================================================================
-           DESIGN NOTE 630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE
-          ==================================================================
-
-           INSTRUCTED: "let's make sure the player order track moves to the
-           same place as the subphase tracker in the Operating Round."
-
-           It was in the BUTTON row, beside Pass and Buy, because that is
-           where the roster pills it replaced had sat (design note #342) --
-           and a pill carrying a player's spendable cash genuinely did belong
-           next to the controls that spend it. `SeatOrderTrail` is not that.
-           It answers "where are we in the rotation", which is the same
-           question the sub-phase trail answers for a corporation's turn, and
-           the two were being answered in different halves of the same panel.
-
-           SO IT MOVES UP, into the slot immediately above, directly under
-           the round label. A player learns one place to look for "how far
-           through are we" and it holds whichever track this round has --
-           steps in an Operating Round, seats in the other two. The two are
-           mutually exclusive by round type, so this costs no height: the row
-           is occupied either way.
-
-           AND THE MONEY IS NO LONGER WHY IT IS THERE. Design note #631's
-           seat card carries the acting player's figures beside the controls,
-           which is the part of #342's argument that was about proximity to
-           the buttons. The trail keeps every seat's cash for comparison,
-           which is the part that was about the table. */}
+      {/* Design note #630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE. It was in the BUTTON row because that
+         is where the roster pills it replaced sat (#342) -- and a pill carrying spendable cash did belong next
+         to the controls that spend it. `SeatOrderTrail` is not that: it answers "where are we in the rotation",
+         the same question the sub-phase trail answers for a corporation's turn.
+         So it moves under the round label. One place to look for "how far through are we", holding whichever
+         track this round has; the two are mutually exclusive by round type, so this costs no height.
+         AND THE MONEY IS NO LONGER WHY IT IS THERE -- #631's seat card carries the acting player's figures
+         beside the controls, which is the part of #342 that was about proximity to the buttons. */}
       {roundType !== "OperatingRound" && seatOrderTrail}
-      {/* Operating Round turn stepper. Renders directly under the round
-          label it elaborates: the label says WHICH step, the strip says
-          where that step sits in the turn. Operating Round only -- there is
-          no sub-phase sequence in a Stock Round or the auction, and a strip
-          showing one would be inventing structure.
-
-          Design note #212: the strip is a READ-ONLY indicator in every
-          mode now, sandbox included. The only control on it is Skip, which
-          dispatches the real `AdvanceOperatingSubPhase` -- see that
-          component's design note #1 for why a clickable sandbox strip made
-          the one place that tests the turn order unable to test it. */}
+      {/* Operating Round turn stepper, directly under the round label it elaborates: the label says WHICH step,
+         the strip says where that step sits in the turn. Operating Round only -- a strip elsewhere would be
+         inventing structure.
+         Design note #212: READ-ONLY in every mode now, sandbox included. Its only control is Skip, which
+         dispatches the real `AdvanceOperatingSubPhase` -- see that component's #1 for why a clickable sandbox
+         strip made the one place that tests turn order unable to test it. */}
       {/* Design note #159: the targeting badge. A crosshair on the canvas
           only reads while the pointer is OVER the canvas -- a player who
           armed the mode and then looked at a panel has no way to tell it is
@@ -1468,89 +951,30 @@ export default function ContextualActionBar({
           </button>
         </div>
       )}
-      {/* ===================================================================
-           DESIGN NOTE 164: THE OPERATING ROUND PANEL IS TWO ROWS
-          ===================================================================
-
-          It used to be one long wrapping strip: Pass Turn, a divider, every
-          action for the current sub-phase, another divider, Undo, the route
-          mode toggle, a spacer, the phase badge, the shift warning. On a
-          narrow window that wrapped, and because the number of contextual
-          buttons CHANGES with the sub-phase, the badges moved every time the
-          turn advanced. A warning that relocates as the game progresses is a
-          warning players stop tracking.
-
-          Now: a stepper row, then an action row laid out as a THREE-COLUMN
-          GRID -- `1fr auto 1fr`. The centre column holds the sub-phase
-          actions and is genuinely centred on the panel, not merely centred
-          in whatever space the sides left over, because the two `1fr` rails
-          are equal by construction however wide their contents get. The
-          badges dock left and the always-available utilities dock right, and
-          neither can push the actions off-centre.
-
-          THE FOUR "SKIP" BUTTONS ARE GONE. `Skip Track Lay`, `Skip Private
-          Purchase`, `Skip Tokens` and `Skip Routes` all called
-          `onSkipSubPhase` -- the exact handler the stepper's own "Advance
-          Sub-Phase" button calls. Four names for one action, one of them
-          present in every phase, which is what made the action row read as
-          a pile of controls rather than as "what can I do here". Advancing
-          is a property of the TURN, so it lives with the stepper that shows
-          the turn; the action row now holds only things that actually
-          change game state. */}
+      {/* Design note #164: THE OPERATING ROUND PANEL IS TWO ROWS. It was one wrapping strip, and because the
+         number of contextual buttons CHANGES with the sub-phase, the badges moved every time the turn advanced
+         -- a warning that relocates as the game progresses is one players stop tracking.
+         Now a stepper row, then a THREE-COLUMN GRID (`1fr auto 1fr`): the centre column is centred on the panel
+         rather than on the leftovers, because the two rails are equal by construction however wide they get.
+         THE FOUR "SKIP" BUTTONS ARE GONE -- `Skip Track Lay`, `Skip Private Purchase`, `Skip Tokens` and `Skip
+         Routes` all called the handler the stepper's own button calls. Advancing is a property of the TURN, so
+         it lives with the stepper; the action row holds only things that change game state. */}
       {roundType === "OperatingRound" ? (
         <div style={styles.orPanel}>
-          {/* ===================================================================
-               DESIGN NOTE 228: WHOSE TURN IS IT, AND WHAT DO THEY HAVE
-              ===================================================================
-
-              A player presiding over three corporations had no single place
-              telling them which one is acting. The information existed --
-              the Round Detail table below the board highlights the active
-              row, and the corporation roster carries treasuries -- but both
-              are elsewhere on the page, and the action bar, which is where
-              every decision is actually made, named no company at all. So
-              the commonest question in an Operating Round ("am I spending
-              PRR's money or NYC's?") required looking away from the controls
-              that spend it.
-
-              FOUR FACTS, chosen because each one gates a decision on this
-              very bar rather than because they were available:
-
-                TREASURY   caps every action in the turn -- a tile's terrain
-                           cost, a token, a train.
-                STATIONS   how many tokens are left and what the next one
-                           costs, which is the Tokens step's whole decision
-                           and was previously only on the button.
-                TRAINS     what can run in the Routes step, and what the
-                           train limit permits buying in Hardware.
-
-              Rendered as a strip above the stepper: it describes the whole
-              turn, and the stepper describes where in that turn you are. */}
-          {/* ==================================================================
-               DESIGN NOTE 236: THE BAR WEARS THE CORPORATION'S COLOUR
-              ==================================================================
-
-              Two changes, and the second is why the first matters.
-
-              THE COLOUR IS THE IDENTITY NOW. This was a fixed dark navy with
-              a small brand-coloured dot -- the same slab for every
-              corporation, so telling PRR's turn from NYC's meant reading the
-              ticker. The bar now takes `stationTickerColor`, the exact
-              palette the station tokens on the map are drawn from, so the
-              strip and the tokens the player is placing are visibly the same
-              company. A player running three corporations can tell whose
-              turn it is peripherally, which is the whole complaint.
-
-              THE DOT WENT WITH IT. A brand-coloured dot on a brand-coloured
-              bar is invisible, and it was only ever a miniature of the
-              signal the bar now carries at full size.
-
-              INK IS DERIVED, NOT ASSERTED. `bestContrastTextColor` is the
-              same per-fill choice the map tokens use for their acronyms, so
-              B&M's dark slate gets white text and C&O's orange gets black
-              without either being hardcoded. Secondary text takes the same
-              ink at reduced alpha rather than a fixed grey, which would go
-              illegible on half the palette. */}
+          {/* Design note #228: WHOSE TURN IS IT, AND WHAT DO THEY HAVE. A player presiding over three corporations
+             had no single place naming the acting one -- the information existed elsewhere on the page, and the bar
+             where every decision is made named no company at all.
+             FOUR FACTS, chosen because each gates a decision on this very bar: TREASURY caps every action in the
+             turn; STATIONS is the Tokens step's whole decision and was previously only on the button; TRAINS is what
+             can run in Routes and what the limit permits buying in Hardware.
+             A strip ABOVE the stepper: it describes the whole turn, and the stepper describes where in it you are. */}
+          {/* Design note #236: THE BAR WEARS THE CORPORATION'S COLOUR. It was a fixed navy slab with a small brand
+             dot, so telling PRR's turn from NYC's meant reading the ticker. It now takes `stationTickerColor`, the
+             exact palette the map's station tokens are drawn from, so the strip and the tokens are visibly the same
+             company. THE DOT WENT WITH IT -- a brand dot on a brand bar is invisible.
+             INK IS DERIVED, NOT ASSERTED: `bestContrastTextColor` gives B&M's slate white text and C&O's orange
+             black without either being hardcoded, and secondary text takes the same ink at reduced alpha rather
+             than a fixed grey, which would go illegible on half the palette. */}
           <div
             style={{
               ...styles.orContextCard,
@@ -1558,35 +982,17 @@ export default function ContextualActionBar({
               borderColor: corporationBarInk.border,
             }}
           >
-            {/* ==================================================
-                 DESIGN NOTE 575: THE BAR IDENTIFIES A CORPORATION THE
-                 SAME WAY THE CARD DOES
-                ==================================================
-
-                 REPORTED: the herald and the full name are on the bar, but
-                 not the acronym.
-
-                 They were on one baseline-aligned row -- herald, then full
-                 name -- so the ACRONYM appeared only as `CorporateLogo`'s
-                 text fallback, which is to say only when the artwork failed
-                 to load. Design note #465 had already settled this argument
-                 for the Stock Card and its reasoning applies unchanged
-                 here: "a herald is unmistakable once you know it and
-                 unreadable until you do", and the full name "is what you
-                 read second". `PRR` is what a player says out loud.
-
-                 So this now mirrors `rosterIdentityRow` exactly -- herald
-                 and acronym sharing a row, full name on its own line
-                 beneath. Not a similar arrangement: the same one, because
-                 the bar and the card name the same object and a player
-                 should not have to learn two layouts for it. */}
+            {/* Design note #575: the bar identifies a corporation the SAME WAY the card does. Herald and full name sat
+               on one baseline row, so the ACRONYM appeared only as `CorporateLogo`'s text fallback -- which is to say
+               only when the artwork failed to load. `StockRoundPanel #465` settled this: a herald is unmistakable once
+               you know it and unreadable until you do, and the full name is what you read second.
+               Not a similar arrangement to `rosterIdentityRow` -- the same one, because the bar and the card name the
+               same object and a player should not learn two layouts for it. */}
             <span style={styles.orContextIdentity}>
               <span style={styles.orContextIdentityRow}>
-                {/* Design note #410: the same herald the Stock Card stripe
-                    shows, so a corporation is not a logo on one screen and
-                    an acronym on the other. `null` has no logo to draw --
-                    there is no corporation, which is a sentence rather than
-                    a missing image. */}
+                {/* Design note #410: the same herald the Stock Card stripe shows, so a corporation is not a logo on one
+                   screen and an acronym on the other. `null` has no logo to draw -- there is no corporation, which is a
+                   sentence rather than a missing image. */}
                 {activeCorporation ? (
                   <>
                     <CorporateLogo
@@ -1596,12 +1002,9 @@ export default function ContextualActionBar({
                       title={activeCorporation.fullName ?? activeCorporation.ticker}
                       fallbackStyle={styles.orContextTicker}
                     />
-                    {/* Design note #465: BESIDE, not instead. The herald
-                        keeps its recognisability and the acronym rides next
-                        to it as the readable handle. The logo's own text
-                        fallback would double this when a file is missing --
-                        only in the failure case, and a doubled ticker is a
-                        better failure than a nameless bar. */}
+                    {/* Design note #465: BESIDE, not instead. The herald keeps its recognisability and the acronym rides next
+                       to it as the readable handle. The logo's own text fallback would double this when a file is missing --
+                       only in the failure case, and a doubled ticker is a better failure than a nameless bar. */}
                     <span
                       style={{ ...styles.orContextAcronym, color: corporationBarInk.ink }}
                     >
@@ -1614,24 +1017,10 @@ export default function ContextualActionBar({
                   </span>
                 )}
               </span>
-              {/* ==================================================
-                   DESIGN NOTE 589: TWO LINES, NOT THREE
-                  ==================================================
-
-                   REPORTED: the president became a third row under the
-                   herald/acronym and the full name, making the card taller
-                   than it needs to be.
-
-                   That was a side effect of design note #575 turning this
-                   from a baseline-aligned ROW into a column: the president
-                   had been sitting on the same line as everything else, and
-                   a column gave it a line of its own.
-
-                   It belongs beside the full NAME. Both are identity detail
-                   read second -- "the Pennsylvania Railroad, Ada presiding"
-                   is one thought -- while the herald and acronym above are
-                   the label you read first. Two lines, same information,
-                   and the card is back to the height it was. */}
+              {/* Design note #589: TWO LINES, NOT THREE. A side effect of #575 turning a baseline-aligned ROW into a
+                 column: the president had shared a line and a column gave it one of its own. It belongs beside the full
+                 NAME -- both are identity detail read second ("the Pennsylvania Railroad, Ada presiding" is one
+                 thought), while the herald and acronym above are the label you read first. */}
               {(activeCorporation?.fullName || activeCorporation?.presidentLabel) && (
                 <span style={styles.orContextSubRow}>
                   {activeCorporation?.fullName && (
@@ -1648,24 +1037,12 @@ export default function ContextualActionBar({
                       ? { cursor: "help", textDecoration: "underline dotted 1px" }
                       : {}),
                   }}
-                  /* ==================================================
-                       DESIGN NOTE 326: THE PERSONAL PURSE, ON THE PERSON
-                      ==================================================
-
-                      Where design note #325's figure went. Attached to the
-                      president's NAME, so there is no ambiguity about
-                      whose money it is -- a number beside a crown is a
-                      fact about that human, where the same number floating
-                      in the rail below was a fact about "the acting
-                      turn", which in an Operating Round means the
-                      company.
-
-                      A tooltip rather than visible text because it is
-                      reference, not a driver: it answers "can they cover
-                      the emergency buy" when somebody asks, and the rest
-                      of the time the strip is about the corporation. The
-                      dotted underline is what makes it discoverable --
-                      an unmarked tooltip is one nobody hovers. */
+                  /* Design note #326: THE PERSONAL PURSE, ON THE PERSON. Where #325's figure went -- attached to the
+                     president's NAME, so a number beside a crown is a fact about that human, where the same number in the
+                     rail below was a fact about "the acting turn", which in an Operating Round means the company.
+                     A tooltip rather than visible text because it is reference: it answers "can they cover the emergency
+                     buy" when asked. The dotted underline is what makes it discoverable -- an unmarked tooltip is one
+                     nobody hovers. */
                   title={
                     activeCorporation.presidentCash !== null
                       ? `President's Personal Treasury: $${activeCorporation.presidentCash}`
@@ -1693,42 +1070,16 @@ export default function ContextualActionBar({
                   </span>
                 </span>
 
-                {/* ==================================================================
-                     DESIGN NOTE 237: TOKENS, NOT A FRACTION
-                    ==================================================================
-
-                    This read `2/4 - $40 ea`, which was wrong about the money
-                    and shaped wrong for the decision. The price is not flat:
-                    the home token is free, the second is $40 and every one
-                    after that is $100 (`utils/stationTokens.ts` design note
-                    #0), so "$40 ea" understated a third token by 60%.
-
-                    The row draws the corporation's whole allowance as
-                    circles in placement order, each captioned with its own
-                    cost, spent ones greyed in place. See
-                    `StationTokenRow.tsx` for why it needs its own inset
-                    surface on a brand-coloured bar. */}
-                {/* ==================================================
-                     DESIGN NOTE 372: THE PINNED CARD SHOWS THE PIECES
-                    ==================================================
-
-                    REPORTED: scrolled down, the sticky card shows the name,
-                    the treasury and the TRAIN LIMIT. During operations the
-                    actual trains and stations matter far more than the cap.
-
-                    Design note #298 chose what to drop when the bar pins,
-                    and it dropped the two rows that were expensive in
-                    height -- the station circles and the train chips --
-                    keeping the cheap single figures. That optimised for
-                    pixels rather than for the decision: a president mid-turn
-                    is asking "what do I own and where can I put a token",
-                    and the answer was scrolled off the top of the page while
-                    a number they cannot act on stayed pinned.
-
-                    So the condensed card keeps the PIECES and drops the
-                    LIMIT. It costs a few pixels back, which is the right
-                    trade for the one row that is on screen the whole time
-                    the map is being used. */}
+                {/* Design note #237: TOKENS, NOT A FRACTION. This read `2/4 - $40 ea`, which was wrong about the money:
+                   the home token is free, the second is $40 and every one after that is $100 (`utils/stationTokens.ts
+                   #0`), so "$40 ea" understated a third token by 60%. The row draws the whole allowance as circles in
+                   placement order, each captioned with its own cost. See `StationTokenRow.tsx` for why it needs an inset
+                   surface on a brand-coloured bar. */}
+                {/* Design note #372: THE PINNED CARD SHOWS THE PIECES. #298 dropped the two rows that were expensive in
+                   height -- the station circles and the train chips -- keeping the cheap single figures, which optimised
+                   for pixels rather than for the decision: a president mid-turn asks "what do I own and where can I put a
+                   token", and the answer was scrolled off the top while a number they cannot act on stayed pinned.
+                   So the condensed card keeps the PIECES and drops the LIMIT. */}
                 <span style={styles.orContextFact}>
                   <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                     Stations
@@ -1761,14 +1112,10 @@ export default function ContextualActionBar({
                       trains={activeCorporation.trains}
                       phase={phase ?? null}
                       surface="dark"
-                      // Design note #259: the rust countdown, matching the
-                      // Round Detail table below the board. Without
-                      // `outlook` a chip's tooltip names WHAT will destroy
-                      // it but not HOW SOON -- and "rusts when the first
-                      // 4-train is bought" is a different decision from
-                      // "rusts in one more purchase". The figure was
-                      // already computed for the table; this bar simply
-                      // was not being handed it.
+                      // Design note #259: the rust countdown, matching the Round Detail table below the board. Without
+                      // `outlook` a chip's tooltip names WHAT will destroy it but not HOW SOON -- and "rusts when the first
+                      // 4-train is bought" is a different decision from "rusts in one more purchase". The figure was already
+                      // computed for the table; this bar was not being handed it.
                       outlook={rustOutlookForBar}
                       /* Design note #375: interactive only during Run
                          Routes, where a chip and a route line are two views
@@ -1778,18 +1125,10 @@ export default function ContextualActionBar({
                       onHighlightTrain={onHighlightRoute}
                     />
                   )}
-                  {/* Design note #248: the limit, beside the fleet it caps.
-                      The chips say WHICH trains; this says how much room is
-                      left, which is the figure that decides whether the Buy
-                      Trains step has anything in it. Amber at the ceiling,
-                      because that is the state that ends the step.
-
-                      Design note #372: DROPPED WHEN PINNED. It is the one
-                      figure here a president cannot act on -- the Buy Trains
-                      step enforces it on its own -- so it is what gives way
-                      to keep the chips and the tokens on a bar that has to
-                      stay short. Still present in the full card, where there
-                      is room for both. */}
+                  {/* Design note #248: the limit, beside the fleet it caps. The chips say WHICH trains; this says how much
+                     room is left, which decides whether the Buy Trains step has anything in it. Amber at the ceiling.
+                     Design note #372: dropped when pinned -- the one figure here a president cannot act on, since the Buy
+                     Trains step enforces it on its own. (Restored by #590, which found the space was never scarce.) */}
                   {!condensed && phase?.trainLimit !== undefined && (
                     <span
                       style={{
@@ -1814,54 +1153,19 @@ export default function ContextualActionBar({
                   )}
                 </span>
 
-                {/* ==================================================
-                     DESIGN NOTE 379 (strip half): PRIVATES THE COMPANY OWNS
-                    ==================================================
-
-                    A corporation that bought a private from a player owns a
-                    real asset -- it pays that company's revenue into this
-                    treasury every Operating Round (design note #329) -- and
-                    no surface said so. `utils/gameState.ts` design note #379
-                    has the full account.
-
-                    ABSENT, NOT EMPTY, when there are none. Most
-                    corporations never buy a private, so a permanent
-                    "Privates: none" on the one bar that is on screen all
-                    turn would be a row of nothing for seven companies out
-                    of eight. The Game Ledger's table shows a dash instead,
-                    which is right for a table -- a column has to keep its
-                    cell -- and wrong for a strip.
-
-                    DROPPED WHEN PINNED, like the president line: design
-                    note #372 keeps the pieces a president acts on, and a
-                    private is a standing asset rather than a move. */}
-                {/* ==================================================
-                     DESIGN NOTE 590: NOTHING IS DROPPED WHEN PINNED
-                    ==================================================
-
-                     REPORTED: "I am not sure any of the information from the
-                     fully expanded version needs to disappear... removing
-                     items for the sake of removing them makes the
-                     information that disappears (presidency, train limit)
-                     seem less important than the other items, but since
-                     there's room players might as well see it all."
-
-                     Design notes #298 and #372 dropped the president line
-                     and the privates row when the bar pinned, on the
-                     reasoning that a pinned bar should carry "the pieces a
-                     president acts on" and not standing reference.
-
-                     The premise was that space was scarce. It is not, at the
-                     widths this is actually played at -- and the cost of the
-                     rule is worse than the space it saved: a player who
-                     learns that presidency and train limit vanish under
-                     pressure reasonably concludes they matter less, which is
-                     the opposite of true for the train limit especially.
-
-                     So the pinned bar shows the same facts as the expanded
-                     one. If a narrow window ever makes this genuinely tight,
-                     the answer is wrapping or a smaller type scale, not
-                     deciding for the player which facts they may keep. */}
+                {/* Design note #379 (strip half): PRIVATES THE COMPANY OWNS. A corporation that bought a private owns a
+                   real asset -- it pays that revenue into this treasury every Operating Round (#329) -- and no surface
+                   said so. `utils/gameState.ts #379` has the full account.
+                   ABSENT, NOT EMPTY, when there are none: a permanent "Privates: none" would be a row of nothing for seven
+                   companies out of eight. The Ledger's table shows a dash, which is right for a table -- a column has to
+                   keep its cell -- and wrong for a strip. */}
+                {/* Design note #590: NOTHING IS DROPPED WHEN PINNED. #298 and #372 dropped the president line and the
+                   privates row on the reasoning that a pinned bar carries "the pieces a president acts on".
+                   The premise was that space was scarce. It is not, at the widths this is played at -- and the cost of the
+                   rule is worse than the space it saved: a player who learns that presidency and train limit vanish under
+                   pressure reasonably concludes they matter less, which is the opposite of true for the train limit.
+                   If a narrow window ever makes this tight, the answer is wrapping or a smaller type scale, not deciding
+                   for the player which facts they may keep. */}
                 {activeCorporation.privates.length > 0 && (
                   <span style={styles.orContextFact}>
                     <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
@@ -1889,134 +1193,41 @@ export default function ContextualActionBar({
             )}
           </div>
 
-          {/* ==============================================================
-               DESIGN NOTE 481: THE STEPPER ROW WAS A ROW FOR ONE WORD
-              ==============================================================
-
-               REPORTED: two Undo buttons when expanded, and the sub-phase
-               takes an entire unnecessary row.
-
-               Both were the same row. It held the six-chip progress strip
-               and, in its `trailing` slot, a second Undo -- design note
-               #235's reasoning, which was sound when it was written and
-               stopped being true underneath it. #235 put Undo beside the
-               cursor it moves; design note #451 then put Undo in the action
-               row's right rail, WITH the sub-phase name next to it, for
-               the same reason. Two notes, one argument, two buttons. #451's
-               placement wins because it sits with the other turn controls,
-               which is where a player looks for it.
-
-               THE STRIP IS NOW A PHRASE. It rendered five or six chips,
-               chevrons and step numbers across the full width of the panel
-               to say "you are on step 2 of 5, called Lay Track" -- which is
-               a sentence, and now reads as one, inline beside the round
-               title. The three facts the strip carried are all still there:
-               the step's name, its position, and how many there are. What
-               is gone is a horizontal rule and 30-odd pixels of height,
-               permanently, on the panel that sits above the board.
-
-               WHAT IS LOST, honestly: the chips named the steps that come
-               NEXT, so a newcomer could read the whole sequence off the
-               bar. `RulesReference.tsx` still lists it, and the strip
-               component is kept intact rather than deleted so that view can
-               use it -- see this file's import, which is now the only thing
-               that changed about it. */}
+          {/* Design note #481: THE STEPPER ROW WAS A ROW FOR ONE WORD. Reported as two Undo buttons when expanded,
+             and the sub-phase taking a whole row -- both were the same row. #235 put Undo beside the cursor it
+             moves; #451 then put Undo in the action row's right rail WITH the sub-phase name, for the same reason.
+             Two notes, one argument, two buttons. #451's placement wins because it sits with the other turn
+             controls.
+             THE STRIP IS NOW A PHRASE: it spent the panel's full width and 30-odd pixels of permanent height saying
+             "you are on step 2 of 5, called Lay Track" -- which is a sentence. All three facts survive inline.
+             WHAT IS LOST, honestly: the chips named the steps that come NEXT. `RulesReference.tsx` still lists them
+             and the component is kept intact rather than deleted so that view can use it. */}
           <div style={styles.orPanelActionRow}>
             {/* LEFT RAIL -- docked status. Fixed home, so the phase badge and
                 the rust warning sit in the same place all game. */}
             <div style={styles.orPanelRailLeft}>
-              {/* ==============================================================
-                   DESIGN NOTE 482: THE TICKER LEAVES THE PINNED BAR
-                  ==============================================================
-
-                   REPORTED: the activity ticker pushes the action buttons
-                   off-centre in the collapsed bar.
-
-                   It did, and the mechanism is worth recording because the
-                   row was BUILT not to allow it. `orPanelActionRow` is a
-                   `1fr auto 1fr` grid precisely so the centre column is
-                   centred on the panel rather than on the leftovers
-                   (design note #426). But a `1fr` track is
-                   `minmax(auto, 1fr)`: it refuses to shrink below its
-                   content, so a rail holding a long, unconstrained line of
-                   text does not get clipped -- it grows, and takes the
-                   centre column with it. The sibling rail on the
-                   non-Operating-Round bar has carried `minWidth: 0` for
-                   exactly this reason since design note #458; this one
-                   never did.
-
-                   So there are two fixes here and both are wanted. The
-                   rail gets its `minWidth: 0`, which makes the centring
-                   structural rather than dependent on what happens to be
-                   in the rail. And the ticker is gone from the pinned form
-                   outright, which is what was asked for.
-
-                   ON #458's ARGUMENT: it put the line here because the
-                   sticky bar is the one element that survives scrolling --
-                   which is a claim about the PINNED state specifically. It
-                   does not survive the removal, and the copy kept below is
-                   redundant with the full ticker sitting on the same
-                   screen. It is left in the expanded bar because that is
-                   the change that was asked for and no more; the honest
-                   next step is to take it out altogether.
-
-                   ==================================================
-                    DESIGN NOTE 500: THE HONEST NEXT STEP, TAKEN
-                   ==================================================
-
-                   REPORTED: remove the Activity Log ticker from the Action
-                   Panel in all states.
-
-                   Which is the sentence the note above ends on. The pinned
-                   form lost it already; the expanded form kept a copy that
-                   its own note called "redundant with the full ticker
-                   sitting on the same screen", and that redundancy is the
-                   whole case. `TopTicker` is mounted at the top of the app
-                   with the same feed, the same filter and an accordion for
-                   the history. A one-line echo of its newest entry, inside
-                   the panel a player uses to ACT, spent a row of the one
-                   surface whose rows are contested to repeat something
-                   already on screen.
-
-                   `latestFeedItem` and `onOpenActivityLog` go with it
-                   rather than being left as unused props: a prop with no
-                   reader is how the line comes back. `App.tsx` keeps
-                   `latestFeedItem` -- `TopTicker` is its real consumer and
-                   always was. */}
+              {/* Design note #482: THE TICKER LEAVES THE PINNED BAR. The row is a `1fr auto 1fr` grid precisely so the
+                 centre is centred on the panel (#426) -- but a `1fr` track is `minmax(auto, 1fr)`: it refuses to shrink
+                 below its content, so a rail holding a long unconstrained line of text does not get clipped, it GROWS
+                 and takes the centre column with it. The sibling rail has carried `minWidth: 0` since #458; this never
+                 did. Both fixes are wanted: the rail gets its `minWidth: 0`, which makes the centring structural.
+                 Design note #500: THE HONEST NEXT STEP, TAKEN. #482 ended on "the honest next step is to take it out
+                 altogether", and its own note called the expanded copy "redundant with the full ticker sitting on the
+                 same screen". `TopTicker` has the same feed, the same filter and an accordion for the history.
+                 `latestFeedItem` and `onOpenActivityLog` go with it -- a prop with no reader is how the line comes back. */}
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
                 </span>
               )}
-              {/* ==================================================
-                   DESIGN NOTE 325: TWO POCKETS, ONE ROW, CONSTANT CONFUSION
-                  ==================================================
-
-                  REPORTED: the standalone personal cash line in the
-                  Operating Round panel is confused with corporate treasury
-                  funds.
-
-                  Design note #300 added it here on the reasoning that a
-                  president facing an emergency train buy needs to know
-                  what they can personally cover. That is true and the
-                  placement was still wrong: this rail sits directly under
-                  the corporation strip, which shows `Treasury $X` in the
-                  same typeface at the same size. Two dollar figures, one
-                  above the other, both attached to the acting turn, and
-                  the tooltip explaining that they are different pockets
-                  only opens if you already suspected they were.
-
-                  An Operating Round spends the CORPORATION's money.
-                  Nothing on this rail is charged to a player's wallet, so
-                  the figure had no decision on this screen to inform.
-
-                  IT IS NOT DELETED, IT IS MOVED -- design note #326 hangs
-                  it off the president's own name in the strip above, where
-                  it is unambiguously a fact about the person rather than
-                  about the turn. The auction and Stock Round branch of this
-                  bar keeps its badge (design note #308): there the money
-                  IS the player's, and there it is the only figure on the
-                  row. */}
+              {/* Design note #325: TWO POCKETS, ONE ROW, CONSTANT CONFUSION. #300 added personal cash here so a
+                 president facing an emergency buy could see what they can cover -- true, and the placement was still
+                 wrong: this rail sits directly under the corporation strip, which shows `Treasury $X` in the same
+                 typeface at the same size, and the tooltip explaining that they are different pockets only opens if you
+                 already suspected they were. An Operating Round spends the CORPORATION's money, so the figure had no
+                 decision on this screen to inform.
+                 IT IS NOT DELETED, IT IS MOVED -- #326 hangs it off the president's own name. The auction and Stock
+                 Round branch keeps its badge (#308): there the money IS the player's. */}
               {phaseAlert && (
                 <span
                   className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
@@ -2044,52 +1255,23 @@ export default function ContextualActionBar({
 
             {/* CENTRE -- only what this sub-phase can actually do. */}
             <div style={styles.orPanelActions}>
-              {/* ===================================================================
-                   DESIGN NOTE 279: NO PLACEHOLDER WHERE A CONTROL SHOULD BE
-                  ===================================================================
-
-                  This row used to fall back to "No button for this step --
-                  use Skip to move on." whenever a sub-phase contributed no
-                  contextual buttons.
-
-                  Design note #180 wrote it to replace an even worse string
-                  ("Nothing to do in this step"), and it kept that string's
-                  central mistake: it describes the PANEL rather than the
-                  player's options. Every step of an Operating Round has
-                  something to do -- lay track, place a token, draw a route,
-                  buy a train -- and a line saying otherwise was only ever
-                  true of this one div.
-
-                  It also aged badly. By the time the Run Routes controls had
-                  moved into their own panel, `Routes` was the only step
-                  reaching this branch -- so the one place the string
-                  actually rendered was a step with a whole route planner
-                  directly beneath it, telling the player there was nothing
-                  here but Skip.
-
-                  Deleted outright, and the Routes controls moved onto this
-                  line (below) so the branch has content rather than a
-                  caption about its absence. The Track hint survives because
-                  it is the opposite kind of string: it says where the
-                  action IS (on the map), which is a thing the player cannot
-                  otherwise know. */}
-              {/* Design note #413: and it is only true for the player who
-                  may actually click that hex. Told to a non-acting player it
-                  is an instruction they cannot follow, on a map that will
-                  refuse them -- which is the same dead click the Skip button
-                  was handing out, dressed as help. */}
+              {/* Design note #279: NO PLACEHOLDER WHERE A CONTROL SHOULD BE. This fell back to "No button for this step
+                 -- use Skip to move on", which describes the PANEL rather than the player's options: every step of an
+                 Operating Round has something to do, and the line was only ever true of one div.
+                 It also aged badly -- once the route controls moved into their own panel, `Routes` was the only step
+                 reaching this branch, so the one place it rendered was a step with a whole route planner beneath it.
+                 Deleted, with the Routes controls moved onto this line. The Track hint survives because it is the
+                 opposite kind of string: it says where the action IS, which the player cannot otherwise know. */}
+              {/* Design note #413: and it is only true for the player who may actually click that hex. Told to a
+                 non-acting player it is an instruction they cannot follow, on a map that will refuse them. */}
               {mayActThisTurn && contextualButtons.length === 0 && orSubPhase === "Track" && (
                 <span style={styles.orPanelNoActions}>
                   Select a hex on the map to lay or upgrade track. Click the preview to rotate.
                 </span>
               )}
-              {/* Design note #510: the "Buy Trains" jump button is GONE.
-                  Design note #491 added it because the purchase panels sat
-                  far below a pinned bar and a scrolled player could not see
-                  them. Design note #508 moved those panels INTO the bar, so
-                  they travel with it -- and a button whose only job was to
-                  scroll to something that no longer goes anywhere is a
-                  control with nothing left to do. */}
+              {/* Design note #510: the "Buy Trains" jump button is GONE. #491 added it because the purchase panels sat
+                 far below a pinned bar; #508 moved those panels INTO the bar, so they travel with it -- and a button
+                 whose only job was to scroll to something that no longer goes anywhere has nothing left to do. */}
               {contextualButtons.map((btn) => (
                 <button
                   key={btn.key}
@@ -2108,24 +1290,11 @@ export default function ContextualActionBar({
                 </button>
               ))}
 
-              {/* ===================================================================
-                   DESIGN NOTE 279: THE ROUTE MODE TOGGLE IS A TOOLBAR CONTROL
-                  ===================================================================
-
-                  Run Routes was the only sub-phase whose primary controls
-                  lived somewhere other than this line. The toggle sat at the
-                  top of `RoutePlannerPanel`, inside its border, above a
-                  table of drafted routes -- which reads as a property of
-                  those routes rather than as the tool that makes them.
-
-                  It sits here now, immediately before Skip, because those
-                  two ARE the choice on arriving at this step: pick how to
-                  build a route, or decline to build one. The panel below
-                  keeps everything that describes a route.
-
-                  See `RoutePlannerPanel`'s design note #7 for why the
-                  component itself still lives there rather than being
-                  rebuilt here. */}
+              {/* Design note #279: THE ROUTE MODE TOGGLE IS A TOOLBAR CONTROL. It sat at the top of `RoutePlannerPanel`
+                 above a table of drafted routes, which reads as a property of those routes rather than as the tool that
+                 makes them. It sits immediately before Skip because those two ARE the choice on arriving at this step:
+                 pick how to build a route, or decline to build one. See `RoutePlannerPanel`'s #7 for why the component
+                 itself still lives there. */}
               {showRouteToggle && (
                 <AutoRouteButton
                   onAutoRoute={onAutoRoute}
@@ -2148,75 +1317,23 @@ export default function ContextualActionBar({
                 />
               )}
 
-              {/* ==================================================================
-                   DESIGN NOTE 258: SKIP IS AN ACTION, SO IT SITS WITH THE ACTIONS
-                  ==================================================================
-
-                  Design note #235 moved Skip onto the action ROW for the
-                  right reason -- it is the alternative to whatever this step
-                  offers -- but dropped it into the right RAIL, which is the
-                  docked-utilities column. The row is a three-column grid
-                  (`1fr auto 1fr`), so anything in that rail is pinned to the
-                  far edge: Skip ended up flush right, half a panel away from
-                  the buttons it is an alternative to.
-
-                  It sits in the CENTRE column now, last in the group.
-                  Declining is the fallback, so it reads after the things it
-                  is a fallback to rather than competing for the first
-                  glance.
-
-                  ==================================================================
-                   DESIGN NOTE 263: EXCEPT ON THE LAST STEP, WHERE IT IS A TWIN
-                  ==================================================================
-
-                  Buy Trains is the final sub-phase of a corporation's turn,
-                  and it already carries "End Turn". Skip and End Turn there
-                  are the same gesture wearing two labels: nothing follows
-                  Buy Trains, so "move past this step without acting" IS
-                  "finish this turn". Two buttons for one outcome is worse
-                  than a redundant control -- it implies a distinction, and a
-                  player who reads one has to work out what the other would
-                  do differently.
-
-                  So Skip is hidden on `Hardware` and End Turn is the sole
-                  advancement, which is also the honest label: the turn is
-                  what ends. Every earlier step keeps Skip, because on those
-                  it genuinely does something End Turn does not -- move one
-                  step and leave the rest of the turn intact. */}
-              {/* ===================================================================
-                   DESIGN NOTE 278: A CORPORATION THAT EARNED CANNOT DECLINE
-                  ===================================================================
-
-                  Skip was available on the Dividends step regardless of what
-                  the trains had just earned, which offers a third option
-                  1830 does not have. Once a corporation runs a route for
-                  more than $0 the money EXISTS, and the rules give exactly
-                  two places it can go: out to the shareholders, or into the
-                  treasury. There is no third door where it evaporates.
-
-                  Worse than merely wrong, it was the ONE step where skipping
-                  silently destroyed value. Skipping Track or Tokens forgoes
-                  an opportunity; skipping a declared $180 would have thrown
-                  away $180 the corporation had already earned, and nothing
-                  on screen said so.
-
-                  So Skip disappears when there is revenue to allocate, and
-                  the Pay/Withhold pair -- already the only two contextual
-                  buttons on this step -- becomes the whole choice.
-
-                  IT STAYS AT $0, which is the case the rule does not cover.
-                  A corporation that ran nothing, or ran a route worth
-                  nothing, has no money to allocate and no reason to be held
-                  on this step; `DeclareDividends` for zero is a message with
-                  no effect, so Skip is the honest control there. That is
-                  also why this tests the REVENUE rather than the sub-phase:
-                  the question is whether anything was earned, not which
-                  step the cursor is on. */}
-              {/* Design note #413: `mayActThisTurn` leads, because Skip is
-                  the control the report names. It dispatches
-                  `AdvanceOperatingSubPhase` for the ACTING corporation, so a
-                  non-acting player clicking it was stepping somebody else's
-                  turn forward. */}
+              {/* Design note #258: SKIP IS AN ACTION, SO IT SITS WITH THE ACTIONS. #235 moved it to the action ROW for
+                 the right reason and dropped it into the right RAIL -- the docked-utilities column -- so it ended up
+                 flush right, half a panel from the buttons it is an alternative to. It is last in the CENTRE group now:
+                 declining is the fallback, so it reads after the things it is a fallback to.
+                 Design note #263: EXCEPT ON THE LAST STEP, WHERE IT IS A TWIN. Nothing follows Buy Trains, so "move past
+                 this step" IS "finish this turn" -- and two buttons for one outcome implies a distinction a player then
+                 has to work out. Skip is hidden on `Hardware`; every earlier step keeps it, because there it genuinely
+                 does something End Turn does not. */}
+              {/* Design note #278: A CORPORATION THAT EARNED CANNOT DECLINE. Skip on the Dividends step offered a third
+                 option 1830 does not have -- once a route runs for more than $0 the money EXISTS and the rules give it
+                 two destinations. Worse, it was the ONE step where skipping silently destroyed value: skipping Track
+                 forgoes an opportunity, skipping a declared $180 throws away $180 already earned.
+                 It tests the REVENUE rather than the sub-phase: the question is whether anything was earned.
+                 (Its own "IT STAYS AT $0" exception is superseded -- see #436/#485.) */}
+              {/* Design note #413: `mayActThisTurn` leads, because Skip is the control the report names. It dispatches
+                 `AdvanceOperatingSubPhase` for the ACTING corporation, so a non-acting player clicking it was stepping
+                 somebody else's turn forward. */}
               {mayActThisTurn && orSubPhase !== "Hardware" && !dividendChoiceForced && (
                 <button
                   type="button"
@@ -2244,41 +1361,16 @@ export default function ContextualActionBar({
             {/* RIGHT RAIL -- always-available utilities, never sub-phase
                 specific, so they do not belong in the centre. */}
             <div style={styles.orPanelRailRight}>
-              {/* Design note #266: the Auto Route / Manual Route pair used to
-                  live here, in the docked-utilities rail. They are not
-                  utilities -- they are the first step of the Run Routes
-                  task -- and they now head `RoutePlannerPanel` below as one
-                  segmented control. See that file's design note #0 for why
-                  the three regions became one column. */}
-              {/* ==================================================
-                   DESIGN NOTE 451: UNDO, AND WHAT IT WOULD UNDO
-                  ==================================================
-
-                   REPORTED: add Undo to the collapsed/sticky action bar so
-                   it is always accessible, and put the sub-phase name beside
-                   it so the logic of what is being undone is visible.
-
-                   Undo lived only on the NON-Operating-Round branch of this
-                   bar -- the auction and Stock Round row. During an
-                   Operating Round, which is the round with the most
-                   undoable actions in it and the only one with sub-steps to
-                   get lost in, the button was simply absent. A player who
-                   laid the wrong tile had to leave the round's own panel to
-                   find the control that would take it back.
-
-                   THE PAIR IS THE POINT, not two controls that happen to be
-                   adjacent. `Undo` alone answers "can I take that back";
-                   `Track ⟲ Undo` answers "take back what I did in Track",
-                   which is the question actually being asked. Design note
-                   #439 made Undo rewind past auto-skipped steps to the last
-                   thing the player chose -- so naming the step it will land
-                   on is what makes that behaviour legible rather than
-                   surprising.
-
-                   IT SITS IN THE RIGHT RAIL, which the grid keeps clear of
-                   the centred action group (design note #426). So adding it
-                   moves nothing: the primary buttons stay exactly where
-                   muscle memory left them. */}
+              {/* Design note #266: the Auto Route / Manual Route pair used to live in the docked-utilities rail. They are
+                 not utilities -- they are the first step of the Run Routes task -- and now head `RoutePlannerPanel` as
+                 one segmented control. See that file's #0 for why three regions became one column. */}
+              {/* Design note #451: UNDO, AND WHAT IT WOULD UNDO. Undo lived only on the non-Operating-Round branch, so
+                 in the round with the most undoable actions and the only one with sub-steps to get lost in, the button
+                 was absent -- a player who laid the wrong tile had to leave the round's own panel to find it.
+                 THE PAIR IS THE POINT: `Undo` alone answers "can I take that back"; `Track undo` answers "take back what
+                 I did in Track". #439 made Undo rewind past auto-skipped steps to the last thing the player chose, so
+                 naming the step it lands on is what makes that legible rather than surprising.
+                 It sits in the right rail, which the grid keeps clear of the centred group, so adding it moves nothing. */}
               <span style={styles.undoStepLabel}>
                 {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel}
               </span>
@@ -2303,43 +1395,19 @@ export default function ContextualActionBar({
             </div>
           </div>
 
-          {/* Design note #490: the payout detail, inside the panel and under
-              the buttons it explains. `orPanel` is a flex COLUMN, so this
-              lands directly below `orPanelActionRow` with no positioning of
-              its own -- which is why the move needed no new layout, only a
-              different parent.
-
-              Design note #188 (kept): the consequence of each option, laid
-              out before the player commits. Two things they could not
-              otherwise see -- WHO gets paid and how much, and WHERE the
-              stock token lands -- both computable from state already on
-              screen, and both previously left for the player to work out. */}
-          {/* ==================================================================
-               DESIGN NOTE 498: THE PINNED BAR DROPPED THE ONE STEP THAT IS
-               ABOUT THE TRAINS
-              ==================================================================
-
-              REPORTED: during Run Routes the collapsed Action Panel does not
-              give enough context about the active trains.
-
-              It gave none. Design note #298's rule for the pinned form --
-              keep what a player needs WHILE LOOKING AT THE BOARD, drop the
-              rest -- is right, and Run Routes is the step where it misfires.
-              Everything about this step IS the board: which train is being
-              drafted for, what its run is worth, whether the other two have
-              routes at all. `RoutePlannerPanel` carries all of it and scrolls
-              away, so a pinned player drawing a route on the map had no way
-              to see the value of what they were drawing.
-
-              So this row is the exception #298's own reasoning asks for, and
-              it is narrow: condensed only, Routes only, one line.
-
-              THE CHIPS ARE LIVE, not a readout. They call the same
-              `onSelectRouteTrain`/`onHighlightRoute` the planner rows do, so
-              from the collapsed bar a player can still switch which train the
-              map is drafting for and light its route up (design note #495's
-              emphasis). A dead label here would have shown the problem
-              without giving anywhere to act on it. */}
+          {/* Design note #490: the payout detail, inside the panel and under the buttons it explains. `orPanel` is a
+             flex COLUMN, so this lands directly below the action row with no positioning of its own.
+             Design note #188 (kept): the consequence of each option, laid out before the player commits -- WHO gets
+             paid and how much, and WHERE the stock token lands. Both computable from state already on screen, and
+             both previously left for the player to work out. */}
+          {/* Design note #498: THE PINNED BAR DROPPED THE ONE STEP THAT IS ABOUT THE TRAINS. #298's rule -- keep
+             what a player needs WHILE LOOKING AT THE BOARD -- is right, and Run Routes is the step where it
+             misfires: everything about this step IS the board, and `RoutePlannerPanel` carries all of it and scrolls
+             away. So this row is the exception #298's own reasoning asks for, and it is narrow: condensed only,
+             Routes only, one line.
+             THE CHIPS ARE LIVE, not a readout -- they call the same handlers the planner rows do, so a player can
+             still switch which train the map is drafting for. A dead label would show the problem without giving
+             anywhere to act on it. */}
           {orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
             <div style={styles.condensedTrainRow} role="group" aria-label="Drafted routes">
               {trainDrafts.map((draft) => {
@@ -2379,26 +1447,12 @@ export default function ContextualActionBar({
               })}
             </div>
           )}
-          {/* ==================================================================
-               DESIGN NOTE 509: THE DECISION TRAVELS WITH THE BUTTONS
-              ==================================================================
-
-               REPORTED: the Dividends block must stay visible and travel with
-               the collapsed/sticky panel, so a player does not have to scroll
-               back to the top to read the market moves.
-
-               Design note #490 gated this on `!condensed`, reasoning from
-               design note #298's rule that the pinned bar keeps what a player
-               needs WHILE LOOKING AT THE BOARD. That rule is right and this
-               was the wrong side of it: the payout table and the two market
-               moves are not orientation, they are the INPUTS to the two
-               buttons sitting directly above them. Hiding them when pinned
-               left a player scrolled down the page with Pay and Withhold
-               live and no way to see what either one does.
-
-               The Buy Trains panel below travels for the same reason and by
-               the same mechanism -- the bar is `position: sticky`, so
-               anything inside it follows. */}
+          {/* Design note #509: THE DECISION TRAVELS WITH THE BUTTONS. #490 gated this on `!condensed`, reasoning
+             from #298's rule -- and this was the wrong side of it: the payout table and the two market moves are
+             not orientation, they are the INPUTS to the two buttons directly above them. Hiding them when pinned
+             left a scrolled player with Pay and Withhold live and no way to see what either does.
+             The Buy Trains panel travels for the same reason and by the same mechanism: the bar is `position:
+             sticky`, so anything inside it follows. */}
           {orSubPhase === "Dividends" && (
             <div style={styles.dividendPanel}>
               <div style={styles.dividendColumn}>
@@ -2426,32 +1480,13 @@ export default function ContextualActionBar({
                 />
               </div>
 
-              {/* ==================================================================
-                   DESIGN NOTE 509a: SHOW THE MONEY MOVING, DO NOT DESCRIBE IT
-                  ==================================================================
-
-                   REPORTED: replace the explanatory string under Withhold with
-                   the corporation's herald and a strict
-                   `[current treasury] -> [new treasury]`.
-
-                   The sentence it replaces -- "The full amount stays in the
-                   corporation's treasury. Shareholders receive nothing this
-                   Operating Round." -- was two clauses of rules text on a
-                   panel whose other column shows an actual table of figures.
-                   It described a consequence the player then had to compute:
-                   they know the treasury and they know the revenue, and the
-                   panel made them add.
-
-                   The transition states it. And it mirrors `MarketMoveLine`
-                   deliberately -- same arrow, same green-for-a-rise rule
-                   (design note #489) -- so the two things a withhold does,
-                   move the treasury up and the share price left, read as one
-                   pair of before/after facts rather than as a paragraph and a
-                   diagram.
-
-                   THE HERALD IS THE SUBJECT. Whose treasury this is was the
-                   one fact the sentence carried that the numbers do not, and
-                   a logo says it in the space a pronoun took. */}
+              {/* Design note #509a: SHOW THE MONEY MOVING, DO NOT DESCRIBE IT. The sentence it replaces was two clauses
+                 of rules text on a panel whose other column shows an actual table of figures -- it described a
+                 consequence the player then had to compute, since they know the treasury and they know the revenue.
+                 The transition states it, and it mirrors `MarketMoveLine` deliberately (same arrow, same green-for-a-
+                 rise rule, #489) so the two things a withhold does read as one pair of before/after facts.
+                 THE HERALD IS THE SUBJECT -- whose treasury this is was the one fact the sentence carried that the
+                 numbers do not, and a logo says it in the space a pronoun took. */}
               <div style={styles.dividendColumn}>
                 <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
                 <span style={styles.treasuryMove}>
@@ -2482,51 +1517,20 @@ export default function ContextualActionBar({
             </div>
           )}
 
-          {/* ==================================================================
-               DESIGN NOTE 508: THE PURCHASE PANELS MOVED INTO THE BAR
-              ==================================================================
-
-               REPORTED: the train purchasing interface should condense and
-               travel with the collapsed/sticky Action Panel.
-
-               Design note #203 moved both halves of this step OUT of the bar
-               and into `TrainPurchasePanel`, correctly -- the bar could not
-               host a depot queue and a corporation roster as inline controls.
-               What that left was a step whose entire interface lived below a
-               `position: sticky` bar, so scrolling the board scrolled the
-               controls away and left "End Turn" pinned on its own.
-
-               Design note #491 patched the symptom with a jump button. This
-               removes the cause: the panel is rendered HERE, inside the bar,
-               so it is sticky by inheritance and there is nothing to jump to.
-
-               IT IS STILL ONE COMPONENT, which is what keeps #203's argument
-               intact -- there is exactly one place a train is bought, it has
-               simply changed address. `condensed` is the panel's own pinned
-               form (design note #508 there), not a second cut-down copy of
-               it. */}
-          {/* ==================================================================
-               DESIGN NOTE 619: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT
-              ==================================================================
-
-               The other half of the report: "the 'End Turn' button needs to be
-               grayed out AND/OR prompt errant clicks that they must buy a
-               train."
-
-               A `disabled` button cannot answer a click -- the browser
-               swallows the event before any handler runs -- so "prompt errant
-               clicks" is not available without un-disabling the control and
-               refusing the action ourselves, which would put a button on
-               screen that dispatches nothing. The honest substitute is to stop
-               the click being errant in the first place: state the obligation
-               where the player is already looking, in the step that owns it.
-
-               So the notice is PERSISTENT rather than a response. It appears
-               with the panel, above the depot the player is about to buy from,
-               and it names the emergency purchase -- which is the part that
-               makes the greyed button feel like a rule rather than a
-               malfunction, because the poverty case is exactly when a player
-               reaches for the exit. */}
+          {/* Design note #508: THE PURCHASE PANELS MOVED INTO THE BAR. #203 moved both halves of this step OUT,
+             correctly -- the bar could not host a depot queue and a corporation roster as inline controls. What that
+             left was a step whose entire interface lived below a `position: sticky` bar, so scrolling the board
+             scrolled the controls away and left "End Turn" pinned on its own. #491 patched the symptom with a jump
+             button; this removes the cause -- the panel renders HERE, sticky by inheritance, with nothing to jump to.
+             IT IS STILL ONE COMPONENT, which keeps #203's argument intact: there is exactly one place a train is
+             bought, it has simply changed address. `condensed` is the panel's own pinned form, not a second copy. */}
+          {/* Design note #619: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. A `disabled` button cannot answer a click
+             -- the browser swallows the event before any handler runs -- so "prompt errant clicks" is not available
+             without un-disabling the control and refusing the action ourselves, which would put a button on screen
+             that dispatches nothing. The honest substitute is to stop the click being errant: state the obligation
+             where the player is already looking.
+             So the notice is PERSISTENT rather than a response, and it names the emergency purchase -- which is what
+             makes the greyed button feel like a rule rather than a malfunction. */}
           {orSubPhase === "Hardware" && mustBuyTrain && (
             <div style={styles.mustBuyTrainNotice} role="status">
               This corporation owns no train and has a route to run — it must buy one before the
@@ -2551,78 +1555,26 @@ export default function ContextualActionBar({
         </div>
       ) : (
       <div style={styles.actionBarPanel}>
-        {/* ==================================================================
-             DESIGN NOTE 636: THE SAME THREE ROWS AS AN OPERATING ROUND
-            ==================================================================
-
-             INSTRUCTED: "why not exactly replicate the Operating Round's Action
-             bar layout? top row is: Auction/Stock Round X, Player Name > Player
-             Name > ..., the second row is the player card showing their
-             treasury and escrowed cash (if any), and the third row is the
-             center Pass or Undo buttons?"
-
-             Taken as written. The Operating Round is a COLUMN (`orPanel`):
-             identity card, then a `1fr auto 1fr` action row. This branch was a
-             single action row with the seat card wedged into its left rail --
-             so the card competed with the buttons for width instead of sitting
-             above them, and the two rounds put the same object in two places.
-
-             ON THE OBJECTION RAISED ALONGSIDE IT -- that "players are
-             different from corporations and it may not be right to have them
-             displayed the exact same way" -- the difference is real and it is
-             not in the LAYOUT. What differs is what the track contains: an
-             Operating Round's trail is one corporation's progress through its
-             own turn, while the seat trail is the whole table's rotation. Those
-             are different scopes and they read differently in the same slot,
-             which is fine and even useful. What a player learns from the
-             standardisation is where to LOOK -- round on the first line, who is
-             acting on the second, what they can do on the third -- and that is
-             worth more than preserving a distinction the layout was never
-             carrying anyway.
-
-             THE PHASE BADGE STAYS IN THE ACTION ROW'S RIGHT RAIL, exactly as
-             the Operating Round keeps its utilities there. It is chrome about
-             the game rather than about this seat, so it does not belong on the
-             identity row. */}
-          {/* ==================================================================
-               DESIGN NOTE 631: THE SEAT CARD, BUILT LIKE THE CORPORATION CARD
-              ==================================================================
-
-               REPORTED: "the Action bar during stock and auction rounds now
-               have a long player color-ed stripe along the top, but users are
-               still not seeing it or finding it very intuitive what it does.
-               Compared to the corporate card/tile in the Operating round
-               action bar, it is indeed quite subtle."
-
-               Both halves are right and the second explains the first. A
-               3px stripe can only signal that SOMETHING is the case; it cannot
-               say what. The Operating Round bar does not have that problem
-               because it does not use a stripe -- `orContextCard` is a
-               fully-saturated block carrying the corporation's acronym, name
-               and figures, and a player reads WHO from it without being taught
-               that colour means anything.
-
-               SO THIS IS THAT CARD, WITH A SEAT IN IT. Same construction:
-               the identity's own colour at full strength, ink chosen by
-               `bestContrastTextColor` rather than asserted, a translucent black
-               border so one rule darkens any hue. Nothing here is a new idea;
-               it is the existing idea applied to the round that was left out.
-
-               THE FIGURES ARE LABELLED, WHICH IS THE OTHER HALF OF THE REPORT:
-               'the compressed "P1 $500 (+$200)" made some players think they
-               were earning $200'. That reading is entirely fair -- a bare
-               "+$200" beside a balance is the notation a game uses for income.
-               Escrowed money is the opposite: it is the player's own cash,
-               already committed, and unavailable until the bid resolves. A
-               plus sign cannot carry that and no amount of tooltip fixes a
-               glyph people do not hover. So the card spends the width on words
-               -- "Cash" and "In bids" -- and the ambiguity has nowhere to
-               live.
-
-               THE STRIPE STAYS. It is the HANDOFF animation (design note
-               #597), which is about the moment of change rather than the
-               state, and the card cannot do that job -- a card that is always
-               there cannot sweep. */}
+        {/* Design note #636: THE SAME THREE ROWS AS AN OPERATING ROUND. The OR branch is a COLUMN -- identity
+           card, then a `1fr auto 1fr` action row -- while this was a single action row with the seat card wedged
+           into its left rail, so the card competed with the buttons for width and the two rounds put the same
+           object in two places.
+           ON THE OBJECTION that players are different from corporations: the difference is real and it is not in
+           the LAYOUT. What differs is what the track contains -- one corporation's progress through its own turn
+           versus the whole table's rotation. What a player learns from the standardisation is where to LOOK.
+           THE PHASE BADGE STAYS IN THE ACTION ROW'S RIGHT RAIL, as the Operating Round keeps its utilities there:
+           it is chrome about the game rather than about this seat. */}
+          {/* Design note #631: THE SEAT CARD, BUILT LIKE THE CORPORATION CARD. A 3px stripe can only signal that
+             SOMETHING is the case; it cannot say what. The Operating Round bar does not have that problem because
+             it does not use a stripe -- `orContextCard` is a saturated block carrying acronym, name and figures, and
+             a player reads WHO from it without being taught that colour means anything.
+             So this is that card with a seat in it: same construction, ink from `bestContrastTextColor` rather than
+             asserted, a translucent black border so one rule darkens any hue. Not a new idea, the existing one
+             applied to the round that was left out.
+             THE FIGURES ARE LABELLED: the compressed "P1 $500 (+$200)" made players think they were earning $200,
+             which is entirely fair -- a bare "+$200" beside a balance is the notation a game uses for income, while
+             escrowed money is the opposite. A plus sign cannot carry that and no tooltip fixes a glyph nobody hovers.
+             THE STRIPE STAYS -- it is the HANDOFF animation (#597), and a card that is always there cannot sweep. */}
           {actingSeatColor && activePlayerCash !== null && (
             <span
               style={{
@@ -2685,67 +1637,23 @@ export default function ContextualActionBar({
             </span>
           )}
         <div style={styles.actionBarButtons}>
-          {/* ==================================================================
-               DESIGN NOTE 308: THE AUCTION BAR HAD NEITHER NAME NOR MONEY
-              ==================================================================
-
-              Design note #300 put the acting player's cash on the Operating
-              Round branch of this bar. The auction and Stock Round take the
-              OTHER branch a few lines down, and got neither -- which is the
-              wrong way round if anything: an Operating Round spends the
-              CORPORATION's treasury, while a private auction spends the
-              player's own money and nothing else. The one screen where a
-              personal balance decides every action was the one not showing it.
-
-              It leads the row rather than trailing it, because in a hotseat
-              the first question on arriving at the bar is whose turn this is.
-
-              ==================================================================
-               DESIGN NOTE 309: THE BUTTONS SIT WHERE THE OTHER BRANCH PUTS THEM
-              ==================================================================
-
-              Pass and Undo were left-aligned here while the Operating Round's
-              controls are centred (`orPanelActionRow`'s `1fr auto 1fr` grid).
-              Switching rounds moved the buttons across the screen, so muscle
-              memory built in one phase missed in the next. A leading spacer
-              balances the trailing one that already pins the phase badge,
-              which centres the group between them without either rail having
-              to know what the other holds. */}
-          {/* ==================================================================
-               DESIGN NOTE 601: THE ROSTER PILLS WERE UNREACHABLE
-              ==================================================================
-
-              Deleted here: a `playerRoster.length > 0` branch rendering one
-              pill per seat, plus its eight `rosterPill*` styles and the
-              `ROSTER_CONTEST_CHASE_CSS` keyframes. Roughly forty lines of
-              render that could not execute.
-
-              WHY IT COULD NOT. Design note #595a left the pills in place "for
-              every case the trail does not cover", which sounded careful and
-              described an empty set. `playerRoster` is computed in `App.tsx`
-              behind `current_round_type === "WaterfallAuction" || ===
-              "StockRound"` (design note #406) and returns `[]` otherwise --
-              and that is the SAME test that decides whether `seatOrderTrail`
-              is passed at all. So the two conditions are one condition: any
-              time the roster is non-empty the trail is non-null, wins the
-              `??`, and the pills never render. There was no third case.
-
-              The lesson is about the shape of the guard, not the pills. Two
-              conditions written in two files, each true exactly when the other
-              is, read like a fallback and behave like dead code -- and nothing
-              flags it, because it compiles and lints perfectly.
-
-              WHAT THE PILLS KNEW LIVES ON. Design note #342's "the whole
-              table, not just whoever is up" and #317's "AVAILABLE cash, not
-              the total" are both carried by `SeatOrderTrail`, which cites them
-              by number. Design note #545's mini-auction chase animation is the
-              one thing genuinely gone: the trail does not distinguish a
-              contested seat, and nobody has asked it to.
-
-              THE ACTING-PLAYER BADGE BELOW IS STILL LIVE, and is now the only
-              fallback. It covers the Operating Round -- whose turn belongs to
-              a corporation, so it has no seat queue to draw -- and every
-              non-sandbox room until the first `GetGameState` resolves. */}
+          {/* Design note #308: THE AUCTION BAR HAD NEITHER NAME NOR MONEY. #300 put the acting player's cash on the
+             Operating Round branch; the auction and Stock Round got neither -- the wrong way round if anything,
+             since an OR spends the CORPORATION's treasury while a private auction spends the player's own money and
+             nothing else. It leads the row because in a hotseat the first question is whose turn this is.
+             Design note #309: THE BUTTONS SIT WHERE THE OTHER BRANCH PUTS THEM. Pass and Undo were left-aligned here
+             while the OR's are centred, so switching rounds moved the buttons across the screen and muscle memory
+             built in one phase missed in the next. A leading spacer balances the trailing one. */}
+          {/* Design note #601: THE ROSTER PILLS WERE UNREACHABLE. Deleted: a `playerRoster.length > 0` branch, eight
+             styles and a keyframes block -- roughly forty lines of render that could not execute.
+             #595a left them "for every case the trail does not cover", which sounded careful and described an empty
+             set: `playerRoster` is computed behind `current_round_type === "WaterfallAuction" || === "StockRound"`
+             (#406) and returns `[]` otherwise -- the SAME test that decides whether `seatOrderTrail` is passed. Any
+             time the roster is non-empty the trail is non-null, wins the `??`, and the pills never render.
+             THE LESSON IS ABOUT THE SHAPE OF THE GUARD: two conditions in two files, each true exactly when the
+             other is, read like a fallback and behave like dead code -- and nothing flags it, because it compiles.
+             What the pills knew lives on in `SeatOrderTrail` (#342, #317). #545's mini-auction chase is the one
+             thing genuinely gone. The acting-player badge below is now the only fallback. */}
           {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
               The leading `actionBarSpacer` that used to sit here is gone --
               see `appStyles.ts` for why two equal spacers centred the group
@@ -2757,16 +1665,11 @@ export default function ContextualActionBar({
               {phase.label}
             </span>
           )}
-          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
-              used to render identically at two purchases and at one, so the
-              last purchase before a rust -- the single most consequential
-              moment in an 1830 game -- looked exactly like the moment before
-              it. It now reads the same `phaseAlertLevel` helper the train
-              chips do, so the bar and the chips escalate together.
-
-              The wording escalates with the colour: "Imminent" is a claim
-              about the next purchase, and it was previously being made one
-              purchase too early. */}
+          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge rendered identically at two purchases
+             and at one, so the last purchase before a rust -- the most consequential moment in an 1830 game --
+             looked exactly like the moment before it. It reads the same `phaseAlertLevel` helper the train chips do,
+             so the bar and the chips escalate together, and the wording escalates with the colour: "Imminent" is a
+             claim about the NEXT purchase, and it was being made one purchase too early. */}
           {phaseAlert && (
             <span
               className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
@@ -2811,23 +1714,11 @@ export default function ContextualActionBar({
           >
             Pass Turn
           </button>
-          {/* ==================================================================
-               DESIGN NOTE 540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES
-              ==================================================================
-
-               REPORTED: two bars appear between Pass Turn and Undo Last Action.
-
-               They are these two, with nothing between them. The pair frames
-               `contextualButtons`, and that array is EMPTY in several real
-               states -- an auction round, a Stock Round with no corporation
-               selected, and (the case that surfaced it) a room whose game has
-               not been dealt. Two separators with no content between them read
-               as a rendering fault, which is exactly what they are: a rule
-               divides things, and there was nothing to divide.
-
-               Gated on the group they frame rather than on any particular
-               round, so every empty case is covered by the condition that
-               actually describes the problem. */}
+          {/* Design note #540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES. Reported as two bars between Pass Turn and
+             Undo -- these two, with nothing between them. The pair frames `contextualButtons`, which is EMPTY in
+             several real states: an auction round, a Stock Round with no corporation selected, and a room whose game
+             has not been dealt. A rule divides things, and there was nothing to divide.
+             Gated on the group they frame rather than on any particular round, so every empty case is covered. */}
           {contextualButtons.length > 0 && <span style={styles.actionBarDivider} />}
           {contextualButtons.map((btn) => (
             <button
@@ -2847,26 +1738,12 @@ export default function ContextualActionBar({
             </button>
           ))}
           <span style={styles.actionBarDivider} />
-          {/* ==================================================
-               DESIGN NOTE 592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED
-              ==================================================
-
-               REPORTED: "the Host's Undo power needs to be effective at all
-               times: currently it only works on their turn."
-
-               `sessionReady` is `controlsEnabled && isMyTurn`, so Undo wore the
-               same gate as Buy and Pass. That is exactly backwards for this
-               control: the player who most needs it is the one whose turn has
-               just passed to somebody else, and the host's whole reason for
-               having a longer reach is to fix a mistake that is no longer
-               theirs to fix on their own turn.
-
-               ONE REASON STRING IS THE WHOLE GATE. `undoBlockedReason` is
-               non-null whenever Undo cannot fire -- read-only mode, nothing to
-               undo, or somebody else has acted since your last move -- and the
-               button shows it. A boolean plus a separate message would be two
-               things to keep in step, and the failure would be a disabled
-               control explaining why a different control is disabled. */}
+          {/* Design note #592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED. `sessionReady` is
+             `controlsEnabled && isMyTurn`, so Undo wore the same gate as Buy and Pass -- exactly backwards, since
+             the player who most needs it is the one whose turn has just passed, and the host's longer reach exists
+             to fix a mistake that is no longer theirs to fix on their own turn.
+             ONE REASON STRING IS THE WHOLE GATE: `undoBlockedReason` is non-null whenever Undo cannot fire, and the
+             button shows it. A boolean plus a separate message would be two things to keep in step. */}
           <button
             style={{
               ...styles.actionBarButton,
@@ -2879,140 +1756,57 @@ export default function ContextualActionBar({
           >
             Undo Last Action
           </button>
-          {/* The route mode toggle used to render here too. It is
-              `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
-              in this NON-Operating-Round branch it was unreachable markup.
-              Removed rather than left as a second copy to keep in step with
-              the live one in the OR panel above. */}
+          {/* The route mode toggle used to render here too. It is `showRouteToggle`-gated and that flag is
+             OR-and-Routes-only, so in this branch it was unreachable markup -- removed rather than left as a second
+             copy to keep in step with the live one. */}
           </span>
 
-          {/* ==================================================================
-               DESIGN NOTE 654: THE GRID HAD THREE COLUMNS AND TWO CHILDREN
-              ==================================================================
-
-               REPORTED: "the Action Buttons and the 'Phase' badge [are] in
-               [a] weird place. The 'Phase' badge should be flush left and the
-               Action buttons should be center."
-
-               `actionBarButtons` is a `1fr auto 1fr` grid and design note #426
-               describes it working: rails either side, buttons centred on the
-               PANEL rather than between whatever the rails happen to hold. It
-               never did, in this branch. Only TWO children were put in it --
-               the button group and the phase rail -- so the buttons took
-               column one and the badge took column two, and a whole `1fr`
-               column sat empty off the right edge. That is the reported
-               "weird place": buttons left of centre, badge adrift in the
-               middle.
-
-               #426's own note says "the rail renders unconditionally so the
-               grid always has three columns". True of the RIGHT rail it was
-               written about; never made true of the left one.
-               `actionBarRailLeft` is defined in `appStyles.ts` and this file
-               has never referenced it. A grid does not report a missing
-               child -- it shifts everything one column over and renders
-               something plausible. Same family as the phantom style key: the
-               layout is stated in one file and half-performed in another.
-
-               THE ORDER IS THE INSTRUCTION'S. Phase leads, buttons centre,
-               and the trailing rail is empty and unconditional -- it exists
-               only so the centre column has equal weight either side, which
-               is the one thing that puts `auto` in the middle of the panel
-               rather than in the middle of the leftovers. */}
+          {/* Design note #654: THE GRID HAD THREE COLUMNS AND TWO CHILDREN. `actionBarButtons` is a `1fr auto 1fr`
+             grid and #426 describes it working -- it never did in this branch. Only TWO children were put in it, so
+             the buttons took column one, the badge took column two, and a whole `1fr` column sat empty off the right
+             edge: buttons left of centre, badge adrift in the middle.
+             #426 says "the rail renders unconditionally so the grid always has three columns" -- true of the RIGHT
+             rail it was written about, never made true of the left one. `actionBarRailLeft` is defined in
+             `appStyles.ts` and this file had never referenced it. A grid does not report a missing child; it shifts
+             everything one column over and renders something plausible.
+             Phase leads, buttons centre, and the trailing rail is empty and unconditional -- it exists only so the
+             centre column has equal weight either side. */}
           <span style={styles.actionBarRailTrail} aria-hidden="true" />
         </div>
       </div>
       )}
     </div>
 
-    {/* ---- Contextual trays -- design note #31 --------------------------
-        Panels, not bar content: a train marketplace, a private-company
-        purchase tray with a price slider, and the route-point readout.
-        Each is narrowly conditional (a specific OR sub-phase, or the route
-        toggle being on), so most of the time none of this renders at all
-        and the bar above is the entire control surface. */}
-      {/* Phase 4's marketplace selection tray -- see design note #10/item 2.
-          `BuyHardwareFromPool` has no per-model parameter yet (see
-          `MOCK_TRAIN_CATALOG`'s own doc comment), so selecting a card here
-          only changes which model is highlighted/labeled; the purchase
-          itself still targets whichever unit the pool auto-assigns. */}
-      {/* ===================================================================
-           DESIGN NOTE 490: THE CONSEQUENCE BELONGS TO THE BUTTON
-          ===================================================================
-
-          REPORTED: the Dividends step opens a separate, redundant panel
-          below the Action panel to show payouts and market moves.
-
-          It did, and the split was structural rather than cosmetic: this
-          block sat OUTSIDE the action bar's own root `<div>`, as a sibling
-          of it, so a bordered card appeared under the bar the moment the
-          sub-phase changed and vanished again when it advanced. The player
-          read the payout in one panel and clicked the button that caused it
-          in another, with a border between the cause and the effect.
-
-          Design note #188's content was right -- WHO gets paid and WHERE
-          the token lands are exactly the two things a player cannot
-          otherwise see -- and it is kept verbatim. Only its address changed:
-          it now renders inside `orPanel`, directly beneath the action row
-          that carries Pay and Withhold, so each column sits under the
-          button it describes.
-
-          NOT RENDERED WHEN CONDENSED. Design note #298's rule for the
-          pinned bar is that it keeps what a player needs WHILE LOOKING AT
-          THE BOARD and drops the rest. A payout table is the opposite of
-          that: it is read while deciding, not while scrolling a map, and a
-          pinned bar carrying two columns of figures would cost the board
-          more height than any other state of this panel. The buttons stay;
-          the reading matter returns the moment the bar unsticks. */}
-      {/* ===================================================================
-           DESIGN NOTE 203: THE HARDWARE TRAY MOVED OUT OF THE BAR
-          ===================================================================
-
-          Design note #182 correctly reduced a six-card selector to the ONE
-          train 1830's cheapest-first depot will actually sell. What it could
-          not fix, sitting inside the action bar, is that the depot was only
-          half the step: a corporation in the Hardware sub-phase can buy from
-          the bank OR from another corporation, and the second half lived in
-          a completely separate panel further down the page.
-
-          Both halves are now `TrainPurchasePanel`, rendered by the shell --
-          see that file's design note #0 for why they are two sections rather
-          than one control, and #1 for the quantity field this tray had
-          nowhere to put. The bar keeps only "End Turn" for this step, which
-          is the one thing here that is a button rather than a panel. */}
-      {/* ===================================================================
-           DESIGN NOTE 165: THE INLINE BUY-PRIVATE TRAY IS GONE
-          ===================================================================
-
-          It was a select, a range slider and a Buy button wedged into the
-          action bar, and it modelled the purchase as a UNILATERAL act: pick
-          a private, drag a price, buy it. In 1830 that transaction needs the
-          owner's agreement, and a slider you drag past somebody else's
-          property does not represent one.
-
-          `ProposePrivatePurchase` replaces it -- a real sheet with the
-          eligible privates, each showing its owner and its legal band, and
-          a typed price rather than a drag. Typing matters here: the band is
-          50-200% of face value, so a $100 private has a 51-value range and
-          a slider makes hitting an exact intended figure fiddly.
-
-          The tray also sat under the HARDWARE sub-phase, which is wrong --
-          `trading.rs`'s own sub-phase gate puts private purchase FIRST in
-          the turn, before track. The button now lives in the `BuyPrivate`
-          step where the contract expects it. */}
-      {/* ===================================================================
-           DESIGN NOTE 266: THE RUN ROUTES STEP IS ONE PANEL NOW
-          ===================================================================
-
-          Everything this step needs moved into `RoutePlannerPanel` -- the
-          mode toggle that was in the right rail, the run button that was in
-          the centre column, and the waypoint readout that was here. See
-          that file's design note #0 for the reading-order argument.
-
-          It renders on the whole `Routes` sub-phase rather than only while
-          route mode is engaged. The old panel was gated on
-          `routeSelectMode`, which made the toggle that turns route mode on
-          live somewhere else by necessity -- a control cannot switch on the
-          panel it is inside. Rendering on the sub-phase breaks that loop. */}
+    {/* Contextual trays -- design note #31. Panels, not bar content: a train marketplace, a private-company
+       purchase tray with a price slider, and the route-point readout. Each is narrowly conditional, so most of
+       the time none renders and the bar above is the entire control surface. */}
+      {/* Phase 4's marketplace selection tray -- design note #10/item 2. `BuyHardwareFromPool` has no per-model
+         parameter yet (see `MOCK_TRAIN_CATALOG`'s doc comment), so selecting a card only changes which model is
+         highlighted; the purchase still targets whichever unit the pool auto-assigns. */}
+      {/* Design note #490: THE CONSEQUENCE BELONGS TO THE BUTTON. This block sat OUTSIDE the bar's root `<div>`
+         as a sibling, so a bordered card appeared under the bar when the sub-phase changed -- the player read
+         the payout in one panel and clicked the button that caused it in another, with a border between the
+         cause and the effect. #188's content was right and is kept verbatim; only its address changed.
+         NOT RENDERED WHEN CONDENSED: a payout table is read while deciding, not while scrolling a map, and two
+         columns of figures would cost the board more height than any other state of this panel. */}
+      {/* Design note #203: THE HARDWARE TRAY MOVED OUT OF THE BAR. #182 correctly reduced a six-card selector to
+         the ONE train 1830's cheapest-first depot will sell. What it could not fix from inside the bar is that
+         the depot was only half the step -- a corporation in Hardware can buy from the bank OR from another
+         corporation, and the second half lived in a separate panel further down the page.
+         Both halves are now `TrainPurchasePanel`. The bar keeps only "End Turn", the one thing here that is a
+         button rather than a panel. */}
+      {/* Design note #165: THE INLINE BUY-PRIVATE TRAY IS GONE. A select, a slider and a Buy button modelled the
+         purchase as a UNILATERAL act -- and in 1830 that transaction needs the owner's agreement, which a slider
+         you drag past somebody else's property does not represent.
+         `ProposePrivatePurchase` replaces it, with a TYPED price: the legal band is 50-200% of face value, so a
+         $100 private has a 51-value range and a slider makes an exact figure fiddly.
+         The tray also sat under HARDWARE, which is wrong -- `trading.rs`'s own sub-phase gate puts private
+         purchase FIRST in the turn, before track. */}
+      {/* Design note #266: THE RUN ROUTES STEP IS ONE PANEL NOW -- the mode toggle from the right rail, the run
+         button from the centre column and the waypoint readout from here all moved into `RoutePlannerPanel`.
+         It renders on the whole `Routes` sub-phase rather than only while route mode is engaged: the old panel
+         was gated on `routeSelectMode`, which forced the toggle that turns route mode ON to live elsewhere by
+         necessity -- a control cannot switch on the panel it is inside. */}
       {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
           ownership and on the round they may be used in. Renders nothing
           outside sandbox, and nothing when the viewer owns none. */}
@@ -3022,12 +1816,9 @@ export default function ContextualActionBar({
         roundType={roundType}
         orSubPhase={roundType === "OperatingRound" ? orSubPhase : null}
         sandbox={sandboxMode}
-        /* Design note #441: a corporate power belongs to the corporation
-           OPERATING and is executed by whoever holds its controls. The bar
-           already resolves both -- `activeCorporation` is the acting
-           company and `presidentAddress` the person entitled to act for it
-           -- so the panel is handed the same answers the rest of this bar
-           is gated on rather than deriving a second set. */
+        /* Design note #441: a corporate power belongs to the corporation OPERATING and is executed by whoever
+           holds its controls. The bar already resolves both, so the panel is handed the same answers the rest of
+           the bar is gated on rather than deriving a second set. */
         actingProtocolId={activeCorporation?.companyId ?? null}
         actingPresident={activeCorporation?.presidentAddress ?? null}
         usedAbilities={usedPrivateAbilities}

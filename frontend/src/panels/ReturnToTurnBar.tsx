@@ -94,7 +94,11 @@ export function ReturnToTurnBar({ isMyTurn, roundType, onReturn }: ReturnToTurnB
             Return to {label} &#8250;
           </button>
         </span>
-        <span style={styles.actionBarRailRight} />
+        {/* Design note #654: was `actionBarRailRight`, renamed with the phase
+            badge's move to the lead. This bar has always used it the way that
+            note now describes -- an empty third grid track, present so the
+            centred column is centred on the panel. */}
+        <span style={styles.actionBarRailTrail} />
       </div>
     </div>
   );

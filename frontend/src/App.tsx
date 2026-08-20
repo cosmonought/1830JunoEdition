@@ -692,6 +692,7 @@ import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
+import { turnGuardKey } from "./utils/turnGuardKey";
 
 import {
   EmergencyTrainPurchaseModal,
@@ -1340,14 +1341,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [activeMainTab, setActiveMainTab] = useState<MainTab>("map");
   // Design note #10/item 2: which of the four legal OR action sub-phases
   // the Contextual Top Action Bar is currently guiding the player through.
-  // Client-side only -- see `OperatingSubPhase`'s own doc comment.
-  // Design note #144: seeded from `initialOrSubPhase`, mirroring
-  // `or_phase::initial_sub_phase` -- `Track` before Phase 3, `BuyPrivate`
-  // from Green on. Hardcoding "Track" would open the bar on a phase the
-  // contract has already moved past once the era advances.
-  const [orSubPhase, setOrSubPhase] = useState<OperatingSubPhase>(() =>
+  /* ==================================================================
+   *  DESIGN NOTE 656: THE CURSOR IS READ, NOT HELD
+   * ==================================================================
+   *
+   * REPORTED: "the game stayed in OR 1.1 and returned to C&O's turn,
+   * starting at step 3 (Station Tokens) ... It should not be looping at all."
+   *
+   * This was the whole cursor: `useState`, seeded by `initialOrSubPhase` and
+   * re-seeded by an effect below whose dependency array named
+   * `current_global_era` and `currentPhase.tier`. Buying a 3-train changes
+   * the era during the Buy Trains step of the corporation buying it, so the
+   * effect fired with the corporation unchanged and put the cursor back at
+   * the first visible step -- `Track` when Buy Private is hidden, `BuyPrivate`
+   * when it is not, which is why the reported step differed between games.
+   *
+   * In the sandbox the reducer owns it now (`settleOperatingCursor`), so
+   * `gameState.operating_sub_phase` is the answer and this state is not
+   * consulted at all.
+   *
+   * WHY THE LOCAL STATE SURVIVES ANYWAY, and is not the dead code this
+   * codebase keeps finding: a LIVE room's cursor belongs to the contract.
+   * `or_phase` persists it, `WrongOperatingSubPhase` rejects a client that
+   * disagrees, and `GetGameState` does not currently report it -- so until it
+   * does, a live room has nothing to read and this is what the bar follows.
+   * The `??` below states which room is which, once, instead of every reader
+   * asking. `operating_sub_phase` is only ever set by the sandbox reducer, so
+   * the branch is exact rather than a guess about the mode. */
+  const [liveOrSubPhase, setLiveOrSubPhase] = useState<OperatingSubPhase>(() =>
     initialOrSubPhase(null),
   );
+
 
   // Stock Round (SR) control state -- see `StockRoundPanel.tsx` design
   // note #1. Purely UI state; the real dispatch runs through
@@ -1609,6 +1633,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode, seedSandboxState]);
 
   const gameState = sandboxState ?? liveGameState;
+
+  /* Design note #656: the cursor, read rather than held. Declared here rather
+     than beside `liveOrSubPhase` because it needs `gameState`, and stating
+     the dependency in the position is cheaper than a ref. The sandbox
+     reducer's value wins whenever there is one; see the note on
+     `liveOrSubPhase` for why the fallback is a live room's cursor and not
+     dead code. */
+  const orSubPhase: OperatingSubPhase = gameState?.operating_sub_phase ?? liveOrSubPhase;
 
   /* Design note #553: the merged state, synchronously, for the two par
      resolvers declared above it. `sandboxStateRef` alone would have been
@@ -2310,6 +2342,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      rather than re-deriving the condition, so the cursor and the strip
      cannot disagree about which steps exist. */
   useEffect(() => {
+    /* ==================================================================
+     *  DESIGN NOTE 656: THIS EFFECT IS THE BUG, AND IT IS NOW FENCED
+     * ==================================================================
+     *
+     * REPORTED: a corporation that bought a 3-train was sent back to an
+     * earlier step of its own turn, repeatedly.
+     *
+     * THIS IS WHERE THAT HAPPENED. The body seeds the cursor for a new turn,
+     * which is right; the dependency array names `current_global_era`,
+     * `currentPhase.known`, `currentPhase.tier` and `private_companies`,
+     * which are all genuine inputs to WHERE a turn opens and none of which is
+     * a turn opening. Buying a train that advances the phase changes three of
+     * them at once, mid-turn, and the effect cannot tell that apart from a
+     * new corporation stepping up. A `useEffect` watches conditions; opening
+     * a turn is an event.
+     *
+     * The sandbox reducer raises that event now, so the guard below hands it
+     * the whole question. Not deleted, because a LIVE room still has no
+     * cursor to read -- `GetGameState` does not report the contract's -- and
+     * for a live room this effect is the only thing that opens a turn on the
+     * right step. It stays exactly as correct, and exactly as wrong, as it
+     * has always been there; what changes is that it can no longer contradict
+     * a reducer that knows better.
+     *
+     * The guard reads the FIELD rather than a `sandbox` flag deliberately. A
+     * mode flag is a claim about which code path is live; the field's
+     * presence is the code path itself having run. Design note #601's lesson
+     * about two conditions written in two files, each true exactly when the
+     * other is, applies directly -- so there is only one condition here. */
+    if (gameState?.operating_sub_phase !== undefined) return;
     const steps = visibleSubPhases(
       gameState?.current_global_era,
       gameState?.private_companies,
@@ -2347,8 +2409,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        is gone with solo mode. There is no longer a session where skipping
        the opening step is a convenience rather than a rule not applied. */
     const opening = initialOrSubPhase(gameState?.current_global_era);
-    setOrSubPhase(steps.includes(opening) ? opening : steps[0]);
-  }, [gameState?.current_round_type, gameState?.active_corporation_index, gameState?.current_global_era, gameState?.private_companies, currentPhase?.known, currentPhase?.tier, sandbox, sandboxRoomCode]);
+    setLiveOrSubPhase(steps.includes(opening) ? opening : steps[0]);
+  }, [
+    // Design note #656: the guard's own input, so the effect re-evaluates
+    // the moment a room starts reporting a reducer-owned cursor.
+    gameState?.operating_sub_phase,
+    gameState?.current_round_type,
+    gameState?.active_corporation_index,
+    gameState?.current_global_era,
+    gameState?.private_companies,
+    currentPhase?.known,
+    currentPhase?.tier,
+    sandbox,
+    sandboxRoomCode,
+  ]);
 
   // Automatic Phase-Based Tab Navigation. Fires ONLY on a genuine
   // `current_round_type` transition (compared against `prevRoundTypeRef`,
@@ -5987,7 +6061,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSettledPrivatePrices({});
 
     setMapGrid(MOCK_MAP_GRID);
-    setOrSubPhase("Track");
+    setLiveOrSubPhase("Track");
 
     // Any in-flight gesture belonged to the history just discarded.
     setPreviewTile(null);
@@ -6825,7 +6899,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // of not gating local UI sequencing on a chain round-trip -- and now
     // necessary rather than cosmetic, since running trains is the step that
     // produces the figure the Dividends phase decides about.
-    setOrSubPhase("Dividends");
+    setLiveOrSubPhase("Dividends");
   }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain]);
 
   // Generalized over `distribute` (design note #10/item 2 -- Phase 3's
@@ -6903,7 +6977,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         },
         { automatic },
       );
-      setOrSubPhase("Hardware");
+      setLiveOrSubPhase("Hardware");
     },
     [runGameplayAction, gameId, actingProtocolId, gameState, skippedRoutesThisTurn],
   );
@@ -7258,7 +7332,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // A corporation places at most one token per turn, so the Tokens step
     // is done -- the same "the action completes the step" rule the tile
     // lay follows. Routes is next in `OPERATING_SUB_PHASE_ORDER`.
-    setOrSubPhase("Routes");
+    setLiveOrSubPhase("Routes");
     runGameplayAction("PlaceStationToken", {
       PlaceStationToken: {
         game_id: gameId,
@@ -7359,7 +7433,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       { automatic },
     );
     if (!sandbox) return;
-    setOrSubPhase((current) => {
+    setLiveOrSubPhase((current) => {
       // Design note #385: the same filtered list the strip renders, so Skip
       // walks past a hidden `Buy Private` rather than stopping on it.
       const steps = visibleSubPhases(
@@ -7780,6 +7854,60 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
 
   /** Why this step has no decision in it, or `null` when it does. */
+  /* ==================================================================
+   *  DESIGN NOTE 653: A ONCE-PER-GAME GUARD ON A ONCE-PER-TURN EVENT
+   * ==================================================================
+   *
+   * REPORTED: "C&O has no legal routes despite owning trains, but this Run
+   * Routes action has no Skip button, so the game is now bricked."
+   *
+   * There IS an auto-skip for exactly that case -- design note #414 built
+   * it, and #433 states the rule it implements: no route, no obligation. It
+   * did not fire, and the reason is the loop guard rather than the skip.
+   *
+   * `autoSkippedRef` keyed on `${actingProtocolId}:${orSubPhase}` and
+   * `forcedWithholdRef` on `${actingProtocolId}:withhold`. Neither key says
+   * WHEN. Both Sets are cleared only by a full sandbox rebuild, so the first
+   * time C&O auto-skips Routes the pair `3:Routes` is remembered for the
+   * rest of the game -- and every later turn where C&O again has no route
+   * hits a step that will not skip itself and offers no button that would.
+   * The same is true of the forced withhold on Dividends one step later.
+   *
+   * WHAT THE GUARD IS ACTUALLY FOR is a re-entrancy window a few
+   * milliseconds wide: `autoSkipReason` is derived, so it stays truthy for
+   * the render between dispatching the skip and the cursor moving off the
+   * step, and without a guard the effect fires again on that render. That is
+   * a WITHIN-TURN problem, and the key was scoped to the whole game.
+   *
+   * SO THE KEY GAINS THE TURN. `macro_round_number`, `sub_round_index` and
+   * `active_corporation_index` together name one corporation's one turn;
+   * prepending them keeps the re-entrancy guard exactly as tight inside a
+   * turn and re-arms it at every new one. Read off game state rather than
+   * counted locally, so a replay rebuilds the same key rather than a
+   * parallel tally that could disagree -- the lesson of #642.
+   *
+   * NOT THE WHOLE STORY. This unbricks the turn; it does not stop a
+   * corporation revisiting a step it already left, which is the separate
+   * `orSubPhase`-lives-outside-the-reducer defect and its own chunk. The two
+   * compounded: the cursor reset sent C&O back through Routes, and this
+   * guard then refused the skip that would have released it. */
+  /* Design note #653: the identity of one corporation's one turn. The
+     construction lives in `utils/turnGuardKey.ts` with its own tests -- see
+     that module's note for why a template literal inside an effect was the
+     wrong home for the property that actually matters. */
+  const turnIdentity = useMemo(
+    () => ({
+      macro_round_number: gameState?.macro_round_number ?? null,
+      sub_round_index: gameState?.sub_round_index ?? null,
+      active_corporation_index: gameState?.active_corporation_index ?? null,
+    }),
+    [
+      gameState?.macro_round_number,
+      gameState?.sub_round_index,
+      gameState?.active_corporation_index,
+    ],
+  );
+
   const autoSkipReason = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
@@ -7880,7 +8008,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      * they could have run has still run nothing, and the market move is not
      * theirs to waive. */
     if (noEarnableRevenue === null && !skippedRoutesThisTurn) return;
-    const key = `${actingProtocolId}:withhold`;
+    // Design note #653: scoped to THIS turn, not to this corporation for
+    // the whole game -- a corporation withholds on many turns.
+    const key = turnGuardKey(turnIdentity, actingProtocolId, "withhold");
     if (forcedWithholdRef.current.has(key)) return;
     forcedWithholdRef.current.add(key);
     logInfo(
@@ -7902,6 +8032,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     skippedRoutesThisTurn,
     ownsAnyTrain,
     actingProtocolId,
+    turnIdentity,
     withholdRevenueAutomatically,
     logInfo,
   ]);
@@ -7909,7 +8040,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const autoSkippedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!autoSkipReason) return;
-    const key = `${actingProtocolId}:${orSubPhase}`;
+    // Design note #653: the turn is part of the key, so the guard re-arms.
+    const key = turnGuardKey(turnIdentity, actingProtocolId, orSubPhase);
     if (autoSkippedRef.current.has(key)) return;
     autoSkippedRef.current.add(key);
     logInfo(
@@ -7918,7 +8050,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
     // Design note #439: the AUTOMATIC entry point, so Undo rewinds past it.
     skipSubPhaseAutomatically();
-  }, [autoSkipReason, actingProtocolId, orSubPhase, skipSubPhaseAutomatically, logInfo]);
+  }, [
+    autoSkipReason,
+    actingProtocolId,
+    turnIdentity,
+    orSubPhase,
+    skipSubPhaseAutomatically,
+    logInfo,
+  ]);
 
   // Phase 4 -> ends the corporation's turn via the SAME real `PassTurn`
   // dispatch the Stock Round's "Pass Turn" button uses (per `msg.rs`'s own
@@ -7982,7 +8121,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const isFirstOperatingRound = (gameState?.macro_round_number ?? 0) <= 1;
 
     handlePassTurn();
-    setOrSubPhase("Track");
+    setLiveOrSubPhase("Track");
 
     if (viewerIsPresident && isFirstOperatingRound) {
       if (tutorialModeEnabled()) setActiveMainTab("stock");
@@ -8035,7 +8174,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // mirrors what `hexmap::execute_lay_tile` does on chain (it advances
       // the cursor off `Track` on success) rather than inventing a sandbox
       // sequencing rule.
-      setOrSubPhase("Tokens");
+      setLiveOrSubPhase("Tokens");
       setPreviewTile(null);
     },
     [runGameplayAction, gameId, actingProtocolId],

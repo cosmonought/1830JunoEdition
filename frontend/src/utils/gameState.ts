@@ -96,6 +96,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 // Design note #526: the one printed-limits table.
 import { certLimitForPlayers } from "./gameSetup";
+import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirror -- see design note #1                         */
@@ -266,6 +267,22 @@ export interface GameStateResponse {
    *  operating queue finished its turn and the macro round closed. Consumed
    *  and cleared by the caller, which owns the log and the tab. */
   operating_round_just_ended?: boolean;
+  /** Design note #656: WHICH STEP of its turn the acting corporation is on.
+   *
+   *  This was `orSubPhase`, React state in `App.tsx`, re-seeded by an effect
+   *  keyed on the era and the phase tier -- so buying a train that advanced
+   *  the phase sent the buying corporation back to the top of its own turn.
+   *  A cursor held outside the reducer is also not in the action log, so a
+   *  client that joined or undid mid-turn rebuilt every treasury exactly and
+   *  then showed whichever step its own effect seeded. Same split design note
+   *  #642 found in the round machine, one layer down.
+   *
+   *  Sandbox-only and optional, per the block above: `GetGameState` does not
+   *  report it, and a live room leaves it `undefined` because the CONTRACT
+   *  owns the cursor there (`or_phase`, and `WrongOperatingSubPhase` when a
+   *  client disagrees). Readers treat `undefined` as "ask the opening rule",
+   *  never as a step. */
+  operating_sub_phase?: OperatingSubPhase;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */

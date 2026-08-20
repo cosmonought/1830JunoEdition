@@ -449,7 +449,24 @@ export function PlayerCards({
 
 export default PlayerCards;
 
-const styles: Record<string, React.CSSProperties> = {
+/* Design note #658: ONE row metric, spread into every cell of both tables.
+ *
+ * The two tables aligning is not a coincidence to be re-established each time
+ * somebody edits one of them -- it is the point of the layout, so it is a
+ * value rather than a convention. Six style keys agreeing by hand is exactly
+ * the arrangement that drifts: `holdingHead` was missing the 2px the figures
+ * rows carried, and nothing could have reported that.
+ *
+ * `verticalAlign: "top"` rides along because the same intent explains it. A
+ * cell that centres its text re-introduces the reported symptom the moment
+ * any row is taller than its neighbour -- a wrapped ticker, a crown glyph --
+ * and top-aligned cells simply cannot. */
+export const TABLE_ROW_CELL: React.CSSProperties = {
+  padding: "1px 0",
+  verticalAlign: "top",
+};
+
+export const styles: Record<string, React.CSSProperties> = {
   /* Design note #563: the same reflow the corporation grid uses -- as many
      across as fit, never fewer than one, so six seats on a narrow window
      stack rather than clipping. */
@@ -609,26 +626,58 @@ const styles: Record<string, React.CSSProperties> = {
    * then divides itself by what is actually in it, and does so per card --
    * a player holding one corporation is not held to the width of a player
    * holding five. */
+  /* ==================================================================
+   *  DESIGN NOTE 658: A GRID ITEM STRETCHES, AND A TABLE OBEYS
+   * ==================================================================
+   *
+   * REPORTED: "the two double-column tables 'start' at different heights ...
+   * P1's 'Corp' label sits in a row between 'Cash' and 'Net worth,' while
+   * PRR and C&O seem to be widely spaced apart to fill up the size of the
+   * table."
+   *
+   * Both halves of that are one line of CSS. `body` is a grid, grid items
+   * default to `align-self: stretch`, and the row is as tall as the FIGURES
+   * table -- five labelled rows. The holdings table is stretched to match,
+   * and an HTML table given more height than it needs does not sit at the
+   * top of it: it distributes the surplus across its own rows. With a header
+   * and two holdings that is three tall rows, each with its text centred --
+   * so `Corp.` sinks to somewhere between `Cash` and `Net Worth`, and PRR and
+   * C&O drift apart. Nothing was positioning them; they were being inflated.
+   *
+   * `alignItems: "start"` is the whole fix. Each table takes its natural
+   * height, both begin on the same line, and rows pack upward because that is
+   * what rows do when nothing is stretching them.
+   *
+   * WHY DESIGN NOTE #611 DID NOT CATCH THIS. That note aligned the two
+   * tables' HEADERS -- "setting them against `Cash` starts both columns
+   * saying something on the same line" -- and it was right about the markup:
+   * the figures table has no `<thead>`, so its first row and the holdings
+   * header genuinely are both row one. The alignment it describes is real and
+   * is what the DOM says. It just never survived layout, because the note was
+   * reasoning about row ORDER while the defect was in row HEIGHT. Two
+   * elements can be in the same row of the same grid and still not appear on
+   * the same line. */
   body: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
     columnGap: "18px",
     padding: "8px 10px",
+    alignItems: "start",
   },
   figures: { borderCollapse: "collapse", width: "100%", fontVariantNumeric: "tabular-nums" },
   figureKey: {
+    ...TABLE_ROW_CELL,
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#5f636d",
-    padding: "1px 0",
     whiteSpace: "nowrap",
   },
   figureValue: {
+    ...TABLE_ROW_CELL,
     textAlign: "right",
     fontSize: FONT_SIZE.small,
     fontWeight: 800,
-    padding: "1px 0",
     whiteSpace: "nowrap",
   },
   /* Design note #609: `auto`, not `100%`. A table told to fill 100% of an
@@ -636,19 +685,30 @@ const styles: Record<string, React.CSSProperties> = {
      its own content, and settles wider than it needs -- the grid track and
      the table have to agree about who is deciding, and it is the content. */
   holdings: { borderCollapse: "collapse", width: "auto", fontVariantNumeric: "tabular-nums" },
+  /* Design note #658: `padding: "1px 0"` and `verticalAlign: "top"`, matching
+     `figureKey`/`figureValue` exactly. `alignItems: "start"` above puts the
+     two tables' first rows on the same line; these make those rows the same
+     HEIGHT, which is what keeps `Corp.` level with `Cash` rather than merely
+     adjacent to it. The padding was absent here and present there, so the
+     figures rows were 2px taller and the two columns drifted apart down the
+     card -- small enough to read as sloppiness rather than as a bug, which is
+     how it survived design note #611's pass. */
   holdingHead: {
+    ...TABLE_ROW_CELL,
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#5f636d",
   },
   holdingHeadNum: {
+    ...TABLE_ROW_CELL,
     textAlign: "right",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#5f636d",
   },
   holdingName: {
+    ...TABLE_ROW_CELL,
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     whiteSpace: "nowrap",
@@ -656,7 +716,12 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
   },
   holdingCrown: { color: "#c9a94c", marginLeft: "4px" },
-  holdingNum: { textAlign: "right", fontSize: FONT_SIZE.micro, fontWeight: 800 },
+  holdingNum: {
+    ...TABLE_ROW_CELL,
+    textAlign: "right",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+  },
   holdingEmpty: { fontSize: FONT_SIZE.micro, color: "#8a8f99", fontStyle: "italic" },
   privates: {
     borderCollapse: "collapse",

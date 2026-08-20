@@ -63,6 +63,7 @@ import type {
   GameStateResponse,
   PublicCompanyState,
   RoundType,
+  TileColor,
   WaterfallMiniAuctionStatus,
   WaterfallPrivateStatus,
   WaterfallStateResponse,
@@ -79,6 +80,13 @@ import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCat
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
 import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
 import { stationTokenPrice } from "./stationTokens";
+// Design note #656: the cursor's rules, in a module the reducer can reach.
+import {
+  nextSubPhase,
+  openingSubPhase,
+  settleSubPhase,
+  type OperatingSubPhase,
+} from "./operatingCursor";
 // Design note #596: the president's certificate changes hands.
 import { settlePresidencies } from "./presidencyTransfer";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
@@ -2297,7 +2305,185 @@ export function applySandboxAction(
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
-  return settleRoundTransitions(applyOneAction(state, msg, ctx), ctx);
+  return settleOperatingCursor(
+    state,
+    settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx)),
+    msg,
+  );
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 657: THE ERA HAS TO MOVE WHEN THE PHASE DOES
+ * ==================================================================
+ *
+ * INSTRUCTED: "tiles should become available immediately based on the era:
+ * so as soon as a game enters Green, green tiles must be available, though
+ * the SR>OR pattern does not change at this point."
+ *
+ * `current_global_era` was never written by this reducer -- not one
+ * assignment anywhere in this file. It was stamped once at seed time and
+ * held that value for the rest of the game, so every sandbox room reported
+ * "Yellow" in a Phase 6 game.
+ *
+ * Design note #431 above states the intent precisely and then relies on
+ * something nobody was doing: "`current_global_era` is the contract's TILE
+ * colour ... They advance together in an ordinary game." They did not. The
+ * note is describing the contract's behaviour, and the sandbox never
+ * acquired the half that makes the sentence true.
+ *
+ * HOW BAD IT ACTUALLY WAS, stated honestly because the first report of this
+ * overstated it. Tile availability and route revenue were never affected:
+ * `radialCandidates` and `sandboxRouteBreakdown` are both handed
+ * `ERA_FOR_PHASE_TINT[currentPhase.tint]`, derived live from the trains in
+ * play, so green tiles have always appeared on entering Green. What read the
+ * frozen field was the MAP'S OWN READOUT -- `HexGridRenderer`'s `currentEra`,
+ * which prices off-board terminals in the hover text and bolds a row in the
+ * era legend. So a Green-phase game showed Yellow off-board values on hover
+ * while paying Green ones on the route. Wrong, and exactly the kind of wrong
+ * that erodes trust in every other number on screen.
+ *
+ * SETTLED, NOT WRITTEN PER-ARM. The era is a FUNCTION of the trains in play,
+ * so it is recomputed from them after every action rather than assigned in
+ * the one arm that buys trains. That is the difference between a value that
+ * can drift and one that cannot: there is no message anybody could add that
+ * changes the fleet and forgets the era.
+ *
+ * THE OR COUNT IS DELIBERATELY NOT TOUCHED. "The SR>OR pattern does not
+ * change at this point" is the rule, and design note #511 already implements
+ * it -- `operating_round_sequence_length` is stamped when a cycle OPENS and
+ * read from the state thereafter, so a phase shift mid-cycle cannot lengthen
+ * the cycle it happens in. Tiles are immediate; the round pattern is locked.
+ * Two different answers to "when does a phase change take effect", and 1830
+ * genuinely gives both. */
+function settleEra(state: GameStateResponse): GameStateResponse {
+  const phase = derivePhase(state);
+  /* Unknown phase -- no corporation has reported a fleet at all -- leaves the
+     era alone. That is a board we know nothing about rather than a Yellow
+     one, and overwriting a seeded scenario's era (`sandboxState.ts` starts
+     one in "Green") with a guess would be worse than saying nothing. */
+  if (!phase?.known) return state;
+  const era = ERA_FOR_TIER[phase.tier];
+  if (era === undefined || era === state.current_global_era) return state;
+  return { ...state, current_global_era: era };
+}
+
+/** Train tier to tile colour -- 1830's phase table.
+ *
+ *  Yellow through Phase 2, Green from the first 3-train, Brown from the
+ *  first 5-train. `"D"` is the Diesel phase, which this codebase calls Brown
+ *  (design note #431: "GRAY in the requirement is 1830's Diesel phase").
+ *
+ *  Written out rather than derived from `TIER_PRESENTATION[tier].era`
+ *  because that table exists to pick a BADGE COLOUR, and a rule should not
+ *  be read out of a presentation table -- the day someone re-themes the
+ *  badge is the day the tile colours move with it. */
+const ERA_FOR_TIER: Readonly<Record<string, TileColor>> = {
+  "2": "Yellow",
+  "3": "Green",
+  "4": "Green",
+  "5": "Brown",
+  "6": "Brown",
+  D: "Brown",
+};
+
+/* ==================================================================
+ *  DESIGN NOTE 656: THE TURN CURSOR MOVES HERE, NOT IN AN EFFECT
+ * ==================================================================
+ *
+ * REPORTED: "the game stayed in OR 1.1 and returned to C&O's turn, starting
+ * at step 3 (Station Tokens) ... It should not be looping at all."
+ *
+ * `orSubPhase` was React state in `App.tsx`, re-seeded by an effect keyed on
+ * `current_global_era` and `currentPhase.tier` among others. Buying a 3-train
+ * changes the era DURING the Buy Trains step of the corporation buying it, so
+ * the effect re-ran with the corporation unchanged and reset the cursor to
+ * the first visible step. That is the loop, and it is also why the step it
+ * landed on differed between playthroughs -- `visibleSubPhases[0]` is `Track`
+ * when Buy Private is hidden and `BuyPrivate` when it is not.
+ *
+ * THIS IS #642 ONE LAYER DOWN, and it is placed deliberately beside
+ * `settleRoundTransitions` for that reason: same shape of defect, same shape
+ * of fix. That note moved ROUND transitions out of the shell; this moves TURN
+ * transitions out of an effect. Both are answers to the same question -- what
+ * does a client rebuild when it replays the log -- and after this one the
+ * answer is "the whole game" rather than "the whole game except which step
+ * anyone is on".
+ *
+ * ONE PLACE RATHER THAN TWELVE MESSAGE ARMS. The alternative was a
+ * `operating_sub_phase` write inside each of `LayTile`, `PlaceStationToken`,
+ * `RunManualRoute`, `DeclareDividends` and the rest. That spreads a single
+ * rule across arms that are otherwise about money and trains, and every arm
+ * added later is a chance to forget it -- which is exactly how the cursor
+ * ended up outside the reducer in the first place. Here the DEFAULT is
+ * stated (`settleSubPhase`: hold where you are), so a new message that says
+ * nothing about the cursor leaves it alone, which is almost always right.
+ *
+ * A TURN CHANGE BEATS EVERY STEP RULE. Whatever a message did to the cursor,
+ * if the acting corporation or the round changed underneath it then a new
+ * turn has begun and it opens where the era says it opens. Checked first so
+ * no arm below can hand a fresh turn a stale step.
+ */
+function settleOperatingCursor(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  msg: GameplayExecuteMsg,
+): GameStateResponse {
+  /* Outside an Operating Round there is no cursor. Cleared rather than
+     frozen: a Stock Round that kept `Hardware` on the state would hand it
+     back to the first corporation of the next Operating Round if any later
+     read forgot to check the round type. `undefined` is the same "not
+     applicable" the other sandbox-only fields use. */
+  if (after.current_round_type !== "OperatingRound") {
+    if (after.operating_sub_phase === undefined) return after;
+    return { ...after, operating_sub_phase: undefined };
+  }
+
+  const turnChanged =
+    before.current_round_type !== after.current_round_type ||
+    before.active_corporation_index !== after.active_corporation_index ||
+    before.sub_round_index !== after.sub_round_index ||
+    before.macro_round_number !== after.macro_round_number;
+  if (turnChanged) {
+    return { ...after, operating_sub_phase: openingSubPhase(after) };
+  }
+
+  const current = after.operating_sub_phase;
+  const next = stepAfterMessage(after, current, msg);
+  if (next === current) return after;
+  return { ...after, operating_sub_phase: next };
+}
+
+/** Which step a message leaves the acting corporation on.
+ *
+ *  The four explicit arms mirror what the CONTRACT does with its own cursor
+ *  rather than inventing a sandbox sequencing rule -- `hexmap::execute_lay_tile`
+ *  advances off `Track` on success, and the rest follow the same pattern.
+ *  They were previously four `setOrSubPhase` calls scattered through
+ *  `App.tsx`'s handlers, which is why a replay never performed them. */
+function stepAfterMessage(
+  state: GameStateResponse,
+  current: OperatingSubPhase | undefined,
+  msg: GameplayExecuteMsg,
+): OperatingSubPhase {
+  // A corporation lays one tile per turn, so the Track step is done.
+  if ("LayTile" in msg) return settleSubPhase(state, "Tokens");
+  // One station placement per turn likewise.
+  if ("PlaceStationToken" in msg) return settleSubPhase(state, "Routes");
+  /* Running the routes COMPUTES the revenue; declaring dividends chooses
+     what to do with it (design note #142). Two steps, so two messages. */
+  if ("RunManualRoute" in msg) return settleSubPhase(state, "Dividends");
+  if ("DeclareDividends" in msg) return settleSubPhase(state, "Hardware");
+  /* The Skip button and the auto-skip (design note #439) both arrive as
+     this, and both mean the same thing to the cursor. */
+  if ("AdvanceOperatingSubPhase" in msg) {
+    return nextSubPhase(state, settleSubPhase(state, current));
+  }
+  /* THE DEFAULT IS TO STAY PUT, and it is the important arm. Buying a train
+     is the reported bug: it changes the phase, and the phase is not a turn
+     event. Neither is a private company being bought, or a share price
+     moving. `settleSubPhase` only intervenes when the cursor names a step
+     this game no longer has -- see its own note. */
+  return settleSubPhase(state, current);
 }
 
 /* ==================================================================

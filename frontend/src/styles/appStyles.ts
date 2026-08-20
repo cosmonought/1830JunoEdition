@@ -604,8 +604,11 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     /* Design note #295: the action strip's own height. At 10px vertical
        padding around a 19px control this bar ran past 60px; with the type
-       scale at 14px it lands inside the 44-52px band the layout targets,
-       and `maxHeight` stops a wrapped row from silently growing past it. */
+       scale at 14px it lands inside the 44-52px band the layout targets.
+       Design note #655: the clause that used to end this sentence -- "and
+       `maxHeight` stops a wrapped row from silently growing past it" --
+       described a property `actionBar` does not have and should not. This
+       bar WRAPS, and a wrapped row growing is the wrap working. */
     padding: "6px 12px",
     backgroundColor: "#1b2130",
     borderWidth: "1px",
@@ -732,7 +735,12 @@ export const styles: Record<string, React.CSSProperties> = {
   actionBarPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
   actionBarButtons: {
     display: "grid",
-    gridTemplateColumns: "1fr auto 1fr",
+    /* Design note #654: `minmax(0, 1fr)` rather than bare `1fr`. A `1fr`
+       track still has an `auto` minimum, so a rail whose content is wider
+       than its share -- the phase badge with a Phase Shift Imminent warning
+       beside it -- grows past half and drags the centre column off true. The
+       explicit `0` floor lets the rails shrink and keeps the middle middle. */
+    gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
     alignItems: "center",
     gap: "6px",
     // Design note #40, still: must GROW so the rails have width to take.
@@ -781,13 +789,33 @@ export const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     overflow: "hidden",
   },
-  actionBarRailRight: {
+  /* ==================================================================
+   *  DESIGN NOTE 654: LEAD AND TRAIL, NOT LEFT AND RIGHT
+   * ==================================================================
+   *
+   * `actionBarRailRight` stood here, holding the phase badge with
+   * `justifySelf: end`. The badge is flush LEFT now, so the pair is named
+   * for position in the row rather than for a side: `actionBarRailLead`
+   * carries the phase group, `actionBarRailTrail` carries nothing and exists
+   * to be the third grid column.
+   *
+   * An empty element as layout is worth defending, because it looks like
+   * something to delete. It is not a spacer of the kind design note #426
+   * removed -- those were two `flex` children sized by their own content,
+   * which centred the group between THEM and not on the bar. This is a grid
+   * TRACK: `minmax(0, 1fr)` either side of an `auto`, and the two rails have
+   * equal weight whatever they hold, including nothing. Delete it and the
+   * centre column becomes the last column, which is the bug this note is
+   * about. */
+  actionBarRailLead: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     gap: "6px",
-    justifySelf: "end",
+    justifySelf: "start",
+    minWidth: 0,
   },
+  actionBarRailTrail: { display: "block", minWidth: 0 },
   /* Design note #426: nudged back up. Design note #31 slimmed these to
      `small`/7px on the reasoning that "in a single chrome strip they only
      have to be comfortably clickable, not the focal point of the screen" --
@@ -1091,14 +1119,42 @@ export const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "1fr auto 1fr",
     alignItems: "center",
     gap: "10px",
-    // Design note #295: a fixed band rather than a floor alone -- the
-    // floor was already 44px and nothing stopped the row exceeding it.
-    /* Design note #426: the band grows with the buttons. At 9px padding
-       around a `strong` label the row needs the extra few pixels, and a
-       `maxHeight` that no longer fits its contents is how a bar starts
-       clipping its own controls. */
+    /* ==================================================================
+     *  DESIGN NOTE 655: THE CEILING WAS THE BUG IT WARNED ABOUT
+     * ==================================================================
+     *
+     * REPORTED, at the Run Routes step: "there's a horizontal rule that looks
+     * like 'Run Routes' is supposed to be above, but instead the rule is
+     * bisecting the Phase marker, the Run Routes button, and the Undo button,
+     * while C&O's four train chips below the 'Run Routes' button are not
+     * enclosed in the action panel and bleed onto the map."
+     *
+     * One cause, two symptoms. `maxHeight: 60px` capped this row's BOX, not
+     * its contents. Routes is the busiest step -- Run Routes, Auto-Route,
+     * Skip, Undo, the phase badge and the utilities -- so the centre column
+     * wraps to a second line and the row's real content runs past 60px. With
+     * no `overflow` set, that surplus paints outside the box.
+     *
+     * The rule is `condensedTrainRow`'s `borderTop`. That row is a SIBLING in
+     * `orPanel`'s column, so it is laid out at this row's declared bottom
+     * edge -- 60px -- while the buttons are still being drawn below it. The
+     * divider lands across the controls instead of under them, and the chips
+     * that follow are positioned past where the panel believes it ends, so
+     * they fall outside its background and over the map.
+     *
+     * Design note #426 named this exact failure while keeping it: "a
+     * `maxHeight` that no longer fits its contents is how a bar starts
+     * clipping its own controls." It raised the number instead of removing
+     * the cap, which buys the distance to the next step that needs one more
+     * button. A ceiling on a wrapping row has no version that is right; the
+     * FLOOR is what design note #295 actually wanted -- a band the row never
+     * falls below, so a sparse step still reads as the same bar. `alignItems:
+     * center` keeps the contents centred in whatever height results.
+     *
+     * Removing the cap is also what makes the chips correct without touching
+     * them: they were never mispositioned, they were positioned relative to a
+     * boundary that lied. */
     minHeight: "48px",
-    maxHeight: "60px",
   },
   /* ==================================================================
    *  DESIGN NOTE 631: THE SEAT CARD

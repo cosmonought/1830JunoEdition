@@ -2750,6 +2750,50 @@ export default function ContextualActionBar({
               The leading `actionBarSpacer` that used to sit here is gone --
               see `appStyles.ts` for why two equal spacers centred the group
               between themselves but not on the bar. */}
+          {/* Design note #654: the phase group leads the row, flush left. */}
+          <span style={styles.actionBarRailLead}>
+          {phase && (
+            <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
+              {phase.label}
+            </span>
+          )}
+          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
+              used to render identically at two purchases and at one, so the
+              last purchase before a rust -- the single most consequential
+              moment in an 1830 game -- looked exactly like the moment before
+              it. It now reads the same `phaseAlertLevel` helper the train
+              chips do, so the bar and the chips escalate together.
+
+              The wording escalates with the colour: "Imminent" is a claim
+              about the next purchase, and it was previously being made one
+              purchase too early. */}
+          {phaseAlert && (
+            <span
+              className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
+              style={{
+                ...styles.phaseShiftBadge,
+                ...(phaseAlert === "critical"
+                  ? styles.phaseShiftBadgeCritical
+                  : styles.phaseShiftBadgeWarn),
+              }}
+              // The exact consequence, per tier. Falls back to a plain
+              // depot-count statement for the 2-train case, which empties
+              // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
+              title={
+                phase?.shiftWarning ??
+                (phase?.depotRemaining === 0
+                  ? `No ${phase.tier}-Trains left in the Bank Depot.`
+                  : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
+              }
+            >
+              {phaseAlert === "critical" ? (
+                <>&#9888; Phase Shift Imminent</>
+              ) : (
+                <>&#9888; Phase Shift in 2 Buys</>
+              )}
+            </span>
+          )}
+          </span>
           <span style={styles.actionBarButtonsCentre}>
           {/* Design note #31: Pass leads -- it is the action available in
               every phase, and the one a player reaches for most. */}
@@ -2842,57 +2886,39 @@ export default function ContextualActionBar({
               the live one in the OR panel above. */}
           </span>
 
-          {/* Design note #40/#426: the phase badge, pinned right. The trailing
-              spacer is gone with the leading one -- the grid's right rail
-              (`justifySelf: end`) pins the badge without taking width from the
-              centred group, which is what the spacer pair could not do. The
-              rail renders unconditionally so the grid always has three
-              columns; design note #40's warning about an auto margin on a
-              conditional node no longer applies, because the margin is now the
-              rail's rather than the badge's. */}
-          <span style={styles.actionBarRailRight}>
-          {phase && (
-            <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
-              {phase.label}
-            </span>
-          )}
-          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
-              used to render identically at two purchases and at one, so the
-              last purchase before a rust -- the single most consequential
-              moment in an 1830 game -- looked exactly like the moment before
-              it. It now reads the same `phaseAlertLevel` helper the train
-              chips do, so the bar and the chips escalate together.
+          {/* ==================================================================
+               DESIGN NOTE 654: THE GRID HAD THREE COLUMNS AND TWO CHILDREN
+              ==================================================================
 
-              The wording escalates with the colour: "Imminent" is a claim
-              about the next purchase, and it was previously being made one
-              purchase too early. */}
-          {phaseAlert && (
-            <span
-              className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
-              style={{
-                ...styles.phaseShiftBadge,
-                ...(phaseAlert === "critical"
-                  ? styles.phaseShiftBadgeCritical
-                  : styles.phaseShiftBadgeWarn),
-              }}
-              // The exact consequence, per tier. Falls back to a plain
-              // depot-count statement for the 2-train case, which empties
-              // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
-              title={
-                phase?.shiftWarning ??
-                (phase?.depotRemaining === 0
-                  ? `No ${phase.tier}-Trains left in the Bank Depot.`
-                  : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
-              }
-            >
-              {phaseAlert === "critical" ? (
-                <>&#9888; Phase Shift Imminent</>
-              ) : (
-                <>&#9888; Phase Shift in 2 Buys</>
-              )}
-            </span>
-          )}
-          </span>
+               REPORTED: "the Action Buttons and the 'Phase' badge [are] in
+               [a] weird place. The 'Phase' badge should be flush left and the
+               Action buttons should be center."
+
+               `actionBarButtons` is a `1fr auto 1fr` grid and design note #426
+               describes it working: rails either side, buttons centred on the
+               PANEL rather than between whatever the rails happen to hold. It
+               never did, in this branch. Only TWO children were put in it --
+               the button group and the phase rail -- so the buttons took
+               column one and the badge took column two, and a whole `1fr`
+               column sat empty off the right edge. That is the reported
+               "weird place": buttons left of centre, badge adrift in the
+               middle.
+
+               #426's own note says "the rail renders unconditionally so the
+               grid always has three columns". True of the RIGHT rail it was
+               written about; never made true of the left one.
+               `actionBarRailLeft` is defined in `appStyles.ts` and this file
+               has never referenced it. A grid does not report a missing
+               child -- it shifts everything one column over and renders
+               something plausible. Same family as the phantom style key: the
+               layout is stated in one file and half-performed in another.
+
+               THE ORDER IS THE INSTRUCTION'S. Phase leads, buttons centre,
+               and the trailing rail is empty and unconditional -- it exists
+               only so the centre column has equal weight either side, which
+               is the one thing that puts `auto` in the middle of the panel
+               rather than in the middle of the leftovers. */}
+          <span style={styles.actionBarRailTrail} aria-hidden="true" />
         </div>
       </div>
       )}

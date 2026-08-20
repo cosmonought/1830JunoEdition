@@ -595,6 +595,8 @@ import {
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxLog,
+  // Design note #644: sandbox chat hangs off the sandbox room, not a lobby one.
+  SANDBOX_ROOMS_COLLECTION,
   subscribeSandboxRoom,
   toSetupPlayers,
   upsertSandboxPlayer,
@@ -701,7 +703,10 @@ import {
   applySandboxMarketAction,
   applyPrivateRevenue,
   applySandboxWaterfallAction,
-  beginOperatingRound,
+  /* Design note #642: `beginOperatingRound` is no longer imported here. The
+     shell used to call it when it saw `stock_round_just_ended`; the reducer
+     owns that now, which is the whole point of the change -- a round can only
+     be opened by the path that replays. */
   pendingHomeTokens,
   placeHomeStationToken,
   describePrivatePayout,
@@ -853,6 +858,18 @@ import {
 /* themselves now live in utils/feed.ts -- see that file's design note   */
 /* #1 for why.                                                           */
 /* ------------------------------------------------------------------ */
+
+/** Design note #643: "Auction" / "SR2" / "OR 1.1", from a state rather than
+ *  from whatever the browser is showing. `null` before the first poll. */
+function roundLabelFor(state: GameStateResponse | null | undefined): string | null {
+  if (!state) return null;
+  // Pre-Game Waterfall Auction: every room genesis-starts here, before
+  // `macro_round_number`'s numbering means anything.
+  if (state.current_round_type === "WaterfallAuction") return "Auction";
+  if (state.current_round_type === "StockRound") return `SR${state.macro_round_number}`;
+  const suffix = state.sub_round_index > 0 ? `.${state.sub_round_index}` : "";
+  return `OR ${state.macro_round_number}${suffix}`;
+}
 
 let nextLogEntryId = 1;
 
@@ -2033,6 +2050,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [],
   );
 
+  /* Design note #646/#647: the operating-order tie-breaks. Read from the same ref
+     as the price and for the same reason (design note #411): the chart is a
+     separate atom, and the queue is rebuilt within a dispatch that may have
+     just moved a marker -- so both must come from the ref the dispatch has
+     already refreshed, not from a render-old state variable. */
+  const marketMarkForCompany = useCallback(
+    (companyId: number) => sandboxMarketRef.current[companyId] ?? null,
+    [],
+  );
+
   /** Design note #363: the board's own label -> `(q, r)` table.
    *
    *  HOISTED since design note #416. It was an inline lambda inside the
@@ -2498,51 +2525,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [gameState, waterfallState]);
 
   /* ==================================================================
-   *  DESIGN NOTE 406: EVERY SEAT'S SPENDABLE CASH, IN SEATING ORDER
+   *  DESIGN NOTE 639: EVERY SEAT'S SPENDABLE CASH, BY ADDRESS
    * ==================================================================
    *
-   * BOTH SEAT-DRIVEN ROUNDS. The auction wants it because the question that
-   * decides a bid is what the OTHER seats can spend (design note #342); a
-   * Stock Round wants it for the same reason one step removed.
+   * Back after design note #637 removed it, in a smaller form. The trail
+   * shows figures on the INACTIVE seats only, so this is what those segments
+   * read -- and a map rather than the old array, because the one thing every
+   * consumer did with it was `find` by address once per seat, which is a
+   * quadratic scan for a lookup.
    *
-   * OPERATING ROUNDS ARE EXCLUDED. An OR turn belongs to a CORPORATION, not
-   * a seat -- the bar already names the acting corporation and its president
-   * -- so a seat roster there would answer a question nobody is asking.
-   *
-   * ESCROW IS AUCTION-ONLY and stays correct by construction: `escrowedBids`
-   * reads the waterfall document, which is absent outside the auction, so it
-   * returns zero and the trail renders one fewer figure in a Stock Round.
-   *
-   * ==================================================================
-   *  DESIGN NOTE 601: WHAT THIS IS NOW, AND THE TRAP IN THE GUARD
-   * ==================================================================
-   *
-   * This used to feed the action bar's roster pills and carried the fields
-   * they needed -- `label`, `isActive`, `contested`, `sidelined`. The pills
-   * turned out to be unreachable and are gone (design note #601 in
-   * `ContextualActionBar.tsx`), so those four fields went with them. What
-   * remains is a lookup table: `SeatOrderTrail` reads `available` and
-   * `escrowed` per seat and derives everything else itself.
-   *
-   * WORTH FLAGGING FOR THE NEXT READER: the round test below is the THIRD
-   * statement of one condition. `stockRoundPlayerFinances` has it, and so
-   * does the `seatOrderTrail` prop at the render site. Two of those agreeing
-   * by coincidence is exactly what made the pills dead code and hid it --
-   * a guard that reads like a fallback but can never be reached. If a fourth
-   * copy is ever wanted, hoist the boolean instead. */
-  const playerRoster = useMemo(() => {
-    if (!gameState) return [];
+   * BOTH SEAT-DRIVEN ROUNDS, empty otherwise (design note #406): an
+   * Operating Round's turn belongs to a corporation and its bar draws no
+   * seat queue at all. */
+  const seatFunds = useMemo(() => {
+    const table = new Map<string, { available: number; escrowed: number }>();
+    if (!gameState) return table;
     if (
       gameState.current_round_type !== "WaterfallAuction" &&
       gameState.current_round_type !== "StockRound"
     ) {
-      return [];
+      return table;
     }
-    return gameState.player_addresses.map((address) => ({
-      address,
-      available: availableCash(gameState, waterfallState, address) ?? 0,
-      escrowed: escrowedBids(waterfallState, address),
-    }));
+    for (const address of gameState.player_addresses) {
+      table.set(address, {
+        available: availableCash(gameState, waterfallState, address) ?? 0,
+        escrowed: escrowedBids(waterfallState, address),
+      });
+    }
+    return table;
   }, [gameState, waterfallState]);
 
   /** What the acting seat has locked in standing bids, for the badge's
@@ -2650,7 +2660,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Firestore document, and subscribing to it would CREATE one the first
     // time anyone typed -- littering the room collection with junk rooms
     // from what is supposed to be a local, chain-free scratchpad.
-  } = useFirestoreChat(sandbox ? null : roomId, wallet.address, displayName);
+    /* ==================================================================
+     *  DESIGN NOTE 644: THE SANDBOX GETS ITS OWN ROOM AND ITS OWN IDENTITY
+     * ==================================================================
+     *
+     * This read `sandbox ? null : roomId`, which switched chat off entirely
+     * in the mode most people are playing -- see design note #644 in
+     * `ChatBox.tsx` for why that argument expired.
+     *
+     * THE IDENTITY MATTERS AS MUCH AS THE ROOM. `wallet.address` is null in a
+     * sandbox, and `sendMessage` refuses without an author, so passing the
+     * room alone would have moved the refusal rather than removed it.
+     * `localId` is the sandbox's own stable id -- the same one the action log
+     * records as `actor`, so a message and a move made by the same seat agree
+     * about who did them.
+     *
+     * `sandboxRoomCode` IS NULL UNTIL A ROOM IS OPENED, and that is the local
+     * case rather than an error: the hook keeps those messages in memory. A
+     * solo sandbox has a working chat box with nobody else in it, which is
+     * the honest rendering of a solo sandbox. */
+  } = useFirestoreChat(
+    sandbox ? sandboxRoomCode : roomId,
+    sandbox ? localId : wallet.address,
+    displayName,
+    sandbox ? SANDBOX_ROOMS_COLLECTION : undefined,
+  );
   const [chatDraft, setChatDraft] = useState("");
   // Renamed from `feedOpen` -- design note #20/item 1. Same boolean role,
   // now gates `TopTicker.tsx`'s in-place accordion body instead of a
@@ -2867,18 +2901,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * gutter, not a heading -- "[Waterfall Auction]" is wider than most of
    * the lines it would sit beside.
    */
-  const roundLabel = useMemo(() => {
-    if (!gameState) return null;
-    // Pre-Game Waterfall Auction (`waterfall.rs`): every room now
-    // genesis-starts here, before `macro_round_number`'s "SR1"/"OR1.1"
-    // numbering is meaningful at all.
-    if (gameState.current_round_type === "WaterfallAuction") return "Auction";
-    if (gameState.current_round_type === "StockRound") {
-      return `SR${gameState.macro_round_number}`;
-    }
-    const suffix = gameState.sub_round_index > 0 ? `.${gameState.sub_round_index}` : "";
-    return `OR ${gameState.macro_round_number}${suffix}`;
-  }, [gameState]);
+  /* ==================================================================
+   *  DESIGN NOTE 643: THE ROUND LABEL IS A FUNCTION OF A STATE
+   * ==================================================================
+   *
+   * Lifted out of the memo so a log writer can ask it about the state an
+   * action RESOLVED to, rather than about the state the browser is currently
+   * rendering. Those are the same thing during live play and completely
+   * different during a replay -- which is why an auction entry came back
+   * stamped "OR 1.1" after an undo.
+   *
+   * Module-scope rather than a `useCallback`: it closes over nothing, and a
+   * hook identity here would be one more thing for the log writers'
+   * dependency arrays to keep still. */
+  const roundLabel = useMemo(() => roundLabelFor(gameState), [gameState]);
 
   /* Read through a ref by the log writers, which are declared above this
      memo -- the same ordering workaround `logInfoRef` uses. A ref also
@@ -3637,7 +3673,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  it what still counts and who authored it -- a ref rather than state
    *  because the answer is only needed at the moment a button is pressed, and
    *  making it a dependency would rebuild the handlers on every action. */
-  const sandboxLogRef = useRef<Array<{ index: number; payload: string; actor: string }>>([]);
+  /* Design note #643: `at` joins the mirrored shape. A structural type that
+     omits a field the source carries is a silent narrowing -- the drain reads
+     `SandboxAction`s and this ref was quietly dropping their timestamp on the
+     way through. */
+  const sandboxLogRef = useRef<
+    Array<{ index: number; payload: string; actor: string; at?: number }>
+  >([]);
   /* ==================================================================
    *  DESIGN NOTE 592a: WHERE THE ROUND STARTED
    * ==================================================================
@@ -4708,6 +4750,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         automatic?: boolean;
         resetRouteRevenue?: boolean;
         isRemoteReplay?: boolean;
+        /** Design note #643: the log entry's own `createdAt`, so a replayed
+         *  action is timestamped when it HAPPENED rather than when it was
+         *  replayed. Omitted by every live dispatch. */
+        at?: number;
         actor?: string | null;
       },
     ) => {
@@ -4808,8 +4854,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         (chainMsg ? describeGameplayAction(chainMsg, describeContext) : null) ?? fallbackLabel;
 
       const id = nextLogEntryId++;
-      const timestamp = new Date().toLocaleTimeString();
-      const timestampMs = Date.now();
+      /* ==================================================================
+       *  DESIGN NOTE 643: A REPLAYED ACTION KEEPS ITS OWN CLOCK
+       * ==================================================================
+       *
+       * REPORTED: every entry in a game carries the same timestamp.
+       *
+       * It did, and accurately: a rebuilding client re-dispatches the whole
+       * log, and each of those dispatches stamped `Date.now()`. The log was
+       * not recording when the game happened -- it was recording when the
+       * rebuild ran, which for a whole history is one instant.
+       *
+       * `options.at` is the entry's own `createdAt`, surfaced by design note
+       * #643 in `sandboxRoom.ts` and handed down by the drain. Live dispatches
+       * pass nothing and take the current time, which is what they always
+       * did; only a replay has an earlier time to honour, and only a replay
+       * was wrong. */
+      const timestampMs = options?.at ?? Date.now();
+      const timestamp = new Date(timestampMs).toLocaleTimeString();
 
       // Design note #23: the read-only gate for dispatch path (1). Every
       // gameplay control on this screen except the tile popup -- the
@@ -5540,6 +5602,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                has just refreshed, so the order reflects any move this very
                dispatch caused rather than the previous render's prices. */
             marketPriceFor: marketPriceForCompany,
+            // Design note #647: the token's position -- column and arrival.
+            marketMarkFor: marketMarkForCompany,
             /* Design note #351: the par ladder's selection, for the
                founding purchase that sets it. Read from the ref rather
                than the state variable for design note #265's reason --
@@ -5693,84 +5757,53 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           setSandboxState(after);
 
           /* ==============================================================
-           *  DESIGN NOTE 353 (caller half): THE ROUND CHANGES HANDS
+           *  DESIGN NOTE 642 (caller half): THE SHELL REPORTS, IT DOES NOT DECIDE
            * ==============================================================
            *
-           * `recordPass` sets a one-shot flag when a full round of passes
-           * closed the Stock Round. The shell consumes it here: it owns the
-           * log, and it owns the round transition -- the reducer holds only
-           * the game document and has no business deciding which tab the
-           * player is looking at.
+           * Two blocks stood here. One saw `stock_round_just_ended` and built
+           * the Operating Round; the other saw `operating_round_just_ended`
+           * and closed the cycle, incrementing `macro_round_number`. Both were
+           * doing the reducer's job in the shell, and both were skipped by
+           * every replay -- see design note #642 in `sandboxSession.ts` for
+           * what that cost.
            *
-           * The flag is CLEARED as it is read, so a later re-render cannot
-           * fire the transition twice. */
-          if (after.stock_round_just_ended) {
-            const holder = after.player_addresses[after.priority_deal_index];
-            const holderLabel = holder
-              ? (sandboxPlayerLabel(holder) ?? truncateAddress(holder))
-              : "the next player";
-            logInfo(
-              "Round",
-              `Stock Round ends. Priority Deal shifts to ${holderLabel}.`,
-            );
-            /* ==========================================================
-             *  DESIGN NOTE 411 (caller half): THE QUEUE IS BUILT HERE
-             * ==========================================================
-             *
-             * This set `current_round_type` and `consecutive_passes` and
-             * nothing else, so the Operating Round opened with whatever
-             * `active_operating_order` the state already carried -- `[]`
-             * for any game actually played into an OR rather than seeded
-             * into one by a fixture. An OR with an empty queue cannot
-             * advance and has no acting seat, which is both halves of the
-             * reported infinite-round bug.
-             *
-             * `beginOperatingRound` is the same function the
-             * `BeginOperatingRound` message arm uses, so the two entry
-             * paths cannot build different queues -- or, as here, one of
-             * them build none at all. */
-            after = beginOperatingRound(after, marketPriceForCompany);
-            after = { ...after, stock_round_just_ended: false };
-            sandboxStateRef.current = after;
-            setSandboxState(after);
-            /* The tab follows the round. `surfaceTabFor` is the same lookup
-               the round-transition effect uses, so the two cannot disagree
-               about where an Operating Round is played. */
-            setActiveMainTab(surfaceTabFor("OperatingRound"));
-          }
-
-          /* ==============================================================
-           *  DESIGN NOTE 411 (caller half): AND THE ROUND HANDS BACK
-           * ==============================================================
+           * `settleRoundTransitions` performs the transition now, so all that
+           * is left here is what a transition should CAUSE rather than what it
+           * IS: a line in the activity log.
            *
-           * The mirror of the block above. `advanceCorporation` raises this
-           * when the last corporation in the queue has operated and the
-           * sequence has no further Operating Round in it; the shell owns
-           * the log and the tab, exactly as it does for the Stock Round's
-           * close, so the reducer reports rather than navigates.
+           * DETECTED BY COMPARING STATE, not by reading a flag. The flags are
+           * consumed inside the reducer now and are gone by the time this
+           * runs; more importantly a before/after comparison is a fact about
+           * the game, so it means the same thing on a replay as on a live
+           * dispatch. A flag is a message to whoever reads it first.
            *
-           * Cleared as it is read for the same reason: a flag left standing
-           * would re-fire the transition on the next render. */
-          if (after.operating_round_just_ended) {
-            logInfo(
-              "Round",
-              "Operating Round ends — every corporation has operated. Opening the next Stock Round.",
-            );
-            after = {
-              ...after,
-              operating_round_just_ended: false,
-              current_round_type: "StockRound" as const,
-              macro_round_number: after.macro_round_number + 1,
-              sub_round_index: 0,
-              consecutive_passes: 0,
-              last_trader_index: null,
-              // The Priority Deal holder opens the Stock Round -- the whole
-              // point of holding it (design note #353).
-              active_player_index: after.priority_deal_index,
-            };
-            sandboxStateRef.current = after;
-            setSandboxState(after);
-            setActiveMainTab(surfaceTabFor("StockRound"));
+           * SILENT ON A REPLAY. A rebuilding client re-applies every action in
+           * the log, so an unguarded line here would re-announce every round
+           * change the game has ever had -- which is exactly the duplicated,
+           * identically-timestamped history that was reported.
+           *
+           * NO TAB NAVIGATION EITHER. Design note #213's effect already
+           * watches `current_round_type` and moves the player to the round's
+           * own surface; doing it here as well was a second opinion about one
+           * transition, and on a replay it would yank the tab once per
+           * replayed round. */
+          if (
+            before !== null &&
+            before.current_round_type !== after.current_round_type &&
+            options?.isRemoteReplay !== true
+          ) {
+            if (after.current_round_type === "OperatingRound") {
+              const holder = after.player_addresses[after.priority_deal_index];
+              const holderLabel = holder
+                ? (sandboxPlayerLabel(holder) ?? truncateAddress(holder))
+                : "the next player";
+              logInfo("Round", `Stock Round ends. Priority Deal shifts to ${holderLabel}.`);
+            } else if (after.current_round_type === "StockRound") {
+              logInfo(
+                "Round",
+                "Operating Round ends — every corporation has operated. Opening the next Stock Round.",
+              );
+            }
           }
         }
 
@@ -5786,8 +5819,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
             timestamp,
             timestampMs,
-            // Design note #343: stamped at write time.
-            round: roundLabelRef.current ?? undefined,
+            /* Design note #643: from the state this action RESOLVED to, not
+               from a ref holding whatever round the browser is looking at
+               now. On a replay the ref is the present and the action is the
+               past, which is how an auction entry came to be tagged
+               "OR 1.1". */
+            round: roundLabelFor(after) ?? undefined,
           },
           ...log,
         ]);
@@ -5890,6 +5927,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          as `parValueNumberFor` above -- both are `useCallback`s over a ref,
          and both would go stale silently if that ever changed. */
       marketPriceForCompany,
+      // Design note #646: beside the price, and stable for the same reason
+      // -- both are `useCallback`s over a ref, so neither changes identity.
+      marketMarkForCompany,
       // Design note #416: hoisted out of this object literal, so it is a
       // dependency now rather than a freshly-built closure each call.
       homeHexToAxial,
@@ -8305,7 +8345,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!sandbox || !sandboxRoomCode) return undefined;
     let live = true;
 
-    const drain = async (actions: Array<{ index: number; payload: string; id: string; actor: string }>) => {
+    /* Design note #643: the parameter is spelled out rather than imported as
+       `SandboxAction`, and that hand-written shape had silently gone stale --
+       it omitted `at`, so the timestamp the log carries was dropped at the
+       door. Widened here; the lasting fix is to name the type. */
+    const drain = async (
+      actions: Array<{ index: number; payload: string; id: string; actor: string; at?: number }>,
+    ) => {
       if (replayingRef.current) return;
       replayingRef.current = true;
       try {
@@ -8356,6 +8402,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         if (rewound) {
           rebuildRef.current?.();
           appliedCountRef.current = 0;
+          /* ==============================================================
+           *  DESIGN NOTE 643: THE LOG IS REBUILT TOO, NOT APPENDED TO
+           * ==============================================================
+           *
+           * REPORTED: the activity log holds events from previous
+           * playthroughs, and reports each game's actions more than once.
+           *
+           * A rewind throws the game state away and replays from zero -- and
+           * the replay writes a log entry per action, as any dispatch does.
+           * The entries from BEFORE the rewind were still sitting in
+           * `actionLog`, so every undo doubled the history, and the doubled
+           * copy included actions the undo had just declared never happened.
+           *
+           * The log is a rendering of the action list, so it is rebuilt from
+           * the same source and at the same moment as the state it describes.
+           * Anything else is two records of one history, agreeing only until
+           * somebody rewinds. */
+          setActionLog([]);
         }
         // The next log index to append at is the LOG's length, never the
         // effective count -- an undone action still occupies its index.
@@ -8377,6 +8441,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             automatic: true,
             // Design note #549: WHO, straight off the log entry.
             actor: action.actor || null,
+            // Design note #643: and WHEN, likewise. Without this the whole
+            // rebuilt history is stamped with the instant of the rebuild.
+            at: action.at,
           });
         }
         if (live) setSandboxAppliedCount(appliedCountRef.current);
@@ -9455,17 +9522,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     (gameState.current_round_type === "StockRound" ||
                       gameState.current_round_type === "WaterfallAuction") ? (
                       <SeatOrderTrail
-                        /* Design note #595a: the same figures the roster
-                           pills carried, on the same chips as the order --
-                           `playerRoster` is the single computation both used
-                           to read, so the trail cannot quote a different
-                           number from the badge it replaced. */
+                        /* Design note #639: figures for the seats that are
+                           NOT acting -- the trail suppresses them on the lit
+                           segment, where the card below says it properly. */
                         seats={gameState.player_addresses.map((address, index) => ({
                           address,
                           label: sandboxPlayerLabel(address) ?? truncateAddress(address),
                           color: seatColor(address, index),
-                          available: playerRoster.find((s) => s.address === address)?.available,
-                          escrowed: playerRoster.find((s) => s.address === address)?.escrowed,
+                          available: seatFunds.get(address)?.available,
+                          escrowed: seatFunds.get(address)?.escrowed,
                           // Design note #610: derived from the pass counter,
                           // so it clears itself the moment anybody trades.
                           passed: passedSeats.has(index),

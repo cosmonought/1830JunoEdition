@@ -724,6 +724,12 @@ export const styles: Record<string, React.CSSProperties> = {
    *
    * The spacers are gone from the markup with it; `actionBarSpacer` stays
    * defined for the auction bar's own row, which is a genuine flex line. */
+  /* Design note #636: the Stock/Auction branch as a COLUMN, mirroring
+     `orPanel`. Identity on one row, actions on the next -- the same shape
+     and the same 3px gap, so the two rounds' bars are the same object with
+     different contents rather than two layouts that happen to share a
+     border. */
+  actionBarPanel: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" },
   actionBarButtons: {
     display: "grid",
     gridTemplateColumns: "1fr auto 1fr",

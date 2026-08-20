@@ -280,6 +280,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+// Design note #640: which build the browser is actually running.
+import { UI_BUILD_LABEL } from "../utils/buildStamp";
 
 interface RuleRow {
   label: string;
@@ -806,6 +808,12 @@ function AboutSection() {
   return (
     <section style={styles.section}>
       <h3 style={styles.sectionTitle}>About This Game &amp; Your Goal</h3>
+      {/* Design note #640: the one place to look when a reported bug cannot be
+          reproduced. Quiet, because it is for the rare conversation rather
+          than for play -- but findable without asking anyone. */}
+      <p style={styles.buildStamp} title="Quote this in a bug report — it says which build of the interface you are running.">
+        {UI_BUILD_LABEL}
+      </p>
       <div style={styles.aboutProse}>
         <p style={styles.aboutParagraph}>
           Project 18XX puts you in the seat of a 19th-century financier, competing to build and
@@ -1105,6 +1113,16 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.75,
   },
   aboutEmphasis: { color: "#e0b64a", fontWeight: 700 },
+  /* Design note #640: deliberately the quietest text on the page. It is
+     diagnostic metadata, not something a player reads while learning the
+     game. */
+  buildStamp: {
+    margin: "0 0 10px",
+    fontSize: FONT_SIZE.micro,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    color: "#6f7480",
+    cursor: "help",
+  },
   tableScroll: {
     overflowX: "auto",
     width: "100%",

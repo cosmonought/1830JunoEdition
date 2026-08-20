@@ -509,6 +509,62 @@ export interface SandboxMarketMark {
   price: number;
   x: number;
   y: number;
+  /* ==================================================================
+   *  DESIGN NOTE 646: WHEN THIS MARKER REACHED THIS CELL
+   * ==================================================================
+   *
+   * INSTRUCTED: "corporations on the same cell act in the order in which they
+   * reached the cell: so a first company to par at $100 goes first, and a
+   * second company that also pars at $100 goes second. If two corporations
+   * markers move into the same cell, the first one to enter goes first."
+   *
+   * That rule is about HISTORY, and a price alone cannot answer it -- two
+   * corporations sharing a cell are indistinguishable by anything the chart
+   * currently records. On a physical board the answer is visible because the
+   * tokens are a stack; here it has to be written down.
+   *
+   * A SEQUENCE, NOT A CLOCK. Wall time would work and would be wrong under
+   * replay: a rebuilt room re-applies the whole log in one burst, so every
+   * arrival would share a timestamp. This is an ordinal derived from the
+   * marks already on the chart (`nextArrival`), so it is a pure function of
+   * state and lands identically however many times the log is replayed --
+   * the same property design note #642 had to restore for the round machine.
+   *
+   * STAMPED ONLY WHEN THE CELL CHANGES. A marker that lands where it already
+   * stood has not re-entered anything, and re-stamping would send a
+   * corporation to the back of its own tie for standing still. */
+  enteredAt?: number;
+}
+
+/** The next arrival ordinal for a chart. One past the highest already on it,
+ *  so it is monotonic without a counter to keep -- and derived, so a replay
+ *  reaches the same numbers rather than continuing from wherever this
+ *  browser's session had got to. */
+export function nextArrival(prices: SandboxMarketPrices): number {
+  let highest = 0;
+  for (const mark of Object.values(prices)) {
+    if (mark && typeof mark.enteredAt === "number" && mark.enteredAt > highest) {
+      highest = mark.enteredAt;
+    }
+  }
+  return highest + 1;
+}
+
+/** Records a landing, stamping the arrival only if the cell actually changed.
+ *  Every place a marker moves goes through here, so no landing site can
+ *  forget -- which is how the tie-break would quietly go back to being
+ *  arbitrary for one kind of move. */
+export function withArrival(
+  prices: SandboxMarketPrices,
+  companyId: number,
+  landed: { price: number; x: number; y: number },
+): SandboxMarketMark {
+  const before = prices[companyId] ?? null;
+  const sameCell = before !== null && before.x === landed.x && before.y === landed.y;
+  return {
+    ...landed,
+    enteredAt: sameCell ? before.enteredAt : nextArrival(prices),
+  };
 }
 
 /** Live market position by `company_id`. `null` for a corporation that has
@@ -617,7 +673,10 @@ export function placeParMark(
   if (!Number.isFinite(parPrice) || parPrice <= 0) return prices;
   const cell = parCellFor(parPrice);
   if (!cell) return prices;
-  return { ...prices, [companyId]: { price: parPrice, ...cell } };
+  /* Design note #646: paring IS an arrival -- it is the moment a corporation
+     first reaches a cell, and the report's own example ("a first company to
+     par at $100 goes first") is exactly this case. */
+  return { ...prices, [companyId]: withArrival(prices, companyId, { price: parPrice, ...cell }) };
 }
 
 /** Just the prices, for the corporation cards -- design note #2's "one

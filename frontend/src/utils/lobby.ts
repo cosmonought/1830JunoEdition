@@ -735,6 +735,21 @@ export async function bindChainGameId(roomId: string, chainGameId: number): Prom
  *  disagree about where chat lives -- and so the staging room and the live
  *  game demonstrably share ONE transcript, since both pass the same
  *  Firestore room id here. */
-export function chatCollectionPath(roomId: string): [string, string, string] {
-  return [ROOMS_COLLECTION, roomId, CHAT_SUBCOLLECTION];
+export function chatCollectionPath(
+  roomId: string,
+  /* ==================================================================
+   *  DESIGN NOTE 644: WHICH COLLECTION THE ROOM LIVES IN
+   * ==================================================================
+   *
+   * Lobby rooms are in `games`; sandbox rooms are in `sandbox_rooms`. Both
+   * hang their transcript off the room document in the same way, so the SHAPE
+   * of the path is one decision and the collection is a parameter -- which is
+   * still this function's stated purpose, that nowhere disagrees about where
+   * chat lives.
+   *
+   * Defaulted, so every existing caller is unchanged and the lobby path
+   * cannot be got wrong by omission. */
+  collectionName: string = ROOMS_COLLECTION,
+): [string, string, string] {
+  return [collectionName, roomId, CHAT_SUBCOLLECTION];
 }

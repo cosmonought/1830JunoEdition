@@ -33,6 +33,28 @@ import {
 import { derivePhase } from "./gamePhase";
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
+/* ==================================================================
+ *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG
+ * ==================================================================
+ *
+ * These tests detected the end of an Operating Round by reading
+ * `operating_round_just_ended`. That flag was a message from the reducer to
+ * the SHELL, which then performed the transition -- and design note #642
+ * moved the transition into the reducer, where it belongs, so the flag is now
+ * raised and consumed inside a single `applySandboxAction` call and is never
+ * observable from outside.
+ *
+ * THE REPLACEMENT IS BETTER, not merely different. A flag says "something is
+ * about to happen if the right caller notices"; `current_round_type` says what
+ * round the game is actually in. The first could be true on a board that
+ * never moved, which is exactly the bug the move fixed -- so a harness that
+ * asserts against the flag would keep passing on a game that had stopped
+ * advancing.
+ */
+const inOperatingRound = (state: { current_round_type: string }) =>
+  state.current_round_type === "OperatingRound";
+const roundHasEnded = (state: { current_round_type: string }) => !inOperatingRound(state);
+
 const ALICE = "juno1alice";
 const BOB = "juno1bob";
 const CAI = "juno1cai";
@@ -114,7 +136,7 @@ function operatingRoundsInCycle(trains: string[]): number {
   let rounds = 1;
   for (let dispatch = 0; dispatch < 200; dispatch += 1) {
     state = applySandboxAction(state, END_TURN);
-    if (state.operating_round_just_ended) return rounds;
+    if (roundHasEnded(state)) return rounds;
     if (state.active_corporation_index === 0) rounds += 1;
   }
   throw new Error("the operating round never closed");
@@ -161,7 +183,7 @@ describe("the cycle's opening bookkeeping", () => {
     let state = beginOperatingRound(stockRoundHandover(["3"]));
     expect(state.sub_round_index).toBe(1);
     for (let turn = 0; turn < 3; turn += 1) state = applySandboxAction(state, END_TURN);
-    expect(state.operating_round_just_ended).toBeFalsy();
+    expect(inOperatingRound(state)).toBe(true);
     expect(state.sub_round_index).toBe(2);
   });
 
@@ -182,7 +204,7 @@ describe("the cycle's opening bookkeeping", () => {
     expect(operatingRoundsForPhase(derivePhase(state))).toBe(2);
     // ...and the cycle in progress still ends after its one round.
     for (let turn = 0; turn < 3; turn += 1) state = applySandboxAction(state, END_TURN);
-    expect(state.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(state)).toBe(true);
   });
 });
 
@@ -196,15 +218,15 @@ describe("the round closes only when every floated corporation has ended its tur
     expect(state.active_operating_order).toHaveLength(3);
 
     state = applySandboxAction(state, END_TURN);
-    expect(state.operating_round_just_ended).toBeFalsy();
+    expect(inOperatingRound(state)).toBe(true);
     expect(state.active_corporation_index).toBe(1);
 
     state = applySandboxAction(state, END_TURN);
-    expect(state.operating_round_just_ended).toBeFalsy();
+    expect(inOperatingRound(state)).toBe(true);
     expect(state.active_corporation_index).toBe(2);
 
     state = applySandboxAction(state, END_TURN);
-    expect(state.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(state)).toBe(true);
   });
 
   it("seats only floated corporations that have a president", () => {

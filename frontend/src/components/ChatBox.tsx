@@ -173,12 +173,52 @@ export interface FirestoreChatResult {
  *                who later renames themselves should not retroactively
  *                rewrite the byline on things they already said.
  */
+/* ==================================================================
+ *  DESIGN NOTE 644: THE SANDBOX HAD NO CHAT, TWICE OVER
+ * ==================================================================
+ *
+ * REPORTED: "the Send button on the chatbox does not actually send a message.
+ * The chat log records 'No activity yet'."
+ *
+ * Two independent gates, either of which alone was enough:
+ *
+ *   THE ROOM WAS `null`. `App.tsx` passed `sandbox ? null : roomId`, on
+ *   design note #24's reasoning that subscribing would CREATE a Firestore
+ *   document "from what is supposed to be a local, chain-free scratchpad".
+ *   That was true when written and stopped being true at design note #578:
+ *   the sandbox is now the multiplayer mode, it already has a real room
+ *   (`sandboxRoomCode`) and already writes an action log to it. There is no
+ *   junk document to avoid -- the room exists.
+ *
+ *   THERE IS NO WALLET. `sendMessage` refuses when `address` is null, which
+ *   in a sandbox it always is. So even a correctly-roomed sandbox chat would
+ *   have answered "Connect a wallet before sending a message" -- to a mode
+ *   whose entire premise is playing without one.
+ *
+ * AND A THIRD CASE THE FIX HAS TO COVER: a sandbox with no Firebase config at
+ * all, which is a supported way to run this app (`config/firebase.ts` design
+ * note #1). There is no transport there and there never will be, and a Send
+ * button that silently does nothing is the worst of the three outcomes. So
+ * the hook falls back to keeping messages in memory -- which is exactly what
+ * chat was before design note #22 moved it to Firestore, and is honest for a
+ * session that is local by construction.
+ *
+ * THE ERROR STATE IS NOT THE FALLBACK. A configured Firestore that REFUSES a
+ * write still reports the failure; it does not quietly divert to local state
+ * and leave a player believing the table saw their message. Local is for
+ * "there is no transport", never for "the transport said no". */
+let nextLocalChatId = 1;
+
 export function useFirestoreChat(
   roomId: string | null,
   address: string | null,
   displayName: string,
+  /** Design note #644: which collection the room lives in. Sandbox rooms are
+   *  not lobby rooms, and the transcript hangs off whichever one this is. */
+  collectionName?: string,
 ): FirestoreChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const db = getFirestoreDb();
@@ -198,7 +238,7 @@ export function useFirestoreChat(
       return;
     }
 
-    const [rooms, room, chat] = chatCollectionPath(roomId);
+    const [rooms, room, chat] = chatCollectionPath(roomId, collectionName);
     const chatQuery = query(
       collection(db, rooms, room, chat),
       // Design note #2: `clientCreatedAtMs`, NOT `createdAt`. Ordering on
@@ -227,7 +267,9 @@ export function useFirestoreChat(
     );
 
     return unsubscribe;
-  }, [db, roomId]);
+    // Design note #644: the collection joins, so switching rooms between a
+    // lobby and a sandbox resubscribes rather than listening to the old path.
+  }, [db, roomId, collectionName]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -235,8 +277,22 @@ export function useFirestoreChat(
       if (!trimmed) return;
 
       const { address: sender, displayName: name } = identityRef.current;
+      /* Design note #644: no transport is not a failure, it is a local
+         session. The message is kept in memory so the button does what it
+         says, and the feed shows it exactly as a delivered one -- because
+         within this browser it IS delivered; there is nobody else to reach. */
       if (!db || !roomId) {
-        setError(firebaseConfigError() ?? "Join a room before sending a message.");
+        setLocalMessages((current) => [
+          ...current,
+          {
+            id: `local-${nextLocalChatId++}`,
+            author: sender || name || "You",
+            text: trimmed,
+            timestamp: new Date().toLocaleTimeString(),
+            timestampMs: Date.now(),
+          },
+        ]);
+        setError(null);
         return;
       }
       if (!sender) {
@@ -244,7 +300,7 @@ export function useFirestoreChat(
         return;
       }
 
-      const [rooms, room, chat] = chatCollectionPath(roomId);
+      const [rooms, room, chat] = chatCollectionPath(roomId, collectionName);
       try {
         await addDoc(collection(db, rooms, room, chat), {
           author: sender,
@@ -263,10 +319,18 @@ export function useFirestoreChat(
         );
       }
     },
-    [db, roomId],
+    [db, roomId, collectionName],
   );
 
-  return { messages, sendMessage, error, available };
+  /* Design note #644: one list either way. A caller should not have to know
+     which transport answered -- and on the local path `messages` is empty, so
+     this is a concatenation rather than a choice. */
+  const allMessages = useMemo(
+    () => (localMessages.length === 0 ? messages : [...messages, ...localMessages]),
+    [messages, localMessages],
+  );
+
+  return { messages: allMessages, sendMessage, error, available };
 }
 
 /* ------------------------------------------------------------------ */

@@ -26,6 +26,28 @@ import {
 import { derivePhase } from "./gamePhase";
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
+/* ==================================================================
+ *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG
+ * ==================================================================
+ *
+ * These tests detected the end of an Operating Round by reading
+ * `operating_round_just_ended`. That flag was a message from the reducer to
+ * the SHELL, which then performed the transition -- and design note #642
+ * moved the transition into the reducer, where it belongs, so the flag is now
+ * raised and consumed inside a single `applySandboxAction` call and is never
+ * observable from outside.
+ *
+ * THE REPLACEMENT IS BETTER, not merely different. A flag says "something is
+ * about to happen if the right caller notices"; `current_round_type` says what
+ * round the game is actually in. The first could be true on a board that
+ * never moved, which is exactly the bug the move fixed -- so a harness that
+ * asserts against the flag would keep passing on a game that had stopped
+ * advancing.
+ */
+const inOperatingRound = (state: { current_round_type: string }) =>
+  state.current_round_type === "OperatingRound";
+const roundHasEnded = (state: { current_round_type: string }) => !inOperatingRound(state);
+
 const ALICE = "juno1alice";
 const BOB = "juno1bob";
 
@@ -96,7 +118,7 @@ function operatingRoundsUntilStockRound(trains: string[]): number {
   let rounds = 1;
   for (let dispatch = 0; dispatch < 200; dispatch += 1) {
     state = applySandboxAction(state, PASS);
-    if (state.operating_round_just_ended) return rounds;
+    if (roundHasEnded(state)) return rounds;
     // A rebuilt queue with the cursor back at zero means a new OR opened.
     if (state.active_corporation_index === 0) rounds += 1;
   }
@@ -204,7 +226,7 @@ describe("a phase shift during the cycle", () => {
       }
       const before = state.sub_round_index;
       state = applySandboxAction(state, PASS);
-      if (state.operating_round_just_ended) return { rounds, endedAfter: dispatch };
+      if (roundHasEnded(state)) return { rounds, endedAfter: dispatch };
       if (state.sub_round_index > before) rounds += 1;
     }
     throw new Error("the cycle never closed");
@@ -247,7 +269,7 @@ describe("a phase shift during the cycle", () => {
         })),
       };
       state = applySandboxAction(state, PASS);
-      if (state.operating_round_just_ended) break;
+      if (roundHasEnded(state)) break;
       expect(state.operating_round_sequence_length).toBe(opened);
     }
   });

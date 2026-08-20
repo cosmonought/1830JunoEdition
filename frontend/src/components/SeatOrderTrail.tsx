@@ -51,23 +51,35 @@ export interface SeatOrderTrailProps {
     label: string;
     color: string;
     /* ==================================================================
-     *  DESIGN NOTE 595a: ONE ROW, NOT TWO
+     *  DESIGN NOTE 639: RIVALS' MONEY HERE, YOURS ON YOUR CARD
      * ==================================================================
      *
-     * REPORTED: the trail rendered ABOVE the existing roster pills, so the
-     * bar carried two rows of the same players -- one with the order and no
-     * money, one with the money and no order -- and the extra row shoved the
-     * phase badge out of place.
+     * INSTRUCTED: "perhaps it makes sense to re-insert inactive player's
+     * treasury amounts in that ordering, and leave the active player's in
+     * their player card."
      *
-     * That was mine, and the fix is the one the report points at: they are
-     * two answers to one question. Design note #342 put every seat's
-     * spendable cash on the bar because "in an auction the question that
-     * decides a bid is what can THEY spend"; design note #595 put the order
-     * there because the pills could only imply it. Both belong on the same
-     * chip.
+     * That is the right split and it resolves what design note #637 removed
+     * and what #637 admitted it was losing. Taking the figures off entirely
+     * was the correct answer to a duplication problem -- the acting seat's
+     * cash appeared on the trail AND on the card directly beneath it -- but
+     * it also took away every OTHER seat's, which was never duplicated
+     * anywhere on the sticky bar. Design note #342's rule survives after
+     * all: "in an auction the question that decides a bid is what can THEY
+     * spend."
      *
-     * `undefined` renders the name alone, which is what a round with no
-     * money question wants. */
+     * SO THE FIGURE IS SUPPRESSED ON EXACTLY ONE SEGMENT -- the lit one. The
+     * card below states it in full, labelled, with escrow spelled out; the
+     * trail would be repeating it two inches away in a compressed form that
+     * caused the "+$200 looks like earnings" reading in the first place.
+     *
+     * IT ALSO KEEPS SIX SEATS FITTING. The acting segment is the one that
+     * carries a colour fill and, when it applies, the PASSED tag's absence --
+     * dropping ~35px from it is width bought back exactly where the row is
+     * busiest. Five figures instead of six is also simply less to scan.
+     *
+     * ESCROW RIDES WITH IT and is likewise inactive-only. It is the number
+     * that decides whether a rival can still raise, which is the whole
+     * reason to look across the row. */
     available?: number | null;
     /** Design note #317: what is locked in standing bids. Zero or omitted
      *  outside the auction, where there is no escrow to report. */
@@ -201,16 +213,19 @@ export function SeatOrderTrail({
                 {seat.passed && !isCurrent && (
                   <span style={styles.passedTag}>PASSED</span>
                 )}
-                {typeof seat.available === "number" && (
+                {/* Design note #639: the acting seat's own money is on the
+                    card below, labelled. Repeating it here compressed is the
+                    duplication #637 removed. */}
+                {!isCurrent && typeof seat.available === "number" && (
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
                      spent. */
                   <span style={styles.cash}>${seat.available}</span>
                 )}
-                {typeof seat.escrowed === "number" && seat.escrowed > 0 && (
+                {!isCurrent && typeof seat.escrowed === "number" && seat.escrowed > 0 && (
                   <span
                     style={styles.escrow}
-                    title={`$${seat.escrowed} is escrowed in standing bids and comes back if those bids lose.`}
+                    title={`$${seat.escrowed} of ${seat.label}'s money is committed to standing bids. It is not spendable now, and it comes back if those bids lose.`}
                   >
                     +${seat.escrowed}
                   </span>
@@ -456,25 +471,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 3px",
     lineHeight: 1.5,
   },
+  /* Design note #639: back, and inactive-only. `escrow` stays deliberately
+     quiet -- it qualifies the figure beside it rather than competing with
+     it, and on a segment that is already the dim half of the row it does not
+     need to shout. */
   cash: { fontWeight: 800 },
-  /* ==================================================================
-   *  DESIGN NOTE 599a: THE ESCROW STAYS, AND STAYS QUIET
-   * ==================================================================
-   *
-   * The request says the rectangle lists "only [player name] [treasury]",
-   * and a third figure per segment is exactly the clutter that reading is
-   * guarding against. But escrowed money is not decoration: during the
-   * waterfall auction it is the difference between what a rival HOLDS and
-   * what a rival can still RAISE WITH, which is the one number a bid is
-   * actually judged against (design notes #317 and #342 both land here).
-   *
-   * So it is subordinated rather than removed -- lighter weight, dimmer, a
-   * step down in size -- and it renders only when it is non-zero, which is
-   * only ever during the auction. Outside that round every segment does read
-   * as strictly name + treasury, which is the shape the request describes.
-   *
-   * `opacity` deliberately, not a fixed colour: the lit segment's text is
-   * `bestContrastTextColor` against an arbitrary seat colour, and a hardcoded
-   * grey would be unreadable on roughly half of those fills. */
   escrow: { fontSize: "10px", fontWeight: 600, opacity: 0.65 },
 };

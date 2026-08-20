@@ -82,6 +82,9 @@ import { stationTokenPrice } from "./stationTokens";
 // Design note #596: the president's certificate changes hands.
 import { settlePresidencies } from "./presidencyTransfer";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
+// Design note #646: every marker landing is stamped with its arrival here,
+// so the operating-order tie-break has a history to read.
+import { withArrival } from "./sandboxState";
 import {
   HEX_START_VALUE_OVERRIDE,
   OFFBOARD_LABELS,
@@ -255,6 +258,24 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
 export function buildOperatingOrder(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
+  /* ==================================================================
+   *  DESIGN NOTE 647: THE WHOLE MARK, NOT A GROWING LIST OF SCALARS
+   * ==================================================================
+   *
+   * This was `arrivalFor`, added one pass ago for the same-cell tie-break.
+   * Rule (iii) needs the COLUMN as well, and a second scalar lookup beside
+   * the first would be two ways of asking one question -- and a third the
+   * moment a rule needs the row.
+   *
+   * The mark is the answer to "where is this corporation's token", and every
+   * tie-break below is a fact about that position. One lookup, one source.
+   *
+   * `priceFor` STAYS SEPARATE, deliberately. It is not simply
+   * `markFor(...).price`: design note #468's fallback chain reaches past the
+   * chart to `par_value` for a corporation that has floated and has no
+   * position yet, and folding that into the mark would either lose the
+   * fallback or invent a cell the token is not standing on. */
+  markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
 ): number[] {
   /* ==================================================================
    *  DESIGN NOTE 468: THE PRICE FALLBACK IS LOAD-BEARING
@@ -296,15 +317,83 @@ export function buildOperatingOrder(
         : Number.isFinite(fromPar)
           ? fromPar
           : 0;
-      return { companyId: company.company_id, price };
+      /* Design note #646: `Infinity` for a corporation whose arrival is not
+         recorded, which sorts it AFTER every corporation whose is. A fixture
+         board seeded straight onto the chart has no history to read, and
+         guessing one would invent a turn order; putting the unknowns last and
+         falling through to `company_id` keeps them in a stable, arbitrary
+         order without pretending it is the rule. */
+      const mark = markFor?.(company.company_id) ?? null;
+      const arrival = mark?.enteredAt;
+      return {
+        companyId: company.company_id,
+        price,
+        /* Design note #647: `-Infinity` sorts a positionless corporation to
+           the LEFT of every real column, which puts it last under a
+           rightmost-first rule. That is the same direction design note #646
+           takes for a missing arrival, and for the same reason: a corporation
+           the chart cannot place should not be handed precedence by the
+           absence of information. */
+        column: Number.isFinite(mark?.x as number) ? (mark?.x as number) : -Infinity,
+        arrival: Number.isFinite(arrival as number) ? (arrival as number) : Infinity,
+      };
     });
 
-  /* Ties broken by `company_id` ascending. The real tie-break is
-     `calculate_operating_order`'s and belongs to the contract; what matters
-     here is that the order is TOTAL and STABLE, because a queue that
-     reshuffles between two dispatches would move the cursor onto a
-     corporation that has already operated. */
-  priced.sort((a, b) => (b.price - a.price) || (a.companyId - b.companyId));
+  /* ==================================================================
+   *  DESIGN NOTE 646: PRICE FIRST, THEN WHO GOT THERE FIRST
+   * ==================================================================
+   *
+   * INSTRUCTED: "corporations act in descending market value" and
+   * "corporations on the same cell act in the order in which they reached
+   * the cell".
+   *
+   * The first was already right. The second was a placeholder -- ties fell
+   * through to `company_id` ascending, which the old note here admitted was
+   * chosen for being TOTAL and STABLE rather than for being the rule. It made
+   * turn order a function of the contract's roster numbering, so PRR (id 1)
+   * beat B&O (id 4) at equal price forever, whichever had parred first.
+   *
+   * ASCENDING ARRIVAL, so EARLIER goes first: the corporation that reached
+   * the cell first operates first, which is the rule as stated.
+   *
+   * `company_id` SURVIVES AS THE LAST RESORT and still earns its place. Two
+   * corporations can share an arrival ordinal only if neither has one
+   * recorded, and the sort must still be total -- an incomparable pair makes
+   * `sort` produce an order that is not an order, which is how the cursor
+   * lands on a corporation that has already operated (the same failure design
+   * note #468 guards the price against).
+   *
+   * ==================================================================
+   *  DESIGN NOTE 647: AND RIGHTMOST BEFORE EITHER OF THEM
+   * ==================================================================
+   *
+   * INSTRUCTED: "if two corporations have the same share value but are on
+   * different cells, the corporation whose token is furthest right on the
+   * matrix goes first."
+   *
+   * THE THREE RULES ARE DISJOINT, WHICH IS WHY THIS IS A CLEAN THIRD LEVEL
+   * rather than a special case. Equal price and DIFFERENT cells is rule
+   * (iii); equal price and the SAME cell is rule (ii). A shared cell shares a
+   * column, so comparing columns first is a no-op for rule (ii) and decisive
+   * for rule (iii) -- neither rule can reach the other's ground.
+   *
+   * COLUMN, NOT CELL IDENTITY. Two cells in one column can share a price on
+   * this chart, and "furthest right" cannot separate them: they are equally
+   * right. Those fall through to arrival, which is not the stated rule but is
+   * the nearest thing to it and keeps the order total. The rules do not
+   * legislate that case and this is the honest place to say so.
+   *
+   * DESCENDING, unlike every other level here. `b.column - a.column` is the
+   * one comparison that reads backwards, because rightmost is first -- worth
+   * flagging beside `a.arrival - b.arrival` directly below it, where earliest
+   * is first. */
+  priced.sort(
+    (a, b) =>
+      (b.price - a.price) ||
+      (b.column - a.column) ||
+      (a.arrival - b.arrival) ||
+      (a.companyId - b.companyId),
+  );
   return priced.map((entry) => entry.companyId);
 }
 
@@ -385,6 +474,8 @@ export function operatingRoundsForPhase(phase: GamePhase | null): number {
 export function beginOperatingRound(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
+  /** Design note #646: the arrival lookup the tie-break reads. */
+  markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
   /* ==================================================================
    *  DESIGN NOTE 511: THE SEQUENCE LOCKS AT THE START OF THE CYCLE
    * ==================================================================
@@ -413,7 +504,7 @@ export function beginOperatingRound(
    * on the continuation is exactly how the lock would leak. */
   continuingSequence = false,
 ): GameStateResponse {
-  const order = buildOperatingOrder(state, priceFor);
+  const order = buildOperatingOrder(state, priceFor, markFor);
   return syncSeatToActingCorporation({
     ...state,
     current_round_type: "OperatingRound",
@@ -539,6 +630,8 @@ export function operatingRoundSequenceLength(state: GameStateResponse): number {
 function advanceCorporation(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
+  // Design note #646: carried through so a rebuilt queue keeps the tie-break.
+  markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
 ): GameStateResponse {
   /* AN EMPTY QUEUE IS RECOVERED, NOT TOLERATED. This returned the state
      unchanged, which is the infinite round in one line. A round that has
@@ -546,7 +639,7 @@ function advanceCorporation(
      that was missing than by refusing to move -- and if nothing can float,
      the round is genuinely over and the flag below says so. */
   if (state.active_operating_order.length === 0) {
-    const rebuilt = beginOperatingRound(state, priceFor);
+    const rebuilt = beginOperatingRound(state, priceFor, markFor);
     return rebuilt.active_operating_order.length > 0
       ? rebuilt
       : { ...state, operating_round_just_ended: true };
@@ -572,7 +665,7 @@ function advanceCorporation(
       /* `true`: this is the SECOND round of an existing cycle, so it keeps
          the cycle's locked count rather than re-deriving from a phase that
          may have moved. */
-      ...beginOperatingRound(state, priceFor, true),
+      ...beginOperatingRound(state, priceFor, markFor, true),
       sub_round_index: state.sub_round_index + 1,
     });
   }
@@ -1009,6 +1102,11 @@ export interface SandboxActionContext {
    *  reducer must not reach across into, and the caller is the one place
    *  that holds both. Omitted falls back to par value. */
   marketPriceFor?: (companyId: number) => number | null;
+  /** Design note #646: when a corporation's marker reached its current cell,
+   *  for the operating-order tie-break. Travels beside the price for the same
+   *  reason the price does -- the chart is a separate atom the reducer must
+   *  not reach into. */
+  marketMarkFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined;
   /** Design note #273: what one 10% certificate of the corporation being
    *  traded costs right now, from the live market atom. Handed in rather
    *  than looked up because the market is a SEPARATE mock (design note
@@ -2110,7 +2208,9 @@ export function applySandboxMarketAction(
       return { prices, tradePrice: proceeds, moved: null };
     }
     return {
-      prices: { ...prices, [protocol_id]: landed },
+      // Design note #646: every landing is stamped with its arrival, so a
+      // tie on the new cell resolves by who reached it first.
+      prices: { ...prices, [protocol_id]: withArrival(prices, protocol_id, landed) },
       // Priced at the price BEFORE the drop: the seller is paid what the
       // share was worth when they sold it, and the fall is the consequence.
       tradePrice: proceeds,
@@ -2128,7 +2228,8 @@ export function applySandboxMarketAction(
     const landed = ctx.projectDividend(mark, distribute ? "pay" : "withhold");
     if (!landed || (landed.x === mark.x && landed.y === mark.y)) return unchanged;
     return {
-      prices: { ...prices, [protocol_id]: landed },
+      // Design note #646: likewise -- a dividend move is an arrival.
+      prices: { ...prices, [protocol_id]: withArrival(prices, protocol_id, landed) },
       tradePrice: null,
       /* Design note #435: the REASON travels with the move. The shell
          logged every marker move as "on the sale", because that was the
@@ -2147,7 +2248,116 @@ export function applySandboxMarketAction(
   return unchanged;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 642: THE ROUND MACHINE BELONGS TO THE REDUCER
+ * ==================================================================
+ *
+ * REPORTED, over four separate passes: the Operating Round counter does not
+ * increment, a one-round Yellow cycle runs twice, and an undo removes a train
+ * without returning the turn to the corporation that bought it.
+ *
+ * Design notes #431, #511 and #621 each fixed a real defect in
+ * `advanceCorporation` and none of them fixed the reported bug, because
+ * `advanceCorporation` was never where it lived. Applying a message was split
+ * across two places: this reducer changed the game, and then `App.tsx`'s
+ * `runGameplayAction` noticed the round-boundary flags and performed the
+ * transition itself -- building the Operating Round queue, closing the cycle,
+ * incrementing `macro_round_number`.
+ *
+ * THAT SPLIT IS INVISIBLE UNTIL SOMETHING REPLAYS, and two ordinary things
+ * do. A sandbox room reconstructs its board by re-applying the log from index
+ * zero; an undo (`RevertTo`) shortens the history and forces exactly that
+ * rebuild. Both run the reducer and neither runs the shell. So corporate
+ * state came back precisely and round state did not -- a rebuilt board whose
+ * corporations were correct and whose ROUND was wherever the last live
+ * dispatch had left it. That is the reported undo, exactly: PRR's train came
+ * off because the reducer owns trains, and PRR's turn did not come back
+ * because the shell owned turns.
+ *
+ * THE PROJECT'S OWN RULE SAYS THIS: actions are appended to a log and read
+ * sequentially by a single reducer path. A second path that also changes the
+ * game is not a shortcut, it is a second source of truth -- and the failure
+ * mode is not a wrong number, it is a board that cannot be rebuilt from its
+ * own history.
+ *
+ * SO `applySandboxAction` IS NOW TWO STEPS. `applyOneAction` is the whole of
+ * the old function, unchanged: it handles the message. `settleRoundTransitions`
+ * then consumes any round-boundary flag that step raised. A caller gets one
+ * function that takes a message and returns the state the game is genuinely
+ * in, with no follow-up required of them.
+ *
+ * WHAT STAYS IN THE SHELL IS EVERYTHING THAT IS NOT THE GAME: the log line
+ * announcing the round change, and the tab the player is looking at. Those
+ * are reactions to a transition rather than part of it, they must NOT repeat
+ * on every replayed action, and `App.tsx` now detects them by comparing the
+ * round type before and after -- a fact about state, which replays correctly
+ * by construction. */
 export function applySandboxAction(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  return settleRoundTransitions(applyOneAction(state, msg, ctx), ctx);
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 642a: THE FLAGS ARE CONSUMED WHERE THEY ARE RAISED
+ * ==================================================================
+ *
+ * `recordPass` raises `stock_round_just_ended` when a full rotation of passes
+ * closes the Stock Round; `advanceCorporation` raises
+ * `operating_round_just_ended` when the last corporation of the last cycle
+ * has operated. Both were designed as one-shot signals for the shell to read.
+ *
+ * They are still one-shot, and now nobody outside this file reads them: each
+ * is consumed in the same dispatch that raised it, and cleared. A flag that
+ * survives its own transition fires it again on the next action, which is the
+ * other half of how a replay could run a Stock Round close once per remaining
+ * message.
+ *
+ * ONE TRANSITION PER ACTION, deliberately, rather than a loop. A Stock Round
+ * closing opens an Operating Round, and that Operating Round cannot also end
+ * in the same dispatch -- it has corporations that have not operated yet. If
+ * some future rule ever makes a double transition possible, it should be
+ * written down and tested rather than absorbed silently by a `while`. */
+function settleRoundTransitions(
+  state: GameStateResponse,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  if (state.stock_round_just_ended) {
+    /* Design note #411: the queue is BUILT here. Leaving it to the caller is
+       what produced an Operating Round with `active_operating_order: []`,
+       which `advanceCorporation` then "recovers" by rebuilding the round from
+       scratch -- resetting the cursor to the first corporation while leaving
+       the counter alone. That recovery is why a rebuilt board reappeared on
+       B&O still calling itself Operating Round 1.1. */
+    return {
+      ...beginOperatingRound(state, ctx?.marketPriceFor, ctx?.marketMarkFor),
+      stock_round_just_ended: false,
+    };
+  }
+
+  if (state.operating_round_just_ended) {
+    return {
+      ...state,
+      operating_round_just_ended: false,
+      current_round_type: "StockRound" as const,
+      macro_round_number: state.macro_round_number + 1,
+      // Design note #621: the cycle counter resets, and the next
+      // `beginOperatingRound` stamps it back to 1.
+      sub_round_index: 0,
+      consecutive_passes: 0,
+      last_trader_index: null,
+      // The Priority Deal holder opens the Stock Round -- design note #353,
+      // and the whole point of holding it.
+      active_player_index: state.priority_deal_index,
+    };
+  }
+
+  return state;
+}
+
+function applyOneAction(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
@@ -2195,7 +2405,7 @@ export function applySandboxAction(
   // would strand the Operating Round on its first corporation forever.
   if ("PassTurn" in msg) {
     return state.current_round_type === "OperatingRound"
-      ? advanceCorporation(state, ctx?.marketPriceFor)
+      ? advanceCorporation(state, ctx?.marketPriceFor, ctx?.marketMarkFor)
       : recordPass(state);
   }
 
@@ -2859,7 +3069,7 @@ export function applySandboxAction(
        left `active_operating_order` at whatever it already held -- which
        from the zero state is `[]`, the empty queue that made the round
        unadvanceable. `beginOperatingRound` builds it. */
-    return beginOperatingRound(state, ctx?.marketPriceFor);
+    return beginOperatingRound(state, ctx?.marketPriceFor, ctx?.marketMarkFor);
   }
 
   if ("UndoLastAction" in msg) {

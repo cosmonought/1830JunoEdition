@@ -33,6 +33,28 @@ import {
 } from "./sandboxSession";
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
+/* ==================================================================
+ *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG
+ * ==================================================================
+ *
+ * These tests detected the end of an Operating Round by reading
+ * `operating_round_just_ended`. That flag was a message from the reducer to
+ * the SHELL, which then performed the transition -- and design note #642
+ * moved the transition into the reducer, where it belongs, so the flag is now
+ * raised and consumed inside a single `applySandboxAction` call and is never
+ * observable from outside.
+ *
+ * THE REPLACEMENT IS BETTER, not merely different. A flag says "something is
+ * about to happen if the right caller notices"; `current_round_type` says what
+ * round the game is actually in. The first could be true on a board that
+ * never moved, which is exactly the bug the move fixed -- so a harness that
+ * asserts against the flag would keep passing on a game that had stopped
+ * advancing.
+ */
+const inOperatingRound = (state: { current_round_type: string }) =>
+  state.current_round_type === "OperatingRound";
+const roundHasEnded = (state: { current_round_type: string }) => !inOperatingRound(state);
+
 const ALICE = "juno1alice";
 const BOB = "juno1bob";
 
@@ -189,11 +211,11 @@ describe("the round still terminates", () => {
       NO_MARKET_PRICE,
     );
     let turns = 0;
-    while (!s.operating_round_just_ended && turns < 50) {
+    while (!roundHasEnded(s) && turns < 50) {
       s = applySandboxAction(s, { PassTurn: { game_id: 1 } }, { marketPriceFor: NO_MARKET_PRICE });
       turns += 1;
     }
-    expect(s.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(s)).toBe(true);
     expect(turns).toBe(2);
   });
 
@@ -208,11 +230,11 @@ describe("the round still terminates", () => {
       nan,
     );
     let turns = 0;
-    while (!s.operating_round_just_ended && turns < 50) {
+    while (!roundHasEnded(s) && turns < 50) {
       s = applySandboxAction(s, { PassTurn: { game_id: 1 } }, { marketPriceFor: nan });
       turns += 1;
     }
-    expect(s.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(s)).toBe(true);
     expect(turns).toBe(3);
   });
 });

@@ -2550,154 +2550,104 @@ export default function ContextualActionBar({
           )}
         </div>
       ) : (
-      <div style={styles.actionBarButtons}>
+      <div style={styles.actionBarPanel}>
         {/* ==================================================================
-             DESIGN NOTE 308: THE AUCTION BAR HAD NEITHER NAME NOR MONEY
+             DESIGN NOTE 636: THE SAME THREE ROWS AS AN OPERATING ROUND
             ==================================================================
 
-            Design note #300 put the acting player's cash on the Operating
-            Round branch of this bar. The auction and Stock Round take the
-            OTHER branch a few lines down, and got neither -- which is the
-            wrong way round if anything: an Operating Round spends the
-            CORPORATION's treasury, while a private auction spends the
-            player's own money and nothing else. The one screen where a
-            personal balance decides every action was the one not showing it.
+             INSTRUCTED: "why not exactly replicate the Operating Round's Action
+             bar layout? top row is: Auction/Stock Round X, Player Name > Player
+             Name > ..., the second row is the player card showing their
+             treasury and escrowed cash (if any), and the third row is the
+             center Pass or Undo buttons?"
 
-            It leads the row rather than trailing it, because in a hotseat
-            the first question on arriving at the bar is whose turn this is.
+             Taken as written. The Operating Round is a COLUMN (`orPanel`):
+             identity card, then a `1fr auto 1fr` action row. This branch was a
+             single action row with the seat card wedged into its left rail --
+             so the card competed with the buttons for width instead of sitting
+             above them, and the two rounds put the same object in two places.
 
-            ==================================================================
-             DESIGN NOTE 309: THE BUTTONS SIT WHERE THE OTHER BRANCH PUTS THEM
-            ==================================================================
+             ON THE OBJECTION RAISED ALONGSIDE IT -- that "players are
+             different from corporations and it may not be right to have them
+             displayed the exact same way" -- the difference is real and it is
+             not in the LAYOUT. What differs is what the track contains: an
+             Operating Round's trail is one corporation's progress through its
+             own turn, while the seat trail is the whole table's rotation. Those
+             are different scopes and they read differently in the same slot,
+             which is fine and even useful. What a player learns from the
+             standardisation is where to LOOK -- round on the first line, who is
+             acting on the second, what they can do on the third -- and that is
+             worth more than preserving a distinction the layout was never
+             carrying anyway.
 
-            Pass and Undo were left-aligned here while the Operating Round's
-            controls are centred (`orPanelActionRow`'s `1fr auto 1fr` grid).
-            Switching rounds moved the buttons across the screen, so muscle
-            memory built in one phase missed in the next. A leading spacer
-            balances the trailing one that already pins the phase badge,
-            which centres the group between them without either rail having
-            to know what the other holds. */}
-        {/* ==================================================================
-             DESIGN NOTE 601: THE ROSTER PILLS WERE UNREACHABLE
-            ==================================================================
+             THE PHASE BADGE STAYS IN THE ACTION ROW'S RIGHT RAIL, exactly as
+             the Operating Round keeps its utilities there. It is chrome about
+             the game rather than about this seat, so it does not belong on the
+             identity row. */}
+          {/* ==================================================================
+               DESIGN NOTE 631: THE SEAT CARD, BUILT LIKE THE CORPORATION CARD
+              ==================================================================
 
-            Deleted here: a `playerRoster.length > 0` branch rendering one
-            pill per seat, plus its eight `rosterPill*` styles and the
-            `ROSTER_CONTEST_CHASE_CSS` keyframes. Roughly forty lines of
-            render that could not execute.
+               REPORTED: "the Action bar during stock and auction rounds now
+               have a long player color-ed stripe along the top, but users are
+               still not seeing it or finding it very intuitive what it does.
+               Compared to the corporate card/tile in the Operating round
+               action bar, it is indeed quite subtle."
 
-            WHY IT COULD NOT. Design note #595a left the pills in place "for
-            every case the trail does not cover", which sounded careful and
-            described an empty set. `playerRoster` is computed in `App.tsx`
-            behind `current_round_type === "WaterfallAuction" || ===
-            "StockRound"` (design note #406) and returns `[]` otherwise --
-            and that is the SAME test that decides whether `seatOrderTrail`
-            is passed at all. So the two conditions are one condition: any
-            time the roster is non-empty the trail is non-null, wins the
-            `??`, and the pills never render. There was no third case.
+               Both halves are right and the second explains the first. A
+               3px stripe can only signal that SOMETHING is the case; it cannot
+               say what. The Operating Round bar does not have that problem
+               because it does not use a stripe -- `orContextCard` is a
+               fully-saturated block carrying the corporation's acronym, name
+               and figures, and a player reads WHO from it without being taught
+               that colour means anything.
 
-            The lesson is about the shape of the guard, not the pills. Two
-            conditions written in two files, each true exactly when the other
-            is, read like a fallback and behave like dead code -- and nothing
-            flags it, because it compiles and lints perfectly.
+               SO THIS IS THAT CARD, WITH A SEAT IN IT. Same construction:
+               the identity's own colour at full strength, ink chosen by
+               `bestContrastTextColor` rather than asserted, a translucent black
+               border so one rule darkens any hue. Nothing here is a new idea;
+               it is the existing idea applied to the round that was left out.
 
-            WHAT THE PILLS KNEW LIVES ON. Design note #342's "the whole
-            table, not just whoever is up" and #317's "AVAILABLE cash, not
-            the total" are both carried by `SeatOrderTrail`, which cites them
-            by number. Design note #545's mini-auction chase animation is the
-            one thing genuinely gone: the trail does not distinguish a
-            contested seat, and nobody has asked it to.
+               THE FIGURES ARE LABELLED, WHICH IS THE OTHER HALF OF THE REPORT:
+               'the compressed "P1 $500 (+$200)" made some players think they
+               were earning $200'. That reading is entirely fair -- a bare
+               "+$200" beside a balance is the notation a game uses for income.
+               Escrowed money is the opposite: it is the player's own cash,
+               already committed, and unavailable until the bid resolves. A
+               plus sign cannot carry that and no amount of tooltip fixes a
+               glyph people do not hover. So the card spends the width on words
+               -- "Cash" and "In bids" -- and the ambiguity has nowhere to
+               live.
 
-            THE ACTING-PLAYER BADGE BELOW IS STILL LIVE, and is now the only
-            fallback. It covers the Operating Round -- whose turn belongs to
-            a corporation, so it has no seat queue to draw -- and every
-            non-sandbox room until the first `GetGameState` resolves. */}
-        {/* ==================================================================
-             DESIGN NOTE 631: THE SEAT CARD, BUILT LIKE THE CORPORATION CARD
-            ==================================================================
-
-             REPORTED: "the Action bar during stock and auction rounds now
-             have a long player color-ed stripe along the top, but users are
-             still not seeing it or finding it very intuitive what it does.
-             Compared to the corporate card/tile in the Operating round
-             action bar, it is indeed quite subtle."
-
-             Both halves are right and the second explains the first. A
-             3px stripe can only signal that SOMETHING is the case; it cannot
-             say what. The Operating Round bar does not have that problem
-             because it does not use a stripe -- `orContextCard` is a
-             fully-saturated block carrying the corporation's acronym, name
-             and figures, and a player reads WHO from it without being taught
-             that colour means anything.
-
-             SO THIS IS THAT CARD, WITH A SEAT IN IT. Same construction:
-             the identity's own colour at full strength, ink chosen by
-             `bestContrastTextColor` rather than asserted, a translucent black
-             border so one rule darkens any hue. Nothing here is a new idea;
-             it is the existing idea applied to the round that was left out.
-
-             THE FIGURES ARE LABELLED, WHICH IS THE OTHER HALF OF THE REPORT:
-             'the compressed "P1 $500 (+$200)" made some players think they
-             were earning $200'. That reading is entirely fair -- a bare
-             "+$200" beside a balance is the notation a game uses for income.
-             Escrowed money is the opposite: it is the player's own cash,
-             already committed, and unavailable until the bid resolves. A
-             plus sign cannot carry that and no amount of tooltip fixes a
-             glyph people do not hover. So the card spends the width on words
-             -- "Cash" and "In bids" -- and the ambiguity has nowhere to
-             live.
-
-             THE STRIPE STAYS. It is the HANDOFF animation (design note
-             #597), which is about the moment of change rather than the
-             state, and the card cannot do that job -- a card that is always
-             there cannot sweep. */}
-        {actingSeatColor && activePlayerCash !== null && (
-          <span
-            style={{
-              ...styles.seatContextCard,
-              backgroundColor: actingSeatColor,
-              borderColor: "rgba(0, 0, 0, 0.35)",
-            }}
-          >
+               THE STRIPE STAYS. It is the HANDOFF animation (design note
+               #597), which is about the moment of change rather than the
+               state, and the card cannot do that job -- a card that is always
+               there cannot sweep. */}
+          {actingSeatColor && activePlayerCash !== null && (
             <span
               style={{
-                ...styles.seatContextName,
-                color: bestContrastTextColor(actingSeatColor),
+                ...styles.seatContextCard,
+                backgroundColor: actingSeatColor,
+                borderColor: "rgba(0, 0, 0, 0.35)",
               }}
             >
-              {activePlayerName ?? "Player"}
-            </span>
-            <span style={styles.seatContextFigures}>
-              <span style={styles.seatContextFact}>
-                <span
-                  style={{
-                    ...styles.seatContextFactLabel,
-                    color: seatInkMuted(actingSeatColor),
-                  }}
-                >
-                  Cash
-                </span>
-                <span
-                  style={{
-                    ...styles.seatContextFactValue,
-                    color: bestContrastTextColor(actingSeatColor),
-                  }}
-                >
-                  ${activePlayerCash}
-                </span>
+              <span
+                style={{
+                  ...styles.seatContextName,
+                  color: bestContrastTextColor(actingSeatColor),
+                }}
+              >
+                {activePlayerName ?? "Player"}
               </span>
-              {activePlayerEscrow > 0 && (
-                <span
-                  style={styles.seatContextFact}
-                  title={`$${activePlayerEscrow} of ${activePlayerName ?? "this player"}'s money is committed to standing bids. It is not spendable now, and it comes back if those bids lose.`}
-                >
+              <span style={styles.seatContextFigures}>
+                <span style={styles.seatContextFact}>
                   <span
                     style={{
                       ...styles.seatContextFactLabel,
                       color: seatInkMuted(actingSeatColor),
                     }}
                   >
-                    In bids
+                    Cash
                   </span>
                   <span
                     style={{
@@ -2705,160 +2655,245 @@ export default function ContextualActionBar({
                       color: bestContrastTextColor(actingSeatColor),
                     }}
                   >
-                    ${activePlayerEscrow}
+                    ${activePlayerCash}
                   </span>
                 </span>
-              )}
+                {activePlayerEscrow > 0 && (
+                  <span
+                    style={styles.seatContextFact}
+                    title={`$${activePlayerEscrow} of ${activePlayerName ?? "this player"}'s money is committed to standing bids. It is not spendable now, and it comes back if those bids lose.`}
+                  >
+                    <span
+                      style={{
+                        ...styles.seatContextFactLabel,
+                        color: seatInkMuted(actingSeatColor),
+                      }}
+                    >
+                      In bids
+                    </span>
+                    <span
+                      style={{
+                        ...styles.seatContextFactValue,
+                        color: bestContrastTextColor(actingSeatColor),
+                      }}
+                    >
+                      ${activePlayerEscrow}
+                    </span>
+                  </span>
+                )}
+              </span>
             </span>
-          </span>
-        )}
-        {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
-            The leading `actionBarSpacer` that used to sit here is gone --
-            see `appStyles.ts` for why two equal spacers centred the group
-            between themselves but not on the bar. */}
-        <span style={styles.actionBarButtonsCentre}>
-        {/* Design note #31: Pass leads -- it is the action available in
-            every phase, and the one a player reaches for most. */}
-        <button
-          type="button"
-          style={{
-            ...styles.actionBarButton,
-            ...(!sessionReady || passDisabledReason !== null
-              ? styles.actionBarButtonDisabled
-              : {}),
-          }}
-          onClick={onPassTurn}
-          disabled={!sessionReady || passDisabledReason !== null}
-          title={passDisabledReason ?? "Pass / skip your turn."}
-        >
-          Pass Turn
-        </button>
-        {/* ==================================================================
-             DESIGN NOTE 540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES
-            ==================================================================
+          )}
+        <div style={styles.actionBarButtons}>
+          {/* ==================================================================
+               DESIGN NOTE 308: THE AUCTION BAR HAD NEITHER NAME NOR MONEY
+              ==================================================================
 
-             REPORTED: two bars appear between Pass Turn and Undo Last Action.
+              Design note #300 put the acting player's cash on the Operating
+              Round branch of this bar. The auction and Stock Round take the
+              OTHER branch a few lines down, and got neither -- which is the
+              wrong way round if anything: an Operating Round spends the
+              CORPORATION's treasury, while a private auction spends the
+              player's own money and nothing else. The one screen where a
+              personal balance decides every action was the one not showing it.
 
-             They are these two, with nothing between them. The pair frames
-             `contextualButtons`, and that array is EMPTY in several real
-             states -- an auction round, a Stock Round with no corporation
-             selected, and (the case that surfaced it) a room whose game has
-             not been dealt. Two separators with no content between them read
-             as a rendering fault, which is exactly what they are: a rule
-             divides things, and there was nothing to divide.
+              It leads the row rather than trailing it, because in a hotseat
+              the first question on arriving at the bar is whose turn this is.
 
-             Gated on the group they frame rather than on any particular
-             round, so every empty case is covered by the condition that
-             actually describes the problem. */}
-        {contextualButtons.length > 0 && <span style={styles.actionBarDivider} />}
-        {contextualButtons.map((btn) => (
+              ==================================================================
+               DESIGN NOTE 309: THE BUTTONS SIT WHERE THE OTHER BRANCH PUTS THEM
+              ==================================================================
+
+              Pass and Undo were left-aligned here while the Operating Round's
+              controls are centred (`orPanelActionRow`'s `1fr auto 1fr` grid).
+              Switching rounds moved the buttons across the screen, so muscle
+              memory built in one phase missed in the next. A leading spacer
+              balances the trailing one that already pins the phase badge,
+              which centres the group between them without either rail having
+              to know what the other holds. */}
+          {/* ==================================================================
+               DESIGN NOTE 601: THE ROSTER PILLS WERE UNREACHABLE
+              ==================================================================
+
+              Deleted here: a `playerRoster.length > 0` branch rendering one
+              pill per seat, plus its eight `rosterPill*` styles and the
+              `ROSTER_CONTEST_CHASE_CSS` keyframes. Roughly forty lines of
+              render that could not execute.
+
+              WHY IT COULD NOT. Design note #595a left the pills in place "for
+              every case the trail does not cover", which sounded careful and
+              described an empty set. `playerRoster` is computed in `App.tsx`
+              behind `current_round_type === "WaterfallAuction" || ===
+              "StockRound"` (design note #406) and returns `[]` otherwise --
+              and that is the SAME test that decides whether `seatOrderTrail`
+              is passed at all. So the two conditions are one condition: any
+              time the roster is non-empty the trail is non-null, wins the
+              `??`, and the pills never render. There was no third case.
+
+              The lesson is about the shape of the guard, not the pills. Two
+              conditions written in two files, each true exactly when the other
+              is, read like a fallback and behave like dead code -- and nothing
+              flags it, because it compiles and lints perfectly.
+
+              WHAT THE PILLS KNEW LIVES ON. Design note #342's "the whole
+              table, not just whoever is up" and #317's "AVAILABLE cash, not
+              the total" are both carried by `SeatOrderTrail`, which cites them
+              by number. Design note #545's mini-auction chase animation is the
+              one thing genuinely gone: the trail does not distinguish a
+              contested seat, and nobody has asked it to.
+
+              THE ACTING-PLAYER BADGE BELOW IS STILL LIVE, and is now the only
+              fallback. It covers the Operating Round -- whose turn belongs to
+              a corporation, so it has no seat queue to draw -- and every
+              non-sandbox room until the first `GetGameState` resolves. */}
+          {/* Design note #426: the centre cell of a `1fr auto 1fr` grid.
+              The leading `actionBarSpacer` that used to sit here is gone --
+              see `appStyles.ts` for why two equal spacers centred the group
+              between themselves but not on the bar. */}
+          <span style={styles.actionBarButtonsCentre}>
+          {/* Design note #31: Pass leads -- it is the action available in
+              every phase, and the one a player reaches for most. */}
           <button
-            key={btn.key}
-            /* Design note #619: same treatment as the expanded copy above --
-               the two forms of this bar must not disagree about whether a
-               control is available. */
+            type="button"
             style={{
               ...styles.actionBarButton,
-              ...(btn.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+              ...(!sessionReady || passDisabledReason !== null
+                ? styles.actionBarButtonDisabled
+                : {}),
             }}
-            onClick={btn.onClick}
-            disabled={btn.disabled || !sessionReady}
-            title={btn.title}
+            onClick={onPassTurn}
+            disabled={!sessionReady || passDisabledReason !== null}
+            title={passDisabledReason ?? "Pass / skip your turn."}
           >
-            {btn.label}
+            Pass Turn
           </button>
-        ))}
-        <span style={styles.actionBarDivider} />
-        {/* ==================================================
-             DESIGN NOTE 592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED
-            ==================================================
+          {/* ==================================================================
+               DESIGN NOTE 540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES
+              ==================================================================
 
-             REPORTED: "the Host's Undo power needs to be effective at all
-             times: currently it only works on their turn."
+               REPORTED: two bars appear between Pass Turn and Undo Last Action.
 
-             `sessionReady` is `controlsEnabled && isMyTurn`, so Undo wore the
-             same gate as Buy and Pass. That is exactly backwards for this
-             control: the player who most needs it is the one whose turn has
-             just passed to somebody else, and the host's whole reason for
-             having a longer reach is to fix a mistake that is no longer
-             theirs to fix on their own turn.
+               They are these two, with nothing between them. The pair frames
+               `contextualButtons`, and that array is EMPTY in several real
+               states -- an auction round, a Stock Round with no corporation
+               selected, and (the case that surfaced it) a room whose game has
+               not been dealt. Two separators with no content between them read
+               as a rendering fault, which is exactly what they are: a rule
+               divides things, and there was nothing to divide.
 
-             ONE REASON STRING IS THE WHOLE GATE. `undoBlockedReason` is
-             non-null whenever Undo cannot fire -- read-only mode, nothing to
-             undo, or somebody else has acted since your last move -- and the
-             button shows it. A boolean plus a separate message would be two
-             things to keep in step, and the failure would be a disabled
-             control explaining why a different control is disabled. */}
-        <button
-          style={{
-            ...styles.actionBarButton,
-            ...styles.actionBarUtilityButton,
-            ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
-          }}
-          onClick={onUndoLastAction}
-          disabled={undoBlockedReason !== null}
-          title={undoBlockedReason ?? "Takes back the last action. Available on anyone's turn."}
-        >
-          Undo Last Action
-        </button>
-        {/* The route mode toggle used to render here too. It is
-            `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
-            in this NON-Operating-Round branch it was unreachable markup.
-            Removed rather than left as a second copy to keep in step with
-            the live one in the OR panel above. */}
-        </span>
+               Gated on the group they frame rather than on any particular
+               round, so every empty case is covered by the condition that
+               actually describes the problem. */}
+          {contextualButtons.length > 0 && <span style={styles.actionBarDivider} />}
+          {contextualButtons.map((btn) => (
+            <button
+              key={btn.key}
+              /* Design note #619: same treatment as the expanded copy above --
+                 the two forms of this bar must not disagree about whether a
+                 control is available. */
+              style={{
+                ...styles.actionBarButton,
+                ...(btn.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+              }}
+              onClick={btn.onClick}
+              disabled={btn.disabled || !sessionReady}
+              title={btn.title}
+            >
+              {btn.label}
+            </button>
+          ))}
+          <span style={styles.actionBarDivider} />
+          {/* ==================================================
+               DESIGN NOTE 592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED
+              ==================================================
 
-        {/* Design note #40/#426: the phase badge, pinned right. The trailing
-            spacer is gone with the leading one -- the grid's right rail
-            (`justifySelf: end`) pins the badge without taking width from the
-            centred group, which is what the spacer pair could not do. The
-            rail renders unconditionally so the grid always has three
-            columns; design note #40's warning about an auto margin on a
-            conditional node no longer applies, because the margin is now the
-            rail's rather than the badge's. */}
-        <span style={styles.actionBarRailRight}>
-        {phase && (
-          <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
-            {phase.label}
-          </span>
-        )}
-        {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
-            used to render identically at two purchases and at one, so the
-            last purchase before a rust -- the single most consequential
-            moment in an 1830 game -- looked exactly like the moment before
-            it. It now reads the same `phaseAlertLevel` helper the train
-            chips do, so the bar and the chips escalate together.
+               REPORTED: "the Host's Undo power needs to be effective at all
+               times: currently it only works on their turn."
 
-            The wording escalates with the colour: "Imminent" is a claim
-            about the next purchase, and it was previously being made one
-            purchase too early. */}
-        {phaseAlert && (
-          <span
-            className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
+               `sessionReady` is `controlsEnabled && isMyTurn`, so Undo wore the
+               same gate as Buy and Pass. That is exactly backwards for this
+               control: the player who most needs it is the one whose turn has
+               just passed to somebody else, and the host's whole reason for
+               having a longer reach is to fix a mistake that is no longer
+               theirs to fix on their own turn.
+
+               ONE REASON STRING IS THE WHOLE GATE. `undoBlockedReason` is
+               non-null whenever Undo cannot fire -- read-only mode, nothing to
+               undo, or somebody else has acted since your last move -- and the
+               button shows it. A boolean plus a separate message would be two
+               things to keep in step, and the failure would be a disabled
+               control explaining why a different control is disabled. */}
+          <button
             style={{
-              ...styles.phaseShiftBadge,
-              ...(phaseAlert === "critical"
-                ? styles.phaseShiftBadgeCritical
-                : styles.phaseShiftBadgeWarn),
+              ...styles.actionBarButton,
+              ...styles.actionBarUtilityButton,
+              ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
             }}
-            // The exact consequence, per tier. Falls back to a plain
-            // depot-count statement for the 2-train case, which empties
-            // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
-            title={
-              phase?.shiftWarning ??
-              (phase?.depotRemaining === 0
-                ? `No ${phase.tier}-Trains left in the Bank Depot.`
-                : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
-            }
+            onClick={onUndoLastAction}
+            disabled={undoBlockedReason !== null}
+            title={undoBlockedReason ?? "Takes back the last action. Available on anyone's turn."}
           >
-            {phaseAlert === "critical" ? (
-              <>&#9888; Phase Shift Imminent</>
-            ) : (
-              <>&#9888; Phase Shift in 2 Buys</>
-            )}
+            Undo Last Action
+          </button>
+          {/* The route mode toggle used to render here too. It is
+              `showRouteToggle`-gated, and that flag is OR-and-Routes-only, so
+              in this NON-Operating-Round branch it was unreachable markup.
+              Removed rather than left as a second copy to keep in step with
+              the live one in the OR panel above. */}
           </span>
-        )}
-        </span>
+
+          {/* Design note #40/#426: the phase badge, pinned right. The trailing
+              spacer is gone with the leading one -- the grid's right rail
+              (`justifySelf: end`) pins the badge without taking width from the
+              centred group, which is what the spacer pair could not do. The
+              rail renders unconditionally so the grid always has three
+              columns; design note #40's warning about an auto margin on a
+              conditional node no longer applies, because the margin is now the
+              rail's rather than the badge's. */}
+          <span style={styles.actionBarRailRight}>
+          {phase && (
+            <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
+              {phase.label}
+            </span>
+          )}
+          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge
+              used to render identically at two purchases and at one, so the
+              last purchase before a rust -- the single most consequential
+              moment in an 1830 game -- looked exactly like the moment before
+              it. It now reads the same `phaseAlertLevel` helper the train
+              chips do, so the bar and the chips escalate together.
+
+              The wording escalates with the colour: "Imminent" is a claim
+              about the next purchase, and it was previously being made one
+              purchase too early. */}
+          {phaseAlert && (
+            <span
+              className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
+              style={{
+                ...styles.phaseShiftBadge,
+                ...(phaseAlert === "critical"
+                  ? styles.phaseShiftBadgeCritical
+                  : styles.phaseShiftBadgeWarn),
+              }}
+              // The exact consequence, per tier. Falls back to a plain
+              // depot-count statement for the 2-train case, which empties
+              // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
+              title={
+                phase?.shiftWarning ??
+                (phase?.depotRemaining === 0
+                  ? `No ${phase.tier}-Trains left in the Bank Depot.`
+                  : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
+              }
+            >
+              {phaseAlert === "critical" ? (
+                <>&#9888; Phase Shift Imminent</>
+              ) : (
+                <>&#9888; Phase Shift in 2 Buys</>
+              )}
+            </span>
+          )}
+          </span>
+        </div>
       </div>
       )}
     </div>

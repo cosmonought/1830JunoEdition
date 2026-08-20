@@ -181,6 +181,24 @@ export interface SandboxAction {
    *  applies a structurally identical object rather than one Firestore has
    *  reshaped on the way through. */
   payload: string;
+  /* ==================================================================
+   *  DESIGN NOTE 643: WHEN IT HAPPENED, NOT WHEN IT WAS REPLAYED
+   * ==================================================================
+   *
+   * REPORTED: the activity log stamps every entry in a game with the same
+   * time, and re-reports actions from earlier playthroughs.
+   *
+   * `appendSandboxAction` has always written a `createdAt` server timestamp;
+   * `toAction` simply never read it back. So a client rebuilding from the log
+   * had no idea when anything happened and stamped each replayed entry with
+   * `Date.now()` -- which, during a rebuild, is the same instant for the whole
+   * game. Every timestamp identical is not a clock bug; it is an accurate
+   * record of when the REPLAY ran.
+   *
+   * `undefined` FOR ENTRIES WRITTEN BEFORE THIS, and for the moment between a
+   * local write and the server's timestamp resolving. Callers fall back to the
+   * current time, which is what they were doing for everything until now. */
+  at?: number;
 }
 
 /** `payload` decoded, or `null` when it cannot be. A single unparseable
@@ -205,11 +223,21 @@ function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction 
   const index = Number(data.index);
   if (!Number.isFinite(index)) return null;
   if (typeof data.payload !== "string") return null;
+  /* Design note #643: `createdAt` is a Firestore `Timestamp` once the server
+     has resolved it, and `null` in the brief local-echo window before that.
+     `toMillis` is guarded rather than assumed -- an optimistic snapshot
+     arriving without it is ordinary, not an error. */
+  const createdAt = data.createdAt;
+  const at =
+    createdAt && typeof createdAt.toMillis === "function"
+      ? Number(createdAt.toMillis())
+      : undefined;
   return {
     index,
     id: snapshot.id,
     actor: typeof data.actor === "string" ? data.actor : "",
     payload: data.payload,
+    ...(Number.isFinite(at) ? { at: at as number } : {}),
   };
 }
 

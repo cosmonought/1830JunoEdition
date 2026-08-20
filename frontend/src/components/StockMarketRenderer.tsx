@@ -755,31 +755,48 @@ const REAL_MARKET_ROWS: readonly RealMarketRow[] = [
  *  track). */
 const REAL_BOARD_COLUMNS = 19;
 
-/** The real board's game-end cell -- see design note #9 and
- *  `market::GAME_END_PRICE_TRIGGER`/`market::price_triggers_game_end`. */
-const GAME_END_CELL_X = 18;
-const GAME_END_CELL_Y = 10;
-
-/** Design note #18/item 2 (final visual theme pass): a vibrant, distinct
- *  green fill for the `$350` game-end cell, taking top priority over every
- *  other background in the priority chain below (par gradient, zone
- *  gradient, ordinary charcoal) -- landing here triggers
- *  `market::price_triggers_game_end`'s on-chain game-end termination, and
- *  this is the single most consequential coordinate on the whole board, so
- *  it gets the strongest, most unmistakable visual treatment rather than
- *  competing for attention with the par ladder's gold or the exception
- *  zones' warm tints. Same hand-paired lighter-to-darker diagonal gradient
- *  convention as `PAR_VALUE_GRADIENTS`/`ZONE_GRADIENTS` (design note #11),
- *  just in green instead of gold/amber/brown so it reads as its own
- *  distinct signal, not a variant of either existing palette. */
-const GAME_END_CELL_BACKGROUND = "linear-gradient(155deg, #3fe07a 0%, #1fae4a 55%, #157a34 100%)";
-
-/** Dark, high-contrast text color for the green `GAME_END_CELL_BACKGROUND`
- *  fill -- see design note #18. The game-end cell is the one remaining
- *  bright/light background in the grid (design note #20/item 1 removed the
- *  par cells' own former gold fill), so this dark-on-bright pairing is now
- *  a standalone case rather than one of a matching pair. */
-const GAME_END_CELL_TEXT_COLOR = "#07260f";
+/* ==================================================================
+ *  DESIGN NOTE 652: $350 IS A CEILING, NOT AN ENDING
+ * ==================================================================
+ *
+ * INSTRUCTED: "make sure the 350 price is not a game end condition anymore.
+ * We were supposed to have removed that, both from rules reference and the
+ * grid, as well as the actual game end mechanics."
+ *
+ * It was removed from the rules text (#27) and then only HALF removed from
+ * the grid: `isGameEndCell` was left in place and switched off with a
+ * literal `false &&`, on the reasoning that "re-enabling it is a one-line
+ * change if the house rule ever comes back." That reasoning is what this
+ * note deletes. A flag that is provably always false is not a switch, it is
+ * a claim the code keeps making and the board keeps not honouring, and it
+ * carried a whole apparatus with it -- `GAME_END_CELL_X`/`_Y`, a green
+ * gradient, a dark-on-green text colour, an outline, an `END` badge, and a
+ * tooltip line reading "GAME END -- reaching this cell ends the game."
+ *
+ * IT HAD ALREADY MISLED ONE READER: ME. Building the #651 legend, I sourced
+ * the swatches from the constants the grid paints with and duly gave "Game
+ * end" its own row -- a legend entry for a rule no cell on the board has.
+ * The dormant flag survived four years of passes precisely because
+ * everything around it still looked live. This is the same shape as the
+ * phantom `styles.actionButtonDisabled` key and the dead negated-condition
+ * fallback: code that compiles, lints, and means nothing.
+ *
+ * WHAT ACTUALLY ENDS THE GAME, in this frontend, is `GameEndReason` in
+ * `GameOverModal.tsx` -- `"bankruptcy" | "bank-broken"` -- and it never had
+ * a price path. Nothing about game-end mechanics changes here because
+ * nothing here implemented them.
+ *
+ * OUT OF SCOPE, STILL LIVE: the contract does fire on price. `market.rs`
+ * defines `GAME_END_PRICE_TRIGGER: u128 = 350` and `price_triggers_game_end`,
+ * checked in `trading.rs` and referenced from `escrow.rs`. Design note #27
+ * flagged this as backend-audit debt and it is still owed; the frontend
+ * boundary means I have not touched it. Until it is removed, a live-chain
+ * game and a sandbox game disagree about whether $350 ends anything --
+ * which is worth knowing before the two are ever reconciled.
+ *
+ * The $350 cell remains what 1830 says it is: the top of the chart, a price
+ * that cannot go higher. `TutorialModal`'s "$350 ceiling" line is correct
+ * and stays. */
 
 /* `isRealMarketCell` DELETED -- the last ESLint warning in the codebase.
  *
@@ -809,20 +826,14 @@ const PAR_VALUE_LADDER: ReadonlyArray<{ price: number; x: number; y: number }> =
   { price: 100, x: 6, y: 10 },
 ];
 
-/** The par ladder's single, fixed column -- every `PAR_VALUE_LADDER` entry
- *  shares this `x`. Named/derived rather than hardcoded a second time, so
- *  the explicit zone-tint exclusion guard below (see the color-fill ternary
- *  further down, and its own doc comment) can never drift out of sync with
- *  where the par cells actually live if this column ever moved. */
-const PAR_LADDER_COLUMN_X = PAR_VALUE_LADDER[0].x;
-
-/** The par ladder's own row span (`y = 5..10`) -- see design note #18/item
- *  4. Derived from `PAR_VALUE_LADDER` itself (never hardcoded a second
- *  time) so the gold group-frame overlay below can never drift out of sync
- *  with where the six real par cells actually live, the same anti-drift
- *  rationale as `PAR_LADDER_COLUMN_X` just above. */
-const PAR_LADDER_ROW_MIN = Math.min(...PAR_VALUE_LADDER.map((entry) => entry.y));
-const PAR_LADDER_ROW_MAX = Math.max(...PAR_VALUE_LADDER.map((entry) => entry.y));
+/* Design note #651: `PAR_LADDER_COLUMN_X`, `PAR_LADDER_ROW_MIN` and
+ * `PAR_LADDER_ROW_MAX` stood here. All three existed to place ONE thing --
+ * the gold overlay's bounding box (#18/item 4) -- and to keep a coordinate
+ * guard from drifting away from it (#223). With the overlay gone (#650) the
+ * six cells are found the way every other special cell on this chart is
+ * found: by the flag the cell itself carries, `cell.isParValueLadder`. That
+ * is the anti-drift argument those constants were written to make, finally
+ * made by the data instead of by three derived numbers. */
 
 // `PAR_COLUMN_NEUTRAL_FILL`/`PAR_COLUMN_NEUTRAL_TEXT_COLOR` (design note
 // #15's "hard-block any x = 6 cell from its own real zone color, paint it
@@ -840,13 +851,12 @@ const PAR_VALUE_LADDER_BY_CELL: ReadonlyMap<string, number> = new Map(
   PAR_VALUE_LADDER.map((entry) => [cellKey(entry.x, entry.y), entry.price]),
 );
 
-interface PriceCell {
+export interface PriceCell {
   x: number;
   y: number;
   price: number;
   zoneType: ZoneType;
   isParValueLadder: boolean;
-  isGameEndCell: boolean;
   /** Design note #43: the leftmost cell of its row -- a LEFT CLIFF. A price
    *  here that would move left moves DOWN instead. */
   isLeftCliff: boolean;
@@ -879,16 +889,6 @@ function buildPriceGrid(): PriceCell[] {
         price: parOverride ?? price,
         zoneType,
         isParValueLadder: parOverride !== undefined,
-        // Design note #27: ALWAYS false. The $350 cell is an ordinary top
-        // -of-chart price, not a game-end trigger -- that condition is not
-        // canonical 1830 and has been removed from the rules text too. The
-        // flag and its green fill are kept in the type/style tables rather
-        // than ripped out, so re-enabling it is a one-line change if the
-        // house rule ever comes back deliberately.
-        // `GAME_END_CELL_X`/`_Y` still name the cell; the `&& false` is the
-        // switch. Written this way rather than deleting the coordinates so
-        // restoring the house rule is one edit, not an archaeology exercise.
-        isGameEndCell: false && x === GAME_END_CELL_X && row.y === GAME_END_CELL_Y,
         // Design note #43: cliffs are a property of the ROW, not of the
         // board's overall rectangle. `REAL_MARKET_ROWS` is jagged -- 19
         // cells at the top narrowing to 4 at the bottom -- so a row's own
@@ -914,7 +914,11 @@ function buildPriceGrid(): PriceCell[] {
   return cells;
 }
 
-const PRICE_GRID: readonly PriceCell[] = buildPriceGrid();
+/* Design note #652: exported for `gameEndCondition.test.ts`. The grid is the
+   only place a cell can claim a rule, so a test that the board makes no
+   game-end claim has to be able to read it. Frozen-by-type (`readonly`) and
+   built once at module load, so a reader cannot perturb it. */
+export const PRICE_GRID: readonly PriceCell[] = buildPriceGrid();
 
 /** Finds the market-chart cell a given share price sits in.
  *
@@ -1259,6 +1263,11 @@ const ZONE_PRICE_TEXT_COLOR = "#f5f6fa";
  *  original near-black value it replaces. */
 const NORMAL_CELL_BACKGROUND = "#343a45";
 
+/** Design note #650: the six par cells. A flat, quiet tint -- dark enough
+ *  that `styles.priceText`'s existing light ink stays legible without a
+ *  per-cell contrast rule. */
+const PAR_CELL_BACKGROUND = "#1e4430";
+
 /** Exact rules text specified for this pass -- shown both as each cell's
  *  tooltip suffix and in the legend row under the header. Deliberately
  *  cumulative wording (each tier states what it adds on top of the
@@ -1601,6 +1610,43 @@ const MAX_TOKEN_DIAMETER_PX = 46;
  * wrapper keeps `pointer-events: none` (design note #23) so the hover is
  * driven by the tokens themselves rather than by an invisible box over the
  * whole cell. */
+/* ==================================================================
+ *  DESIGN NOTE 648: ONE TOOLTIP, TWO ELEMENTS THAT MAY CARRY IT
+ * ==================================================================
+ *
+ * The cell and the token cluster occupy the same grid coordinate, and only
+ * one of them can own the pointer. Whichever does has to be able to state the
+ * cell's facts, so the text is assembled here rather than inline in the cell
+ * -- otherwise moving the hover target would silently drop the tooltip on
+ * every occupied cell.
+ */
+/* Design note #652: exported alongside `PRICE_GRID` -- the tooltip is where
+   the removed "GAME END" sentence lived, so it is the string a regression
+   test has to be able to inspect. */
+export function cellTitleFor(cell: PriceCell): string {
+  const zoneLabel = cell.zoneType !== "Normal" ? ZONE_LEGEND_LABELS[cell.zoneType] : undefined;
+  const zoneDescription =
+    cell.zoneType !== "Normal" ? ZONE_DESCRIPTIONS[cell.zoneType] : undefined;
+  return [
+    cell.isParValueLadder ? `Par Value $${cell.price}` : `$${cell.price}`,
+    zoneLabel && zoneDescription ? `${zoneLabel}: ${zoneDescription}` : undefined,
+    // Design note #22/item 2: standard cells state their certificate status.
+    cell.zoneType === "Normal" ? "Stocks count toward certificate limit." : undefined,
+    // Design note #43: what the arrow in the corner means.
+    cell.isRightCliff ? "Right cliff: a price that would move right moves UP instead." : undefined,
+    cell.isLeftCliff ? "Left cliff: a price that would move left moves DOWN instead." : undefined,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+}
+
+/** Design note #648: the grid by coordinate, so a token cluster can find the
+ *  cell it is standing on. Built once from the module constant rather than
+ *  per render -- `PRICE_GRID` never changes. */
+const PRICE_CELL_BY_KEY: ReadonlyMap<string, PriceCell> = new Map(
+  PRICE_GRID.map((cell) => [cellKey(cell.x, cell.y), cell]),
+);
+
 const MARKET_TOKEN_SCATTER_CSS = `
 .market-token-cluster .market-token {
   transition: transform 140ms ease, opacity 140ms ease;
@@ -1684,26 +1730,14 @@ function deriveTokenClusterOffset(
  * what stops the thinner line vanishing against the dark chart; at 45%
  * opacity over a 10px blur it was a gold wash, at 22% over 5px it reads as
  * the line's own edge. */
-const BASE_PAR_FRAME_BORDER_PX = 2.4;
-/** Same baseline pattern for the frame's soft outer glow blur radius. */
-const BASE_PAR_FRAME_GLOW_PX = 5;
-
-/** Scales the gold par-box frame's border thickness proportionally to the
- *  live, dynamically-computed cell size, so the frame stays a "thick,
- *  distinctive" outline relative to the six cells it encloses at any matrix
- *  scale -- see design note #19/item 4. */
-function deriveParFrameBorderPx(cellSize: number): number {
-  // Design note #402: floor 3 -> 2, or the thinner baseline would round
-  // straight back up to the old weight at ordinary cell sizes.
-  return Math.max(2, Math.round(cellSize * (BASE_PAR_FRAME_BORDER_PX / CELL_SIZE_PX)));
-}
-
-/** Scales the gold par-box frame's outer glow blur radius alongside its
- *  border thickness -- see design note #19/item 4. */
-function deriveParFrameGlowPx(cellSize: number): number {
-  // Design note #402: floor 6 -> 3, same reasoning as the border's.
-  return Math.max(3, Math.round(cellSize * (BASE_PAR_FRAME_GLOW_PX / CELL_SIZE_PX)));
-}
+/* Design note #651: `BASE_PAR_FRAME_BORDER_PX`, `BASE_PAR_FRAME_GLOW_PX`,
+ * `deriveParFrameBorderPx` and `deriveParFrameGlowPx` all lived here and are
+ * gone with the frame they scaled (#650). The reasoning above is kept because
+ * it is the record of four passes spent making a gold rectangle behave --
+ * seam (#20), stacking (#23(1)), weight (#402), clipped numbers (#527) -- and
+ * the conclusion those passes add up to is that the grouping wanted a FILL,
+ * not an overlay. Nothing on this chart should need its own stacking layer
+ * to be seen. */
 
 /** Floor a price cell's text can shrink to, even at `MIN_CELL_SIZE_PX` --
  *  see design note #13. */
@@ -1765,10 +1799,6 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
   // that cell's own live occupant count (`tokenCountScale`), which varies
   // cell by cell.
   const priceFontSizePx = derivePriceFontSizePx(cellSize);
-  // Gold par-box frame border/glow, scaled off the same live `cellSize` --
-  // see design note #19/item 4.
-  const parFrameBorderPx = deriveParFrameBorderPx(cellSize);
-  const parFrameGlowPx = deriveParFrameGlowPx(cellSize);
 
   /* ==================================================================
    *  DESIGN NOTE 387: NO PAR, NO TOKEN. ENFORCED HERE.
@@ -1916,10 +1946,43 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
             //      options purely via the `parGroupFrame` gold BORDER below
             //      (design note #20/item 2, unchanged) plus their own bold
             //      text weight and "PAR" badge, not a special background.
-            const gradient = cell.isGameEndCell
-              ? GAME_END_CELL_BACKGROUND
-              : cell.zoneType !== "Normal"
-                ? ZONE_GRADIENTS[cell.zoneType]
+            /* ==================================================
+                 DESIGN NOTE 650: THE PAR CELLS ARE TINTED, NOT FRAMED
+                ==================================================
+
+               REPORTED: "rather than the gold rectangle around those six
+               cells, which still looks odd or tacked onto the board, maybe we
+               should tint the cells green?"
+
+               The frame had been fought with for four passes -- #18 added it,
+               #19 scaled it to the cell, #20 stopped it drawing as six
+               segments, #23(1) fixed its stacking layer, #402 thinned it,
+               #24(1) centred the prices to dodge it. Every one of those was a
+               real fix and the object stayed foreign, because an overlay
+               drawn ON TOP of six cells is a different KIND of thing from
+               everything else on this chart: every other meaning here is a
+               fill, and this one alone was a box.
+
+               A TINT MAKES IT THE SAME KIND OF THING. The par cells now say
+               what they are the way the zones and the game-end cell do, and
+               the whole class of layering, seam and clearance problems the
+               frame kept producing simply stops existing.
+
+               GREEN, DISTINCT FROM THE GAME-END GREEN. That cell is a vivid
+               gradient; this is a flat, muted tint -- same hue family because
+               both are good news for a shareholder, clearly different weight
+               because one is a starting option and the other ends the game.
+
+               PRIORITY BELOW THE ZONES. A par cell that is also a zone cell
+               would be a rules conflict rather than a display one, and on
+               this board none is -- `REAL_MARKET_ROWS` tags all six
+               `"Normal"`. Ordering it after the zone test means that if the
+               board ever changes, the ZONE wins and the tint yields, because
+               a zone carries a rule and the tint carries an option. */
+            const gradient = cell.zoneType !== "Normal"
+              ? ZONE_GRADIENTS[cell.zoneType]
+              : cell.isParValueLadder
+                ? PAR_CELL_BACKGROUND
                 : NORMAL_CELL_BACKGROUND;
             // Tooltip text (design note #16, extended by design note
             // #18/item 4) -- price, plus the zone's own proper name
@@ -1929,33 +1992,23 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
             // note #20's fill-color rework -- this was always sourced from
             // `cell.zoneType`/`cell.isParValueLadder` directly, never from
             // column index.
-            const zoneLabel = cell.zoneType !== "Normal" ? ZONE_LEGEND_LABELS[cell.zoneType] : undefined;
-            const zoneDescription =
-              cell.zoneType !== "Normal" ? ZONE_DESCRIPTIONS[cell.zoneType] : undefined;
+
             // Design note #22/item 2: every standard (`"Normal"`-tagged)
             // cell -- which includes the six par cells, see that note --
             // now states its certificate-limit status explicitly, the
             // counterpart to the Yellow/Orange/Brown zones' own explicit
             // exemption wording above.
-            const certificateLimitNote =
-              cell.zoneType === "Normal" ? "Stocks count toward certificate limit." : undefined;
+
             // Design note #23(2): par cells' tooltip trimmed to exactly the
             // two clauses requested -- "Par Value $X" and the certificate-
             // limit rule -- dropping the redundant "valid starting price" /
             // "Starting IPO / Par Value Selection." restatements.
-            const titleParts = [
-              cell.isParValueLadder ? `Par Value $${cell.price}` : `$${cell.price}`,
-              zoneLabel && zoneDescription ? `${zoneLabel}: ${zoneDescription}` : undefined,
-              certificateLimitNote,
-              cell.isGameEndCell ? "GAME END — reaching this cell ends the game" : undefined,
-              // Design note #43: what the arrow in the corner means.
-              cell.isRightCliff
-                ? "Right cliff: a price that would move right moves UP instead."
-                : undefined,
-              cell.isLeftCliff
-                ? "Left cliff: a price that would move left moves DOWN instead."
-                : undefined,
-            ].filter(Boolean);
+            /* Design note #648: assembled by `cellTitleFor`, which the token
+               cluster also reads. The cluster now covers the cell as a hover
+               target, so it would otherwise swallow this tooltip on exactly
+               the cells that have tokens -- the ones a player is most likely
+               to interrogate. */
+            const titleParts = [cellTitleFor(cell)];
             return (
               <div
                 key={cellKey(cell.x, cell.y)}
@@ -1970,22 +2023,27 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                   // rather than an omitted override that fell through to
                   // `styles.cell`'s own plain `backgroundColor`.
                   background: gradient,
-                  // The green fill (item 2) is now the primary "this cell is
-                  // special" signal for the game-end coordinate, so its
-                  // outline is a crisp dark-green edge that frames the fill
-                  // rather than the prior red ring, which would visually
-                  // clash with -- and read as contradicting -- the new green
-                  // background.
-                  outline: cell.isGameEndCell ? "2px solid #0d3319" : undefined,
-                  outlineOffset: cell.isGameEndCell ? "-2px" : undefined,
-                  // Design note #24(1): the six par-ladder cells center
-                  // their price text instead of the ordinary left-aligned
-                  // layout, so it clears the gold `parGroupFrame`'s own
-                  // left/right border (which now paints ON TOP of these
-                  // cells, design note #23(1)) on both sides instead of
-                  // starting directly underneath it.
-                  justifyContent: cell.isParValueLadder ? "center" : "flex-start",
-                  alignItems: cell.isParValueLadder ? "center" : "flex-start",
+                  /* ==================================================
+                       DESIGN NOTE 649: EVERY PRICE IN THE SAME CORNER
+                      ==================================================
+
+                     REPORTED: "the cell values are in the upper left, other
+                     than the 6 cells in the par column where for some reason
+                     they are centered (I would prefer they occupy the same
+                     top left position as all the other cells)."
+
+                     Design note #24(1) centred them for a specific reason:
+                     the gold `parGroupFrame` painted ON TOP of these cells,
+                     and a top-left number started underneath its border.
+                     Centring dodged the frame.
+
+                     THE FRAME IS GONE (design note #650), so the dodge has
+                     nothing left to dodge -- and it was never free. A column
+                     of prices that all sit in one corner is scannable down
+                     the grid; six that jump to the middle break that line for
+                     no gain once the thing they were avoiding is removed. */
+                  justifyContent: "flex-start",
+                  alignItems: "flex-start",
                 }}
                 title={titleParts.join(" — ")}
               >
@@ -2032,65 +2090,32 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                     // charcoal background, so text brightness can never
                     // disagree with whether a background tint actually
                     // rendered.
-                    color: cell.isGameEndCell
-                      ? GAME_END_CELL_TEXT_COLOR
-                      : cell.zoneType !== "Normal"
+                    color:
+                      cell.zoneType !== "Normal"
                         ? ZONE_PRICE_TEXT_COLOR
                         : styles.priceText.color,
-                    // Par-ladder cells keep bold weight even without their
-                    // own special fill anymore -- alongside the "PAR" badge
-                    // and the gold `parGroupFrame` border, this is one more
-                    // small signal (not a color) that these six are starting
-                    // options, not just ordinary Normal cells.
+                    // Par-ladder cells keep bold weight alongside the "PAR"
+                    // badge and their #650 green tint -- one more small signal
+                    // (not a colour) that these six are starting options, not
+                    // just ordinary Normal cells.
                     fontWeight:
-                      cell.isGameEndCell || cell.isParValueLadder
-                        ? 700
-                        : cell.zoneType !== "Normal"
-                          ? 700
-                          : 600,
+                      cell.isParValueLadder || cell.zoneType !== "Normal" ? 700 : 600,
                   }}
                 >
                   {cell.price}
                 </span>
                 {cell.isParValueLadder && <span style={styles.parBadge}>PAR</span>}
-                {cell.isGameEndCell && <span style={styles.gameEndBadge}>END</span>}
               </div>
             );
           })}
 
-          {/* Gold Par Box grouping frame -- design note #18/item 4. One
-              independent grid item spanning the par ladder's full outer
-              bounding box (`x = PAR_LADDER_COLUMN_X` column, `y = 5..10`
-              rows -- see `PAR_VALUE_LADDER`), rather than six separate
-              per-cell borders: a CSS grid item that spans multiple
-              rows/columns occupies the full continuous box from the start
-              edge of its first row/column to the end edge of its last,
-              INCLUDING the `gap` gutters between the individual cells inside
-              that span -- so a single thick gold `border` here traces one
-              unbroken frame around the whole six-cell block, with no visible
-              seam at the internal cell gaps, exactly as this item asked for
-              ("a continuous, thick, distinctive gold outline frame
-              completely enclosing those six blocks"). No fill (`background`
-              stays transparent) and `pointerEvents: "none"` so it never
-              covers the six cells' own backgrounds/tooltips/click targets
-              underneath -- purely a border overlay. */}
-          <div
-            style={{
-              ...styles.parGroupFrame,
-              gridColumn: PAR_LADDER_COLUMN_X + 1,
-              gridRow: `${11 - PAR_LADDER_ROW_MAX} / ${11 - PAR_LADDER_ROW_MIN + 1}`,
-              // Border/glow scaled off the live `cellSize` -- see design
-              // note #19/item 4 -- rather than the flat fixed pixel values
-              // `styles.parGroupFrame` still carries as its pre-measurement
-              // fallback.
-              borderWidth: `${parFrameBorderPx}px`,
-              // Design note #402: 0.45 -> 0.22. This is the value that
-              // actually renders -- the style literal is only the
-              // unscaled fallback -- so leaving it would have made
-              // the whole change invisible in practice.
-              boxShadow: `0 0 ${parFrameGlowPx}px rgba(234, 179, 8, 0.22)`,
-            }}
-          />
+          {/* Design note #650: the gold `parGroupFrame` overlay is GONE, and
+              with it four passes of layering fixes (#20's six-segment seam,
+              #23(1)'s stacking order, #402's thinning, #527's clipped
+              numbers). The six par cells now carry a green tint instead, so
+              the grouping is a property of the cells rather than a box drawn
+              over them -- which is why none of those problems has a
+              successor. */}
 
           {/* Live company tokens -- placed as independent grid items (see
               design note #5/#8) so a token is never silently dropped even
@@ -2109,6 +2134,15 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
                 key={group.key}
                 className="market-token-cluster"
                 style={{ ...styles.tokenWrapper, gridColumn: group.x + 1, gridRow: 11 - group.y }}
+                /* Design note #648: the cell's own facts, because this box is
+                   now what the pointer meets there. `undefined` for a token
+                   at a coordinate with no cell -- design note #5/#8's orphan
+                   case, which has no price to report. */
+                title={
+                  PRICE_CELL_BY_KEY.get(cellKey(group.x, group.y))
+                    ? cellTitleFor(PRICE_CELL_BY_KEY.get(cellKey(group.x, group.y)) as PriceCell)
+                    : undefined
+                }
               >
                 {group.occupants.map((occupant, index) => {
                   const offset = deriveTokenClusterOffset(index, occupantCount, cellSize, tokenDiameterPx);
@@ -2200,6 +2234,73 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
       <style>{MARKET_TOKEN_SCATTER_CSS}</style>
       <ParIpoTray markersByPrice={parMarkersByPrice} />
       </div>
+      <MarketCellLegend />
+    </div>
+  );
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 651: THE COLOURS HAVE TO SAY WHAT THEY MEAN
+ * ==================================================================
+ *
+ * INSTRUCTED: "since we've decided not to tuck crucial/otherwise
+ * undiscoverable game information in tooltips, we probably need to re-add the
+ * cell color legend to the bottom of the stock market matrix panel, including
+ * (if applicable) the green tint from 4b to explain that those are par
+ * values."
+ *
+ * The legend existed and was moved to a side column (#19), then off the
+ * matrix entirely -- and every removal left the colours meaning something
+ * they only stated on hover. Design note #43 already worked through the same
+ * problem for the cliff arrows: "the board's edges are RULES, and until now
+ * the only place they were stated was a tooltip nobody hovers." Four fills on
+ * this chart carry rules; a tooltip is not where a rule lives.
+ *
+ * UNDER THE MATRIX, NOT BESIDE IT. A side column competes with the grid for
+ * the width the grid is trying to maximise (#19 and #21 both fought this), and
+ * a legend is reference: it is read once, early, and then rarely. Below is
+ * where it costs the thing it explains nothing.
+ *
+ * IT READS ITS OWN SWATCHES FROM THE FILLS THE GRID USES. `ZONE_GRADIENTS`,
+ * `PAR_CELL_BACKGROUND` and `NORMAL_CELL_BACKGROUND` are the same constants
+ * the cells paint with, so a legend swatch cannot come to disagree with the
+ * cell it describes -- which is exactly what a hand-picked palette here would
+ * eventually do. That guarantee is one-directional, though, and #652 is the
+ * proof: sourcing the COLOUR from the grid does not check that any cell
+ * actually uses it. Every row here must name a fill some cell paints.
+ */
+function MarketCellLegend() {
+  const entries: Array<{ label: string; rule: string; fill: string }> = [
+    {
+      label: "Par values",
+      // Design note #650: the tint the six starting prices now carry.
+      rule: "The six prices a corporation may be started at.",
+      fill: PAR_CELL_BACKGROUND,
+    },
+    ...(Object.keys(ZONE_LEGEND_LABELS) as Array<Exclude<ZoneType, "Normal">>).map((zone) => ({
+      label: ZONE_LEGEND_LABELS[zone],
+      rule: ZONE_DESCRIPTIONS[zone],
+      fill: ZONE_GRADIENTS[zone],
+    })),
+    {
+      label: "Standard",
+      rule: "Stocks count toward the certificate limit.",
+      fill: NORMAL_CELL_BACKGROUND,
+    },
+    /* Design note #652: NO "Game end" ROW. There was one here for exactly one
+       verification cycle, describing a condition no cell on this board
+       carries -- which is how the dormant `isGameEndCell` flag finally got
+       caught. $350 is the top of the chart and nothing more. */
+  ];
+  return (
+    <div style={styles.cellLegend}>
+      {entries.map((entry) => (
+        <span key={entry.label} style={styles.cellLegendEntry}>
+          <span style={{ ...styles.cellLegendSwatch, background: entry.fill }} aria-hidden="true" />
+          <span style={styles.cellLegendLabel}>{entry.label}</span>
+          <span style={styles.cellLegendRule}>{entry.rule}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -2263,6 +2364,31 @@ const styles: Record<string, React.CSSProperties> = {
   // there's no width pressure keeping them small. Swatch size bumped
   // alongside them purely for visual proportion against the larger text,
   // not because this item named it directly.
+  /* Design note #651: the cell-colour legend, under the matrix. A wrapping
+     row rather than a fixed grid -- it holds six entries at a comfortable
+     width and folds to two lines on a narrow window without any breakpoint
+     to maintain. */
+  cellLegend: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "6px 18px",
+    padding: "10px 4px 2px",
+  },
+  cellLegendEntry: { display: "inline-flex", alignItems: "baseline", gap: "7px", minWidth: 0 },
+  /* Sized to read as a CELL rather than a dot: the thing it stands for is a
+     rectangle on the grid above, and a circle would be a second shape for one
+     idea. */
+  cellLegendSwatch: {
+    width: "18px",
+    height: "13px",
+    borderRadius: "3px",
+    border: "1px solid rgba(0, 0, 0, 0.45)",
+    flex: "none",
+    alignSelf: "center",
+  },
+  cellLegendLabel: { fontSize: FONT_SIZE.small, fontWeight: 800, color: "#e6e8ef" },
+  cellLegendRule: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
   legendText: {
     fontSize: FONT_SIZE.heading,
     fontWeight: 600,
@@ -2475,28 +2601,9 @@ const styles: Record<string, React.CSSProperties> = {
   // that would show a visible seam at every gap.
   // Design note #22/item 1: recolored from `#ffd54a` to the explicitly
   // requested `#EAB308` gold.
-  parGroupFrame: {
-    // Design note #402: ~40% thinner, and the glow softened from 0.45 over
-    // 10px to 0.22 over 5px so the frame stops washing gold onto the cells
-    // around it. Both are overridden per-render by the derive helpers; the
-    // literals here are the unscaled fallback and are kept in step with the
-    // baselines so the two can never describe different frames.
-    border: "2.4px solid #EAB308",
-    borderRadius: "6px",
-    boxSizing: "border-box",
-    pointerEvents: "none",
-    boxShadow: "0 0 5px rgba(234, 179, 8, 0.22)",
-    // Explicit positioned stacking layer -- design note #23(1). Without
-    // `position` set, this element was "non-positioned" and painted BEFORE
-    // every price cell (which sets `position: relative`) regardless of DOM
-    // order, per CSS2.1's painting-order rules -- the actual cause of the
-    // frame appearing as six separate per-cell segments instead of one
-    // continuous rectangle. `zIndex: 6` sits above `styles.cell`'s `1` and
-    // below `styles.tokenWrapper`'s `10`, so tokens still render in front
-    // of the frame exactly as before.
-    position: "relative",
-    zIndex: 6,
-  },
+  /* Design note #651: `parGroupFrame` removed with the overlay it painted
+     (#650). The six par cells are now told apart by `PAR_CELL_BACKGROUND`,
+     which the legend under the matrix names in words. */
   // Color promoted from the former `PAR_COLUMN_NEUTRAL_TEXT_COLOR` (design
   // note #20/item 1) -- brighter/higher-contrast than the prior dim
   // `#6f7480`, now the single text color for every `"Normal"`-tagged cell
@@ -2534,20 +2641,36 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#1a1408",
     opacity: 0.75,
   },
-  gameEndBadge: {
-    position: "absolute",
-    left: "2px",
-    bottom: "1px",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: "6px",
-    fontWeight: 700,
-    letterSpacing: "0.03em",
-    color: "#ff6b5e",
-  },
+  /* Design note #652: `gameEndBadge` removed with the flag that rendered it. */
   tokenWrapper: {
     position: "relative",
     overflow: "visible",
-    pointerEvents: "none",
+    /* ==================================================================
+     *  DESIGN NOTE 648: THE CELL IS THE HOVER TARGET, NOT THE TOKEN
+     * ==================================================================
+     *
+     * REPORTED: "the scatter effect only works when the mouse is over a
+     * corporation token, but the corporation tokens are moving, so the effect
+     * happens and then undoes itself almost immediately."
+     *
+     * A feedback loop, and design note #452 wrote down the cause without
+     * seeing it: `pointer-events: none` here so "the hover is driven by the
+     * tokens themselves rather than by an invisible box over the whole cell".
+     * The tokens are what the hover MOVES. Pointer enters a token, the token
+     * scatters out from under it, `:hover` is lost, the token returns under
+     * the pointer, and it oscillates -- the effect is its own off switch.
+     *
+     * `auto` MAKES THE WRAPPER THE TARGET, and the wrapper is a grid item
+     * filling the cell, so the cursor stays inside it however far the tokens
+     * travel. That is the report's own suggestion ("have the scatter happen
+     * on the cell rather than the corp marker") and it is the only version
+     * that is stable, because the hover region no longer moves.
+     *
+     * THE COST IS THE CELL'S TOOLTIP, paid back in the same change: the
+     * wrapper covers the cell, so it carries the cell's own title
+     * (`cellTitleFor`). Occupied cells were exactly the ones whose price is
+     * hidden and whose tooltip therefore mattered most. */
+    pointerEvents: "auto",
     // Explicit stacking layer -- design note #23(1): above `parGroupFrame`
     // (zIndex 6), so live company tokens keep rendering in front of the par
     // frame exactly as before that fix.

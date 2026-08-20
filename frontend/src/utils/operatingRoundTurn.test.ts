@@ -24,6 +24,28 @@
 import { applySandboxAction, beginOperatingRound, buildOperatingOrder } from "./sandboxSession";
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
+/* ==================================================================
+ *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG
+ * ==================================================================
+ *
+ * These tests detected the end of an Operating Round by reading
+ * `operating_round_just_ended`. That flag was a message from the reducer to
+ * the SHELL, which then performed the transition -- and design note #642
+ * moved the transition into the reducer, where it belongs, so the flag is now
+ * raised and consumed inside a single `applySandboxAction` call and is never
+ * observable from outside.
+ *
+ * THE REPLACEMENT IS BETTER, not merely different. A flag says "something is
+ * about to happen if the right caller notices"; `current_round_type` says what
+ * round the game is actually in. The first could be true on a board that
+ * never moved, which is exactly the bug the move fixed -- so a harness that
+ * asserts against the flag would keep passing on a game that had stopped
+ * advancing.
+ */
+const inOperatingRound = (state: { current_round_type: string }) =>
+  state.current_round_type === "OperatingRound";
+const roundHasEnded = (state: { current_round_type: string }) => !inOperatingRound(state);
+
 const ALICE = "juno1alice";
 const BOB = "juno1bob";
 const CAROL = "juno1carol";
@@ -170,9 +192,9 @@ describe("PassTurn during an Operating Round", () => {
     let state = beginOperatingRound(stateEnteringOperatingRound());
     state = applySandboxAction(state, PASS); // -> 2nd
     state = applySandboxAction(state, PASS); // -> 3rd
-    expect(state.operating_round_just_ended).toBeFalsy();
+    expect(inOperatingRound(state)).toBe(true);
     state = applySandboxAction(state, PASS); // past the end
-    expect(state.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(state)).toBe(true);
   });
 
   /* ==================================================================
@@ -203,7 +225,7 @@ describe("PassTurn during an Operating Round", () => {
     let state = beginOperatingRound({ ...green, sub_round_index: 1 });
     for (let i = 0; i < 3; i += 1) state = applySandboxAction(state, PASS);
     // The queue rebuilt for OR 2 rather than the round closing.
-    expect(state.operating_round_just_ended).toBeFalsy();
+    expect(inOperatingRound(state)).toBe(true);
     expect(state.sub_round_index).toBe(2);
     expect(state.active_corporation_index).toBe(0);
   });
@@ -213,7 +235,7 @@ describe("PassTurn during an Operating Round", () => {
     // here is trainless, which derives to the Yellow phase.
     let state = beginOperatingRound(stateEnteringOperatingRound());
     for (let i = 0; i < 3; i += 1) state = applySandboxAction(state, PASS);
-    expect(state.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(state)).toBe(true);
   });
 
   it("TERMINATES -- the regression that started all of this", () => {
@@ -221,11 +243,11 @@ describe("PassTurn during an Operating Round", () => {
     const CAP = 200;
     let state = beginOperatingRound(stateEnteringOperatingRound());
     let turns = 0;
-    while (!state.operating_round_just_ended && turns < CAP) {
+    while (!roundHasEnded(state) && turns < CAP) {
       state = applySandboxAction(state, PASS);
       turns += 1;
     }
-    expect(state.operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(state)).toBe(true);
     // Three corporations, one round in the sequence: it should close on the
     // fourth dispatch, not merely somewhere under the cap.
     expect(turns).toBe(3);
@@ -237,6 +259,6 @@ describe("PassTurn during an Operating Round", () => {
     const noneFloated = stateEnteringOperatingRound([
       company({ company_id: 1, ticker: "PRR", is_floated: false }),
     ]);
-    expect(applySandboxAction(noneFloated, PASS).operating_round_just_ended).toBe(true);
+    expect(roundHasEnded(applySandboxAction(noneFloated, PASS))).toBe(true);
   });
 });

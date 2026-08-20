@@ -293,9 +293,42 @@ function OperatingRoundCorporationPanel({
     <>
       <div style={styles.header}>
         <span style={styles.headerTitle}>Operating Round — Corporations</span>
+        {/* ==================================================================
+             DESIGN NOTE 645: BOTH SIDES OF "OF" ARE ROUND NUMBERS
+            ==================================================================
+
+             REPORTED: '"OR1.1 of 1," which should probably be updated to
+             "OR 1.1 of 1.1," and on appropriate later rounds say, e.g,
+             "OR 3.1 of 3.2".'
+
+             The old string put two different numbering systems either side of
+             one word. `1.1` is a round NAME -- cycle and index, the notation
+             the action bar, the activity log and every 1830 discussion use --
+             and the bare `1` after "of" was a COUNT of rounds in the cycle.
+             Both are correct and the sentence is not: "1.1 of 1" reads as a
+             position outside its own range, which is why it looks broken even
+             though the arithmetic is right.
+
+             NAMING THE LAST ROUND FIXES IT. `of 1.1` says the cycle ends here;
+             `of 3.2` says one more to come. The reader compares two labels of
+             the same kind rather than translating between them, and the phase
+             rule -- one Operating Round in Phase 2, two in Green, three in
+             Brown -- becomes legible from the number rather than needing to be
+             known.
+
+             THE SPACE AFTER "OR" IS THE SAME CORRECTION one level down. The
+             action bar writes "Operating Round 3.2" and `roundLabelFor` writes
+             "OR 3.2"; this alone wrote "OR3.2", so a player matching a log
+             line against this panel was comparing two spellings of one round.
+
+             NO GUARD ON THE LENGTH. It is stamped when the cycle opens
+             (design note #511) and `operatingRoundSequenceLength` floors it at
+             1, so there is no state where this renders "of 3.0" -- and if
+             there were, the honest thing is to show it rather than hide it
+             behind a fallback. */}
         <span style={styles.headerHint}>
-          OR{gameState.macro_round_number}.{gameState.sub_round_index} of{" "}
-          {gameState.operating_round_sequence_length}
+          OR {gameState.macro_round_number}.{gameState.sub_round_index} of{" "}
+          {gameState.macro_round_number}.{gameState.operating_round_sequence_length}
         </span>
       </div>
       <div style={styles.tableScroll}>

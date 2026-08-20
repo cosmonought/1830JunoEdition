@@ -89,14 +89,20 @@ describe("the regression itself", () => {
 });
 
 describe("placeParMark", () => {
+  /* Design note #646: `toMatchObject`, not `toEqual`. A mark now also carries
+     `enteredAt` -- the arrival ordinal the operating-order tie-break reads --
+     and these tests are about WHERE the token lands, not about its history.
+     Asserting the whole object made them fail for a field they have no
+     opinion on; `operatingOrderTieBreak.test.ts` is where the stamp is
+     checked. */
   it("places a newly parred token in its par box", () => {
     const placed = placeParMark({}, 6 /* ERIE */, 67, parBoxCellFor);
-    expect(placed[6]).toEqual({ price: 67, x: 6, y: 5 });
+    expect(placed[6]).toMatchObject({ price: 67, x: 6, y: 5 });
   });
 
   it("places every par value where the board draws its box", () => {
     for (const [par, x, y] of EXPECTED_PAR_BOXES) {
-      expect(placeParMark({}, 1, par, parBoxCellFor)[1]).toEqual({ price: par, x, y });
+      expect(placeParMark({}, 1, par, parBoxCellFor)[1]).toMatchObject({ price: par, x, y });
     }
   });
 

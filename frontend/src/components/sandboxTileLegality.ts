@@ -244,7 +244,25 @@ function preservesRouting(
   if (!oldSegments || !newSegments) return true;
 
   const available = new Set(newSegments.map(([a, b]) => segmentKey(a, b)));
-  return oldSegments.every(([a, b]) => available.has(segmentKey(a, b)));
+  /* Design note #676: A TERMINUS IS NOT A PATH, AND `[e, e]` IS A TERMINUS.
+     FOUND BY the derived upgrade graph (`utils/tileUpgrades.ts` #675), which swept the tray and reported that
+     green #59 -- the OO tile -- had no brown successor at all. Not a display fault: this function is what the
+     board asks, so the four OO hexes (E5, D10, E11, H18) were frozen at green for the whole game.
+     THE CATALOG IS RIGHT AND THE COMPARISON WAS WRONG. #59 carries `paths: [[0, 0], [2, 2]]`, which is the
+     backend saying what `hexBoardData` #391 says in prose: two revenue-earning cities with NO track joining
+     them, each edge running in and stopping. A self-loop is the honest encoding of "ends here".
+     Compared literally, that demanded the brown tile ALSO carry `0:0` -- and #64 through #68 carry `[[0, 2],
+     [3, 4]]` and friends, because connecting the two cities is precisely what the upgrade is FOR. Strict
+     preservation was reading an addition as a severance.
+     SO A SELF-LOOP IS SATISFIED BY THE EDGE SURVIVING, which the mask test above has already established:
+     `old_actual & !new_actual == 0` guarantees every edge the old tile carried is still carried. Nothing is
+     weakened -- a real path `[a, b]` with `a !== b` is still compared exactly, and the mask test still gates
+     everything. What changes is that a terminus stops being asked to remain a terminus.
+     ON THE ALTERNATIVE of encoding spurs as `[e, CITY_ENDPOINT]` instead: that is the ARTWORK's convention
+     (`tileArtworkEdgePairs(59)` returns `[[0, null], [2, null]]`) and the two are both legitimate. Changing the
+     catalog would mean editing the mirror away from the Rust source it mirrors, which is the one thing this
+     file's whole design forbids. The comparison is ours; the mirror is not. */
+  return oldSegments.every(([a, b]) => a === b || available.has(segmentKey(a, b)));
 }
 
 /* ------------------------------------------------------------------ */

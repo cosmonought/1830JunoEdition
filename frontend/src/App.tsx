@@ -133,6 +133,8 @@ import InlineQuickChat from "./components/InlineQuickChat";
 import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
+// Design note #677: the Tiles tab.
+import TileReference from "./components/TileReference";
 import TrainTradePanel from "./components/TrainTradePanel";
 /* Design note #508: the default export is gone from this import -- the panel
    is mounted by `ContextualActionBar` now, so this file supplies its props
@@ -5769,7 +5771,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #427: the reference tabs get a way back. Only while
           the viewer is on turn -- see that file for why a permanent banner
           would be worse than none. */}
-      {(activeMainTab === "ledger" || activeMainTab === "rules") && (
+      {/* Design note #677: `tiles` joins the list. #427's whole point is that a
+         reference tab has no way back to the turn, and the new tab is exactly as
+         easy to get lost on as the two that prompted it -- more so, since a
+         player opens it mid-lay to check what a hex becomes. */}
+      {(activeMainTab === "ledger" || activeMainTab === "rules" || activeMainTab === "tiles") && (
         <ReturnToTurnBar
           isMyTurn={isMyTurn}
           roundType={gameState?.current_round_type ?? null}
@@ -5795,6 +5801,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           playerLabel={sandbox ? sandboxPlayerLabel : undefined}
         />
       )}
+
+      {/* Design note #677: the tray and its upgrade paths. `mapGrid` is the only
+         input -- supply is counted off the board, and the paths are derived from
+         the board's own legality filter rather than authored (`tileUpgrades.ts`
+         #675). */}
+      {activeMainTab === "tiles" && <TileReference mapGrid={mapGrid} />}
 
       {activeMainTab === "rules" && (
         <RulesReference

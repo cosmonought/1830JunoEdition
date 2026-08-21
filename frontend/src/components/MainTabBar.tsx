@@ -12,15 +12,26 @@ import React from "react";
 import type { RoundType } from "../utils/gameState";
 import { styles } from "../styles/appStyles";
 
-export type MainTab = "phase" | "corps" | "map" | "stock" | "ledger" | "rules";
+export type MainTab = "phase" | "corps" | "map" | "stock" | "ledger" | "rules" | "tiles";
 
 /** The tabs to show, in order, for the current round. The active phase always
  *  leads: a player's attention starts at the left edge, and the first tab should
  *  be the one they can act in, or every phase transition begins with a hunt. */
 export function orderedMainTabs(roundType: RoundType | null): { id: MainTab; label: string }[] {
+  /* Design note #677: `Tiles` joins the REFERENCE group, which is what decides
+     its position without anyone choosing one -- reference tabs trail the
+     surfaces a player acts in, in every round, by the rule this function
+     already applies. It sits beside Rules Reference because it is the same kind
+     of thing: a lookup you open mid-turn and close again.
+     PRESENT IN EVERY ROUND, unlike the phase surfaces. A player plans a tile lay
+     during a Stock Round at least as often as during their own Operating Round
+     -- "can I still get a green city onto Erie" is a question about what to buy
+     -- and a tab that vanished outside Lay Track would be missing exactly when
+     the planning happens. */
   const reference: { id: MainTab; label: string }[] = [
     { id: "stock", label: "Stock Market" },
     { id: "ledger", label: "Game Ledger" },
+    { id: "tiles", label: "Tiles" },
     { id: "rules", label: "Rules Reference" },
   ];
   const railMap = { id: "map" as MainTab, label: "Rail Map" };

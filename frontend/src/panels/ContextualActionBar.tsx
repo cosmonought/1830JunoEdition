@@ -743,6 +743,23 @@ export default function ContextualActionBar({
      describe somebody else's decision. The acting corporation is already named across the top of the bar.
      SCOPED TO OPERATING ROUNDS -- the round whose turn belongs to a corporation rather than a seat, and the
      only one this bar carries action buttons in. */
+  /* Design note #691: AND THE SAME RULE FOR THE PANELS, which is where #740 stopped.
+     REPORTED: "on the non-active players' turn during the Operating Round, the Action Bar displays all the
+     actions and views of the current player -- when the current player enters Buy Train, the inactive players'
+     screens are filled with the Buy Train action panels."
+     #740's argument is quoted above and is exactly right; it was simply applied to `contextualButtons` and to
+     nothing else. Its own words -- "eight greyed buttons on four screens describe somebody else's decision" --
+     understate what was left rendering: a depot table, a payout ledger, a route planner and a train-purchase
+     panel are far more screen than eight buttons, and every one of them was describing a turn the reader cannot
+     take.
+     WHAT AN INACTIVE PLAYER KEEPS is what the report asks for and what #740's reasoning already implies: WHO is
+     acting (the corporation card across the top), WHERE they are in the turn (the sub-phase trail, #672), and
+     Undo -- which is deliberately not gated on turn at all (#592c/#592d), because it is an instruction about the
+     log rather than a move.
+     WHAT IT DOES NOT TOUCH is the train-trade ledger. That lives in `App.tsx` (#508 moved only the PURCHASE
+     panel in here) and it is the one thing a non-acting player legitimately acts on during somebody else's
+     Hardware step -- a seller answering an offer. Hiding it would take away a real decision rather than a
+     description of one. */
   const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;
   if (!mayActThisTurn) contextualButtons = [];
 
@@ -756,7 +773,11 @@ export default function ContextualActionBar({
      why; (2) it advertised a control for a phase the player was not in.
      Hiding the button alone would leave hazard (1) intact -- the mode would just become unreachable while
      still ON -- so the owning component force-clears `routeSelectMode` when this condition goes false. */
-  const showRouteToggle = roundType === "OperatingRound" && orSubPhase === "Routes";
+  /* Design note #691: `mayActThisTurn` folded in here rather than repeated at three call sites -- this one flag
+     gates the Auto Route button, the Run Routes button and `RoutePlannerPanel` below, which are the whole of the
+     Run Routes step's interface. Three separate conditions is three chances to miss one. */
+  const showRouteToggle =
+    roundType === "OperatingRound" && orSubPhase === "Routes" && mayActThisTurn;
 
   /* Design note #278: the Dividends step's Pay-or-Withhold binary, derived here because both halves are
      already props and a second boolean saying what they jointly mean can disagree with them.
@@ -1503,7 +1524,10 @@ export default function ContextualActionBar({
              THE CHIPS ARE LIVE, not a readout -- they call the same handlers the planner rows do, so a player can
              still switch which train the map is drafting for. A dead label would show the problem without giving
              anywhere to act on it. */}
-          {orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
+          {/* Design note #691: and only for the player whose routes these are. The chips are LIVE (see above) --
+              on somebody else's turn they would be a row of controls that dispatch for a corporation the reader
+              does not hold. */}
+          {mayActThisTurn && orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
             <div style={styles.condensedTrainRow} role="group" aria-label="Drafted routes">
               {trainDrafts.map((draft) => {
                 const isActive = draft.trainIndex === activeTrainIndex;
@@ -1548,7 +1572,10 @@ export default function ContextualActionBar({
              left a scrolled player with Pay and Withhold live and no way to see what either does.
              The Buy Trains panel travels for the same reason and by the same mechanism: the bar is `position:
              sticky`, so anything inside it follows. */}
-          {orSubPhase === "Dividends" && (
+          {/* Design note #691: the payout table and the two market moves are the INPUTS to Pay and Withhold
+              (#509). With those buttons gone on an inactive screen, the inputs describe a choice the reader is
+              not making -- and the round's own result reaches them through the Activity Log either way. */}
+          {mayActThisTurn && orSubPhase === "Dividends" && (
             <div style={styles.dividendPanel}>
               <div style={styles.dividendColumn}>
                 <span style={styles.dividendHeading}>
@@ -1626,14 +1653,18 @@ export default function ContextualActionBar({
              where the player is already looking.
              So the notice is PERSISTENT rather than a response, and it names the emergency purchase -- which is what
              makes the greyed button feel like a rule rather than a malfunction. */}
-          {orSubPhase === "Hardware" && mustBuyTrain && (
+          {/* Design note #691: the obligation is the ACTING president's. #619 wrote it to stop an errant click on
+              a greyed button; on a screen with no button it is a rule addressed to somebody else. */}
+          {mayActThisTurn && orSubPhase === "Hardware" && mustBuyTrain && (
             <div style={styles.mustBuyTrainNotice} role="status">
               This corporation owns no train and has a route to run — it must buy one before the
               turn can end. If the treasury cannot cover the cheapest train, the president pays
               the difference personally.
             </div>
           )}
-          {orSubPhase === "Hardware" && trainPurchase && (
+          {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
+              button are the largest block in this bar, and on three of four screens they were furniture. */}
+          {mayActThisTurn && orSubPhase === "Hardware" && trainPurchase && (
             <TrainPurchasePanel
               depot={trainPurchase.depot}
               buyer={trainPurchase.buyer}

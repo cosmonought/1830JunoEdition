@@ -490,8 +490,28 @@ export const styles: Record<string, React.CSSProperties> = {
      what keeps `Corp.` level with `Cash` rather than merely adjacent to it. The padding was absent here and
      present there, so the figures rows were 2px taller and the columns drifted apart down the card -- small
      enough to read as sloppiness rather than as a bug, which is how it survived #611's pass. */
+  /* Design note #680: THE COLUMN GAP, BORROWED FROM THE PRIVATES TABLE. Reported as `Corp.` and `%` being "too
+     tight" and asked to sit at the same horizontal spaces as `Value` and `Income` below.
+     They were tight for a specific reason: `TABLE_ROW_CELL` is `padding: "1px 0"` -- no horizontal padding at
+     all -- because #658 made it ONE metric shared with the figures table, where the two columns are `Cash` and a
+     right-aligned figure and need no separation. Inherited by the holdings table, that put `Corp.` and `%`
+     directly against each other.
+     THE PRIVATES TABLE'S RHYTHM IS 20px: its cells carry `3px 10px`, so `Value` and `Income` sit ten from each
+     side of the boundary between them. Split the same way here -- ten off the right of `Corp.`, ten off the left
+     of `%` -- and the two tables read with one spacing.
+     THE RIGHT EDGE IS WHY THE PADDING IS ASYMMETRIC, and it is the part that would break if this were a plain
+     `1px 10px`. `%` currently ends flush with the holdings table's right edge, which is the card's edge less the
+     body's own 10px; `Income` ends ten inside the privates table, which runs the full card width. The two land
+     on the SAME x today, and padding `%` on both sides would move it ten left of a column it is meant to line up
+     with. So the right stays at zero.
+     VERTICAL PADDING IS UNTOUCHED at 1px, which is the half of `TABLE_ROW_CELL` #658 actually cares about --
+     that note is about row HEIGHT keeping `Corp.` level with `Cash`, and horizontal padding cannot affect it.
+     Written as one four-value `padding` rather than spreading the shared metric and overriding a longhand:
+     shorthand-then-longhand in a single inline style object is order-dependent, and this file has already been
+     bitten once by a style that silently did nothing (#619). */
   holdingHead: {
     ...TABLE_ROW_CELL,
+    padding: "1px 10px 1px 0",
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
@@ -499,13 +519,18 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   holdingHeadNum: {
     ...TABLE_ROW_CELL,
+    padding: "1px 0 1px 10px",
     textAlign: "right",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     color: "#5f636d",
   },
+  /* Design note #680: the body cells take the header's padding exactly. A header
+     indented past its own column is the drift #658 was written to stop, in the
+     one direction that note did not have to think about. */
   holdingName: {
     ...TABLE_ROW_CELL,
+    padding: "1px 10px 1px 0",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     whiteSpace: "nowrap",
@@ -515,6 +540,7 @@ export const styles: Record<string, React.CSSProperties> = {
   holdingCrown: { color: "#c9a94c", marginLeft: "4px" },
   holdingNum: {
     ...TABLE_ROW_CELL,
+    padding: "1px 0 1px 10px",
     textAlign: "right",
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,

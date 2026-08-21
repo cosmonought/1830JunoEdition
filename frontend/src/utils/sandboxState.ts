@@ -309,6 +309,46 @@ export function placeParMark(
   return { ...prices, [companyId]: withArrival(prices, companyId, { price: parPrice, ...cell }) };
 }
 
+/** Every parred corporation has a mark. An INVARIANT, checked, rather than an edge, detected.
+ *
+ *  Design note #688: REPORTED -- "B&O, PRR, C&O and NNH are floated ... but only B&O has a Market price ...
+ *  those other corporations have their markers on the IPO/Par tray, but they are not on the stock market
+ *  matrix."
+ *
+ *  THE TWO SURFACES HAVE TWO SOURCES, which is the whole bug. The par TRAY is fed `gameState.public_companies`
+ *  and reads `par_value` directly, so a company appears there the instant it pars. The MATRIX is fed the
+ *  `sandboxMarket` atom, which is NOT part of `GameStateResponse` -- it is shell state, and a mark only arrived
+ *  in it when `runGameplayAction` happened to notice a `null -> value` transition on `par_value` go past.
+ *
+ *  A TRANSITION DETECTOR OVER STATE THAT IS NOT IN THE LOG IS THE #685 BUG AGAIN, one atom over. `rebuildSandbox`
+ *  resets the market; the replay then has to re-notice every edge to rebuild it, and anything that misses one --
+ *  a batched render, an action applied before the market atom caught up -- loses that corporation's mark
+ *  permanently, because nothing ever looks again. B&O survived only because its par arrives by its own
+ *  `SetBoPar` branch, which writes the ref synchronously.
+ *
+ *  SO IT IS NOT AN EDGE. "A corporation with a par has a mark" is true of a state, not of a change between two,
+ *  and a fact about a state can be re-established from that state at any time. Run on every action, a rebuild
+ *  reconstructs the whole chart with no special case and no memory of how it got there.
+ *
+ *  IDEMPOTENT BY CONSTRUCTION, AND MOVES SURVIVE: `placeParMark` returns `prices` untouched when the company
+ *  already has one, so a token that has walked away from its par box is never yanked back into it. That is what
+ *  makes running this unconditionally safe rather than merely cheap.
+ *
+ *  Returns the SAME OBJECT when nothing changed, so an identity check still means "no re-render". */
+export function reconcileParMarks(
+  prices: SandboxMarketPrices,
+  companies: ReadonlyArray<{ company_id: number; par_value?: string | null }>,
+  parCellFor: (parPrice: number) => { x: number; y: number } | null,
+): SandboxMarketPrices {
+  let next = prices;
+  for (const company of companies) {
+    const par = Number(company.par_value ?? NaN);
+    if (!Number.isFinite(par) || par <= 0) continue;
+    next = placeParMark(next, company.company_id, par, parCellFor);
+  }
+  return next;
+}
+
 /** Just the prices, for the corporation cards -- design note #2's "one
  *  price, two renderers", now with the chart and the cards reading one
  *  object rather than two tables. */

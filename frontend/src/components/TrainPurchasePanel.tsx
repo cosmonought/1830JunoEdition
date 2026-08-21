@@ -872,15 +872,57 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
         />
         <span style={styles.depotTier}>{tier.tier}</span>
         <span style={styles.depotCost}>${tier.cost}</span>
+        {/* Design note #687: THE SUPPLY IS A FIGURE, AND IT WAS DRESSED AS A FOOTNOTE.
+            REPORTED: "the Bank/Depot Supply of trains is hard to notice because it isn't labeled AND its font
+            seems to be faded and unbolded against everything else." Both halves are measurable: this cell was
+            11px/400 in `#8a919e` while the tier beside it is 13px/800 in `#e6e8ef` -- the smallest, dimmest,
+            lightest thing in the row.
+            IT IS ALSO THE FIGURE THE PHASE TURNS ON. 1830's depot sells cheapest-first, so how many are left is
+            what says when this tier sells out, when the phase advances and when a fleet rusts. A player weighing
+            $180 against $300 is weighing exactly that count, and it was set as an aside.
+            THE COUNT CARRIES THE WEIGHT, NOT THE WHOLE STRING. Bolding "2 / 4 left" entire would just move the
+            problem -- the reader would still have to find the number inside it. The remaining count takes the
+            tier's own weight and the rest stays muted, so the cell has an answer and a unit rather than a
+            sentence.
+            SELF-LABELLED RATHER THAN HEADED -- see the caption note below the grid for why the table has no
+            header row. "left" is the label, and it is already in the string. */}
         <span
           style={{
             ...styles.depotSupply,
             ...(tier.remaining === 0 ? styles.depotSupplyEmpty : {}),
           }}
+          /* An arrangement of numerals and a slash reads as "two slash four" to a
+             screen reader. The sentence says what the row means.
+             Design note #687a: IT DOES NOT NAME THE TIER. The first draft read "2 of 4 3-trains left in the
+             depot", and the tier is redundant twice over -- it is the cell immediately before this one, so a
+             reader hears "three" and then "three-trains" back to back, and a sighted reader has the same
+             collision two columns wide. A cell in a labelled row should say what the CELL means; saying what
+             the row is about is the row's job, and the row already does it. */
+          aria-label={
+            tier.total === null
+              ? "Unlimited supply in the depot"
+              : `${tier.remaining ?? tier.total} of ${tier.total} left in the depot`
+          }
         >
-          {tier.total === null
-            ? "unlimited"
-            : `${tier.remaining ?? tier.total} / ${tier.total} left`}
+          {tier.total === null ? (
+            "unlimited"
+          ) : (
+            <>
+              <span
+                style={{
+                  ...styles.depotSupplyCount,
+                  /* Design note #687: the count opts back IN to the empty tint. Without this a
+                     sold-out row reads "0 / 4 left" with a bright white zero inside an amber
+                     string -- the one glyph saying the tier is gone, drawn as though it were
+                     the healthy case. */
+                  ...(tier.remaining === 0 ? styles.depotSupplyEmpty : {}),
+                }}
+              >
+                {tier.remaining ?? tier.total}
+              </span>
+              {` / ${tier.total} left`}
+            </>
+          )}
         </span>
         {/* Design note #618: the flags share one right-hand column, so
             a row always has the same four slots whatever it is
@@ -952,6 +994,21 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   /* ---- Depot (design note #618: a column of rows, not a grid of cards) ---- */
+  /* Design note #687: NO HEADER ROW, and the reasoning belongs here because the absence is the kind of thing
+     that gets "fixed" by the next reader. Asked directly -- "there is a table but no headings for the entries.
+     I am not sure if there needs to be one" -- and the answer is no, for three reasons that are about THIS
+     table rather than about headers in general:
+       TWO OF THE FIVE COLUMNS CANNOT BE HEADED. The row opens with a train glyph and closes with a cluster of
+       fate flags; a header would be three captions and two blanks, which reads as a table missing something.
+       THE CELLS SELF-LABEL. "$180" and "2 / 4 left" carry their own units. `PlayerCards` #567 removed three
+       marks for exactly this reason -- a caption over a string that already says what it is, is one more thing
+       to read and nothing more to know.
+       AND THE GRID RENDERS TWICE -- once for the purchasable tier, once inside the "Later trains" accordion.
+       One header serves the first list and leaves the second bare, or it is repeated and the panel gains two
+       header rows for six data rows.
+     WHAT THE REPORT WAS ACTUALLY ABOUT was weight, not vocabulary: the supply cell was set as an aside. That is
+     fixed above. If a header still turns out to be wanted, it belongs over the three data columns only, with the
+     accordion's list sharing it -- not as a `<thead>` per grid. */
   depotGrid: {
     display: "flex",
     flexDirection: "column",
@@ -996,11 +1053,28 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "right",
   },
-  depotSupply: { fontSize: FONT_SIZE.micro, color: "#8a919e", whiteSpace: "nowrap" },
+  /* Design note #687: a step up to `small`, matching the cost column beside it -- the two are the pair a
+     purchase is decided on and they should read as peers. The muted ink stays on the UNIT ("/ 4 left"), which
+     is genuinely secondary; the count opts back out below. */
+  depotSupply: {
+    fontSize: FONT_SIZE.small,
+    color: "#8a919e",
+    whiteSpace: "nowrap",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontVariantNumeric: "tabular-nums",
+  },
+  /* Design note #687: the remaining count, at the tier column's weight and ink. Tabular figures come from the
+     parent, so "10 / 12" and "2 / 4" keep their slash on the same x down the six rows -- #618's whole argument
+     for fixed columns, applied inside one of them. */
+  depotSupplyCount: { fontWeight: 800, color: "#e6e8ef" },
   /* Design note #618: the shared right-hand column the fate flags live in,
      so "rusted" / "For Sale" / "Rusts on Phase 5" / "Permanent" all start on
      the same x whatever the row above said. */
   depotFate: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 },
+  /* Design note #687: spread onto the CELL and, separately, onto the count inside it. An inline style on a
+     child does not inherit through a `color` set on its parent when the child sets its own -- and the count
+     does set its own, so a sold-out row would have shown a bright white `0` inside an amber string reporting
+     that the tier is gone. */
   depotSupplyEmpty: { color: "#c8a24a" },
   /* Design note #283: amber for a coming loss, slate for a permanence.
      Deliberately quieter than `depotFlag`'s rusted red -- one is a warning

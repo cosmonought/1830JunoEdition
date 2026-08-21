@@ -652,7 +652,9 @@ const MARKET_TOKEN_SCATTER_CSS = `
   transition: transform 140ms ease, opacity 140ms ease;
 }
 .market-token-cluster:hover .market-token {
-  transform: translate(var(--scatter-x, 0px), var(--scatter-y, 0px)) scale(0.72);
+  /* Design note #689: the scale is a variable now. A cluster and a lone token need different amounts of it,
+     and CSS cannot count occupants -- so the call site, which can, supplies it. */
+  transform: translate(var(--scatter-x, 0px), var(--scatter-y, 0px)) scale(var(--scatter-scale, 0.72));
   opacity: 0.88;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -690,6 +692,44 @@ function deriveTokenClusterOffset(
   const radius = Math.min(cellSize * 0.42, Math.max(8, diameterPx * 0.6));
   const angle = (index / count) * 2 * Math.PI - Math.PI / 2;
   return { x: Math.round(Math.cos(angle) * radius), y: Math.round(Math.sin(angle) * radius) };
+}
+
+/** How far a token travels on hover, and how far it shrinks -- design note #689.
+ *
+ *  REPORTED: "the scatter effect on the stock market matrix when there's only one token simply shrinks the
+ *  token in place, but the token (even shrunk) still covers the cell's value."
+ *
+ *  #452 SAID SO ITSELF and read it as a feature: "a lone occupant has a zero offset and does not move --
+ *  correct, since it only needs the scale-down". The premise is the part that does not hold. A lone token
+ *  renders at FULL size by #24(2) -- up to 46px -- and 0.72 of that is still ~33px sitting dead centre, while
+ *  #649 puts every price in the TOP-LEFT corner. The shrink was never going to uncover it, because the token
+ *  does not shrink toward a corner; it shrinks toward the middle, which is where it already was.
+ *
+ *  SO A LONE TOKEN GETS A DIRECTION, and the direction is not arbitrary: away from the price. Down and right is
+ *  the one diagonal with nothing important on it -- the price is top-left (#649), the cliff arrows are top-right
+ *  (#43), and the par badge at bottom-right is 6px of text a 23px disc can sit beside rather than on.
+ *  AND A DEEPER SHRINK WITH IT. Moving alone leaves a big disc overlapping two quadrants; shrinking alone
+ *  uncovers nothing. #452's own finding about clusters -- "either effect alone is insufficient" -- turns out to
+ *  be true of a single token too, which is the part it did not test.
+ *
+ *  THE RESTING POSITION IS UNCHANGED. A lone token still sits centred at full size when nobody is pointing at
+ *  it, which is what #24(2) wanted and what makes the chart readable at a glance. This is the hover vector
+ *  only. */
+export function deriveTokenScatterOffset(
+  restingOffset: { x: number; y: number },
+  count: number,
+  cellSize: number,
+): { x: number; y: number; scale: number } {
+  if (count > 1) {
+    /* A cluster travels along the spoke that already positioned it, so each token moves outward from the
+       middle rather than across its neighbours. */
+    return { x: restingOffset.x * 0.55, y: restingOffset.y * 0.55, scale: 0.72 };
+  }
+  /* Toward the free diagonal. Clamped so the token stays mostly inside its own cell -- the wrapper is
+     `overflow: visible` and a cluster's members already spill a little, but a lone token sliding fully into a
+     neighbouring cell would read as belonging to that price instead. */
+  const travel = Math.min(cellSize * 0.28, 14);
+  return { x: travel, y: travel, scale: 0.5 };
 }
 
 /** Design note #402: the gold frame's border thickness at the original cell size, kept as the ratio
@@ -943,17 +983,20 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
               >
                 {group.occupants.map((occupant, index) => {
                   const offset = deriveTokenClusterOffset(index, occupantCount, cellSize, tokenDiameterPx);
+                  // Design note #689: the hover vector, which is NOT the resting one for a lone token.
+                  const scatter = deriveTokenScatterOffset(offset, occupantCount, cellSize);
                   return (
                     <span
                       key={occupant.company_id}
                       className="market-token"
                       style={{
                         ...styles.tokenBadge,
-                        /* Design note #452: how far and in which direction a token travels on hover, derived from the offset
-                           that already positioned it so it moves along its own spoke. A lone occupant has a zero offset and
-                           does not move -- correct, since it only needs the scale-down. */
-                        ["--scatter-x" as string]: `${offset.x * 0.55}px`,
-                        ["--scatter-y" as string]: `${offset.y * 0.55}px`,
+                        /* Design note #452: how far and in which direction a token travels on hover. A cluster moves along
+                           the spoke that already positioned it; #689 gives a LONE token a direction of its own, because it
+                           has no spoke and shrinking in place never uncovers a price it is centred on. */
+                        ["--scatter-x" as string]: `${scatter.x}px`,
+                        ["--scatter-y" as string]: `${scatter.y}px`,
+                        ["--scatter-scale" as string]: `${scatter.scale}`,
                         backgroundColor: tickerColor(occupant.company_id),
                         // Design note #430: computed ink, for the same
                         // reason the par pill above takes it.

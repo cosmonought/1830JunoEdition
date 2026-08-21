@@ -18,10 +18,16 @@
 //
 // Design notes #2/#3/#4/#483: see `docs/ai_architecture/routing_pathfinding.md`.
 
+/* Design note #686: `liveEdgesForHex` is no longer imported here. The one line that called it -- the start of
+   the walk, taking every rail on a station's hex -- now asks `cityExitEdges`, which answers the same question
+   for a hex with one city and a narrower one for a hex with two.
+   Dropped rather than left imported: this file's whole history is the hex-as-a-node model being removed one
+   caller at a time (#4, #483, and now this), and an unused import of the function that embodies it is an
+   invitation to reach for it again. */
 import {
   HEX_NEIGHBOR_OFFSETS,
+  cityExitEdges,
   evaluateHexForTileLaying,
-  liveEdgesForHex,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { neighbourAcross, traversalsFrom } from "./trackSegments";
@@ -80,10 +86,22 @@ function extensionAcross(
   return { q: nq, r: nr };
 }
 
+/** A token, as `(q, r)` or -- when the chain recorded which slot it sits in
+ *  (`gameState.ts` #560) -- as `(q, r, cityIndex)`.
+ *
+ *  Design note #686: THE THIRD ELEMENT IS THE FIX. `station_token_hexes` cannot
+ *  say which of a two-city hex holds a token, so a walk starting from one had to
+ *  assume both -- and on New York and every OO tile the two cities do not
+ *  connect. `station_tokens` has carried the answer since #560; this is the
+ *  first caller to ask for it.
+ *  OPTIONAL, because a chain predating that field is a real state and the
+ *  fallback is exactly the old behaviour. */
+export type StationToken = readonly [number, number] | readonly [number, number, number];
+
 export interface LayableHexInput {
   mapGrid: MapGridResponse;
-  /** The acting corporation's station tokens, as `(q, r)` pairs. */
-  stationHexes: ReadonlyArray<readonly [number, number]>;
+  /** The acting corporation's station tokens. */
+  stationHexes: ReadonlyArray<StationToken>;
 }
 
 export interface LayableHexResult {
@@ -147,25 +165,38 @@ export interface ReachableTrack {
  *  function's `hexes` and exists because most callers want only that. */
 export function reachableTrack(
   mapGrid: MapGridResponse,
-  stationHexes: ReadonlyArray<readonly [number, number]>,
+  stationHexes: ReadonlyArray<StationToken>,
 ): ReachableTrack {
   const hexes = new Set<string>();
   const ports = new Set<string>();
   /** `q,r:arrivalEdge` -- one hex may legitimately be entered several ways. */
   const visited = new Set<string>();
-  const queue: Array<{ q: number; r: number; arrivalEdge: number | null }> = [];
+  const queue: Array<{
+    q: number;
+    r: number;
+    arrivalEdge: number | null;
+    /** Design note #686: which city this visit started in, for a start only.
+     *  `null` once the walk is on rails -- an arrival edge is a stricter
+     *  answer than a city index and supersedes it. */
+    cityIndex: number | null;
+  }> = [];
 
-  for (const [q, r] of stationHexes) {
+  for (const token of stationHexes) {
+    const [q, r] = token;
     if (!BOARD_KEYS.has(hexKey(q, r))) continue;
     hexes.add(hexKey(q, r));
-    // `null` arrival: a station is entered from inside, so every rail on it
-    // is available.
-    queue.push({ q, r, arrivalEdge: null });
+    /* `null` arrival: a station is entered from inside. Design note #686: from
+       inside ONE CITY, though -- which is the part "every rail on it" got
+       wrong on the hexes that carry two. */
+    queue.push({ q, r, arrivalEdge: null, cityIndex: token.length > 2 ? (token[2] ?? null) : null });
   }
 
   while (queue.length > 0) {
     const at = queue.shift()!;
-    const stateKey = `${hexKey(at.q, at.r)}:${at.arrivalEdge ?? "start"}`;
+    /* Design note #686: a start is keyed by its CITY, so two tokens in the two
+       cities of one hex are two distinct visits rather than one that dedupes
+       the second away. */
+    const stateKey = `${hexKey(at.q, at.r)}:${at.arrivalEdge ?? `start${at.cityIndex ?? ""}`}`;
     if (visited.has(stateKey)) continue;
     visited.add(stateKey);
 
@@ -174,7 +205,7 @@ export function reachableTrack(
        joining the two edges, which is what makes two curves on one tile two curves rather than a junction. */
     const exits =
       at.arrivalEdge === null
-        ? liveEdgesForHex(mapGrid, at.q, at.r)
+        ? cityExitEdges(mapGrid, at.q, at.r, at.cityIndex)
         : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).map((t) => t.exitEdge);
 
     for (const edge of exits) {
@@ -187,7 +218,7 @@ export function reachableTrack(
       const next = neighbourAcross(mapGrid, at.q, at.r, edge);
       if (!next) continue;
       hexes.add(hexKey(next.q, next.r));
-      queue.push({ q: next.q, r: next.r, arrivalEdge: next.arrivalEdge });
+      queue.push({ q: next.q, r: next.r, arrivalEdge: next.arrivalEdge, cityIndex: null });
     }
   }
   return { hexes, ports };
@@ -195,9 +226,32 @@ export function reachableTrack(
 
 export function reachableNetwork(
   mapGrid: MapGridResponse,
-  stationHexes: ReadonlyArray<readonly [number, number]>,
+  stationHexes: ReadonlyArray<StationToken>,
 ): Set<string> {
   return reachableTrack(mapGrid, stationHexes).hexes;
+}
+
+/** A corporation's tokens as the walk wants them: the recorded `(q, r, city)`
+ *  triples when the chain has them, the bare `(q, r)` pairs otherwise.
+ *
+ *  Design note #686: ONE RESOLVER, THREE CALLERS. The tile-lay veil, the token
+ *  placement highlight and `stationTokens`' connectivity refusal all ask this
+ *  walk the same question, and all three read `station_token_hexes` today. Three
+ *  copies of "prefer `station_tokens` when it is there" is three chances to keep
+ *  the old field -- and a board where the veil knows about cities and the token
+ *  gate does not is worse than one where neither does, because the two disagree
+ *  in front of the player.
+ *  `gameState.ts` #560's three states, honoured: absent means "use the
+ *  heuristic", a shorter list means the same for the tokens it does not cover. */
+export function stationTokensOf(company: {
+  station_token_hexes: ReadonlyArray<readonly [number, number]>;
+  station_tokens?: ReadonlyArray<readonly [number, number, number]> | null;
+}): StationToken[] {
+  const recorded = company.station_tokens ?? [];
+  return company.station_token_hexes.map((hex) => {
+    const match = recorded.find(([q, r]) => q === hex[0] && r === hex[1]);
+    return match ?? hex;
+  });
 }
 
 export function layableHexes(input: LayableHexInput): LayableHexResult {

@@ -34,7 +34,7 @@ import HexGridRenderer, {
 } from "./components/HexGridRenderer";
 import { liveEdgesForHex } from "./components/hexGeometry";
 import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
-import { layableHexes, reachableNetwork } from "./utils/trackReach";
+import { layableHexes, reachableNetwork, stationTokensOf } from "./utils/trackReach";
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
@@ -190,6 +190,8 @@ import {
 import { useDocumentTitleFlash } from "./utils/turnAlert";
 import {
   placeParMark,
+  // Design note #688: the invariant that replaced the par-mark edge detector.
+  reconcileParMarks,
   sandboxInitialMarketPrices,
   sandboxMarketPriceTable,
   type SandboxMarketPrices,
@@ -1047,13 +1049,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // disagreeing about where a Stock Round lands.
       setActiveMainTab(surfaceTabFor(currentRoundType));
 
-      /* The privates are paid on this round-change edge and only here - a per-turn trigger would pay them once per company. Sandbox only.
-         See docs/ai_architecture/contract_economy.md - App.tsx #331 */
-      if (sandbox && currentRoundType === "OperatingRound") {
-        payPrivateRevenueRef.current?.();
-      }
+      /* Design note #331 paid the privates on this edge, and design note #685 moved that into the reducer.
+         THE REF IS WHY IT HAD TO MOVE. `prevRoundTypeRef` survives `rebuildSandbox`, so after a rebuild it still
+         read "OperatingRound" while the replay ended in one -- no edge, no payout, and no error anywhere. This
+         effect's OWN job is unaffected by that: picking a tab is idempotent and a missed edge just leaves the
+         player where they were. Moving money on a missed edge is silent, permanent and different per client.
+         See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #685 */
     }
-  }, [gameState?.current_round_type, sandbox]);
+  }, [gameState?.current_round_type]);
 
   // Correctness guard: the tab set changes shape by phase, so the active tab can cease to exist under the player.
   // See docs/ai_architecture/state_machine.md - App.tsx #28
@@ -1310,7 +1313,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
     const reach = layableHexes({
       mapGrid,
-      stationHexes: corporation?.station_token_hexes ?? [],
+      // Design note #686: the recorded city slot travels with the token.
+      stationHexes: corporation ? stationTokensOf(corporation) : [],
     });
     if (reach.unconstrained) return undefined;
     /* The corporation's own network stays lit beside the legal placements; unioned here because this layer has both halves.
@@ -1469,7 +1473,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Design note #241: same three tiers as the tile lay. A token placement
     // is judged against the network it joins, so that network stays lit.
     const visible = new Set<string>(
-      reachableNetwork(mapGrid, activeStationCompany.station_token_hexes),
+      // Design note #686: same resolver as the tile-lay veil, so the two tiers
+      // cannot disagree about where this corporation's network reaches.
+      reachableNetwork(mapGrid, stationTokensOf(activeStationCompany)),
     );
     highlighted.forEach((key) => visible.add(key));
     return {
@@ -2252,37 +2258,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     | null
   >(null);
 
-  /* Reached through a ref for declaration order, and reads sandboxStateRef so the payout is not credited against a stale board.
-     See docs/ai_architecture/contract_economy.md - App.tsx #331 */
-  const payPrivateRevenue = useCallback(() => {
-    const before = sandboxStateRef.current;
-    if (!before) return;
-    const result = applyPrivateRevenue(before);
-    // Identity, not length: `applyPrivateRevenue` returns the same object
-    // when nothing is owed, so this is also the "no re-render" check.
-    if (!result || result.state === before) return;
-
-    sandboxStateRef.current = result.state;
-    setSandboxState(result.state);
-
-    const labelForAddress = (address: string) =>
-      sandboxPlayerLabel(address) ?? truncateAddress(address);
-    const labelForCompany = (companyId: number) =>
-      before.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
-      `company #${companyId}`;
-
-    for (const payout of result.payouts) {
-      logInfoRef.current?.(
-        "Private Revenue",
-        describePrivatePayout(payout, labelForAddress, labelForCompany),
-      );
-    }
-  }, []);
-
-  const payPrivateRevenueRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    payPrivateRevenueRef.current = payPrivateRevenue;
-  }, [payPrivateRevenue]);
+  /* `payPrivateRevenue` and its ref are GONE -- design note #685 moved the payout into `settleRoundTransitions`,
+     where the round machine already lives and where a replay reproduces it.
+     Deleted rather than left unused: a function that moves money, still exported into a ref, is not a dead
+     branch somebody might tidy later -- it is a second way to pay the privates, waiting for a caller.
+     WHAT SURVIVES IS THE LOG LINE, re-derived from the state diff in the sandbox dispatch below, the same way
+     `describeFloat` reports a float nobody explicitly announced.
+     See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #685 */
 
   const runGameplayAction = useCallback(
     async (
@@ -2850,33 +2832,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           });
           /* A float is announced here by diffing before/after, naming the hex the home token landed on. #401: a par is also a cell on the chart.
              See docs/ai_architecture/state_machine.md - App.tsx #400 */
-          if (before) {
-            for (const company of after.public_companies) {
-              const wasUnparred =
-                before.public_companies.find((e) => e.company_id === company.company_id)
-                  ?.par_value ?? null;
-              const wasFloated =
-                before.public_companies.find((e) => e.company_id === company.company_id)
-                  ?.is_floated ?? false;
-              /* The invariant is enforced at FLOAT, not only at par: the B&O's par is set by the auction prompt and never passes through this diff. Idempotent by construction.
-                 See docs/ai_architecture/stock_market.md - App.tsx #468 */
-              const parredNow = wasUnparred === null && company.par_value !== null;
-              const floatedNow = !wasFloated && company.is_floated;
-              if ((parredNow || floatedNow) && company.par_value !== null) {
-                const par = Number(company.par_value);
-                /* Design note #415: `parBoxCellFor`, not `marketCellForPrice`. The
-                   latter resolves a par to the chart's TOP ROW -- see its own
-                   note -- which is what put five of the six par values on the
-                   wrong cell. */
-                setSandboxMarket((prices) => {
-                  const next = placeParMark(prices, company.company_id, par, parBoxCellFor);
-                  /* Write the ref too: the Stock Round close that opens the Operating Round runs in this same dispatch, before React commits.
-                     See docs/ai_architecture/stock_market.md - App.tsx #316 */
-                  if (next !== prices) sandboxMarketRef.current = next;
-                  return next;
-                });
-              }
+          /* Design note #688: EVERY PARRED CORPORATION HAS A MARK, checked as an invariant rather than caught as
+             an edge. #468 enforced it "at FLOAT, not only at par", which was the right instinct chasing the wrong
+             quarry -- both are still transitions, and a transition over an atom a rebuild resets is exactly the
+             #685 failure: a missed edge is silent and permanent, because nothing looks again.
+             `reconcileParMarks` is idempotent (`placeParMark` no-ops on a company that already has a mark, so a
+             token that walked away from its par box is never dragged back), which is what makes running it on
+             every action safe rather than merely cheap.
+             Design note #415 survives inside it: `parBoxCellFor`, not `marketCellForPrice` -- the latter resolves
+             a par to the chart's TOP ROW and put five of six par values on the wrong cell.
+             THE REF IS WRITTEN SYNCHRONOUSLY, out of the state updater it used to hide in. #316 needed the ref
+             fresh because the Stock Round close that opens an Operating Round runs in this same dispatch, before
+             React commits -- and a write buried inside an updater is a side effect in a function React may call
+             twice, or not until flush. Same requirement, honestly met. */
+          {
+            const marked = reconcileParMarks(
+              sandboxMarketRef.current,
+              after.public_companies,
+              parBoxCellFor,
+            );
+            if (marked !== sandboxMarketRef.current) {
+              sandboxMarketRef.current = marked;
+              setSandboxMarket(marked);
             }
+          }
+
+          if (before) {
             for (const company of after.public_companies) {
               const previously = before.public_companies.find(
                 (entry) => entry.company_id === company.company_id,
@@ -2885,6 +2866,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               // where a test can reach it.
               const line = previously ? describeFloat(previously, company) : null;
               if (line) logInfo("Float", line);
+            }
+          }
+
+          /* Design note #685: the private income, REPORTED here and PAID by the reducer.
+             The money moves inside `settleRoundTransitions`, so this only has to say what happened -- the same
+             division `describeFloat` above works to: the reducer settles, the shell narrates.
+             DERIVED FROM `before`, which is safe because nothing in the transition changes who owns a private:
+             `applyPrivateRevenue` is pure, and asking it for its `payouts` list without taking its `state` reads
+             the figures the reducer just paid without paying them again. The harness asserts that equivalence
+             rather than trusting this sentence. */
+          const openedOperatingRound =
+            before !== null &&
+            after !== null &&
+            before.current_round_type !== "OperatingRound" &&
+            after.current_round_type === "OperatingRound";
+          if (openedOperatingRound && before !== null && after !== null) {
+            const settled = after;
+            const labelForAddress = (address: string) =>
+              sandboxPlayerLabel(address) ?? truncateAddress(address);
+            const labelForCompany = (companyId: number) =>
+              settled.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+              `company #${companyId}`;
+            for (const payout of applyPrivateRevenue(before)?.payouts ?? []) {
+              logInfo("Private Revenue", describePrivatePayout(payout, labelForAddress, labelForCompany));
             }
           }
 
@@ -5408,9 +5413,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     (gameState.current_round_type === "StockRound" ||
                       gameState.current_round_type === "WaterfallAuction") ? (
                       <SeatOrderTrail
-                        /* Design note #639: figures for the seats that are
-                           NOT acting -- the trail suppresses them on the lit
-                           segment, where the card below says it properly. */
+                        /* Design note #690: figures for EVERY seat. #639 had the trail
+                           suppress them on the lit segment, back when it sat directly above
+                           the seat card; #630 moved it under the round label and the
+                           adjacency that justified the hole went with it. The caller always
+                           passed all of them -- the suppression was, and is, the
+                           component's own decision. */
                         seats={gameState.player_addresses.map((address, index) => ({
                           address,
                           label: sandboxPlayerLabel(address) ?? truncateAddress(address),
@@ -5576,6 +5584,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     // seat that is up rather than telling the player to
                     // wait for themselves.
                     activePlayerLabel={activeSeatLabel}
+                    /* Design note #682: the acting seat's own colour, for the treasury
+                       projection under Buy/Sell. Resolved the same way the action bar's
+                       seat card resolves it, so one player is one colour on both. */
+                    actingSeatColor={(() => {
+                      if (!gameState) return null;
+                      const acting = actingAddress(gameState, waterfallState);
+                      if (!acting) return null;
+                      const seat = gameState.player_addresses.indexOf(acting);
+                      return seat === -1 ? null : seatColor(acting, seat);
+                    })()}
                     // Design note #41: the roster is readable in every
                     // phase, but shares only trade in a Stock Round.
                     // Design note #464: the card-order boundary.

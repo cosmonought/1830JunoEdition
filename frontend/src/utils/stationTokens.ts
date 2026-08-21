@@ -33,7 +33,7 @@ import {
   tileCitySlotPoints,
 } from "../components/TileGraphics";
 import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
-import { hexKey, reachableNetwork } from "./trackReach";
+import { hexKey, reachableNetwork, stationTokensOf } from "./trackReach";
 
 /** The home token, granted at float rather than bought. */
 export const STATION_TOKEN_HOME_COST = 0;
@@ -225,7 +225,8 @@ export function evaluateStationPlacement(
      A corporation with no token yet has no network to measure, and its first placement is its home city -- which
      the contract grants at float rather than asking for. Rather than guess, that case is allowed through. */
   if (company.station_token_hexes.length > 0) {
-    const network = reachableNetwork(mapGrid, company.station_token_hexes);
+    // Design note #686: the recorded city slot, same resolver as the veil.
+    const network = reachableNetwork(mapGrid, stationTokensOf(company));
     if (!network.has(hexKey(q, r))) {
       return {
         allowed: false,

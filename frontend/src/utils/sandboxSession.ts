@@ -1309,10 +1309,33 @@ function settleRoundTransitions(
   if (state.stock_round_just_ended) {
     /* The queue is built here; leaving it to the caller is what produced an OR with an empty order that advanceCorporation then "recovered" back to 1.1.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
-    return {
+    const opened = {
       ...beginOperatingRound(state, ctx?.marketPriceFor, ctx?.marketMarkFor),
       stock_round_just_ended: false,
     };
+    /* Design note #685: THE PRIVATES ARE PAID HERE, BY THE REDUCER.
+
+       REPORTED as a regression -- "the Private Companies are supposed to pay out their income every Operating
+       Round, and in previous playthroughs they have, but in my latest playthrough they did not."
+
+       They were paid by a REACT EFFECT in the shell, watching `current_round_type` for an edge against a ref.
+       That is precisely the arrangement design note #1206 above removed for the round machine itself -- "the
+       shell used to perform transitions, so a replay rebuilt corporations correctly and left the round wherever
+       the last live dispatch had put it" -- and the payout never got the same treatment.
+
+       IT BROKE THE MOMENT A REBUILD BECAME MORE LIKELY. `rebuildSandbox` resets the board but not the shell's
+       edge-detector ref, so after a rebuild the ref still said "OperatingRound" while the replay ended in one:
+       no edge, no payout, no error. `firebase_middleware.md` #668 replaced a length check with a prefix check,
+       which correctly rebuilds in cases the old one missed -- and each of those newly-correct rebuilds silently
+       skipped a round of private income.
+
+       AND IT COULD NEVER HAVE BEEN RIGHT IN A ROOM. The money moved outside the log, so a client that rebuilt
+       and a client that did not held different treasuries from then on -- the same divergence class the action
+       log itself was hardened against.
+
+       HERE IT IS DETERMINISTIC BY CONSTRUCTION: one place, on the one transition that opens an Operating Round,
+       replayed identically by every client. No ref to go stale, no effect to miss a batch. */
+    return applyPrivateRevenue(opened)?.state ?? opened;
   }
 
   if (state.operating_round_just_ended) {

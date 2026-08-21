@@ -426,6 +426,68 @@ export function liveEdgesForHex(mapGrid: MapGridResponse, q: number, r: number):
   return [];
 }
 
+/** The rails belonging to ONE city of a hex, or every live edge when the hex has only one city, when the slot
+ *  is unknown, or when nothing describes the split.
+ *
+ *  Design note #686: A TOKEN IS IN A CITY, NOT ON A HEX.
+ *
+ *  REPORTED: "on NNH's operating turn, during Lay Track, the H18 hex is getting illuminated as part of its
+ *  network ... NNH has no connectivity to H18."
+ *
+ *  It does not, and the reason is the last surviving piece of the hex-as-a-node model `trackSegments.ts` #0 and
+ *  `trackReach.ts` #4 spent two passes removing. Both fixed the WALK -- it steps `(hex, arrival edge)` states,
+ *  so a crossover is two rails rather than a junction. Neither could fix the START, because a route begins
+ *  inside a city with no arrival edge, and "every rail on the hex" was the only answer available.
+ *
+ *  IT IS THE WRONG ANSWER ON EXACTLY THE HEXES THAT MATTER. New York is `[{edges:[1]}, {edges:[4]}]` -- two
+ *  cities whose spurs do not touch (`hexBoardData` #391 says the same of every OO hex: two revenue centres with
+ *  no connecting track). NNH's home is the top-right city (#584 derived that from the reservation marker), which
+ *  owns edge 1. H18 lies across edge 4, which belongs to the OTHER city. Starting from "all live edges" walked
+ *  NNH out of a city it has no token in.
+ *
+ *  THE SPLIT IS ALREADY AUTHORED, twice, which is why this reads rather than invents: `LANDMARK_TRACKS` lists
+ *  one entry per city, and `TileCatalogEntry.cityGroups` is "the real per-city edge group" for a genuine
+ *  two-city tile.
+ *
+ *  UNKNOWN OPENS THE BOARD UP. `trackReach.ts` #0's rule: the cost of being wrong here is a hex dimmed that
+ *  should not be, so every gap -- no city index recorded, no grouping authored, an index past the end -- falls
+ *  back to every live edge, which is exactly today's behaviour. Nothing is newly hidden except a rail that
+ *  provably belongs to another city. */
+export function cityExitEdges(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  cityIndex: number | null | undefined,
+): number[] {
+  const all = liveEdgesForHex(mapGrid, q, r);
+  if (cityIndex === null || cityIndex === undefined || cityIndex < 0) return all;
+
+  const laidTile = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laidTile) {
+    const groups = TILE_CATALOG_BY_ID.get(laidTile.tile_id)?.cityGroups;
+    if (!groups || groups.length < 2) return all;
+    const group = groups[cityIndex];
+    if (!group) return all;
+    /* `cityGroups` is BASE (pre-rotation) edges, like every other geometry field on the entry -- rotating here
+       is what `rotateConnections` does for the mask, done one edge at a time because a group is a list rather
+       than a bitmask. */
+    const turn = (edge: number) => (edge + (((laidTile.orientation % 6) + 6) % 6)) % 6;
+    const rotated = group.map(turn).filter((edge) => all.includes(edge));
+    return rotated.length > 0 ? rotated : all;
+  }
+
+  const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (landmark) {
+    const segments = LANDMARK_TRACKS[landmark.name] ?? [];
+    if (segments.length < 2) return all;
+    const segment = segments[cityIndex];
+    if (!segment) return all;
+    return [...segment.edges];
+  }
+
+  return all;
+}
+
 /** Centre is occupied by a Single-archetype's always-central circle, OR by track passing through it -- but NEVER on a DoubleCity/DoubleTown hex, which routes track to its own off-centre nodes by construction. Which is exactly why every OO and double-town nameplate already renders dead-centre.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #70 */
 export function hexBlockedSlots(mapGrid: MapGridResponse, q: number, r: number): Set<number> {

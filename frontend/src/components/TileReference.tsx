@@ -131,72 +131,109 @@ export function TileReference({ mapGrid }: TileReferenceProps) {
         </div>
       </div>
 
-      {/* ---- The tray, by tier ---- */}
-      {TIERS.map((tier) => (
-        <div key={tier} style={styles.tierBlock}>
-          <h3 style={{ ...styles.sectionTitle, color: TIER_INK[tier] }}>{tier}</h3>
-          <div style={styles.grid}>
-            {(byTier.get(tier) ?? []).map((tileId) => {
-              const entry = TILE_CATALOG_BY_ID.get(tileId);
-              if (!entry) return null;
-              const targets = graph.successors.get(tileId) ?? [];
-              const supply = stock.get(tileId);
-              const family = FAMILY_FOR_TERRAIN[entry.terrain];
-              const deadEnd = isUpgradeDeadEnd(tileId);
-              return (
-                <article key={tileId} style={styles.card}>
-                  <div style={styles.cardHead}>
-                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={44} />
-                    <div style={styles.cardHeadText}>
-                      <span style={{ ...styles.cardId, color: TIER_INK[tier] }}>#{tileId}</span>
-                      {/* Design note #677: the SUPPLY, which is why a player opens this
-                          tab mid-game. Remaining leads and printed is the context for it;
-                          before a game there is no remaining and the panel says so rather
-                          than showing a full tray as though it were live. */}
-                      <span style={styles.supply}>
-                        {supply
-                          ? live
-                            ? `${supply.remaining} of ${supply.printed} left`
-                            : `${supply.printed} in the tray`
-                          : "—"}
-                      </span>
-                    </div>
-                  </div>
+      {/* ---- The trays ---- */}
+      {/* Design note #692: A TRAY IS THE BOX. THE TILES ARE NOT.
+         REPORTED: "I didn't actually register these as being in a tray because the header for them (Yellow,
+         Green and Brown) live in a shared background and each tile is in its own box."
+         That is the diagnosis and it is exact -- the grouping was inverted. #677 gave every tile a bordered
+         card and gave the tier nothing but a heading floating above a grid, so 46 boxes competed with each
+         other while the thing they were meant to belong to had no edges at all. "Messy" is what an inverted
+         hierarchy looks like.
+         SO THE TIER TAKES THE BORDER and the heading sits ON it; the tiles are loose contents. Nothing about
+         the information changed -- only which level of it is drawn as an object. */}
+      {TIERS.map((tier) => {
+        const ids = byTier.get(tier) ?? [];
+        const isTopTier = tier === TIERS[TIERS.length - 1];
+        return (
+          <section
+            key={tier}
+            style={{ ...styles.tray, borderColor: TIER_INK[tier] }}
+            aria-label={`${tier} tiles`}
+          >
+            <header style={styles.trayHead}>
+              <h3 style={{ ...styles.trayTitle, color: TIER_INK[tier] }}>{tier}</h3>
+              {/* Design note #692: "Top tier -- nothing replaces it" was on all EIGHTEEN brown tiles, and it
+                  is a fact about the TIER. Said once, on the thing it is true of. `PlayerCards` #567 removed
+                  three marks on the same reasoning: a caption repeated on every member of a group is telling
+                  the reader about the group in the least efficient available place. */}
+              <span style={styles.trayNote}>
+                {isTopTier
+                  ? "The top tier — nothing replaces these."
+                  : `${ids.length} tiles`}
+              </span>
+            </header>
 
-                  {family && (
-                    <p style={styles.restriction} title={FAMILY_BLURB[family]}>
-                      <span style={styles.familyTag}>{family}</span> {FAMILY_BLURB[family]}
-                    </p>
-                  )}
+            <div style={styles.trayContents}>
+              {ids.map((tileId) => {
+                const entry = TILE_CATALOG_BY_ID.get(tileId);
+                if (!entry) return null;
+                const targets = graph.successors.get(tileId) ?? [];
+                const supply = stock.get(tileId);
+                const family = FAMILY_FOR_TERRAIN[entry.terrain];
+                return (
+                  /* Design note #692: no border, no background. A tile is contents, and its own artwork is
+                     already a bounded shape -- a box around a hexagon is a box around something that did not
+                     need one. */
+                  <div key={tileId} style={styles.trayTile}>
+                    {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
+                        44 a green city and a green crossover are two dark hexagons -- which is the reading the
+                        report is describing when it says the page looks messy. */}
+                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={64} />
 
-                  <div style={styles.upgradeRow}>
-                    {targets.length > 0 ? (
-                      <>
-                        <span style={styles.upgradeLabel}>Upgrades to</span>
+                    <span style={{ ...styles.tileId, color: TIER_INK[tier] }}>
+                      #{tileId}
+                      {family && (
+                        <span style={styles.familyTag} title={FAMILY_BLURB[family]}>
+                          {family}
+                        </span>
+                      )}
+                    </span>
+
+                    {/* Design note #677: the SUPPLY, which is why a player opens this tab mid-game. */}
+                    <span style={styles.supply}>
+                      {supply
+                        ? live
+                          ? `${supply.remaining} / ${supply.printed}`
+                          : `${supply.printed} in tray`
+                        : "—"}
+                    </span>
+
+                    {/* Design note #692: the upgrades as bare numbered chips, with no "Upgrades to" caption.
+                        An arrow and a tier-coloured number say it in the space a label was taking, and the
+                        caption was repeated 28 times to explain a relationship the arrow states once. */}
+                    {targets.length > 0 && (
+                      <span style={styles.upgradeRow}>
+                        <span style={styles.arrow} aria-hidden="true">→</span>
                         {targets.map((id) => (
                           <TileChip key={id} tileId={id} />
                         ))}
-                      </>
-                    ) : deadEnd ? (
-                      /* Design note #677: NOT THE SAME AS "nothing follows brown". A yellow
-                         or green tile with no successor fixes its hex at that colour for the
-                         rest of the game, which is a cost the player is choosing to pay when
-                         they lay it -- and the reason to say it in words rather than leaving
-                         an empty row the reader has to interpret. */
-                      <span style={styles.deadEnd}>
-                        No upgrade — this fixes the hex at {tier.toLowerCase()} for the rest of
-                        the game.
                       </span>
-                    ) : (
-                      <span style={styles.topTier}>Top tier — nothing replaces it.</span>
+                    )}
+
+                    {/* Design note #677: NOT THE SAME AS "nothing follows brown", which is why this survives
+                        while the top-tier line moved to the heading. A yellow or green tile with no successor
+                        fixes its hex at that colour for the rest of the game -- a cost the player is choosing
+                        to pay, true of eight tiles rather than of a whole tier.
+                        `isUpgradeDeadEnd`, NOT `!isTopTier && targets.length === 0`. The first draft of this
+                        tray inlined that expression and left the import unused, which is how it was caught --
+                        the predicate is the util's (`tileUpgrades.ts` #675), it already draws exactly this
+                        distinction, and it is tested. A second copy here is a second opinion about which
+                        tiles are dead ends. */}
+                    {isUpgradeDeadEnd(tileId) && (
+                      <span
+                        style={styles.deadEnd}
+                        title={`No green or brown tile can replace #${tileId}, so laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`}
+                      >
+                        No upgrade
+                      </span>
                     )}
                   </div>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
     </section>
   );
 }
@@ -247,62 +284,75 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: "#c8cbd6",
   },
-  tierBlock: { display: "flex", flexDirection: "column", gap: "10px" },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-    gap: "10px",
-  },
-  card: {
+  /* Design note #692: THE TRAY IS THE OBJECT. A tinted panel with the tier's own colour on its edge, holding
+     loose tiles -- the inversion the report identified, corrected. The border takes the tier ink at the call
+     site so the three trays are one shape in three colours rather than three styles. */
+  tray: {
     display: "flex",
     flexDirection: "column",
-    gap: "8px",
-    padding: "10px 12px",
-    backgroundColor: "#161922",
-    border: "1px solid #2a2e3a",
-    borderRadius: "10px",
+    gap: "12px",
+    padding: "14px 16px 16px",
+    backgroundColor: "#12151d",
+    border: "1px solid",
+    /* Overridden per tier; a neutral here so a missing colour degrades to a
+       visible tray rather than an invisible one. */
+    borderColor: "#2a2e3a",
+    borderRadius: "12px",
   },
-  cardHead: { display: "flex", alignItems: "center", gap: "10px" },
-  cardHeadText: { display: "flex", flexDirection: "column", gap: "1px" },
-  cardId: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 700,
+  trayHead: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "10px",
+    flexWrap: "wrap",
   },
-  supply: {
-    fontSize: FONT_SIZE.small,
-    fontVariantNumeric: "tabular-nums",
-    color: "#9aa0ac",
-  },
-  restriction: { margin: 0, fontSize: FONT_SIZE.micro, lineHeight: 1.4, color: "#e0b062" },
-  familyTag: {
-    display: "inline-block",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    padding: "1px 5px",
-    borderRadius: "4px",
-    border: "1px solid #6b5a2a",
-    backgroundColor: "#241f12",
-    color: "#e0c07a",
-  },
-  upgradeRow: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" },
-  upgradeLabel: {
-    fontSize: FONT_SIZE.micro,
+  trayTitle: {
+    margin: 0,
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: "#8a90a0",
   },
-  chip: { display: "inline-flex", alignItems: "center", gap: "4px" },
-  chipId: {
+  /* The tier's own one-line note -- a count, or #692's single statement that brown ends every chain. */
+  trayNote: { fontSize: FONT_SIZE.small, color: "#8a90a0" },
+  /* `auto-fill` at a width that fits the 64px artwork plus its figures. The tiles reflow; the tray does not
+     scroll, because a tray you have to scroll inside is a list wearing a border. */
+  trayContents: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))",
+    gap: "16px 12px",
+  },
+  /* Design note #692: contents, not cards. No border, no fill -- the hexagon is already a bounded shape. */
+  trayTile: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "3px",
+    textAlign: "center",
+  },
+  tileId: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.micro,
+    fontSize: FONT_SIZE.body,
     fontWeight: 700,
   },
+  upgradeRow: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
+  /* Design note #692: the "Upgrades to" caption is GONE -- 28 repetitions of a label for a relationship the
+     arrow beside it states. What survives is the arrow and the tier-coloured ids, which is the same sentence
+     in a third of the width. */
   arrow: { color: "#8a90a0", fontSize: FONT_SIZE.body },
   /* Amber, matching the app's other "a rule constrains you here" marks rather
      than red -- a tile with no upgrade is a trade-off, not an error. */
-  deadEnd: { fontSize: FONT_SIZE.micro, lineHeight: 1.4, color: "#e0c07a" },
-  topTier: { fontSize: FONT_SIZE.micro, lineHeight: 1.4, color: "#6f7480" },
+  /* Design note #692: two words, not a sentence. The sentence ("this fixes the hex at yellow for the rest of
+     the game") is the tooltip's job now -- on a tile in a tray, the point is that this one is DIFFERENT from
+     its neighbours, and two amber words say that at a glance where a clause has to be read.
+     `topTier` is DELETED: it said the same thing on all eighteen brown tiles and now sits on the tray. */
+  deadEnd: { fontSize: FONT_SIZE.micro, fontWeight: 700, lineHeight: 1.4, color: "#e0c07a" },
 };

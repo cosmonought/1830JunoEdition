@@ -877,11 +877,24 @@ export const styles: Record<string, React.CSSProperties> = {
      NO `borderRadius: 999px`: the pill shape is what made the old badge read as a tag ABOUT something rather
      than as the thing itself (#603 worked through the same distinction). A card is a rectangle.
      Background and border come from the CALL SITE, because only it knows the seat; everything that can be
-     fixed is fixed here so the two cards cannot drift in shape while differing in colour. */
+     fixed is fixed here so the two cards cannot drift in shape while differing in colour.
+     Design note #678: PROPORTIONS, NOT AXIS. Matching `orContextCard` meant its padding, radius and border --
+     copying its column too was the part that did not follow, and it is the part that cost a row. */
+  /* Design note #678: ONE ROW. The card stacked the name over the figures, and reported as "taking up vertical
+     screen real estate" for nothing -- which is right, and the reason is that #631 borrowed a COLUMN from
+     `orContextCard` along with its proportions. That card is a column because it has four things to say
+     (acronym, full name, a rail of figures, privates); this one has a name and at most two numbers, so the
+     column bought a second line of bar height to hold whitespace.
+     BASELINE, not centre: the name is 14/800 and the figures 13/800 under a 10px caption, and centring three
+     type sizes leaves the digits floating against the name. Sitting them on a shared baseline is what makes
+     "Bradshaw  CASH $500" read as one line rather than as three things that happen to be adjacent.
+     THE STACK WAS NEVER LOAD-BEARING -- #631's argument was about labelling the figures so a second number is
+     not read as a delta on the first, and the labels do that inline exactly as well. */
   seatContextCard: {
     display: "inline-flex",
-    flexDirection: "column",
-    gap: "2px",
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: "12px",
     padding: "5px 12px",
     borderRadius: "8px",
     borderWidth: "1px",
@@ -896,8 +909,11 @@ export const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.15,
   },
   seatContextFigures: { display: "inline-flex", alignItems: "baseline", gap: "12px" },
-  /* Design note #631: label above value, not "$500 (+$200)". The label is
-     what stops a second figure being read as a delta on the first. */
+  /* Design note #631: a NAMED figure, not "$500 (+$200)". The label is what stops a second figure being read
+     as a delta on the first -- escrowed money is the opposite of income, and a plus sign cannot carry that.
+     Design note #678: the note used to say "label above value", which the style has never done -- these are
+     baseline-aligned at a 4px gap and always have been. Corrected rather than left, because the card just
+     moved onto one row and a stale note claiming a stack is how the stack comes back. */
   seatContextFact: { display: "inline-flex", alignItems: "baseline", gap: "4px" },
   seatContextFactLabel: {
     fontSize: "10px",

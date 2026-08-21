@@ -68,7 +68,9 @@ export interface RadialTileSelectorProps {
      `utils/pendingTileCost.ts` from the same `terrainBuildFeeAt` the board badge prints and the reducer
      charges, so the three cannot disagree about a figure the player is about to commit to.
      A STRING, like `tokenNote` and for the same reason: this component renders a caption. `null` for a free
-     lay -- most hexes, and every upgrade, since 1830 bills the ground once. */
+     lay -- most hexes, and every upgrade, since 1830 bills the ground once.
+     Design note #684: shown only while PREVIEWING, like `tokenNote` -- the choosing stage's ring covers the
+     caption slot. See the `cost=` prop below for the geometry that decides it. */
   costNote?: string | null;
   /* Design note #488b: the caption's picture. #271b answered "which half" with a sentence; this is the same
      answer drawn on the tile, and the two MUST come from one computation or the ring can say "city 2 of 2"
@@ -231,7 +233,12 @@ export interface RadialConfirmRingProps {
   /** Design note #673: what pressing the tick will cost, and what it leaves.
    *  `null` when it is free -- most hexes are, and a permanent "Costs $0"
    *  teaches a player to stop reading the line that matters on the two
-   *  terrains where it does. */
+   *  terrains where it does.
+   *
+   *  Design note #684: `null` at the CHOOSING stage too. The caller decides,
+   *  because the caller is the one that knows which stage it is in -- this
+   *  component draws a caption and does not get an opinion about when a fee is
+   *  worth stating. */
   cost?: string | null;
   /** How far out the ring's own contents sit, so the buttons and caption
    *  clear them. */
@@ -476,11 +483,22 @@ export function RadialTileSelector({
       // Design note #271b: only while a tile is actually being previewed --
       // before that there is no destination to describe.
       note={previewing ? (tokenNote ?? undefined) : undefined}
-      /* Design note #673: BOTH STAGES, unlike the note above. The terrain fee is a property of the GROUND
-         (`sandboxSession.ts` #432 -- "the fee belongs to the ground, not the tile"), so it is known the moment
-         the ring opens and before any tile has been chosen. Withholding it until the preview stage would make a
-         player pick a tile for a hex they were never going to build on. */
-      cost={costNote}
+      /* Design note #673 argued BOTH STAGES: the terrain fee is a property of the GROUND (`sandboxSession.ts`
+         #432 -- "the fee belongs to the ground, not the tile"), so it is known the moment the ring opens, and
+         withholding it would let a player pick a tile for a hex they were never going to build on.
+
+         Design note #684: THAT WAS TRUE ABOUT THE DATA AND WRONG ABOUT THE SCREEN. Reported: during the choosing
+         stage the caption is "almost completely covered by the radial menu".
+         It is, and the geometry says so plainly. The caption is positioned at `-radius`, and #174 made that
+         radius GROW WITH THE CANDIDATE COUNT -- so on the choosing stage it sits inside a ring of thumbnails
+         rather than above it. Previewing hides the ring and collapses the radius to `ringRadiusFor(0)`, which is
+         the only stage where anything anchored to it has clear space.
+         SO IT FOLLOWS `note` AFTER ALL, and for a reason #271b never had to state: not "there is nothing to say
+         yet" but "there is nowhere to say it". A fee a player cannot read is not an early warning.
+         THE COST IS NOT LOST AT THE CHOOSING STAGE -- `HexGridRenderer` #136 prints the terrain badge on the hex
+         itself, which is what the player is looking at, and the corporation card's provisional treasury (#673)
+         updates the moment the ring opens. This caption was the third telling of it, and the one with no room. */
+      cost={previewing ? costNote : null}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
       /* Design note #471: the candidate ring's X sits behind its own top

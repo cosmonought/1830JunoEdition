@@ -30,12 +30,13 @@ export interface SeatOrderTrailProps {
        correct answer to a duplication problem -- the acting seat's cash appeared on the trail AND on the card
        beneath it -- but it also took away every OTHER seat's, which was never duplicated anywhere on the sticky
        bar. #342's rule survives after all: in an auction the question that decides a bid is what can THEY spend.
-       SO THE FIGURE IS SUPPRESSED ON EXACTLY ONE SEGMENT -- the lit one. The card below states it in full,
-       labelled, with escrow spelled out; the trail would repeat it two inches away in the compressed form that
-       caused the "+$200 looks like earnings" reading in the first place.
-       IT ALSO KEEPS SIX SEATS FITTING: dropping ~35px from the busiest segment is width bought back where the row
-       needs it. ESCROW RIDES WITH IT and is likewise inactive-only -- it is the number that decides whether a
-       rival can still raise. */
+       Design note #690: EVERY SEAT, INCLUDING THE ACTING ONE. #639 suppressed the figure on the lit segment
+       because the card sat directly beneath the trail; #630 has since moved the trail under the round label, so
+       the adjacency the argument rested on is gone. The row now reports one thing about every seat rather than
+       carrying a hole that travels along it as the turn passes.
+       #639's SECOND REASON was width -- "dropping ~35px from the busiest segment keeps six seats fitting". Given
+       up knowingly: a row that wraps is a row that wraps, and #590 settled that deciding for the player which
+       facts they may keep is the worse trade. ESCROW RIDES WITH IT, on the same rule. */
     available?: number | null;
     /** Design note #317: what is locked in standing bids. Zero or omitted
      *  outside the auction, where there is no escrow to report. */
@@ -141,16 +142,30 @@ export function SeatOrderTrail({
                 {seat.passed && !isCurrent && (
                   <span style={styles.passedTag}>PASSED</span>
                 )}
-                {/* Design note #639: the acting seat's own money is on the
-                    card below, labelled. Repeating it here compressed is the
-                    duplication #637 removed. */}
-                {!isCurrent && typeof seat.available === "number" && (
+                {/* Design note #639 suppressed these on the LIT segment: the acting seat's own money was on the
+                    card directly below, labelled, and repeating it compressed two inches away was the duplication
+                    #637 removed.
+                    Design note #690: THE TWO ARE NO LONGER TWO INCHES APART. #630 moved the trail out of the button
+                    row and under the round label, so the trail and the seat card are no longer a stacked pair --
+                    and the argument was always about that adjacency rather than about the figures themselves.
+                    WHAT THE SUPPRESSION COST is a row that changes shape as the turn passes: five seats carrying a
+                    figure and one conspicuously not, with the gap travelling along the row. A reader scanning "what
+                    can each of them spend" hits a hole exactly where the answer matters most, and has to know WHY
+                    it is missing to know it is not zero.
+                    ONE RULE FOR EVERY SEAT, therefore. #342's reasoning is unchanged and now simply applies
+                    everywhere: in an auction the question that decides a bid is what each seat can spend, and that
+                    includes the seat about to bid.
+                    THE CARD KEEPS ITS OWN COPY, deliberately. It states the figure labelled and with escrow spelled
+                    out; this states it compressed, in a row built for comparing seats. Two renderings of one fact
+                    is only a fault when they are read as one thing -- #637's actual complaint -- and a trail and a
+                    card are not. */}
+                {typeof seat.available === "number" && (
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
                      spent. */
                   <span style={styles.cash}>${seat.available}</span>
                 )}
-                {!isCurrent && typeof seat.escrowed === "number" && seat.escrowed > 0 && (
+                {typeof seat.escrowed === "number" && seat.escrowed > 0 && (
                   <span
                     style={styles.escrow}
                     title={`$${seat.escrowed} of ${seat.label}'s money is committed to standing bids. It is not spendable now, and it comes back if those bids lose.`}
@@ -309,7 +324,10 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #639: back, and inactive-only. `escrow` stays deliberately
      quiet -- it qualifies the figure beside it rather than competing with
      it, and on a segment that is already the dim half of the row it does not
-     need to shout. */
+     need to shout.
+     Design note #690: no longer inactive-only. The weight stands unchanged on the lit segment, which inherits
+     its own brighter ink from the segment rather than from here -- so the acting seat's figure reads as part of
+     the highlighted chip without needing a second rule. */
   cash: { fontWeight: 800 },
   escrow: { fontSize: "10px", fontWeight: 600, opacity: 0.65 },
 };

@@ -24,6 +24,13 @@ import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
 import { TrainChips } from "./TrainBadges";
 // Design note #410: the corporate herald, shared with the action panel.
 import { CorporateLogo } from "./CorporateLogo";
+// Design note #682: what a buy or a sale leaves the player holding, and which
+// way it moves. The colour rule lives there because it is a claim about meaning.
+import {
+  describeTreasuryProjection,
+  projectTreasury,
+  type TreasuryProjection,
+} from "../utils/treasuryProjection";
 import {
   allowsMultipleBankPoolBuys,
   marketZoneForPrice,
@@ -82,6 +89,11 @@ export interface StockRoundPanelProps {
   hotseat?: boolean;
   /** Whose turn it is, already resolved to a name. */
   activePlayerLabel?: string | null;
+  /** Design note #682: the acting seat's own colour, for the treasury block.
+   *  `null` when it is not known -- the block then falls back to the card's ink
+   *  rather than inventing a seat, which is the same rule `playerLabel` follows
+   *  for a name it cannot resolve. */
+  actingSeatColor?: string | null;
   /** F-6: the connected wallet, needed to find THIS player's own stake in
    *  `player_holdings` and so bound the sell sizes to what they can actually
    *  cover. `null` when disconnected, which zeroes every option -- correct,
@@ -151,6 +163,8 @@ function CorporationRoster({
   onBuyShare,
   onSellShares,
   controlsDisabled,
+  controlsBlockedReason,
+  actingSeatColor,
   tradingOpen,
 }: {
   publicCompanies: readonly PublicCompanyState[];
@@ -183,6 +197,12 @@ function CorporationRoster({
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
+  /** Design note #681: why, when `controlsDisabled` is true. Threaded to the
+   *  cards so a greyed control can answer for itself -- a button that cannot
+   *  say why it is out reads as broken rather than as barred. */
+  controlsBlockedReason: string | null;
+  /** Design note #682: the acting seat's colour, for the treasury block. */
+  actingSeatColor: string | null;
   /** Design note #417: `false` outside a Stock Round -- each card then
    *  renders no trading controls at all. */
   tradingOpen: boolean;
@@ -650,6 +670,8 @@ function CorporationRoster({
               onBuyShare={onBuyShare}
               onSellShares={onSellShares}
               controlsDisabled={controlsDisabled}
+              controlsBlockedReason={controlsBlockedReason}
+              actingSeatColor={actingSeatColor}
               // Design note #417: no Stock Round, no controls at all.
               tradingOpen={tradingOpen}
             />
@@ -703,6 +725,8 @@ function CompanyActions({
   onBuyShare,
   onSellShares,
   controlsDisabled,
+  controlsBlockedReason,
+  actingSeatColor,
   tradingOpen,
 }: {
   company: PublicCompanyState;
@@ -719,6 +743,10 @@ function CompanyActions({
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
+  /** Design note #681: why, when `controlsDisabled` is true. */
+  controlsBlockedReason: string | null;
+  /** Design note #682: the acting seat's colour, for the treasury block. */
+  actingSeatColor: string | null;
   /** Design note #417: whether shares can be traded AT ALL right now, i.e.
    *  whether this is a Stock Round. `false` renders no controls -- not
    *  disabled ones. */
@@ -824,6 +852,21 @@ function CompanyActions({
   const bankPoolPercent = company.bank_pool_percentage;
   const selectedSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
 
+  /* Design note #683: whether a treasury projection is attached beneath each action, hoisted because THREE
+     things read it -- the block itself, and the two controls above it that square their bottom corners to meet
+     it. Written three times these drift, and the visible failure is a button squared off above nothing, which
+     reads as a clipping bug rather than as a missing figure.
+     BOTH ARE SILENT WITHOUT A PRICE OR A BALANCE: there is no subtraction to show, and inventing "$0 left" is
+     the failure this codebase keeps removing. The sell side is silent in SR1 too -- quoting proceeds beside a
+     button banned for the round would price an action nobody can take (#577). */
+  const showBuyProjection =
+    priceKnown && typeof playerCash === "number" && totalCost !== null;
+  const showSellProjection =
+    !sellingForbidden &&
+    selectedSellState.enabled &&
+    typeof playerCash === "number" &&
+    typeof unitPrice === "number";
+
   /* Design note #417: outside a Stock Round there are no controls -- hidden, not disabled.
      #32 argued a disabled button beats a rejected transaction; the real choice is between a disabled
      button and NO button, and a disabled control claims the action is available here and fixable. The
@@ -884,8 +927,22 @@ function CompanyActions({
            through and its reason on hover, sitting ON the Buy row so it reads as one sentence.
            THE DEFAULT is handled by the effect below, which re-points `source` at the first stocked pool and runs
            on mount, covering the "one is empty" case at first render. */}
+        {/* Design note #683: computed once, because THREE things depend on it -- whether the block renders,
+           whether the button squares its bottom corners, and whether the source toggle does. Written three
+           times, they drift, and the failure is a button squared off above nothing. */}
+        {/* Design note #683: the row and its projection share an edge, so they need a container that does NOT
+           space them -- `cardActionsBlock`'s 6px gap is right between the label and the controls and wrong
+           between a control and the base attached to it. */}
+        <div style={styles.attachedGroup}>
         <div style={styles.buyRow}>
-          <div style={styles.sourceSwitch} role="group" aria-label="Share source">
+          <div
+            style={{
+              ...styles.sourceSwitch,
+              ...(showBuyProjection ? styles.attachedAbove : {}),
+            }}
+            role="group"
+            aria-label="Share source"
+          >
             {(["Ipo", "Bank"] as const).map((option) => {
               const available = option === "Ipo"
                 ? company.ipo_pool_percentage > 0
@@ -895,22 +952,28 @@ function CompanyActions({
                   key={option}
                   type="button"
                   aria-pressed={source === option}
+                  /* Design note #681 (sweep): it computed a look for an EMPTY source and none for a
+                     disabled one, so off-turn -- or before the session key was ready -- the toggle stayed
+                     fully lit while refusing every click. Both reasons grey it now, and `controlsBlockedReason`
+                     answers when the source itself is fine and the moment is not. */
                   style={{
                     ...styles.sourceSwitchOption,
                     ...(source === option && available ? styles.sourceSwitchOptionActive : {}),
                     // Inline styles cannot express `:disabled` (Lobby.tsx
                     // design note #3), so the disabled look is computed.
                     ...(available ? {} : styles.sourceSwitchOptionEmpty),
+                    ...(controlsDisabled ? styles.actionButtonDisabled : {}),
                   }}
                   disabled={controlsDisabled || !available}
                   title={
-                    available
+                    !available
                       ? option === "Ipo"
-                        ? `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
-                        : `Buy from the Bank Pool at market price. ${company.bank_pool_percentage}% left.`
-                      : option === "Ipo"
                         ? "The IPO Warehouse is empty."
                         : "The Bank Pool is empty."
+                      : (controlsBlockedReason ??
+                        (option === "Ipo"
+                          ? `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
+                          : `Buy from the Bank Pool at market price. ${company.bank_pool_percentage}% left.`))
                   }
                   onClick={() => setSource(option)}
                 >
@@ -928,7 +991,12 @@ function CompanyActions({
           {availableSources.length === 0 ? (
             <button
               type="button"
-              style={{ ...styles.actionButton, ...styles.soldOutButton }}
+              style={{
+                ...styles.actionButton,
+                ...styles.buyButtonFill,
+                ...(showBuyProjection ? styles.attachedAbove : {}),
+                ...styles.soldOutButton,
+              }}
               disabled
               title={`Every ${company.ticker} certificate is held by players — the IPO and the Bank Pool are both empty.`}
             >
@@ -944,13 +1012,18 @@ function CompanyActions({
                  that silently refuses the click. Inline styles cannot express `:disabled` (`Lobby.tsx #3`). */
               style={{
                 ...styles.actionButton,
+                ...styles.buyButtonFill,
+                ...(showBuyProjection ? styles.attachedAbove : {}),
                 ...(controlsDisabled || cannotAfford ? styles.actionButtonDisabled : {}),
               }}
               disabled={controlsDisabled || cannotAfford}
+              /* Design note #681: #466 got the LOOK right here and left the tooltip saying nothing
+                 for every reason but affordability. Cost leads because it is the specific one; the
+                 shared reason answers the rest. */
               title={
                 cannotAfford
                   ? `Insufficient funds — costs $${totalCost}, you hold $${playerCash}.`
-                  : undefined
+                  : (controlsBlockedReason ?? undefined)
               }
             >
               {/* Design note #35: one computed label, so the price cannot
@@ -958,29 +1031,19 @@ function CompanyActions({
               {buyLabel}
             </button>
           )}
-          {/* Design note #577: WHAT IT LEAVES YOU WITH. The price is on the button; what the button cannot say is
-             the thing a player decides on -- not "does this cost $67" but "can I still start the C&O afterwards".
-             BESIDE THE BUTTON, NOT INSIDE IT: the label already carries the certificate, quantity and price, and a
-             fourth figure would move every time the quantity selector moved.
-             Silent without a price or a balance -- there is no subtraction to show, and inventing "$0 left" is the
-             failure this codebase keeps removing. */}
-          {priceKnown && typeof playerCash === "number" && totalCost !== null && (
-            <span
-              style={{
-                ...styles.cashAfter,
-                ...(cannotAfford ? styles.cashAfterShort : {}),
-              }}
-              title={
-                cannotAfford
-                  ? `You hold $${playerCash} and this costs $${totalCost}.`
-                  : `$${playerCash} now, $${playerCash - totalCost} after this purchase.`
-              }
-            >
-              {cannotAfford
-                ? `$${playerCash} — $${totalCost - playerCash} short`
-                : `$${playerCash} → $${playerCash - totalCost}`}
-            </span>
-          )}
+        </div>
+
+        {/* Design note #682: #577's figure, moved out of the button row and given a shape. Its own reasoning is
+           unchanged and still right -- the price is on the button, and this is the thing the button cannot say.
+           Silent without a price or a balance: there is no subtraction to show, and inventing "$0 left" is the
+           failure this codebase keeps removing. */}
+        {showBuyProjection && (
+          <TreasuryProjectionBlock
+            projection={projectTreasury(playerCash as number, -(totalCost as number))}
+            seatColor={actingSeatColor}
+            action="purchase"
+          />
+        )}
         </div>
 
         {/* Design note #33: the Brown zone's multi-buy. Brown is the only zone where a player may take several
@@ -992,11 +1055,18 @@ function CompanyActions({
         {multiBuyMax > 1 && (
           <div style={styles.multiBuyRow}>
             <span style={styles.cardActionsLabel}>Quantity</span>
+            {/* Design note #681 (sweep): a `<select>` needs this as much as a button does. A form control
+                with an authored background does not take the browser's own disabled rendering, so this was
+                the third control in the file passing `disabled` and looking available. */}
             <select
-              style={styles.multiBuySelect}
+              style={{
+                ...styles.multiBuySelect,
+                ...(controlsDisabled ? styles.actionButtonDisabled : {}),
+              }}
               value={Math.min(buyQuantity, multiBuyMax)}
               onChange={(event) => setBuyQuantity(Number(event.target.value))}
               disabled={controlsDisabled}
+              title={controlsBlockedReason ?? undefined}
               aria-label="Number of bank pool shares to buy"
             >
               {Array.from({ length: multiBuyMax }, (_, index) => index + 1).map((n) => (
@@ -1055,12 +1125,15 @@ function CompanyActions({
                   // rather than a custom one: a disabled button does not
                   // fire pointer events in every browser, so a JS-driven
                   // tooltip is unreliable in exactly the state it is needed.
-                  title={state.reason}
+                  title={state.reason ?? controlsBlockedReason ?? undefined}
                   aria-pressed={active}
                   style={{
                     ...styles.sellSlashOption,
                     ...(active ? styles.sellSlashOptionActive : {}),
                     ...(state.enabled ? {} : styles.sellSlashOptionDisabled),
+                    // Design note #681 (sweep): the size buttons had a look for
+                    // an illegal SIZE and none for a blocked moment.
+                    ...(controlsDisabled ? styles.actionButtonDisabled : {}),
                   }}
                   disabled={controlsDisabled || !state.enabled}
                   onClick={() => setSellPercentage(pct)}
@@ -1089,36 +1162,62 @@ function CompanyActions({
          action of this panel, barred for one round and legal in every round after, so a disabled button carrying
          the reason teaches a rule the player will need next round.
          THE REASON IS ON THE BUTTON, not only in a tooltip -- the label itself changes. */}
-      {playerHoldingPercent > 0 && (
-      <button
-        type="button"
-        style={styles.actionButton}
-        onClick={() => onSellShares(company.company_id, sellPercentage)}
-        disabled={controlsDisabled || sellingForbidden || !selectedSellState.enabled}
-        title={
-          sellingForbidden
-            ? "No selling in the first Stock Round — 1830 opens the market to sales from SR2 onward."
-            : undefined
-        }
-      >
-        {sellingForbidden ? "Selling Opens in SR2" : `Sell ${sellPercentage}% Bundle`}
-      </button>
-      )}
+      {/* Design note #679: AND IT HAS TO LOOK BARRED. Reported: "Selling Opens in SR2" is the same colour as the
+         Buy buttons beside it, so a rule the panel is trying to teach reads as a control the player simply has
+         not pressed yet.
+         #418 above got the ENFORCEMENT right and stopped one line short of the appearance -- the button passes
+         `disabled` and spread no disabled style, which is the exact failure #466 names two hundred lines down
+         ("inline styles cannot express `:disabled`, so every disabled control here computes its own look") and
+         #619 found three of in the action bar. The style already existed; the Buy button beside it already used
+         it.
+         ONE EXPRESSION, TWO USES. The condition is hoisted rather than written twice, because the two copies
+         drifting apart -- a button greyed but live, or live but grey -- is a worse bug than either state and is
+         how this one arrived. */}
+      {/* Design note #683: the sell button's own zero-gap group, same reasoning as the buy row above. */}
+      <div style={styles.attachedGroup}>
+      {playerHoldingPercent > 0 && (() => {
+        const sellDisabled =
+          controlsDisabled || sellingForbidden || !selectedSellState.enabled;
+        return (
+          <button
+            type="button"
+            style={{
+              ...styles.actionButton,
+              // Design note #682: the same fill as Buy, so the two sides of the
+              // card present one shape.
+              ...styles.buyButtonFill,
+              ...(showSellProjection ? styles.attachedAbove : {}),
+              ...(sellDisabled ? styles.actionButtonDisabled : {}),
+            }}
+            onClick={() => onSellShares(company.company_id, sellPercentage)}
+            disabled={sellDisabled}
+            title={
+              sellingForbidden
+                ? "No selling in the first Stock Round — 1830 opens the market to sales from SR2 onward."
+                : (controlsBlockedReason ?? undefined)
+            }
+          >
+            {sellingForbidden ? "Selling Opens in SR2" : `Sell ${sellPercentage}% Bundle`}
+          </button>
+        );
+      })()}
 
       {/* Design note #577, the other direction: a sale RAISES cash, answering the same question. Shown only when
          the sale is genuinely available -- quoting proceeds beside a button banned in SR1 would price an action
-         nobody can take. */}
-      {!sellingForbidden &&
-        selectedSellState.enabled &&
-        typeof playerCash === "number" &&
-        typeof unitPrice === "number" && (
-          <span
-            style={styles.cashAfter}
-            title={`$${playerCash} now, $${playerCash + unitPrice * (sellPercentage / 10)} after this sale.`}
-          >
-            {`$${playerCash} → $${playerCash + unitPrice * (sellPercentage / 10)}`}
-          </span>
-        )}
+         nobody can take.
+         Design note #682: the same block as the buy side, so a player reads one shape for both directions and
+         the only difference on screen is which way the arrow's colour goes. */}
+      {showSellProjection && (
+          <TreasuryProjectionBlock
+            projection={projectTreasury(
+              playerCash as number,
+              (unitPrice as number) * (sellPercentage / 10),
+            )}
+            seatColor={actingSeatColor}
+            action="sale"
+          />
+      )}
+      </div>
 
     </div>
   );
@@ -1213,6 +1312,77 @@ function sellOptionState(
   return { enabled: true };
 }
 
+/* Design note #682: THE CONSEQUENCE, UNDER THE BUTTON THAT CAUSES IT.
+
+   #577 put this figure beside the Buy button as running micro text, and it was
+   reported as unclear -- "a plain-looking text string ... having no styling", so
+   a reader who did not already know why it was there could not tell what it was
+   claiming. The information was right and the rendering said "aside".
+
+   THREE THINGS CHANGED, and each answers a different half of that:
+     BELOW, NOT BESIDE. Under the button it reads as the result of pressing it.
+     Beside a button that already carries a price, it read as more label.
+     THE SEAT'S OWN COLOUR says whose money this is without a caption -- the one
+     question a bare pair of figures could not answer, and the reason the report
+     asked for it.
+     A DIRECTION, in green or amber. Money moving is the point, and an arrow
+     alone is a glyph the reader has to interpret.
+
+   IT IS NOT A SECOND PRICE. The button says what the action costs; this says
+   what the player is left with. Two figures that look alike would be worse than
+   one, which is why the label leads with `Treasury` and the price never appears
+   here. */
+function TreasuryProjectionBlock({
+  projection,
+  seatColor,
+  action,
+}: {
+  projection: TreasuryProjection;
+  /** The acting seat's colour, or `null` when it is not known -- the block then
+   *  falls back to the card's own ink rather than inventing a seat. */
+  seatColor: string | null;
+  /** "purchase" or "sale", for the sentence a tooltip and a screen reader get. */
+  action: string;
+}) {
+  const tint =
+    projection.direction === "short"
+      ? styles.projectionShort
+      : projection.direction === "up"
+        ? styles.projectionUp
+        : styles.projectionDown;
+  return (
+    <div
+      style={{
+        ...styles.projectionBlock,
+        ...(seatColor ? { borderTopColor: seatColor } : {}),
+      }}
+      title={describeTreasuryProjection(projection, action)}
+    >
+      <span
+        style={{
+          ...styles.projectionLabel,
+          ...(seatColor ? { color: seatColor } : {}),
+        }}
+      >
+        Treasury
+      </span>
+      <span style={styles.projectionFigures}>
+        <span style={styles.projectionBefore}>${projection.before}</span>
+        {/* The arrow takes the direction's colour with the figure it points at,
+            so the pair reads as one movement rather than as a symbol and a
+            number that happen to be adjacent. */}
+        <span style={{ ...styles.projectionArrow, ...tint }} aria-hidden="true">
+          →
+        </span>
+        <span style={{ ...styles.projectionAfter, ...tint }}>${projection.after}</span>
+      </span>
+      {projection.short !== null && (
+        <span style={styles.projectionShortNote}>${projection.short} short</span>
+      )}
+    </div>
+  );
+}
+
 const FLOAT_THRESHOLD_PERCENT = 60;
 
 export function StockRoundPanel({
@@ -1226,6 +1396,7 @@ export function StockRoundPanel({
   isMyTurn,
   hotseat = false,
   activePlayerLabel = null,
+  actingSeatColor = null,
   connectedAddress,
   macroRoundNumber,
   playerCash,
@@ -1236,10 +1407,39 @@ export function StockRoundPanel({
   actionsLockedReason,
   roundType,
 }: StockRoundPanelProps) {
-  // Design note #32: out of phase counts as "controls disabled" exactly the
-  // same way an unready session does -- one flag, so no control can be
-  // wired to one condition and miss the other.
-  const controlsDisabled = !sessionReady || actionsLockedReason != null;
+  /* Design note #32: out of phase counts as "controls disabled" exactly the
+     same way an unready session does -- one flag, so no control can be
+     wired to one condition and miss the other.
+
+     Design note #681: AND SO DOES SOMEBODY ELSE'S TURN.
+
+     REPORTED, after the SR1 sell button: "let's grey out the buttons when it
+     isn't a player's turn so that there is no confusion about what they can be
+     doing." The panel already RECEIVED `isMyTurn` -- it had since #34 -- and
+     spent it on one header hint. Nothing else read it, so on another seat's turn
+     every Buy and Sell button looked and felt completely live, and the refusal
+     arrived from `App`'s dispatcher after the click as "It is not your turn."
+     The turn gate was real and enforced and entirely invisible until you hit it.
+     THE FLAG IS WHY THIS IS ONE LINE. #32's whole argument is that a second
+     condition wired control-by-control will miss one; adding the third to the
+     flag reaches all five at once and cannot miss.
+     THE CARDS ARE NOT GATED, deliberately. `controlsDisabled` feeds action
+     controls only -- the roster stays fully readable, and expanding a card to
+     study a rival's holdings on their turn is exactly when a player has time to
+     do it. Browsing is not acting. */
+  const controlsDisabled = !sessionReady || actionsLockedReason != null || !isMyTurn;
+
+  /* Design note #681: WHY, in one sentence, for whichever control is asked.
+     A greyed button that cannot say why is the failure #619 describes from the
+     other side -- it looks broken rather than barred. Ordered by precedence, so
+     the answer is the first thing that would stop the click rather than the
+     last one checked. */
+  const controlsBlockedReason: string | null = !sessionReady
+    ? "Initialize the session key to act."
+    : (actionsLockedReason ??
+      (!isMyTurn
+        ? `It is ${activePlayerLabel ?? "another player"}'s turn.`
+        : null));
   /* Design note #396: the ACTIVE card -- the one whose action bar renders.
      Renamed from `expandedCompanyId`: it no longer expands anything, it
      decides where the controls live. */
@@ -1311,6 +1511,8 @@ export function StockRoundPanel({
         onBuyShare={onBuyShare}
         onSellShares={onSellShares}
         controlsDisabled={controlsDisabled}
+        controlsBlockedReason={controlsBlockedReason}
+        actingSeatColor={actingSeatColor}
         /* Design note #417: shares trade in a Stock Round and nowhere else. Derived from
            `actionsLockedReason` -- the sentence rendered directly above -- so the notice and the controls answer
            to one condition rather than two that can disagree. */
@@ -1389,6 +1591,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderTopColor: CARD_DIVIDER,
   },
   cardActionsBlock: { display: "flex", flexDirection: "column", gap: "6px" },
+  /* Design note #683: a control and the projection attached beneath it. Zero gap is the whole job -- the
+     seat-coloured seam only reads as one object if there is no paper showing between the two. */
+  attachedGroup: { display: "flex", flexDirection: "column", gap: 0 },
   cardActionsLabel: {
     display: "flex",
     alignItems: "center",
@@ -1623,16 +1828,65 @@ const styles: Record<string, React.CSSProperties> = {
      Design note #552: this now sizes a drawing, so the type properties went with the text; `color` stays
      and is load-bearing, since the crown fills with `currentColor`.
      Design note #577: the balance after the purchase, in tabular figures so the two numbers line up either
-     side of the arrow rather than jittering as the quantity selector moves. */
-  cashAfter: {
+     side of the arrow rather than jittering as the quantity selector moves.
+     Design note #682: `cashAfter`/`cashAfterShort` are GONE with the inline string they drew. An orphaned style
+     for a rendering somebody has just asked us to stop using is how it comes back -- the rule `palette.ts`
+     records for its deleted colour token, and this file's own #466 for `cannotAffordNote`. */
+  /* Design note #682: the projection block. A BORDER carries the seat colour rather than a fill: these cards
+     are warm near-white paper (`palette.ts`), and a saturated seat colour behind text would need its own
+     contrast rule across eight hues -- which is what `bestContrastTextColor` exists for, and is far more
+     machinery than a two-figure row deserves. A 3px edge is legible at every hue against paper and needs none.
+
+     Design note #683: ATTACHED, NOT ADJACENT. #682 rendered this as its own box with a 6px gap above it, and
+     it was reported as still not reading like part of the button that causes it -- "I thought the button itself
+     could be vertically expanded to have a player color segment".
+     THE SEAT COLOUR MOVED TO THE TOP EDGE, which is the whole trick: flush against the control above, a 3px
+     seat-coloured bar reads as the SEAM of one taller object rather than as the frame of a second one. The
+     bottom corners are rounded and the top ones square, so the block finishes the shape the button started.
+
+     WHY NOT INSIDE THE BUTTON, which is what was actually asked for: a disabled control must grey out (#681,
+     and #619 before it), and greying this would dim a figure that is still true -- including in the
+     insufficient-funds case, where it is the figure EXPLAINING the refusal. A readout inside a control also
+     makes part of a click target inert. Attached gets the single-object reading; separate keeps the number
+     legible when the button is not. */
+  projectionBlock: {
+    display: "flex",
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    gap: "8px",
+    padding: "6px 10px",
+    backgroundColor: "rgba(0, 0, 0, 0.05)",
+    borderTop: "3px solid",
+    borderTopColor: CARD_INK_MUTED,
+    borderRadius: "0 0 8px 8px",
+  },
+  projectionLabel: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
     color: CARD_INK_MUTED,
+  },
+  /* Tabular figures so the pair does not jitter as the quantity selector moves
+     -- #577's own observation, and the part of it that needed no change. */
+  projectionFigures: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: "5px",
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
-    alignSelf: "center",
   },
-  cashAfterShort: { color: "#a4442f" },
+  projectionBefore: { fontSize: FONT_SIZE.small, fontWeight: 700, color: CARD_INK_MUTED },
+  projectionArrow: { fontSize: FONT_SIZE.small, fontWeight: 700 },
+  projectionAfter: { fontSize: FONT_SIZE.body, fontWeight: 800 },
+  /* Design note #682: green up, amber down, red only for a genuine block. `cashDelta.ts` #670 settled the
+     amber -- red in this app marks a contested auction and an error toast, and money leaving a player's hand
+     to buy a share is neither. Spending is ordinary and reads as ordinary, which also keeps red meaning "you
+     cannot do this", as it already did on this card. */
+  projectionUp: { color: "#2f7d52" },
+  projectionDown: { color: "#8a6a1f" },
+  projectionShort: { color: "#a4442f" },
+  projectionShortNote: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#a4442f" },
   presidentTag: {
     color: CARD_HIGHLIGHT_BORDER,
     marginRight: "5px",
@@ -1938,6 +2192,14 @@ const styles: Record<string, React.CSSProperties> = {
      grow; the Buy button takes the rest, so the price stays readable at
      every card width. */
   buyRow: { display: "flex", alignItems: "stretch", gap: "8px" },
+  /* Design note #682: the Buy button takes the width the figure beside it used to occupy. With the projection
+     moved below, the row holds a source toggle and a button -- and a button stopping short of the card edge
+     leaves a ragged gap exactly where a number used to be, which reads as something failing to render. */
+  buyButtonFill: { flex: "1 1 auto", textAlign: "center" },
+  /* Design note #683: squares the bottom corners of a control that has the projection block attached beneath
+     it, so the two share an edge instead of leaving paper visible in the corner notches. Applied only when a
+     projection is actually rendering -- a squared-off button with nothing under it looks like a clipping bug. */
+  attachedAbove: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   sourceSwitch: {
     display: "flex",
     flexShrink: 0,

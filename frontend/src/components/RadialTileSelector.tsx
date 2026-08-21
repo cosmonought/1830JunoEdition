@@ -64,6 +64,12 @@ export interface RadialTileSelectorProps {
      A string rather than a structure: this component renders a caption and `utils/tokenMigration.ts` owns
      what the sentence should be. `null` on every hex with no tokens, which is most of them. */
   tokenNote?: string | null;
+  /* Design note #673: what this lay costs and what the treasury is left with, as one string. Built by
+     `utils/pendingTileCost.ts` from the same `terrainBuildFeeAt` the board badge prints and the reducer
+     charges, so the three cannot disagree about a figure the player is about to commit to.
+     A STRING, like `tokenNote` and for the same reason: this component renders a caption. `null` for a free
+     lay -- most hexes, and every upgrade, since 1830 bills the ground once. */
+  costNote?: string | null;
   /* Design note #488b: the caption's picture. #271b answered "which half" with a sentence; this is the same
      answer drawn on the tile, and the two MUST come from one computation or the ring can say "city 2 of 2"
      while the marker sits on city 1 -- the near-miss duplicate class TD-1 catalogued, in the version a
@@ -222,6 +228,11 @@ export interface RadialConfirmRingProps {
   confirmAriaLabel: string;
   cancelTitle: string;
   cancelAriaLabel: string;
+  /** Design note #673: what pressing the tick will cost, and what it leaves.
+   *  `null` when it is free -- most hexes are, and a permanent "Costs $0"
+   *  teaches a player to stop reading the line that matters on the two
+   *  terrains where it does. */
+  cost?: string | null;
   /** How far out the ring's own contents sit, so the buttons and caption
    *  clear them. */
   radius: number;
@@ -247,6 +258,7 @@ export function RadialConfirmRing({
   confirmAriaLabel,
   cancelTitle,
   cancelAriaLabel,
+  cost = null,
   radius,
   onConfirm,
   onCancel,
@@ -307,7 +319,7 @@ export function RadialConfirmRing({
      note means the element is not rendered at all -- an empty positioned div still occupies its slot above
      the hex and still paints, so suppressing the TEXT alone would leave the clutter it was asked to remove. */
   const caption =
-    title === null && hint === null && !note ? null : { title, hint };
+    title === null && hint === null && !note && !cost ? null : { title, hint };
 
   return (
     /* Design note #168: THE BACKDROP MUST NOT SWALLOW BOARD CLICKS. It was `position: fixed; inset: 0` with
@@ -382,6 +394,14 @@ export function RadialConfirmRing({
         <div style={{ ...styles.caption, top: `${-radius}px` }}>
           {caption.title !== null && <span style={styles.captionHex}>{caption.title}</span>}
           {caption.hint !== null && <span style={styles.captionHint}>{caption.hint}</span>}
+          {/* Design note #673: THE PRICE, WHERE THE PLAYER COMMITS TO IT.
+              FIRST in the caption and the only emphasised line in it, above both the rotate hint and the token
+              migration -- those describe the move, this is what the move costs, and a player scanning a floating
+              caption before pressing a tick reads the top line.
+              NOT A SECOND DIALOG, which is what a literal "are you sure?" would have been: the tick and cross ARE
+              the confirmation (#2), and they have been since the picker gained a preview stage. All that was
+              missing is that they never said the price. */}
+          {cost && <span style={styles.captionCost}>{cost}</span>}
           {/* Design note #290: the migration line, when there is one. */}
           {note && <span style={styles.captionNote}>{note}</span>}
         </div>
@@ -407,6 +427,7 @@ export function RadialTileSelector({
   provisional = false,
   legalRotationCount,
   tokenNote = null,
+  costNote = null,
   stationMarkersFor,
   stockFor,
   onSelectCandidate,
@@ -455,6 +476,11 @@ export function RadialTileSelector({
       // Design note #271b: only while a tile is actually being previewed --
       // before that there is no destination to describe.
       note={previewing ? (tokenNote ?? undefined) : undefined}
+      /* Design note #673: BOTH STAGES, unlike the note above. The terrain fee is a property of the GROUND
+         (`sandboxSession.ts` #432 -- "the fee belongs to the ground, not the tile"), so it is known the moment
+         the ring opens and before any tile has been chosen. Withholding it until the preview stage would make a
+         player pick a tile for a hex they were never going to build on. */
+      cost={costNote}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
       /* Design note #471: the candidate ring's X sits behind its own top
@@ -760,6 +786,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#e0b062",
     lineHeight: 1.35,
     maxWidth: "260px",
+  },
+  /* Design note #673: the one line in this caption a player is about to spend money on, so it is the one line
+     with weight. A step up from `captionNote`'s micro and a plainer ink than its amber -- the migration note is
+     a WARNING about a side effect, this is the price of the thing being asked for, and rendering them the same
+     would make the caption read as two alerts.
+     `tabular-nums` so "$1000 → $920" does not jitter as the figures change while the player cycles hexes. */
+  captionCost: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#f2f4f8",
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.35,
   },
   /* Design note #369: THE CHROME WAS THE OTHER HALF OF THE RECTANGLE. `HexGridRenderer` #368 fixed the
      artwork; this is the half that was visible even once it was not -- a rounded rectangle with a border and

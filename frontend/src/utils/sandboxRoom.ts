@@ -87,6 +87,18 @@ export interface SandboxAction {
   /* createdAt is read back so a replayed entry keeps its own clock; stamping Date.now() during a rebuild made every entry share one instant. undefined for older entries and unresolved writes.
      See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #643 */
   at?: number;
+  /** Design note #668: dispatched BY THE GAME rather than by the player -- the
+   *  auto-skip and the forced withhold. Recorded on the entry because it is a
+   *  fact about the history that Undo has to read, and the acting client is the
+   *  only party that ever knows it.
+   *
+   *  NOT the same question as `runGameplayAction`'s `automatic`, which is a turn
+   *  gate: a home station placement and a B&O par are dispatched automatically
+   *  and are still decisions the player made and may take back.
+   *
+   *  Absent on entries written before this field existed, which read as `false`
+   *  -- the behaviour those rooms already had. */
+  derived: boolean;
 }
 
 /** `payload` decoded, or `null` when it cannot be. A single unparseable
@@ -104,6 +116,32 @@ export function decodeAction(action: SandboxAction): SandboxLogMsg | null {
  *  a test should be able to state it directly. */
 export function sortActions(actions: readonly SandboxAction[]): SandboxAction[] {
   return [...actions].sort((a, b) => (a.index !== b.index ? a.index - b.index : a.id < b.id ? -1 : 1));
+}
+
+/** Whether the history a client has ALREADY APPLIED is still a prefix of the
+ *  history the room now reports.
+ *
+ *  Design note #668: the drain used to detect a rewind by LENGTH -- a shorter
+ *  effective history meant an undo had landed. Length is not enough, and this is
+ *  the desync. Two clients writing at the same index both see their own
+ *  optimistic entry first; the doc-id tie-break in `sortActions` then decides the
+ *  real order, and for one of them that order REPLACES an entry it has already
+ *  applied with a different one AT THE SAME LENGTH. Nothing shrank, so nothing
+ *  rebuilt, and that client played on from a board no other client shares --
+ *  which is what strands one player in OR 2.2 while the rest reach SR3.
+ *
+ *  Compares document ids, not payloads: two entries can carry identical JSON and
+ *  still be different events, and the id is the only thing about an entry that is
+ *  unique and agreed on by everybody. */
+export function appliedPrefixHolds(
+  appliedIds: readonly string[],
+  history: readonly { id: string }[],
+): boolean {
+  if (appliedIds.length > history.length) return false;
+  for (let at = 0; at < appliedIds.length; at += 1) {
+    if (appliedIds[at] !== history[at].id) return false;
+  }
+  return true;
 }
 
 function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction | null {
@@ -125,6 +163,9 @@ function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction 
     id: snapshot.id,
     actor: typeof data.actor === "string" ? data.actor : "",
     payload: data.payload,
+    // Design note #668: `=== true`, so a missing field on an older entry is
+    // `false` rather than `undefined` leaking into the undo walk.
+    derived: data.derived === true,
     ...(Number.isFinite(at) ? { at: at as number } : {}),
   };
 }
@@ -161,6 +202,10 @@ export async function appendSandboxAction(
      messages. Both are single-key objects and both round-trip as JSON, so
      widening this changes nothing about how an entry is written. */
   msg: SandboxLogMsg,
+  /** Design note #668: whether the GAME dispatched this rather than the player.
+   *  Written into the entry, because a client replaying somebody else's log has
+   *  no other way to tell an auto-skip from a deliberate one. */
+  derived = false,
 ): Promise<boolean> {
   const db = getFirestoreDb();
   if (!db) return false;
@@ -170,6 +215,7 @@ export async function appendSandboxAction(
       index: nextIndex,
       actor,
       payload: JSON.stringify(msg),
+      derived,
       createdAt: serverTimestamp(),
     },
   );

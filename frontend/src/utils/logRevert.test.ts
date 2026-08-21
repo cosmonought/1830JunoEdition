@@ -33,6 +33,15 @@ const act = (index: number, actor: string, what = "BuyStock"): RevertableAction 
   payload: JSON.stringify({ [what]: { game_id: 1 } }),
 });
 
+/** Design note #668: an action the GAME dispatched -- the auto-skip walking the
+ *  sub-phase cursor, or the forced $0 withhold. It really happened and really
+ *  counts; it is simply not a decision anybody made. */
+const derived = (
+  index: number,
+  actor: string,
+  what = "AdvanceOperatingSubPhase",
+): RevertableAction => ({ ...act(index, actor, what), derived: true });
+
 const revert = (index: number, to: number, actor: string): RevertableAction => ({
   index,
   actor,
@@ -159,6 +168,93 @@ describe("undoReachFor", () => {
        that has already been taken back. */
     const log = [act(0, ADA), act(1, ADA), revert(2, 1, ADA)];
     expect(undoReachFor(log, ADA, false, describe_).index).toBe(0);
+  });
+
+  /* ==================================================================
+      DESIGN NOTE 668: UNDO LANDS ON A DECISION
+     ==================================================================
+
+     REPORTED: Undo during Run Routes "simply refreshes the Run Routes
+     action" instead of returning the player to Lay Track or Place Token.
+
+     The top of an Operating Round log is almost never the player's move. The
+     auto-skip dispatches a real `AdvanceOperatingSubPhase` to walk the
+     cursor onto Routes, so THAT is what a press landed on -- and reverting
+     it put the cursor back one step, re-armed the auto-skip (a rebuild
+     clears its once-per-turn guards) and advanced straight back to Routes.
+     The button worked perfectly and undid nothing anybody had done.
+
+     `undoTarget.ts` #475 settled this for the local stack by never
+     snapshotting an automatic dispatch. The room's history is a Firestore
+     log that records every dispatch, so the rule has to be applied when
+     READING it instead. */
+
+  it("walks past the game's own actions to the player's last decision", () => {
+    /* Ada lays a tile; the game then skips Tokens and Routes for her. The
+       press must land on the tile lay -- index 0 -- not on the skip at 2. */
+    const log = [act(0, ADA, "LayTile"), derived(1, ADA), derived(2, ADA)];
+    expect(undoReachFor(log, ADA, false, describe_).index).toBe(0);
+  });
+
+  it("quotes the decision, not the step the game walked onto", () => {
+    const log = [act(0, ADA, "LayTile"), derived(1, ADA)];
+    expect(undoReachFor(log, ADA, false, describe_).summary).toBe("action 0");
+  });
+
+  it("still lands on a MANUAL skip, which is a decision", () => {
+    /* The Skip button dispatches the same message. #439's split entry points
+       are what keep the two apart, and the flag is the whole difference. */
+    const log = [act(0, ADA, "LayTile"), act(1, ADA, "AdvanceOperatingSubPhase")];
+    expect(undoReachFor(log, ADA, false, describe_).index).toBe(1);
+  });
+
+  it("does not let the host land on a derived action either", () => {
+    /* The reported case: Player 1 was the host, so the host branch reached
+       the top entry -- the auto-skip -- and reverted that. */
+    const log = [act(0, BEN, "LayTile"), derived(1, BEN), derived(2, BEN)];
+    expect(undoReachFor(log, ADA, true, describe_).index).toBe(0);
+  });
+
+  it("judges ownership on the action it would land on, not the top entry", () => {
+    /* A derived entry's actor is the SEAT the game acted for, which is not a
+       player id. Judging by the top entry told Ada "other players have acted
+       since your last move" about the game's own bookkeeping. */
+    const log = [act(0, ADA, "LayTile"), derived(1, "juno1prr")];
+    const reach = undoReachFor(log, ADA, false, describe_);
+    expect(reach.index).toBe(0);
+    expect(reach.blockedReason).toBeNull();
+  });
+
+  it("still refuses when a real player has acted since", () => {
+    // The protection #592 added is unchanged: derived entries are stepped
+    // over, another player's move is not.
+    const log = [act(0, ADA), act(1, BEN), derived(2, BEN)];
+    expect(undoReachFor(log, ADA, false, describe_).index).toBeNull();
+  });
+
+  it("says so plainly when the game has acted and nobody else has", () => {
+    const log = [derived(0, ADA), derived(1, ADA)];
+    const reach = undoReachFor(log, ADA, true, describe_);
+    expect(reach.index).toBeNull();
+    expect(reach.blockedReason).toMatch(/taken by the game/i);
+  });
+
+  it("treats an entry with no flag at all as a decision", () => {
+    /* Rooms written before the field existed. Absent must read as "a player
+       did this", which is the behaviour those logs already had -- the other
+       way round, an old room would have nothing undoable in it. */
+    const log = [act(0, ADA, "LayTile"), act(1, ADA, "AdvanceOperatingSubPhase")];
+    expect(log.every((entry) => entry.derived === undefined)).toBe(true);
+    expect(undoReachFor(log, ADA, false, describe_).index).toBe(1);
+  });
+
+  it("leaves effectiveActions alone -- a derived action still happened", () => {
+    /* The distinction is about where a press LANDS, not about what counts. A
+       revert then removes the derived entries stacked on top anyway, because
+       it kills everything from its target onward, and the replay re-derives
+       them. */
+    const log = [act(0, ADA, "LayTile"), derived(1, ADA), derived(2, ADA)];
+    expect(indices(effectiveActions(log))).toEqual([0, 1, 2]);
   });
 });
 

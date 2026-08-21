@@ -510,31 +510,11 @@ export const styles: Record<string, React.CSSProperties> = {
     borderColor: `rgba(${TURN_PULSE_INK_RGB}, 0.75)`,
     animation: "app-turn-pulse-glow 1.6s ease-in-out infinite",
   },
-  /* Design note #481: THE SUB-PHASE, BESIDE THE TITLE. Sized and coloured as a CONTINUATION of the round
-     label rather than a second heading -- "OPERATING ROUND / LAY TRACK 2/5" should scan as one line, because
-     it is one fact split across two spans only because half of it is conditional.
-     `whiteSpace: nowrap` because the bar wraps, and a step name broken across two lines inside a wrapping
-     row is how a 48px bar becomes a 70px one. */
-  actionBarSubPhaseInline: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.04em",
-    color: "#d7dce5",
-    whiteSpace: "nowrap",
-    /* The separator is drawn rather than typed: a literal "·" in the JSX
-       would need its own span to be spaced correctly and would be read
-       aloud by a screen reader as "middle dot". */
-    paddingLeft: "10px",
-    borderLeft: "1px solid #2f3646",
-  },
-  /* The position, deliberately quieter than the name. A player reads
-     "Lay Track" every turn and "2/5" only when they want to know how much
-     of the turn is left, so the two should not compete. */
-  actionBarSubPhaseCount: {
-    fontWeight: 700,
-    color: "#8f98a8",
-  },
+  /* `actionBarSubPhaseInline` and `actionBarSubPhaseCount` are GONE -- design note #672. They styled the
+     pinned bar's compact "LAY TRACK 2/5", which the sub-phase trail now replaces in both forms.
+     DELETED RATHER THAN LEFT UNUSED, the same rule `palette.ts` records for its removed colour token: a
+     ready-made style for a form somebody just asked us to stop rendering is a standing invitation to render it
+     again. The trail's own styles are below (`subPhaseTrail`, `subPhaseStep`). */
   actionBarRoundLabel: {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
@@ -652,6 +632,14 @@ export const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     padding: "7px 10px",
   },
+  /* Design note #674: UNDO ONLY, now. Skip wore this too and was reported as looking "slightly dimmer than the
+     Buy Private button; they should be the same since they're equally viable options" -- which is correct, and
+     about the RULES rather than about taste. Declining a step is a real 1830 play, not a fallback, and drawing a
+     peer of the action beside it as its lesser tells the player something untrue about their own options.
+     WHAT THIS MARK MEANS, stated so the next call site can tell whether it qualifies: NOT ONE OF THE TURN'S
+     MOVES. Undo is an instruction about the log (`logRevert.ts` #591), not an action a corporation takes -- so it
+     belongs outside the set of things the player is choosing between, and dimmer ink plus a dashed edge is that
+     boundary. Anything the game offers as an option does not qualify, however secondary it feels. */
   actionBarUtilityButton: {
     color: "#c7cbd4",
     borderStyle: "dashed",
@@ -723,10 +711,13 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "1px",
     minWidth: 0,
   },
-  /* Design note #589: the full name and the president share line two --
-     identity detail, read second, one thought. `flexWrap` because a long
-     name plus a long player name genuinely can exceed a narrow bar, and
-     wrapping is a better failure than clipping a president's name. */
+  /* Design note #589: the full name and the president shared line two --
+     identity detail, read second, one thought.
+     Design note #671: the president has moved to the end of the facts rail, so
+     this row now carries the full name alone. The flex box STAYS rather than
+     collapsing to a bare span: `flexWrap` and `minWidth: 0` are what let a long
+     company name wrap instead of clipping, and that was never about having two
+     children. */
   orContextSubRow: {
     display: "flex",
     flexDirection: "row",
@@ -760,6 +751,10 @@ export const styles: Record<string, React.CSSProperties> = {
      that does not depend on which corporation is acting. */
   orContextTicker: { fontSize: FONT_SIZE.heading, fontWeight: 800 },
   orContextName: { fontSize: FONT_SIZE.small },
+  /* Design note #671: a step BELOW the figures it now sits beside, deliberately.
+     The rail's values are 14px tabular monospace because they are quantities a
+     president compares; a name is not, and matching their weight would make the
+     rail read as five figures with a typo in the last one. */
   orContextPresident: { fontSize: FONT_SIZE.small, whiteSpace: "nowrap" },
   /* Design note #236: the figures CONTINUE FROM THE LEFT. `marginLeft: auto` flung them to the far edge, so
      reading "PRR ... $640" meant crossing the bar and the figures ended up further from their own label than
@@ -782,6 +777,22 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontVariantNumeric: "tabular-nums",
+  },
+  /* Design note #673: the treasury as a previewed tile lay will leave it. Same face and size as the standing
+     figure -- it is the same quantity, one step in the future, and shrinking it would read as a footnote rather
+     than as the number the player is deciding about.
+     A DASHED UNDERLINE is what marks it provisional. Colour alone cannot: the bar is painted in the acting
+     corporation's own livery, so any hue chosen here is legible on some of the roster and invisible on the rest
+     -- the same trap `hexBoardData` #561 records for the legality glow. A border is a shape, and a shape works
+     on all eight. */
+  orContextTreasuryPending: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontVariantNumeric: "tabular-nums",
+    borderBottom: "1px dashed currentColor",
+    paddingBottom: "1px",
+    whiteSpace: "nowrap",
   },
   /* Design note #379: chips, matching the Game Ledger's own list so a
      private reads the same wherever it appears. The border takes the

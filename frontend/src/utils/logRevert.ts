@@ -19,6 +19,11 @@ export interface RevertableAction {
   index: number;
   payload: string;
   actor: string;
+  /** Design note #668: the game dispatched this, not the player. Optional
+   *  because `effectiveActions` neither reads nor needs it -- a derived action
+   *  really happened and really counts. Only `undoReachFor` cares, and only
+   *  about where a press LANDS. */
+  derived?: boolean;
 }
 
 /** The index a `RevertTo` entry targets, or `null` for an ordinary action.
@@ -98,7 +103,31 @@ export interface UndoReach {
 /** How far back this player may revert.
  *
  *  `describe` turns an action into the sentence the log already used for it, so
- *  the undo button quotes the move rather than describing it a second way. */
+ *  the undo button quotes the move rather than describing it a second way.
+ *
+ *  Design note #668: UNDO LANDS ON A DECISION, NOT ON WHATEVER IS ON TOP.
+ *
+ *  REPORTED: Undo during Run Routes "simply refreshes the Run Routes action"
+ *  instead of returning the player to Lay Track or Place Token. The top of the
+ *  log in an Operating Round is almost never the player's move -- it is the
+ *  auto-skip's `AdvanceOperatingSubPhase`, dispatched by the game to walk the
+ *  cursor onto Routes. Reverting THAT put the cursor back one step, the auto-skip
+ *  effect re-armed (a rebuild clears its once-per-turn guards) and it advanced
+ *  straight back to Routes. The press was working perfectly and undoing nothing a
+ *  player had done.
+ *
+ *  `undoTarget.ts` #475 settled this for the local stack -- automatic dispatches
+ *  do not snapshot -- but the room's history is a Firestore log that records
+ *  every dispatch, so the same rule has to be applied when READING it. Walking
+ *  back to the last non-derived action is that rule. The revert then removes the
+ *  derived entries stacked on top too, because `RevertTo` kills everything from
+ *  its target onward and the game re-derives them on replay -- which is the
+ *  property that makes this safe rather than lossy.
+ *
+ *  Ownership is judged on the action Undo would LAND on, not on the top entry: a
+ *  derived action's actor is the seat the game acted for, so a player was told
+ *  "other players have acted since your last move" about the game's own
+ *  bookkeeping. */
 export function undoReachFor(
   actions: readonly RevertableAction[],
   player: string,
@@ -114,7 +143,18 @@ export function undoReachFor(
     };
   }
 
-  const last = live[live.length - 1];
+  /* The topmost entry a player actually chose. `findLast` is ES2023 and this
+     builds to es5, so the reverse-find idiom the rest of this module already
+     uses stands in for it. */
+  const last = [...live].reverse().find((action) => action.derived !== true);
+  if (!last) {
+    return {
+      index: null,
+      summary: "",
+      blockedReason:
+        "There is nothing to undo yet — every action so far was taken by the game.",
+    };
+  }
 
   /* THE HOST reverts the last action whoever took it. Everybody else may
      only reach their own -- and only when it IS the last one, because
@@ -124,7 +164,12 @@ export function undoReachFor(
     return { index: last.index, summary: describe(last), blockedReason: null };
   }
 
-  const mine = [...live].reverse().find((action) => action.actor === player);
+  /* Design note #668: derived entries are excluded here too. An auto-skip
+     recorded against this player's seat is not an action they have "taken", and
+     counting it would answer "you have not acted yet" with the wrong message. */
+  const mine = [...live]
+    .reverse()
+    .find((action) => action.actor === player && action.derived !== true);
   if (!mine) {
     return {
       index: null,

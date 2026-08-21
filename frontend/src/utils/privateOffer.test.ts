@@ -40,7 +40,15 @@ import path from "path";
  *  side lives inside a Firestore call -- what this file needs is the SHAPE
  *  the seller's client decodes, and that shape is `payload`. */
 function asLoggedAction(msg: SandboxLogMsg, actor: string, index: number): SandboxAction {
-  return { index, id: `doc-${index}`, actor, payload: JSON.stringify(msg), at: Date.now() };
+  return {
+    index,
+    id: `doc-${index}`,
+    actor,
+    payload: JSON.stringify(msg),
+    // Design note #668: a player's offer, not the game's own bookkeeping.
+    derived: false,
+    at: Date.now(),
+  };
 }
 
 const ALICE = "juno1alice";

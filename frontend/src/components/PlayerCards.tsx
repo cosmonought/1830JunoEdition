@@ -21,6 +21,11 @@ import React, { useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { PresidentCrown } from "./PresidentCrown";
 import { bestContrastTextColor } from "../styles/corporationLivery";
+// Design note #670: the same badge the Operating Round's cash strip uses. The
+// cards are where cash lives in a Stock Round, so this is where the confirmation
+// has to appear there -- and one component means the two rounds cannot end up
+// signalling the same event two different ways.
+import { CashDeltaBadge } from "./PlayerCashStrip";
 import type { PlayerFinances } from "../utils/playerFinance";
 
 export interface PlayerCardsProps {
@@ -45,6 +50,10 @@ export interface PlayerCardsProps {
      same fact -- a round with no seat on turn passes `null`, every card compares unequal, and nothing is marked.
      Design note #568: the private's rules text, for the expandable rows. `null` renders the name as plain text. */
   privateDescription?: (privateId: number) => string | null;
+  /** Design note #670: what this player's cash has just done, or `0`/absent for
+   *  nothing recent. A FUNCTION rather than a map, so the card asks the same
+   *  question the strip asks and neither has to know how the answer is stored. */
+  cashDelta?: (address: string) => number;
 }
 
 /* Design note #569: the palette moved to `utils/playerLabels.ts`, beside the
@@ -88,6 +97,7 @@ export function PlayerCards({
   viewerAddress,
   colorForSeat,
   privateDescription,
+  cashDelta,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
      the whole grid rather than state per card -- a player may want the
@@ -191,7 +201,14 @@ export function PlayerCards({
                 <tbody>
                   <tr>
                     <th scope="row" style={styles.figureKey}>Cash</th>
-                    <td style={styles.figureValue}>{money(player.cash)}</td>
+                    {/* Design note #670: the badge sits INSIDE the existing cell rather than in a column of its own.
+                        A sixth row, or a third column, would relayout the card for a mark that is absent almost all
+                        of the time -- and #609's point about this table is that its shape is already carrying
+                        meaning. Appending to the value leaves every figure where it was. */}
+                    <td style={styles.figureValue}>
+                      {money(player.cash)}
+                      <CashDeltaBadge amount={cashDelta?.(player.address) ?? 0} />
+                    </td>
                   </tr>
                   <tr>
                     <th scope="row" style={styles.figureKey}>Net Worth</th>

@@ -23,6 +23,7 @@
 //   THE DECODE. One corrupt entry must not take a room down.
 
 import {
+  appliedPrefixHolds,
   decodeAction,
   generateRoomCode,
   parseRoomCode,
@@ -31,7 +32,7 @@ import {
 } from "./sandboxRoom";
 
 function action(index: number, id: string, payload = '{"PassTurn":{"game_id":1}}'): SandboxAction {
-  return { index, id, actor: "alice", payload };
+  return { index, id, actor: "alice", payload, derived: false };
 }
 
 describe("the room code", () => {
@@ -105,6 +106,70 @@ describe("sortActions", () => {
     const entries = [action(2, "c"), action(0, "a")];
     sortActions(entries);
     expect(entries.map((a) => a.index)).toEqual([2, 0]);
+  });
+});
+
+describe("appliedPrefixHolds", () => {
+  /* ==================================================================
+      DESIGN NOTE 668 (harness): A LENGTH IS NOT A HISTORY
+     ==================================================================
+
+     REPORTED: Player 1 stranded in OR 2.2 while Player 2 advanced to SR3.
+
+     The drain decided it had to rebuild by comparing LENGTHS -- a shorter
+     effective history meant an undo had landed. That catches an undo and
+     nothing else. `sortActions` above guarantees two clients agree on an
+     order EVENTUALLY, and the cases below are the window before that: a
+     client applies its own optimistic entry, the tie-break then puts
+     somebody else's first, and the corrected history is exactly as long as
+     the one already applied. Nothing shrank, so nothing rebuilt, and that
+     client kept playing a game only it could see.
+
+     Every case here is a way a history can change without changing size. */
+
+  it("holds when the applied entries are still the front of the history", () => {
+    const history = [action(0, "a"), action(1, "b"), action(2, "c")];
+    expect(appliedPrefixHolds(["a", "b"], history)).toBe(true);
+  });
+
+  it("holds for a client that has applied the whole history", () => {
+    const history = [action(0, "a"), action(1, "b")];
+    expect(appliedPrefixHolds(["a", "b"], history)).toBe(true);
+  });
+
+  it("holds trivially for a client that has applied nothing", () => {
+    expect(appliedPrefixHolds([], [action(0, "a")])).toBe(true);
+    expect(appliedPrefixHolds([], [])).toBe(true);
+  });
+
+  it("BREAKS when a race is resolved against the client, at the same length", () => {
+    /* THE STRANDING. Both clients wrote at index 1. This one saw its own
+       entry `zz` first and applied it; the document-id tie-break then puts
+       `aa` ahead of it. Same three entries, same length, different game --
+       and the length check would have said nothing was wrong. */
+    const applied = ["a", "zz"];
+    const corrected = [action(0, "a"), action(1, "aa"), action(1, "zz")];
+    expect(corrected.length).toBeGreaterThanOrEqual(applied.length);
+    expect(appliedPrefixHolds(applied, corrected)).toBe(false);
+  });
+
+  it("breaks when an undo has shortened the history", () => {
+    // The case the length check DID catch. Still caught.
+    expect(appliedPrefixHolds(["a", "b", "c"], [action(0, "a")])).toBe(false);
+  });
+
+  it("breaks when an undo removed an entry from the middle", () => {
+    /* `RevertTo` kills a range, so an entry can vanish from under an applied
+       cursor while later ones survive at the same total length. */
+    expect(appliedPrefixHolds(["a", "b"], [action(0, "a"), action(2, "c")])).toBe(false);
+  });
+
+  it("compares document ids, not payloads", () => {
+    /* Two entries can carry identical JSON -- two passes in a row are the
+       ordinary case -- and still be different events. The id is the only
+       thing about an entry that is both unique and agreed on by everybody. */
+    const twin = '{"PassTurn":{"game_id":1}}';
+    expect(appliedPrefixHolds(["a"], [action(0, "b", twin)])).toBe(false);
   });
 });
 

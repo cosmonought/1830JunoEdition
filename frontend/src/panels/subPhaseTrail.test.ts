@@ -1,19 +1,25 @@
 // frontend/src/panels/subPhaseTrail.test.ts
 //
 // ==================================================================
-//  DESIGN NOTES 517 / 518 (harness): THE HEADER'S TWO FORMS
+//  DESIGN NOTES 517 / 518 / 672 (harness): THE HEADER HAS ONE FORM
 // ==================================================================
 //
-// Two requirements that pull against each other, which is why they are
-// pinned together: the expanded header gains a full sub-phase trail, and the
-// pinned header must keep the compact string it already had.
+// #518 SPLIT the header in two: the expanded panel showed a full sub-phase
+// trail, the pinned form kept #481's three-word phrase. This harness pinned
+// that split -- each form under exactly one condition.
 //
-// A test that only checked "the trail renders" would pass against a bar that
-// showed it in BOTH states -- which is the regression design note #481
-// removed a stepper to avoid, and the one #298's rule exists to prevent. So
-// the assertions are about the SPLIT: each form appears under exactly one
-// condition, and the trail is built from the same step list the counter is
-// measured against.
+// Design note #672 REMOVED THE SPLIT, and these assertions inverted with it.
+// Reported repeatedly: the sticky bar drops the train limit and condenses the
+// sub-phase to "[Current Action] x/6", with room to spare for both. #590 had
+// already ruled on that and only half-applied its own ruling, which is how a
+// note saying NOTHING IS DROPPED WHEN PINNED came to sit six lines above two
+// things being dropped when pinned.
+//
+// SO WHAT IS UNDER TEST FLIPPED, and both halves are asserted. Not just "the
+// trail renders" -- that passed before, in one branch of a ternary. The
+// condition is that the trail renders with NO condensed branch anywhere near
+// it, and that the compact form is GONE rather than merely unreachable: a
+// dead branch is how the split comes back, one bug report at a time.
 //
 // SOURCE-LEVEL, for the reason `corporationCardText.test.ts` records: this
 // JSX cannot be rendered without standing up the whole bar and a game state,
@@ -50,18 +56,36 @@ describe("the Operating Round number", () => {
 });
 
 describe("the sub-phase display", () => {
-  it("branches on the condensed flag", () => {
-    /* THE SPLIT. Both forms exist and exactly one renders -- a bar that
-       showed the trail while pinned would be spending the row design note
-       #481 reclaimed. */
-    expect(CODE).toMatch(/condensed \? \([\s\S]{0,600}?actionBarSubPhaseInline/);
-    expect(CODE).toMatch(/actionBarSubPhaseInline[\s\S]{0,900}?\) : \([\s\S]{0,300}?subPhaseTrail/);
+  it("renders the trail without asking whether the bar is pinned", () => {
+    /* Design note #672. The gate is the round type and the presence of a
+       progress object -- nothing about `condensed`. */
+    expect(CODE).toMatch(
+      /roundType === "OperatingRound" && orSubPhaseProgress && \(\s*<span\s*style=\{styles\.subPhaseTrail\}/,
+    );
   });
 
-  it("keeps the compact string for the pinned form", () => {
-    // Design note #481's phrase, unchanged, plus its position counter --
-    // which is the only thing carrying the position in that form.
-    expect(CODE).toContain("actionBarSubPhaseCount");
+  it("has NO condensed branch left around the trail", () => {
+    /* The assertion the previous version of this file made in reverse. A
+       ternary that still exists is a split that still exists -- and the
+       reported bug was, precisely, one branch of it. */
+    const trailAt = CODE.indexOf("styles.subPhaseTrail");
+    expect(trailAt).toBeGreaterThan(-1);
+    expect(CODE.slice(Math.max(0, trailAt - 400), trailAt)).not.toContain("condensed ?");
+  });
+
+  it("has DELETED the compact string, not merely stopped reaching it", () => {
+    /* Dead code is how this comes back. The phrase, its counter and both
+       styles go together or the next reader finds a ready-made pinned form
+       and a plausible reason to re-gate it. */
+    expect(CODE).not.toContain("actionBarSubPhaseInline");
+    expect(CODE).not.toContain("actionBarSubPhaseCount");
+  });
+
+  it("keeps the train limit pinned too", () => {
+    /* The other half of the same report, and the half #590 claimed to have
+       fixed while leaving the gate in. */
+    expect(CODE).toMatch(/\{phase\?\.trainLimit !== undefined && \(/);
+    expect(CODE).not.toMatch(/!condensed && phase\?\.trainLimit/);
   });
 
   it("builds the trail from the step list the counter is measured against", () => {

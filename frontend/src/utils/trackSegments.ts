@@ -83,16 +83,54 @@ export function boardLabelAt(q: number, r: number): string | undefined {
  *  documented as deliberately stricter than the rule, and it forbids the commonest legal shape on a busy board:
  *  two trains crossing the same hex on the two arms of a crossover, or reaching the two separate stations of an
  *  OO tile. On a late-game map that costs real revenue.
- *  A segment key is `q,r#index`, where `index` is the authored rail's own position in its hex's artwork. Two
- *  trains sharing a hex are fine; two trains sharing a `q,r#index` are not.
+ *  A segment key is `q,r#index@edge`, where `index` is the authored rail's own position in its hex's artwork and
+ *  `edge` is the END of that rail a train is using. Two trains sharing a hex are fine; two trains sharing a
+ *  `q,r#index@edge` are not.
  *  A hex with no per-rail structure (design note #2) reports `q,r#*` -- one shared identity for the whole hex,
- *  reproducing the old exclusion exactly where nothing better is knowable. */
+ *  reproducing the old exclusion exactly where nothing better is knowable.
+ *
+ *  Design note #669: WHY THE KEY NAMES AN END AND NOT JUST A RAIL.
+ *
+ *  REPORTED: B&O with two 2-trains, a straight yellow city joining its home station to Deep South, a second
+ *  token on that city. Auto Route drafts ONE train. The route the second train wants -- second token to Deep
+ *  South -- is right there, and clicking it out by hand produces a perfectly good $100.
+ *
+ *  Tile #57 is "the yellow city, straight through one central station": ONE authored path, with the city
+ *  sitting on it. So a train running home -> city and a train running city -> Deep South both claimed
+ *  `q,r#0` and the second was conflicted out of its own route.
+ *
+ *  1830 IS EXPLICIT: two trains may overlap at a city or a town, but may not run over the same section of
+ *  track. A city is a NODE where track ends, not track. The rail either side of it is two sections, and
+ *  qualifying the key with the end being used is how that becomes expressible.
+ *
+ *  WHAT THIS DOES NOT LOOSEN. An authored rail is one stroke with two ends, so a train running THROUGH takes
+ *  both of them -- the same information the bare `q,r#index` carried, written as two halves. Every conflict
+ *  that held before still holds: through vs through, through vs terminating on either side, two trains
+ *  terminating on the SAME side. The single case that changes is two trains terminating on OPPOSITE sides,
+ *  which is the case 1830 permits and the one that was reported.
+ *
+ *  HUB TILES WERE ALREADY RIGHT and are the reason this was hard to see. `pathsForTraversal` resolves a
+ *  crossing as TWO rails -- entry spoke plus exit spoke -- so a terminus there already took only its own
+ *  spoke. Only tiles whose single rail passes through a centre were wrong, which is most yellow cities and
+ *  therefore most early boards. */
 export type SegmentKey = string;
 
 const WHOLE_HEX_SEGMENT = "*";
 
+/** The whole of one rail, both ends. Still used where an end cannot be named:
+ *  the structureless fallback of design note #2. */
 function segmentKey(q: number, r: number, index: number | typeof WHOLE_HEX_SEGMENT): SegmentKey {
   return `${hexKey(q, r)}#${index}`;
+}
+
+/** One END of one rail -- design note #669. */
+function stubKey(
+  q: number,
+  r: number,
+  index: number | typeof WHOLE_HEX_SEGMENT,
+  edge: number,
+): SegmentKey {
+  return `${segmentKey(q, r, index)}@${edge}`;
 }
 
 /** One legal way through a hex: in at `entryEdge`, out at `exitEdge`, over
@@ -104,9 +142,38 @@ export interface HexTraversal {
   segments: readonly SegmentKey[];
 }
 
+/** Turns the authored rail indices for one transit into the ENDS that transit uses -- design note #669.
+ *
+ *  The first rail is entered at `entryEdge` and the last is left at `exitEdge`; a single rail spanning both is
+ *  both, so it yields two stubs. Anything strictly between is crossed end to end and keeps its whole identity,
+ *  since no train could use half of it without using the whole.
+ *
+ *  ORDER IS LOAD-BEARING: `segmentsTouchingEdge` reads element 0 as "the rail entered at `entryEdge`", which
+ *  `pathsForTraversal` guarantees by returning the entry rail first. Putting the entry stub anywhere else would
+ *  make a terminus claim the far side of the hex, which is the bug this note is about, inverted. */
+function stubsForTransit(
+  q: number,
+  r: number,
+  indices: readonly number[],
+  entryEdge: number,
+  exitEdge: number,
+): readonly SegmentKey[] {
+  if (indices.length === 1) {
+    return [stubKey(q, r, indices[0], entryEdge), stubKey(q, r, indices[0], exitEdge)];
+  }
+  return indices.map((index, at) => {
+    if (at === 0) return stubKey(q, r, index, entryEdge);
+    if (at === indices.length - 1) return stubKey(q, r, index, exitEdge);
+    return segmentKey(q, r, index);
+  });
+}
+
 /** The authored rails joining `entryEdge` to `exitEdge` on this hex, or `null` when the two are not joined by
  *  continuous track. `null` is the whole point: it is the answer `liveEdgesForHex` cannot give, and the reason
- *  design note #0's bug existed. */
+ *  design note #0's bug existed.
+ *
+ *  Design note #669: reported as the ENDS used rather than as whole rails, so a route terminating here can be
+ *  told apart from one running through. */
 export function traversalSegments(
   mapGrid: MapGridResponse,
   q: number,
@@ -125,13 +192,13 @@ export function traversalSegments(
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laid && TILE_GRAPHICS_CATALOG[laid.tile_id]) {
     const indices = artworkPathsForTraversal(laid.tile_id, laid.orientation, entryEdge, exitEdge);
-    return indices.length === 0 ? null : indices.map((index) => segmentKey(q, r, index));
+    return indices.length === 0 ? null : stubsForTransit(q, r, indices, entryEdge, exitEdge);
   }
 
   const label = LABEL_BY_COORD.get(hexKey(q, r));
   if (label !== undefined && printedArtwork(label) !== undefined) {
     const indices = printedPathsForTraversal(label, entryEdge, exitEdge);
-    return indices.length === 0 ? null : indices.map((index) => segmentKey(q, r, index));
+    return indices.length === 0 ? null : stubsForTransit(q, r, indices, entryEdge, exitEdge);
   }
   // New York is authored outside `PRINTED_GRAPHICS_CATALOG` (design note #229), and `printedPathsForTraversal`
   // already resolves it -- but `printedArtwork` does not see it, so it is asked for explicitly rather than
@@ -139,7 +206,7 @@ export function traversalSegments(
   // make.
   if (label === "G19") {
     const indices = printedPathsForTraversal(label, entryEdge, exitEdge);
-    return indices.length === 0 ? null : indices.map((index) => segmentKey(q, r, index));
+    return indices.length === 0 ? null : stubsForTransit(q, r, indices, entryEdge, exitEdge);
   }
 
   /* Design note #2: no per-rail structure here. Fall back to the edge test,
@@ -195,7 +262,11 @@ export function neighbourAcross(
 
 /** Every rail on this hex that touches `edge` -- what a route TERMINATING
  *  here occupies. A terminus runs in and stops, so it uses the entry rail
- *  and nothing else. */
+ *  and nothing else.
+ *
+ *  Design note #669: "the entry rail" now means the entry END of it. The body below is unchanged, because
+ *  `traversalSegments` puts that end first and this already took the first element -- the fix reached here for
+ *  free, which is the sign the split was made at the right level. */
 export function segmentsTouchingEdge(
   mapGrid: MapGridResponse,
   q: number,
@@ -214,8 +285,14 @@ export function segmentsTouchingEdge(
   /* A dead-end: rail reaches this edge and goes nowhere else on the hex.
      Still occupied by a train that stops here, so it needs an identity --
      the whole-hex one, which is the honest answer when no traversal can
-     name a rail. */
+     name a rail.
+
+     Design note #669: qualified by the edge, and this is the RED OFF-BOARD case as much as the dead-end one.
+     #484 made a red area terminal, so `traversalSegments` returns `null` for it and every train ending at Deep
+     South claimed one identity for the whole zone -- two trains arriving from different directions blocked each
+     other out of a destination 1830 lets them share. There are no transits through a red area at all, so
+     naming the end here cannot disagree with anything. */
   return liveEdgesForHex(mapGrid, q, r).includes(edge)
-    ? [segmentKey(q, r, WHOLE_HEX_SEGMENT)]
+    ? [stubKey(q, r, WHOLE_HEX_SEGMENT, edge)]
     : [];
 }

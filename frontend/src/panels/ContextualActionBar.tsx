@@ -255,6 +255,7 @@ export default function ContextualActionBar({
   onPlaceStationTokenHint,
   stationTokenCost,
   activeCorporation,
+  pendingTreasury = null,
   tokenTargetMode,
   setTokenTargetMode,
   onSkipSubPhase,
@@ -343,6 +344,14 @@ export default function ContextualActionBar({
     stationSlots: readonly StationTokenSlot[];
     trains: readonly string[];
   } | null;
+  /** Design note #673: the tile lay currently being previewed, or `null` when
+   *  none is or when it is free.
+   *
+   *  A SEPARATE PROP rather than a field on `activeCorporation`, deliberately:
+   *  that object is what the corporation IS, and this is a gesture in flight
+   *  that has not happened and may never. Folding a pending figure into the
+   *  standing record is how a preview ends up read as a fact. */
+  pendingTreasury?: { fee: number; after: number } | null;
   /** Design note #159: whether station-token targeting is armed, and the
    *  setter behind the banner's own Cancel. Passed rather than owned here
    *  because the CANVAS is the other half of this mode and lives in the
@@ -865,59 +874,64 @@ export default function ContextualActionBar({
          IT SURVIVES THE COLLAPSE, unlike the strip it replaces. #298 dropped the stepper when pinned as
          orientation rather than input; neither objection survives the change of form -- at three words it costs
          the board nothing, and it is now the ONLY thing naming the current step in the header. */}
-      {/* Design note #518: THE TRAIL, WHEN THERE IS ROOM FOR IT. This restores what #481 removed, and the
-         reason it is not a reversal is the CONDITION: #481's argument was about the PINNED form (a pinned bar
-         must earn every row) and was applied to both.
-         So the two forms split. The expanded panel shows the whole trail, which answers "what is still to
-         come"; the pinned form keeps #481's phrase, which answers "where am I" in three words. Neither state
-         gains a row it was not already spending.
-         THE COUNTER GOES WITH THE TRAIL -- "4/6" beside six visible boxes is two renderings of one position.
-         The compact form keeps it, because there it is the only thing carrying the position. */}
+      {/* Design note #518: THE TRAIL, WHEN THERE IS ROOM FOR IT. This restored what #481 removed, and split the
+         two forms: the expanded panel got the whole trail, the pinned form kept #481's three-word phrase.
+
+         Design note #672: THE SPLIT IS GONE. THE TRAIL RENDERS IN BOTH FORMS.
+
+         REPORTED, more than once: "when the Action Bar becomes sticky it drops the Train Limit and condenses the
+         sub-phase into '[Current Action] x/6' — there is plenty of room for both."
+
+         #590 had already reached that conclusion and said so in capitals -- NOTHING IS DROPPED WHEN PINNED -- and
+         then only half-applied it. It restored the president and the privates row and left the two facts here
+         behind, so a note asserting a rule sat six lines above two violations of it. That is worse than either
+         behaviour on its own: the next reader trusts the note.
+
+         THE PREMISE WAS THE PROBLEM, and it is worth naming precisely because it sounded so reasonable. #298
+         reasoned that a sticky bar costs the map its height for the whole scroll, so a pinned bar must earn every
+         row. True. But the trail does not COST a row -- it sits on the same line as the round label, in 11px
+         boxes about a pixel taller than the 14px phrase it replaced. The saving was never real; it was assumed
+         from the fact that the trail looks bigger.
+
+         AND THE COUNTER GOES WITH IT, for #518's own reason: "4/6" beside six visible boxes is two renderings of
+         one position. It existed because the phrase was the only thing carrying the position, and the phrase is
+         gone.
+
+         IF A NARROW WINDOW EVER MAKES THIS TIGHT the trail wraps -- `subPhaseTrail` is `flexWrap` already -- which
+         is #590's stated answer: wrapping or a smaller type scale, not deciding for the player which facts they
+         may keep. */}
       {roundType === "OperatingRound" && orSubPhaseProgress && (
-        condensed ? (
-          <span
-            style={styles.actionBarSubPhaseInline}
-            title={`Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} in this corporation's turn.`}
-          >
-            {orSubPhaseProgress.label}
-            <span style={styles.actionBarSubPhaseCount}>
-              {" "}
-              {orSubPhaseProgress.position}/{orSubPhaseProgress.total}
-            </span>
-          </span>
-        ) : (
-          <span
-            style={styles.subPhaseTrail}
-            role="list"
-            aria-label={`Operating Round steps — currently ${orSubPhaseProgress.label}`}
-          >
-            {orSubPhaseProgress.steps.map((phase, index) => {
-              const isCurrent = phase === orSubPhase;
-              const isDone = index < orSubPhaseProgress.position - 1;
-              return (
-                <span
-                  key={phase}
-                  role="listitem"
-                  aria-current={isCurrent ? "step" : undefined}
-                  style={{
-                    ...styles.subPhaseStep,
-                    ...(isDone ? styles.subPhaseStepDone : {}),
-                    ...(isCurrent ? styles.subPhaseStepCurrent : {}),
-                  }}
-                  title={
-                    isCurrent
-                      ? `Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} — this corporation is here now.`
-                      : isDone
-                        ? `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — already past.`
-                        : `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — still to come.`
-                  }
-                >
-                  {OPERATING_SUB_PHASE_LABELS[phase].stepLabel}
-                </span>
-              );
-            })}
-          </span>
-        )
+        <span
+          style={styles.subPhaseTrail}
+          role="list"
+          aria-label={`Operating Round steps — currently ${orSubPhaseProgress.label}`}
+        >
+          {orSubPhaseProgress.steps.map((phase, index) => {
+            const isCurrent = phase === orSubPhase;
+            const isDone = index < orSubPhaseProgress.position - 1;
+            return (
+              <span
+                key={phase}
+                role="listitem"
+                aria-current={isCurrent ? "step" : undefined}
+                style={{
+                  ...styles.subPhaseStep,
+                  ...(isDone ? styles.subPhaseStepDone : {}),
+                  ...(isCurrent ? styles.subPhaseStepCurrent : {}),
+                }}
+                title={
+                  isCurrent
+                    ? `Step ${orSubPhaseProgress.position} of ${orSubPhaseProgress.total} — this corporation is here now.`
+                    : isDone
+                      ? `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — already past.`
+                      : `${OPERATING_SUB_PHASE_LABELS[phase].stepLabel} — still to come.`
+                }
+              >
+                {OPERATING_SUB_PHASE_LABELS[phase].stepLabel}
+              </span>
+            );
+          })}
+        </span>
       )}
       {/* Design note #630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE. It was in the BUTTON row because that
          is where the roster pills it replaced sat (#342) -- and a pill carrying spendable cash did belong next
@@ -1018,56 +1032,66 @@ export default function ContextualActionBar({
                 )}
               </span>
               {/* Design note #589: TWO LINES, NOT THREE. A side effect of #575 turning a baseline-aligned ROW into a
-                 column: the president had shared a line and a column gave it one of its own. It belongs beside the full
-                 NAME -- both are identity detail read second ("the Pennsylvania Railroad, Ada presiding" is one
-                 thought), while the herald and acronym above are the label you read first. */}
-              {(activeCorporation?.fullName || activeCorporation?.presidentLabel) && (
+                 column: the president had shared a line and a column gave it one of its own.
+                 Design note #671: and the president has LEFT this line, which leaves the full name alone on it. #589
+                 argued the two were one thought -- "the Pennsylvania Railroad, Ada presiding" -- and that reading is
+                 fine in prose and wrong on this bar, because the full name is the LONGEST string here and the
+                 president's name sat downstream of it. Every company shifted the crown to a different x, so the one
+                 fact a reader scans for ("whose company is this?") had no fixed place to look. It sits at the end of
+                 the facts rail now, where the row's own gaps give it a stable position. */}
+              {activeCorporation?.fullName && (
                 <span style={styles.orContextSubRow}>
-                  {activeCorporation?.fullName && (
-                    <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
-                      {activeCorporation.fullName}
-                    </span>
-                  )}
-                  {activeCorporation?.presidentLabel && (
-                <span
-                  style={{
-                    ...styles.orContextPresident,
-                    color: corporationBarInk.inkMuted,
-                    ...(activeCorporation.presidentCash !== null
-                      ? { cursor: "help", textDecoration: "underline dotted 1px" }
-                      : {}),
-                  }}
-                  /* Design note #326: THE PERSONAL PURSE, ON THE PERSON. Where #325's figure went -- attached to the
-                     president's NAME, so a number beside a crown is a fact about that human, where the same number in the
-                     rail below was a fact about "the acting turn", which in an Operating Round means the company.
-                     A tooltip rather than visible text because it is reference: it answers "can they cover the emergency
-                     buy" when asked. The dotted underline is what makes it discoverable -- an unmarked tooltip is one
-                     nobody hovers. */
-                  title={
-                    activeCorporation.presidentCash !== null
-                      ? `President's Personal Treasury: $${activeCorporation.presidentCash}`
-                      : undefined
-                  }
-                >
-                  {/* Design note #552: our own crown, not U+1F451 -- the
-                      same drawing every other surface uses. */}
-                  <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
-                  {activeCorporation.presidentLabel}
-                </span>
-                  )}
+                  <span style={{ ...styles.orContextName, color: corporationBarInk.inkMuted }}>
+                    {activeCorporation.fullName}
+                  </span>
                 </span>
               )}
             </span>
 
             {activeCorporation && (
               <span style={styles.orContextFacts}>
-                <span style={styles.orContextFact} title="Everything this corporation can spend this turn.">
+                {/* Design note #673: THE PROVISIONAL TREASURY. While a tile lay is being previewed, this reads
+                   "$1000 → $920" -- where the corporation stands and where the pending lay leaves it.
+                   THE ARROW, NOT A LONE CHANGED NUMBER. A single amber "$920" is the same failure the dividend
+                   report named (#670): a figure only reads as a change to somebody who had memorised the one
+                   before it. Both ends, and the reader does no arithmetic.
+                   IT IS NOT A COMMITMENT. The lay has not happened -- the player still has a tick and a cross
+                   above the hex -- so the pending figure is styled as pending and the standing one is left
+                   legible beside it rather than replaced. */}
+                <span
+                  style={styles.orContextFact}
+                  title={
+                    pendingTreasury
+                      ? `Treasury $${activeCorporation.treasury} now. The previewed tile lay costs $${pendingTreasury.fee}, leaving $${pendingTreasury.after}. Nothing is spent until you confirm.`
+                      : "Everything this corporation can spend this turn."
+                  }
+                >
                   <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                     Treasury
                   </span>
-                  <span style={{ ...styles.orContextFactValue, color: corporationBarInk.ink }}>
+                  <span
+                    style={{
+                      ...styles.orContextFactValue,
+                      // Dimmed to the muted ink while pending: the standing figure is
+                      // about to stop being the answer, and the arrow's right-hand side
+                      // is what the player is deciding about.
+                      color: pendingTreasury ? corporationBarInk.inkMuted : corporationBarInk.ink,
+                    }}
+                  >
                     ${activeCorporation.treasury}
                   </span>
+                  {pendingTreasury && (
+                    <span
+                      style={{ ...styles.orContextTreasuryPending, color: corporationBarInk.ink }}
+                      /* A live region: the figure changes as the player moves between hexes without
+                         anything being focused or clicked, which is exactly the update assistive tech
+                         has no other way to learn about. */
+                      aria-live="polite"
+                      aria-label={`After the previewed tile lay, $${pendingTreasury.after}`}
+                    >
+                      {"→"} ${pendingTreasury.after}
+                    </span>
+                  )}
                 </span>
 
                 {/* Design note #237: TOKENS, NOT A FRACTION. This read `2/4 - $40 ea`, which was wrong about the money:
@@ -1079,7 +1103,9 @@ export default function ContextualActionBar({
                    height -- the station circles and the train chips -- keeping the cheap single figures, which optimised
                    for pixels rather than for the decision: a president mid-turn asks "what do I own and where can I put a
                    token", and the answer was scrolled off the top while a number they cannot act on stayed pinned.
-                   So the condensed card keeps the PIECES and drops the LIMIT. */}
+                   So the condensed card kept the PIECES and dropped the LIMIT.
+                   Design note #672: and now keeps both -- see the train limit below, and the note on the sub-phase trail
+                   for why the "expensive when pinned" premise did not survive being measured. */}
                 <span style={styles.orContextFact}>
                   <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
                     Stations
@@ -1128,8 +1154,14 @@ export default function ContextualActionBar({
                   {/* Design note #248: the limit, beside the fleet it caps. The chips say WHICH trains; this says how much
                      room is left, which decides whether the Buy Trains step has anything in it. Amber at the ceiling.
                      Design note #372: dropped when pinned -- the one figure here a president cannot act on, since the Buy
-                     Trains step enforces it on its own. (Restored by #590, which found the space was never scarce.) */}
-                  {!condensed && phase?.trainLimit !== undefined && (
+                     Trains step enforces it on its own.
+                     Design note #672: RESTORED IN THE CODE, not only in a note. #590 said this was restored and left the
+                     `!condensed` gate in place, so the file asserted one thing and did another for two releases.
+                     ON #372's ARGUMENT that a president cannot act on it: they cannot act on the number, and they decide
+                     with it -- "am I one train from the ceiling" is what makes a $450 purchase urgent or pointless, and
+                     the pinned bar is exactly where that question gets asked, because the player is looking at the board.
+                     It is a `<span>` on a line that already exists; there was no row to reclaim. */}
+                  {phase?.trainLimit !== undefined && (
                     <span
                       style={{
                         ...styles.orContextFactValue,
@@ -1187,6 +1219,49 @@ export default function ContextualActionBar({
                         </span>
                       ))}
                     </span>
+                  </span>
+                )}
+
+                {/* Design note #671: THE PRESIDENT, AT THE END OF THE RAIL.
+                   Moved off the name line (see #589 above for what it was doing there). LAST rather than first,
+                   because this rail is ordered by what a president acts ON -- treasury, then tokens, then the fleet
+                   and its ceiling -- and whose company it is decides nothing during the turn. It is identity, and
+                   identity belongs at the end of a rail of figures rather than in front of them.
+                   NO CAPTION, unlike its four neighbours. The crown IS the caption -- it is the mark every other
+                   surface in this app uses for exactly this fact (`PlayerCards` #567 settled the same question the
+                   same way), and "PRESIDENT [crown] Ada" says it twice. The one thing that would justify the word is
+                   if the crown were ambiguous here, and next to a rail of money and trains it is not. */}
+                {activeCorporation.presidentLabel && (
+                  <span
+                    style={{
+                      ...styles.orContextFact,
+                      ...styles.orContextPresident,
+                      /* `orContextFact`'s 6px is the gap between a CAPTION and its
+                         value. There is no caption here, and the crown carries its
+                         own 3px, so inheriting it would set the crown 9px off a name
+                         it belongs against. */
+                      gap: 0,
+                      color: corporationBarInk.inkMuted,
+                      ...(activeCorporation.presidentCash !== null
+                        ? { cursor: "help", textDecoration: "underline dotted 1px" }
+                        : {}),
+                    }}
+                    /* Design note #326: THE PERSONAL PURSE, ON THE PERSON. Where #325's figure went -- attached to the
+                       president's NAME, so a number beside a crown is a fact about that human, where the same number in
+                       the rail below was a fact about "the acting turn", which in an Operating Round means the company.
+                       A tooltip rather than visible text because it is reference: it answers "can they cover the
+                       emergency buy" when asked. The dotted underline is what makes it discoverable -- an unmarked
+                       tooltip is one nobody hovers. */
+                    title={
+                      activeCorporation.presidentCash !== null
+                        ? `President's Personal Treasury: $${activeCorporation.presidentCash}`
+                        : undefined
+                    }
+                  >
+                    {/* Design note #552: our own crown, not U+1F451 -- the
+                        same drawing every other surface uses. */}
+                    <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
+                    {activeCorporation.presidentLabel}
                   </span>
                 )}
               </span>
@@ -1334,10 +1409,30 @@ export default function ContextualActionBar({
               {/* Design note #413: `mayActThisTurn` leads, because Skip is the control the report names. It dispatches
                  `AdvanceOperatingSubPhase` for the ACTING corporation, so a non-acting player clicking it was stepping
                  somebody else's turn forward. */}
+              {/* Design note #674: SKIP IS NOT A UTILITY. It wore `actionBarUtilityButton` -- dimmer ink and a dashed
+                 border -- alongside Undo, and reported as looking "slightly dimmer than the Buy Private button; they
+                 should be the same since they're equally viable options."
+                 THE REPORT IS A RULES POINT, not a taste one, and it is right. #258 called declining "the fallback",
+                 which is true of a UI affordance and false of 1830: not laying track to keep $120 for a train, or
+                 declining a private a rival needs you to bid on, are ordinary strong plays. A control the game
+                 offers as a peer of the action beside it should not be drawn as its lesser.
+                 UNDO KEEPS THE TREATMENT, which is what makes this a distinction rather than a deletion. Undo is not
+                 a move at all -- `logRevert.ts` #591 is explicit that it is an instruction about the LOG -- so it is
+                 categorically not one of the turn's options, and dimmer-and-dashed says exactly that.
+                 THE LABEL CARRIES THE DIFFERENCE, chevron included. "Skip Buy Private ›" beside "Buy Private
+                 Company" is unambiguous in words, and a second signal for a fact the words already state is what
+                 `PlayerCards` #567 removed three of. */}
               {mayActThisTurn && orSubPhase !== "Hardware" && !dividendChoiceForced && (
                 <button
                   type="button"
-                  style={{ ...styles.actionBarButton, ...styles.actionBarUtilityButton }}
+                  /* Design note #619: it passes `disabled` and so it has to LOOK disabled. This button was missed by
+                     that note's own sweep -- which found the contextual buttons and the phantom style key and left
+                     the one control sitting between them. Exactly the invisible failure #619 describes: a
+                     `Record<string, CSSProperties>` sheet cannot report a style nobody spread. */
+                  style={{
+                    ...styles.actionBarButton,
+                    ...(!sessionReady ? styles.actionBarButtonDisabled : {}),
+                  }}
                   onClick={onSkipSubPhase}
                   disabled={!sessionReady}
                   title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. Dispatches AdvanceOperatingSubPhase — the contract moves its own cursor one step.`}

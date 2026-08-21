@@ -88,6 +88,7 @@ import SandboxRoomBar from "./components/SandboxRoomBar";
 import SandboxWaitingRoom from "./components/SandboxWaitingRoom";
 import {
   appendSandboxAction,
+  appliedPrefixHolds,
   canStartSandboxGame,
   decodeAction,
   hostSandboxRoom,
@@ -101,6 +102,11 @@ import {
   subscribeSandboxRoom,
   toSetupPlayers,
   upsertSandboxPlayer,
+  /* Design note #668: NAMED, at last. #643 noted that the drain's hand-written
+     copy of this shape had gone stale and dropped `at`; importing the type is
+     the fix that note asked for, and it is what stops `derived` going the same
+     way. */
+  type SandboxAction,
   type SandboxRoomDoc,
 } from "./utils/sandboxRoom";
 import { isFirebaseConfigured } from "./config/firebase";
@@ -154,6 +160,16 @@ import {
 // Chat messages arrive pre-built from useFirestoreChat; this file constructs none.
 // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
+// Design note #670: the payout confirmation. The arithmetic is in the util so
+// the replay and undo cases can be tested as sequences rather than screenshots.
+import PlayerCashStrip from "./components/PlayerCashStrip";
+import {
+  cashByPlayer,
+  cashChanges,
+  settleCashDeltas,
+  type CashByPlayer,
+  type CashDelta,
+} from "./utils/cashDelta";
 import {
   depotInventory,
   derivePhase,
@@ -295,6 +311,9 @@ import {
   resolvePrivateExchange,
 } from "./utils/privateExchange";
 import { effectiveActions, undoReachFor } from "./utils/logRevert";
+// Design note #673: one computation of what a previewed lay costs, read by the
+// corporation card and by the radial confirm caption.
+import { describePendingTileCost, pendingTileCost } from "./utils/pendingTileCost";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -318,6 +337,50 @@ import {
 /** Round tag ("Auction"/"SR2"/"OR 1.1") from a state, not from what the browser shows; null before the first poll. roundLabelFor moved to utils/roundLabel.ts (#659).
  *  See docs/ai_architecture/state_machine.md - App.tsx #643 */
 let nextLogEntryId = 1;
+
+/* ---- Design note #668: the feed's clock, and why it needed one. ----
+
+   REPORTED: during OR 2.2 the Activity Log suddenly printed a backlog of setup
+   events -- "Game dealt for 2 players", "Host won Mohawk & Hudson", "B&O
+   floated" -- long after they happened.
+
+   Nothing was buffering them. They were REPLAYED, correctly and in order, by a
+   rebuild after an undo, and then SORTED into the wrong place. #643 gave a
+   replayed action the log entry's own `createdAt` so a rebuild would not stamp
+   the whole history with one instant; what it could not reach was `logInfo`,
+   which every derived line goes through and which had no way to know a replay
+   was running. So the action landed at its true time and its own consequences
+   landed at `Date.now()`, at the bottom of a feed sorted on that field alone.
+
+   Two things fix it and both are needed. `seq` (feed.ts #668) gives the feed a
+   real order to fall back on. `replayClock` below gives the derived lines the
+   right time in the first place, so the two orders agree instead of one papering
+   over the other.
+
+   The clock is also MONOTONIC. Firestore's `createdAt` is null in the optimistic
+   local snapshot, so `at` is legitimately absent on a just-written entry; taking
+   the greater of the stamp and the previous entry's keeps the log non-decreasing
+   whatever the source, which is the property the sort actually relies on. */
+let replayClock: number | null = null;
+let lastLogStampMs = 0;
+
+/** The instant to stamp the next entry with. `at` when the caller has one (a
+ *  replayed action), the replay clock when a derived line is being written
+ *  during one, and the wall clock otherwise -- never going backwards. */
+function stampLogTime(at?: number): number {
+  const proposed = at ?? replayClock ?? Date.now();
+  const stamped = Math.max(proposed, lastLogStampMs);
+  lastLogStampMs = stamped;
+  return stamped;
+}
+
+/** Clears the clock, for a rebuild that is about to replay history from the
+ *  start. Without this the previous run's high-water mark would flatten the
+ *  whole replay onto one instant. */
+function resetLogClock(): void {
+  replayClock = null;
+  lastLogStampMs = 0;
+}
 
 // Chat ids are Firestore document ids, not a local counter, so they match across clients.
 // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
@@ -1513,11 +1576,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  drain can replay from the fixture. Published by an effect below,
    *  because the setters it needs are declared after this. */
   const rebuildRef = useRef<(() => void) | null>(null);
-  /** The log as last seen, for the undo controls; a ref so pressing a button does not rebuild the handlers. Mirrors `at` too (#643).
+  /** The log as last seen, for the undo controls; a ref so pressing a button does not rebuild the handlers. Mirrors `at` too (#643), and `derived` (#668) -- typed as `SandboxAction` rather than restated, so the next field cannot go missing the way those two did.
    *  See docs/ai_architecture/state_machine.md - App.tsx #591 */
-  const sandboxLogRef = useRef<
-    Array<{ index: number; payload: string; actor: string; at?: number }>
-  >([]);
+  const sandboxLogRef = useRef<SandboxAction[]>([]);
   /* Log index of the last round-opening action, derived from the log rather than counted, so an undo cannot leave it stale.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const roundBoundaryIndexRef = useRef<number | null>(null);
@@ -1962,6 +2023,81 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   }, [gameState, marketGrid, settledPrivatePrices]);
 
+  /* ---- Design note #670: what just happened to everyone's money. ----
+
+     REPORTED: "when players click Pay Dividends, it is very hard to tell if the
+     game is actually doing so." The payout worked and the log said so; what a
+     reader could not do was SEE it, because a balance of $540 confirms a payout
+     only to somebody who had memorised $530. `cashDelta.ts` owns the
+     arithmetic; this owns when to ask it.
+
+     TWO SOURCES, BECAUSE THERE ARE TWO CLOCKS. In a room the board advances one
+     logged action at a time and the drain below knows exactly which; on a live
+     chain it advances when a poll comes back and nobody knows what moved. So the
+     room measures per action and the chain diffs the poll -- and BOTH funnel
+     into the one `noteCashChanges` so the badge cannot mean two things. */
+  const [cashDeltas, setCashDeltas] = useState<CashDelta[]>([]);
+  const noteCashChanges = useCallback(
+    (changes: ReadonlyArray<{ address: string; amount: number }>) => {
+      if (changes.length === 0) return;
+      setCashDeltas((current) => settleCashDeltas(current, changes, Date.now()));
+    },
+    [],
+  );
+
+  /* A badge has to be able to expire with nothing else happening -- a dividend
+     is often the last event for a while. So a timer re-settles the set, which
+     drops whatever has aged out; `settleCashDeltas` returns the SAME array when
+     nothing expired, so this cannot loop. */
+  useEffect(() => {
+    if (cashDeltas.length === 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setCashDeltas((current) => {
+        const next = settleCashDeltas(current, [], Date.now());
+        return next.length === current.length ? current : next;
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [cashDeltas]);
+
+  /* THE LIVE-CHAIN HALF. Polled state, so the only question a diff can answer
+     is "different from last time" -- which is the right question there and the
+     wrong one in a room, where a rebuild replays the entire game through the
+     same state variable and would fire a badge for every historic action at
+     once. Hence the guard: in a room the drain measures instead. */
+  const polledCashRef = useRef<CashByPlayer>({});
+  useEffect(() => {
+    if (sandbox) return;
+    const next = cashByPlayer(liveGameState);
+    const previous = polledCashRef.current;
+    polledCashRef.current = next;
+    noteCashChanges(cashChanges(previous, next));
+  }, [sandbox, liveGameState, noteCashChanges]);
+
+  /** Keyed for the two surfaces that render a badge. Rebuilt only when the set
+   *  changes, so a card is not re-rendered by an unrelated poll. */
+  const cashDeltaByPlayer = useMemo(() => {
+    const out: Record<string, CashDelta> = {};
+    for (const delta of cashDeltas) out[delta.address] = delta;
+    return out;
+  }, [cashDeltas]);
+  const cashDeltaFor = useCallback(
+    (address: string) => cashDeltaByPlayer[address]?.amount ?? 0,
+    [cashDeltaByPlayer],
+  );
+
+  /** Design note #670: the strip's rows. Seating order, cash only -- everything
+   *  else a player might want is a tab away, and a second copy of it here would
+   *  be a second thing to keep true. */
+  const playerCashRows = useMemo(() => {
+    if (!gameState) return [];
+    const cash = cashByPlayer(gameState);
+    return gameState.player_addresses.map((address) => ({
+      address,
+      cash: address in cash ? cash[address] : null,
+    }));
+  }, [gameState]);
+
   /* Pass stamps come from the two consecutive-pass counters, which self-clear. Suppressed during a mini-auction, empty in an Operating Round.
      See docs/ai_architecture/ui_shell_layout.md - App.tsx #610 */
   const passedSeats = useMemo(() => {
@@ -2071,11 +2207,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      See docs/ai_architecture/state_machine.md - App.tsx #659 */
   const logInfo = useCallback((label: string, detail: string, round?: string | null) => {
     const id = nextLogEntryId++;
-    const timestamp = new Date().toLocaleTimeString();
-    const timestampMs = Date.now();
+    /* Design note #668: the replay clock, not `Date.now()`. Every derived line
+       in the app goes through here -- Float, Round, Auto-Skip, Private Revenue
+       -- and during a rebuild each one is a consequence of the action being
+       replayed, so it belongs beside that action rather than at the instant the
+       rebuild happened to run. */
+    const timestampMs = stampLogTime();
+    const timestamp = new Date(timestampMs).toLocaleTimeString();
     setActionLog((log) => [
       {
         id,
+        // Design note #668: the counter is already monotonic; naming it `seq`
+        // at the point of use is what lets the feed sort on it.
+        seq: id,
         label,
         status: "info",
         detail,
@@ -2150,6 +2294,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          See docs/ai_architecture/state_machine.md - App.tsx #439 */
       options?: {
         automatic?: boolean;
+        /** Design note #668: the game dispatched this, not the player -- the
+         *  auto-skip and the forced withhold, and nothing else.
+         *
+         *  DELIBERATELY NOT `automatic`. That flag means "do not apply the turn
+         *  gate", and a home station placement, a B&O par and a private exchange
+         *  all set it while being decisions a player made and expects to be able
+         *  to take back. Folding the two together would make Undo step silently
+         *  past a real move, which is the bug #475 was fixed to prevent. */
+        derived?: boolean;
         resetRouteRevenue?: boolean;
         isRemoteReplay?: boolean;
         /** Design note #643: the log entry's own `createdAt`, so a replayed
@@ -2194,8 +2347,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
       const id = nextLogEntryId++;
       /* A replayed action keeps its own clock: options.at is the log entry's createdAt, so a rebuild does not stamp the whole history with one instant.
+         #668: through stampLogTime, which also holds the stamp monotonic -- `at` is legitimately absent on an entry Firestore has not resolved yet.
          See docs/ai_architecture/state_machine.md - App.tsx #643 */
-      const timestampMs = options?.at ?? Date.now();
+      const timestampMs = stampLogTime(options?.at);
       const timestamp = new Date(timestampMs).toLocaleTimeString();
 
       // Read-only gate for dispatch path (1); the tile popup is path (2) and is gated by not being mounted. Refusals are logged, not silently dropped. Sandbox routes to the local reducer and never signs.
@@ -2226,6 +2380,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               ? actingAddressRef.current ?? authorId
               : authorId,
             msg,
+            /* Design note #668: recorded ON the entry. The client that
+               dispatched it is the only one that knows, and every other client
+               has to be able to answer "was this a decision?" from the log
+               alone -- Undo lands on the same action for everybody or the
+               table disagrees about what was taken back. */
+            options?.derived === true,
           ).catch(() => false);
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
@@ -2737,6 +2897,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         setActionLog((log) => [
           {
             id,
+            seq: id, // design note #668
             label,
             status: "success",
             detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
@@ -2788,6 +2949,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         setActionLog((log) => [
           {
             id,
+            seq: id, // design note #668
             label,
             status: "info",
             detail: "Spectator mode — watching only. Join from the lobby to play.",
@@ -2804,6 +2966,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setActionLog((log) => [
         {
           id,
+          seq: id, // design note #668
           label,
           status: "pending",
           detail: "Broadcasting via session key...",
@@ -3382,7 +3545,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             distribute,
           },
         },
-        { automatic },
+        /* Design note #668: same reasoning as the sub-phase skip -- the flag is
+           true only for `withholdRevenueAutomatically`, the forced $0 withhold
+           the game declares on the player's behalf. Pay and Withhold are
+           decisions and remain undoable. */
+        { automatic, derived: automatic },
       );
       setLiveOrSubPhase("Hardware");
     },
@@ -3709,7 +3876,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           protocol_id: actingProtocolId,
         },
       },
-      { automatic },
+      /* Design note #668: `derived` tracks `automatic` HERE, because here the
+         two questions have the same answer -- #439's split entry points mean
+         this flag is true only when the auto-skip effect called it. The Skip
+         button passes `false` and stays undoable. */
+      { automatic, derived: automatic },
     );
     if (!sandbox) return;
     setLiveOrSubPhase((current) => {
@@ -4287,69 +4458,150 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxRoomCode]);
 
   const replayingRef = useRef(false);
+  /* Design note #668: the ids of the entries this client has already applied,
+     in the order it applied them. The drain's only record of WHICH history it
+     replayed -- a count cannot tell one history from another of the same
+     length, and that is exactly the case that stranded a player. */
+  const appliedIdsRef = useRef<string[]>([]);
+  /** Design note #668: the snapshot that arrived mid-replay, held rather than
+   *  dropped. `null` when there is nothing waiting. */
+  const pendingSnapshotRef = useRef<SandboxAction[] | null>(null);
   useEffect(() => {
     if (!sandbox || !sandboxRoomCode) return undefined;
     let live = true;
 
-    /* Design note #643: the parameter is spelled out rather than imported as
-       `SandboxAction`, and that hand-written shape had silently gone stale --
-       it omitted `at`, so the timestamp the log carries was dropped at the
-       door. Widened here; the lasting fix is to name the type. */
-    const drain = async (
-      actions: Array<{ index: number; payload: string; id: string; actor: string; at?: number }>,
-    ) => {
-      if (replayingRef.current) return;
+    /* Design note #668: `SandboxAction`, imported. #643 spelled this shape out
+       by hand and it went stale immediately -- it omitted `at`, so the log's
+       timestamp was dropped at the door and the whole rebuilt history was
+       stamped with the instant of the rebuild. Naming the type is the fix that
+       note asked for. */
+    const drain = async (incoming: SandboxAction[]) => {
+      /* A snapshot arriving mid-replay is now HELD, NOT DROPPED. This is the
+         stranding: `subscribeSandboxLog` hands back the whole log, so a dropped
+         snapshot is harmless only while another is coming. The LAST one has
+         nothing behind it -- the room falls quiet because it is the other
+         player's turn -- so the client that dropped it simply stops, mid-round,
+         with a board every other client has moved past. Player 1 sits in OR 2.2
+         while Player 2 reaches SR3, and no amount of waiting fixes it because
+         Firestore has nothing left to send.
+         See docs/ai_architecture/firebase_middleware.md - App.tsx #668 */
+      if (replayingRef.current) {
+        // Newest wins: the whole log, so an older held snapshot is a strict
+        // subset of this one and worth nothing.
+        pendingSnapshotRef.current = incoming;
+        return;
+      }
       replayingRef.current = true;
       try {
-        /* A shorter effective history means an undo landed: throw the state away and replay from the fixture. A full replay is the cheap option.
-           See docs/ai_architecture/firebase_middleware.md - App.tsx #591 */
-        sandboxLogRef.current = actions;
-        /* Named history, not live - the first version shadowed the effect's own teardown flag.
-           See docs/ai_architecture/firebase_middleware.md - App.tsx #454 */
-        const history = effectiveActions(actions);
-        /* Design note #592a: the newest round-opening action still standing.
-           `SetupGame` counts as one -- it opens the auction -- so a host can
-           always reach back to the top of the current round even in the
-           first one. */
-        roundBoundaryIndexRef.current =
-          [...history].reverse().find((entry) => {
-            const decoded = decodeAction(entry);
-            return isSetupGameMsg(decoded) || isOpenStockRoundMsg(decoded);
-          })?.index ?? null;
-        const rewound = history.length < appliedCountRef.current;
-        if (rewound) {
-          rebuildRef.current?.();
-          appliedCountRef.current = 0;
-          /* The log is a rendering of the action list, so a rewind rebuilds it from the same source rather than appending to it.
-             See docs/ai_architecture/firebase_middleware.md - App.tsx #643 */
-          setActionLog([]);
-        }
-        // The next log index to append at is the LOG's length, never the
-        // effective count -- an undone action still occupies its index.
-        appliedIndexRef.current =
-          actions.length > 0 ? actions[actions.length - 1].index + 1 : 0;
+        let actions = incoming;
+        // Drains until the room stops changing under it, so the coalesced
+        // snapshot above is never left sitting.
+        for (;;) {
+          /* An undo, or a race resolved against this client, means the history it
+             replayed is no longer the room's: throw the state away and replay from
+             the fixture. A full replay is the cheap option.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #591, #668 */
+          sandboxLogRef.current = actions;
+          /* Named history, not live - the first version shadowed the effect's own teardown flag.
+             See docs/ai_architecture/firebase_middleware.md - App.tsx #454 */
+          const history = effectiveActions(actions);
+          /* Design note #592a: the newest round-opening action still standing.
+             `SetupGame` counts as one -- it opens the auction -- so a host can
+             always reach back to the top of the current round even in the
+             first one. */
+          roundBoundaryIndexRef.current =
+            [...history].reverse().find((entry) => {
+              const decoded = decodeAction(entry);
+              return isSetupGameMsg(decoded) || isOpenStockRoundMsg(decoded);
+            })?.index ?? null;
+          /* Design note #668: PREFIX, not length. `history.length <
+             appliedCountRef.current` catches an undo and misses a reorder --
+             two clients appending at the same index each see their own entry
+             first, and `sortActions`' document-id tie-break then puts them in
+             an order one of them has already contradicted. Same length,
+             different history, no rebuild, permanent divergence. */
+          const rewound = !appliedPrefixHolds(
+            appliedIdsRef.current.slice(0, appliedCountRef.current),
+            history,
+          );
+          if (rewound) {
+            rebuildRef.current?.();
+            appliedCountRef.current = 0;
+            appliedIdsRef.current = [];
+            /* The log is a rendering of the action list, so a rewind rebuilds it from the same source rather than appending to it.
+               See docs/ai_architecture/firebase_middleware.md - App.tsx #643 */
+            setActionLog([]);
+            // Design note #668: and the feed's clock goes back with it, or the
+            // previous run's high-water mark flattens the whole replay onto one
+            // instant.
+            resetLogClock();
+          }
+          // The next log index to append at is the LOG's length, never the
+          // effective count -- an undone action still occupies its index.
+          appliedIndexRef.current =
+            actions.length > 0 ? actions[actions.length - 1].index + 1 : 0;
 
-        for (let at = appliedCountRef.current; at < history.length; at += 1) {
-          if (!live) return;
-          const action = history[at];
-          const msg = decodeAction(action);
-          /* A corrupt entry is SKIPPED PAST, cursor and all. Stopping would
-             wedge the room on one bad document; re-reading it every
-             snapshot would wedge it in a loop. */
-          appliedCountRef.current = at + 1;
-          if (!msg) continue;
-          // eslint-disable-next-line no-await-in-loop
-          await runGameplayAction("Sandbox room", msg, {
-            isRemoteReplay: true,
-            automatic: true,
-            // Design note #549: WHO, straight off the log entry.
-            actor: action.actor || null,
-            // Design note #643: and WHEN, likewise. Without this the whole
-            // rebuilt history is stamped with the instant of the rebuild.
-            at: action.at,
-          });
+          /* Design note #670: A BADGE MARKS A MOVE, NOT A CATCH-UP.
+             This pass is ordinary play only when exactly ONE action is new and
+             nothing was rewound. Joining a room replays a whole game, and an
+             undo rebuilds from the fixture -- in both, every balance on the
+             board changes, and firing a badge per change would carpet the strip
+             with figures about events that are minutes old. Those passes
+             re-baseline in silence, which is what `cashByPlayer` after the loop
+             does for free. */
+          const pending = history.length - appliedCountRef.current;
+          const isOrdinaryPlay = !rewound && pending === 1;
+
+          for (let at = appliedCountRef.current; at < history.length; at += 1) {
+            if (!live) return;
+            const action = history[at];
+            const msg = decodeAction(action);
+            /* A corrupt entry is SKIPPED PAST, cursor and all. Stopping would
+               wedge the room on one bad document; re-reading it every
+               snapshot would wedge it in a loop. */
+            appliedCountRef.current = at + 1;
+            appliedIdsRef.current[at] = action.id;
+            if (!msg) continue;
+            /* Design note #668: the replay clock is set BEFORE the dispatch and
+               cleared after, so every derived line `runGameplayAction` writes
+               through `logInfo` -- Float, Round, Auto-Skip -- is stamped with
+               this action's instant rather than the rebuild's. */
+            replayClock = action.at ?? null;
+            /* Design note #670: read off the REF, not the state variable. The
+               reducer writes `sandboxStateRef` synchronously and React commits
+               later, so the ref is the only thing that can be compared either
+               side of one awaited dispatch. */
+            const cashBefore = isOrdinaryPlay ? cashByPlayer(sandboxStateRef.current) : null;
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              await runGameplayAction("Sandbox room", msg, {
+                isRemoteReplay: true,
+                automatic: true,
+                // Design note #549: WHO, straight off the log entry.
+                actor: action.actor || null,
+                // Design note #643: and WHEN, likewise. Without this the whole
+                // rebuilt history is stamped with the instant of the rebuild.
+                at: action.at,
+              });
+            } finally {
+              // Cleared even if the dispatch threw: a stuck clock would stamp
+              // every later live action with a replayed instant.
+              replayClock = null;
+            }
+            if (cashBefore && live) {
+              noteCashChanges(cashChanges(cashBefore, cashByPlayer(sandboxStateRef.current)));
+            }
+          }
+          if (live) setSandboxAppliedCount(appliedCountRef.current);
+
+          /* Design note #668: whatever arrived while the loop was running. The
+             room is only caught up once there is nothing waiting -- returning
+             here with a snapshot still held is the stranding by another route. */
+          const queued = pendingSnapshotRef.current;
+          pendingSnapshotRef.current = null;
+          if (!queued || !live) return;
+          actions = queued;
         }
-        if (live) setSandboxAppliedCount(appliedCountRef.current);
       } finally {
         replayingRef.current = false;
       }
@@ -4365,8 +4617,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return () => {
       live = false;
       unsubscribe();
+      /* Design note #670: badges belong to the room they were earned in. */
+      setCashDeltas([]);
+      /* Design note #668: a held snapshot belongs to the room being left. The
+         next room's first snapshot is a whole log of its own and needs no help
+         from this one. */
+      pendingSnapshotRef.current = null;
     };
-  }, [sandbox, sandboxRoomCode, runGameplayAction]);
+    /* `noteCashChanges` is stable (`useCallback` with an empty dependency list),
+       so naming it here costs nothing and keeps the linter's guarantee intact --
+       an omission that happens to be safe today is the one that stops being safe
+       silently. See docs/ai_architecture/ui_shell_layout.md - App.tsx #670 */
+  }, [sandbox, sandboxRoomCode, runGameplayAction, noteCashChanges]);
 
   /** Design note #522: opens a room and publishes its code. */
   const handleHostSandboxRoom = useCallback(async () => {
@@ -4511,6 +4773,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   );
 
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
+
+  /* Design note #673: what the tile lay in flight will cost, computed ONCE and
+     rendered in two places -- the corporation card's provisional treasury and
+     the radial confirm caption. Two surfaces deriving one figure is how the two
+     come to show different figures.
+     GATED ON THE STEP, not merely on the ring: the picker also opens as an
+     inspector outside Lay Track (#437), where nothing is going to be spent and a
+     projected treasury would be describing a purchase nobody is making. */
+  const pendingLayCost = useMemo(() => {
+    if (!radialSelector || orSubPhase !== "Track" || !canLayTileNow) return null;
+    const cost = pendingTileCost(
+      mapGrid,
+      radialSelector.q,
+      radialSelector.r,
+      activeCorporationContext?.treasury ?? null,
+    );
+    return cost.fee > 0 ? cost : null;
+  }, [radialSelector, orSubPhase, canLayTileNow, mapGrid, activeCorporationContext]);
 
   /** Derived from radialSelector: the ring and the veil must appear and vanish together.
    *  See docs/ai_architecture/canvas_rendering.md - App.tsx #472 */
@@ -4709,6 +4989,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           privateDescription={(privateId) =>
             PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
           }
+          /* Design note #670: the same confirmation the Operating Round's cash
+             strip gives, on the surface that owns cash in these two rounds. A
+             share bought is a cash change like any other. */
+          cashDelta={cashDeltaFor}
         />
       </section>
     ) : null;
@@ -5027,6 +5311,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
                   stationTokenCost={stationTokenCost}
                   activeCorporation={activeCorporationContext}
+                  /* Design note #673: the previewed lay, as the card's provisional
+                     treasury. `after` is non-null here because `pendingLayCost` only
+                     survives with a positive fee, which needs a known balance. */
+                  pendingTreasury={
+                    pendingLayCost && pendingLayCost.after !== null
+                      ? { fee: pendingLayCost.fee, after: pendingLayCost.after }
+                      : null
+                  }
                   tokenTargetMode={tokenTargetMode}
                   setTokenTargetMode={setTokenTargetMode}
                   onSkipSubPhase={handleSkipSubPhase}
@@ -5444,6 +5736,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   // the grid handed to it separately.
                   marketGrid={marketGrid}
                 />
+
+                {/* Design note #670: THE OPERATING ROUND IS THE ONE ROUND THAT SHOWED NOBODY'S BALANCE.
+                    `PlayerCards` render on the Stock Round and auction surfaces; an OR's surface is the Rail
+                    Map, whose footer is the corporation panel. So the round in which money is actually EARNED
+                    had no cash on screen at all, and "did Pay Dividends work" had no answer but the log.
+                    ONLY WHERE THE CARDS ARE NOT, which keeps `ContextualSubPanel` #572's rule rather than
+                    breaking it: two readouts of one dataset make the reader prove they agree. The cards carry
+                    the same badge (`PlayerCards` #670), so the confirmation is continuous across a round
+                    change while the table showing it is not duplicated. */}
+                {gameState?.current_round_type === "OperatingRound" && (
+                  <PlayerCashStrip
+                    players={playerCashRows}
+                    label={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+                    colorForSeat={(index) =>
+                      seatColor(gameState.player_addresses[index] ?? "", index)
+                    }
+                    deltas={cashDeltaByPlayer}
+                    /* The seat whose corporation is operating. An OR's turn belongs to a
+                       corporation and `actingAddress` already draws that line, so the strip
+                       does not draw a second one. */
+                    activeAddress={actingAddress(gameState, waterfallState)}
+                    viewerAddress={viewerAddress ?? null}
+                  />
+                )}
               </>
             )}
           </main>
@@ -5649,6 +5965,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // already standing on this hex end up. `null` on the ordinary
           // empty hex, which is most of them.
           tokenNote={radialTokenNote}
+          /* Design note #673: the price, on the control that commits to it. Same
+             `pendingLayCost` the card's provisional treasury reads. */
+          costNote={pendingLayCost ? describePendingTileCost(pendingLayCost) : null}
           // Design note #488b: the caption's picture -- the same migration,
           // drawn on each candidate instead of described.
           stationMarkersFor={radialStationMarkersFor}

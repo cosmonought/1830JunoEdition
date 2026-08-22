@@ -806,7 +806,7 @@ export function describeHex(q: number, r: number): string {
     return namedLabel ? `${namedLabel} (${boardHex.label})` : boardHex.label;
   }
 
-  return `(${q}, ${r}) [off the authentic 1830 board]`;
+  return `(${q}, ${r}) [off the Project 18XX board]`;
 }
 
 /** Debug descriptor of a hex's PRE-PRINTED terrain, independent of any laid tile, mirroring the same lookup priority describeHex uses.
@@ -820,7 +820,7 @@ export function describeHexDesignationForLog(
     return {
       hexLabel: landmark.label,
       terrainType: "MajorCityHub",
-      designation: `Landmark: ${landmark.name} (LANDMARK_HEXES)`,
+      designation: `Landmark: ${landmark.name}`,
     };
   }
 
@@ -831,35 +831,46 @@ export function describeHexDesignationForLog(
       return {
         hexLabel: boardHex.label,
         terrainType: grayTrack.marker === "city" ? "MajorCityHub" : "SmallTown",
-        designation: `Preprinted GRAY ${grayTrack.marker} (CITY_DESIGNATED_HEXES/TOWN_DESIGNATED_HEXES)`,
+        // Design note #709: the source list name dropped with the OO entry's, for the same reason -- a
+        // reader of this string cannot look up `CITY_DESIGNATED_HEXES`, and a reader who can does not need it.
+        designation: `Preprinted gray ${grayTrack.marker}`,
       };
     }
     if (YELLOW_OO_HEXES.has(boardHex.label)) {
       return {
         hexLabel: boardHex.label,
         terrainType: "DoubleCityHub",
-        designation:
-          "Preprinted YELLOW OO double-city (OO_DESIGNATED_HEXES) — Tile Selection Catalog verification pass: now strictly requires DoubleCityHub artwork (tile 15, the real 1830 tile 59), rejecting an ordinary MajorCityHub tile here",
+        /* Design note #709: WAS A CHANGELOG ENTRY WEARING A DESCRIPTION'S CLOTHES. It read "Preprinted YELLOW
+           OO double-city (OO_DESIGNATED_HEXES) — Tile Selection Catalog verification pass: now strictly
+           requires DoubleCityHub artwork (tile 15, the real 1830 tile 59), rejecting an ordinary MajorCityHub
+           tile here" -- an internal symbol, a description of a past code change, and a tile number that was
+           simply wrong.
+           TILE 15 HAS NOTHING TO DO WITH THESE HEXES. It is the green MajorCityHub -- ONE city, four
+           connections -- which is precisely the "ordinary MajorCityHub" the same sentence says is rejected.
+           Asked directly, `filterSandboxPlacements` returns exactly one tile for all four OO hexes at every
+           era: 59. So the numbering is not the problem and never was; the sentence was.
+           Its siblings describe what a hex IS, and this one now does too. */
+        designation: "Preprinted yellow double city — upgrades to tile 59",
       };
     }
     if (boardHex.townDesignation) {
       return {
         hexLabel: boardHex.label,
         terrainType: boardHex.townDesignation === "double" ? "DoubleTown" : "SmallTown",
-        designation: "Blank Town-designated, no printed track yet (TOWN_DESIGNATED_HEXES)",
+        designation: "Town-designated, no printed track yet",
       };
     }
     if (boardHex.cityDesignation) {
       return {
         hexLabel: boardHex.label,
         terrainType: "MajorCityHub",
-        designation: "Blank City-designated, no printed track yet (CITY_DESIGNATED_HEXES)",
+        designation: "City-designated, no printed track yet",
       };
     }
     return { hexLabel: boardHex.label, terrainType: "None", designation: boardHex.type };
   }
 
-  return { hexLabel: `(${q}, ${r})`, terrainType: "None", designation: "off the authentic 1830 board" };
+  return { hexLabel: `(${q}, ${r})`, terrainType: "None", designation: "off the Project 18XX board" };
 }
 
 /** Mirrors hexmap::terrain_base_value -- deliberately flat and terrain-only, NOT phase-dependent: a hex's value never changes as the game advances through colour tiers, unlike the genuinely era-tiered off-board figures.

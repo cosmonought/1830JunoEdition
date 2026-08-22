@@ -698,25 +698,84 @@ export const STATION_RADIUS_RATIO = 0.22;
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #151 */
 export const SLOT_RING_RATIO = 0.86;
 
-/** A token filled to exactly the ring radius COVERS it -- and since the outline is centred on the radius, half spilling outward, filling to the ring would paint over it entirely. 0.84 leaves the outline room to land just inside, so the ring survives as a thin collar.
- *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #487 */
-export const TOKEN_DOCK_INSET = 0.84;
+/* Design note #699: TOKEN_DOCK_INSET (0.84) DELETED. It existed so the station circle survived as a thin
+   collar around a docked token, which #487 argued for. REPORTED since: "I find the collar distracting: the
+   station tokens already have a colour and font, and adding a third border/colour around them makes it busy.
+   Rather than having the collar peek out, let's give the tokens that much space to be larger, to fill the
+   slot."
+   A token now fills its ring exactly. That does NOT leave it edgeless -- the token draws its own outline in
+   `STATION_TOKEN_RING`, landing where the circle's outline was. Removing the inset stops drawing two edges,
+   it does not stop drawing one. */
 
-/** Extracted so the function that places tokens and the one that sizes them cannot disagree -- the exact hazard the slot spacing constant's own note describes.
- *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #151 */
-function markerSizeFor(art: TileArtwork, size: number): number {
-  return art.markers.length > 1 ? size * 0.85 : size;
+/** The marker size a tile's artwork is drawn at, and therefore the size any token docking into it must read.
+ *
+ *  Design note #699: THE SHRINK IS ABOUT PILLS, NOT ABOUT MARKER COUNT.
+ *
+ *  REPORTED: "I understand why station tokens need to shrink a little when placing on a dual-station city. But
+ *  I noticed the NNH shrinks on the green upgrade to G19 even though that is still a single-station city. It
+ *  is almost difficult to read that it is NNH's token at the size it has shrunk to."
+ *
+ *  Exactly right. The old rule was `markers.length > 1`, and tile #54 -- New York's green -- is TWO ONE-SLOT
+ *  CITIES. Both shrank for having company on the TILE rather than company in the CITY. Stacked with the ring
+ *  ratio and the dock inset it took NNH from 0.220 of the hex to 0.135: 39% of its radius and 63% of its area,
+ *  on an upgrade that shared nothing.
+ *
+ *  AND IT RAN BACKWARDS. Tile #63 is a genuine 2-slot city carrying ONE marker, so it escaped the shrink and
+ *  drew a LARGER token (0.159) than #54's unshared one. The rule was not merely imprecise, it was
+ *  anti-correlated with what a player reads it as meaning.
+ *
+ *  The shrink's real job is keeping two PILLS from crowding, which is #62 and only #62. Plain circles never
+ *  needed it: across the whole catalog the tightest pair of one-slot cities (#66) still clears by 0.06
+ *  unit-hex at full size, and #54's clears by 0.43.
+ *
+ *  EXPORTED, and taking markers rather than a `TileArtwork`, because this rule had been written out THREE more
+ *  times as literals -- `hexCanvasPrimitives` restates it for the catalog pass, again as a bare `size * 0.85`
+ *  for New York's printed hex, and a FOURTH figure (`size * 0.75`) for the preprinted OO hexes -- while the
+ *  tokens read a fifth. Four statements of one idea, none of them agreeing. */
+export function markerSizeFor(markers: readonly TileArtworkMarker[], size: number): number {
+  if (markers.length <= 1) return size;
+  return markers.some((marker) => (marker.slots ?? 1) > 1) ? size * 0.85 : size;
+}
+
+/** The radius a station token is drawn at, given the artwork it lands in.
+ *
+ *  Design note #699: ONE FUNCTION, because the alternative is what was here -- a docked radius on laid tiles,
+ *  a legacy `size * 0.22` on preprinted ones, and no relationship between the two. That gap is the second half
+ *  of the same report: "B&O's second station has a border around it that B&O's home station does not. Is this
+ *  a style for all non-home station markers? If so I would say all station markers need to be identical."
+ *
+ *  IT IS NOT A HOME STYLE. Nothing in the renderer knows which token is a home. B&O's home sits on PREPRINTED
+ *  Baltimore, which had no docking radius and fell back to `size * 0.22` -- exactly its circle's radius, so it
+ *  painted the circle out. Its second token sits on a LAID tile, docked and inset, leaving the circle showing
+ *  as a ring. One primitive, two radii, chosen by whether a tile happened to be laid there.
+ *
+ *  `SLOT_RING_RATIO` belongs to a PILL and only a pill: `drawStationPill` draws an inner ring per slot for a
+ *  token to sit in, and `drawStationCircle` draws no such ring. Insetting a lone circle's token from a ring
+ *  that is not there was the second over-shrink stacked on the first. */
+export function stationTokenRadius(
+  markers: readonly TileArtworkMarker[],
+  cityIndex: number,
+  size: number,
+): number | undefined {
+  const city = markers.filter((marker) => marker.kind === "city")[cityIndex];
+  if (!city) return undefined;
+  const radius = markerSizeFor(markers, size) * STATION_RADIUS_RATIO;
+  return (city.slots ?? 1) > 1 ? radius * SLOT_RING_RATIO : radius;
 }
 
 /** The hardcoded hex-relative radius made a token ~18% wider than the ring it was supposedly sitting in, overflowing the pill on every OO tile -- which is the "centring across the entire pill" symptom. The position was already right; only the size was not.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #151 */
-export function tileCityTokenRadius(tileId: number, size: number): number | undefined {
+export function tileCityTokenRadius(
+  tileId: number,
+  size: number,
+  /* Design note #699: WHICH city. Defaulted rather than required, so a caller with only one answer keeps
+     working -- but a tile can carry a shared city beside an unshared one, and those take different radii.
+     Answering per-TILE was a rounding of the question. */
+  cityIndex = 0,
+): number | undefined {
   const art = TILE_GRAPHICS_CATALOG[tileId];
   if (!art) return undefined;
-  // marker size -> station radius -> the ring inside it -> inset for the
-  // token's own outline. Every factor is the shared constant the pill
-  // renderer uses for the same step.
-  return markerSizeFor(art, size) * STATION_RADIUS_RATIO * SLOT_RING_RATIO * TOKEN_DOCK_INSET;
+  return stationTokenRadius(art.markers, cityIndex, size);
 }
 
 /** `Path2D` is immutable once built and the catalog never changes, so each
@@ -1274,7 +1333,7 @@ export function tileCitySlotPoints(
 
   // Marker size matches the artwork renderer's own multi-marker shrink, shared through one helper rather than restated -- slot POSITIONS and token SIZE are the same measurement of the same circle.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #151
-  const markerSize = markerSizeFor(art, size);
+  const markerSize = markerSizeFor(art.markers, size);
   const radius = markerSize * STATION_RADIUS_RATIO;
   const spacing = PILL_SLOT_SPACING * radius;
   const span = spacing * (slots - 1);

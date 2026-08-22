@@ -21,7 +21,7 @@ import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
 // Design note #497: the local valuation, for when there is no chain to ask.
-import { estimatePlayerNetWorth } from "../utils/gameState";
+import { estimatePlayerNetWorth, sharePriceFor } from "../utils/gameState";
 import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
 // `ContextualSubPanel` design note #170: a name beats a truncated hash, and this returns `null` for a real
@@ -42,6 +42,8 @@ import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
+// Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
+import { playerLiquidity } from "../utils/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
 import {
   certificateBreakdown,
@@ -345,6 +347,14 @@ export function PlayerAssetsSection({
      "computed here", it means "roughly", which is a claim about accuracy that was never true.
      THE TOOLTIP STAYS AND DOES THE JOB PROPERLY -- provenance belongs in words, attached to precisely the
      cells the client computed. (`estimateCertificateCount` was renamed for the same reason.) */
+  /* One sentence, shared by the header and every cell, so the column cannot explain itself two ways. It names
+     the president rule specifically because that is the restriction a player is most likely to be surprised
+     by -- the pool cap at least announces itself on the market. Matches `PlayerCards`' wording deliberately. */
+  const LIQUIDITY_TOOLTIP =
+    "Cash plus only the shares that could legally be sold right now — a president's block cannot be sold " +
+    "unless another player already holds 20%, the bank pool cannot exceed 50% of a corporation, and a " +
+    "corporation nobody has parred yet has no price to sell at.";
+
   const ESTIMATE_TOOLTIP =
     "Calculated in this browser from the board's own holdings and live market " +
     "prices — exact, not approximate. The contract's PlayerNetWorth query answers " +
@@ -367,13 +377,36 @@ export function PlayerAssetsSection({
                 <th style={styles.thNumB} rowSpan={2}>
                   Certs
                 </th>
-                <th style={styles.thNumB} rowSpan={2}>
-                  Liquid Cash
+                {/* Design note #710: "Liquid Cash" was a tautology -- cash is liquid by definition, and the
+                    adjective was doing the job of a column that did not exist. REPORTED: "Cash is by
+                    definition liquid. I think what is missing in this table is a LIQUIDITY column that shows
+                    cash + sellable stocks." */}
+                <th style={styles.thNumB} rowSpan={2} title="Cash in hand.">
+                  Cash
                 </th>
-                <th style={styles.thNumB} rowSpan={2}>
+                <th
+                  style={styles.thNumB}
+                  rowSpan={2}
+                  title="Every share this player holds, at its market price."
+                >
                   Stock Value
                 </th>
-                <th style={styles.thNumB} rowSpan={2}>
+                {/* BETWEEN THE TWO TOTALS, as reported, and the position earns its keep: Liquidity and Net
+                    Worth are the same sum over different sets of shares, so side by side the GAP between them
+                    reads at a glance. #562a: "$2,000 of net worth against $200 of liquidity is one bad train
+                    purchase from bankruptcy, and a single Net Worth column has never been able to say so." */}
+                <th
+                  style={styles.thNumB}
+                  rowSpan={2}
+                  title={LIQUIDITY_TOOLTIP}
+                >
+                  Liquidity
+                </th>
+                <th
+                  style={styles.thNumB}
+                  rowSpan={2}
+                  title="Cash plus every share at market price. The score."
+                >
                   Net Worth
                 </th>
                 <th style={hasCompanies ? styles.thB : styles.th} rowSpan={2}>
@@ -424,6 +457,25 @@ export function PlayerAssetsSection({
                 const estimated = netWorth
                   ? null
                   : estimatePlayerNetWorth(player, gameState, marketPrices);
+                /* Design note #710: cash + only what could legally be sold. `playerLiquidity` owns the
+                   arithmetic and `sellableHoldings` owns the rules, so this column and the player card cannot
+                   drift apart -- they differ only in the price resolver handed in, which is #566's
+                   distinction and is stated there. */
+                const liquidity = playerLiquidity(
+                  gameState,
+                  player,
+                  cashEntry ? Number(cashEntry.cash_vgp) || 0 : null,
+                  /* Design note #711: the shared ladder -- market, then par, then $0 for a corporation nobody
+                     has parred. NOT the bare `marketPrices` this table also feeds to the net-worth estimate:
+                     a parred corporation whose token is not yet on the chart has a real price, and reading
+                     $0 there would call a sellable share worthless. */
+                  (companyId) => {
+                    const company = gameState.public_companies.find(
+                      (entry) => entry.company_id === companyId,
+                    );
+                    return company ? sharePriceFor(company, marketPrices) : null;
+                  },
+                );
                 const privates = playerPrivateCompanies(player, gameState);
                 const certs = certificateBreakdown(
                   player,
@@ -475,6 +527,17 @@ export function PlayerAssetsSection({
                         : estimated
                           ? `$${Math.round(estimated.stockValue)}`
                           : pendingLabel}
+                    </td>
+                    {/* Design note #710: ALWAYS COMPUTED HERE, never taken from `PlayerNetWorth`. The
+                       contract answers net worth and stock value; it has no notion of what may be SOLD, which
+                       depends on the pool's 50% cap and on whether another player can succeed a president --
+                       both facts this table already holds. So there is no chain figure to prefer, and the
+                       tooltip marks the provenance the same way the two client-computed cells beside it do.
+                       Design note #711: there is no strict-versus-loose reading left to choose between --
+                       `sharePriceFor` is the one ladder, and the only thing that withholds this figure now is
+                       a player whose cash the state has not reported. */}
+                    <td style={styles.tdNumB} title={liquidity === null ? undefined : LIQUIDITY_TOOLTIP}>
+                      {liquidity === null ? pendingLabel : `$${Math.round(liquidity)}`}
                     </td>
                     <td style={styles.tdNumB} title={netWorth ? undefined : ESTIMATE_TOOLTIP}>
                       {netWorth

@@ -58,12 +58,19 @@ const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""
 /** Any pictographic character, however new. */
 const LITERAL_EMOJI = /\p{Extended_Pictographic}/u;
 
-/** `&#NNNNN;` above the Basic Multilingual plane's punctuation -- the form
- *  the removed glyphs were actually written in. */
+/** `&#NNNNN;` naming a PICTOGRAPHIC character -- the form the removed glyphs were actually written in.
+ *
+ *  Design note #713: THE FILTER NOW TESTS WHAT THE RULE SAYS. It read `codepoint > 0x2000`, a threshold
+ *  chosen because the coin, locomotive and crown all sit above it -- and so does every arrow. A sale's
+ *  market-move line was reported by this test as an emoji on the card, which it is not: `&#8595;` is a
+ *  DOWNWARDS ARROW, `\p{Extended_Pictographic}` says so, and the literal check one line up would have let the
+ *  same character through unchallenged.
+ *  DECODING AND REUSING `LITERAL_EMOJI` is the point: #490's note promises this covers "BOTH SPELLINGS" of one
+ *  rule, and two spellings tested by two different rules is not that. */
 function entityCodepoints(source: string): number[] {
   return Array.from(source.matchAll(/&#(\d+);/g))
     .map((match) => Number(match[1]))
-    .filter((codepoint) => codepoint > 0x2000);
+    .filter((codepoint) => LITERAL_EMOJI.test(String.fromCodePoint(codepoint)));
 }
 
 describe("the corporation card carries no emoji", () => {

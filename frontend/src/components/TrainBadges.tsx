@@ -18,10 +18,12 @@
 import React from "react";
 
 import {
-  ALERT_CRITICAL_BG,
+  /* Design note #702: `ALERT_CRITICAL_BG` and `ALERT_WARN_BG` are gone from this import, and their absence is
+     the fix. They were the translucent fills that let the corporation's livery through the chip. The BORDER
+     and INK constants stay, because those are the two properties the warning now uses -- and they are still
+     the same constants the action bar's phase badge reads, so chip and badge escalate together (#7). */
   ALERT_CRITICAL_BORDER,
   ALERT_CRITICAL_INK,
-  ALERT_WARN_BG,
   ALERT_WARN_BORDER,
   ALERT_WARN_INK,
   CARD_DIVIDER,
@@ -30,6 +32,7 @@ import {
   CARD_SURFACE_MUTED,
 } from "../styles/palette";
 import { FONT_SIZE } from "../styles/typography";
+import { TrainGlyph } from "./TrainGlyph";
 import {
   phaseAlertLevel,
   trainTier,
@@ -144,11 +147,15 @@ export function TrainChips({
           ...styles.chip,
           ...ink.chip,
           ...ink.empty,
+          // Design note #702: the same ring. "none" and "?" are chips too (#3), and a placeholder without an
+          // edge would dissolve into a livery card exactly as a real one did.
+          boxShadow: surface === "light" ? LIGHT_CHIP_RING : DARK_CHIP_RING,
           fontSize: size,
           padding: compact ? "1px 6px" : "2px 9px",
           minWidth: compact ? "22px" : "28px",
           fontWeight: 600,
           cursor: "default",
+          // No locomotive: there is no train to draw, which is what the word says.
         }}
         title={
           label === "?"
@@ -194,9 +201,12 @@ export function TrainChips({
             style={{
               ...styles.chip,
               ...ink.chip,
+              // Design note #702: the ring, on EVERY chip and in every state. See `styles.chip`.
+              boxShadow: surface === "light" ? LIGHT_CHIP_RING : DARK_CHIP_RING,
               fontSize: size,
-              padding: compact ? "1px 6px" : "2px 9px",
-              minWidth: compact ? "22px" : "28px",
+              padding: compact ? "1px 5px 1px 4px" : "2px 8px 2px 6px",
+              minWidth: compact ? "26px" : "34px",
+              gap: compact ? "3px" : "4px",
               ...(inDangerWindow ? ink[inDangerWindow] : {}),
               ...(isPrimary ? styles.chipHighlighted : {}),
               ...(isMuted ? styles.chipMuted : {}),
@@ -209,6 +219,21 @@ export function TrainChips({
             onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}
             onMouseLeave={interactive ? () => onHighlightTrain?.(null) : undefined}
           >
+            {/* Design note #702: THE LOCOMOTIVE HOLDS STILL WHILE THE NUMBER CHANGES COLOUR.
+                REPORTED: "the train icon could be black or something to signal it's still there even as the
+                number turns amber, red."
+                That is the whole job. Once the tint moved to the number, a tinted chip and a plain one differ
+                only by the colour of one numeral -- which is exactly the discrimination that failed at the top
+                of this report ("I actually thought the 3-train purchase had been swapped out"). The glyph is
+                the chip's constant: it never tints, so the reader always has a fixed thing to find, and what
+                the colour changes is legible AGAINST it rather than instead of it.
+                `ink.chip.color`, not the tint -- deliberately the SAME neutral in all three states. */}
+            <TrainGlyph
+              tier={tier ?? model}
+              color={String(ink.chip.color)}
+              carriages={false}
+              height={compact ? 9 : 10}
+            />
             {model}
           </span>
         );
@@ -297,19 +322,33 @@ export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutPr
 
 const darkInk = {
   chip: { borderColor: "#3a4150", backgroundColor: "#232936", color: "#e2e6ee" },
-  // Design note #7 (`gamePhase.ts`): the SAME two constants the action bar's
-  // phase-shift badge uses, so chip and badge escalate together by construction.
-  // Amber became orange here because amber is already spent on "look here" and on
-  // the Yellow ERA, which made an amber rust warning near-invisible against the
-  // phase badge beside it.
+  /* Design note #7 (`gamePhase.ts`): the SAME two constants the action bar's phase-shift badge uses, so chip
+     and badge escalate together by construction. Amber became orange here because amber is already spent on
+     "look here" and on the Yellow ERA.
+
+     Design note #702: NO `backgroundColor`. THE TINT COLOURS THE NUMBER, NOT THE BODY.
+
+     REPORTED: "NNH is running and already owned a 2-train and a 3-train ... Its 2-train chip almost
+     disappears into its corporation card -- I actually thought the 3-train purchase had been swapped out with
+     it because it is so hard to see ... To avoid this issue on other corporations (red on red later, etc),
+     what if we just colored the number itself and left the train chip alone?"
+
+     THE FILLS WERE TRANSLUCENT -- `rgba(249, 115, 22, 0.1)` and `rgba(244, 63, 94, 0.2)`. Ten percent of a
+     colour over ninety percent of whatever is behind it is not a chip, it is a tint on the backdrop, and the
+     backdrop here is the CORPORATION'S LIVERY (`ContextualActionBar` paints the card
+     `stationTickerColor(companyId)`). Measured against all eight cards the tinted body scores 1.00 to 1.14:1
+     -- it has no edge on ANY of them. NNH is 1.00:1 exactly, because its livery `#ee7c22` and this warning
+     orange `#f97316` are the same hue at the same lightness, which is why NNH is where it was noticed.
+
+     SO THE BUG WAS NEVER "AMBER ON ORANGE". It was a translucent fill on an arbitrary hue, and NNH was the
+     one collision loud enough to report. Dropping `backgroundColor` gives every state the opaque body above,
+     and the tint moves to the two properties that sit ON that body and can be measured against it. */
   atRisk: {
     borderColor: ALERT_WARN_BORDER,
-    backgroundColor: ALERT_WARN_BG,
     color: ALERT_WARN_INK,
   },
   doomed: {
     borderColor: ALERT_CRITICAL_BORDER,
-    backgroundColor: ALERT_CRITICAL_BG,
     color: ALERT_CRITICAL_INK,
   },
   atCapacity: {
@@ -326,12 +365,52 @@ const darkInk = {
 // and light text on linen is unreadable.
 const lightInk = {
   chip: { borderColor: CARD_DIVIDER, backgroundColor: CARD_SURFACE_MUTED, color: CARD_INK },
-  atRisk: { borderColor: "#b8860b", backgroundColor: "#fdecc4", color: "#6b4e05" },
-  doomed: { borderColor: "#b91c1c", backgroundColor: "#fadadd", color: "#7a1020" },
+  /* Design note #702: the light palette's tints were already OPAQUE pastels, so they never had the dissolving
+     problem -- and they go too, for the other half of the report. "To avoid this issue on other corporations
+     (red on red later, etc)" is asking for one rule rather than one fix, and a chip that changes its whole
+     body on one surface and only its number on the other is two rules wearing one name. */
+  atRisk: { borderColor: "#b8860b", color: "#6b4e05" },
+  doomed: { borderColor: "#b91c1c", color: "#7a1020" },
   atCapacity: { borderColor: "#7e22ce", backgroundColor: "#ece0fb", color: "#4a1670" },
   empty: { color: CARD_INK_FAINT },
   value: { color: CARD_INK },
 } as const;
+
+/* Design note #702: A CHIP THAT HAS AN EDGE ON ANY BACKDROP.
+
+   REPORTED, of the untinted chips: "on the blue B&O corporate card, the train chips similarly dissolve, though
+   it is not quite as dramatic as the NNH 2-train disappearing act, so I'm wondering if we need to do something
+   more for the train chips themselves to make them stand out ... make the chips '3D'?"
+
+   MEASURED: the plain dark chip `#232936` scores 1.50:1 against B&O's `#12408f` and 1.20:1 against NYC's
+   `#1a1a1a`. `surface: "dark" | "light"` names the app CHROME, and these are drawn on a card painted the
+   corporation's own colour -- a prop with two values cannot describe eight backdrops, so the palette was
+   answering a question it had not been asked.
+
+   NO SINGLE COLOUR CAN FIX THIS, and that is the whole design. The liveries span the full lightness range,
+   `#1a1a1a` to `#f5cd3a`; any fixed edge colour is near-invisible against SOME card, and searching for the
+   best one gets 1.5:1 at its optimum. The way out is to stop asking the ring to contrast with the card and
+   make the RING CONTAIN ITS OWN CONTRAST: a near-black stroke immediately outside the chip and a light
+   hairline immediately inside it. Those two are ADJACENT, so the reader sees a light-against-dark boundary
+   whatever is behind -- 4.1:1 at worst across all eight liveries, and card-independent by construction. It is
+   the same instrument a map label uses to stay legible over aerial photography, and the honest version of
+   "3D": the bevel is real, not decorative.
+
+   `box-shadow`, not a second border: a border changes the box's size, and #370 settled this geometry in whole
+   pixels after a fractional height cost the bottom edge. Shadows are drawn outside the layout. The third
+   layer is an ordinary soft drop, which does the depth the report asked for and nothing structural. */
+const DARK_CHIP_RING = [
+  "inset 0 0 0 1px rgba(255, 255, 255, 0.45)",
+  "0 0 0 1px rgba(0, 0, 0, 0.8)",
+  "0 1px 2px rgba(0, 0, 0, 0.4)",
+].join(", ");
+/* On paper the pair swaps polarity: the chip is pale, so the inner hairline goes dark to read against it while
+   the outer stroke softens -- a linen card is not a surface anything casts a hard shadow onto. */
+const LIGHT_CHIP_RING = [
+  "inset 0 0 0 1px rgba(0, 0, 0, 0.16)",
+  "0 0 0 1px rgba(0, 0, 0, 0.28)",
+  "0 1px 2px rgba(0, 0, 0, 0.16)",
+].join(", ");
 
 const styles: Record<string, React.CSSProperties> = {
   /* Design note #370: the chip had no height of its own -- `lineHeight: 1.25` on a

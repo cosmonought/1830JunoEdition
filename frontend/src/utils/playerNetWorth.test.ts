@@ -25,9 +25,12 @@ const ALICE = "juno1alice";
 const BOB = "juno1bob";
 
 /** Two corporations; Alice holds 30% of one and 20% of the other. */
+/** Design note #711: `pars` names the corporations that HAVE been parred. Everything else is unparred, which
+ *  is the one state in which a share has no price -- and by the rules cannot be sold at all. */
 function stateWith(
   holdings: Array<{ companyId: number; player: string; percentage: number }>,
   cash: Array<{ player: string; cash_vgp: string }>,
+  pars: Readonly<Record<number, number>> = {},
 ): GameStateResponse {
   const companyIds = Array.from(new Set(holdings.map((h) => h.companyId)));
   return {
@@ -36,6 +39,7 @@ function stateWith(
     public_companies: companyIds.map((id) => ({
       company_id: id,
       ticker: `C${id}`,
+      par_value: pars[id] === undefined ? null : String(pars[id]),
       player_holdings: holdings
         .filter((h) => h.companyId === id)
         .map((h) => ({ player: h.player, percentage: h.percentage })),
@@ -82,31 +86,55 @@ describe("estimateStockPortfolioValue", () => {
     expect(estimateStockPortfolioValue(ALICE, state, { 1: 100 })).toBe(0);
   });
 
-  it("returns null when a held corporation has NO price", () => {
-    /* THE CASE THAT MATTERS. Skipping the unpriced corporation would report
-       $300 for a portfolio that also contains an unvalued 20% -- an
-       under-report indistinguishable from a correct smaller number, which is
-       the kind of figure a player would act on. */
+  it("falls back to par when the chart has no position yet", () => {
+    /* Design note #711: PAR IS THE PRICE, not a fallback -- a corporation whose President's Share has sold at
+       $67 sells its remaining shares at $67 whether or not a token has been placed on the chart. #566 argued
+       this for the player card; #711 made it the only reading. */
+    const state = stateWith([{ companyId: 1, player: ALICE, percentage: 30 }], [], { 1: 67 });
+    expect(estimateStockPortfolioValue(ALICE, state, {})).toBe(201);
+  });
+
+  it("prefers the market price over the par once the token has moved", () => {
+    const state = stateWith([{ companyId: 1, player: ALICE, percentage: 30 }], [], { 1: 67 });
+    expect(estimateStockPortfolioValue(ALICE, state, { 1: 100 })).toBe(300);
+  });
+
+  it("values an UNPARRED corporation's shares at nothing", () => {
+    /* THE CASE THIS WHOLE NOTE TURNS ON, and the assertion is the exact inverse of what stood here.
+       It read: "Skipping the unpriced corporation would report $300 for a portfolio that also contains an
+       unvalued 20% -- an under-report indistinguishable from a correct smaller number."
+       REPORTED: "if a share has no market price it is unsellable, so it should either be excluded or count as
+       $0 ... the only case in which this can ever happen is the 10% PRR share granted by the private company
+       before PRR pars/sells its President's Share."
+       So there is no unvalued 20%. There is a 20% that nobody may buy at any figure, and $300 is the whole
+       portfolio rather than part of it. */
     const state = stateWith(
       [
         { companyId: 1, player: ALICE, percentage: 30 },
         { companyId: 2, player: ALICE, percentage: 20 },
       ],
       [],
+      { 1: 100 },
     );
-    expect(estimateStockPortfolioValue(ALICE, state, { 1: 100 })).toBeNull();
-    expect(estimateStockPortfolioValue(ALICE, state, { 1: 100, 2: null })).toBeNull();
+    expect(estimateStockPortfolioValue(ALICE, state, { 1: 100 })).toBe(300);
+    expect(estimateStockPortfolioValue(ALICE, state, { 1: 100, 2: null })).toBe(300);
   });
 
-  it("does not treat an unpriced holding as free", () => {
-    // The same point stated as the thing that must not happen.
-    const state = stateWith([{ companyId: 9, player: ALICE, percentage: 50 }], []);
-    expect(estimateStockPortfolioValue(ALICE, state, {})).not.toBe(0);
+  it("is the private company's PRR certificate, and nothing else", () => {
+    /* Worth stating as the scope rather than as a number: the report is explicit that this arises once per
+       game. A test that treated unparred holdings as an ordinary case would invite someone to build for it. */
+    const state = stateWith([{ companyId: 9, player: ALICE, percentage: 10 }], []);
+    expect(estimateStockPortfolioValue(ALICE, state, {})).toBe(0);
   });
 
-  it("returns null rather than NaN for a nonsense price", () => {
-    const state = stateWith([{ companyId: 1, player: ALICE, percentage: 30 }], []);
-    expect(estimateStockPortfolioValue(ALICE, state, { 1: Number.NaN })).toBeNull();
+  it("treats a nonsense price as no price rather than as NaN", () => {
+    /* The guard survives #711; only its answer changed. A `NaN` on the wire is not a valuation, so the ladder
+       steps past it -- to par where there is one, and to nothing where there is not. */
+    const unparred = stateWith([{ companyId: 1, player: ALICE, percentage: 30 }], []);
+    expect(estimateStockPortfolioValue(ALICE, unparred, { 1: Number.NaN })).toBe(0);
+
+    const parred = stateWith([{ companyId: 1, player: ALICE, percentage: 30 }], [], { 1: 67 });
+    expect(estimateStockPortfolioValue(ALICE, parred, { 1: Number.NaN })).toBe(201);
   });
 });
 
@@ -129,12 +157,14 @@ describe("estimatePlayerNetWorth", () => {
     expect(estimatePlayerNetWorth(ALICE, state, {})).toEqual({ stockValue: 0, netWorth: 1200 });
   });
 
-  it("returns null when the portfolio cannot be valued", () => {
+  it("still answers when a holding is unparred, counting it as nothing", () => {
+    /* Design note #711: the portfolio can always be valued now, so this is no longer a `null` case. An
+       unparred share is worth $0 to its holder, which makes this player worth exactly their cash. */
     const state = stateWith(
       [{ companyId: 1, player: ALICE, percentage: 30 }],
       [{ player: ALICE, cash_vgp: "450" }],
     );
-    expect(estimatePlayerNetWorth(ALICE, state, {})).toBeNull();
+    expect(estimatePlayerNetWorth(ALICE, state, {})).toEqual({ stockValue: 0, netWorth: 450 });
   });
 
   it("returns null when the player has no cash RECORD", () => {

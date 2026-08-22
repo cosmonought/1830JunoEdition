@@ -24,6 +24,8 @@ import PrivatePowerPanel, {
 // Design note #623: `RunRoutesButton` joins them -- the step's finishing
 // action belongs on the bar that follows the player down the page.
 import { RoutePlannerPanel, AutoRouteButton, RunRoutesButton } from "../components/RoutePlannerPanel";
+// Design note #715: the private-purchase panel, embedded rather than modal.
+import { ProposePrivatePurchase } from "../components/PrivateTradePanel";
 import TrainPurchasePanel, {
   type TrainPurchaseCompany,
   type TrainTradeProposal,
@@ -40,9 +42,7 @@ import {
   type OperatingSubPhase,
 } from "../components/OperatingSubPhaseStepper";
 import {
-  marketZoneForPrice,
-  marketZoneTextColor,
-  marketZoneTooltip,
+  ZonedPrice,
   type MarketProjection,
 } from "../components/StockMarketRenderer";
 import {
@@ -78,6 +78,13 @@ import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep"
 // the lines on the map.
 import { routeTrainColor } from "../styles/routeLivery";
 import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
+// Design note #707: a corporation that can run must run.
+import { routeRunObligation } from "../utils/routeStep";
+// Design note #705: the row as one sentence, built from the fields the row renders.
+import {
+  describeDividendRow,
+  type DividendPayoutProjection,
+} from "../utils/dividendProjection";
 
 /* ------------------------------------------------------------------ */
 /* Contextual Top Action Bar -- see design note #8/item 5              */
@@ -94,27 +101,10 @@ interface ActionBarButton {
 
 
 
-/* Design note #197: THE MARKET MOVE LINE. "Market move: to $82" stated the destination and hid the
-   departure -- the one comparison the dividend decision turns on. It reads `$76 -> $82` now.
-   Each price is tinted with its own zone's ink and carries that zone's rule as a tooltip: a player
-   reading this panel is looking at a NUMBER, not the chart, so stepping into the Yellow zone was
-   invisible exactly when it mattered. `marketZoneForPrice` is the same lookup the chart colours itself
-   from, so the panel and the board cannot disagree (see #196 for why the flat ink is a separate export).
-   The two prices are tinted INDEPENDENTLY -- the interesting case is the one where they differ. */
-function ZonedPrice({ price }: { price: number | null }) {
-  if (price === null) return <>--</>;
-  const zone = marketZoneForPrice(price);
-  const color = marketZoneTextColor(zone);
-  const tooltip = marketZoneTooltip(zone);
-  return (
-    <span
-      style={color ? { color, fontWeight: 700, cursor: "help" } : undefined}
-      title={tooltip ?? undefined}
-    >
-      ${price}
-    </span>
-  );
-}
+/* Design note #197's ZonedPrice moved to `StockMarketRenderer` at #712, when the Stock Round's corporation
+   cards needed the same tinted figure. Its reasoning is unchanged and now lives beside the zone table it
+   reads: "a player reading this panel is looking at a NUMBER, not the chart, so stepping into the Yellow zone
+   was invisible exactly when it mattered." */
 
 function MarketMoveLine({
   currentPrice,
@@ -251,9 +241,11 @@ export default function ContextualActionBar({
   orSubPhase,
   sessionReady,
   onPassTurn,
+  autoPass,
   passDisabledReason,
   onPlaceStationTokenHint,
   stationTokenCost,
+  maxRouteRevenue = null,
   activeCorporation,
   pendingTreasury = null,
   tokenTargetMode,
@@ -261,6 +253,7 @@ export default function ContextualActionBar({
   onSkipSubPhase,
   orSequence = null,
   trainPurchase = null,
+  privatePurchase,
   onOpenPrivateTrade,
   ownsAnyTrain,
   mustBuyTrain,
@@ -310,6 +303,12 @@ export default function ContextualActionBar({
   orSubPhase: OperatingSubPhase;
   sessionReady: boolean;
   onPassTurn: () => void;
+  /** Design note #717: the standing-pass control. `null` where there is no such thing to offer. */
+  autoPass?: {
+    armed: boolean;
+    onOpenSettings: () => void;
+    onDisarm: () => void;
+  } | null;
   /** Design note #31: why passing is currently illegal, or `null`. The
    *  waterfall forbids it while no private holds a standing bid
    *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
@@ -319,6 +318,10 @@ export default function ContextualActionBar({
    *  label. A number rather than a formatted string so the caller cannot
    *  quietly change the currency here. */
   stationTokenCost: number;
+  /** Design note #707: the best total `assignRouteSet` can find for the acting corporation -- `0` for
+   *  "nothing to run", `null` for "could not tell". The Routes step's Skip is withdrawn on a positive figure
+   *  and on nothing else; see `routeStep.ts` for why `null` must never block. */
+  maxRouteRevenue?: number | null;
   /** Design note #228: who is acting, and the three figures that gate what
    *  they can do this turn. `null` before the first `GetGameState` resolves
    *  or when the operating queue names a company this build does not know --
@@ -410,6 +413,15 @@ export default function ContextualActionBar({
      `sub_round_index`, rendered "3.2"). PASSED RATHER THAN DERIVED, because this bar has no game state.
      `null` before the first poll keeps the bare "Operating Round" wording rather than a placeholder pair. */
   orSequence?: { cycle: number; index: number } | null;
+  /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
+   *  shape and for the same reason as `trainPurchase` below. `null` renders no panel. */
+  privatePurchase?: {
+    buyerTicker: string;
+    privates: readonly PrivateCompanyState[];
+    treasury: number;
+    labelForAddress: (address: string) => string;
+    onPropose: (privateId: number, price: number) => void;
+  } | null;
   /** Design note #508: everything `TrainPurchasePanel` needs, as ONE object. These are not facts this bar
    *  reasons about -- it neither reads nor derives any of them -- they are a child's props passing through,
    *  and spreading them across the bar's interface would imply the bar has an opinion about the depot.
@@ -434,7 +446,9 @@ export default function ContextualActionBar({
   dividendRevenueIsThisTurn: boolean;
   dividendPerShare: number;
   /** Who receives what, already resolved to display names. */
-  dividendPayouts: ReadonlyArray<{ holder: string; percentage: number; amount: number }>;
+  /* Design note #705: `cashBefore`/`cashAfter` are `null` for a holder with no balance to project -- the bank
+     pool, which is paid but is not a player. */
+  dividendPayouts: ReadonlyArray<DividendPayoutProjection>;
   /** Design note #259: per-tier rust countdown, so the bar's train chips
    *  read identically to the Round Detail table's. */
   rustOutlookForBar: Readonly<Record<TrainTier, TierRustOutlook>> | null;
@@ -625,14 +639,11 @@ export default function ContextualActionBar({
         // Design note #144: Phase 3+ only, and FIRST in the turn. The
         // contract starts the cursor at `Track` before Phase 3, so this case
         // is unreachable in the Yellow era rather than showing a dead button.
-        contextualButtons = [
-          {
-            key: "buy-private",
-            label: "Buy Private Company",
-            onClick: onOpenPrivateTrade,
-            title: "Select a private company below to purchase it into this corporation's treasury.",
-          },
-        ];
+        /* Design note #715: NO BUTTON. It opened a modal, and the panel that modal held now renders below --
+           so the button's only remaining job would be scrolling to something already on screen.
+           #691 removed the Buy Trains button for the same reason one step later, and #263's argument applies
+           here too: two controls for one outcome implies a distinction a player then has to work out. */
+        contextualButtons = [];
         break;
       case "Tokens":
         contextualButtons = [
@@ -691,7 +702,7 @@ export default function ContextualActionBar({
             title:
               declaredRevenue > 0
                 ? `Keeps all $${declaredRevenue} in the corporation's treasury. Shareholders receive nothing.`
-                : "This corporation earned nothing this turn. 1830 has no $0 dividend — the revenue is withheld and the share price moves one step left.",
+                : "This corporation earned nothing this turn. Project 18XX has no $0 dividend — the revenue is withheld and the share price moves one step left.",
           },
         ];
         break;
@@ -789,9 +800,33 @@ export default function ContextualActionBar({
      Design note #485: SKIP IS NEVER A DIVIDEND DECLARATION. `dividendRevenueIsThisTurn` was the third
      clause and it is false in precisely the reported situation -- a corporation that skipped Routes -- so
      the one corporation guaranteed to have $0 was the one Skip was kept alive for. Gone rather than
-     inverted: 1830 requires a declaration every turn. Skip remains correct on Track, Tokens and Routes. */
+     inverted: 1830 requires a declaration every turn.
+     Design note #707 CORRECTED THE LAST CLAUSE, which read "Skip remains correct on Track, Tokens and
+     Routes". It is correct on Track and Tokens, where declining is an ordinary strong play (#674) -- and it
+     was not correct on ROUTES, where a corporation that can run must. Reported: "I was able to skip Run
+     Routes with both a train and a valid route." #278 guards the money once it exists; the step before it
+     decides whether it exists at all, so the omission voided this note's own protection upstream of it. */
   const dividendChoiceForced =
     roundType === "OperatingRound" && orSubPhase === "Dividends";
+
+  /* Design note #707: AND THE STEP BEFORE IT. #278's note above ends "Skip remains correct on Track, Tokens
+     and Routes" -- and Routes is where its own argument applies hardest.
+     REPORTED: "there is a 'Skip Run Routes' button even when a corporation has trains and a valid route ...
+     the game is very strict that players MUST run routes if they can."
+     #278 protects the money once it exists; this protects its existing. A corporation that declines a run it
+     could have made voids the declaration AND the market move #436 calls "the most consequential thing that
+     happens to a corporation that could not run" -- upstream of every guard built to preserve them.
+     DERIVED HERE FROM `maxRouteRevenue` rather than passed as a ready-made boolean, for the reason #278's own
+     note gives one paragraph up: the facts are already props, and a second boolean saying what they jointly
+     mean can disagree with them. */
+  const routeObligation =
+    roundType === "OperatingRound"
+      ? routeRunObligation({
+          orSubPhase,
+          maxRouteRevenue,
+          ticker: activeCorporation?.ticker,
+        })
+      : null;
 
   /* Design note #31: ONE BAR, EVERYWHERE. Two bars existed and on the phase tab during a Stock Round BOTH
      rendered, with two Undo buttons. `GlobalActionBar` is deleted; this component absorbed Pass, kept Undo
@@ -1443,7 +1478,7 @@ export default function ContextualActionBar({
                  THE LABEL CARRIES THE DIFFERENCE, chevron included. "Skip Buy Private ›" beside "Buy Private
                  Company" is unambiguous in words, and a second signal for a fact the words already state is what
                  `PlayerCards` #567 removed three of. */}
-              {mayActThisTurn && orSubPhase !== "Hardware" && !dividendChoiceForced && (
+              {mayActThisTurn && orSubPhase !== "Hardware" && !dividendChoiceForced && !routeObligation && (
                 <button
                   type="button"
                   /* Design note #619: it passes `disabled` and so it has to LOOK disabled. This button was missed by
@@ -1460,6 +1495,17 @@ export default function ContextualActionBar({
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
+              )}
+              {/* Design note #707/#619: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
+                  Dividends silently, which was survivable there because the two buttons it leaves behind are
+                  self-explanatory. Here the player has just been offered Auto Route and a manual draft, and a
+                  Skip that is simply absent reads as a panel that failed rather than as a rule.
+                  IT NAMES NO FIGURE. The first draft quoted `maxRouteRevenue`, which reads as a requirement
+                  to EARN it -- and corporations are not required to run the best route they can reach. The
+                  probe is an existence proof; the sentence says so by ending on the president's discretion
+                  rather than on an amount. */}
+              {mayActThisTurn && routeObligation && (
+                <span style={styles.orPanelObligation}>{routeObligation}</span>
               )}
               {/* The one line that replaces the whole control set for a
                   player who is not acting. Without it the centre column is
@@ -1586,12 +1632,63 @@ export default function ContextualActionBar({
                     No shareholders on record — the whole payout would go to the bank pool.
                   </span>
                 ) : (
+                  /* Design note #705: BOTH ENDS AND THE MOVE BETWEEN THEM.
+                     REPORTED: "it's hard to see in the Dividends phase how paying out affects players'
+                     personal cash ... the solution is looking at us on the Withhold side where we show the
+                     corporation's treasury with its current value to its new value ... I am reluctant to lose
+                     the actual payout amount, which going from current to new treasury will elide."
+                     The two columns were answering different KINDS of question -- Withhold a before-and-after
+                     about a balance, Pay a bare delta only a reader already holding P1's cash in their head
+                     could use. That is the very thing #509a fixed one column to the right, and this column was
+                     left computing.
+                     THE AMOUNT KEEPS ITS GREEN and its place in the middle: it is what the decision turns on
+                     (#188 put it on the button for the same reason), so it sits BETWEEN the balances it
+                     connects rather than being replaced by them.
+                     ONE ARROW, NOT TWO. The report sketched `[current] > +$[payout] > [new]`; written as
+                     `$420 + $54` then the arrow, the middle term reads as the addition it is rather than as a
+                     value the cash briefly becomes -- and the line keeps `MarketMoveLine`'s and the withhold
+                     transition's single-arrow grammar, which is the consistency the report is reaching for. */
                   dividendPayouts.map((row) => (
-                    <span key={row.holder} style={styles.dividendRow}>
-                      <span>{row.holder}</span>
-                      <span style={styles.dividendAmount}>
-                        ${row.amount} <span style={styles.dividendPct}>({row.percentage}%)</span>
+                    <span
+                      key={row.holder}
+                      style={styles.dividendRow}
+                      title={describeDividendRow(row)}
+                    >
+                      <span style={styles.dividendHolder}>
+                        {/* Design note #706: the bank pool pays the CORPORATION, so its row wears the same
+                            herald the Withhold column gives the treasury -- the two columns are now showing
+                            the same balance and should say so in the same way. */}
+                        {row.kind === "treasury" && (
+                          <CorporateLogo
+                            ticker={row.holder}
+                            size={14}
+                            color={corporationInk}
+                            title={`${row.holder} treasury`}
+                          />
+                        )}
+                        {row.holder} <span style={styles.dividendPct}>{row.percentage}%</span>
                       </span>
+                      {row.cashBefore === null || row.cashAfter === null ? (
+                        /* A balance this build cannot read. #278's rule -- a number we cannot stand behind is
+                           worse than no number -- so the row states what is known and stops. */
+                        <span style={styles.dividendAmount}>${row.amount}</span>
+                      ) : (
+                        <span style={styles.dividendMoveGroup}>
+                          <span style={styles.treasuryFrom}>${row.cashBefore}</span>
+                          <span style={styles.dividendPlus} aria-hidden="true">
+                            +
+                          </span>
+                          <span style={styles.dividendAmount}>${row.amount}</span>
+                          <span
+                            style={{ ...styles.dividendMoveArrow, ...styles.dividendMoveArrowUp }}
+                            role="img"
+                            aria-label="rises to"
+                          >
+                            &#10132;
+                          </span>
+                          <span style={styles.treasuryTo}>${row.cashAfter}</span>
+                        </span>
+                      )}
                     </span>
                   ))
                 )}
@@ -1664,6 +1761,22 @@ export default function ContextualActionBar({
           )}
           {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
               button are the largest block in this bar, and on three of four screens they were furniture. */}
+          {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
+              be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
+              Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
+              present -- so the two purchase steps of a turn have one shape. */}
+          {mayActThisTurn && orSubPhase === "BuyPrivate" && privatePurchase && (
+            <ProposePrivatePurchase
+              embedded
+              open
+              buyerTicker={privatePurchase.buyerTicker}
+              privates={privatePurchase.privates}
+              treasury={privatePurchase.treasury}
+              labelForAddress={privatePurchase.labelForAddress}
+              onPropose={privatePurchase.onPropose}
+              onClose={() => undefined}
+            />
+          )}
           {mayActThisTurn && orSubPhase === "Hardware" && trainPurchase && (
             <TrainPurchasePanel
               depot={trainPurchase.depot}
@@ -1840,6 +1953,30 @@ export default function ContextualActionBar({
           >
             Pass Turn
           </button>
+          {/* Design note #717: AUTO-PASS SITS BESIDE PASS, because it is the same decision with a duration.
+              Only in a Stock Round -- an Operating Round turn is a corporation's, not a player's, and there is
+              nothing there a standing instruction could safely stand for.
+              ARMED, IT IS A DISARM BUTTON. One control, two states, so a player can always see whether it is
+              on -- which is the thing they most need to know about a setting that acts without them. */}
+          {autoPass && roundType === "StockRound" && (
+            <button
+              type="button"
+              style={{
+                ...styles.actionBarButton,
+                ...(autoPass.armed ? styles.autoPassArmed : {}),
+                ...(!sessionReady ? styles.actionBarButtonDisabled : {}),
+              }}
+              onClick={autoPass.armed ? autoPass.onDisarm : autoPass.onOpenSettings}
+              disabled={!sessionReady}
+              title={
+                autoPass.armed
+                  ? "Auto-Pass is on for this Stock Round. Click to turn it off."
+                  : "Pass automatically until something happens that affects you, or the Stock Round ends."
+              }
+            >
+              {autoPass.armed ? "Auto-Pass: On" : "Auto-Pass"}
+            </button>
+          )}
           {/* Design note #540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES. Reported as two bars between Pass Turn and
              Undo -- these two, with nothing between them. The pair frames `contextualButtons`, which is EMPTY in
              several real states: an auction round, a Stock Round with no corporation selected, and a room whose game

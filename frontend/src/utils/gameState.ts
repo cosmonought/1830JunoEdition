@@ -129,6 +129,23 @@ export interface PrivatePurchaseOffer {
   price: number;
 }
 
+/** Design note #701: the train-trade offer awaiting the seller president's answer. The train equivalent of
+ *  `PrivatePurchaseOffer`, and here for the same reason: a proposal is something the OTHER player has to see,
+ *  and the sandbox's shared state is the only thing both clients hold.
+ *  Sandbox-only. Online the contract keeps a real offer register and `GetTrainOffers` reaches the counterparty
+ *  already -- which is why this went unnoticed for so long. Both paths render the same prompt, and only one of
+ *  them had a register behind it. */
+export interface TrainPurchaseOffer {
+  seller_protocol_id: number;
+  seller_ticker: string;
+  seller_president: string | null;
+  buyer_protocol_id: number;
+  buyer_ticker: string;
+  model_type: string;
+  /** String, matching the contract's `Uint128` -- see `ProposeTrainPurchaseMsg`. */
+  price: string;
+}
+
 export interface GameStateResponse {
   game_id: number;
   creator: string;
@@ -177,6 +194,9 @@ export interface GameStateResponse {
    *  Sandbox-only: the contract's `BuyPrivateCompany` is single-party (it reads `private.owner` and never
    *  consults them), so there is no chain-side offer for this to mirror. */
   private_purchase_offer?: PrivatePurchaseOffer | null;
+  /** Design note #701: the train-trade offer awaiting its seller's answer. Sandbox-only, for the reason on
+   *  `TrainPurchaseOffer` -- online this lives in the contract's offer register. */
+  train_purchase_offer?: TrainPurchaseOffer | null;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */
@@ -429,35 +449,72 @@ const PERCENT_PER_CERTIFICATE = 10;
 
 /** What `playerAddress`'s shares are worth at live market prices, or `null` when any corporation they hold
  *  has no price to value them at. Keyed by `company_id`, exactly as `FinancialLedger`'s own map is. */
+/** What one 10% certificate of this corporation is worth, and therefore what it would sell for.
+ *
+ *  Design note #711: AN UNPARRED SHARE IS WORTH $0, NOT "UNKNOWN".
+ *
+ *  REPORTED: "if a share has no market price it is unsellable, so it should either be excluded or count as
+ *  $0 -- and the only case in which this can ever happen is the 10% PRR share granted by the private company
+ *  before PRR pars/sells its President's Share. Regarding Net Worth: unsellable shares ... are effectively
+ *  worth $0."
+ *
+ *  THAT IS THE FACT THE OLD CODE WAS MISSING: a corporation acquires a price the moment its President's Share
+ *  is sold at a par. So "no price" is not a gap in what this client knows, it is a statement about the board
+ *  -- nobody has parred the corporation, its shares cannot be sold to anyone at any figure, and $0 is the
+ *  answer rather than a refusal to answer. In practice it happens once per game, to the certificate a private
+ *  company grants.
+ *
+ *  PARRED, NOT FLOATED, and the distinction is the one #562a already had to make from the other side: "a
+ *  started-but-unfloated corporation sits at its par position and its shares sell perfectly well". Floating is
+ *  about how many shares have sold; pricing happens at the par, before any of that.
+ *
+ *  SO THE THREE READINGS COLLAPSE INTO ONE LADDER. `estimateStockPortfolioValue` returned `null` on an unknown
+ *  price; #566 added a par fallback for the card only, on the grounds that "a corporation whose president has
+ *  set a par but whose token is not yet on the chart is not unpriced"; and the Ledger kept the stricter
+ *  reading. All three were circling the same ladder -- market, then par, then nothing to sell -- and the
+ *  disagreement was only about where it stopped.
+ *
+ *  WHICH RETIRES #566's SPLIT. There is no longer a looser reading and a stricter one for the two surfaces to
+ *  choose between, because par is not a fallback: it is the price, whenever the chart has not moved off it. */
+export function sharePriceFor(
+  company: PublicCompanyState,
+  marketPrices: Readonly<Record<number, number | null>>,
+): number {
+  const market = marketPrices[company.company_id];
+  if (market != null && Number.isFinite(market)) return market;
+  const par = Number(company.par_value ?? NaN);
+  if (Number.isFinite(par) && par > 0) return par;
+  // Unparred: no IPO price, no chart position, no buyer. Design note #711.
+  return 0;
+}
+
 export function estimateStockPortfolioValue(
   playerAddress: string,
   state: GameStateResponse,
   marketPrices: Readonly<Record<number, number | null>>,
-): number | null {
+): number {
   let total = 0;
   for (const holding of playerCompanyHoldings(playerAddress, state)) {
-    const price = marketPrices[holding.company.company_id];
-    /* Unknown price, unknown total. Skipping the corporation instead would
-       under-report the portfolio by however much it is worth, and an
-       under-report is indistinguishable from a correct smaller number --
-       which is exactly the kind of wrong figure a player would act on. */
-    if (price == null || !Number.isFinite(price)) return null;
-    total += (holding.percentage / PERCENT_PER_CERTIFICATE) * price;
+    /* Design note #711: no `null` branch any more. It read "unknown price, unknown total ... an under-report
+       is indistinguishable from a correct smaller number", which is sound reasoning about a MISSING FIGURE and
+       was being applied to a share that has no value. Counting it as zero is not under-reporting; it is the
+       report. */
+    total += (holding.percentage / PERCENT_PER_CERTIFICATE) * sharePriceFor(holding.company, marketPrices);
   }
   return total;
 }
 
-/** Liquid cash plus portfolio value, or `null` when either is unknown. */
+/** Liquid cash plus portfolio value, or `null` when the player's CASH is unknown -- which is now the only
+ *  thing that can make this unanswerable (design note #711). */
 export function estimatePlayerNetWorth(
   playerAddress: string,
   state: GameStateResponse,
   marketPrices: Readonly<Record<number, number | null>>,
 ): { stockValue: number; netWorth: number } | null {
   const stockValue = estimateStockPortfolioValue(playerAddress, state, marketPrices);
-  if (stockValue === null) return null;
   const entry = state.player_cash.find((row) => row.player === playerAddress);
   const cash = Number(entry?.cash_vgp ?? NaN);
-  // No cash record is not zero cash -- same argument as the `null` above.
+  // No cash record is not zero cash -- a player the state has not reported is not a player with nothing.
   if (!Number.isFinite(cash)) return null;
   return { stockValue, netWorth: cash + stockValue };
 }

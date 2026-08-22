@@ -1,15 +1,28 @@
-// Which hexes a private company is holding, and for how long.
+// Which hexes carry a private company's special power, and for how long.
 //
-// Design note #0: the reservation was real and stated in three places, all of
-// them text -- the auction card, the powers panel and the rules reference. None
-// is on screen while a president is choosing where to lay track, so a player
-// discovers the block by having a placement refused.
+// Design note #0: the power is real and stated in three places, all of them text -- the auction card, the
+// powers panel and the rules reference. None is on screen while a president is choosing where to lay track.
+//
+// Design note #714: THE REST OF #0 WAS WRONG, AND SO IS THIS FILE'S NAME.
+//
+// It read "so a player discovers the block by having a placement refused". There is no block. REPORTED:
+// "these hexes are actually not locked by the private companies: any corporation can build on those hexes
+// following the usual rules, it's only that the owning corporations of DH or CSL get their special power."
+//
+// So the badge is an OPPORTUNITY its owner should not miss, not a wall everyone else must route around --
+// which is why it was drawn as a padlock and captioned "Reserved by", both now corrected. The `power` strings
+// below were accurate the whole time; nothing rendered them, and the two surfaces that DID render something
+// invented a shorter claim that happened to be false.
+//
+// THE VOCABULARY IS LEFT ALONE ON PURPOSE. "Reservation" is wrong and it is wrong in seven exported symbols
+// across four files; renaming them is mechanical, touches a lot of lines, and would bury the one-line fixes
+// that matter. Recorded here rather than done quietly, so the misnomer is a known debt and not a belief.
 //
 // Design note #1: DERIVED FROM OWNERSHIP, not a static list. The badge has to
 // CLEAR, and it clears two ways: CLOSED (the private leaves at Phase 5) and
 // ABSENT (a room that does not report it -- no claim, no badge). UNOWNED STILL
-// COUNTS: during the auction nobody holds the C&SL and the hex is still spoken
-// for; ownership changes only the tooltip.
+// COUNTS: during the auction nobody holds the C&SL and the hex still carries the
+// power; ownership changes only who can use it.
 //
 // Design note #2: the table stores hex LABELS and `HEX_LABEL_TO_AXIAL` resolves
 // them. Storing `(q, r)` here would be a second copy of the board's geometry,
@@ -22,7 +35,8 @@
 import { STATIC_BOARD_HEXES, NAMED_HEX_LABELS } from "../components/hexBoardData";
 import type { PrivateCompanyState } from "./gameState";
 
-/** One private's claim on one hex. */
+/** One private's special power on one hex. Design note #714: a POWER, not a claim -- anybody may build
+ *  here under the ordinary rules. */
 interface ReservationRule {
   privateId: number;
   /** Board label, resolved against `STATIC_BOARD_HEXES` -- design note #2. */
@@ -91,9 +105,8 @@ export function reservationKey(q: number, r: number): string {
   return `${q},${r}`;
 }
 
-/** Every hex currently spoken for by a private that is still in the game. Empty
- *  once both privates have closed, which is the state the badge exists to stop
- *  misrepresenting. */
+/** Every hex carrying a live private's power. Empty once both privates have closed, which is the state the
+ *  badge exists to stop misrepresenting. */
 export function activeReservations(
   privateCompanies: readonly PrivateCompanyState[] | null | undefined,
 ): HexReservation[] {

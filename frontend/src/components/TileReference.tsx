@@ -28,14 +28,18 @@
 //
 // See docs/ai_architecture/hex_tile_math.md, TileReference.tsx #677.
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 
 import { TilePreviewThumbnail } from "./HexGridRenderer";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "./hexTileCatalog";
 import type { MapGridResponse } from "./hexContractTypes";
 import { FONT_SIZE } from "../styles/typography";
 import { tileStockTable } from "../utils/tileSupply";
-import { isUpgradeDeadEnd, tileUpgradeGraph } from "../utils/tileUpgrades";
+import {
+  isUpgradeDeadEnd,
+  tileUpgradeGraph,
+  tileUpgradeSources,
+} from "../utils/tileUpgrades";
 
 export interface TileReferenceProps {
   /** The live board, for remaining supply. `null` renders printed counts only
@@ -67,11 +71,14 @@ const FAMILY_BLURB: Readonly<Record<string, string>> = {
   NY: "Only on New York.",
 };
 
-function TileChip({ tileId }: { tileId: number }) {
+/** Design note #693: the chip takes a size. It draws the printed-start rows at 30px and the detail panel at
+ *  52-72 -- one component so a tile looks the same wherever it is referenced, which is the whole reason the
+ *  chip exists rather than an inline thumbnail plus a span. */
+function TileChip({ tileId, size = 30 }: { tileId: number; size?: number }) {
   const entry = TILE_CATALOG_BY_ID.get(tileId);
   return (
-    <span style={styles.chip}>
-      <TilePreviewThumbnail tileId={tileId} orientation={0} size={30} />
+    <span style={{ ...styles.chip, ...(size > 40 ? styles.chipStacked : {}) }}>
+      <TilePreviewThumbnail tileId={tileId} orientation={0} size={size} />
       <span style={{ ...styles.chipId, color: entry ? TIER_INK[entry.color] : "#8a90a0" }}>
         #{tileId}
       </span>
@@ -79,9 +86,97 @@ function TileChip({ tileId }: { tileId: number }) {
   );
 }
 
+/** Readable names for the terrain tags, so the panel says what a tile IS rather than repeating its catalog
+ *  enum. Absent entries fall through to the raw tag -- a new terrain should look unfamiliar, not blank. */
+const TERRAIN_LABEL: Readonly<Record<string, string>> = {
+  Plain: "Plain track",
+  SmallTown: "One town",
+  DoubleTown: "Two towns",
+  MajorCityHub: "City",
+  DoubleCityHub: "Two cities",
+  BostonHub: "Boston",
+  NewYorkHub: "New York",
+};
+
+/** One tile's place in the chain -- design note #693.
+ *
+ *  Deliberately NOT a modal or a radial ring. A radial menu is a board tool: it anchors to a canvas, it is
+ *  for choosing a thing to place, and it dismisses on a click elsewhere. This is a reference page, and what
+ *  the reader wants is to compare -- open a tile, look at its successors, keep the tray visible around it.
+ *  A panel that pushes the tray down does that; an overlay that covers the tray does not. */
+function TileUpgradeDetail({
+  tileId,
+  tier,
+  targets,
+  onClose,
+}: {
+  tileId: number;
+  tier: TileColorTier;
+  targets: readonly number[];
+  onClose: () => void;
+}) {
+  const sources = tileUpgradeSources(tileId);
+  const entry = TILE_CATALOG_BY_ID.get(tileId);
+  return (
+    <div style={{ ...styles.detail, borderColor: TIER_INK[tier] }} role="group">
+      <div style={styles.detailHead}>
+        <span style={{ ...styles.detailTitle, color: TIER_INK[tier] }}>#{tileId}</span>
+        {entry && <span style={styles.detailTerrain}>{TERRAIN_LABEL[entry.terrain] ?? entry.terrain}</span>}
+        <button type="button" style={styles.detailClose} onClick={onClose} aria-label="Close">
+          ✕
+        </button>
+      </div>
+
+      <div style={styles.detailChain}>
+        {/* Upgraded FROM, when anything reaches it. Absent rather than "nothing" for a yellow tile: the tray
+            it sits in already says it starts a chain. */}
+        {sources.length > 0 && (
+          <div style={styles.detailArm}>
+            <span style={styles.detailArmLabel}>Replaces</span>
+            <div style={styles.detailTiles}>
+              {sources.map((id) => (
+                <TileChip key={id} tileId={id} size={52} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={styles.detailArm}>
+          <span style={styles.detailArmLabel}>This tile</span>
+          <div style={styles.detailTiles}>
+            <TileChip tileId={tileId} size={72} />
+          </div>
+        </div>
+
+        <div style={styles.detailArm}>
+          <span style={styles.detailArmLabel}>Upgrades to</span>
+          <div style={styles.detailTiles}>
+            {targets.length > 0 ? (
+              targets.map((id) => <TileChip key={id} tileId={id} size={52} />)
+            ) : (
+              /* The two ways a chain ends, told apart -- #677's distinction, which is worth more here than it
+                 was in the tray because this is the panel a player opens to ask the question. */
+              <span style={styles.detailEnd}>
+                {isUpgradeDeadEnd(tileId)
+                  ? `Nothing replaces #${tileId}. Laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`
+                  : "The top tier — nothing replaces it."}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TileReference({ mapGrid }: TileReferenceProps) {
   /* The sweep is real work and the board does not change under it, so both
      derivations are memoised on the one input that matters. */
+  /* Design note #693: ONE SELECTION FOR THE WHOLE TAB, mirroring `StockRoundPanel`'s `activeCompanyId`
+     exactly -- a single `number | null`, click to toggle, so at most one tile is ever open. That component
+     reached the same shape for the same reason (#396: the card "decides where the controls live"), and a
+     reader who has learned it there does not have to learn it again here. */
+  const [selectedTileId, setSelectedTileId] = useState<number | null>(null);
   const graph = useMemo(() => tileUpgradeGraph(), []);
   const stock = useMemo(() => tileStockTable(mapGrid), [mapGrid]);
   const live = mapGrid !== null;
@@ -167,14 +262,30 @@ export function TileReference({ mapGrid }: TileReferenceProps) {
               {ids.map((tileId) => {
                 const entry = TILE_CATALOG_BY_ID.get(tileId);
                 if (!entry) return null;
-                const targets = graph.successors.get(tileId) ?? [];
+                /* Design note #693: the tray tile no longer reads `successors` at all -- the panel does. Left
+                   as a comment rather than a stale binding, because an unused lookup here is how the chips
+                   would find their way back. */
                 const supply = stock.get(tileId);
                 const family = FAMILY_FOR_TERRAIN[entry.terrain];
+                const isSelected = tileId === selectedTileId;
                 return (
                   /* Design note #692: no border, no background. A tile is contents, and its own artwork is
                      already a bounded shape -- a box around a hexagon is a box around something that did not
-                     need one. */
-                  <div key={tileId} style={styles.trayTile}>
+                     need one.
+                     Design note #693: and it is a BUTTON now -- see the note on the detail panel below. Styled
+                     as contents still; the affordance is the pointer, the pressed ring and `aria-pressed`,
+                     none of which add a box. */
+                  <button
+                    key={tileId}
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={`Tile #${tileId} — ${isSelected ? "hide" : "show"} its upgrade path`}
+                    onClick={() => setSelectedTileId(isSelected ? null : tileId)}
+                    style={{
+                      ...styles.trayTile,
+                      ...(isSelected ? { ...styles.trayTileSelected, borderColor: TIER_INK[tier] } : {}),
+                    }}
+                  >
                     {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
                         44 a green city and a green crossover are two dark hexagons -- which is the reading the
                         report is describing when it says the page looks messy. */}
@@ -198,17 +309,13 @@ export function TileReference({ mapGrid }: TileReferenceProps) {
                         : "—"}
                     </span>
 
-                    {/* Design note #692: the upgrades as bare numbered chips, with no "Upgrades to" caption.
-                        An arrow and a tier-coloured number say it in the space a label was taking, and the
-                        caption was repeated 28 times to explain a relationship the arrow states once. */}
-                    {targets.length > 0 && (
-                      <span style={styles.upgradeRow}>
-                        <span style={styles.arrow} aria-hidden="true">→</span>
-                        {targets.map((id) => (
-                          <TileChip key={id} tileId={id} />
-                        ))}
-                      </span>
-                    )}
+                    {/* Design note #693: THE UPGRADE CHIPS ARE GONE FROM HERE. #692 shrank them to bare
+                        numbered ids and it was still reported as "very cluttered and chaotic" -- correctly,
+                        because the problem was never their size. An upgrade path is a RELATIONSHIP, and this
+                        page was drawing all of them at once: 46 tiles carrying up to seven references each is
+                        a hundred tile ids competing with the 46 they sit beneath, at the same weight, in the
+                        same typeface. No amount of shrinking fixes simultaneity.
+                        A relationship is only interesting ONE AT A TIME. It moves to the panel below. */}
 
                     {/* Design note #677: NOT THE SAME AS "nothing follows brown", which is why this survives
                         while the top-tier line moved to the heading. A yellow or green tile with no successor
@@ -227,10 +334,29 @@ export function TileReference({ mapGrid }: TileReferenceProps) {
                         No upgrade
                       </span>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
+
+            {/* Design note #693: THE ANSWER APPEARS UNDER THE QUESTION.
+                Rendered inside the tray that HOLDS the selected tile rather than at the top of the page, so
+                the panel opens where the reader just clicked -- and only ever one tray has one, because the
+                selection is a single value.
+                ON THE WORRY that a tile with seven upgrades would be messy here: seven tiles in a panel of
+                their own is not the problem the report describes. Seven were unreadable when they were one of
+                46 simultaneous lists; alone, with room and a caption, they are a short row.
+                IT SHOWS BOTH DIRECTIONS, which the inline chips never could. `tileUpgradeSources` has been
+                exported and tested since #675 and had no caller -- an orphan by this codebase's own rule --
+                and it is what turns "what does this become" into "where does this sit in the chain". */}
+            {selectedTileId !== null && ids.includes(selectedTileId) && (
+              <TileUpgradeDetail
+                tileId={selectedTileId}
+                tier={tier}
+                targets={graph.successors.get(selectedTileId) ?? []}
+                onClose={() => setSelectedTileId(null)}
+              />
+            )}
           </section>
         );
       })}
@@ -322,13 +448,65 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "16px 12px",
   },
   /* Design note #692: contents, not cards. No border, no fill -- the hexagon is already a bounded shape. */
+  /* Design note #693: a button that does not look like one. Transparent fill, transparent border reserved so
+     selecting does not reflow the grid, and the type inherited rather than reset -- the affordance is the
+     cursor and the ring, because #692's whole point was that these are contents rather than cards. */
   trayTile: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     gap: "3px",
     textAlign: "center",
+    padding: "6px 4px",
+    background: "none",
+    border: "1px solid transparent",
+    borderRadius: "10px",
+    font: "inherit",
+    color: "inherit",
+    cursor: "pointer",
   },
+  trayTileSelected: { backgroundColor: "rgba(255, 255, 255, 0.05)" },
+  /* Design note #693: the panel, inside the tray that holds the selected tile. */
+  detail: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    marginTop: "4px",
+    padding: "12px 14px",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    border: "1px solid",
+    borderColor: "#2a2e3a",
+    borderRadius: "10px",
+  },
+  detailHead: { display: "flex", alignItems: "baseline", gap: "10px" },
+  detailTitle: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.heading,
+    fontWeight: 700,
+  },
+  detailTerrain: { fontSize: FONT_SIZE.small, color: "#9aa0ac", flex: "1 1 auto" },
+  detailClose: {
+    background: "none",
+    border: "none",
+    color: "#8a90a0",
+    fontSize: FONT_SIZE.body,
+    cursor: "pointer",
+    padding: "0 2px",
+    lineHeight: 1,
+  },
+  /* The chain reads left to right, and wraps as one unit per arm rather than as one long row of tiles --
+     otherwise "Replaces" and "Upgrades to" interleave at narrow widths and the panel says something false. */
+  detailChain: { display: "flex", flexWrap: "wrap", gap: "10px 22px", alignItems: "flex-start" },
+  detailArm: { display: "flex", flexDirection: "column", gap: "6px" },
+  detailArmLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: "#8a90a0",
+  },
+  detailTiles: { display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-start" },
+  detailEnd: { fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#e0c07a", maxWidth: "40ch" },
   tileId: {
     display: "inline-flex",
     alignItems: "center",

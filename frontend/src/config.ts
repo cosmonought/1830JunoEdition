@@ -33,6 +33,16 @@ export const JUNO_PREFIX = "juno";
  *  display unit. `ujuno` -> `JUNO` is 6 decimals, matching the fixed-point
  *  scale the contract uses for VGP (`juno_developer_spec.md` §1). */
 export const NATIVE_DENOM = "ujuno";
+/** The application's own name, as a player and their wallet see it.
+ *
+ *  Design note #708: ONE PLACE, because it was in five and drifting was invisible. The wallet's signature
+ *  prompts, the room-creation prompt, the join prompt and the transaction memo all spelled it out
+ *  independently, so renaming meant finding every literal -- and a prompt that disagrees with the one before
+ *  it is exactly the kind of thing a cautious user reads as a phishing attempt.
+ *  BRANDING ONLY. The rules sentences elsewhere name the game in PROSE ("Project 18XX has no $0 dividend"),
+ *  and reading those from a constant would make an ordinary sentence a template for no benefit. */
+export const APP_NAME = "Project 18XX";
+
 export const NATIVE_DENOM_DISPLAY = "JUNO";
 export const NATIVE_DENOM_EXPONENT = 6;
 

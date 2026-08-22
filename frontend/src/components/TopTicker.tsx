@@ -150,7 +150,18 @@ export function TopTicker({
           aria-expanded={isExpanded}
           aria-label="Expand or collapse the chat and activity history"
         >
-          <span style={styles.previewText}>
+          {/* Design note #694: the rule reaches the COLLAPSED line too. The expanded panel is where the request
+              was aimed, and applying it there alone would leave the same feed saying two different things
+              about the same message depending on whether it happened to be open -- which is the half-applied
+              shape #691 and #681 both cost a report to find.
+              IT MATTERS MORE HERE, if anything: this one line is what a player sees while they are looking at
+              the board, and "did somebody say something to me" is exactly the question a glance at it asks. */}
+          <span
+            style={{
+              ...styles.previewText,
+              ...(latestItem?.kind === "chat" ? styles.previewTextChat : {}),
+            }}
+          >
             {latestItem ? feedItemText(latestItem) : "No activity yet — click to expand the history."}
           </span>
           {/* Design note #616: unread CHAT, which is why the count can be
@@ -228,7 +239,15 @@ export function StickyTickerLine({
       title={`${feedItemText(latestItem)}\n\nClick to open the full activity log.`}
     >
       <span style={styles.stickyLineDot} aria-hidden="true" />
-      <span style={styles.stickyLineText}>{feedItemText(latestItem)}</span>
+      <span
+        style={{
+          ...styles.stickyLineText,
+          // Design note #694: same rule, same reason -- see the preview above.
+          ...(latestItem.kind === "chat" ? styles.previewTextChat : {}),
+        }}
+      >
+        {feedItemText(latestItem)}
+      </span>
     </button>
   );
 }
@@ -372,6 +391,10 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  /* Design note #694: the one-line forms share this, so the collapsed ticker and the sticky line cannot
+     disagree about whether a message is a message. Weight only -- the expanded panel's chat row has a colour,
+     a border and a background to distinguish it, and a single line in a bar has none of those to spare. */
+  previewTextChat: { fontWeight: 700 },
   /* Design note #600: the empty flex item the toggle is positioned into. It draws nothing and is
      `aria-hidden` -- its entire job is to be the width the toggle occupies, so the flow accounts for a control
      it cannot contain. `flexShrink: 0` because a slot that can be squeezed is not a reservation. */
@@ -480,8 +503,23 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
   },
+  /* Design note #694: A PERSON SPEAKING, IN A COLUMN OF NARRATION.
+     Requested: chat bold, activity log plain. The log was already plain -- both were, at weight 400 in the
+     same ink and the same size -- so the whole change is that the chat now carries weight and the log is left
+     exactly as it was.
+     THE FEED IS MOSTLY LOG, and that asymmetry is the argument. Emphasis belongs on the exception, and in a
+     scrolling column where nine rows in ten are the game describing itself, the one row that is a human
+     talking is the one worth catching an eye that is not currently reading.
+     WEIGHT RATHER THAN COLOUR, and it is the fourth mark this row carries -- after the author's own colour,
+     the coloured left border and the tinted background. The first three all live at the row's EDGES, which is
+     what a reader scanning down a fast-moving column looks past. Weight is the only signal that survives in
+     the text itself, and the text is what the reader is actually there for.
+     THE INK IS UNCHANGED. Bold and brighter would be two changes for one purpose, and `#c7cbd4` is already
+     the panel's reading colour -- lifting it too would push chat past "notable" into "alarming", which is what
+     the app reserves for a contested auction and a failed action. */
   chatText: {
     fontSize: FONT_SIZE.body,
+    fontWeight: 700,
     color: "#c7cbd4",
     marginTop: "1px",
   },

@@ -105,7 +105,19 @@ export function privatePurchaseBlockReason(entry: PrivateCompanyState): string |
 /* ------------------------------------------------------------------ */
 
 export interface ProposePrivatePurchaseProps {
+  /** Ignored when `embedded` -- the bar's own condition decides whether the step is on screen. */
   open: boolean;
+  /** Design note #715: RENDER IN PLACE, not over the board.
+   *
+   *  REPORTED: "the modal that opens when you click 'Buy Private Company' should maybe be a subpanel like
+   *  'Buy Trains' instead of something you only see by actively clicking into it."
+   *
+   *  Same argument #691 made about the depot, one step earlier in the turn: a step's own controls are not
+   *  furniture to be summoned, they ARE the step. A modal additionally hides the board behind it, which is
+   *  the surface a president is weighing the purchase against.
+   *  `embedded` drops the backdrop, the dialog role and the two chrome buttons -- there is nothing to close
+   *  and nothing to cancel when the panel is simply part of the bar. */
+  embedded?: boolean;
   buyerTicker: string;
   privates: readonly PrivateCompanyState[];
   /** Renders a wallet as a readable name. */
@@ -119,6 +131,7 @@ export interface ProposePrivatePurchaseProps {
 
 export function ProposePrivatePurchase({
   open,
+  embedded = false,
   buyerTicker,
   privates,
   labelForAddress,
@@ -165,24 +178,19 @@ export function ProposePrivatePurchase({
               ? `${buyerTicker}'s treasury holds $${treasury} — it cannot pay $${price}.`
               : null;
 
-  if (!open) return null;
+  if (!embedded && !open) return null;
 
-  return (
-    <div
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Propose a private company purchase"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div style={styles.card}>
+  const body = (
+      <div style={embedded ? styles.embeddedCard : styles.card}>
         <div style={styles.header}>
           <span style={styles.heading}>{buyerTicker} proposes a purchase</span>
-          <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
-            &#10006;
-          </button>
+          {/* Design note #715: no close button when embedded -- the panel is the step, and a control that
+              dismissed it would leave the player on a step with nothing on it. */}
+          {!embedded && (
+            <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
+              &#10006;
+            </button>
+          )}
         </div>
 
         <p style={styles.body}>
@@ -323,9 +331,13 @@ export function ProposePrivatePurchase({
         )}
 
         <div style={styles.footer}>
-          <button type="button" style={styles.secondaryButton} onClick={onClose}>
-            Cancel
-          </button>
+          {/* Design note #715: Cancel is a modal's word. Embedded, declining is `Skip Buy Private` on the bar
+              -- the control that already exists for it, and the one #674 argued should look like a peer. */}
+          {!embedded && (
+            <button type="button" style={styles.secondaryButton} onClick={onClose}>
+              Cancel
+            </button>
+          )}
           <button
             type="button"
             style={{
@@ -343,6 +355,24 @@ export function ProposePrivatePurchase({
           </button>
         </div>
       </div>
+  );
+
+  /* Design note #715: EMBEDDED IS THE BODY ALONE. The backdrop is what makes a modal a modal -- the click
+     target that dismisses it, the `aria-modal` that hides the rest of the app from a screen reader, and the
+     scrim over the board. None of them belong to a panel that lives inside the bar. */
+  if (embedded) return body;
+
+  return (
+    <div
+      style={styles.backdrop}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Propose a private company purchase"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      {body}
     </div>
   );
 }
@@ -454,6 +484,21 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: "24px",
+  },
+  /* Design note #715: the embedded twin. Same content, none of the chrome a floating card needs -- no fixed
+     width fighting the bar's own, no drop shadow (nothing is floating), no scroll cap (the bar scrolls with
+     the page). The border stays: it is what separates this block from the buttons above it, exactly as the
+     depot panel's does. */
+  embeddedCard: {
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    padding: "12px 14px",
+    borderRadius: "10px",
+    border: "1px solid #2b3242",
+    backgroundColor: "#141a26",
+    marginTop: "6px",
   },
   card: {
     width: "min(560px, 100%)",

@@ -174,7 +174,7 @@ export function SandboxWaitingRoom({
             </span>
           ) : (
             <span style={styles.note}>
-              1830 is dealt for {MIN_PLAYERS}–{MAX_PLAYERS} players. Waiting for more.
+              Project 18XX is dealt for {MIN_PLAYERS}–{MAX_PLAYERS} players. Waiting for more.
             </span>
           )}
         </div>
@@ -199,7 +199,7 @@ export function SandboxWaitingRoom({
                  reason names whichever condition is actually blocking. */
               title={
                 !enough
-                  ? `1830 needs at least ${MIN_PLAYERS} players.`
+                  ? `Project 18XX needs at least ${MIN_PLAYERS} players.`
                   : !allReady
                     ? "Waiting for everyone to mark themselves ready."
                     : "Deal the game and begin."

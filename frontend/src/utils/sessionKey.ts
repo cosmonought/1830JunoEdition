@@ -56,6 +56,7 @@ import {
   requireContractAddress,
   requireFeeGranterAddress,
   requireRpcEndpoint,
+  APP_NAME,
 } from "../config";
 
 const SESSION_STORAGE_KEY = "18cosmos.session_key.v1";
@@ -166,6 +167,13 @@ export type GameplayExecuteMsg =
         protocol_id: number;
         source: "Ipo" | "Bank";
         par_value: string | null;
+        /** Design note #712: HOW MANY CERTIFICATES, so a Brown-zone pool multi-buy is ONE turn rather than
+         *  several. It used to be several: `handleBuyShare` looped and dispatched N messages, and every
+         *  `BuyStock` calls `advanceSeat` -- so buying three pool shares passed the turn three times and the
+         *  second and third landed on whoever was next.
+         *  OPTIONAL, and absent means one. Every existing log entry and every contract dispatch omits it, and
+         *  a replay of an older room must keep meaning exactly what it meant when it was written. */
+        quantity?: number;
       };
     }
   | { SellStock: { game_id: number; protocol_id: number; percentage: number } }
@@ -382,7 +390,7 @@ export async function execViaSessionKey(
     feeGranter = requireFeeGranterAddress(),
     gasLimit = "300000",
     gasFeeAmount = { denom: "ujuno", amount: "5000" },
-    memo = "1830 Juno move",
+    memo = `${APP_NAME} move`,
   } = options;
 
   const messageKey = Object.keys(msg)[0] as GameplayMessageKey;

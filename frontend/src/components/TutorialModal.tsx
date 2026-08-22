@@ -359,7 +359,7 @@ export const STOCK_MARKET_TUTORIAL: readonly TutorialPage[] = [
       "Because you just finished your first Operating Round, your stock price has moved one " +
       "space left. This is because your corporation did not own a train and could not pay out " +
       "revenue. Don't be alarmed: every corporation's share price moves left on its first turn " +
-      "in 1830!",
+      "in Project 18XX!",
   },
   {
     title: "Cliffs and ledges",

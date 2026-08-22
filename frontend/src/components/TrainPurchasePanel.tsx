@@ -22,6 +22,10 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
+import { purchaseCeiling } from "../utils/purchaseCeiling";
+import { buyableNow, isTrainLocked } from "../utils/trainLimit";
+// Design note #702: moved to its own file, because the train CHIPS draw it now too.
+import { TrainGlyph } from "./TrainGlyph";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
 import { tierTint } from "../utils/gamePhase";
@@ -185,10 +189,66 @@ export function TrainPurchasePanel({
     currentTrainLimit !== null &&
     limitAfterPurchase !== null &&
     limitAfterPurchase !== currentTrainLimit;
-  const trainLimit = nextTier?.trainLimit ?? Infinity;
-  const limitHeadroom = Math.max(0, trainLimit - ownedTrainCount);
-  const atTrainLimit = limitHeadroom === 0;
-  const supplyCap = Math.min(depotSupply, limitHeadroom);
+
+  /* Design note #703: THE LIMIT THAT BINDS A PURCHASE IS THE ONE IN FORCE WHEN IT IS MADE.
+
+     REPORTED: "NNH owns three trains, the next available train to purchase is a 4-train, and there is a red
+     text that says 'Buying a 4-train would start the next phase and cut the limit to 3, and NNH already holds
+     3.' This misunderstands the rule: corporations are not prohibited from buying a train if doing so triggers
+     a phase change that lowers the train limit, provided the corporation was legally under the old limit
+     before the purchase."
+
+     Correct, and #296 chose this deliberately: "ENFORCEMENT STAYS ON THE AFTER-VALUE: buying the first 4-train
+     starts Phase 4 and the limit drops with it, so capping against the old one would offer a quantity the
+     rules take back." That sentence describes a rule 1830 does not have. A phase change does not reach
+     backwards and un-make the purchase that caused it; it changes what the corporation may HOLD from that
+     moment on, which is a different obligation with a different remedy.
+
+     AND IT WAS PROBABLY A HALF-MEMORY OF A REAL RULE, which the report also names: "a player cannot purchase
+     a train that exceeds the train limit even if doing so would rust their current trains to bring them under
+     the limit." Both rules are the same principle read at the same instant -- the limit is checked BEFORE the
+     purchase resolves, against what the corporation holds and what the phase allows RIGHT NOW. Rusting does
+     not create headroom in advance and a phase shift does not remove it in arrears. #296 applied the correct
+     instant to one of the two consequences and the wrong one to the other.
+
+     EVERY OTHER SURFACE ALREADY HAD IT RIGHT -- `App.tsx`'s auto-skip gate, `TrainBadges`' capacity pill and
+     the action bar's train-limit rail all read the CURRENT phase. So the panel that ENFORCED was the only one
+     out of step, and it contradicted the rail directly above it: "Train limit: 3 / 4" beside "already holds
+     3". */
+  const trainLimit = currentTrainLimit ?? Infinity;
+  /* The limit's OWN ceiling, with the depot taken out of it -- the figure `purchaseCeiling` names in "Room for
+     N more". Walked, not subtracted, for the same reason `supplyCap` is: with a phase change in the middle,
+     `currentLimit - owned` overcounts. A caption reading "Room for 3 more" beside two selectable buttons is
+     precisely the reconciliation failure #247 exists to prevent, so the caption and the buttons are handed the
+     same walk. */
+  const limitHeadroom = useMemo(
+    () =>
+      buyableNow({
+        owned: ownedTrainCount,
+        currentLimit: currentTrainLimit,
+        depotSupply: Number.MAX_SAFE_INTEGER,
+        advancesPhase: limitDropsOnPurchase,
+        limitAfterPurchase,
+      }),
+    [ownedTrainCount, currentTrainLimit, limitDropsOnPurchase, limitAfterPurchase],
+  );
+  const atTrainLimit = isTrainLocked(ownedTrainCount, currentTrainLimit);
+
+  /* THE MULTI-BUY IS WHERE #296'S WORRY WAS ACTUALLY TRUE, and it is a cap rather than a block: buying two
+     4-trains at once is two purchases, the first legal under the current limit and the second judged by the
+     new one. The walk lives in `trainLimit.ts` with the rule it implements -- a rule this file has now had
+     wrong across two design notes is not one to keep in local arithmetic. */
+  const supplyCap = useMemo(
+    () =>
+      buyableNow({
+        owned: ownedTrainCount,
+        currentLimit: currentTrainLimit,
+        depotSupply,
+        advancesPhase: limitDropsOnPurchase,
+        limitAfterPurchase,
+      }),
+    [ownedTrainCount, currentTrainLimit, depotSupply, limitDropsOnPurchase, limitAfterPurchase],
+  );
 
   /* Design note #219: THE CAP MOVES WHILE THE FIELD IS SITTING THERE. Supply is derived from what every
      corporation owns, so it drops when ANY of them buys -- including on a poll while this panel is open.
@@ -205,20 +265,19 @@ export function TrainPurchasePanel({
     });
   }, [supplyCap]);
 
-  /* Design note #247: WHICH rule stopped the list where it did. With two ceilings in play and one of them
-     displayed, a player facing "2 in the depot, 1 selectable" had no way to reconcile the numbers. This names
-     the binding one, and says nothing when neither is close -- a permanent explanation of a constraint nobody
-     is hitting is noise. */
-  const bindingCeiling: string | null =
-    nextTier === null || atTrainLimit
-      ? null
-      : limitHeadroom < depotSupply
-        ? (limitDropsOnPurchase
-            ? `Room for ${limitHeadroom} more — this purchase drops the limit to ${limitAfterPurchase}.`
-            : `Room for ${limitHeadroom} more before the ${trainLimit}-train limit.`)
-        : depotSupply < 99 && depotSupply <= 2
-          ? `Only ${depotSupply} left in the depot.`
-          : null;
+  /* Design note #247 named which of two ceilings bound; #700 moved the rule into `purchaseCeiling` and split
+     its answer by MOOD -- a caption volunteered permanently, a reason asked for by hovering a dead option.
+     The reasoning, including why the depot's sentence left the caption, is recorded there rather than here:
+     it is a rule about what the panel already draws, and it now has one statement. */
+  const { caption: ceilingCaption, reason: ceilingReason } = purchaseCeiling({
+    hasTierForSale: nextTier !== null,
+    atTrainLimit,
+    limitHeadroom,
+    depotSupply,
+    trainLimit,
+    limitDropsOnPurchase,
+    limitAfterPurchase,
+  });
 
   const quantity = Number(quantityText);
   const quantityValid =
@@ -242,9 +301,11 @@ export function TrainPurchasePanel({
              panel -- so an instruction here could not be followed even in
              principle. Naming the lock and stopping is the honest end of the
              sentence. */
-          (limitDropsOnPurchase
-            ? `Buying a ${nextTier?.tier}-train would start the next phase and cut the limit to ${limitAfterPurchase}, and ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount}.`
-            : `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`)
+          /* Design note #703: ONE SENTENCE, because there is one rule. The `limitDropsOnPurchase` variant read
+             "Buying a 4-train would start the next phase and cut the limit to 3, and NNH already holds 3" --
+             a prohibition 1830 does not contain, and the only message on this panel that could fire while the
+             corporation was legally under its limit. */
+          `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
         : !quantityValid
           ? `Enter a whole number between 1 and ${Math.max(1, supplyCap)}.`
           : bankTotal > treasury
@@ -382,9 +443,9 @@ export function TrainPurchasePanel({
                  ceiling, or what the ceiling would be after buying. They are facts about different subjects: one counts
                  cardboard in the bank, the other caps a corporation's holdings this phase. Naming the subject on each is
                  the whole fix -- neither number was wrong, and neither said whose it was. */}
-              <label style={styles.quantityLabel} htmlFor="depot-quantity">
+              <span style={styles.quantityLabel} id="depot-quantity-label">
                 Buy from bank
-              </label>
+              </span>
               {/* Design note #247: A DROPDOWN THAT LISTS WHAT IS BUYABLE. Two things were true at once and it was not one
                  bug. IT WAS NOT A DROPDOWN -- it was `<input type="number">` that silently CLAMPED, so typing 2 against a
                  ceiling of 1 rewrote the field mid-keystroke, indistinguishable from the control refusing the digit. A
@@ -392,23 +453,65 @@ export function TrainPurchasePanel({
                  undoing their input.
                  AND THE CEILING WAS OFTEN THE TRAIN LIMIT, NOT THE DEPOT -- `min(depot, limit - owned)` -- so the panel
                  showed the depot's 2 and enforced the limit's 1 without ever mentioning the limit.
-                 A `<select>` fixes the first; `bindingCeiling` names which rule set the ceiling and fixes the second. */}
-              <select
-                id="depot-quantity"
-                value={quantityText}
-                disabled={!sessionReady || !canAct || atTrainLimit || supplyCap < 1}
-                onChange={(event) => setQuantityText(event.target.value)}
-                style={styles.quantitySelect}
-                aria-label={`Quantity, up to ${Math.max(1, supplyCap)} available`}
+                 A `<select>` fixes the first; `ceilingCaption`/`ceilingReason` name which rule set the ceiling and fix
+                 the second. */}
+              {/* Design note #696: A SEGMENTED ROW, NOT A DROPDOWN.
+                 REPORTED: "since players can only ever buy at most 4 trains in one purchase, the drop-down
+                 selector is a little over-the-top ... this would only need to show a maximum of 4 until the
+                 train limit drops to 3 and then 2, so it could shrink as the phases change. Players only need
+                 to click one to change the number instead of once to open a drop-down and once to select."
+                 EVERY WORD OF #247 SURVIVES -- it is the CONTROL that changes, not the reasoning. A `<select>`
+                 was the fix for an `<input type="number">` that silently clamped, and the property that made it
+                 right is that the options ARE the buyable set. A row of buttons has that property just as
+                 exactly, in one click instead of two, and it is the same shape as the sell-size and par
+                 selectors a player has already used twice by the time they reach this step.
+                 IT SHRINKS ON ITS OWN, which is the part that makes a row viable where it would not be for an
+                 open-ended count: `supplyCap` is already `min(depot stock, limit headroom)`, so the row is at
+                 most four and narrows as the phase turns -- no new rule, and nothing to keep in step. */}
+              <div
+                style={styles.quantityRow}
+                role="group"
+                aria-labelledby="depot-quantity-label"
               >
                 {Array.from({ length: Math.max(1, supplyCap) }, (_, index) => index + 1).map(
-                  (option) => (
-                    <option key={option} value={String(option)}>
-                      {option}
-                    </option>
-                  ),
+                  (option, index) => {
+                    const selected = String(option) === quantityText;
+                    const unavailable = !sessionReady || !canAct || atTrainLimit || supplyCap < 1;
+                    return (
+                      <React.Fragment key={option}>
+                        {/* Design note #19 in `StockRoundPanel`: the separators are `aria-hidden`, so a
+                            screen reader hears four options rather than "1 slash 2 slash 3". */}
+                        {index > 0 && (
+                          <span style={styles.quantitySeparator} aria-hidden="true">
+                            /
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          aria-pressed={selected}
+                          disabled={unavailable}
+                          onClick={() => setQuantityText(String(option))}
+                          style={{
+                            ...styles.quantityOption,
+                            ...(selected ? styles.quantityOptionActive : {}),
+                            // Design note #681/#687: it passes `disabled`, so it computes a
+                            // disabled look. `Lobby.tsx` #3 -- inline styles cannot express
+                            // `:disabled`.
+                            ...(unavailable ? styles.quantityOptionDisabled : {}),
+                          }}
+                          title={
+                            unavailable
+                              ? (ceilingReason ?? "No trains can be bought right now.")
+                              : `Buy ${option} ${option === 1 ? "train" : "trains"}.`
+                          }
+                        >
+                          {option}
+                        </button>
+                      </React.Fragment>
+                    );
+                  },
                 )}
-              </select>
+              </div>
 
               {/* Design note #248: the limit, where the decision is made. `Trains: 2 / 4` explains why the quantity list
                  stops where it does, and it was only available on the Operating Round strip -- a different panel from the
@@ -421,7 +524,7 @@ export function TrainPurchasePanel({
                 title={
                   limitDropsOnPurchase
                     ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} — anything above ${limitAfterPurchase} is discarded when the phase turns.`
-                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains 1830 allows one corporation in this phase. Separate from the depot's own stock above.`
+                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains Project 18XX allows one corporation in this phase. Separate from the depot's own stock above.`
                 }
               >
                 <span
@@ -443,17 +546,16 @@ export function TrainPurchasePanel({
                     ? `${limitAfterPurchase}`
                     : `${ownedTrainCount} / ${trainLimit}`}
                 </span>
-                {/* The fact the label alone cannot carry: what it is
-                    changing FROM. Without it "After Purchase: 3" is a
-                    number with no baseline to read it against. */}
-                {limitDropsOnPurchase && (
-                  <span style={styles.limitWas}>
-                    now {currentTrainLimit} &middot; holds {ownedTrainCount}
-                  </span>
-                )}
+                {/* Design note #703: "now 4 · holds 3" REMOVED, on report. #296 added it because "After
+                    Purchase: 3" is "a number with no baseline to read it against" -- true of that number
+                    alone, and it stopped being the whole line. `ownedTrainCount` is drawn as a train chip
+                    for every train the corporation owns two rows up, and the current limit is on the action
+                    bar's own rail; restating both here made the busiest line on the panel out of the one
+                    that a player reads while deciding. The label still says "After Purchase", which is the
+                    tense the bare number needed. */}
               </span>
 
-              {bindingCeiling && <span style={styles.ceilingNote}>{bindingCeiling}</span>}
+              {ceilingCaption && <span style={styles.ceilingNote}>{ceilingCaption}</span>}
 
               <button
                 type="button"
@@ -779,55 +881,6 @@ export function TrainTradePrompt({
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
 
-/* Design note #617: A TRAIN THAT LOOKS LIKE A TRAIN, AND COUNTS. Inline SVG is the answer to the emoji
-   problem -- drawn by this file, from these coordinates, on every device, with no font to substitute and
-   no colour-emoji fallback. The objection that ruled emojis out does not apply to a path we ship.
-   THE CARRIAGES ARE THE TIER, which is the part worth having: what a new player needs to learn is that the
-   NUMBER IS A CAPACITY, so the glyph is a locomotive plus one carriage per revenue centre and "buy a 3"
-   becomes a picture of the thing it buys.
-   DIESEL IS DRAWN, NOT COUNTED -- a D-train has no fixed length, so a carriage count would be a lie in the
-   one case where the number is not a number.
-   `aria-hidden`: every glyph sits beside the tier already written as text. */
-function TrainGlyph({ tier, color }: { tier: string; color: string }) {
-  const carriages = tier === "D" ? 3 : Math.min(6, Number(tier) || 0);
-  const isDiesel = tier === "D";
-  // Locomotive is 13 wide; each carriage is 5 wide on a 6px pitch.
-  const width = 15 + carriages * 6;
-  return (
-    <svg
-      width={width}
-      height={12}
-      viewBox={`0 0 ${width} 12`}
-      aria-hidden="true"
-      focusable="false"
-      style={{ flex: "none", display: "block" }}
-    >
-      {/* Locomotive: cab, boiler, and two wheels. */}
-      <rect x={0} y={2} width={6} height={6} rx={1} fill={color} />
-      <rect x={6} y={4} width={7} height={4} rx={1} fill={color} />
-      <circle cx={3} cy={10} r={1.6} fill={color} />
-      <circle cx={10} cy={10} r={1.6} fill={color} />
-      {isDiesel
-        ? /* Design note #617: "and onward", not a count. */
-          [0, 1, 2].map((index) => (
-            <circle key={index} cx={18 + index * 6} cy={6} r={1.4} fill={color} opacity={0.75} />
-          ))
-        : Array.from({ length: carriages }, (_, index) => (
-            <rect
-              key={index}
-              x={16 + index * 6}
-              y={3.5}
-              width={5}
-              height={5}
-              rx={1}
-              fill={color}
-              opacity={0.8}
-            />
-          ))}
-    </svg>
-  );
-}
-
 /* Design note #632: THE ERA PALETTE, LIGHTENED FOR A DARK PANEL. The tile colours a player already knows,
    adjusted to be legible as INK on near-black rather than as fills on a map -- brown forces the adjustment,
    since the tile brown reads as mud at 12px and the ink is a warm tan that still says "brown era".
@@ -856,7 +909,7 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
           tier.rusted
             ? `${tier.tier}-trains have rusted and left play entirely.`
             : isNext
-              ? `1830's depot sells cheapest-first, so the ${tier.tier}-train is the only one purchasable right now.`
+              ? `Project 18XX's depot sells cheapest-first, so the ${tier.tier}-train is the only one purchasable right now.`
               : tier.soldOut
                 ? `The depot holds no ${tier.tier}-trains.`
                 : `Not purchasable until every cheaper tier is sold out.`
@@ -870,7 +923,18 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
           tier={tier.tier}
           color={tier.rusted ? "#5a6070" : ERA_INK[tierTint(tier.tier)]}
         />
-        <span style={styles.depotTier}>{tier.tier}</span>
+        {/* Design note #695: "2-TRAIN", NOT "2".
+            REPORTED: "the name of the train is listed as '2' and two entries right of that is '3 / 6 left' --
+            there are both 3-train and 6-train options later, and I'm not sure it is as clear here what a player
+            is being told."
+            THREE BARE NUMERALS ON ONE ROW, and every one of them is a different kind of quantity: a tier, a
+            price, and a supply fraction whose numerator is another tier's name. `2 · $80 · 3 / 6` reads as
+            four numbers where the first is a NAME. Naming it costs six characters and removes the collision
+            entirely -- the reader stops parsing and starts reading. */}
+        <span style={styles.depotTier}>
+          {tier.tier}
+          <span style={styles.depotTierUnit}>-train</span>
+        </span>
         <span style={styles.depotCost}>${tier.cost}</span>
         {/* Design note #687: THE SUPPLY IS A FIGURE, AND IT WAS DRESSED AS A FOOTNOTE.
             REPORTED: "the Bank/Depot Supply of trains is hard to notice because it isn't labeled AND its font
@@ -946,7 +1010,7 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
           ) : (
             <span
               style={styles.depotFlagPermanent}
-              title={`${tier.tier}-trains never rust — nothing in 1830 removes them from play.`}
+              title={`${tier.tier}-trains never rust — nothing in Project 18XX removes them from play.`}
             >
               Permanent
             </span>
@@ -1022,7 +1086,9 @@ const styles: Record<string, React.CSSProperties> = {
      string in one row shove that row's fate flag out of the column. */
   depotCard: {
     display: "grid",
-    gridTemplateColumns: "58px 26px 56px 84px 1fr",
+    /* Design note #695: the tier column widens 26 -> 68 to hold "-train". #618's argument for FIXED columns is
+       unchanged and is why this is one edit rather than a `flex` that would let the longest row decide. */
+    gridTemplateColumns: "58px 68px 56px 84px 1fr",
     alignItems: "center",
     gap: "10px",
     padding: "3px 8px",
@@ -1046,7 +1112,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     color: "#e6e8ef",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    whiteSpace: "nowrap",
   },
+  /* Design note #695: the unit is quieter than the numeral it qualifies. The tier is the thing being chosen;
+     "-train" is there to stop it being read as a count, and a suffix at equal weight would just be a longer
+     number. */
+  depotTierUnit: { fontWeight: 400, color: "#8a919e" },
   depotCost: {
     fontSize: FONT_SIZE.small,
     color: "#c8cdd8",
@@ -1102,16 +1173,37 @@ const styles: Record<string, React.CSSProperties> = {
   /* ---- Buy row ---- */
   buyRow: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" },
   quantityLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
-  quantitySelect: {
-    minWidth: "72px",
-    padding: "7px 10px",
+  /* Design note #696: `quantitySelect` is GONE with the dropdown it styled. The row below is the same shape
+     `StockRoundPanel`'s sell-size and par selectors use -- one bordered group, options separated by slashes,
+     the chosen one filled -- so a player meets one control three times rather than three controls once each.
+     Deleted rather than left: an unused style for a dropdown somebody just asked us to replace is how the
+     dropdown comes back (`palette.ts`'s rule for its removed colour token). */
+  quantityRow: {
+    display: "inline-flex",
+    flexWrap: "nowrap",
+    alignItems: "center",
+    gap: "1px",
+    padding: "4px 6px",
     borderRadius: "7px",
     border: "1px solid #3a3f4b",
     backgroundColor: "#1b1e27",
-    color: "#e6e8ef",
-    fontSize: FONT_SIZE.control,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
+  quantityOption: {
+    background: "transparent",
+    border: "none",
+    padding: "3px 8px",
+    borderRadius: "5px",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontVariantNumeric: "tabular-nums",
+    color: "#9aa0ac",
+    cursor: "pointer",
+  },
+  quantityOptionActive: { backgroundColor: "#2b3a4d", color: "#e6e8ef" },
+  quantityOptionDisabled: { opacity: 0.45, cursor: "not-allowed" },
+  /* Non-interactive, `aria-hidden` at the call site -- it separates the options visually and says nothing. */
+  quantitySeparator: { color: "#3a3f4b", fontSize: FONT_SIZE.small },
   /* Design note #248: the limit readout. Deliberately quiet -- it is
      context for the control beside it, not a control itself -- until the
      corporation is AT the limit, when it becomes the reason the panel is
@@ -1137,12 +1229,7 @@ const styles: Record<string, React.CSSProperties> = {
      different colour. Amber rather than red: the ceiling is moving, which is a consequence to plan around. */
   limitLabelFuture: { color: "#e0b062" },
   limitValueFuture: { color: "#e0b062" },
-  /** The baseline the after-value is measured against. */
-  limitWas: {
-    fontSize: FONT_SIZE.micro,
-    color: "#8a919e",
-    fontVariantNumeric: "tabular-nums",
-  },
+  /* `limitWas` is gone with design note #703's "now 4 · holds 3". */
   ceilingNote: { fontSize: FONT_SIZE.small, color: "#8a919e" },
   /* `quantityInput` is gone with design note #247's number field. */
   priceInput: {

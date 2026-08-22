@@ -67,8 +67,8 @@ export function GameOverModal({
         </h2>
         <p style={styles.reasonBody}>
           {reason === "bankruptcy"
-            ? "A corporation could not fund its mandatory train purchase, and its President could not cover the difference from cash or by selling shares. In 1830 the game ends immediately."
-            : "1830 ends the moment the Bank cannot pay. Final standings are counted from cash, shares at their market price, and private companies at face value."}
+            ? "A corporation could not fund its mandatory train purchase, and its President could not cover the difference from cash or by selling shares. In Project 18XX the game ends immediately."
+            : "Project 18XX ends the moment the Bank cannot pay. Final standings are counted from cash, shares at their market price, and private companies at face value."}
         </p>
 
         {verdict && <div style={{ ...styles.verdict, ...verdict.style }}>{verdict.text}</div>}

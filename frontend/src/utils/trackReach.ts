@@ -102,6 +102,21 @@ export interface LayableHexInput {
   mapGrid: MapGridResponse;
   /** The acting corporation's station tokens. */
   stationHexes: ReadonlyArray<StationToken>;
+  /** Design note #716: DOES A TILE ACTUALLY EXIST FOR THIS HEX?
+   *
+   *  Injected rather than imported, for the reason design note #7 gives about `certificateBreakdown`: the tile
+   *  catalog and the legality filter live in `components/` and `utils/` may not import from there. Omitting it
+   *  keeps the old behaviour, which every existing caller and fixture relies on -- and which is the
+   *  conservative answer where there is no engine to ask. */
+  hasPlaceableTile?: (
+    q: number,
+    r: number,
+    /* The walk's own network and ports travel WITH the question. The picker filters its candidates by exactly
+       these, so a callback that asked without them would answer a different question than the panel the click
+       opens -- and the glow would offer hexes whose picker comes up empty. */
+    network: ReadonlySet<string>,
+    ports: ReadonlySet<string>,
+  ) => boolean;
 }
 
 export interface LayableHexResult {
@@ -284,10 +299,23 @@ export function layableHexes(input: LayableHexInput): LayableHexResult {
     if (next) candidates.add(hexKey(next.q, next.r));
   });
 
+  /* Design note #716: THE GLOW PROMISED A TILE AND ONLY CHECKED THE GROUND.
+     REPORTED: "on the yellow/green tiles the white border is everywhere and loses its signal ... tiles with no
+     upgrades still appear with the white border that would suggest there's a legal tile placement on them."
+     `evaluateHexForTileLaying` answers a question about the BOARD -- is this a hex, is it a red off-board, is
+     it forbidden anywhere -- and never about the TRAY. So every hex the network touched that was not
+     structurally banned glowed, including a green city with no brown upgrade printed. On an opening board the
+     two sets are nearly identical, which is why this survived; on a large network almost everything qualifies
+     and the mark stops meaning anything.
+     ASK THE ENGINE, don't restate it. `hasPlaceableTile` is `filterSandboxPlacements` at the call site -- the
+     same search the tile picker runs -- so the glow cannot offer a hex the picker would then open empty. The
+     same discipline #707 used for the Run Routes obligation. */
   const hexes = new Set<string>();
   candidates.forEach((key) => {
     const [q, r] = key.split(",").map(Number);
-    if (evaluateHexForTileLaying(q, r, mapGrid).eligible) hexes.add(key);
+    if (!evaluateHexForTileLaying(q, r, mapGrid).eligible) return;
+    if (input.hasPlaceableTile && !input.hasPlaceableTile(q, r, network, ports)) return;
+    hexes.add(key);
   });
 
   return { hexes, network, ports, networkSize: network.size, unconstrained: false };

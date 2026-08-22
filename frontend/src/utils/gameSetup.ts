@@ -289,6 +289,50 @@ export interface AnswerPrivatePurchaseMsg {
   };
 }
 
+/* Design note #701: THE SAME NEGOTIATION, FOR TRAINS.
+   REPORTED: "the 'Buy Trains from Other Corporations' action offer is not sending the modal notification to
+   the selling player. Instead, it is showing up as a modal on the Buyer's screen and they can accept/reject
+   it as they wish. I thought this bug had been fixed before?"
+   IT WAS -- FOR PRIVATES, at #662. That fix moved the proposal out of React state and into the log, and
+   removed the `sandbox ||` bypass from the consent check. The train flow was the OTHER instance of the same
+   two faults and was left with both. #662's own note even names trains in its opening clause ("Trains have a
+   full on-chain offer flow; privates are single-party") -- true of the ONLINE path, and the sandbox path was
+   reading that sentence as though it covered both.
+   WHY TRAINS NEED THIS AT ALL, given the contract has `GetTrainOffers`: the sandbox has no chain to hold the
+   register. Online, `liveTrainOffer` filters the contract's own offers by `seller_president` and reaches the
+   right client. Offline there was nothing between the two browsers, so a local `useState` was standing in for
+   a shared register -- which is a register of one.
+   TWO MESSAGES for the reason #662 gives: a proposal and its answer have different authors, and collapsing
+   them loses the interval in which the offer is pending -- the only part of this the seller experiences. */
+export interface ProposeTrainPurchaseMsg {
+  ProposeTrainPurchase: {
+    seller_protocol_id: number;
+    seller_ticker: string;
+    /** The wallet whose consent 1830 requires. `null` for a corporation with no president on record, which
+     *  cannot be asked and therefore cannot sell. */
+    seller_president: string | null;
+    buyer_protocol_id: number;
+    buyer_ticker: string;
+    model_type: string;
+    /** A STRING, matching `TrainTradeProposal` and the contract's `Uint128`. Unlike the private offer's
+     *  integer price this one does have a contract to match, and parsing it to `Number` anywhere on the path
+     *  would be a silent precision bug for no benefit. */
+    price: string;
+  };
+}
+
+/** The seller's answer. A refusal is a real event, not the absence of one: it clears the offer on every client
+ *  and it belongs in the log so the Activity Log can say the sale was declined. */
+export interface AnswerTrainPurchaseMsg {
+  AnswerTrainPurchase: {
+    /** Which offer is being answered. Trains have no id of their own in the sandbox register -- there is only
+     *  ever one pending offer -- so the seller identifies it, which is enough for the drain to refuse an
+     *  answer aimed at an offer that has already been settled or replaced. */
+    seller_protocol_id: number;
+    accept: boolean;
+  };
+}
+
 /** Everything the sandbox log can carry -- the contract's own message set,
  *  plus the sandbox-only round events. A PRECISE union rather than an
  *  index signature: a loose type here would let any object into the replay
@@ -302,7 +346,17 @@ export type SandboxLogMsg =
   | ExchangePrivateMsg
   | ProposePrivatePurchaseMsg
   | AnswerPrivatePurchaseMsg
+  | ProposeTrainPurchaseMsg
+  | AnswerTrainPurchaseMsg
   | RevertToMsg;
+
+export function isProposeTrainPurchaseMsg(msg: unknown): msg is ProposeTrainPurchaseMsg {
+  return typeof msg === "object" && msg !== null && "ProposeTrainPurchase" in msg;
+}
+
+export function isAnswerTrainPurchaseMsg(msg: unknown): msg is AnswerTrainPurchaseMsg {
+  return typeof msg === "object" && msg !== null && "AnswerTrainPurchase" in msg;
+}
 
 export function isProposePrivatePurchaseMsg(msg: unknown): msg is ProposePrivatePurchaseMsg {
   return typeof msg === "object" && msg !== null && "ProposePrivatePurchase" in msg;
@@ -352,6 +406,9 @@ export function isSandboxOnlyMsg(
     // nowhere else, which is the point of this predicate existing (#546).
     | ProposePrivatePurchaseMsg
     | AnswerPrivatePurchaseMsg
+    // Design note #701: and the train negotiation, which is the same shape.
+    | ProposeTrainPurchaseMsg
+    | AnswerTrainPurchaseMsg
     | RevertToMsg {
   return (
     isSetupGameMsg(msg) ||
@@ -361,6 +418,8 @@ export function isSandboxOnlyMsg(
     isExchangePrivateMsg(msg) ||
     isProposePrivatePurchaseMsg(msg) ||
     isAnswerPrivatePurchaseMsg(msg) ||
+    isProposeTrainPurchaseMsg(msg) ||
+    isAnswerTrainPurchaseMsg(msg) ||
     isRevertToMsg(msg)
   );
 }

@@ -123,7 +123,7 @@ export function EmergencyTrainPurchaseModal({
   if (!plan) return null;
 
   const confirmReason = plan.bankrupt
-    ? `${plan.presidentLabel} cannot raise $${plan.trainCost}. In 1830 this ends the game.`
+    ? `${plan.presidentLabel} cannot raise $${plan.trainCost}. In Project 18XX this ends the game.`
     : plan.mustRaiseBySelling > 0
       ? `${plan.presidentLabel} must raise $${plan.mustRaiseBySelling} more by selling shares first.`
       : !sandbox
@@ -248,7 +248,7 @@ export function EmergencyTrainPurchaseModal({
             <strong>Bankruptcy.</strong> Every legal source is exhausted: $
             {plan.treasuryContribution} from the treasury, ${plan.presidentCash} in cash and at most
             ${plan.maxSaleProceeds} from sellable shares — short of the ${plan.trainCost} required.
-            In 1830 this ends the game immediately.
+            In Project 18XX this ends the game immediately.
           </p>
         )}
 

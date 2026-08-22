@@ -74,6 +74,8 @@ import {
   isExchangePrivateMsg,
   isProposePrivatePurchaseMsg,
   isAnswerPrivatePurchaseMsg,
+  isProposeTrainPurchaseMsg,
+  isAnswerTrainPurchaseMsg,
   isRevertToMsg,
   isSetBoParMsg,
   isSandboxOnlyMsg,
@@ -112,6 +114,8 @@ import {
 import { isFirebaseConfigured } from "./config/firebase";
 import StockMarketRenderer, {
   marketCellForPrice,
+  // Design note #712: the price-to-zone lookup, injected into the purchase rules.
+  marketZoneForPrice,
   parBoxCellFor,
   projectDividendCellMove,
   projectDividendFrom,
@@ -125,7 +129,6 @@ import StockMarketRenderer, {
 import RadialTileSelector, { RadialTokenConfirm } from "./components/RadialTileSelector";
 import {
   PrivateTradePrompt,
-  ProposePrivatePurchase,
   type PrivateTradeProposal,
 } from "./components/PrivateTradePanel";
 import TopTicker from "./components/TopTicker";
@@ -133,6 +136,8 @@ import InlineQuickChat from "./components/InlineQuickChat";
 import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
+// Design note #697: the receipt for an action you just took.
+import ActionToast from "./components/ActionToast";
 // Design note #677: the Tiles tab.
 import TileReference from "./components/TileReference";
 import TrainTradePanel from "./components/TrainTradePanel";
@@ -177,7 +182,28 @@ import {
   derivePhase,
   rustOutlook,
 } from "./utils/gamePhase";
+// Design note #703: the train-limit rule, so this gate and the Buy Trains panel cannot drift apart again.
+import { isTrainLocked } from "./utils/trainLimit";
+// Design note #705: the Pay column's before-and-after, alongside the Withhold column's.
+import { projectDividendPayouts } from "./utils/dividendProjection";
+// Design note #712: the market-zone purchase rules.
+import { sharePurchaseBlock } from "./utils/sharePurchase";
+// Design note #713: the sale's guards.
+import { shareSaleBlock } from "./utils/shareSale";
+// Design note #717: the standing-pass instruction and what cancels it.
+import {
+  DEFAULT_AUTO_PASS_CONDITIONS,
+  armAutoPass,
+  autoPassDecision,
+  exposedPresidencies,
+  type AutoPassArm,
+  type AutoPassConditions,
+} from "./utils/autoPass";
+import AutoPassModal from "./components/AutoPassModal";
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
+// Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
+import { localCatalogPlacements } from "./components/hexGeometry";
+
 import { describeTokenMigration, previewTokenMigration } from "./utils/tokenMigration";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
@@ -227,6 +253,8 @@ import {
   pendingHomeTokens,
   placeHomeStationToken,
   describePrivatePayout,
+  describeFleetLoss,
+  describeFleetLosses,
   applySandboxLayTile,
   describeFloat,
   isRouteTerminusHex,
@@ -330,6 +358,9 @@ import {
   setRoomColors,
   setRoomNicknames,
 } from "./utils/playerLabels";
+/* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
+   276-entry list inside that loop would be the only expensive thing in the pass. */
+const ALL_TILE_PLACEMENTS = localCatalogPlacements();
 
 /* Move-only extraction: ~3,500 lines left this file for panels/, styles/ and utils/.
    See docs/ai_architecture/ui_shell_layout.md - App.tsx #382 */
@@ -1315,6 +1346,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       mapGrid,
       // Design note #686: the recorded city slot travels with the token.
       stationHexes: corporation ? stationTokensOf(corporation) : [],
+      /* Design note #716: the glow asks the TILE ENGINE, not just the ground. `evaluateHexForTileLaying`
+         answers "may anything ever be built here"; this answers "is there a tile that fits, now, in this
+         era, connecting to this network" -- which is what a white ring was already promising.
+         THE SAME CALL THE PICKER MAKES, with the same era and the same network, so the ring and the panel it
+         opens cannot disagree about whether there is anything to choose. */
+      hasPlaceableTile: (q, r, network, ports) =>
+        filterSandboxPlacements(ALL_TILE_PLACEMENTS, {
+          mapGrid,
+          q,
+          r,
+          networkHexes: network,
+          networkPorts: ports,
+          era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+        }).length > 0,
     });
     if (reach.unconstrained) return undefined;
     /* The corporation's own network stays lit beside the legal placements; unioned here because this layer has both halves.
@@ -1338,7 +1383,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // Design note #561: white, not the livery -- legibility over identity.
       glowColor: STATION_PLACEMENT_HIGHLIGHT_INK,
     };
-  }, [tileLayStepActive, gameState, actingProtocolId, mapGrid]);
+  }, [tileLayStepActive, gameState, actingProtocolId, mapGrid, currentPhase]);
 
 
   /* Layer 3: close the ring when the sub-phase advances, since that can happen without a board click.
@@ -1378,6 +1423,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
         return;
       }
+
+      /* Design note #716: A HEX WITH NOTHING TO OFFER SWALLOWS THE CLICK.
+         REPORTED: "when I click a hex not in my network, it highlights just that hex (no tileselector menu
+         pops up for it) and dims every other hex: it would be better if clicking those out-of-network hexes
+         did nothing."
+         Exactly so, and the two halves of that sentence are the same fault. `soleFocusKey` is set from
+         `radialSelector`, so opening a ring is what deepens the veil -- and the ring opened for ANY resolved
+         hex, then found no candidates to draw. The player got the whole board pushed back to look at an empty
+         menu, which reads as the board reacting to a mistake they made.
+         THE TEST IS THE GLOW SET, deliberately: `layTrackFocus.highlighted` is now the hexes a tile actually
+         fits (#716 above), so "the ring opens where the ring has something to show" is true by construction
+         rather than by two conditions agreeing.
+         ONLY WHILE A LAY IS GATED. With no focus there is no veil to deepen and no network to be outside of --
+         a spectator or a player browsing between turns keeps the inspector on every hex, which is #437's
+         point about not telling somebody they may not build on hexes that are not their concern. */
+      if (layTrackFocus && !layTrackFocus.highlighted.has(`${state.q},${state.r}`)) {
+        setRadialSelector(null);
+        setPreviewTile(null);
+        return;
+      }
+
       setPreviewTile(null);
       // Converted to a board-relative offset at capture time -- the raw
       // client point is only correct until something scrolls.
@@ -1406,7 +1472,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // `boardEl` dropped: design note #171 replaced the `getBoundingClientRect`
     // arithmetic that needed it with the centroid the renderer now reports,
     // so this closure reads nothing from the DOM at all any more.
-  }, [tileInspectorArmed]);
+    // Design note #716: and `layTrackFocus`, whose glow set decides whether a click opens a ring at all.
+  }, [tileInspectorArmed, layTrackFocus]);
 
   /* Click the preview to rotate: 60 degrees clockwise, wrapping at six. Only for the hex the selector is open on.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
@@ -1488,9 +1555,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [tokenTargetMode, activeStationCompany, gameState, mapGrid]);
 
 
-  /* Both local: BuyPrivateCompany is single-party, so the proposal is never synchronised and the prompt says so.
-     See docs/ai_architecture/contract_economy.md - App.tsx #166 */
-  const [privateTradeOpen, setPrivateTradeOpen] = useState(false);
+  /* Design note #715: `privateTradeOpen` is GONE with the modal. It existed to answer "is the sheet showing",
+     and the sheet now shows exactly when the acting president is on the `BuyPrivate` step -- a fact the bar
+     already holds, so a second piece of state saying the same thing could only ever disagree with it.
+     The PROMPT keeps its own state; #166's argument survives for the half that outlives the step. */
   /* Derived from shared sandbox state, not useState. The display label is added at the edge; the wallet is what travels.
      See docs/ai_architecture/contract_economy.md - App.tsx #662 */
   const privateProposal = useMemo<PrivateTradeProposal | null>(() => {
@@ -1507,10 +1575,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [gameState?.private_purchase_offer]);
 
-  /* Trains have a full on-chain offer flow; privates are single-party. sandboxTrainProposal stands in for the offer register offline only.
-     See docs/ai_architecture/contract_economy.md - App.tsx #205 */
-  const [sandboxTrainProposal, setSandboxTrainProposal] =
-    useState<TrainTradeProposal | null>(null);
+  /* Design note #205 said: "Trains have a full on-chain offer flow; privates are single-party.
+     sandboxTrainProposal stands in for the offer register offline only." Both halves are true and the
+     conclusion was not -- an offer register that lives in ONE client's `useState` is a register of one, so
+     offline the seller was never told and the buyer answered their own offer.
+     Design note #701: DERIVED FROM SHARED SANDBOX STATE, exactly as #662 did for privates. The wallet is what
+     travels; the display label is resolved here, at the edge, because two clients can render the same wallet
+     differently. */
+  const sandboxTrainProposal = useMemo<TrainTradeProposal | null>(() => {
+    const offer = gameState?.train_purchase_offer ?? null;
+    if (!offer) return null;
+    return {
+      sellerProtocolId: offer.seller_protocol_id,
+      sellerTicker: offer.seller_ticker,
+      sellerPresident: offer.seller_president,
+      sellerPresidentLabel:
+        sandboxPlayerLabel(offer.seller_president ?? "") ??
+        truncateAddress(offer.seller_president ?? ""),
+      buyerProtocolId: offer.buyer_protocol_id,
+      buyerTicker: offer.buyer_ticker,
+      modelType: offer.model_type,
+      price: offer.price,
+    };
+  }, [gameState?.train_purchase_offer]);
 
   /* Inspecting and dispatching are separate gestures; only the green check is gated.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #163 */
@@ -2044,6 +2131,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      chain it advances when a poll comes back and nobody knows what moved. So the
      room measures per action and the chain diffs the poll -- and BOTH funnel
      into the one `noteCashChanges` so the badge cannot mean two things. */
+  /* Design note #697: the toast. A token rather than a timestamp, because two identical purchases in a row
+     produce the same SENTENCE, and the toast has to re-show for the second one -- which is the repeat this
+     whole feature is about. */
+  const [actionToast, setActionToast] = useState<{ text: string; token: number } | null>(null);
+  const actionToastTokenRef = useRef(0);
+  const showActionToast = useCallback((text: string) => {
+    actionToastTokenRef.current += 1;
+    setActionToast({ text, token: actionToastTokenRef.current });
+  }, []);
+
   const [cashDeltas, setCashDeltas] = useState<CashDelta[]>([]);
   const noteCashChanges = useCallback(
     (changes: ReadonlyArray<{ address: string; amount: number }>) => {
@@ -2287,6 +2384,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          *  to take back. Folding the two together would make Undo step silently
          *  past a real move, which is the bug #475 was fixed to prevent. */
         derived?: boolean;
+        /** Design note #701: an answer the game is WAITING FOR from a player who is not on turn.
+         *
+         *  The turn gate below asks "is it your turn", which is the right question for a move and the wrong
+         *  one for a consent answer: the whole point of a two-party trade is that the counterparty is not the
+         *  one operating. Without this, the seller president clicks Accept and gets "It is not your turn" --
+         *  and #662's private-company flow has the same hole, reached the same way, which is why both are
+         *  marked here rather than only the train.
+         *
+         *  DELIBERATELY NOT `automatic`. That flag also re-attributes the log entry to `actingAddressRef`,
+         *  and a consent answer must be recorded as the COUNTERPARTY's -- they are the author, and the log is
+         *  the only place the table can see who agreed to what.
+         *
+         *  The authorisation this replaces is not weaker: the prompt renders only for the wallet named on the
+         *  offer, and the drain refuses an answer that does not match the offer standing in shared state. A
+         *  turn gate would add nothing to either. */
+        offTurn?: boolean;
         resetRouteRevenue?: boolean;
         isRemoteReplay?: boolean;
         /** Design note #643: the log entry's own `createdAt`, so a replayed
@@ -2344,6 +2457,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         if (
           options?.isRemoteReplay !== true &&
           options?.automatic !== true &&
+          // Design note #701: a consent answer is owed by the player who is NOT on turn.
+          options?.offTurn !== true &&
           !isMyTurnRef.current
         ) {
           setSandboxRoomError("It is not your turn.");
@@ -2373,6 +2488,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ).catch(() => false);
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
+          } else if (options?.derived !== true) {
+            /* Design note #697: the receipt, at the moment the action is SENT. That is the moment the player's
+               question is about -- they pressed a button and want to know it registered -- and it is the last
+               point this browser can distinguish its own dispatch from the replay that follows.
+               `label` is the sentence `describeGameplayAction` already derived above, so the toast and the
+               Activity Log entry for this action are one string.
+               NOT FOR A DERIVED ACTION (#668): the auto-skip and the forced withhold are the game acting, and a
+               receipt for something the player did not do is a notification, not a confirmation. */
+            showActionToast(label);
           }
           return;
         }
@@ -2520,6 +2644,85 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return;
         }
 
+        /* Design note #701: THE TRAIN OFFER, WRITTEN IN THE DRAIN so the SELLER'S client sees it. This was
+           `setSandboxTrainProposal`, React state in this file, which is why the prompt only ever appeared on
+           the buyer's screen -- the identical fault #662 fixed for privates, on the other half of the same
+           feature. */
+        if (isProposeTrainPurchaseMsg(msg)) {
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const {
+            seller_protocol_id,
+            seller_ticker,
+            seller_president,
+            buyer_protocol_id,
+            buyer_ticker,
+            model_type,
+            price,
+          } = msg.ProposeTrainPurchase;
+          const next: GameStateResponse = {
+            ...base,
+            train_purchase_offer: {
+              seller_protocol_id,
+              seller_ticker,
+              seller_president,
+              buyer_protocol_id,
+              buyer_ticker,
+              model_type,
+              price,
+            },
+          };
+          sandboxStateRef.current = next;
+          setSandboxState(next);
+          logInfo(
+            "Train Offer",
+            `${buyer_ticker} offers $${price} for one of ${seller_ticker}'s ${model_type}-trains. ${
+              sandboxPlayerLabel(seller_president ?? "") ??
+              truncateAddress(seller_president ?? "")
+            } must answer.`,
+          );
+          return;
+        }
+
+        if (isAnswerTrainPurchaseMsg(msg)) {
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          const { seller_protocol_id, accept } = msg.AnswerTrainPurchase;
+          const offer = base.train_purchase_offer ?? null;
+          /* Answering an offer that is no longer there is not an error: the first answer settles it, the
+             second finds nothing. Same guard as #662's, same reason. */
+          if (!offer || offer.seller_protocol_id !== seller_protocol_id) return;
+          const cleared: GameStateResponse = { ...base, train_purchase_offer: null };
+          sandboxStateRef.current = cleared;
+          setSandboxState(cleared);
+          const sellerLabel =
+            sandboxPlayerLabel(offer.seller_president ?? "") ??
+            truncateAddress(offer.seller_president ?? "");
+          if (!accept) {
+            logInfo(
+              "Train Offer",
+              `${sellerLabel} declined $${offer.price} for ${offer.seller_ticker}'s ${offer.model_type}-train.`,
+            );
+            return;
+          }
+          /* An accepted offer goes through the ordinary BuyTrainFromCorporation, so the trade and its legality
+             use the same code as every other purchase -- #662's rule, and the reason the accept path here is
+             a dispatch rather than a second implementation of the transfer. */
+          void runGameplayActionRef.current?.(
+            `BuyTrainFromCorporation: ${offer.model_type}-train @ $${offer.price}`,
+            {
+              BuyTrainFromCorporation: {
+                game_id: gameId,
+                buyer_protocol_id: offer.buyer_protocol_id,
+                seller_protocol_id: offer.seller_protocol_id,
+                model_type: offer.model_type,
+                price: offer.price,
+              },
+            },
+          );
+          return;
+        }
+
         if (isPlaceHomeStationMsg(msg)) {
           // Design note #550: a placement is a choice about a shared board.
           const {
@@ -2574,7 +2777,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         if (isSetupGameMsg(msg)) {
           const dealt = dealSandboxGame({ players: msg.SetupGame.players });
           if (!dealt) {
-            logInfo("Room", "That roster cannot be dealt — 1830 seats two to six players.");
+            logInfo("Room", "That roster cannot be dealt — Project 18XX seats two to six players.");
             return;
           }
           /* Setup must not be skippable: fall back through the ref, the rendered state, then a fresh fixture, so there is no path where it does not run.
@@ -2815,6 +3018,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             /* Read the market ref the block above has just refreshed, so the queue reflects a move this dispatch caused.
                See docs/ai_architecture/stock_market.md - App.tsx #411 */
             marketPriceFor: marketPriceForCompany,
+            /* Design note #712: the zone rules travel with the price, so the reducer refuses an illegal
+               purchase on every client rather than trusting the one that drew the button. */
+            marketZoneFor: (companyId: number) =>
+              marketZoneForPrice(marketPriceForCompany(companyId)),
+            marketPricesByCompany: Object.fromEntries(
+              (marketGrid?.positions ?? []).map((entry) => [
+                entry.company_id,
+                Number(entry.price),
+              ]),
+            ),
+            zoneForPrice: marketZoneForPrice,
             // Design note #647: the token's position -- column and arrival.
             marketMarkFor: marketMarkForCompany,
             /* The par comes from the MESSAGE's own protocol_id and par_value, not from any ambient ladder selection (#579).
@@ -2866,6 +3080,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               // where a test can reach it.
               const line = previously ? describeFloat(previously, company) : null;
               if (line) logInfo("Float", line);
+            }
+
+            /* Design note #704: THE TRAINS THE PHASE TOOK. `applyPhaseChange` has rusted and trimmed fleets
+               since #284 and has never said so -- the chips simply held fewer trains than they had a moment
+               earlier. #703 made that reachable for the BUYER (before it, the panel refused the purchase that
+               would leave them over the new limit), so the silence stopped being theoretical.
+               Same division as the two blocks around it: the reducer settles, the shell narrates, and the
+               branching lives in `sandboxSession` where a test can reach it. */
+            const limitNow = depotInventory(after).find((row) => row.isCurrent)?.trainLimit ?? null;
+            for (const loss of describeFleetLosses(before, after)) {
+              const sentence = describeFleetLoss(loss, limitNow);
+              if (sentence) logInfo("Phase Change", sentence);
             }
           }
 
@@ -3013,8 +3239,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       }
     },
     // mapGrid/currentPhase join because the sandbox branch prices a route from them; orSubPhase for the undo snapshot; logInfo for the auction announcement.
+    // Design note #697: `showActionToast` is stable (`useCallback` with an empty list), so naming it costs
+    // nothing and keeps the linter's guarantee -- the same reasoning #668 records for `noteCashChanges`.
     // See docs/ai_architecture/state_machine.md - App.tsx #265
     [
+      showActionToast,
       session,
       refreshGameState,
       spectator,
@@ -3191,13 +3420,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // The target company is an ARGUMENT: eight cards means eight live Buy buttons, and a shared selection would dispatch against the wrong one. #42: multi-buy is N sequential BuyStock messages. #558: the IPO always sells at par; only the bank pool prices from the matrix.
   // See docs/ai_architecture/stock_market.md - App.tsx #29
   const buyOneShare = useCallback(
-    (protocolId: number, source: "Ipo" | "Bank") => {
+    (protocolId: number, source: "Ipo" | "Bank", quantity = 1) => {
       return runGameplayAction(
         "BuyStock",
         {
           BuyStock: {
             game_id: gameId,
             protocol_id: protocolId,
+            /* Design note #712: the whole purchase in one message, so a Brown-zone pool multi-buy is one
+               turn. It used to be a loop of single buys, and `BuyStock` advances the seat -- so shares two
+               and three were bought by whoever the seat had moved on to. */
+            quantity,
             // Design note #18 in `StockRoundPanel.tsx`: the buy source is
             // per-card state now, so it arrives as an argument rather than
             // being read from a shared value that every card could flip.
@@ -3411,15 +3644,128 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [boParPrompt],
   );
 
+  /* Design note #712: ONE DISPATCH, not a loop of them. The loop was inherited from the train multi-buy
+     (#262), where it is correct because each train purchase really is a separate event that can advance the
+     phase. A stock purchase advances the SEAT, so N of them is N turns. */
   const handleBuyShare = useCallback(
-    async (protocolId: number, source: "Ipo" | "Bank", quantity = 1) => {
-      const times = Math.max(1, Math.floor(quantity));
-      for (let i = 0; i < times; i += 1) {
-        await buyOneShare(protocolId, source);
-      }
-    },
+    (protocolId: number, source: "Ipo" | "Bank", quantity = 1) =>
+      buyOneShare(protocolId, source, Math.max(1, Math.floor(quantity))),
     [buyOneShare],
   );
+
+  /* Design note #712: THE ZONE RULES, RESOLVED WHERE THE BOARD IS. `sharePurchaseBlock` needs the private
+     roster and the room's size for the certificate limit, and the panel is given neither -- so the answer is
+     computed here and handed down as a question the card can ask with the source and quantity it has
+     selected.
+     `marketZoneForPrice` is injected for the reason #7 gives about `certificateBreakdown`: the price-to-zone
+     table lives in `components/` and `utils/` may not import from it. */
+  const purchaseBlockFor = useCallback(
+    (companyId: number, source: "Ipo" | "Bank", quantity: number): string | null => {
+      if (!gameState || !viewerAddress) return null;
+      return sharePurchaseBlock({
+        state: gameState,
+        buyer: viewerAddress,
+        companyId,
+        source,
+        quantity,
+        zone: marketZoneForPrice(marketPriceForCompany(companyId)),
+        marketPrices: Object.fromEntries(
+          (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
+        ),
+        zoneForPrice: marketZoneForPrice,
+      });
+    },
+    [gameState, viewerAddress, marketGrid, marketPriceForCompany],
+  );
+
+  /* Design note #713: THE SALE'S TWO ANSWERS, resolved where the board and the chart both are.
+     The successor rule reads every player's holdings and the price walk needs the token's CELL -- the Stock
+     Round panel is handed neither, so both arrive as questions it can ask about the bundle it has selected. */
+  const saleBlockFor = useCallback(
+    (companyId: number, percentage: number): string | null => {
+      if (!gameState || !viewerAddress) return null;
+      return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });
+    },
+    [gameState, viewerAddress],
+  );
+
+  const salePriceAfter = useCallback(
+    (companyId: number, certificates: number): number | null => {
+      /* THE CELL, NOT THE PRICE. #434: "the chart repeats prices across rows, so a first-match search
+         projected from the wrong box" -- the token's own coordinates are the only unambiguous starting
+         point, and they are what `projectShareSaleMove` walks down from. */
+      const cell = marketGrid?.positions.find((entry) => entry.company_id === companyId);
+      if (!cell) return null;
+      const landed = projectShareSaleMove({ x: cell.x, y: cell.y }, certificates);
+      return landed ? landed.price : null;
+    },
+    [marketGrid],
+  );
+
+  /* ==================================================================
+   *  DESIGN NOTE 717: AUTO-PASS
+   * ==================================================================
+   *
+   * A standing instruction to pass, held HERE and never in the log: it is one viewer's preference about their
+   * own client, not a move any other player replays. What reaches the log is the `PassTurn` it dispatches --
+   * an ordinary turn, authored by this player, undoable, and indistinguishable afterwards from a pass they
+   * clicked. The table should not be able to tell who was watching.
+   *
+   * ARMED PER STOCK ROUND, per the report: the arm carries the round it was made in and `autoPassDecision`
+   * refuses on any other. */
+  const [autoPassArm, setAutoPassArm] = useState<AutoPassArm | null>(null);
+  const [autoPassOpen, setAutoPassOpen] = useState(false);
+  /** Remembered so re-arming next round does not re-ask from scratch. */
+  const [autoPassChoices, setAutoPassChoices] = useState<AutoPassConditions>(
+    DEFAULT_AUTO_PASS_CONDITIONS,
+  );
+
+  /* Design note #717: computed for the MODAL, so a player sees why Auto-Pass will not start before they click
+     rather than watching it switch itself off a moment later. */
+  const autoPassExposure = useMemo(
+    () => (gameState && viewerAddress ? exposedPresidencies(gameState, viewerAddress) : []),
+    [gameState, viewerAddress],
+  );
+
+  const handleArmAutoPass = useCallback(
+    (conditions: AutoPassConditions) => {
+      if (!gameState || !viewerAddress) return;
+      setAutoPassChoices(conditions);
+      setAutoPassArm(armAutoPass(gameState, viewerAddress, conditions));
+      setAutoPassOpen(false);
+      logInfo("Auto-Pass", "Auto-Pass is on for this Stock Round.");
+    },
+    [gameState, viewerAddress, logInfo],
+  );
+
+  const handleDisarmAutoPass = useCallback(() => {
+    setAutoPassArm(null);
+    logInfo("Auto-Pass", "Auto-Pass is off.");
+  }, [logInfo]);
+
+  /* THE EFFECT THAT ACTS. Guarded four ways, and each guard is load-bearing:
+       an arm exists          -- nothing to do otherwise
+       it is a Stock Round    -- an Operating Round turn belongs to a corporation, not a player
+       it is THIS player's    -- `isMyTurn` is the same predicate the turn gate uses
+       the decision says pass -- and a "no" DISARMS, so the player keeps the turn it woke them for
+     ONE DISPATCH PER TURN is enforced by the arm being cleared on a wake and by `isMyTurn` going false the
+     moment the pass lands: the seat advances, the effect re-runs, and there is nothing to do. */
+  useEffect(() => {
+    if (!autoPassArm || !gameState || !viewerAddress) return;
+    if (gameState.current_round_type !== "StockRound") return;
+    if (autoPassArm.player !== viewerAddress) return;
+    if (!isMyTurn) return;
+
+    const decision = autoPassDecision(gameState, autoPassArm);
+    if (!decision.pass) {
+      setAutoPassArm(null);
+      /* SAID OUT LOUD, always. A turn that silently did not happen is the failure mode of every feature like
+         this one, and the reason is the only thing that makes the interruption useful. */
+      logInfo("Auto-Pass", `${decision.wakeReason} Auto-Pass is off.`);
+      return;
+    }
+    void handlePassTurn();
+  }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo]);
 
   const handleSellShares = useCallback(
     (protocolId: number, percentage: number) =>
@@ -3626,7 +3972,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       );
       const buyerTicker = buyer?.ticker ?? `#${actingProtocolId}`;
       const ownerLabel = sandboxPlayerLabel(target.owner) ?? truncateAddress(target.owner);
-      setPrivateTradeOpen(false);
+      /* Design note #715: nothing to dismiss. The sheet closed itself here when it was a modal; embedded, it
+         leaves when the step does -- and the step advances on the purchase the way every other one does. */
 
       // The president of the buying corporation already owns it: one party,
       // nothing to negotiate, so the purchase completes outright.
@@ -3673,6 +4020,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     runGameplayAction(
       `Accepted $${privateProposal.price} for ${privateProposal.privateName}`,
       { AnswerPrivatePurchase: { private_id: privateProposal.privateId, accept: true } },
+      // Design note #701: the owner is answering, and the owner is not the player operating.
+      { offTurn: true },
     );
   }, [privateProposal, runGameplayAction]);
 
@@ -3681,6 +4030,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     runGameplayAction(
       `Declined $${privateProposal.price} for ${privateProposal.privateName}`,
       { AnswerPrivatePurchase: { private_id: privateProposal.privateId, accept: false } },
+      { offTurn: true },
     );
   }, [privateProposal, runGameplayAction]);
 
@@ -3957,44 +4307,63 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         return;
       }
 
-      setSandboxTrainProposal(proposal);
-      logInfo(
-        "Train Offer",
-        `${proposal.buyerTicker} offered $${proposal.price} for one of ${proposal.sellerTicker}'s ${proposal.modelType}-trains. Awaiting ${proposal.sellerPresidentLabel}.`,
+      /* Design note #701: appended to the log so the SELLER sees it. This was a local
+         `setSandboxTrainProposal`, which is why the prompt only ever appeared on the buyer's screen.
+         The Activity Log line is written by the DRAIN now, from the message itself, so every client reads the
+         same sentence -- writing it here as well would give the buyer two entries and the seller one. */
+      runGameplayAction(
+        `Offered $${proposal.price} for a ${proposal.modelType}-train`,
+        {
+          ProposeTrainPurchase: {
+            seller_protocol_id: proposal.sellerProtocolId,
+            seller_ticker: proposal.sellerTicker,
+            seller_president: proposal.sellerPresident,
+            buyer_protocol_id: proposal.buyerProtocolId,
+            buyer_ticker: proposal.buyerTicker,
+            model_type: proposal.modelType,
+            price: proposal.price,
+          },
+        },
       );
     },
-    [gameState, sandbox, handleMakeTrainOffer, logInfo],
+    [gameState, sandbox, handleMakeTrainOffer, logInfo, runGameplayAction],
   );
 
-  /** Accepted in the sandbox. THIS is where the real message goes -- the one
-   *  the contract has always had, sent only after both sides have said yes. */
+  /** The answer is a log entry, not a local dismissal: the drain clears the prompt on every client and
+   *  dispatches the purchase on yes.
+   *
+   *  Design note #701: this used to call `BuyTrainFromCorporation` straight from the buyer's client and clear
+   *  its own `useState`. The dispatch was right and its AUTHOR was wrong -- the seller had never seen the
+   *  offer, so "accepted" meant the buyer had agreed with themselves. The transfer still goes through the
+   *  ordinary purchase message; it is now the drain that sends it, once the seller has answered. */
   const handleAcceptSandboxTrainOffer = useCallback(() => {
     if (!sandboxTrainProposal) return;
-    const proposal = sandboxTrainProposal;
-    setSandboxTrainProposal(null);
     runGameplayAction(
-      `BuyTrainFromCorporation: ${proposal.modelType}-train @ $${proposal.price}`,
+      `Accepted $${sandboxTrainProposal.price} for a ${sandboxTrainProposal.modelType}-train`,
       {
-        BuyTrainFromCorporation: {
-          game_id: gameId,
-          buyer_protocol_id: proposal.buyerProtocolId,
-          seller_protocol_id: proposal.sellerProtocolId,
-          model_type: proposal.modelType,
-          price: proposal.price,
+        AnswerTrainPurchase: {
+          seller_protocol_id: sandboxTrainProposal.sellerProtocolId,
+          accept: true,
         },
       },
+      // Design note #701: the seller president answers, and it is the buyer who is on turn.
+      { offTurn: true },
     );
-  }, [sandboxTrainProposal, runGameplayAction, gameId]);
+  }, [sandboxTrainProposal, runGameplayAction]);
 
   const handleRejectSandboxTrainOffer = useCallback(() => {
     if (!sandboxTrainProposal) return;
-    logInfo(
-      "Offer Rejected",
-      `${sandboxTrainProposal.sellerPresidentLabel} declined $${sandboxTrainProposal.price} for ${sandboxTrainProposal.sellerTicker}'s ${sandboxTrainProposal.modelType}-train.`,
+    runGameplayAction(
+      `Declined $${sandboxTrainProposal.price} for a ${sandboxTrainProposal.modelType}-train`,
+      {
+        AnswerTrainPurchase: {
+          seller_protocol_id: sandboxTrainProposal.sellerProtocolId,
+          accept: false,
+        },
+      },
+      { offTurn: true },
     );
-    setSandboxTrainProposal(null);
-  }, [sandboxTrainProposal, logInfo]);
-
+  }, [sandboxTrainProposal, runGameplayAction]);
 
   const handleAcceptTrainOffer = useCallback(
     (offerId: number) => {
@@ -4081,9 +4450,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // on a guess would take the player's turn away from them, so an unknown
     // fleet is never treated as full.
     if (owned === undefined) return false;
-    const limit = depot.find((tier) => tier.isCurrent)?.trainLimit;
-    if (limit === undefined) return false;
-    return owned >= limit;
+    /* Design note #703: through the shared rule, not a second `>=`. This gate and the Buy Trains panel answer
+       the same question -- is this corporation train-locked -- and they DISAGREED: the auto-skip read the
+       CURRENT phase (correctly) while the panel enforced against the tier being bought, so a corporation the
+       skip let through was refused by the panel it was sent to. One expression now, in `trainLimit.ts`. */
+    return isTrainLocked(owned, depot.find((tier) => tier.isCurrent)?.trainLimit ?? null);
   }, [gameState, actingProtocolId, depot]);
 
   /* Owning a train is necessary and not sufficient. The probe is assignRouteSet, the same search Auto Route runs; null means "could not tell", never zero.
@@ -4877,24 +5248,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      when this corporation is known to have skipped Routes -- see the state's
      own note for why `null` (unknown) counts as having run. */
   const dividendRevenueIsThisTurn = !skippedRoutesThisTurn;
+  /* Design note #705: the rows now carry each holder's cash on BOTH sides of the payout, so the Pay column
+     answers the same before-and-after question the Withhold column has answered since #509a. The arithmetic
+     and the sort live in `dividendProjection`; the LABEL is resolved here, at the edge, because a wallet is
+     what the state holds and a label is one client's rendering of it. */
   const dividendPayouts = useMemo(() => {
     if (!dividendCorp) return [];
-    const rows = dividendCorp.player_holdings.map((entry) => ({
-      holder: sandboxPlayerLabel(entry.player) ?? truncateAddress(entry.player),
-      percentage: entry.percentage,
-      amount: dividendPerShare * (entry.percentage / 10),
-    }));
-    // The bank pool is paid too -- its share goes to the bank, and omitting
-    // it would make the listed payouts fail to add up to the revenue.
-    if (dividendCorp.bank_pool_percentage > 0) {
-      rows.push({
-        holder: "Bank Pool",
-        percentage: dividendCorp.bank_pool_percentage,
-        amount: dividendPerShare * (dividendCorp.bank_pool_percentage / 10),
-      });
-    }
-    return rows.sort((a, b) => b.percentage - a.percentage);
-  }, [dividendCorp, dividendPerShare]);
+    const cash = cashByPlayer(gameState);
+    return projectDividendPayouts({
+      holdings: dividendCorp.player_holdings,
+      /* Design note #706: the BANK POOL pays the corporate treasury; unsold IPO shares pay nobody. The two
+         were swapped in the reducer, which is why this column reported the wrong recipient twice. */
+      bankPoolPercentage: dividendCorp.bank_pool_percentage,
+      treasuryNow: Number(dividendCorp.treasury ?? 0) || 0,
+      corporationLabel: dividendCorp.ticker,
+      perShare: dividendPerShare,
+      cashOf: (player) => cash[player] ?? null,
+      labelOf: (player) => sandboxPlayerLabel(player) ?? truncateAddress(player),
+    });
+  }, [dividendCorp, dividendPerShare, gameState]);
 
   /* Carry the CELL through, not just the price: the chart repeats prices across rows, so a first-match search projected from the wrong box (#415).
      See docs/ai_architecture/stock_market.md - App.tsx #434 */
@@ -5308,6 +5680,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   // WaterfallPass and PassTurn are different contract messages, not one action with two names.
                   // See docs/ai_architecture/contract_economy.md - App.tsx #31
                   onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
+                  /* Design note #717: offered only where a standing pass means something. */
+                  autoPass={
+                    isWaterfallPhase
+                      ? null
+                      : {
+                          armed: autoPassArm !== null,
+                          onOpenSettings: () => setAutoPassOpen(true),
+                          onDisarm: handleDisarmAutoPass,
+                        }
+                  }
                   /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
                      See docs/ai_architecture/contract_economy.md - App.tsx #311 */
                   passDisabledReason={
@@ -5317,6 +5699,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   }
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
                   stationTokenCost={stationTokenCost}
+                  /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
+                     the search cannot disagree about whether a run exists. */
+                  maxRouteRevenue={maxRouteRevenue}
                   activeCorporation={activeCorporationContext}
                   /* Design note #673: the previewed lay, as the card's provisional
                      treasury. `after` is non-null here because `pendingLayCost` only
@@ -5329,7 +5714,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   tokenTargetMode={tokenTargetMode}
                   setTokenTargetMode={setTokenTargetMode}
                   onSkipSubPhase={handleSkipSubPhase}
-                  onOpenPrivateTrade={() => setPrivateTradeOpen(true)}
+                  /* Design note #715: the sheet renders in the bar now. */
+                  privatePurchase={
+                    gameState
+                      ? {
+                          buyerTicker:
+                            gameState.public_companies.find(
+                              (c) => c.company_id === actingProtocolId,
+                            )?.ticker ?? "This corporation",
+                          privates: gameState.private_companies ?? [],
+                          treasury: Number(
+                            gameState.public_companies.find(
+                              (c) => c.company_id === actingProtocolId,
+                            )?.treasury ?? 0,
+                          ),
+                          labelForAddress: (address: string) =>
+                            sandboxPlayerLabel(address) ?? truncateAddress(address),
+                          onPropose: handleProposePrivatePurchase,
+                        }
+                      : null
+                  }
+                  onOpenPrivateTrade={() => undefined}
                   ownsAnyTrain={ownsAnyTrain}
                   mustBuyTrain={mustBuyTrain}
                   /* Design note #570: the acting seat's colour, so the bar
@@ -5566,6 +5971,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     playerCash={activeSeatCash}
                     onSelectParValue={handleSelectParValue}
                     onBuyShare={handleBuyShare}
+                    purchaseBlockFor={purchaseBlockFor}
+                    saleBlockFor={saleBlockFor}
+                    salePriceAfter={salePriceAfter}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}
                     isMyTurn={isMyTurn}
@@ -5890,23 +6298,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          it is carried by `provisional` and by `canConfirm`. Keeping two nearly identical JSX blocks is how the
          old spectator bug got in -- one branch grew a `!spectator` guard the other did not need.
          The file is retained, unrendered, until the radial path has been exercised against a live chain. */}
-      {/* Design notes #165/#166: the two halves of the trade engine -- the sheet composes an offer, the prompt
-         answers one. Shell level rather than inside the action bar because both outlive the panel that opened
-         them; the prompt in particular has to survive the sub-phase advancing. */}
-      <ProposePrivatePurchase
-        open={privateTradeOpen}
-        buyerTicker={
-          gameState?.public_companies.find((c) => c.company_id === actingProtocolId)
-            ?.ticker ?? "This corporation"
-        }
-        privates={gameState?.private_companies ?? []}
-        labelForAddress={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
-        treasury={Number(
-          gameState?.public_companies.find((c) => c.company_id === actingProtocolId)
-            ?.treasury ?? 0,
-        )}
-        onPropose={handleProposePrivatePurchase}
-        onClose={() => setPrivateTradeOpen(false)}
+      {/* Design note #697: the action receipt. Shell level, beside the two consent prompts and for the same
+         reason (#165/#166): it outlives the panel that produced it -- a purchase that advances the phase
+         unmounts the depot panel, and the confirmation for that purchase must not go with it. */}
+      <ActionToast
+        message={actionToast?.text ?? null}
+        token={actionToast?.token ?? 0}
+        onDismiss={() => setActionToast(null)}
+      />
+      {/* Design notes #165/#166 argued that BOTH halves of the trade engine belong at shell level, "because
+         both outlive the panel that opened them".
+         Design note #715 SPLIT THAT. It is true of the PROMPT, which has to survive the sub-phase advancing
+         and is mounted just below -- and it was never true of the composing sheet, which is only ever open
+         during `BuyPrivate` and now renders inside the bar on exactly that condition. What outlives the step
+         is the ANSWER, not the offer. */}
+      {/* Design note #717: the conditions, asked at the moment of arming rather than buried in a settings
+         panel -- this is the one control that acts while the player is not looking. */}
+      <AutoPassModal
+        open={autoPassOpen}
+        initial={autoPassChoices}
+        exposedPresidencies={autoPassExposure}
+        onArm={handleArmAutoPass}
+        onClose={() => setAutoPassOpen(false)}
       />
       {/* The train consent prompt -- design notes #205 and #218. ONE component, TWO sources, decided by
          deployment: SANDBOX uses local state (no chain to record an offer in, no second client to show it to),
@@ -5914,12 +6327,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          Mutually exclusive by construction, so this can never show two offers at once. */}
       <TrainTradePrompt
         proposal={liveTrainOffer?.proposal ?? sandboxTrainProposal}
-        // Sandbox names the seller so the clicker knows whose decision they stand in for; online, liveTrainOffer only exists for the seller's president.
-        // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
+        /* Online, `liveTrainOffer` only exists for the seller's president, so its presence IS the check.
+           Offline the wallets are compared.
+           Design note #701 removed `sandbox ||` from the middle of this expression. #536's note read "Sandbox
+           names the seller so the clicker knows whose decision they stand in for" -- written when a sandbox
+           was one human at one wallet. #578 removed solo mode, and this bypass turned "the seller must
+           consent" into "whoever proposed it may consent for them". #662 struck the identical clause out of
+           `viewerIsOwner`; this is the same line on the other prompt. */
         viewerIsSeller={
-          liveTrainOffer !== null ||
-          sandbox ||
-          sandboxTrainProposal?.sellerPresident === viewerAddress
+          liveTrainOffer !== null || sandboxTrainProposal?.sellerPresident === viewerAddress
         }
         onAccept={liveTrainOffer ? handleAcceptLiveTrainOffer : handleAcceptSandboxTrainOffer}
         onReject={liveTrainOffer ? handleRejectLiveTrainOffer : handleRejectSandboxTrainOffer}

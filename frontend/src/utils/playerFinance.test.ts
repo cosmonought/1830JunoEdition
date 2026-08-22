@@ -157,12 +157,18 @@ describe("net worth against liquidity", () => {
     expect(f.liquidity).toBe(800);
   });
 
-  it("gives a company with no price of any kind no sale value", () => {
-    /* The case the dash IS for: no chart position AND no par. Nobody can
-       value these shares, so the figure is withheld rather than guessed. */
+  it("values an unparred corporation's shares at nothing, in BOTH figures", () => {
+    /* CORRECTED A THIRD TIME, and this one was the note contradicting itself. It read "The case the dash IS
+       for: no chart position AND no par. Nobody can value these shares, so the figure is withheld rather than
+       guessed" -- and then asserted a withheld net worth beside a liquidity of 500, which is not withheld at
+       all: it is cash plus the priced holding, silently dropping the unpriced one.
+       REPORTED, resolving it: "if a share has no market price it is unsellable, so it should either be
+       excluded or count as $0 ... Regarding Net Worth: unsellable shares ... are effectively worth $0."
+       So neither figure is unknown. An unparred share is worth nothing to hold and nothing to sell, and both
+       columns now say so with a number. Design note #711. */
     const state = board({ adaPrr: 30, prrPar: null });
     const f = playerFinances(ADA, state, { 1: null, 2: 50 })!;
-    expect(f.netWorth).toBeNull();
+    expect(f.netWorth).toBe(f.liquidity);
     expect(f.liquidity).toBe(500);
   });
 

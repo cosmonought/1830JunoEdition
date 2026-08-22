@@ -33,6 +33,38 @@ export const PRESIDENT_BLOCK_PERCENT = 20;
 export const SHARE_BLOCK_PERCENT = 10;
 
 /** One company's contribution to a forced sale. */
+/** Cash plus everything this player could legally turn into cash today.
+ *
+ *  Design note #710: THE SUM LIVES BESIDE THE RULES IT SUMS.
+ *
+ *  #562a defined liquidity and `playerFinances` added it up inline. That was fine while one surface asked --
+ *  and the Ledger asking too would have meant writing the same reduction a second time, which is how two
+ *  figures called "Liquidity" come to disagree about a player.
+ *
+ *  Design note #711: AN UNPRICED HOLDING CONTRIBUTES $0 AND DOES NOT MAKE THE TOTAL UNKNOWN. A first draft of
+ *  this function returned `null` the moment a sellable holding had no price, reasoning from #566 that an
+ *  under-report is indistinguishable from a correct smaller number. REPORTED, and it is decisive: "if a share
+ *  has no market price it is unsellable, so it should either be excluded or count as $0". There is nothing
+ *  being under-reported -- an unparred share cannot be sold to anyone, which is precisely what liquidity
+ *  measures. `SellableHolding.proceeds` was already 0 for those, so this is the plain sum it always was.
+ *
+ *  `null` SURVIVES FOR ONE THING: cash the state has not reported. A total that starts from an unknown is
+ *  unknown, however well the shares are priced.
+ *
+ *  See docs/ai_architecture/stock_market.md, endgame.ts #710 / #711. */
+export function playerLiquidity(
+  state: GameStateResponse,
+  player: string,
+  cash: number | null,
+  priceForCompany: (companyId: number) => number | null,
+): number | null {
+  if (cash === null) return null;
+  return sellableHoldings(state, player, priceForCompany).reduce(
+    (sum, holding) => sum + holding.proceeds,
+    cash,
+  );
+}
+
 export interface SellableHolding {
   companyId: number;
   ticker: string;

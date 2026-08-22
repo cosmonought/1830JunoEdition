@@ -31,6 +31,7 @@ import {
   chainConfigError,
   formatNativeAmount,
   requireContractAddress,
+  APP_NAME,
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
@@ -465,7 +466,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               },
             },
             "auto",
-            `1830 Juno: create room "${room.name}"`,
+            `${APP_NAME}: create room "${room.name}"`,
             funds,
           );
         } catch (error) {
@@ -519,7 +520,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           contractAddress,
           { JoinGameRoom: { game_id: room.chainGameId } },
           "auto",
-          `1830 Juno: join room ${room.chainGameId}`,
+          `${APP_NAME}: join room ${room.chainGameId}`,
           funds,
         );
 
@@ -775,7 +776,7 @@ function RoomBrowser({
             type="text"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Friday night 1830"
+            placeholder="Friday night 18XX"
             style={styles.input}
             maxLength={48}
           />

@@ -51,6 +51,7 @@ import {
   requireChainId,
   requireContractAddress,
   requireRpcEndpoint,
+  APP_NAME,
 } from "../config";
 
 // F-4: the chain id, RPC endpoint and contract address were local copies
@@ -268,7 +269,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           address,
           [grantMsg],
           fee,
-          "1830 Juno: authorize session key",
+          `${APP_NAME}: authorize session key`,
         );
 
         if (result.code !== 0) {
@@ -314,7 +315,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           address,
           [revokeMsg],
           fee,
-          "1830 Juno: revoke session key",
+          `${APP_NAME}: revoke session key`,
         );
 
         if (result.code !== 0) {

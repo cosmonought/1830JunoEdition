@@ -11,7 +11,8 @@
 // is what they could actually RAISE -- cash plus only the shares 1830 would let
 // them sell, bounded by the successor rule and the pool's 50% cap. NOT
 // "unfloated": a started-but-unfloated corporation sits at its par position and
-// its shares sell perfectly well; the test is whether the chart can price them.
+// its shares sell perfectly well; the test is whether the corporation has been
+// PARRED (design note #711), which is a step earlier than floating.
 //
 // The gap between the two is the interesting part -- $2,000 of net worth against
 // $200 of liquidity is one bad train purchase from bankruptcy, and a single Net
@@ -23,10 +24,11 @@
 import {
   certificateCount,
   estimatePlayerNetWorth,
+  sharePriceFor,
   playerPrivateCompanies,
   type GameStateResponse,
 } from "./gameState";
-import { sellableHoldings, SHARE_BLOCK_PERCENT } from "./endgame";
+import { playerLiquidity, SHARE_BLOCK_PERCENT } from "./endgame";
 import { PRIVATE_COMPANY_CATALOG } from "./privateCatalog";
 import { certLimitForPlayers } from "./gameSetup";
 import { corporationDisplayRank } from "./corporationNames";
@@ -84,27 +86,14 @@ export function playerFinances(
   const cashRaw = Number(cashEntry?.cash_vgp ?? NaN);
   const cash = Number.isFinite(cashRaw) ? cashRaw : null;
 
-  /* Design note #566: PAR IS A PRICE, NOT A GUESS. `estimateStockPortfolioValue`
-     returns `null` the moment any held corporation has no market price, and
-     defends that hard because an under-report is indistinguishable from a correct
-     smaller number -- correct, and it leaves a third option unconsidered.
-
-     A corporation whose president has set a par but whose token is not yet on the
-     chart is not unpriced: its shares sell from the IPO at par, and that figure is
-     on `PublicCompanyState` already. Reading it is not estimating.
-
-     SO THE DASH IS RESERVED for a corporation with NO price of any kind. ONLY THE
-     CARD, deliberately -- the Ledger's column keeps the stricter reading, since it
-     sits beside the contract's own `PlayerNetWorth` answer. */
-  const pricesWithPar: Record<number, number | null> = { ...marketPrices };
-  for (const company of state.public_companies) {
-    const known = pricesWithPar[company.company_id];
-    if (known !== null && known !== undefined && Number.isFinite(known)) continue;
-    const par = Number(company.par_value ?? NaN);
-    pricesWithPar[company.company_id] = Number.isFinite(par) && par > 0 ? par : null;
-  }
-
-  const worth = estimatePlayerNetWorth(address, state, pricesWithPar);
+  /* Design note #566 kept a private `pricesWithPar` here -- "PAR IS A PRICE, NOT A GUESS" -- because
+     `estimateStockPortfolioValue` refused to value a corporation whose token was not yet on the chart, and
+     the card wanted a figure where the Ledger accepted a dash.
+     Design note #711 RETIRED THAT SPLIT by moving the ladder into `sharePriceFor`: market, then par, then
+     $0 for a corporation nobody has parred. So there is no longer a looser reading for this file to hold
+     privately -- both surfaces read the same prices, and the only thing that ever differed was where the
+     ladder stopped. */
+  const worth = estimatePlayerNetWorth(address, state, marketPrices);
 
   const holdings: PlayerHoldingRow[] = [];
   let shares = 0;
@@ -131,13 +120,14 @@ export function playerFinances(
   /* Design note #562a: what could actually be raised. `sellableHoldings` owns the
      presidency and pool-cap rules, so this only adds up its answer -- and the two
      surfaces that ask "what can this player pay with" get the same number by
-     construction rather than by agreement. */
-  const liquid = cash === null
-    ? null
-    : sellableHoldings(state, address, (companyId) => pricesWithPar[companyId] ?? null).reduce(
-        (sum, entry) => sum + entry.proceeds,
-        cash,
-      );
+     construction rather than by agreement.
+     Design note #710 moved the addition itself into `playerLiquidity`, next to those rules, once the Ledger
+     needed the same figure at a different price policy. What is still THIS file's is `pricesWithPar` -- #566's
+     par fallback, which is the card's reading and not the Ledger's. */
+  const liquid = playerLiquidity(state, address, cash, (companyId) => {
+    const company = state.public_companies.find((entry) => entry.company_id === companyId);
+    return company ? sharePriceFor(company, marketPrices) : null;
+  });
 
   const privates: PlayerPrivateRow[] = playerPrivateCompanies(address, state).map((entry) => ({
     privateId: entry.private_id,

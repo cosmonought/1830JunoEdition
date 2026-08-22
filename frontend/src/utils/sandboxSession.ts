@@ -27,6 +27,8 @@ import type { MapGridResponse, MapTileEntry } from "../components/hexContractTyp
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
 import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
+// Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
+import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { stationTokenPrice } from "./stationTokens";
 // Design note #660: the B&O private's two rules, in one place.
 import { isSellableToCorporation, settleBaoPrivate } from "./baltimorePrivate";
@@ -498,6 +500,15 @@ export interface SandboxActionContext {
    *  the board table lives in `components/`, which `utils/` must not
    *  import. Omitted, corporations still float without their token. */
   homeHexToAxial?: (label: string) => readonly [number, number] | null;
+  /** Design note #712: the market-zone rules, injected for the same reason the price is -- the price-to-zone
+   *  table lives in `components/` and this module may not import it.
+   *  OMITTED MEANS UNENFORCED, deliberately: a caller with no chart cannot tell a Normal price from an Orange
+   *  one, and guessing would either forbid a legal purchase or wave an illegal one through. Every live path
+   *  supplies it; the fixtures that do not are exercising other rules. */
+  marketZoneFor?: (companyId: number) => PriceZone;
+  /** Live prices per company, for the certificate limit's zone exemption. */
+  marketPricesByCompany?: Readonly<Record<number, number | null>> | null;
+  zoneForPrice?: (price: number | null | undefined) => string | null;
 }
 
 /** Pure bookkeeping: clamps the pool at zero rather than validating, because refusing would be enforcing a rule.
@@ -634,6 +645,100 @@ export function applyPhaseChange(
   });
 
   return changed ? { ...state, public_companies: companies } : state;
+}
+
+/** What one corporation lost when the phase turned. */
+export interface FleetLoss {
+  companyId: number;
+  ticker: string;
+  /** Destroyed by the arriving tier -- 2s on the first 4, 3s on the first 6, 4s on the first Diesel. */
+  rusted: readonly string[];
+  /** Returned to bring the fleet under the new, lower train limit. Cheapest first. */
+  discarded: readonly string[];
+}
+
+/** Reads back what `applyPhaseChange` took, by comparing the fleets it rewrote.
+ *
+ *  Design note #704: THE REDUCER SETTLES, THE SHELL NARRATES -- #400's division, and the same one #685 used
+ *  for private revenue. `applyPhaseChange` has trimmed over-limit fleets cheapest-first since #284 and has
+ *  never said so: the trains simply left the corporation's chips between one render and the next.
+ *
+ *  THAT SILENCE ONLY JUST BECAME REACHABLE. Until #703 the Buy Trains panel REFUSED the purchase that would
+ *  leave a corporation over the new limit, so the trim ran for bystanders and almost never for the buyer. #703
+ *  corrected the rule; this is the consequence that was hiding behind it.
+ *
+ *  AND IT IS THE BUG FROM #702 MADE REAL. That report was "I actually thought the 3-train purchase had been
+ *  swapped out with it because it is so hard to see" -- a misreading, then. A president who buys a 4-train and
+ *  finds two chips where three were is now reading correctly, and deserves to be told which train went and
+ *  why.
+ *
+ *  DERIVED RATHER THAN RETURNED, so `applyPhaseChange` stays a pure state -> state function and the sentence
+ *  cannot be built for a transition that did not happen. A model that left is a RUST when the arriving tier is
+ *  the one that kills it, and a DISCARD otherwise -- re-derived from `RUSTS_ON`, which is the same table the
+ *  trim itself consulted. */
+export function describeFleetLosses(
+  before: GameStateResponse,
+  after: GameStateResponse,
+): FleetLoss[] {
+  const arrivingTier = derivePhase(after)?.tier ?? null;
+  const losses: FleetLoss[] = [];
+
+  for (const company of after.public_companies) {
+    const was = before.public_companies.find((entry) => entry.company_id === company.company_id);
+    const had = was?.owned_trains;
+    const has = company.owned_trains;
+    // `undefined` on either side is "the chain did not say", never "owns nothing" -- the distinction #232
+    // makes, and inventing a loss from it would report trains that were never there.
+    if (had == null || has == null) continue;
+
+    /* Multiset difference, not a set one: two 3-trains are two trains, and a corporation that loses one of
+       them still holds the other. Splicing from a copy is what keeps the count right. */
+    const remaining = [...has];
+    const lost: string[] = [];
+    for (const model of had) {
+      const at = remaining.indexOf(model);
+      if (at >= 0) remaining.splice(at, 1);
+      else lost.push(model);
+    }
+    if (lost.length === 0) continue;
+
+    const rusted: string[] = [];
+    const discarded: string[] = [];
+    for (const model of lost) {
+      if (arrivingTier !== null && RUSTS_ON[model] === arrivingTier) rusted.push(model);
+      else discarded.push(model);
+    }
+    losses.push({ companyId: company.company_id, ticker: company.ticker, rusted, discarded });
+  }
+
+  return losses;
+}
+
+/** One sentence per corporation, or `null` when it lost nothing worth a line. */
+export function describeFleetLoss(loss: FleetLoss, trainLimit: number | null): string | null {
+  const parts: string[] = [];
+  if (loss.rusted.length > 0) {
+    parts.push(`${namedTrains(loss.rusted)} rusted`);
+  }
+  if (loss.discarded.length > 0) {
+    /* THE LIMIT IS NAMED, because "discarded its 2-train" without it reads as a choice the president made.
+       It is not a choice -- 1830 takes the train, and the only latitude is which one, which is why the rule
+       (cheapest first) is stated too. */
+    const ceiling = trainLimit === null ? "the new train limit" : `the new limit of ${trainLimit}`;
+    parts.push(
+      `${namedTrains(loss.discarded)} ${loss.discarded.length === 1 ? "was" : "were"} discarded to meet ${ceiling}`,
+    );
+  }
+  if (parts.length === 0) return null;
+  return `${loss.ticker}: ${parts.join(", and ")}.`;
+}
+
+/** "its 2-train", "its 3-train and 3-train" -- the tier spelled as players say it (#696). */
+function namedTrains(models: readonly string[]): string {
+  const named = models.map((model) => `${model}-train`);
+  if (named.length === 1) return `its ${named[0]}`;
+  if (named.length === 2) return `its ${named[0]} and ${named[1]}`;
+  return `its ${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
 }
 
 function buyDepotTrain(state: GameStateResponse, companyId: number): GameStateResponse {
@@ -1415,10 +1520,53 @@ function applyOneAction(
       (target.par_value === null || target.par_value === undefined) &&
       !!actor;
 
+    /* Design note #712: QUANTITY, so a Brown-zone pool multi-buy settles as ONE action.
+       It settled as several before: `App.handleBuyShare` looped and dispatched N `BuyStock` messages, and the
+       tail of this branch calls `advanceSeat` -- so three pool shares passed the turn three times and shares
+       two and three were made by whoever the seat had moved to.
+       ABSENT MEANS ONE, which is what every message written before this field meant and must keep meaning on
+       replay. A president's certificate is never multiple: it is one 20% card and there is only ever one. */
+    const requested = Math.max(1, Math.floor(Number(msg.BuyStock.quantity ?? 1)));
+    /* CAPPED BEFORE THE CHARGE. `moveShares` already refuses to hand out more than the pool holds -- "taking
+       more than exists is capped to what exists" -- but the price is computed HERE, so a request for five
+       against a pool of three would have charged for five and delivered three. The cap has to be applied to
+       the figure the player pays, not only to the certificates they receive. */
+    const inSource = target
+      ? Math.floor(
+          (source === "Bank" ? target.bank_pool_percentage : target.ipo_pool_percentage) /
+            SANDBOX_SHARE_PERCENTAGE,
+        )
+      : 0;
+    const certificates = isPresidentBuy ? 1 : Math.max(1, Math.min(requested, inSource));
+
     const percentage = isPresidentBuy
       ? SANDBOX_PRESIDENT_PERCENTAGE
-      : SANDBOX_SHARE_PERCENTAGE;
-    const charged = isPresidentBuy ? price * 2 : price;
+      : SANDBOX_SHARE_PERCENTAGE * certificates;
+    const charged = isPresidentBuy ? price * 2 : price * certificates;
+
+    /* Design note #712: THE REDUCER REFUSES TOO, and that is not belt-and-braces.
+       The panel's gate is advice on one screen; this runs on every client that replays the log, so a purchase
+       that should not have happened cannot enter the shared state from a stale tab, a hand-built message, or
+       a client whose market grid had not loaded when the button was drawn.
+       IT REUSES THE SAME FUNCTION, so the button and the board cannot disagree about a rule -- the failure
+       this codebase keeps finding when a rule is stated twice. The zone comes from `ctx.marketZoneFor`, which
+       is the shared chart rather than any browser's copy of it.
+       A REFUSAL RETURNS THE STATE UNCHANGED rather than throwing: a replay must not halt on an entry the log
+       already contains, and an illegal buy that somehow got written is best treated as a move that did
+       nothing. */
+    if (actor && ctx?.marketZoneFor) {
+      const blocked = sharePurchaseBlock({
+        state,
+        buyer: actor,
+        companyId: protocol_id,
+        source,
+        quantity: certificates,
+        zone: ctx.marketZoneFor(protocol_id),
+        marketPrices: ctx.marketPricesByCompany ?? null,
+        zoneForPrice: ctx.zoneForPrice,
+      });
+      if (blocked !== null) return state;
+    }
 
     const spent = actor ? adjustCash(state, actor, -charged) : state;
     const banked = adjustBank(spent, charged);
@@ -1649,8 +1797,13 @@ function applyOneAction(
   }
 
   if ("DeclareDividends" in msg) {
-    /* The dividend buttons were a no-op. Withhold credits the corporation; Pay splits ten ways -- players to cash, IPO to the treasury, bank pool to the bank. The price ladder stays market.rs's.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #193 */
+    /* The dividend buttons were a no-op. Withhold credits the corporation; Pay splits ten ways. The price
+       ladder stays market.rs's.
+       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #193
+       Design note #706 CORRECTED THE SECOND HALF OF THAT SENTENCE, which read "players to cash, IPO to the
+       treasury, bank pool to the bank" -- the two pools the wrong way round, stated plainly, for as long as
+       this branch has existed. 1830: "Shares in the bank pool pay dividends to the corporate treasury. No
+       payments are made for unsold initial offering shares." */
     const { protocol_id, revenue_amount, distribute } = msg.DeclareDividends;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     const stated = Number(revenue_amount);
@@ -1670,16 +1823,34 @@ function applyOneAction(
     // Floored, matching `App`'s own per-share figure: 1830 pays whole units,
     // and rounding up would have the corporation pay out more than it earned.
     const perShare = Math.floor(revenue / 10);
+
+    /* Design note #706: THE TWO POOLS WERE EXACTLY SWAPPED.
+       1830: "Shares in the bank pool pay dividends to the corporate treasury. No payments are made for unsold
+       initial offering shares."
+       This paid `ipo_pool_percentage` INTO the treasury and let `bank_pool_percentage` stay with the bank --
+       both wrong, and wrong in opposite directions, which is why the total still looked plausible. A
+       corporation with shares unsold banked a slice it is not owed; one whose shares had been sold back into
+       the pool lost a slice it is.
+       IT MATTERS MOST EARLY AND LATE. A freshly floated corporation is mostly IPO, so it was collecting on
+       nearly every dividend it declared; a corporation players have dumped into the pool is where the real
+       rule pays, and it was collecting nothing. The bug rewarded exactly the position 1830 does not.
+       THE BANK FUNDS EXACTLY WHAT IT PAID -- players plus the pool's slice, summed rather than reconstructed
+       from `revenue` minus other slices. The old expression had to stay in step with two figures computed
+       elsewhere, and did not. */
     let next = state;
+    let paid = 0;
     for (const holding of company.player_holdings) {
-      next = adjustCash(next, holding.player, perShare * (holding.percentage / 10));
+      const share = perShare * (holding.percentage / 10);
+      paid += share;
+      next = adjustCash(next, holding.player, share);
     }
-    const treasurySlice = perShare * (company.ipo_pool_percentage / 10);
-    if (treasurySlice > 0) next = adjustTreasury(next, protocol_id, treasurySlice);
-    const bankSlice = perShare * (company.bank_pool_percentage / 10);
-    // The bank funds the payout and keeps its own pool's slice, so the net
-    // movement is everything that actually left it.
-    return adjustBank(next, -(revenue - bankSlice));
+    const poolSlice = perShare * (company.bank_pool_percentage / 10);
+    if (poolSlice > 0) {
+      paid += poolSlice;
+      next = adjustTreasury(next, protocol_id, poolSlice);
+    }
+    // `ipo_pool_percentage` is deliberately absent: unsold shares pay nobody.
+    return adjustBank(next, -paid);
   }
 
   if (

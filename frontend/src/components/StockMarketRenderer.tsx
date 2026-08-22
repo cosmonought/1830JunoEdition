@@ -460,6 +460,33 @@ export function marketZoneTextColor(zone: ZoneType | null): string | null {
   return ZONE_TEXT_COLORS[zone];
 }
 
+/** One price, tinted with its own zone's ink and carrying that zone's rule as a tooltip.
+ *
+ *  Design note #197 wrote this for the dividend move line: "a player reading this panel is looking at a
+ *  NUMBER, not the chart, so stepping into the Yellow zone was invisible exactly when it mattered."
+ *
+ *  Design note #712 MOVED IT HERE, because the Stock Round's corporation cards needed exactly the same thing.
+ *  REPORTED: "when a corporation is in yellow/orange/brown zones, its Market Price on the corp cards reflects
+ *  that." It did not -- and the gap mattered more than a missing tint, because #712 also made those zones
+ *  change what a player may BUY. A rule the board enforces and the card does not mention is the shape of
+ *  problem that whole note is about.
+ *  LIVING BESIDE THE ZONE TABLE is the point of the move: `marketZoneForPrice`, the ink and the tooltip are
+ *  all in this file, so the tint cannot drift from the cell it is describing. */
+export function ZonedPrice({ price }: { price: number | null }) {
+  if (price === null) return <>--</>;
+  const zone = marketZoneForPrice(price);
+  const color = marketZoneTextColor(zone);
+  const tooltip = marketZoneTooltip(zone);
+  return (
+    <span
+      style={color ? { color, fontWeight: 700, cursor: "help" } : undefined}
+      title={tooltip ?? undefined}
+    >
+      ${price}
+    </span>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Ticker color palette -- see design note #6                         */
 /* ------------------------------------------------------------------ */

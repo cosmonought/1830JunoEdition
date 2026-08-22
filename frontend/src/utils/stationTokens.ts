@@ -24,7 +24,11 @@ import {
   axialToPixel,
   twoNodePositions,
 } from "../components/hexGeometry";
-import { STATION_HOME_HEXES } from "../components/hexContractTypes";
+import {
+  STATION_HOME_HEXES,
+  tokenCityIndex,
+  type StationTokenCompany,
+} from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import {
   NEW_YORK_PRINTED_ARTWORK,
@@ -360,6 +364,87 @@ export function cityIndexAtPoint(
   }
 
   return best?.index ?? null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Where a token WILL sit -- design note #698                          */
+/* ------------------------------------------------------------------ */
+
+/** Which city bucket a company's token on `(q, r)` belongs to.
+ *
+ *  Design note #698: EXTRACTED, because two surfaces have to agree about it. The draw pass buckets every
+ *  placed token by this rule to pick its slot; the PREVIEW has to count the same buckets to know which slot is
+ *  next. Written twice, they drift -- and the drift is invisible, because both answers look like a token on a
+ *  city and only one of them is where the token will actually land.
+ *  `station_tokens` is #560's recorded CITY; a hex with no entry falls to city 0.
+ *
+ *  ONE DELIBERATE ASYMMETRY, recorded so it is not "fixed" later: on a MULTI-city hex with no recorded index
+ *  this answers 0 while the draw pass answers `undefined` and falls back to the hex centroid. That is not a
+ *  disagreement about where the token goes -- a token the draw pass cannot place in a city is never drawn from
+ *  a slot list, so its bucket entry is inert. Bucketing it somewhere keeps the map total honest; refusing to
+ *  draw it in a guessed city keeps the picture honest. Both are the behaviour that was already here. */
+export function tokenCityBucket(
+  company: StationTokenCompany,
+  q: number,
+  r: number,
+): number {
+  return tokenCityIndex(company, q, r) ?? 0;
+}
+
+/** The point a token placed in this city NEXT would occupy.
+ *
+ *  Design note #698: THE PREVIEW WAS ANCHORING TO THE CITY AND THE PLACEMENT DOCKS TO A SLOT.
+ *
+ *  REPORTED twice in one breath: "the Place Station preview is putting the station in the middle of the tile,
+ *  though it moves to a correct position after placement", and the tile picker "shows the existing station
+ *  simply in the middle of the pill, not on the actual station."
+ *
+ *  ONE FAULT, TWO SURFACES. `cityNodePoints` returns the CENTROID OF A CITY'S SLOTS -- exactly right for the
+ *  question it was built for (#463: which city did this click land in) and exactly wrong for "where does the
+ *  piece go". On a one-slot city the two coincide, which is why this survived: it is only visible on a pill,
+ *  where the centroid is the gap BETWEEN the two circles a token can sit in.
+ *  The placed token has always been right (`HexGridRenderer` #134/#251 resolves `tileCitySlotPoints` and picks
+ *  a slot from the occupant bucket), which is what "it moves to a correct position after placement" is
+ *  describing: not a token that moved, but two different anchors, one previewed and one drawn.
+ *
+ *  `null` when the geometry cannot say -- an unlaid hex, an unknown tile, a city with no slot points. The
+ *  caller keeps its existing centroid fallback, which is the honest answer where there is no artwork to dock
+ *  into and is what a preprinted OO hex needs. */
+export function nextCitySlotPoint(
+  mapGrid: MapGridResponse,
+  publicCompanies: readonly StationTokenCompany[],
+  q: number,
+  r: number,
+  cityIndex: number | null,
+  center: { x: number; y: number },
+  hexSize: number,
+): { x: number; y: number } | null {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (!laid) return null;
+  const cityCount = tileCitySlotCounts(laid.tile_id).length;
+  if (cityCount === 0) return null;
+  /* Same resolution the draw pass makes: a stated index, or the only city there is. A multi-city hex with no
+     index cannot be guessed, and guessing would put the preview on the wrong city -- which is worse than the
+     centroid it currently falls back to. */
+  const city = cityIndex ?? (cityCount === 1 ? 0 : null);
+  if (city === null) return null;
+
+  const points = tileCitySlotPoints(laid.tile_id, city, laid.orientation, center, hexSize);
+  if (points.length === 0) return null;
+
+  /* How many are already in it. The NEXT slot is the one this placement takes -- the same order the draw pass
+     assigns, so the preview promises the circle the token then appears in. */
+  let taken = 0;
+  for (const company of publicCompanies) {
+    if (!company.is_floated) continue;
+    for (const [tq, tr] of company.station_token_hexes) {
+      if (tq !== q || tr !== r) continue;
+      if (tokenCityBucket(company, q, r) === city) taken += 1;
+    }
+  }
+  // Clamped rather than absent: a full city should still preview somewhere, and the last slot is the least
+  // misleading place -- the same reasoning #251 gives for clamping the draw pass's own slot index.
+  return points[Math.min(taken, points.length - 1)];
 }
 
 /* Design note #463: THE NODES A CLICK CAN LAND ON -- every city node on a hex, in CITY INDEX ORDER.

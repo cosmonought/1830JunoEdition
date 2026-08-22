@@ -34,8 +34,12 @@ import {
 import {
   allowsMultipleBankPoolBuys,
   marketZoneForPrice,
+  // Design note #712: the zone-tinted figure, shared with the dividend move line.
+  ZonedPrice,
   PAR_BOX_PRICES,
 } from "./StockMarketRenderer";
+// Design note #713: the sale's arithmetic and its two guards.
+import { certificatesIn, saleProceeds } from "../utils/shareSale";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
@@ -67,6 +71,21 @@ import {
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
+  /** Design note #712: why this purchase is illegal, or `null` if it is allowed. Resolved by `App`, which
+   *  holds the whole board -- the certificate limit needs the private companies and the room's size, neither
+   *  of which this panel is given. A FUNCTION rather than a precomputed string per card, because the answer
+   *  depends on the source and quantity the player has selected HERE. */
+  /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
+   *  `purchaseBlockFor` is -- the successor rule reads every player's holdings. */
+  saleBlockFor?: (companyId: number, percentage: number) => string | null;
+  /** Design note #713: where the token lands after selling this many certificates, or `null` when the
+   *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
+  salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  purchaseBlockFor?: (
+    companyId: number,
+    source: "Ipo" | "Bank",
+    quantity: number,
+  ) => string | null;
   /** Design note #395: the room's private companies, so each card can list
    *  the ones its corporation owns. Optional -- a caller without game state
    *  simply renders no private rows. */
@@ -161,6 +180,9 @@ function CorporationRoster({
   parValueFor,
   onSelectParValue,
   onBuyShare,
+  purchaseBlockFor,
+  saleBlockFor,
+  salePriceAfter,
   onSellShares,
   controlsDisabled,
   controlsBlockedReason,
@@ -168,6 +190,18 @@ function CorporationRoster({
   tradingOpen,
 }: {
   publicCompanies: readonly PublicCompanyState[];
+  /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
+   *  `purchaseBlockFor` is -- the successor rule reads every player's holdings. */
+  saleBlockFor?: (companyId: number, percentage: number) => string | null;
+  /** Design note #713: where the token lands after selling this many certificates, or `null` when the
+   *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
+  salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  /** Design note #712: the zone rules, resolved by `App` against the whole board. */
+  purchaseBlockFor?: (
+    companyId: number,
+    source: "Ipo" | "Bank",
+    quantity: number,
+  ) => string | null;
   phase?: GamePhase | null;
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
   marketPrices?: Readonly<Record<number, number | null>>;
@@ -391,8 +425,22 @@ function CorporationRoster({
                      held three dollar figures of which only the rightmost said so. The dash stays bare -- "$--" would put
                      a currency on an absent value. */}
                   <div style={styles.rosterPrice}>
+                    {/* Design note #712: THE ZONE, ON THE FIGURE. Reported: "when a corporation is in
+                        yellow/orange/brown zones, its Market Price on the corp cards reflects that."
+                        It did not, and the omission was the same shape as the rules bug beside it -- the
+                        chart knew, and the card a player actually reads did not. `ZonedPrice` has tinted the
+                        dividend line since #197 for precisely this reason ("a player reading this panel is
+                        looking at a NUMBER, not the chart"), so this is that component reaching the surface
+                        it was always describing.
+                        THE INK, NOT A BOX: the report offered either, and a filled swatch here would compete
+                        with the eight corporation liveries this roster already carries (#13's argument for
+                        colouring the ticker's ink rather than its cell). */}
                     <span style={styles.rosterPriceValue}>
-                      {company.par_value === null || market === null ? "--" : `$${market}`}
+                      {company.par_value === null || market === null ? (
+                        "--"
+                      ) : (
+                        <ZonedPrice price={market} />
+                      )}
                     </span>
                     <span style={styles.rosterPriceLabel}>market</span>
                   </div>
@@ -662,6 +710,9 @@ function CorporationRoster({
               // so the controls that branch on one (the Brown-zone
               // multi-buy) see the same `null` the card displays.
               marketPrice={company.par_value === null ? null : market}
+              purchaseBlockFor={purchaseBlockFor}
+              saleBlockFor={saleBlockFor}
+              salePriceAfter={salePriceAfter}
               connectedAddress={connectedAddress}
               macroRoundNumber={macroRoundNumber}
               playerCash={playerCash}
@@ -723,6 +774,9 @@ function CompanyActions({
   parValue,
   onSelectParValue,
   onBuyShare,
+  purchaseBlockFor,
+  saleBlockFor,
+  salePriceAfter,
   onSellShares,
   controlsDisabled,
   controlsBlockedReason,
@@ -741,6 +795,18 @@ function CompanyActions({
   parValue: string;
   onSelectParValue: (companyId: number, value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
+  /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
+   *  `purchaseBlockFor` is -- the successor rule reads every player's holdings. */
+  saleBlockFor?: (companyId: number, percentage: number) => string | null;
+  /** Design note #713: where the token lands after selling this many certificates, or `null` when the
+   *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
+  salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  /** Design note #712: why this purchase is illegal, or `null`. Resolved by `App` against the whole board. */
+  purchaseBlockFor?: (
+    companyId: number,
+    source: "Ipo" | "Bank",
+    quantity: number,
+  ) => string | null;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
   /** Design note #681: why, when `controlsDisabled` is true. */
@@ -769,6 +835,16 @@ function CompanyActions({
       ? Math.max(1, Math.floor(company.bank_pool_percentage / 10))
       : 1;
   const effectiveQuantity = Math.min(Math.max(1, buyQuantity), multiBuyMax);
+
+  /* Design note #712: THE RULES THE CHART ALREADY DESCRIBED. The chart's own tooltips have told players for a
+     long time that the Orange zone lifts the 60% cap and that Yellow-and-up certificates are exempt from the
+     limit -- which implies both rules exist everywhere else, and neither was ever checked. The Buy button's
+     conditions were "is it your turn" and "can you afford it".
+     RESOLVED BY `App`, because the certificate limit needs the private roster and the room's size and this
+     panel is given neither. Asked with the source and quantity SELECTED HERE, since the answer depends on
+     both. */
+  const purchaseBlock =
+    purchaseBlockFor?.(company.company_id, source, multiBuyMax > 1 ? effectiveQuantity : 1) ?? null;
 
   /* Design note #35: the buy button always prices itself. The label only showed a price while unfloated,
      so the suffix vanished exactly when two sources appeared and a price mattered most.
@@ -850,7 +926,20 @@ function CompanyActions({
   const cannotAfford =
     playerCash != null && totalCost != null && totalCost > playerCash;
   const bankPoolPercent = company.bank_pool_percentage;
-  const selectedSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
+  /* Design note #713: THE SUCCESSOR RULE, WHICH THIS CONTROL NEVER ASKED ABOUT. `sellOptionState` checked
+     that the player held enough and that the pool had room, and would sell a presidency into nobody's hands.
+     `sellableHoldings` has computed the rule since #6 -- "some OTHER single player already holds enough to
+     take the certificate" -- and no sell control consulted it.
+     RESOLVED BY `App`, because the rule reads EVERY player's holdings and this card is handed only its own
+     company. The local `sellOptionState` still answers first: its two messages are about the bundle the
+     player just picked, and they are the ones a player hits most. */
+  const localSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
+  const saleBlock = saleBlockFor?.(company.company_id, sellPercentage) ?? null;
+  const selectedSellState: { enabled: boolean; reason?: string } = localSellState.enabled
+    ? saleBlock
+      ? { enabled: false, reason: saleBlock }
+      : localSellState
+    : localSellState;
 
   /* Design note #683: whether a treasury projection is attached beneath each action, hoisted because THREE
      things read it -- the block itself, and the two controls above it that square their bottom corners to meet
@@ -865,7 +954,8 @@ function CompanyActions({
     !sellingForbidden &&
     selectedSellState.enabled &&
     typeof playerCash === "number" &&
-    typeof unitPrice === "number";
+    // Design note #713: the SALE's price, which is the market's and not the buy toggle's.
+    typeof marketPrice === "number";
 
   /* Design note #417: outside a Stock Round there are no controls -- hidden, not disabled.
      #32 argued a disabled button beats a rejected transaction; the real choice is between a disabled
@@ -1014,16 +1104,23 @@ function CompanyActions({
                 ...styles.actionButton,
                 ...styles.buyButtonFill,
                 ...(showBuyProjection ? styles.attachedAbove : {}),
-                ...(controlsDisabled || cannotAfford ? styles.actionButtonDisabled : {}),
+                ...(controlsDisabled || cannotAfford || purchaseBlock
+                  ? styles.actionButtonDisabled
+                  : {}),
               }}
-              disabled={controlsDisabled || cannotAfford}
+              disabled={controlsDisabled || cannotAfford || purchaseBlock !== null}
               /* Design note #681: #466 got the LOOK right here and left the tooltip saying nothing
                  for every reason but affordability. Cost leads because it is the specific one; the
-                 shared reason answers the rest. */
+                 shared reason answers the rest.
+                 Design note #712: a RULE beats a price. "You cannot afford it" is advice to come back with
+                 more cash; "no player may hold more than 60%" is advice to do something else entirely, and a
+                 player told only the first would keep saving toward a purchase the rules forbid. */
               title={
-                cannotAfford
-                  ? `Insufficient funds — costs $${totalCost}, you hold $${playerCash}.`
-                  : (controlsBlockedReason ?? undefined)
+                purchaseBlock
+                  ? purchaseBlock
+                  : cannotAfford
+                    ? `Insufficient funds — costs $${totalCost}, you hold $${playerCash}.`
+                    : (controlsBlockedReason ?? undefined)
               }
             >
               {/* Design note #35: one computed label, so the price cannot
@@ -1193,7 +1290,7 @@ function CompanyActions({
             disabled={sellDisabled}
             title={
               sellingForbidden
-                ? "No selling in the first Stock Round — 1830 opens the market to sales from SR2 onward."
+                ? "No selling in the first Stock Round — Project 18XX opens the market to sales from SR2 onward."
                 : (controlsBlockedReason ?? undefined)
             }
           >
@@ -1209,14 +1306,53 @@ function CompanyActions({
          the only difference on screen is which way the arrow's colour goes. */}
       {showSellProjection && (
           <TreasuryProjectionBlock
+            /* Design note #713: AT THE MARKET PRICE, not `unitPrice`. `unitPrice` follows the IPO/Bank toggle
+               above -- a BUY control -- so with the toggle on its default "Ipo" a sale was quoted at the
+               corporation's PAR. Par is what the IPO charges; a sale always settles against the chart.
+               `saleProceeds` also states rule (i): every certificate in the bundle fetches today's price,
+               because the sale settles before the token moves. */
             projection={projectTreasury(
               playerCash as number,
-              (unitPrice as number) * (sellPercentage / 10),
+              saleProceeds(marketPrice as number, sellPercentage),
             )}
             seatColor={actingSeatColor}
             action="sale"
           />
       )}
+
+      {/* Design note #713: THE OTHER CONSEQUENCE. Reported: "we have the effect on the player's treasury
+          listed, but we don't list the effect on the stock price."
+          It is the more interesting of the two. Cash is a figure a player can add up in their head; where
+          the token lands is the reason they might not sell at all -- a drop through a zone boundary changes
+          what everyone at the table may buy (#712), and a drop off the bottom of a column is how a
+          corporation dies.
+          THE SAME GRAMMAR AS THE DIVIDEND MOVE LINE (#197): two zone-tinted prices and one arrow. A player
+          should read "what this does to the price" as one shape wherever they meet it, and the tint carries
+          the zone rule as a tooltip on both ends -- so a sale that drops a corporation INTO the Yellow zone
+          says so.
+          ONE ROW PER CERTIFICATE, walked by `projectShareSaleMove` through `salePriceAfter`. */}
+      {showSellProjection && salePriceAfter && (() => {
+        const after = salePriceAfter(company.company_id, certificatesIn(sellPercentage));
+        if (after === null || after === marketPrice) return null;
+        return (
+          <div style={styles.saleMarketMove}>
+            <span style={styles.saleMarketLabel}>Share price</span>
+            <ZonedPrice price={marketPrice} />
+            {/* Design note #713: DOWN, not right. The dividend line's arrow is horizontal because a
+                declaration moves the token one column left or right; a sale moves it one row DOWN per
+                certificate. Using the same glyph for both would flatten the one difference between them
+                that a player has to know. */}
+            <span
+              style={styles.saleMarketArrow}
+              role="img"
+              aria-label={`falls to $${after}`}
+            >
+              &#8595;
+            </span>
+            <ZonedPrice price={after} />
+          </div>
+        );
+      })()}
       </div>
 
     </div>

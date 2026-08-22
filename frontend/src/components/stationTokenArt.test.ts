@@ -37,9 +37,14 @@ import {
 import {
   SLOT_RING_RATIO,
   STATION_RADIUS_RATIO,
-  TOKEN_DOCK_INSET,
   tileCityTokenRadius,
 } from "./TileGraphics";
+
+/* Design note #699 retired `TOKEN_DOCK_INSET`, which this file used to reach for whenever it wanted "the
+   radius of a token that is smaller than a preprinted one". That is now a real catalog figure rather than an
+   arithmetic one: tile #62 is the only tile whose cities are BOTH shared, and it therefore draws the smallest
+   token the board has. Asking the catalog keeps this harness measuring the board rather than a formula. */
+const SHARED_CITY_RADIUS = tileCityTokenRadius(62, 40) as number;
 
 /** `drawStationTokenMarker`'s non-muted stroke width, as the source states
  *  it. Kept in one place here so every case below measures the same rule. */
@@ -74,7 +79,7 @@ describe("the ring is proportional to the token", () => {
   it("draws a THINNER ring on a docked token, not the same one", () => {
     // The bug, stated as a number. A docked token is smaller, so its collar
     // must be smaller; under the old absolute width it was not.
-    const docked = PREPRINTED_RADIUS * SLOT_RING_RATIO * TOKEN_DOCK_INSET;
+    const docked = SHARED_CITY_RADIUS;
     expect(docked).toBeLessThan(PREPRINTED_RADIUS);
     expect(ringWidth(docked)).toBeLessThan(ringWidth(PREPRINTED_RADIUS));
   });
@@ -84,7 +89,7 @@ describe("the ring is proportional to the token", () => {
        mattered rather than only that it changed. The old width on a docked
        token was a visibly larger share of that token than the same width on
        a preprinted one. */
-    const docked = PREPRINTED_RADIUS * SLOT_RING_RATIO * TOKEN_DOCK_INSET;
+    const docked = SHARED_CITY_RADIUS;
     const oldWidth = Math.max(2, HEX_SIZE * 0.05);
     const oldRatioOnDocked = oldWidth / docked;
     const oldRatioOnPreprinted = oldWidth / PREPRINTED_RADIUS;
@@ -95,27 +100,68 @@ describe("the ring is proportional to the token", () => {
 });
 
 describe("real docking radii from the tile catalog", () => {
-  /* Not a synthetic radius: these are the numbers `HexGridRenderer` passes
-     as `radiusOverride` for tiles actually on the board. A rule that is
-     proportional in the abstract and wrong for the catalog's own figures
-     would pass every test above. */
-  const CANDIDATES = [9, 20, 55, 57, 62];
+  /* Not a synthetic radius: these are the numbers `HexGridRenderer` passes as `radiusOverride` for tiles
+     actually on the board. A rule that is proportional in the abstract and wrong for the catalog's own
+     figures would pass every test above.
+     Design note #699 split this list, because the old one asserted every docked token was SMALLER than a
+     preprinted one -- which was true, and was the bug. */
 
-  it("produces a smaller radius than the preprinted fallback", () => {
-    const measured = CANDIDATES.map((id) => tileCityTokenRadius(id, HEX_SIZE)).filter(
-      (radius): radius is number => radius !== undefined,
-    );
-    expect(measured.length).toBeGreaterThan(0);
-    for (const radius of measured) {
-      expect(radius).toBeLessThan(PREPRINTED_RADIUS);
+  /** Cities that hold ONE token. Nothing about them is shared, so nothing about them should shrink. */
+  const UNSHARED: readonly [number, number][] = [
+    [57, 0], // yellow single city
+    [54, 0], // New York's green -- TWO one-slot cities, the reported case
+    [54, 1],
+    [64, 0], // brown OO, one slot each
+    [64, 1],
+  ];
+
+  /** Cities that hold two. These are the only tokens with a reason to be smaller. */
+  const SHARED: readonly [number, number][] = [
+    [63, 0], // one 2-slot city, alone on its tile
+    [62, 0], // two 2-slot cities -- the one tile whose pills genuinely crowd
+    [62, 1],
+  ];
+
+  const ALL = [...UNSHARED, ...SHARED];
+
+  it("draws an unshared city's token at the full preprinted radius", () => {
+    /* THE REPORT, as a number. "NNH shrinks on the green upgrade to G19 even though that is still a
+       single-station city" -- tile 54, city 0 or 1, which used to come back at 0.614 of this. */
+    for (const [tileId, cityIndex] of UNSHARED) {
+      expect(tileCityTokenRadius(tileId, HEX_SIZE, cityIndex)).toBeCloseTo(PREPRINTED_RADIUS, 6);
     }
+  });
+
+  it("shrinks a shared city's token exactly to the ring the pill draws it", () => {
+    /* `drawStationPill` strokes an inner ring per slot at `radius * SLOT_RING_RATIO`; the token fills it and
+       nothing further is subtracted. #62 takes the extra 0.85 on top because its two PILLS crowd -- the one
+       case the marker-count shrink was ever really about. */
+    expect(tileCityTokenRadius(63, HEX_SIZE, 0)).toBeCloseTo(PREPRINTED_RADIUS * SLOT_RING_RATIO, 6);
+    for (const cityIndex of [0, 1]) {
+      expect(tileCityTokenRadius(62, HEX_SIZE, cityIndex)).toBeCloseTo(
+        PREPRINTED_RADIUS * 0.85 * SLOT_RING_RATIO,
+        6,
+      );
+    }
+  });
+
+  it("never draws a shared city's token larger than an unshared one", () => {
+    /* The old rule ran BACKWARDS here: #63 is a genuine 2-slot city carrying one marker, so it escaped the
+       marker-count shrink and drew LARGER than #54's unshared city. This is the assertion that would have
+       caught it. */
+    const largestShared = Math.max(
+      ...SHARED.map(([id, city]) => tileCityTokenRadius(id, HEX_SIZE, city) as number),
+    );
+    const smallestUnshared = Math.min(
+      ...UNSHARED.map(([id, city]) => tileCityTokenRadius(id, HEX_SIZE, city) as number),
+    );
+    expect(largestShared).toBeLessThanOrEqual(smallestUnshared);
   });
 
   it("wears the same proportional collar as a preprinted token", () => {
     const reference = ringWidth(PREPRINTED_RADIUS) / PREPRINTED_RADIUS;
-    for (const id of CANDIDATES) {
-      const radius = tileCityTokenRadius(id, HEX_SIZE);
-      if (radius === undefined) continue;
+    for (const [tileId, cityIndex] of ALL) {
+      const radius = tileCityTokenRadius(tileId, HEX_SIZE, cityIndex) as number;
       expect(ringWidth(radius) / radius).toBeCloseTo(reference, 6);
     }
   });
@@ -125,19 +171,23 @@ describe("real docking radii from the tile catalog", () => {
     // reached at any radius the real board uses, or it becomes the absolute
     // width this note is about.
     const smallest = Math.min(
-      ...CANDIDATES.map((id) => tileCityTokenRadius(id, HEX_SIZE)).filter(
-        (radius): radius is number => radius !== undefined,
-      ),
+      ...ALL.map(([id, city]) => tileCityTokenRadius(id, HEX_SIZE, city) as number),
     );
     expect(ringWidth(smallest)).toBeGreaterThan(1);
+  });
+
+  it("returns undefined for a tile with no city at that index", () => {
+    expect(tileCityTokenRadius(55, HEX_SIZE, 0)).toBeUndefined(); // two towns, no city
+    expect(tileCityTokenRadius(57, HEX_SIZE, 1)).toBeUndefined(); // only one city
   });
 });
 
 describe("the ring colour is unchanged", () => {
   it("is still charcoal", () => {
-    // Design note #234 chose this against the white city circle underneath.
-    // #487 is about WIDTH only; a colour change here would be a different
-    // decision smuggled in with a geometry fix.
+    /* Design note #234 chose this against the white city circle underneath. #487 was about WIDTH only; a
+       colour change there would have been a different decision smuggled in with a geometry fix.
+       #699 raises the stakes rather than lowering them: with the collar gone, this stroke IS the token's
+       edge -- the only line between a brand-coloured disc and the tile under it. */
     expect(STATION_TOKEN_RING).toBe("#334155");
   });
 });

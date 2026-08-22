@@ -1139,12 +1139,43 @@ export const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: "12px",
+    /* Design note #705: WRAPS RATHER THAN OVERFLOWS. The row carries five things now (holder, share, and the
+       three-part money move) in half the panel's width, and the bar is `position: sticky` -- it narrows with
+       the viewport and cannot be scrolled sideways. A wrapped second line is legible; a clipped one is not. */
+    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: "4px 10px",
     fontSize: FONT_SIZE.small,
     color: "#c8cdd8",
   },
+  /* The percentage moved OUT of the amount and in beside the name. #705 put a three-part transition on the
+     right of this row, and a parenthetical share sitting inside it read as part of the arithmetic; beside the
+     holder it is what it always was -- a fact about who this is, not about the money. */
+  dividendHolder: {
+    whiteSpace: "nowrap",
+    // Design note #706: the treasury row carries a herald before its name, so the row is a flex line rather
+    // than bare text -- and the logo sits ON the baseline with the ticker rather than above it.
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+  },
   dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700 },
   dividendPct: { color: "#6f7480", fontWeight: 400 },
+  /* Design note #705: the money move, kept on one line of its own so the arrow never separates from the
+     figures it points between. Same vocabulary as `treasuryMove` deliberately -- the Pay column and the
+     Withhold column are two answers to one question and should not read as two designs. */
+  dividendMoveGroup: {
+    display: "inline-flex",
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: "4px",
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+    marginLeft: "auto",
+  },
+  /* Muted, like the departure figure it follows: the `+` is grammar, not a value. */
+  dividendPlus: { color: "#6f7480", fontWeight: 400 },
   dividendNote: { fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.4 },
   dividendMove: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#9ec5ff", marginTop: "4px" },
   /* Design note #214: the arrow is the one glyph in the line carrying a DIRECTION, so it takes the
@@ -1175,6 +1206,30 @@ export const styles: Record<string, React.CSSProperties> = {
      RAISES the treasury, so the figure that matters is the one after. */
   treasuryFrom: { color: "#9aa0ac" },
   treasuryTo: { color: "#7ee0a1", fontWeight: 800 },
+  /* Design note #713: the sale's market consequence, under the treasury block it accompanies. Sized and
+     spaced like `treasuryMove` deliberately -- a player reads one shape for "what this does to a number",
+     whichever number it is. The arrow is red and points the only way a sale ever moves a price. */
+  /* Design note #717: the armed state, in the same green the app uses for a thing that is working rather than
+     a thing that is urgent. Not a toggle switch: this is a button whose LABEL changes, so the state is legible
+     in a screenshot and to a screen reader without anybody having to interpret a colour. */
+  autoPassArmed: {
+    borderColor: "#3f7a55",
+    backgroundColor: "#1d4030",
+    color: "#e6f5ec",
+    fontWeight: 700,
+  },
+  saleMarketMove: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "center",
+    gap: "6px",
+    fontSize: FONT_SIZE.small,
+    fontVariantNumeric: "tabular-nums",
+    marginTop: "3px",
+  },
+  saleMarketLabel: { color: "#8a90a0", fontWeight: 400, marginRight: "2px" },
+  saleMarketArrow: { color: "#f87171", fontWeight: 900, fontSize: "1.15em", lineHeight: 1 },
   dividendMoveArrowUp: { color: "#4ade80" },
   dividendMoveArrowDown: { color: "#f87171" },
   /* Design note #489: a move that goes nowhere is neither a gain nor a loss.
@@ -1189,6 +1244,17 @@ export const styles: Record<string, React.CSSProperties> = {
      button at all -- a caption about an empty div, which is exactly what
      that note deleted. An empty centre column is now allowed to be empty. */
   orPanelNoActions: { fontSize: FONT_SIZE.small, color: "#6f7480", fontStyle: "italic" },
+  /* Design note #707: NOT `orPanelNoActions`. That is the Track step's "the action is on the map" hint --
+     muted and italic, which is right for orientation nobody was looking for. This line stands where a BUTTON
+     was, and a player hunting for Skip needs to find the sentence explaining its absence rather than read past
+     it. Upright, brighter, and no italic; still not an alert, because nothing has gone wrong. */
+  orPanelObligation: {
+    fontSize: FONT_SIZE.small,
+    color: "#c8cdd8",
+    fontWeight: 600,
+    maxWidth: "42ch",
+    lineHeight: 1.35,
+  },
   // ---- Operating Round Phase 4 hardware marketplace tray -- see design
   // note #10/item 2, upscaled alongside the rest of the action bar (design
   // note #12/item 5). ----

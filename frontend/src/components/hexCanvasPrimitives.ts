@@ -65,6 +65,10 @@ import {
   NEW_YORK_PRINTED_ARTWORK,
   PILL_SLOT_SPACING,
   SLOT_RING_RATIO,
+  STATION_RADIUS_RATIO,
+  markerSizeFor,
+  stationTokenRadius,
+  tileCityTokenRadius,
   TILE_GRAPHICS_CATALOG,
   printedMarkersFor,
   artworkPathsForEdge,
@@ -415,11 +419,12 @@ export function drawHardcodedTileArtwork(
   }
   ctx.restore();
 
-  // Markers, in board pixels, at their own explicit per-tile coordinates.
-  // A two-node tile shrinks its marker exactly as the old `cityGroups`
-  // branch did (`size * 0.85`), so a tile moving onto this renderer keeps
-  // the marker size players already know.
-  const markerSize = art.markers.length > 1 ? size * 0.85 : size;
+  /* Markers, in board pixels, at their own explicit per-tile coordinates.
+     Design note #699: the shared `markerSizeFor`, not a restated literal. This copy read
+     `art.markers.length > 1`, which shrank two ONE-SLOT cities for keeping each other company -- and the
+     token pass read its own copy of the same wrong rule, which is how NNH lost 39% of its radius on an
+     upgrade that shared nothing. */
+  const markerSize = markerSizeFor(art.markers, size);
   const points = tileMarkerPoints(tileId, orientation, center, size);
   art.markers.forEach((marker, index) => {
     const point = points[index];
@@ -1235,8 +1240,30 @@ export function drawRestrictionBadgeAt(
   drawLabelWithBackground(ctx, text, badgeCenter, { background: false });
 }
 
-/* Deliberately NOT a restriction badge: those are printed on the cardboard, permanent properties of the hex. A reservation is temporary game state, so it is drawn in its own key -- a gold padlock. The lock is DRAWN, not typed: an emoji is a colour glyph, a hollow outline or a tofu box depending on the platform. #364 removed the pill, which was the visual vocabulary of a button and set the oversized footprint.
-   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #364 */
+/* Deliberately NOT a restriction badge: those are printed on the cardboard, permanent properties of the hex.
+   This is temporary game state, so it is drawn in its own key. The mark is DRAWN, not typed: an emoji is a
+   colour glyph, a hollow outline or a tofu box depending on the platform. #364 removed the pill, which was the
+   visual vocabulary of a button and set the oversized footprint.
+   See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #364
+
+   Design note #714: A STAR, NOT A PADLOCK -- THE HEXES ARE NOT LOCKED.
+
+   REPORTED: "We placed locks on the DH (F16) and CSL (B20) hexes, but these hexes are actually not locked by
+   the private companies: any corporation can build on those hexes following the usual rules, it's only that
+   the owning corporations of DH or CSL get their special power."
+
+   THE GLYPH STATED THE OPPOSITE OF THE RULE. Both privates grant their owner a BONUS on their hex -- a free
+   tile lay, and for the D&H a free lay plus a station -- and neither stops anybody else building there under
+   the ordinary rules. A padlock is the one symbol that cannot mean "you get something extra here".
+
+   AND THE MODULE'S OWN NOTE BELIEVED IT: `privateReservations.ts` #0 justifies the badge because otherwise
+   "a player discovers the block by having a placement refused". There is no block to discover. The badge is
+   still worth having for the reason that note gives one clause earlier -- the power is stated in three places
+   and none of them is on screen while a president chooses where to lay track -- but it is an OPPORTUNITY the
+   owner should not miss, not a wall everyone else should avoid.
+
+   THE STAR IS FIVE-POINTED AND FILLED, at the same weight the padlock was: this is a swap of meaning, not of
+   prominence, and the mark's size and slot were settled by #364 against a real overflow bug. */
 export function drawReservationBadgeAt(
   ctx: CanvasRenderingContext2D,
   badgeCenter: { x: number; y: number },
@@ -1253,12 +1280,12 @@ export function drawReservationBadgeAt(
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
 
-  const lockW = fontPx * 0.62;
+  const markW = fontPx * 0.62;
   const gap = fontPx * 0.28;
   const textW = ctx.measureText(initials).width;
   // Centred on the point the caller gave us, so a slot direction puts the
   // whole mark where it was aimed rather than its left edge.
-  const startX = badgeCenter.x - (lockW + gap + textW) / 2;
+  const startX = badgeCenter.x - (markW + gap + textW) / 2;
 
   /* No plate. A dark halo under both the glyph and the text is what keeps
      them readable over yellow track, green cardboard or a red off-board --
@@ -1266,22 +1293,28 @@ export function drawReservationBadgeAt(
   ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
   ctx.shadowBlur = Math.max(2, 3 * scale);
 
-  // The padlock: shackle arc above a body rectangle.
-  const bodyH = fontPx * 0.55;
-  const bodyY = badgeCenter.y - bodyH * 0.1;
-  const shackleR = lockW * 0.3;
-  ctx.strokeStyle = "#f0d074";
-  ctx.lineWidth = Math.max(0.9, 1 * scale);
-  ctx.beginPath();
-  ctx.arc(startX + lockW / 2, bodyY, shackleR, Math.PI, 0);
-  ctx.stroke();
+  /* Design note #714: the five-pointed star, plotted rather than typed for the reason above. Ten vertices
+     alternating between an outer and an inner radius -- the standard construction, starting at the top so the
+     point sits upright at every scale. */
+  const outer = markW * 0.5;
+  const inner = outer * 0.42;
+  const cx = startX + markW / 2;
+  const cy = badgeCenter.y + fontPx * 0.05;
   ctx.fillStyle = "#f0d074";
   ctx.beginPath();
-  ctx.rect(startX + lockW * 0.12, bodyY, lockW * 0.76, bodyH);
+  for (let point = 0; point < 10; point += 1) {
+    const radius = point % 2 === 0 ? outer : inner;
+    const angle = -Math.PI / 2 + (point * Math.PI) / 5;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    if (point === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
   ctx.fill();
 
   ctx.fillStyle = "#f7ead0";
-  ctx.fillText(initials, startX + lockW + gap, badgeCenter.y + fontPx * 0.05);
+  ctx.fillText(initials, startX + markW + gap, badgeCenter.y + fontPx * 0.05);
   ctx.restore();
 }
 
@@ -1334,11 +1367,15 @@ export function drawLandmarkTrack(
   for (const path of paths) ctx.stroke(path);
   ctx.restore();
 
+  // Design note #699: third statement of the shrink, this one a bare literal. G19's two printed cities are
+  // both one-slot, so under the corrected rule they draw at full size -- and NNH's token no longer changes
+  // size when the green tile lands on top of them.
+  const printedMarkerSize = markerSizeFor(NEW_YORK_PRINTED_ARTWORK.markers, size);
   for (const marker of NEW_YORK_PRINTED_ARTWORK.markers) {
     drawStationCircle(
       ctx,
       { x: center.x + size * marker.at.x, y: center.y + size * marker.at.y },
-      size * 0.85,
+      printedMarkerSize,
     );
   }
   return true;
@@ -1456,8 +1493,42 @@ export function drawOOCityMarkers(
   size: number,
 ): void {
   const [node0, node1] = twoNodePositions(center, size);
-  drawStationCircle(ctx, node0, size * 0.75); // index 0: top-right
-  drawStationCircle(ctx, node1, size * 0.75); // index 1: bottom-left
+  /* Design note #699: FULL SIZE, was `size * 0.75` -- a fourth figure for the shrink, and the one furthest
+     from any geometry: these two nodes sit 1.0 hex apart, WIDER than the 0.866 of tile #54, and were drawn
+     smaller. It also left the token bigger than its own circle here, since the fallback radius was a flat
+     `size * 0.22` against a circle drawn at 0.165. Both circles now match every other unshared city. */
+  drawStationCircle(ctx, node0, size); // index 0: top-right
+  drawStationCircle(ctx, node1, size); // index 1: bottom-left
+}
+
+/** The radius a token drawn by `stationMarkerPoint`'s fallback should take.
+ *
+ *  Design note #699: THE POINT AND THE RADIUS ARE ONE QUESTION. Its sibling above resolves WHERE a token goes
+ *  on a hex the tile catalog cannot describe; every branch it walks also determines how big the circle it is
+ *  landing in was drawn. Answering only the first half is what left B&O's home token painting over the printed
+ *  circle underneath it while its second token sat neatly inside one. Branch for branch, in the same order. */
+export function stationMarkerRadius(
+  q: number,
+  r: number,
+  size: number,
+  laidTile?: MapTileEntry,
+  cityIndex?: number,
+): number | undefined {
+  if (laidTile) {
+    const radius = tileCityTokenRadius(laidTile.tile_id, size, cityIndex ?? 0);
+    if (radius !== undefined) return radius;
+  }
+
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  // The preprinted OO pair: two one-slot circles at the full marker size, as drawn just above.
+  if (hex && YELLOW_OO_HEXES.has(hex.label)) return size * STATION_RADIUS_RATIO;
+
+  const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+  const label = hex?.label ?? landmark?.label;
+  if (label === undefined) return undefined;
+
+  // `printedMarkersFor` already folds New York's exception in, so this needs no G19 branch of its own.
+  return stationTokenRadius(printedMarkersFor(label), cityIndex ?? 0, size);
 }
 
 /* ASK THE MARKER where the home slot is, rather than adding a second table of home city indices -- this codebase's recurring bug is exactly one fact in two places. NEAREST rather than an index handed across: the two functions compute in the same space by different routes.

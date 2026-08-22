@@ -14,6 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import {
+  STATION_RADIUS_RATIO,
   tileCityAnchors,
   tileCitySlotCounts,
   tileCitySlotPoints,
@@ -71,7 +72,12 @@ import {
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
 import type { PrivateCompanyState } from "../utils/gameState";
-import { cityIndexAtPoint, cityNodePoints } from "../utils/stationTokens";
+import {
+  cityIndexAtPoint,
+  cityNodePoints,
+  nextCitySlotPoint,
+  tokenCityBucket,
+} from "../utils/stationTokens";
 import {
   archetypeForHex,
   axialToPixel,
@@ -133,6 +139,7 @@ import {
   offboardNameplateLines,
   homeCityIndexAt,
   stationMarkerPoint,
+  stationMarkerRadius,
   withHexClip,
   type RouteOverlay,
 } from "./hexCanvasPrimitives";
@@ -394,13 +401,28 @@ const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
  *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #383 */
 export const HEX_TOOLTIP_DELAY_MS = 1200;
 
-/* The badge says a hex is spoken for; the tooltip says by whom. One short clause, APPENDED rather than substituted -- the hex's description is why the player hovered.
-   See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #366 */
+/* The badge says a hex carries a private's power; the tooltip says which power. APPENDED rather than
+   substituted -- the hex's description is why the player hovered.
+   See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #366
+
+   Design note #714: IT SAID "RESERVED BY", AND NOTHING IS RESERVED.
+   REPORTED: "these hexes are actually not locked by the private companies: any corporation can build on those
+   hexes following the usual rules, it's only that the owning corporations of DH or CSL get their special
+   power." "Reserved by DH" tells a president to build elsewhere, which is the opposite of true and is advice
+   they may act on -- F16 is Scranton and there are turns where laying it is the right move for anybody.
+   IT PRINTS THE POWER NOW, rather than paraphrasing it. `HexReservation.power` has carried the accurate
+   sentence all along ("its owner may lay a tile AND place a station here at no cost") and no surface showed
+   it; the badge invented a shorter, wrong one instead. */
 export function withReservationNote(
   description: string,
-  reservation: { initials: string } | null,
+  reservation: { initials: string; power?: string } | null,
 ): string {
-  return reservation ? `${description} — Reserved by ${reservation.initials}` : description;
+  if (!reservation) return description;
+  const clause = reservation.power
+    ? `${reservation.initials}: ${reservation.power}`
+    : // No power on record is still not a claim of exclusivity -- name the private and stop.
+      `${reservation.initials} has a special power here`;
+  return `${description} — ${clause}`;
 }
 
 export function HexGridRenderer({
@@ -919,13 +941,13 @@ export function HexGridRenderer({
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
         for (const [q, r] of company.station_token_hexes) {
-          // Design note #251: the bucket key must match the index the draw
-          // pass below resolves, or a company would be counted into one
-          // city's occupants and drawn from another's slot list.
-          const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
-          const cities = laid ? tileCitySlotCounts(laid.tile_id).length : 0;
-          const city = tokenCityIndex(company, q, r) ?? (cities === 1 ? 0 : 0);
-          const key = `${q},${r},${city}`;
+          /* Design note #251: the bucket key must match the index the draw pass below resolves, or a company
+             would be counted into one city's occupants and drawn from another's slot list.
+             Design note #698 moved the rule itself into `tokenCityBucket`, because the PREVIEW has to count
+             these same buckets to know which slot it is about to fill. The old expression here read
+             `?? (cities === 1 ? 0 : 0)`, both arms zero -- an unfinished thought that had already collapsed to
+             the fallback the helper now states plainly. */
+          const key = `${q},${r},${tokenCityBucket(company, q, r)}`;
           const bucket = occupantsByCity.get(key);
           if (bucket) bucket.push(company);
           else occupantsByCity.set(key, [company]);
@@ -946,10 +968,11 @@ export function HexGridRenderer({
           const tokenCenter = axialToPixel(q, r, hexSize);
 
           let point: { x: number; y: number } | undefined;
-          // Design note #151: the docking RADIUS, resolved from the same
-          // artwork the slot position comes from. Left `undefined` on the
-          // fallback path below, where there is no pill to dock into and
-          // the legacy `size * 0.22` is the correct answer.
+          /* Design note #151: the docking RADIUS, resolved from the same artwork the slot position comes
+             from. #699 rewrote the tail of that sentence: it used to be left `undefined` on the fallback path
+             "where there is no pill to dock into and the legacy `size * 0.22` is the correct answer". It was
+             not the correct answer -- a preprinted hex still draws a circle with a size, and 0.22 happened to
+             equal it on a single city and overflow it on an OO pair. `stationMarkerRadius` asks properly. */
           let dockRadius: number | undefined;
 
           /* The slot machinery was always right; what gated it was chainCity !== undefined. The original caution holds for a genuinely TWO-city tile, but a one-city tile's index is 0 and there is nothing to guess.
@@ -974,12 +997,19 @@ export function HexGridRenderer({
             // back empty the token falls through to the per-hex anchor
             // below, and a docking radius there would shrink a token that
             // is not docked in anything.
-            if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize);
+            // Design note #699: the CITY's radius, not the tile's -- a tile can carry a shared city beside an
+            // unshared one, and only the shared one owes the pill's inset.
+            if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize, resolvedCity);
           }
 
           // The city travels to the fallback too: on an UNLAID preprinted OO hex there is no artwork to anchor to, so without it a token in the north-east city was drawn in the south-west one.
           // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #459
           const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile, chainCity);
+          /* Design note #699: and the radius from the SAME branch that chose the point. Left undefined, the
+             fallback fell to a flat `size * 0.22` -- which on preprinted Baltimore is its circle's exact
+             radius, so a home token painted the circle out, and on a preprinted OO hex overflowed it. That
+             difference is the "border around the second station" report: not a style, just two radii. */
+          dockRadius = dockRadius ?? stationMarkerRadius(q, r, hexSize, laidTile, chainCity);
           withHexClip(ctx, tokenCenter, hexSize, () => {
             drawStationTokenMarker(
               ctx,
@@ -1503,9 +1533,11 @@ export function HexGridRenderer({
           /* The ring's radius comes from the TOKEN that will land there, not from hexSize -- on a laid multi-city tile the same ring drew a halo at twice the radius of the thing it was pointing at.
              See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #515 */
           const laidHere = mapGrid.tiles.find((tile) => tile.q === hex.q && tile.r === hex.r);
+          /* Design note #699: through the same resolver the token itself uses, so the ring cannot frame a
+             circle of one size around a token of another. The `?? hexSize * 0.22` tail is gone with it --
+             that literal WAS the mismatched fallback. */
           const slotRadius =
-            (laidHere ? tileCityTokenRadius(laidHere.tile_id, hexSize) : undefined) ??
-            hexSize * 0.22;
+            stationMarkerRadius(hex.q, hex.r, hexSize, laidHere) ?? hexSize * STATION_RADIUS_RATIO;
           // A thin band just outside the token: enough to read as a frame,
           // not enough to read as an orbit.
           const ringRadius = slotRadius * (1.28 + swell * 0.14);
@@ -1946,7 +1978,25 @@ export function HexGridRenderer({
       /* ONE CITY IS NOT AN AMBIGUOUS CITY. The centroid fallback is right when the geometry cannot say, and wrong when there is exactly one node. THE ANCHOR ONLY -- cityIndex still travels as null, because it answers a different question that other board modes read.
          See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #557 */
       const soleNode = nodes.length === 1 ? nodes[0] : undefined;
-      const chosenNode = (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
+      /* Design note #698: THE SLOT, THEN THE CITY, THEN THE CENTROID.
+         Reported: the Place Station preview sits "in the middle of the tile, though it moves to a correct
+         position after placement". It never moved -- the preview anchored HERE, to a city, and the placed
+         token docks into a SLOT (#134/#251). On a one-slot city those are the same point, which is why this
+         held for so long; on a pill the city's anchor is the gap BETWEEN the two circles a token can occupy.
+         `nextCitySlotPoint` answers the placement's question rather than the click's, so the ring opens on the
+         circle the token then appears in. The two fallbacks below are unchanged and still needed: a preprinted
+         OO hex has no artwork to dock into (#459), and a hex with no resolvable node has only its centroid. */
+      const slotPoint = nextCitySlotPoint(
+        mapGrid,
+        publicCompanies,
+        q,
+        r,
+        cityIndex,
+        centre,
+        hexSize,
+      );
+      const chosenNode =
+        slotPoint ?? (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
       const nodeX = chosenNode ? chosenNode.x * view.zoom + view.panX : centroidX;
       const nodeY = chosenNode ? chosenNode.y * view.zoom + view.panY : centroidY;
 
@@ -2111,6 +2161,9 @@ export function HexGridRenderer({
       // Gate 3 reads the laid tile out of mapGrid, so a stale closure would keep judging a hex by whatever was on it when the handler was built.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #141
       mapGrid,
+      /* Design note #698: the preview anchor counts the tokens already in the city, so a handler built before
+         the last placement would open the next ring on the slot that placement just took. */
+      publicCompanies,
       // Design note #125 dropped `currentEra` from here: the offline
       // fallback no longer filters by era, so the handler has nothing
       // era-dependent left to close over. Era browsing is now a view control
@@ -2496,10 +2549,27 @@ export function TilePreviewThumbnail({
       // Docked radius, so the marker sits inside the city circle the artwork
       // actually drew rather than at the legacy preprinted size. Same helper,
       // and therefore the same number, the board docks against.
-      const dockRadius = tileCityTokenRadius(tileId, hexSize);
+      // Design note #699: resolved per marker below, since two cities on one tile can want different radii.
+      /* Design note #698: THE SLOT, NOT THE PILL'S MIDDLE. Reported alongside the board preview and it is the
+         same fault: `tileCityAnchors` gives one point per CITY, and on a two-slot green city that point is
+         between the circles rather than in one. #488's note says this draws "from tileCityAnchors, the same
+         function that places the real token" -- which stopped being true at #134, when the board moved to
+         `tileCitySlotPoints`. This is the thumbnail catching up.
+         SLOTS ARE ASSIGNED BY ORDER WITHIN THE CITY, which is exactly what the draw pass does with its
+         occupant bucket -- so two tokens migrating into one city preview side by side instead of stacking. */
+      const slotCursor = new Map<number, number>();
       for (const marker of stationMarkers) {
-        const point = anchors[marker.cityIndex];
+        const used = slotCursor.get(marker.cityIndex) ?? 0;
+        slotCursor.set(marker.cityIndex, used + 1);
+        const slots = tileCitySlotPoints(tileId, marker.cityIndex, orientation, center, hexSize);
+        // Clamped, then the city anchor, then nothing -- #251's ladder: a token that cannot find its slot is
+        // better drawn on its city than not drawn, and a city that does not exist draws neither.
+        const point =
+          slots.length > 0
+            ? slots[Math.min(used, slots.length - 1)]
+            : anchors[marker.cityIndex];
         if (!point) continue;
+        const dockRadius = tileCityTokenRadius(tileId, hexSize, marker.cityIndex);
         /* The ticker is gated on MEASURED size: below a threshold an acronym becomes a smudge, and a smudge reads as a rendering fault where a plain disc reads as a decision.
            See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #488 */
         const radius = dockRadius ?? hexSize * 0.22;

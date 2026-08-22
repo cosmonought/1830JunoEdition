@@ -22,6 +22,7 @@ import {
   type OperatingSubPhase,
 } from "../components/OperatingSubPhaseStepper";
 import { depotInventory } from "./gamePhase";
+import { hasActedThisTurn } from "./turnAction";
 import { sandboxRouteBreakdown } from "./sandboxSession";
 import { stationTokenPrice } from "./stationTokens";
 
@@ -332,7 +333,12 @@ export function describeGameplayAction(
         ? `${actingActor(context)} passed ${step}.`
         : `${actingActor(context)} passed its turn.`;
     }
-    return `${actingPlayer(context)} passed the turn.`;
+    /* Design note #745: a turn the player already acted in is ENDED, not passed, and the log must say so --
+       it is the record players scroll back through to work out why a round closed when it did. The state
+       here is the one BEFORE the message applies, which is exactly when the flag is still set. */
+    return hasActedThisTurn(gameState ?? {})
+      ? `${actingPlayer(context)} ended the turn.`
+      : `${actingPlayer(context)} passed the turn.`;
   }
   if ("UndoLastAction" in msg) {
     /* Online the client does not know what it undid -- a live chain resolves undo a block or two later, so naming an action would be a guess printed as a fact.

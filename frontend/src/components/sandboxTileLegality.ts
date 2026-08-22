@@ -20,7 +20,7 @@
 // Design notes #3/#4/#6/#7/#483: see `docs/ai_architecture/hex_tile_math.md`.
 
 import { TILE_CATALOG_BY_ID, type TileColorTier, type TileCatalogEntry } from "./hexTileCatalog";
-import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardData";
+import { IMPASSABLE_BORDER_EDGES, LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardData";
 import {
   HEX_NEIGHBOR_OFFSETS,
   archetypeForHex,
@@ -386,6 +386,64 @@ function staysOnBoard(
   return true;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 756: THE FOUR BARRIERS WERE DRAWN AND NOT ENFORCED
+ * ==================================================================
+ *
+ * REPORTED: "On the Lay Track action, there are four impassable barriers on the map: it should not be legal
+ * to rotate a tile so that its tracks run into these barriers, in the same way they cannot run off the
+ * board."
+ *
+ * THE COMPARISON IS EXACT AND SO IS THE FIX. #7 is the off-board rule -- "TRACK CANNOT RUN OFF THE EDGE OF
+ * THE BOARD. Nothing in this filter had any notion of where the board ENDS" -- and this is the same absence
+ * one step in from the rim: a rail pointing at a barrier is track the corporation paid for that can never
+ * carry a train, offered beside legal rotations with nothing to tell them apart.
+ *
+ * THE DATA WAS ALREADY HERE, LABELLED AS DECORATION. `IMPASSABLE_BORDER_EDGES` calls itself "a drawing-only
+ * mirror of the backend's enforcement table", and it was telling the truth: `hexmap.rs` refuses these lays
+ * and the sandbox drew a line across the hex and allowed them. The familiar shape, arriving through a table
+ * that documented its own gap in its first six words.
+ *
+ * THE MIRROR IS DERIVED, NOT TRANSCRIBED. The drawing table lists each barrier ONCE, from one side; refusing
+ * a lay needs both sides, because the tile being rotated may sit on either. Rather than copy the Rust
+ * table's eight entries by hand -- a transcription with four chances to invert an edge index -- the second
+ * side is computed: the neighbour across edge `e` is blocked on edge `(e + 3) % 6`. The harness then checks
+ * the derived set against the contract's own list, so the arithmetic is verified rather than trusted. */
+const IMPASSABLE_EDGE_KEYS: ReadonlySet<string> = (() => {
+  const keys = new Set<string>();
+  for (const border of IMPASSABLE_BORDER_EDGES) {
+    keys.add(`${border.q},${border.r},${border.edge}`);
+    const offset = HEX_NEIGHBOR_OFFSETS[border.edge];
+    if (!offset) continue;
+    /* The opposite edge, which on a hex is three steps round. Stated as arithmetic rather than as a lookup
+       table because a six-entry table of "the other side of edge N" is a second place for the edge
+       numbering to be wrong. */
+    keys.add(`${border.q + offset[0]},${border.r + offset[1]},${(border.edge + 3) % 6}`);
+  }
+  return keys;
+})();
+
+/** Exported for the harness, which pins it against `hexmap.rs`'s `IMPASSABLE_HEX_EDGES`. */
+export function isImpassableEdge(q: number, r: number, edge: number): boolean {
+  return IMPASSABLE_EDGE_KEYS.has(`${q},${r},${edge}`);
+}
+
+/** Whether this tile, at this rotation, would put rail across one of the four barriers.
+ *
+ *  ONE-SIDED IS ENOUGH HERE, unlike `staysOnBoard`'s neighbour lookup: the set already contains both sides,
+ *  so asking about the hex being laid on answers for either direction of approach. */
+function crossesImpassableBorder(
+  q: number,
+  r: number,
+  entry: TileCatalogEntry,
+  orientation: number,
+): boolean {
+  for (const edge of liveEdges(rotateConnections(entry.connections, orientation))) {
+    if (isImpassableEdge(q, r, edge)) return true;
+  }
+  return false;
+}
+
 export function filterSandboxPlacements(
   placements: readonly LegalTilePlacement[],
   { mapGrid, q, r, era, networkHexes, networkPorts }: SandboxLegalityContext,
@@ -441,6 +499,11 @@ export function filterSandboxPlacements(
 
     // 4b. Design note #7: no rail pointing off the edge of the board.
     if (!staysOnBoard(q, r, entry, orientation)) return false;
+
+    /* 4c. Design note #756: and none pointing into one of the four impassable borders. Beside #7 rather than
+       folded into it, because the two rules answer different questions -- "is there a hex there" and "may
+       track cross into it" -- and a hex on the far side of a barrier is perfectly real. */
+    if (crossesImpassableBorder(q, r, entry, orientation)) return false;
 
     // 5. Path preservation, per orientation.
     if (existing && !preservesRouting(existing, laid?.orientation ?? 0, entry, orientation)) {

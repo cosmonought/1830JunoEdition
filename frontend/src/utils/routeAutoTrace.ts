@@ -27,11 +27,14 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
+// Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
+import { cityForArrival } from "./trackReach";
 import {
   neighbourAcross,
   segmentsTouchingEdge,
   traversalSegments,
   traversalsFrom,
+  type HexTraversal,
   type SegmentKey,
 } from "./trackSegments";
 
@@ -40,6 +43,14 @@ export interface TracedHex {
   q: number;
   r: number;
   hexLabel: string;
+  /** Design note #737: which authored way through this hex the route took. `undefined` and `0` both mean the
+   *  first, which is every hex on the board except Altoona. Carried so `routeSegments` can name the right
+   *  rail -- two trains taking H12's two different tracks hold different keys. */
+  variant?: number;
+  /** Design note #737: the route crossed this hex WITHOUT reaching its revenue centre.
+   *  Set at trace time, where the rail chain is known, and read by `sandboxRouteBreakdown`, where it is not.
+   *  A bypassed hex pays nothing AND costs no stop -- the second is what makes the bow worth taking. */
+  bypass?: boolean;
 }
 
 const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
@@ -251,7 +262,9 @@ export function routeSegments(
 
     if (entry !== null && exit !== null) {
       // A transit: the rails joining the two edges.
-      for (const key of traversalSegments(mapGrid, path[i].q, path[i].r, entry, exit) ?? []) {
+      // Design note #737: `variant` picks WHICH way through, so the bow and the through-run hold different keys.
+      for (const key of
+        traversalSegments(mapGrid, path[i].q, path[i].r, entry, exit, path[i].variant ?? 0) ?? []) {
         used.add(key);
       }
       continue;
@@ -282,6 +295,7 @@ function candidatePathsFrom(
   maxCentres: number,
   occupied: ReadonlySet<SegmentKey>,
   keep: number,
+  blocksThrough?: BlocksThrough,
 ): SearchResult[] {
   const found: SearchResult[] = [];
   let expansions = 0;
@@ -315,7 +329,8 @@ function candidatePathsFrom(
 
     const breakdown = sandboxRouteBreakdown(
       mapGrid,
-      path.map((point) => ({ hex: point.hexLabel })),
+      // Design note #737: the bypass flag travels into the pricing.
+      path.map((point) => ({ hex: point.hexLabel, bypass: point.bypass })),
       era,
     );
 
@@ -338,14 +353,53 @@ function candidatePathsFrom(
       segments.forEach((key) => {
         if (occupied.has(key)) clashes = true;
       });
-      if (!clashes) record({ path: [...path], revenue: breakdown.revenue, segments });
+      /* Design note #737: each point COPIED, not the array alone. The walk tags `at` with the variant it is
+         about to take and untags it on the way out, so a banked path holding the same object would have its
+         hex silently rewritten by a sibling branch. A shallow array copy was enough before there was anything
+         mutable on a point. */
+      if (!clashes) {
+        record({
+          path: path.map((point) => ({ ...point })),
+          revenue: breakdown.revenue,
+          segments,
+        });
+      }
     }
 
-    if (breakdown.centres < maxCentres && path.length < MAX_PATH_HEXES) {
+    /* ==================================================================
+     *  DESIGN NOTE 730: A TOKENED-OUT CITY IS A TERMINUS
+     * ==================================================================
+     *
+     * REPORTED: "a corporation's trains are running through tokened out cities when they should be blocked
+     * (i.e., the token out city must be treated as a terminus)."
+     *
+     * THE SAME DEFECT AS #729 AND THE SAME SHAPE OF FIX, in the other tracer. #729 taught the NETWORK walk
+     * about tokens; this is the ROUTE search, a separate DFS that also knew only about rails. They had to be
+     * fixed together or the board would have promised reach the router then refused -- which is worse than
+     * both being wrong, because a player would see a legal-looking hex and a route that would not run to it.
+     *
+     * "TERMINUS" IS EXACTLY RIGHT and it is why this goes HERE rather than at the top of `walk`. The recording
+     * block above has already run, so a path ending in this city is still offered and still priced; what is
+     * refused is going any further. Blocking on arrival instead would delete the legal run that stops there.
+     *
+     * NOT AT A START. `arrivalEdge === null` is the train sitting in its own city, and a corporation is never
+     * blocked by the city it holds -- `cityBlocking.ts` rule 2. */
+    const blockedHere =
+      arrivalEdge !== null && blocksThrough !== undefined
+        ? (() => {
+            const city = cityForArrival(mapGrid, at.q, at.r, arrivalEdge);
+            return city !== null && blocksThrough(at.q, at.r, city);
+          })()
+        : false;
+
+    if (!blockedHere && breakdown.centres < maxCentres && path.length < MAX_PATH_HEXES) {
       /* Design note #6: from a start, every rail on the hex is available --
          the train begins inside the city. Having arrived on a rail, only
          the exits that rail reaches. */
-      const exits =
+      /* Design note #737: typed as `HexTraversal[]` so the start branch and the transit branch are one shape.
+         Left as an inferred literal, the start's `{exitEdge, segments}` widened the union and the variant
+         fields became unreachable on both. */
+      const exits: HexTraversal[] =
         arrivalEdge === null
           ? liveEdgesForHex(mapGrid, at.q, at.r).map((exitEdge) => ({
               exitEdge,
@@ -363,9 +417,20 @@ function candidatePathsFrom(
         const hexLabel = labelFor(next.q, next.r);
         if (hexLabel === null) continue;
 
+        /* Design note #737: the variant belongs to THIS hex -- the one being crossed -- so it is recorded on
+           `at` for the duration of the branch and cleared after. `traversalsFrom` yields one entry per way
+           through, so two entries with the same `exitEdge` are the two arms of Altoona's fork. */
+        const previousVariant = at.variant;
+        const previousBypass = at.bypass;
+        if (transit.variant !== undefined) at.variant = transit.variant;
+        if (transit.bypass !== undefined) at.bypass = transit.bypass;
+
         for (const key of transit.segments) used.add(key);
         walk({ q: next.q, r: next.r, hexLabel }, next.arrivalEdge);
         for (const key of transit.segments) used.delete(key);
+
+        at.variant = previousVariant;
+        at.bypass = previousBypass;
 
         if (expansions >= MAX_EXPANSIONS) break;
       }
@@ -378,6 +443,10 @@ function candidatePathsFrom(
   walk(start, null);
   return found;
 }
+
+/** Design note #730: whether this corporation may run THROUGH city `cityIndex` on `(q, r)`. The rule is in
+ *  `cityBlocking.ts`; this is only its shape, named so the three signatures that take it cannot drift. */
+export type BlocksThrough = (q: number, r: number, cityIndex: number) => boolean;
 
 export interface AutoTraceInput {
   mapGrid: MapGridResponse;
@@ -397,6 +466,10 @@ export interface AutoTraceInput {
      Occupancy is per RAIL now -- `trackSegments.ts #3` for what a segment key is and why a hex id could not be
      one. */
   excludeSegments?: ReadonlySet<SegmentKey>;
+  /** Design note #730: cities this corporation may not run THROUGH -- see `cityBlocking.ts` #729. Injected
+   *  for the same reason the network walk's copy is: the slot counts and the token owners live in places this
+   *  module may not read. Omitted means no blocking, which reproduces every pre-#730 caller. */
+  blocksThrough?: BlocksThrough;
 }
 
 export interface AutoTraceResult {
@@ -427,7 +500,16 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
     if (hexLabel === null) continue;
     const token: TracedHex = { q, r, hexLabel };
 
-    const oneArm = candidatePathsFrom(mapGrid, era, token, cap, occupied, CANDIDATES_PER_TOKEN);
+      const oneArm = candidatePathsFrom(
+      mapGrid,
+      era,
+      token,
+      cap,
+      occupied,
+      CANDIDATES_PER_TOKEN,
+      // Design note #730: the search may not cross a city this corporation is shut out of.
+      input.blocksThrough,
+    );
     all.push(...oneArm);
 
     /* Design note #2: A ROUTE RUNS THROUGH A TOKEN far more often than it starts at one, so each arm is paired
@@ -438,7 +520,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       const barred = new Set<SegmentKey>();
       occupied.forEach((key) => barred.add(key));
       armA.segments.forEach((key) => barred.add(key));
-      const armsB = candidatePathsFrom(mapGrid, era, token, cap, barred, 2);
+      const armsB = candidatePathsFrom(mapGrid, era, token, cap, barred, 2, input.blocksThrough);
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
         const joined = [...armB.path.slice(1).reverse(), ...armA.path];
@@ -447,7 +529,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         if (seenHexes.size !== joined.length) continue;
         const breakdown = sandboxRouteBreakdown(
           mapGrid,
-          joined.map((point) => ({ hex: point.hexLabel })),
+          joined.map((point) => ({ hex: point.hexLabel, bypass: point.bypass })),
           era,
         );
         if (breakdown.centres > cap) continue;
@@ -516,6 +598,8 @@ export interface RouteSetInput {
   era: TileColorTier;
   startHexes: ReadonlyArray<readonly [number, number]>;
   trains: readonly RouteSetTrain[];
+  /** Design note #730: threaded to every train's search, so a corporation's whole draft respects the walls. */
+  blocksThrough?: BlocksThrough;
 }
 
 export interface RouteSetResult {
@@ -528,7 +612,7 @@ export interface RouteSetResult {
 }
 
 export function assignRouteSet(input: RouteSetInput): RouteSetResult {
-  const { mapGrid, era, startHexes, trains } = input;
+  const { mapGrid, era, startHexes, trains, blocksThrough } = input;
   if (startHexes.length === 0) {
     return { assignments: [], totalRevenue: 0, reason: NO_TOKEN_REASON };
   }
@@ -546,6 +630,8 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
       startHexes,
       maxRevenueCentres: train.maxRevenueCentres,
       excludeSegments: occupied,
+      // Design note #730: every train in the set walks the same walls.
+      blocksThrough,
     });
 
   /* STRATEGY A: sequential, in a given train order. This is the OLD algorithm, kept deliberately -- see design

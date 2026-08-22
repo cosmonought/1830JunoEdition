@@ -13,22 +13,29 @@
 
 import type {
   GameStateResponse,
-  PublicCompanyState,
   RoundType,
   TileColor,
   WaterfallMiniAuctionStatus,
   WaterfallPrivateStatus,
   WaterfallStateResponse,
 } from "./gameState";
+// Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
+import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
+// Design note #736: which arriving tier closes the private companies.
+import { closesPrivateCompanies } from "./depotSchedule";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
-import { archetypeForHex, hexRouteValue } from "../components/hexGeometry";
+import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
 import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
+import { hasActedThisTurn } from "./turnAction";
+import { roundEndSoldOutRises } from "./soldOutRise";
+import { shareSaleBlock } from "./shareSale";
+import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 import { stationTokenPrice } from "./stationTokens";
 // Design note #660: the B&O private's two rules, in one place.
 import { isSellableToCorporation, settleBaoPrivate } from "./baltimorePrivate";
@@ -46,7 +53,6 @@ import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
 // so the operating-order tie-break has a history to read.
 import { withArrival } from "./sandboxState";
 import {
-  HEX_START_VALUE_OVERRIDE,
   OFFBOARD_LABELS,
   OFFBOARD_REVENUE,
   STATIC_BOARD_HEXES,
@@ -143,6 +149,10 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
     ...state,
     active_player_index: (state.active_player_index + 1) % count,
     consecutive_passes: 0,
+    /* Design note #745: the flag is about THE TURN NOW IN PROGRESS, so it dies with the turn. Cleared in both
+       seat-moving functions rather than in the arms that call them -- an arm can be added, and the next one
+       will inherit this without its author knowing the flag exists. */
+    turn_action_taken: false,
   };
 }
 
@@ -318,6 +328,8 @@ function recordPass(state: GameStateResponse): GameStateResponse {
     ...state,
     active_player_index: (state.active_player_index + 1) % count,
     consecutive_passes: streak,
+    // Design note #745: this moves the seat too, so it clears the turn flag on the same rule as `advanceSeat`.
+    turn_action_taken: false,
   };
 
   if (streak < count) return advanced;
@@ -380,40 +392,22 @@ export function hexStopValue(
   hexLabel: string,
   era: TileColorTier,
 ): number {
-  // Off-board terminals first: their value RISES with the era, and
-  // `hexRouteValue` deliberately returns `null` for them precisely because
-  // that ladder is a different value system from the terrain one.
-  const offboard = OFFBOARD_LABELS[hexLabel];
-  if (offboard) {
-    const tiers = OFFBOARD_REVENUE[offboard];
-    if (tiers) return offboardValueForEra(tiers, era);
-  }
-
+  /* Design note #741: DELEGATED. This function used to hold the ladder -- chain revenue, then catalog revenue,
+     then the printed override, then the board's own answer -- and the hex TOOLTIP held a shorter one that
+     stopped at the terrain category. Reported as the tooltip not updating when a tile was laid.
+     The ladder moved down into `hexGeometry`, where every table it consults already lives and where the
+     tooltip can reach it: this file imports FROM `components/`, so the tooltip could never have imported from
+     here without a cycle. What is left is the label-to-coordinate lookup, which is this module's own concern.
+     ONE FUNCTION, ONE ANSWER -- the specific failure this codebase keeps finding, closed for hex values. */
   const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
-  if (!coords) return 0;
-
-  const laid = mapGrid.tiles.find((tile) => tile.q === coords.q && tile.r === coords.r);
-  if (laid) {
-    // The chain's own figure wins where there is one -- but only when it is
-    // an actual figure. A `"0"` is a plain connector, not a priced stop.
-    const chainValue = laid.revenue == null ? NaN : Number(laid.revenue);
-    if (Number.isFinite(chainValue) && chainValue > 0) return chainValue;
-    const entry = TILE_CATALOG_BY_ID.get(laid.tile_id);
-    if (typeof entry?.revenue === "number" && entry.revenue > 0) return entry.revenue;
+  if (!coords) {
+    /* An unknown label may still be an off-board terminal: those are keyed by NAME in `OFFBOARD_REVENUE` and
+       need no coordinates. Asked here rather than inside the ladder so the ladder can stay coordinate-based. */
+    const offboard = OFFBOARD_LABELS[hexLabel];
+    const tiers = offboard ? OFFBOARD_REVENUE[offboard] : undefined;
+    return tiers ? offboardValueForEra(tiers, era) : 0;
   }
-
-  // The hex's own printed exception (New York $40, Boston/Baltimore $30,
-  // Altoona's real $10), ahead of the flat terrain bucket below.
-  const printed = HEX_START_VALUE_OVERRIDE[hexLabel];
-  if (typeof printed === "number" && printed > 0) return printed;
-
-  // The board's own answer: a laid tile's terrain, a landmark, a gray hex's
-  // city/town marker, an OO pair. The single source this file no longer
-  // duplicates.
-  const boardValue = hexRouteValue(coords.q, coords.r, mapGrid);
-  if (typeof boardValue === "number" && boardValue > 0) return boardValue;
-
-  return 0;
+  return hexValueForEra(mapGrid, coords.q, coords.r, era);
 }
 
 /* An N-train visits N REVENUE CENTRES and may cross any amount of plain track. The old code compared against hop count, the classic 18xx misreading.
@@ -436,7 +430,7 @@ export interface SandboxRouteBreakdown {
 /** One walk, three figures -- see design note #156. */
 export function sandboxRouteBreakdown(
   mapGrid: MapGridResponse,
-  path: readonly { hex: string; city_node?: number }[],
+  path: readonly { hex: string; city_node?: number; bypass?: boolean }[],
   era: TileColorTier,
 ): SandboxRouteBreakdown {
   // Deduplicated by hex: 1830 prices a hex once per pass however many times
@@ -448,6 +442,32 @@ export function sandboxRouteBreakdown(
   for (const stop of path) {
     if (seen.has(stop.hex)) continue;
     seen.add(stop.hex);
+
+    /* ==================================================================
+     *  DESIGN NOTE 737: A BYPASS PAYS NOTHING AND COSTS NO STOP
+     * ==================================================================
+     *
+     * REPORTED of Altoona: "there seems to be no way to get a train to use the bypass around Altoona's measly
+     * $10 revenue center."
+     *
+     * THE ROUTER COULD NOT FIND IT AND THIS FUNCTION COULD NOT PRICE IT, and the second half is the one that
+     * made the first pointless to fix alone. Revenue was computed from a list of HEX LABELS: a route said
+     * which hexes it touched and nothing about HOW, so a train crossing H12 on the bow was indistinguishable
+     * from one stopping at the station. The bypass was not merely unrouted, it was inexpressible.
+     *
+     * `variant` IS THAT MISSING WORD. It names which authored rail chain the route took through this hex, and
+     * a chain that never reaches the marker earns nothing there -- which is the entire point of the bow on
+     * cardboard.
+     *
+     * AND IT COSTS NO STOP EITHER, which matters more than the $10: a 2-train that had to spend one of its two
+     * stops on Altoona could not reach past it. Skipping the `stops.push` below is what makes the bypass worth
+     * having. */
+    /* A FLAG, NOT A RE-DERIVATION. The first draft of this tried to recover the rail chain from the hex label
+       here, and could not: a stop knows WHICH hex, never which edges the route entered and left by. The tracer
+       does know -- it chose the variant -- so the answer travels with the stop. Recomputing a fact at a point
+       that has lost the inputs is how a second, disagreeing answer gets invented. */
+    if (stop.bypass === true) continue;
+
     revenue += hexStopValue(mapGrid, stop.hex, era);
     /* Count the ARCHETYPE, not the value: fourteen printed cities and seven towns pay $0 until a tile is laid, and a $0 city still costs a train a stop.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #289 */
@@ -488,7 +508,22 @@ export interface SandboxActionContext {
    *  for the operating-order tie-break. Travels beside the price for the same
    *  reason the price does -- the chart is a separate atom the reducer must
    *  not reach into. */
-  marketMarkFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined;
+  /* Design note #746a: WIDENED TO THE WHOLE MARK. It was declared `{x, y, enteredAt?}` while every caller
+     already returned a `SandboxMarketMark` -- the `price` was being passed and thrown away by the type. The
+     sold-out rise needs it, to report what a token rose FROM. */
+  marketMarkFor?: (companyId: number) => SandboxMarketMark | null | undefined;
+  /** Design note #746a: `projectRiseMove`, injected on #7's rule -- `utils/` may not import the chart, and
+   *  the chart is where the cells live. Absent means no rise is computed, which is the honest answer for a
+   *  caller with no market. */
+  projectRise?: (
+    from: SandboxMarketMark,
+  ) => { x: number; y: number; price: number } | null | undefined;
+  /** Design note #757: whether this tile at this rotation is an ILLEGAL placement, injected on #7's rule --
+   *  the legality engine lives in `components/` and `utils/` may not import it.
+   *
+   *  Absent means "no opinion", which is the honest answer for a caller with no board rules to hand and the
+   *  reason this cannot make an existing test stricter by accident. */
+  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean;
   /** Share price injected for the same reason (#272). Omitted falls back to the flat nominal.
    *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #273 */
   sharePrice?: number;
@@ -644,7 +679,59 @@ export function applyPhaseChange(
     return { ...company, owned_trains: fleet };
   });
 
-  return changed ? { ...state, public_companies: companies } : state;
+  /* ==================================================================
+   *  DESIGN NOTE 736: PHASE 5 CLOSES THE PRIVATES, IN CODE
+   * ==================================================================
+   *
+   * REPORTED: "a 5-train has been purchased, but ... the private companies are still displayed (and counting
+   * toward certificates) ... moreover, the private companies are still paying out to players. We need to
+   * enforce the closure in code, not just design diary notes."
+   *
+   * TEN READERS, NO WRITER. `closed` is consulted correctly all over this codebase -- `applyPrivateRevenue`
+   * skips a closed private, `PrivateTradePanel` hides it, `PrivatePowerPanel` greys it, `activeReservations`
+   * drops its hex badge -- and not one line anywhere ever set it. The rule lived in a caption and a schedule
+   * entry, which is exactly the failure this project keeps finding, in its purest form yet: every consumer
+   * right, the producer missing.
+   *
+   * HERE, BECAUSE THIS IS WHERE THE PHASE TURNS. The alternative was a `BuyHardwareFromPool` arm, and it would
+   * have been wrong twice over -- `EmergencyBuyHardware` buys trains too, and a phase reached by any other
+   * route would skip the closure. `applyPhaseChange` is called for the arriving tier however it arrived, and
+   * it already owns the other two consequences of a phase turning (rust, then trim). Closure is the third.
+   *
+   * IDEMPOTENT, which matters because the Undo path replays the whole log: closing an already-closed private
+   * changes nothing, so a rebuild produces the same state as the play did. */
+  const closesPrivates = closesPrivateCompanies(arrivingTier);
+  const privates = closesPrivates
+    ? state.private_companies.map((priv) => (priv.closed ? priv : { ...priv, closed: true }))
+    : state.private_companies;
+  const privatesChanged =
+    closesPrivates && privates.some((priv, at) => priv !== state.private_companies[at]);
+
+  if (!changed && !privatesChanged) return state;
+  return {
+    ...state,
+    ...(changed ? { public_companies: companies } : {}),
+    ...(privatesChanged ? { private_companies: privates } : {}),
+  };
+}
+
+/** Every private company closed by the arriving tier, for the Activity Log.
+ *
+ *  Design note #736: SAID OUT LOUD. A player's income silently dropping is the kind of change that reads as a
+ *  bug -- and this one takes a certificate off their limit too, which they will notice three turns later and
+ *  misattribute. Named separately from the closure so `applyPhaseChange` stays a pure state function and the
+ *  shell does the narrating, per #400/#685. */
+export function describePrivateClosures(
+  before: GameStateResponse,
+  after: GameStateResponse,
+): string[] {
+  const names: string[] = [];
+  for (const priv of after.private_companies) {
+    if (!priv.closed) continue;
+    const was = before.private_companies.find((entry) => entry.private_id === priv.private_id);
+    if (was && !was.closed) names.push(priv.name);
+  }
+  return names;
 }
 
 /** What one corporation lost when the phase turned. */
@@ -1233,6 +1320,13 @@ export interface SandboxMarketContext {
     from: SandboxMarketMark,
     choice: "pay" | "withhold",
   ) => SandboxMarketMark | null;
+  /** Design note #748a: the sale legality rule, so the CHART refuses what the BOARD refuses.
+   *
+   *  This atom advances BEFORE the game state (#272/#273), so without it an illegal sale that the reducer
+   *  declines still walks the token down. The board and the chart would then disagree permanently, and the
+   *  visible symptom is a price drop with no matching change in anybody's holdings -- which reads as a market
+   *  bug rather than as a refused action. */
+  saleRefused?: (companyId: number, percentage: number) => boolean;
 }
 
 export function applySandboxMarketAction(
@@ -1256,6 +1350,8 @@ export function applySandboxMarketAction(
 
   if ("SellStock" in msg) {
     const { protocol_id, percentage } = msg.SellStock;
+    // Design note #748a: a sale the reducer will decline moves no token either.
+    if (ctx?.saleRefused?.(protocol_id, percentage) === true) return unchanged;
     const blocks = Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
     const mark = prices[protocol_id] ?? null;
     const proceeds = priceOf(protocol_id) * blocks;
@@ -1315,6 +1411,40 @@ export function applySandboxAction(
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
+  /* ==================================================================
+   *  DESIGN NOTE 757: THE LAY HAD NO AUTHORITY EITHER
+   * ==================================================================
+   *
+   * #756 closed the button on a rotation that crosses an impassable border, and I said at the time that it
+   * closed the button and not the door: the reducer applied whatever `LayTile` it was handed. This is the
+   * door.
+   *
+   * IT IS THE SAME GAP #748 FOUND ON THE SELL SIDE, and the same one #712 had already closed for buys. Every
+   * placement rule in this game -- the colour step, centre preservation, path preservation, the board's rim,
+   * the four barriers -- lived in a filter that decides which chips the radial selector OFFERS. A message
+   * built by hand, replayed from a stale tab, or dispatched by any second control written later went
+   * straight through.
+   *
+   * GATED HERE RATHER THAN IN THE ARM, because a lay touches three things: the terrain fee in `applyOneAction`,
+   * the sub-phase cursor in `settleOperatingCursor`, and the tile grid, which is a separate atom the shell
+   * owns. Refusing in the arm alone would have charged the fee and advanced the step for a tile that was
+   * never placed -- the cross-atom split #748a had to solve for the market chart, arriving again.
+   *
+   * THE SHELL APPLIES THE SAME PREDICATE TO THE GRID, so one answer governs all three.
+   *
+   * CONNECTIVITY IS DELIBERATELY NOT PART OF IT, and this is the interesting scope decision. The D&H and the
+   * C&SL both lay track that legally ignores network connectivity (#725/#726), and this message carries no
+   * indication of which power is in play -- so a reducer that enforced connectivity would refuse two real
+   * abilities. What it enforces is the set of rules that are facts about the BOARD rather than about whose
+   * turn it is, which is exactly the set a hand-built message could otherwise abuse.
+   *
+   * A REFUSAL RETURNS THE STATE UNCHANGED, on #712's reasoning: a replay must not halt on an entry the log
+   * already contains. */
+  if ("LayTile" in msg && ctx?.layRefused) {
+    const { q, r, tile_id, orientation } = msg.LayTile;
+    if (ctx.layRefused(q, r, tile_id, orientation)) return state;
+  }
+
   return settleOperatingCursor(
     state,
     /* Design note #660: the B&O private closes the moment the B&O
@@ -1412,10 +1542,35 @@ function settleRoundTransitions(
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   if (state.stock_round_just_ended) {
+    /* ==================================================================
+     *  DESIGN NOTE 746a: THE RISE HAPPENS BEFORE THE QUEUE IS ORDERED
+     * ==================================================================
+     *
+     * The operating order sorts floated corporations by market price, and the sold-out rise is an end-of-
+     * Stock-Round event -- so a corporation that rises past a rival must operate ahead of it in the very next
+     * Operating Round. Applying the rise in the shell after this transition would have built the queue on
+     * pre-rise prices and got that ordering wrong for one round, every time.
+     *
+     * SO THE OVERLAY, rather than a second `buildOperatingOrder` call afterwards. #642 is the reason it is not
+     * done in the shell: "the round machine belongs to the reducer. The shell used to perform transitions, so
+     * a replay rebuilt corporations correctly and left the round wherever the last live dispatch had put it."
+     * A rise that reordered the queue from outside would be that mistake with a new name.
+     *
+     * THE SHELL STILL COMMITS THE MOVE to the market atom, because that atom is not part of
+     * `GameStateResponse` -- it derives the rises from the same pure function with the same injected
+     * traversal, so the queue and the chart cannot disagree about where a token landed. */
+    const rises = roundEndSoldOutRises(state, ctx?.marketMarkFor, ctx?.projectRise);
+    const risenPrice = new Map(rises.map((rise) => [rise.companyId, rise.to]));
+    const risenMark = new Map(rises.map((rise) => [rise.companyId, { x: rise.x, y: rise.y }]));
+
     /* The queue is built here; leaving it to the caller is what produced an OR with an empty order that advanceCorporation then "recovered" back to 1.1.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
     const opened = {
-      ...beginOperatingRound(state, ctx?.marketPriceFor, ctx?.marketMarkFor),
+      ...beginOperatingRound(
+        state,
+        (companyId) => risenPrice.get(companyId) ?? ctx?.marketPriceFor?.(companyId) ?? null,
+        (companyId) => risenMark.get(companyId) ?? ctx?.marketMarkFor?.(companyId) ?? null,
+      ),
       stock_round_just_ended: false,
     };
     /* Design note #685: THE PRIVATES ARE PAID HERE, BY THE REDUCER.
@@ -1454,6 +1609,16 @@ function settleRoundTransitions(
       sub_round_index: 0,
       consecutive_passes: 0,
       last_trader_index: null,
+      /* Design note #744: THE LOCKOUT ENDS HERE, and this is the only event that ends it. A player who sold
+         PRR last round may buy it again now -- the rule bars a sell-then-rebuy within ONE Stock Round, which
+         is the window in which the price crater they made is still there to exploit.
+         Cleared rather than aged: "which round was this sale in" would be a second fact to keep in step with
+         `macro_round_number`, and the round opening is exactly when the answer changes. */
+      sold_this_round: {},
+      /* Design note #745: and the turn flag, because the seat below is being MOVED without going through
+         either seat-moving function. A stale `true` here would let the Priority Deal holder's opening Pass
+         slip out of the streak, so the round could not reach its own termination condition. */
+      turn_action_taken: false,
       // The Priority Deal holder opens the Stock Round -- design note #353,
       // and the whole point of holding it.
       active_player_index: state.priority_deal_index,
@@ -1481,9 +1646,14 @@ function applyOneAction(
   // Passing means two things: a player declining a seat-driven turn, or a CORPORATION ending its OR turn. Treating both as a seat advance strands the OR on its first company.
   // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
   if ("PassTurn" in msg) {
-    return state.current_round_type === "OperatingRound"
-      ? advanceCorporation(state, ctx?.marketPriceFor, ctx?.marketMarkFor)
-      : recordPass(state);
+    if (state.current_round_type === "OperatingRound") {
+      return advanceCorporation(state, ctx?.marketPriceFor, ctx?.marketMarkFor);
+    }
+    /* Design note #745: ENDING A TURN IS NOT PASSING IT. A player who has already sold this turn is pressing
+       this button to finish, not to decline -- selling is an action, and 1830 guarantees anyone who acts
+       another opportunity before the round closes. `advanceSeat` moves the seat and leaves the streak at
+       zero; `recordPass` moves it and counts. One message, two meanings, and the flag says which. */
+    return hasActedThisTurn(state) ? advanceSeat(state) : recordPass(state);
   }
 
   if ("WaterfallPass" in msg) {
@@ -1616,6 +1786,42 @@ function applyOneAction(
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #273
     const { protocol_id, percentage } = msg.SellStock;
     const sold = Math.max(SANDBOX_SHARE_PERCENTAGE, Math.round(percentage));
+
+    /* ==================================================================
+     *  DESIGN NOTE 748: THE SELL SIDE HAD NO AUTHORITY AT ALL
+     * ==================================================================
+     *
+     * REPORTED: "P1 had a 10% share and P2 had a 50% share including the 1 President's certificate. P1 sold
+     * their 10% share and P2 was then able to sell 40%: this respected the 50% bank pool limit, but it did not
+     * respect the rule that a President's certificate can never be sold."
+     *
+     * `shareSaleBlock` REFUSES THAT SALE, AND HAS SINCE #713. Run against the reported board it returns
+     * "Selling 40% would leave you under the 20% President's Certificate, and no other player holds 20% to
+     * take it." The rule was right, the message was right, and nothing in the reducer ever asked.
+     *
+     * ONE CALLER, AND IT WAS THE PANEL. `shareSaleBlock` had exactly one call site -- `App.saleBlockFor`,
+     * feeding a disabled state on the Stock Round card. So the rule was advice on one screen while the log
+     * accepted anything: a stale tab, a replay, a hand-built message, or any second sell control written
+     * later all went straight through. #736's phrasing fits it exactly -- readers with no writer.
+     *
+     * WHAT MAKES THIS ONE POINTED is that #712 fixed precisely this for the BUY side twenty lines above, and
+     * #744 got its enforcement for free BECAUSE that work had been done -- "the reducer already routed buys
+     * through `sharePurchaseBlock`, so adding the rule there closed both at once". The sell side never got the
+     * same treatment, and nothing on screen distinguished the two.
+     *
+     * A REFUSAL RETURNS THE STATE UNCHANGED, on #712's reasoning: a replay must not halt on an entry the log
+     * already contains, and an illegal sale that somehow got written is best treated as a move that did
+     * nothing. */
+    if (actor) {
+      const refused = shareSaleBlock({
+        state,
+        seller: actor,
+        companyId: protocol_id,
+        percentage: sold,
+      });
+      if (refused !== null) return state;
+    }
+
     const takings = ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE;
 
     const proceeds = actor ? adjustCash(state, actor, takings) : state;
@@ -1628,10 +1834,29 @@ function applyOneAction(
     );
     // A sale moves the crown too -- selling below another holder hands them the presidency. Same function as the buy, so the two cannot disagree.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #596
-    return markTrader(
-      { ...settlePresidencies(returned).state, consecutive_passes: 0 },
+    /* Design note #744: AND IT LOCKS THE BUY-BACK. Reported: a player sold and then bought the same
+       corporation in the same Stock Round, which is how a stock price is crated and restocked at the bottom.
+       Recorded on the SALE rather than checked at the buy, because the buy cannot see backwards: the log has
+       the sale, but a reducer arm sees only its own message. The record is the memory. */
+    /* Design note #745: AND IT COUNTS AS THIS TURN'S ACTION. `consecutive_passes: 0` below already broke the
+       streak, but the seat does not move on a sale -- the player may still buy -- so the Pass that finishes
+       the turn was putting the streak straight back to one and erasing the sale. The flag is what survives
+       between the two messages. Set here rather than in `moveShares` because a sale is the only Stock Round
+       action that leaves the seat where it is; every other one ends the turn itself. */
+    const settled = markTrader(
+      { ...settlePresidencies(returned).state, consecutive_passes: 0, turn_action_taken: true },
       actor,
     );
+    if (!actor) return settled;
+    const already = settled.sold_this_round?.[actor] ?? [];
+    if (already.includes(protocol_id)) return settled;
+    return {
+      ...settled,
+      sold_this_round: {
+        ...(settled.sold_this_round ?? {}),
+        [actor]: [...already, protocol_id],
+      },
+    };
   }
 
   if (
@@ -1650,8 +1875,21 @@ function applyOneAction(
   if ("LayTile" in msg) {
     /* The GROUND costs money, not the tile: $0 clear, $80 river, $120 mountain, by coordinate. The flat $20 was a placeholder the renderer had been contradicting on screen.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #432 */
+    /* Design note #723: AND IT IS PAID ONCE. Reported twice -- "it is wrong to keep charging the terrain cost
+       for every lay track action on a terrain hex". This arm charged unconditionally and always had; the rule
+       existed only in `pendingTileCost` (#673), which is the figure the player is SHOWN. So an upgrade over a
+       river previewed as free and debited $80, and the only surface anybody could check was the one telling
+       them it was fine.
+       THE SET LIVES IN STATE, not on the tile grid -- `terrainFee.ts` #723 has the reasoning, and it is about
+       replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
+       here would be right live and wrong on every rebuild. */
     const { protocol_id, q, r } = msg.LayTile;
-    return adjustTreasury(state, protocol_id, -terrainBuildFeeAt(q, r));
+    const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
+    const recorded: GameStateResponse = {
+      ...state,
+      terrain_fees_paid: withTerrainPaid(state.terrain_fees_paid, q, r, fee),
+    };
+    return fee > 0 ? adjustTreasury(recorded, protocol_id, -fee) : recorded;
   }
 
   if ("BuyHardwareFromPool" in msg) {
@@ -1804,16 +2042,53 @@ function applyOneAction(
        treasury, bank pool to the bank" -- the two pools the wrong way round, stated plainly, for as long as
        this branch has existed. 1830: "Shares in the bank pool pay dividends to the corporate treasury. No
        payments are made for unsold initial offering shares." */
-    const { protocol_id, revenue_amount, distribute } = msg.DeclareDividends;
+    const { protocol_id, distribute } = msg.DeclareDividends;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
-    const stated = Number(revenue_amount);
-    // The caller's figure wins when it is a real one; otherwise fall back to
-    // what the corporation's last run actually recorded. A payout of nothing
-    // is not an error, it is simply nothing to move.
-    const revenue =
-      Number.isFinite(stated) && stated > 0
-        ? stated
-        : Number(company?.last_route_revenue ?? 0) || 0;
+
+    /* ==================================================================
+     *  DESIGN NOTE 752: THE PHANTOM $1000, AND IT WAS A DECLARED ZERO
+     * ==================================================================
+     *
+     * REPORTED: "a corporation's trains rusted with $500 in its treasury and the cheapest next train was
+     * $630. On its turn it laid track and then was auto-skipped to Buy Trains, where it miraculously suddenly
+     * had $1500 to make the purchase. This amount did not come from the player's cash."
+     *
+     * MY FIRST GUESS WAS RE-CAPITALISATION, ten times par. REPORTED BACK: "it definitely isn't
+     * recapitalization: the company was pared at 72, so I don't know where the $1000 came from." $72 x 10 is
+     * $720, which killed it outright -- and the instrument (#750) was already the right call, because the
+     * actual writer is three lines below this one.
+     *
+     * THE CONDITION READ `stated > 0`, so a DECLARED ZERO fell through to the fallback. A trainless
+     * corporation is auto-skipped past Routes and the game declares a forced $0 withhold on its behalf
+     * (#668). The shell computes that zero correctly -- `dividendDeclaration` exists for exactly this and
+     * #484 says so: "a skipped Routes step declares $0, not last turn's revenue". It then sends
+     * `revenue_amount: "0"`, and this line threw it away and reached for `last_route_revenue` instead: the
+     * figure from the last Operating Round the corporation actually ran, before its trains rusted. A withhold
+     * credits the treasury, so the bank paid out $1000 for a run that did not happen.
+     *
+     * SO #486 WAS FIXED IN THE SHELL AND UNDONE HERE. Its own opening sentence describes this bug --
+     * "the dispatch read `last_route_revenue` straight off the corporation -- a PREVIOUS turn's figure for a
+     * corporation that skipped Routes, so a forced $0 withhold could move real money for a run that did not
+     * happen" -- and the reducer's fallback quietly reinstated it for every client that replays the log. The
+     * project's recurring shape once more: a rule corrected at one surface and left standing in the
+     * authority.
+     *
+     * ABSENT IS NOT ZERO. The fallback still exists, because a message written before `revenue_amount` was
+     * carried has no figure at all and guessing zero for those would silently cancel real dividends. What
+     * changed is that an explicit `"0"` is now a FIGURE rather than a missing one. */
+    const rawAmount = msg.DeclareDividends.revenue_amount;
+    const stated =
+      rawAmount === undefined || rawAmount === null || rawAmount === ""
+        ? NaN
+        : Number(rawAmount);
+
+    /* AND A TRAINLESS CORPORATION HAS NO LAST RUN. The belt to the fix above: even where the fallback is
+       legitimately reached, a corporation that owns no trains cannot have run this turn, so its stored figure
+       is a fact about some earlier Operating Round and must not move money now. */
+    const ownsTrain = (company?.owned_trains?.length ?? 0) > 0;
+    const remembered = ownsTrain ? Number(company?.last_route_revenue ?? 0) || 0 : 0;
+
+    const revenue = Number.isFinite(stated) ? Math.max(0, stated) : remembered;
     if (revenue <= 0 || !company) return state;
 
     if (!distribute) {
@@ -1893,16 +2168,12 @@ export function isSeatDrivenRound(phase: RoundType): boolean {
 }
 
 /* Floating is a threshold with a bookkeeping consequence, so it belongs here. #376: full capitalisation is ten times par, paid BY THE BANK -- that money already went in on the share purchases.
-   See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #363 */
-export const FLOAT_THRESHOLD_PERCENT = 60;
-
-/** Design note #376: full capitalisation pays ten times par. */
-export const FULL_CAPITALISATION_MULTIPLE = 10;
-
-/** How much of `company` sits in players' hands. */
-function soldToPlayersPercent(company: PublicCompanyState): number {
-  return company.player_holdings.reduce((sum, entry) => sum + entry.percentage, 0);
-}
+   See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #363
+   Design note #749: THE CONSTANT AND THE MEASURE MOVED TO `floatThreshold.ts`. They are re-exported so every
+   existing importer keeps working, but the arithmetic now lives in one place -- the local
+   `soldToPlayersPercent` here and a same-named one in `StockRoundPanel` computed the same wrong quantity two
+   different ways, and each read as obviously correct on its own. */
+export { FLOAT_THRESHOLD_PERCENT, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 
 /** Floats every corporation over the threshold. Returns the SAME state when nothing changed so callers can skip on identity. homeHexToAxial is injected (utils/ must not import components/).
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
@@ -1916,7 +2187,10 @@ export function applyFloatThreshold(
 
   const companies = state.public_companies.map((company) => {
     if (company.is_floated) return company;
-    if (soldToPlayersPercent(company) < FLOAT_THRESHOLD_PERCENT) return company;
+    /* Design note #749: OUT OF THE IPO, not in players' hands. This read the sum of `player_holdings`, which
+       is the same number until somebody sells and permanently smaller afterwards -- so a corporation whose
+       shares had reached 60% out of the IPO by way of the Bank Pool never floated, and had no way to. */
+    if (!metFloatThreshold(company)) return company;
 
     changed = true;
 
@@ -2184,7 +2458,14 @@ export function applySandboxLayTile(
   r: number,
   tileId: number,
   orientation: number,
+  /** Design note #757: the SAME refusal `applySandboxAction` applies, so the tile grid and the game state
+   *  cannot disagree about whether a lay happened. Absent means no opinion. */
+  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean,
 ): MapGridResponse {
+  /* Unchanged, by identity, for #712's reason -- and because the caller is a `setMapGrid` updater, where
+     returning the same reference is also what stops a refused lay from repainting the board. */
+  if (layRefused?.(q, r, tileId, orientation) === true) return mapGrid;
+
   const catalogEntry = TILE_CATALOG_BY_ID.get(tileId);
   const existing = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
 

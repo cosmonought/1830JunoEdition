@@ -32,15 +32,21 @@ export interface PresidencyChange {
   companyId: number;
   ticker: string;
   from: string | null;
+  /** Never `null`. Design note #748b: a crown passes from one holder to another and is never vacated, so
+   *  every change names a successor. This was briefly widened to `string | null` and put back. */
   to: string;
 }
 
 /** Who should preside over this corporation, given its holdings.
  *
- *  `null` when nobody qualifies -- an unstarted company, or one whose shares are
- *  all in the pool. Returning the INCUMBENT when they still lead is deliberate:
- *  the caller compares against `company.president` and does nothing when they
- *  match, so "no change" and "no president" stay distinct. */
+ *  `null` when nobody qualifies, which for a PARRED corporation is unreachable: design note #748b, the
+ *  President's Certificate is one card that only ever moves by exchange to a holder of 20% or more, so it
+ *  cannot reach the Bank Pool and somebody always has it. The real case is a company nobody has started.
+ *  This doc comment used to add "or one whose shares are all in the pool" -- that board cannot exist, and
+ *  writing it down here is what led a caller to build a vacate-the-crown branch for it.
+ *
+ *  Returning the INCUMBENT when they still lead is deliberate: the caller compares against
+ *  `company.president` and does nothing when they match. */
 export function presidentFor(company: PublicCompanyState): string | null {
   const holdings = company.player_holdings.filter((entry) => entry.percentage > 0);
   if (holdings.length === 0) return null;
@@ -97,6 +103,37 @@ export function settlePresidencies(state: GameStateResponse): {
        still in the IPO, and `par_value` is what says so (design note #587). */
     if (company.par_value === null || company.par_value === undefined) return company;
 
+    /* ==================================================================
+     *  DESIGN NOTE 748b: A FLOATED CORPORATION ALWAYS HAS A PRESIDENT
+     * ==================================================================
+     *
+     * THIS BRANCH ONCE VACATED THE CROWN, AND THAT WAS WRONG.
+     *
+     * REPORTED alongside #748: "P2 now shows to have 0 certificates and a 10% share" -- P2 still flagged
+     * president of a corporation they held 10% of. I read that as a second defect and made `settlePresidencies`
+     * set `president: null` whenever nobody held the 20% block, on the reasoning that `presidentFor` had
+     * carefully distinguished "no change" from "no president" and its only caller had collapsed the two.
+     *
+     * REPORTED BACK: "this is still very wrong: a President's share can NEVER be sold to the Bank, so what's
+     * wrong is that a crown/presidency can never be vacated. The player should never have been able to sell
+     * below their 20% President's certificate, even though mathematically selling 40% kept the Bank Pool at
+     * the limit of 50%."
+     *
+     * WHAT I ACTUALLY DID was make an illegal board REPRESENTABLE instead of preventing it. A presidentless
+     * floated corporation is not a state 1830 has -- the certificate is a physical card that only ever moves
+     * by exchange to a player already holding 20%, so it cannot reach the Bank Pool and there is always
+     * somebody holding it. Teaching this function to describe that board gave the impossible state a tidy
+     * encoding and a passing test, which is worse than the stale crown it replaced: `president: null` would
+     * freeze the corporation out of laying track, running trains and spending its treasury.
+     *
+     * THE SYMPTOM HAD NO FIX OF ITS OWN. It was the shadow of the illegal sale, and #748 -- the reducer
+     * refusing that sale -- is the whole correction. `next === null` is unreachable for a parred corporation
+     * once the sale rule is enforced, and where it is reached anyway the incumbent is the safe answer: a stale
+     * president is at least a president, and the board stays playable while the real error is found upstream.
+     *
+     * SAME ERROR CLASS AS #746c, one report earlier: making the code agree with a broken board rather than
+     * asking whether the board should exist. Twice now the tell was the same -- I was writing an accommodation
+     * and calling it a rule. */
     const next = presidentFor(company);
     if (next === null || next === company.president) return company;
 

@@ -19,6 +19,8 @@
 // Design notes #349/#350/#441/#442/#470/#573b/#576: see `docs/ai_architecture/contract_economy.md`.
 
 import React from "react";
+// Design note #725: the D&H rule, stated once.
+import { CSL_POWER_DESCRIPTION, DH_POWER_DESCRIPTION } from "../utils/dhPower";
 
 import { FONT_SIZE } from "../styles/typography";
 import type { OperatingSubPhase } from "./OperatingSubPhaseStepper";
@@ -89,8 +91,9 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
   {
     privateId: 2,
     actions: [{ key: "csl-tile", label: "Lay Track (B20)" }],
-    description:
-      "Champlain & St. Lawrence — the owning corporation may lay a tile on B20 (Burlington) in addition to its normal lay.",
+    /* Design note #726: the connection waiver named. The old sentence was right about the EXTRA lay -- unlike
+       the D&H's, which #725 had to correct -- and silent about the half that makes the power worth owning. */
+    description: CSL_POWER_DESCRIPTION,
     phase: "OperatingRound",
     // Design note #441: "A railroad owning the CL may lay a tile on the
     // CL's hex" -- the corporation, not the player holding the certificate.
@@ -102,7 +105,12 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     hideOutOfRound: true,
   },
   {
-    /* Design note #442: THE D&H IS TWO POWERS, AND F16 IS NOT FREE. The caption read "may lay a tile AND place a
+    /* Design note #725: THE D&H IS ONE POWER IN TWO STEPS. The paragraph below is kept because its costing is
+       right and its conclusion is wrong: the tile and the token are NOT independent. Reported: "the Place
+       Station for free action ... should only be allowed if the track lay also happened". Two buttons remain
+       the right control -- they are separately spendable -- but the second is gated on the first, and the
+       reasoning for that is in `dhPower.ts` #725.
+       Design note #442: THE D&H IS TWO POWERS, AND F16 IS NOT FREE. The caption read "may lay a tile AND place a
        station on F16 at no cost", which is wrong twice over and wrong in the direction that costs a player money:
        `privateCatalog.ts` carries the rulebook's own rule -- the mountain costs $120 as usual, and only the TOKEN
        is free. A caption promising a free tile on a $120 mountain hex is an invitation to a purchase the player
@@ -116,8 +124,11 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
       { key: "dh-tile", label: "Lay Track (F16)" },
       { key: "dh-token", label: "Place Station Token for $0 (F16)" },
     ],
-    description:
-      "Delaware & Hudson — The owning corporation may lay a tile on F16 (paying the $120 terrain cost) in addition to its normal lay, AND/OR place a station token there for $0.",
+    /* Design note #725: THE CAPTION WAS WRONG TWICE MORE. #442 corrected an earlier version and introduced two
+       fresh errors of its own -- "AND/OR", which made the token reachable without the lay, and "in addition to
+       its normal lay", which it is not. The wording now lives in `dhPower.ts` so the panel, the rules reference
+       and the auction card cannot drift into three accounts of one rule again. */
+    description: DH_POWER_DESCRIPTION,
     phase: "OperatingRound",
     scope: "corporation",
     subPhase: "Track",
@@ -178,9 +189,15 @@ export interface PrivatePowerPanelProps {
    *  power is executed by the person holding the controls, so the row
    *  appears for them and nobody else at the table. */
   actingPresident: string | null;
-  /** Design note #442: actions already fired this game, by action KEY --
-   *  not by `private_id`. The D&H's two powers are independent. */
+  /** Design note #442: actions already fired this game, by action KEY -- not by `private_id`.
+   *  Design note #725: the D&H's two are NOT independent, which #442 asserted and the report corrected. Keyed
+   *  per action still, because they are separately spendable; what changed is that the second is gated on the
+   *  first, via `blockedActions` below. */
   usedAbilities: ReadonlySet<string>;
+  /** Design note #725: why a specific action cannot be taken right now, by action key. Distinct from `reason`,
+   *  which speaks for a whole private -- the D&H needs to grey ONE of its two buttons and say why, while the
+   *  other stays live. */
+  blockedActions?: Readonly<Record<string, string | null>>;
   onUseAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
   controlsEnabled: boolean;
   /* Design note #573b: WHY IT REFUSED, IN WORDS. A DISABLED BUTTON WOULD NOT DO -- the exchange's legality
@@ -202,6 +219,7 @@ export function PrivatePowerPanel({
   actingProtocolId,
   actingPresident,
   usedAbilities,
+  blockedActions,
   onUseAbility,
   controlsEnabled,
   abilityError = null,
@@ -311,7 +329,13 @@ export function PrivatePowerPanel({
             <div style={styles.actionColumn}>
               {ability.actions.map((action) => {
                 const used = usedAbilities.has(action.key);
-                const blocked = reason ?? (used ? "Already used this game." : null);
+                /* Design note #725: the per-action reason wins over the generic "already used", because it is
+                   the more specific true statement -- "lay the F16 tile first" tells a player what to do and
+                   "already used" would be a lie about a power they still hold. */
+                const blocked =
+                  reason ??
+                  blockedActions?.[action.key] ??
+                  (used ? "Already used this game." : null);
                 return (
                   <button
                     key={action.key}

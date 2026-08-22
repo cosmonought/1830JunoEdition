@@ -197,6 +197,35 @@ export interface GameStateResponse {
   /** Design note #701: the train-trade offer awaiting its seller's answer. Sandbox-only, for the reason on
    *  `TrainPurchaseOffer` -- online this lives in the contract's offer register. */
   train_purchase_offer?: TrainPurchaseOffer | null;
+  /** Design note #723: every hex whose TERRAIN FEE has already been charged, as `"q,r"` keys.
+   *
+   *  In state rather than derived from the tile grid, because the grid is a separate atom that this reducer
+   *  does not own and cannot replay. During an Undo rebuild the log is replayed while `mapGrid` is a React
+   *  value captured at render, so asking it "does this hex have a tile" answers about a board from some other
+   *  moment -- charging every hex again, or nothing at all, depending on where the render landed. A fact the
+   *  reducer must decide has to travel in the state the reducer replays.
+   *
+   *  A hex appears here IF AND ONLY IF its fee has been paid, so a lay on clear ground adds nothing: the
+   *  question is "has this ground been paid for", not "has anything been built here". */
+  terrain_fees_paid?: readonly string[];
+  /** Design note #744: per player, the corporations they have SOLD in the current Stock Round -- and may
+   *  therefore not buy back until the next one.
+   *
+   *  IN STATE FOR #723'S REASON: the Undo path replays the whole log, so a rule about "what has happened this
+   *  round" has to be a function of the log rather than of anything a client remembers. Cleared when a Stock
+   *  Round opens, which is the only event that ends the lockout. */
+  sold_this_round?: Readonly<Record<string, readonly number[]>>;
+  /** Design note #745: has the seat now acting already DONE something this turn? True after a sale, false
+   *  again the moment the seat moves.
+   *
+   *  IT IS A SEPARATE FIELD FROM `sold_this_round` BECAUSE THE TWO HAVE DIFFERENT LIVES. #744's record lasts
+   *  the whole round on purpose -- that is what makes the buy-back lockout a lockout. This one must expire at
+   *  the end of the turn that set it, or a player who sold on their first turn would never be able to pass at
+   *  all: every later Pass would be read as "they acted", and the Stock Round would not end.
+   *
+   *  IN STATE FOR #723'S REASON, like #744's: Undo replays the log, so anything the reducer must decide
+   *  travels in the state the reducer replays. */
+  turn_action_taken?: boolean;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */
@@ -306,9 +335,21 @@ export interface QueryCapableClient {
  *  single physical certificate, so it counts once rather than twice.
  *  The one thing it cannot do is see a certificate the QUERIES do not expose -- but no such certificate
  *  exists in the current schema, so that is a statement about future changes, not present accuracy. */
+/** Design note #734: THE ZONE-BLIND COUNT, and it is no longer what any surface displays.
+ *
+ *  Kept because `presidencyTransfer` reasons about it -- a presidency changing hands moves no percentages, so
+ *  a physical-card count is the right instrument for asserting that -- and because `certificateBreakdown`'s
+ *  `total` is defined as what this returns.
+ *
+ *  NOT FOR A LIMIT. A certificate limit is measured against `certificateBreakdown(...).counted`, which knows
+ *  about the yellow/orange/brown exemptions (#712). This function does not and never did; the Player Card read
+ *  it for a limit and told players they were full when they were not. If you are about to compare this to
+ *  `certLimitForPlayers`, you want the breakdown instead. */
 export function certificateCount(playerAddress: string, state: GameStateResponse): number {
   let count = 0;
   for (const priv of state.private_companies) {
+    // Design note #736: a CLOSED private is off the board and off the limit. It was still being counted.
+    if (priv.closed) continue;
     if (priv.owner === playerAddress) count += 1;
   }
   for (const pub of state.public_companies) {
@@ -375,6 +416,10 @@ export function certificateBreakdown(
   let exempt = 0;
 
   for (const priv of state.private_companies) {
+    /* Design note #736: likewise here, and this is the half the report saw -- "the private companies are
+       still displayed (and counting toward certificates)". `playerPrivateCompanies` already filtered closed
+       ones out of the DISPLAY list, so the two disagreed the moment anything set the flag. */
+    if (priv.closed) continue;
     if (priv.owner === playerAddress) counted += 1;
   }
 
@@ -543,7 +588,12 @@ export function playerPrivateCompanies(
   playerAddress: string,
   state: GameStateResponse,
 ): PrivateCompanyState[] {
-  return state.private_companies.filter((p) => p.owner === playerAddress);
+  /* Design note #736: CLOSED ONES ARE OFF THE BOARD, and this list is what the Player Card and the Ledger
+     render. Its corporate twin `corporationPrivateCompanies` has excluded them since it was written -- "a
+     closed company is off the board, pays nothing, and listing it would show an asset the corporation no
+     longer has" -- and every word of that applies to a player. The two disagreed only because nothing ever
+     set `closed`, so the asymmetry was invisible until #736 made the flag real. */
+  return state.private_companies.filter((p) => !p.closed && p.owner === playerAddress);
 }
 
 /** Every private `playerAddress` owns AND could still sell via `BuyPrivateCompany` -- the list above minus

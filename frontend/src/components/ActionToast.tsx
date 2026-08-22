@@ -37,6 +37,12 @@
 // button you pressed; a toast for somebody else's action would be a
 // notification feed, which is what the log already is.
 //
+// AND SCOPED TO THE ACTION IT WAS REPORTED FOR -- which this note asserted and
+// the code did not do. Mounting the toast on `runGameplayAction` handed one to
+// every dispatch in the app; see `utils/actionReceipt.ts` #718 for the
+// correction and for why the scope now lives in a rule with a harness rather
+// than in the sentence above.
+//
 // See docs/ai_architecture/ui_shell_layout.md, ActionToast.tsx #697.
 
 import React, { useEffect } from "react";
@@ -46,6 +52,10 @@ import { FONT_SIZE } from "../styles/typography";
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */
   message: string | null;
+  /** Design note #738: a second, quieter line -- today the treasury transition on a dividend receipt.
+   *  Optional because the ordinary receipt (#697) has one thing to say and should not grow a slot it leaves
+   *  empty. */
+  detail?: string | null;
   /** Changes on every dispatch, including two identical ones in a row --
    *  which is why it exists rather than keying the timer on `message`. Buying
    *  a second 2-train produces the same string, and a toast that did not
@@ -60,6 +70,7 @@ export interface ActionToastProps {
 
 export function ActionToast({
   message,
+  detail = null,
   token,
   onDismiss,
   durationMs = 2600,
@@ -94,7 +105,13 @@ export function ActionToast({
         <span style={styles.check} aria-hidden="true">
           ✓
         </span>
-        <span style={styles.text}>{message}</span>
+        <span style={styles.body}>
+          <span style={styles.text}>{message}</span>
+          {/* Design note #738: the transition, under the sentence rather than beside it. Money moving is two
+              facts -- what arrived and where it left you -- and #670 settled that they read as a before and an
+              after rather than as one run-on line. */}
+          {detail && <span style={styles.detail}>{detail}</span>}
+        </span>
       </div>
     </>
   );
@@ -120,6 +137,14 @@ const ACTION_TOAST_CSS = `
 `;
 
 const styles: Record<string, React.CSSProperties> = {
+  body: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
+  /* Quieter than the headline and monospaced, because it is a pair of figures rather than a sentence -- the
+     same treatment the Ledger gives every before/after in this app. */
+  detail: {
+    fontSize: FONT_SIZE.micro,
+    color: "#9fb8a4",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
   /* Design note #697: BOTTOM CENTRE, above the status dock. Not top -- the action bar is sticky there and a
      toast over it would cover the controls the player is mid-sequence with, which is the one place it must
      not be. Not a corner either: a receipt for a deliberate action should be on the axis the reader is

@@ -69,7 +69,8 @@ const RESERVATION_RULES: readonly ReservationRule[] = [
     initials: "CSL",
     // Slot 10 = the Bottom Point vertex.
     slot: 10,
-    power: "its owner may lay a tile here free, in addition to the corporation's normal lay",
+    // Design note #726: connection rules named, which is the half the badge never mentioned.
+    power: "its owner may lay a tile here free, ignoring connection rules, in addition to its normal lay",
   },
   {
     privateId: 3,
@@ -77,7 +78,10 @@ const RESERVATION_RULES: readonly ReservationRule[] = [
     initials: "DH",
     // Slot 4 = the Bottom-Left edge midpoint.
     slot: 4,
-    power: "its owner may lay a tile AND place a station here at no cost",
+    /* Design note #725: CORRECTED. This said "lay a tile AND place a station here at no cost", which is wrong
+       twice -- the tile costs the $120 mountain fee, and the station is not independent of the lay. `dhPower.ts`
+       carries the full rule; this is the badge-length version of it. */
+    power: "its owner may lay a tile here for $120, ignoring connection rules, and then place a station free",
   },
 ];
 

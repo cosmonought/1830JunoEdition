@@ -59,6 +59,7 @@ import {
   chainTileRevenue,
   stationTickerColor,
   stationTickerLabel,
+  hasStationTokenAt,
   tokenCityIndex,
   STATION_HOME_HEXES,
   type HexClickQueryState,
@@ -71,6 +72,10 @@ import {
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
+// Design note #723: the one place that decides whether ground is still unpaid.
+import { terrainFeeDue } from "../utils/terrainFee";
+// Design note #727: the palette a private power's hex is marked with.
+import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
 import type { PrivateCompanyState } from "../utils/gameState";
 import {
   cityIndexAtPoint,
@@ -138,6 +143,7 @@ import {
   fitFontSize,
   offboardNameplateLines,
   homeCityIndexAt,
+  homeSlotsAreOpen,
   stationMarkerPoint,
   stationMarkerRadius,
   withHexClip,
@@ -178,6 +184,10 @@ export { TILE_CATALOG_SIZE, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 export interface HexGridRendererProps {
   /** `QueryMsg::GetMapGrid`'s response, verbatim. */
   mapGrid: MapGridResponse;
+  /** Design note #723: which hexes have had their terrain fee settled, from `state.terrain_fees_paid`.
+   *  The badge advertises a PRICE, so it must go when the price has been paid rather than when a tile
+   *  happens to be present -- see `terrainFee.ts` #723 for why those are different questions. */
+  terrainFeesPaid?: readonly string[] | null;
   /** Pixel radius (center to corner) of one hex. Default 42. */
   hexSize?: number;
   /** Omit both to measure the wrapper's WIDTH and derive height from the board's own aspect ratio, so the canvas renders at true full proportional scale instead of being cropped to a bounded ancestor.
@@ -210,6 +220,10 @@ export interface HexGridRendererProps {
      *  the board, the toolbar and the route line agree about whose turn it
      *  is. Omitted falls back to the neutral highlight ink. */
     glowColor?: string;
+    /** Design note #727: hexes the acting corporation may build on by PRIVATE POWER rather than by reach.
+     *  Drawn in the auction's full-hue palette so the mark cannot be read as the white "your network gets
+     *  here" glow, which is the one thing it is not saying. */
+    powerHexes?: ReadonlySet<string>;
     /* Slot rings are for HOME placements only, and only the home slot -- resolved by asking stationMarkerPoint (#584) rather than a second table of home cities.
        See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #585 */
     homeSlotGlow?: boolean;
@@ -427,6 +441,7 @@ export function withReservationNote(
 
 export function HexGridRenderer({
   mapGrid,
+  terrainFeesPaid,
   hexSize = DEFAULT_HEX_SIZE,
   width: widthProp,
   height: heightProp,
@@ -892,8 +907,12 @@ export function HexGridRenderer({
         const company = companiesById.get(home.companyId);
         /* The test is the TOKEN, not is_floated. Between floating and placing, is_floated is already true and no token exists -- so the badge was skipped and the pass below had nothing to draw, blanking exactly the hex the Place Home Station prompt is about.
            See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #608 */
-        const homePlaced =
-          company?.station_tokens?.some(([tq, tr]) => tq === home.q && tr === home.r) ?? false;
+        /* Design note #724: AND IT IS THE RIGHT TOKEN LIST. This read `station_tokens`, the OPTIONAL
+           `(q, r, city_index)` mirror, whose own type comment says an empty one means "this chain doesn't
+           know" rather than "no tokens" -- so the badge survived the placement it was reserving for and
+           reappeared as a second marker the moment an upgrade gave the city a second slot. `station_token_hexes`
+           is the required list and the one the real-token pass below already walks. */
+        const homePlaced = company ? hasStationTokenAt(company, home.q, home.r) : false;
         if (homePlaced) continue; // the real token is drawn by the pass below instead
         // Station Token Badges (design note #43): a RESERVED (not-yet-
         // floated) marker on a `YELLOW_OO_HEXES` home hex (today, only
@@ -912,12 +931,23 @@ export function HexGridRenderer({
         // E11 only: the reserved marker's straight-down point overlapped the bottom city marker, moved to Vertex 2 at the SAME magnitude. The other three OO hexes were not reported and are unchanged.
         // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #106
         const erieVertex2 = hexSlotDirection(9);
+        /* Design note #724a: THE BADGE FOLLOWS THE TILE, like the token it stands in for. This passed no
+           `laidTile`, so it took `stationMarkerPoint`'s tile-less fallback and sat wherever the bare hex put
+           it -- while the real token, once a tile exists, uses that tile's own city anchor. The two agree only
+           while the hex is bare, which is why the stale badge #724 fixed looked like a single correct marker
+           until somebody upgraded underneath it.
+           IT MATTERS ON ITS OWN, not just as part of that bug: another corporation may lay track on an unfloated
+           company's home hex, and the reservation badge should mark the city it is reserving rather than a
+           point the tile no longer has a station at.
+           THE TWO OO BRANCHES ARE UNTOUCHED. #43 anchors those in neutral hex-margin space ON PURPOSE, because
+           the President still gets to choose either slot and committing the badge to one would lie about it. */
+        const homeLaidTile = mapGrid.tiles.find((tile) => tile.q === home.q && tile.r === home.r);
         const point =
           home.label === "E11"
             ? { x: homeCenter.x + erieVertex2.x * hexSize * 0.46, y: homeCenter.y + erieVertex2.y * hexSize * 0.46 }
             : YELLOW_OO_HEXES.has(home.label)
               ? { x: homeCenter.x, y: homeCenter.y + hexSize * 0.46 }
-              : stationMarkerPoint(home.q, home.r, hexSize);
+              : stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile);
         // Design note #55: Strict Hex Boundary Clipping, extended to
         // station token markers -- previously only track/text calls were
         // wrapped.
@@ -1264,13 +1294,17 @@ export function HexGridRenderer({
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
       // A CORRECTNESS fix: execute_lay_tile charges terrain ONCE, on first build. Keeping the badge after that renders what the LAST lay cost as though it were a live price.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      /* Design note #723: ASKED OF THE LEDGER, NOT THE BOARD. This was the third copy of "charged once" in the
+         codebase -- the projection had it, this had it, and the reducer that moves the money did not. The two
+         predicates agree on every hex today, which is exactly why nobody noticed the third disagreed: the
+         badge and the preview were consistent with each other and both wrong about the debit. All three now
+         ask `terrainFeeDue`. */
+      if (terrainFeeDue(terrainFeesPaid, hex.q, hex.r, terrainBuildFeeAt) <= 0) continue;
       const terrainType = hex.type;
       // Design note #136 (F-2): the printed figure comes from the
       // coordinate-keyed mirror of `hexmap::terrain_build_fee`, so the label
       // on the board and the fee the contract charges are the same lookup.
       const terrainFee = terrainBuildFeeAt(hex.q, hex.r);
-      if (terrainFee <= 0) continue;
       const costLabel = String(terrainFee);
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // The SAME isComplexHex test the icon pass uses, so the two always agree on which hexes are complex.
@@ -1543,12 +1577,19 @@ export function HexGridRenderer({
           const ringRadius = slotRadius * (1.28 + swell * 0.14);
           /* Design note #584: the slot the reservation marker is already
              drawn in -- so the ring and the badge cannot point at different
-             circles on a two-station hex like New York. */
+             circles on a two-station hex like New York.
+             Design note #742: EXCEPT WHERE THE PRESIDENT STILL CHOOSES. On an OO hex the badge is anchored to
+             no circle at all, by #43's deliberate design, so asking which circle it sits nearest answers a
+             question it was placed to avoid -- and rings one slot as though the other were unavailable.
+             Reported of ERIE's E11 after a brown upgrade. Both slots are lit there; everywhere else #584's
+             pairing stands untouched. */
           const slotNodes = cityNodePoints(mapGrid, hex.q, hex.r, hexSize);
-          const homeSlot = homeCityIndexAt(
-            slotNodes,
-            stationMarkerPoint(hex.q, hex.r, hexSize, laidHere),
+          const eitherSlot = homeSlotsAreOpen(
+            STATIC_BOARD_HEXES.find((entry) => entry.q === hex.q && entry.r === hex.r)?.label,
           );
+          const homeSlot = eitherSlot
+            ? null
+            : homeCityIndexAt(slotNodes, stationMarkerPoint(hex.q, hex.r, hexSize, laidHere));
           const litNodes = homeSlot === null ? slotNodes : [slotNodes[homeSlot]];
           for (const node of litNodes) {
             if (!node) continue;
@@ -1568,8 +1609,11 @@ export function HexGridRenderer({
         /* Design note #472: likewise the hex glow. Under a focus veil only
            the open hex keeps it -- it is the one thing the player is
            looking at, and the others have been pushed back deliberately. */
+        /* Design note #727: a private power's hex glows whether or not it is in the reach set -- being outside
+           it is the point. So this arm is `||`, not a branch inside the reach test. */
+        const poweredHere = layFocus.powerHexes?.has(key) === true;
         if (
-          layFocus.highlighted.has(key) &&
+          (layFocus.highlighted.has(key) || poweredHere) &&
           (layFocus.soleFocusKey === undefined || key === layFocus.soleFocusKey)
         ) {
           const glow = layFocus.glowColor ?? LAY_TRACK_HIGHLIGHT_INK;
@@ -1580,9 +1624,31 @@ export function HexGridRenderer({
           drawHexPath(ctx, center, hexSize);
           ctx.clip("evenodd");
 
-          ctx.strokeStyle = glow;
-          ctx.shadowColor = glow;
-          ctx.lineWidth = Math.max(1, hexSize * 0.02);
+          /* Design note #727: the full hue circle around the perimeter, from the auction's own stop list.
+             A LINEAR GRADIENT ACROSS THE HEX rather than a conic one: the stroke is a closed path, so a
+             left-to-right ramp reads as a band of colour on every edge, and `createConicGradient` is not
+             available in every browser this ships to. The shadow cannot take a gradient at all -- canvas
+             `shadowColor` is a single colour -- so the halo behind it uses the middle stop, which keeps the
+             bloom neutral while the ring carries the identity. */
+          if (poweredHere) {
+            const ramp = ctx.createLinearGradient(
+              center.x - hexSize,
+              center.y - hexSize,
+              center.x + hexSize,
+              center.y + hexSize,
+            );
+            PRIVATE_POWER_GLOW_STOPS.forEach((stop, index) => {
+              ramp.addColorStop(index / (PRIVATE_POWER_GLOW_STOPS.length - 1), stop);
+            });
+            ctx.strokeStyle = ramp;
+            ctx.shadowColor = PRIVATE_POWER_GLOW_STOPS[4];
+            // Thicker than the reach glow: this one is rarer and says more.
+            ctx.lineWidth = Math.max(1.5, hexSize * 0.035);
+          } else {
+            ctx.strokeStyle = glow;
+            ctx.shadowColor = glow;
+            ctx.lineWidth = Math.max(1, hexSize * 0.02);
+          }
           // Three passes rather than one wide blur: each adds a further
           // falloff step, so the halo fades gradually instead of ending at
           // the visible edge a single shadow leaves.
@@ -1674,6 +1740,11 @@ export function HexGridRenderer({
 
     ctx.restore();
   }, [
+    /* Design note #723: the cost badges are part of the picture too, so paying a hex's fee has to repaint.
+       Omitted, the red $80 would sit on New York until some unrelated change happened to redraw the board --
+       advertising a price that has already been settled, which is the exact failure #150 removed the badge
+       after a build to prevent. */
+    terrainFeesPaid,
     // Design note #223: the veil is part of the picture, so a change to the
     // reachable set has to repaint. Omitted, the board would keep the
     // dimming from whichever corporation was acting when it was last drawn.

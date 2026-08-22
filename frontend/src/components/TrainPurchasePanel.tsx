@@ -23,7 +23,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
-import { buyableNow, isTrainLocked } from "../utils/trainLimit";
+import { buyableNow, isTrainLocked, quantityOptionCount } from "../utils/trainLimit";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
@@ -91,6 +91,11 @@ export interface TrainPurchasePanelProps {
   blockedReason: string | null;
   /** `quantity` sequential `BuyHardwareFromPool` messages -- design note #1. */
   onBuyFromBank: (tier: string, quantity: number) => void;
+  /** Design note #751c: opens the emergency modal. Absent where there is no such flow to open. */
+  onEmergencyPurchase?: () => void;
+  /** Whether the corporation is actually short -- computed by the caller, which is the only place that
+   *  knows both the obligation and the depot. */
+  emergencyAvailable?: boolean;
   /** Raises a proposal. Dispatches nothing itself: whether this completes
    *  immediately or waits on the seller is the caller's decision, because
    *  only the caller knows who is signing. */
@@ -118,6 +123,8 @@ export function TrainPurchasePanel({
   canAct,
   blockedReason,
   onBuyFromBank,
+  onEmergencyPurchase,
+  emergencyAvailable,
   onProposeTrade,
   labelForAddress,
   defaultCorporateOpen = false,
@@ -248,6 +255,13 @@ export function TrainPurchasePanel({
         limitAfterPurchase,
       }),
     [ownedTrainCount, currentTrainLimit, depotSupply, limitDropsOnPurchase, limitAfterPurchase],
+  );
+
+  /* Design note #719: the row shows the PHASE's limit and greys what this corporation cannot reach; the rule
+     and the reasoning live in `trainLimit.ts` beside `buyableNow`, which supplies the greying threshold. */
+  const optionCount = useMemo(
+    () => quantityOptionCount(currentTrainLimit, supplyCap),
+    [currentTrainLimit, supplyCap],
   );
 
   /* Design note #219: THE CAP MOVES WHILE THE FIELD IS SITTING THERE. Supply is derived from what every
@@ -400,41 +414,6 @@ export function TrainPurchasePanel({
           ))}
         </div>
 
-        {laterTiers.length > 0 && (
-          <>
-            <button
-              type="button"
-              style={styles.laterTrainsHeader}
-              onClick={() => setLaterTrainsOpen((open) => !open)}
-              aria-expanded={laterTrainsOpen}
-            >
-              <span style={styles.accordionCaret} aria-hidden="true">
-                {laterTrainsOpen ? "\u25bc" : "\u25b6"}
-              </span>
-              <span style={styles.laterTrainsTitle}>
-                Later trains ({laterTiers.length})
-              </span>
-              {/* Design note #633: the collapsed summary answers the
-                  commonest reference question -- what is next and what does
-                  it cost -- so opening this is for the rarer ones. */}
-              <span style={styles.sectionMeta}>
-                {laterTrainsOpen
-                  ? "hide"
-                  : laterTiers[0]
-                    ? `next: ${laterTiers[0].tier}-train $${laterTiers[0].cost}`
-                    : ""}
-              </span>
-            </button>
-            {laterTrainsOpen && (
-              <div style={styles.depotGrid}>
-                {laterTiers.map((tier) => (
-                  <DepotRow key={tier.tier} tier={tier} isNext={false} />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
         {nextTier ? (
           <>
             <div style={styles.buyRow}>
@@ -443,9 +422,17 @@ export function TrainPurchasePanel({
                  ceiling, or what the ceiling would be after buying. They are facts about different subjects: one counts
                  cardboard in the bank, the other caps a corporation's holdings this phase. Naming the subject on each is
                  the whole fix -- neither number was wrong, and neither said whose it was. */}
-              <span style={styles.quantityLabel} id="depot-quantity-label">
-                Buy from bank
-              </span>
+              {/* Design note #719: THE LABEL WRAPS THE CONTROL.
+                 REPORTED: 'the "Buy from bank [selector]" could read "Buy [selector] x-train(s) from the Bank"
+                 to make it absolutely clear.'
+                 "Buy from bank" followed by a row of bare digits leaves the digits' SUBJECT unstated -- #294
+                 fixed exactly this failure one element to the right, where a quantity and a limit sat side by
+                 side and were read as one figure. The same fix applies here: put the noun in the sentence and
+                 the number cannot be read as anything else. The tier is named too, so the row of digits cannot
+                 be mistaken for a choice of train.
+                 The group carries its own `aria-label` rather than pointing at a fragment, because the visible
+                 text is now two spans with the control between them and neither half labels it alone. */}
+              <span style={styles.quantityLabel}>Buy</span>
               {/* Design note #247: A DROPDOWN THAT LISTS WHAT IS BUYABLE. Two things were true at once and it was not one
                  bug. IT WAS NOT A DROPDOWN -- it was `<input type="number">` that silently CLAMPED, so typing 2 against a
                  ceiling of 1 rewrote the field mid-keystroke, indistinguishable from the control refusing the digit. A
@@ -471,12 +458,18 @@ export function TrainPurchasePanel({
               <div
                 style={styles.quantityRow}
                 role="group"
-                aria-labelledby="depot-quantity-label"
+                aria-label={`How many ${nextTier.tier}-trains to buy from the Bank`}
               >
-                {Array.from({ length: Math.max(1, supplyCap) }, (_, index) => index + 1).map(
+                {Array.from({ length: optionCount }, (_, index) => index + 1).map(
                   (option, index) => {
                     const selected = String(option) === quantityText;
-                    const unavailable = !sessionReady || !canAct || atTrainLimit || supplyCap < 1;
+                    /* Design note #719: BEYOND THE CAP, NOT OFF THE ROW. The option is drawn, dead, and says
+                       why on hover -- `ceilingReason` already names whether it was the depot or the limit that
+                       bound, which is the sentence #700 wrote for exactly this hover and which the old row
+                       could only ever show on a control that had no dead options left to hover. */
+                    const beyondCap = option > supplyCap;
+                    const unavailable =
+                      !sessionReady || !canAct || atTrainLimit || supplyCap < 1 || beyondCap;
                     return (
                       <React.Fragment key={option}>
                         {/* Design note #19 in `StockRoundPanel`: the separators are `aria-hidden`, so a
@@ -512,6 +505,9 @@ export function TrainPurchasePanel({
                   },
                 )}
               </div>
+              <span style={styles.quantityLabel}>
+                {nextTier.tier}-train{quantity === 1 ? "" : "s"} from the Bank
+              </span>
 
               {/* Design note #248: the limit, where the decision is made. `Trains: 2 / 4` explains why the quantity list
                  stops where it does, and it was only available on the Operating Round strip -- a different panel from the
@@ -572,15 +568,60 @@ export function TrainPurchasePanel({
                   bankProblem ??
                   `${quantity} x ${nextTier.tier}-train at $${nextTier.cost} each.`
                 }
+                /* Design note #722: THE VISIBLE LABEL IS A PRICE; THE ACCESSIBLE NAME IS A SENTENCE.
+                   A button reading "$600" is unambiguous BESIDE the sentence that sets it up, and a screen
+                   reader does not get the sentence -- it announces the button alone, out of order and out of
+                   context. "$600" would be an unusable control. This is the ordinary fix for a label that
+                   leans on its surroundings, and it costs nothing on screen. */
+                aria-label={
+                  atTrainLimit
+                    ? "Train limit reached — no train can be bought."
+                    : `Buy ${quantity} ${nextTier.tier}-train${quantity === 1 ? "" : "s"} from the Bank for $${
+                        bankTotal || nextTier.cost
+                      }.`
+                }
               >
-                {atTrainLimit
-                  ? "Train Limit Reached"
-                  : `Buy ${quantity > 1 ? `${quantity} x ` : ""}${nextTier.tier}-Train for $${
-                      bankTotal || nextTier.cost
-                    }`}
+                {/* Design note #722: THE COST ALONE.
+                   #719 made the row above read "Buy [2] 4-trains from the Bank", and this button was still
+                   saying "Buy 2 x 4-Train for $600" a few pixels away -- the same verb, the same quantity and
+                   the same tier, twice, with only the price distinguishing them. Two statements of one thing is
+                   how a panel gets long, which is the complaint #719 came from.
+                   THE PRICE IS WHAT THE BUTTON UNIQUELY KNOWS. Everything else on it was already on the line
+                   above, and the total is the one figure that appears nowhere else: the depot table lists the
+                   UNIT cost, so `bankTotal` is the only place a multi-buy is priced.
+                   THE LIMIT WORDING STAYS, because it is the one state where a price is the wrong thing to
+                   show: the button is dead, and the reason beats a number nobody can pay. */}
+                {atTrainLimit ? "Train Limit Reached" : `$${bankTotal || nextTier.cost}`}
               </button>
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}
+            {/* ==================================================================
+               DESIGN NOTE 751c: THE EMERGENCY IS A BUTTON, BESIDE THE REFUSAL IT ANSWERS
+               ==================================================================
+               REPORTED: "let's have the normal Buy button grayed out with the explanation as usual, and a
+               new 'Emergency Train Purchase' button that opens a modal instead -- it is important that this
+               be a button because the corporation could fulfill its obligation by buying from another
+               corporation instead."
+               PLACED HERE RATHER THAN ON THE ACTION BAR because the sentence above it is the reason it
+               exists -- "PRR's treasury holds $500, it cannot pay $630" and then, immediately, the one
+               control that can do something about it. A president who reads the refusal and has to go
+               looking for the remedy has been told half a thing.
+               AND IT DOES NOT REPLACE THE DISABLED BUY. #619's rule: the dead control carries the
+               explanation, so removing it would remove the reason. */}
+            {onEmergencyPurchase && emergencyAvailable && (
+              <button
+                type="button"
+                style={styles.emergencyButton}
+                onClick={onEmergencyPurchase}
+                title={
+                  `${buyer?.ticker ?? "This corporation"} cannot pay for a train from its treasury. ` +
+                  "An emergency purchase draws on the president's own cash, and on share sales if that is " +
+                  "not enough. Buying a train from another corporation is the other way out."
+                }
+              >
+                Emergency Train Purchase
+              </button>
+            )}
             {/* Design note #1: stated, because it is the question a player asks the moment they see a quantity field.
                Design note #508: except when pinned. This is the longest piece of prose in the panel and it explains a
                rule rather than a value -- read once, not on every scroll -- so it is the first thing the condensed form
@@ -594,6 +635,54 @@ export function TrainPurchasePanel({
           </>
         ) : (
           <p style={styles.empty}>{bankProblem}</p>
+        )}
+
+        {/* Design note #719: REFERENCE BELOW THE ACTION.
+           REPORTED: "it shows the current trains, then there's a dropdown for Later Trains, then there's the
+           Buy from bank [selector].... I think Buy from bank [selector] should be below the current train and
+           the Later trains dropdown can be below that?"
+           #633 put the accordion here because it is a continuation of the depot table, which is true of the
+           MARKUP and wrong about the reading order: it left a collapsed row of reference material sitting
+           between the one purchasable tier and the control that buys it. The two halves of a single decision
+           had a filing cabinet between them, and opening the accordion pushed the buy row off the bottom of a
+           condensed panel entirely. */}
+        {laterTiers.length > 0 && (
+          <>
+            <button
+              type="button"
+              style={styles.laterTrainsHeader}
+              onClick={() => setLaterTrainsOpen((open) => !open)}
+              aria-expanded={laterTrainsOpen}
+            >
+              <span style={styles.accordionCaret} aria-hidden="true">
+                {laterTrainsOpen ? "\u25bc" : "\u25b6"}
+              </span>
+              {/* Design note #719: the count is gone. REPORTED: "Later trains has a parenthetical (5) that I
+                 think tells players how many types of trains are left? I'm unsure if it's necessary."
+                 It was the number of TIERS not yet for sale, which is not a quantity anybody plans around --
+                 it counts rows behind a caret, and it decrements as the game advances in a way that invites
+                 reading it as trains remaining. The summary beside it already answers the question a player
+                 actually has, which is what comes next and what it costs. */}
+              <span style={styles.laterTrainsTitle}>Later trains</span>
+              {/* Design note #633: the collapsed summary answers the
+                  commonest reference question -- what is next and what does
+                  it cost -- so opening this is for the rarer ones. */}
+              <span style={styles.sectionMeta}>
+                {laterTrainsOpen
+                  ? "hide"
+                  : laterTiers[0]
+                    ? `next: ${laterTiers[0].tier}-train $${laterTiers[0].cost}`
+                    : ""}
+              </span>
+            </button>
+            {laterTrainsOpen && (
+              <div style={styles.depotGrid}>
+                {laterTiers.map((tier) => (
+                  <DepotRow key={tier.tier} tier={tier} isNext={false} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
 
@@ -1189,7 +1278,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1b1e27",
   },
   quantityOption: {
-    background: "transparent",
+    /* Design note #732: `backgroundColor`, not the `background` shorthand -- `quantityOptionActive` below
+       toggles the longhand on THIS element, which is the exact pairing that gave the Tiles tab a white
+       background on deselect. Found by the sweep that fix prompted rather than by a report, so this one never
+       shipped the symptom. */
+    backgroundColor: "transparent",
     border: "none",
     padding: "3px 8px",
     borderRadius: "5px",
@@ -1379,6 +1472,22 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1f2937",
     borderColor: "#374151",
     color: "#6b7280",
+  },
+  /* Design note #751c: amber, not green and not the disabled grey. It is a live control, so it must not read
+     as dead; it is a last resort that spends the president's own money, so it must not read as the ordinary
+     purchase either. The Phase Shift warning on the action bar already uses this register for "you may do
+     this, and you should understand it first". */
+  emergencyButton: {
+    alignSelf: "flex-start",
+    padding: "8px 16px",
+    borderRadius: "8px",
+    border: "1px solid #f59e0b",
+    backgroundColor: "#3a2a10",
+    color: "#fcd34d",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
   },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
   note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a919e" },

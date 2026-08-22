@@ -126,10 +126,19 @@ describe("the D&H caption", () => {
     expect(caption).not.toMatch(/tile[^.]*at no cost/i);
   });
 
-  it("presents the two powers as separable", () => {
-    // "AND" alone would deny a corporation the ordinary line of play where
-    // it takes the tile and skips the token.
-    expect(caption).toContain("AND/OR");
+  it("presents the tile as takeable WITHOUT the token, but not the reverse", () => {
+    /* Design note #725: THIS TEST USED TO ASSERT "AND/OR" AND WAS WRONG, which is the most useful thing in
+       this file. #442 reasoned that "AND" alone "would deny a corporation the ordinary line of play where it
+       takes the tile and skips the token" -- true, and it fixed that by making the two fully independent,
+       which also permitted the line of play where a corporation takes the FREE TOKEN AND SKIPS THE TILE. That
+       is not a line of play; it is the power's benefit without its cost.
+       REPORTED: "the Place Station for free action ... should only be allowed if the track lay also happened".
+       So the asymmetry is the rule, and a symmetric conjunction cannot state it. The green half of #442's
+       concern survives -- tile-then-stop is still legal -- and it is now asserted as the ORDER rather than as
+       a word. `dhPower.test.ts` holds the gate itself; this holds the sentence. */
+    expect(caption).not.toMatch(/AND\/OR/i);
+    expect(caption).toMatch(/only available with the lay/i);
+    expect(caption).toMatch(/INSTEAD OF its normal tile lay/);
   });
 
   it("agrees with the catalog about which half is free", () => {

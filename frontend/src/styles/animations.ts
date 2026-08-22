@@ -47,6 +47,31 @@ export const PHASE_SHIFT_PULSE_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .app-phase-shift-critical { animation: none !important; }
 }
+/* ==================================================================
+   DESIGN NOTE 755: THE TRAIN CHIP BORROWS THE BADGE'S PULSE
+   ==================================================================
+
+   REQUESTED: "When trains are 2/1 purchase away from rusting, we currently have the number in the chip
+   turning amber/red. I think maybe it should be the number AND the train icon that change colors, and they
+   could pulsate like the 'Phase Shift' badge."
+
+   THE SAME KEYFRAME, NOT A SECOND ONE THAT LOOKS LIKE IT. gamePhase.ts #7 already has chip and badge sharing
+   the two alert constants "so chip and badge escalate together by construction"; sharing the motion is the
+   same argument applied to the second channel. Two hand-tuned pulses at 1.4s and 1.5s would read as a
+   rendering fault rather than as two warnings.
+
+   ONE CLASS PER SURFACE, so reduced-motion can switch them off independently if the chip ever needs a
+   different accommodation -- and because a class named for the badge, sitting on a train chip, is a thing a
+   future reader would rightly hesitate to touch.
+
+   NOTE FOR EDITORS: this whole block lives inside a TEMPLATE LITERAL, so no backticks. The first draft
+   quoted three identifiers in backticks and terminated the string four lines early. */
+.app-train-rust-critical {
+  animation: app-phase-shift-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-train-rust-critical { animation: none !important; }
+}
 `;
 
 

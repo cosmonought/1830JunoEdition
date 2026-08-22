@@ -40,6 +40,12 @@ import {
 } from "./StockMarketRenderer";
 // Design note #713: the sale's arithmetic and its two guards.
 import { certificatesIn, saleProceeds } from "../utils/shareSale";
+// Design note #749: the float rule, shared with the reducer so the card and the board cannot disagree.
+import {
+  FLOAT_THRESHOLD_PERCENT,
+  metFloatThreshold,
+  soldFromIpoPercent,
+} from "../utils/floatThreshold";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
@@ -398,7 +404,7 @@ function CorporationRoster({
                           ? hasRunRoutes
                             ? `${company.ticker} last ran its trains for $${company.last_route_revenue}.`
                             : `${company.ticker} has floated but has not yet run its trains.`
-                          : `${soldToPlayersPercent(company)}% sold to players; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`
+                          : `${soldFromIpoPercent(company)}% has left the IPO; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`
                       }
                     >
                       {company.is_floated ? (
@@ -407,7 +413,7 @@ function CorporationRoster({
                           {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
                         </>
                       ) : (
-                        `${soldToPlayersPercent(company)}% / ${FLOAT_THRESHOLD_PERCENT}%`
+                        `${soldFromIpoPercent(company)}% / ${FLOAT_THRESHOLD_PERCENT}%`
                       )}
                     </span>
                   </span>
@@ -692,10 +698,16 @@ function CorporationRoster({
                    rule: a badge reading "Auto-floated by the B&O private" tells every player such a route exists.
                    So no cause is named. If `is_floated` is true below 60% the flag and the arithmetic disagree, and that
                    is a data fault to surface rather than a rule to rationalise. */}
+                {/* Design note #749: the banner stays and its ARITHMETIC changed. #445's reasoning is intact
+                   -- a floated flag the 60% rule cannot account for is a data fault to surface rather than a
+                   rule to rationalise -- but it was asking how much sat in players' hands, so it fired on
+                   every corporation with 40%-plus in the Bank Pool. Those are floated and operating
+                   normally, so the card was reporting a contradiction that was its own.
+                   AND THE WORDING NAMES THE MEASURE NOW. "40% sold" said nothing about which pile. */}
                 {company.is_floated && !metFloatThreshold(company) && (
                   <span style={styles.floatMismatchNote}>
-                    Floated flag set at {soldToPlayersPercent(company)}% sold &middot; expected{" "}
-                    {FLOAT_THRESHOLD_PERCENT}%
+                    Floated flag set with only {soldFromIpoPercent(company)}% out of the IPO &middot;
+                    expected {FLOAT_THRESHOLD_PERCENT}%
                   </span>
                 )}
 
@@ -1333,7 +1345,33 @@ function CompanyActions({
           ONE ROW PER CERTIFICATE, walked by `projectShareSaleMove` through `salePriceAfter`. */}
       {showSellProjection && salePriceAfter && (() => {
         const after = salePriceAfter(company.company_id, certificatesIn(sellPercentage));
-        if (after === null || after === marketPrice) return null;
+        /* ==================================================================
+             DESIGN NOTE 743a: "NOWHERE LEFT TO FALL" IS AN ANSWER
+           ==================================================================
+
+           REPORTED: "the Sell action shows what happens to the player's treasury but not what happens to the
+           corporation's share price."
+
+           The row #713 built was already here -- and it RENDERED NOTHING whenever `after` came back equal to
+           the current price, which on this chart means the token is on the bottom row of its column and cannot
+           drop. So the one board position where a seller most wants reassurance about the price showed them
+           the same blank as a feature that had never been built.
+
+           AN ABSENT ROW CANNOT BE TOLD FROM A MISSING FEATURE, which is why this now says the thing out loud
+           rather than returning `null`. A player who sees "Share price $65 — already at the bottom of its
+           column" has learnt a fact about the board; a player who sees nothing concludes the app forgot. */
+        if (after === null) return null;
+        if (after === marketPrice) {
+          return (
+            <div style={styles.saleMarketMove}>
+              <span style={styles.saleMarketLabel}>Share price</span>
+              <ZonedPrice price={marketPrice} />
+              <span style={styles.saleMarketFloor}>
+                already at the bottom of its column — this sale cannot lower it
+              </span>
+            </div>
+          );
+        }
         return (
           <div style={styles.saleMarketMove}>
             <span style={styles.saleMarketLabel}>Share price</span>
@@ -1369,18 +1407,15 @@ function CompanyActions({
 // bug in the language of a rule is how the bug becomes the rule. The badge still reads `is_floated`, but
 // when it disagrees with the 60% math the card reports the DISAGREEMENT and names no cause.
 
-/** Percent of a company's shares actually in player hands. */
-function soldToPlayersPercent(company: PublicCompanyState): number {
-  return Math.max(0, 100 - company.ipo_pool_percentage - company.bank_pool_percentage);
-}
+/* Design note #749: BOTH OF THESE ARE GONE, and the pair is why the bug survived. This file had a
+   `soldToPlayersPercent` computing `100 - ipo - bank`; `sandboxSession` had one summing `player_holdings`.
+   Two files, two spellings, one wrong quantity, and each looked right where it stood. `floatThreshold.ts`
+   now owns the arithmetic and names it for what it measures -- `soldFromIpoPercent` -- so the next reader
+   has to notice that "out of the IPO" and "in players' hands" are different questions.
 
-/** Whether this company floated the ORDINARY way -- by reaching the 60%
- *  threshold. `false` plus `is_floated === true` is a CONTRADICTION, not a
- *  second way of floating -- see design note #445. The card reports it as
- *  one rather than attributing it to a rule. */
-function metFloatThreshold(company: PublicCompanyState): boolean {
-  return soldToPlayersPercent(company) >= FLOAT_THRESHOLD_PERCENT;
-}
+   REPORTED: "floating is only contingent on 60% of shares being out of the IPO; if there are 20% in IPO, 20%
+   in player, and 60% in market, that corporation is floated and operational the same as a corporation with
+   40% in IPO and 60% in player." */
 
 /** How many PHYSICAL certificates a holding represents -- NOT `percentage / 10`. A President's Share is
  *  a 20% double certificate, so a president on 60% holds five, not six. The certificate LIMIT is per
@@ -1500,7 +1535,23 @@ function TreasuryProjectionBlock({
           ...(seatColor ? { color: seatColor } : {}),
         }}
       >
-        Treasury
+        {/* ==================================================================
+             DESIGN NOTE 743: CASH IS A PLAYER'S, TREASURY IS A CORPORATION'S
+           ==================================================================
+
+           REPORTED: "listing the player's money as 'Cash' in the action bar and 'Treasury' on the corp card is
+           confusing. I think we need to tighten up our language: Cash is what a player has, Treasury is what a
+           corporation has."
+
+           THIS BLOCK PROJECTS `playerCash` AND CALLED IT TREASURY, which is the confusion at its source: a
+           player watching their own money move read the word the corporation cards use for THEIRS. The module
+           behind it is named `treasuryProjection` and stays that way -- it is generic arithmetic over a
+           balance, used by both -- but the WORD a player reads has to name whose balance it is.
+
+           1830 makes this distinction load-bearing rather than stylistic. A president's cash and their
+           corporation's treasury are separate piles that may not be mixed, except in the one emergency the
+           rules carve out; a UI that uses one word for both is teaching the opposite of the rule. */}
+        Cash
       </span>
       <span style={styles.projectionFigures}>
         <span style={styles.projectionBefore}>${projection.before}</span>
@@ -1519,7 +1570,8 @@ function TreasuryProjectionBlock({
   );
 }
 
-const FLOAT_THRESHOLD_PERCENT = 60;
+// Design note #749: the local `60` is gone -- one constant, beside the arithmetic that uses it.
+export { FLOAT_THRESHOLD_PERCENT } from "../utils/floatThreshold";
 
 export function StockRoundPanel({
   publicCompanies,

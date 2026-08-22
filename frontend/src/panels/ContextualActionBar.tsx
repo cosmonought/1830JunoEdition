@@ -71,7 +71,12 @@ import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
 import { PresidentCrown } from "../components/PresidentCrown";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
-import { shouldCondenseSticky, stickyTopOffset } from "../utils/stickyCollapse";
+import { passButtonLabel, passButtonTitle } from "../utils/turnAction";
+import {
+  canPinWithoutTrapping,
+  shouldCondenseSticky,
+  stickyTopOffset,
+} from "../utils/stickyCollapse";
 import type { DepotTier } from "../utils/gamePhase";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
@@ -186,9 +191,12 @@ function MarketMoveLine({
    coalesced to one per frame. `resize` is listened to alongside `scroll` because a reflow above the
    panel moves its pin line without the scroll position changing -- and a media query may change the
    sticky offset too. */
-function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean] {
+function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, boolean] {
   const ref = React.useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = React.useState(false);
+  /* Design note #720: whether the bar is short enough to pin at all. Starts `true` -- the pre-#720 behaviour --
+     so the first paint is unchanged and the measurement corrects it a frame later. */
+  const [mayPin, setMayPin] = React.useState(true);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -205,8 +213,16 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean] {
       if (stickyTop === null) {
         stickyTop = stickyTopOffset(window.getComputedStyle(node).top);
       }
-      const distanceToPin = node.getBoundingClientRect().top - stickyTop;
-      setCondensed((was) => shouldCondenseSticky(distanceToPin, was));
+      const rect = node.getBoundingClientRect();
+      /* Design note #720: measured on the SAME rect as the pin distance, in the same rAF. Two reads would be
+         two forced layouts per frame for numbers that must agree with each other. */
+      const pinnable = canPinWithoutTrapping(rect.height, window.innerHeight, stickyTop);
+      setMayPin(pinnable);
+      const distanceToPin = rect.top - stickyTop;
+      /* A bar that cannot pin must not CONDENSE either. Condensing is a response to being stuck, and a static
+         element's rect top goes negative simply by scrolling past it -- so the untouched predicate would shed
+         rows as the bar left the screen, for space nothing was competing for. */
+      setCondensed((was) => (pinnable ? shouldCondenseSticky(distanceToPin, was) : false));
     };
 
     const schedule = () => {
@@ -226,13 +242,47 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean] {
     measure();
     window.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", onResize);
+
+    /* ==================================================================
+       DESIGN NOTE 758: THE RULE WAS RIGHT AND ITS TRIGGER WAS INCOMPLETE
+       ==================================================================
+
+       REPORTED: "A similar bug as occurred with the Buy Private Company sticky, the sticky for Buy Trains
+       from Other Corporations is so large when all corporations are operating that it takes up the whole
+       screen and cannot be scrolled to the bottom until the screen behind it is scrolled all the way down."
+
+       "A SIMILAR BUG" IS EXACTLY RIGHT, AND #720 ALREADY FIXED THE RULE. `canPinWithoutTrapping` is sound and
+       was already being applied to this same bar. What it was wired to is the problem: scroll and resize --
+       two things that describe the VIEWPORT. The quantity that actually changes here is the PANEL. "Buy
+       Trains from a Corporation" is an accordion, and the seller roster inside it grows with every
+       corporation that owns a train, so the bar can double in height with the viewport untouched and nothing
+       telling the measurement to look again.
+
+       SO A STALE `mayPin` FROM WHEN THE ACCORDION WAS SHUT keeps the bar pinned while it is too tall to pin.
+       A scroll eventually corrects it, which is why this reads as "cannot be scrolled to the bottom UNTIL the
+       screen behind it is scrolled" rather than as a permanently broken panel -- the fix arrives, one gesture
+       after it was needed.
+
+       A `ResizeObserver` IS THE WHOLE FIX, and it covers the cases nobody has thought of yet: a longer
+       refusal message wrapping to three lines, a tray added next year, a font-size preference. Anything that
+       changes the bar's height now re-asks the question, which is what #720 meant to happen and wired to the
+       wrong events.
+
+       FEATURE-DETECTED because this hook renders under jsdom in the component tests, where `ResizeObserver`
+       is not always defined -- and an absent observer must degrade to the old scroll-and-resize behaviour
+       rather than throwing on mount. */
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule());
+    if (observer && ref.current) observer.observe(ref.current);
+
     return () => {
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", onResize);
+      observer?.disconnect();
     };
   }, []);
 
-  return [ref, condensed];
+  return [ref, condensed, mayPin];
 }
 
 
@@ -243,6 +293,7 @@ export default function ContextualActionBar({
   onPassTurn,
   autoPass,
   passDisabledReason,
+  turnActionTaken,
   onPlaceStationTokenHint,
   stationTokenCost,
   maxRouteRevenue = null,
@@ -265,6 +316,7 @@ export default function ContextualActionBar({
   privatePowerViewer,
   sandboxMode,
   usedPrivateAbilities,
+  privateActionBlocks,
   privateAbilityError = null,
   onUsePrivateAbility,
   onRunTrains,
@@ -313,6 +365,9 @@ export default function ContextualActionBar({
    *  waterfall forbids it while no private holds a standing bid
    *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
   passDisabledReason: string | null;
+  /** Design note #745: has the acting seat already sold this turn? The bar renders the fact; the reducer
+   *  decides it. `undefined` reads as "no", which is the right answer everywhere outside a Stock Round. */
+  turnActionTaken?: boolean;
   onPlaceStationTokenHint: () => void;
   /** Design note #181: what a token costs this corporation, for the button
    *  label. A number rather than a formatted string so the caller cannot
@@ -402,6 +457,9 @@ export default function ContextualActionBar({
   /** Design note #442: keyed by ACTION, not by private id -- the D&H's
    *  two powers are spent independently. */
   usedPrivateAbilities: ReadonlySet<string>;
+  /** Design note #725: per-action refusals for the private powers, keyed by action key. Passed straight
+   *  through -- the bar hosts the panel but has no opinion about the D&H's ordering rule. */
+  privateActionBlocks?: Readonly<Record<string, string | null>>;
   /** Design note #573b: why the last exchange refused. */
   privateAbilityError?: string | null;
   onUsePrivateAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
@@ -433,6 +491,10 @@ export default function ContextualActionBar({
     canAct: boolean;
     blockedReason: string | null;
     onBuyFromBank: (tier: string, quantity: number) => void;
+    /** Design note #751c: opens the emergency modal, and whether the corporation is short enough to need it.
+     *  Passed straight through -- the bar is a conduit, not a decider. */
+    onEmergencyPurchase?: () => void;
+    emergencyAvailable?: boolean;
     onProposeTrade: (proposal: TrainTradeProposal) => void;
     labelForAddress: (address: string) => string;
   } | null;
@@ -522,7 +584,7 @@ export default function ContextualActionBar({
   const phaseAlert = phaseAlertLevel(phase ?? null);
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
-  const [actionBarRef, condensed] = useCondensedWhenPinned();
+  const [actionBarRef, condensed, mayPin] = useCondensedWhenPinned();
 
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
@@ -847,6 +909,9 @@ export default function ContextualActionBar({
         style={{
           ...styles.actionBar,
           ...(condensed ? styles.actionBarCondensed : {}),
+          // Design note #720: applied here too. This form is one button tall and will never trip the rule --
+          // what it must not do is become the copy that disagrees when somebody grows it.
+          ...(mayPin ? {} : styles.actionBarUnpinned),
           ...styles.actionBarRedirect,
         }}
       >
@@ -877,6 +942,12 @@ export default function ContextualActionBar({
            turn just began", which a continuous animation can never carry. */
         ...(isMyTurn ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
+        /* Design note #720: THE BAR UNSTICKS WHEN IT OUTGROWS THE VIEWPORT. Reported of the embedded Buy
+           Private step: "my scrolling is taking me down the page but not the subpanel". A sticky element stops
+           at its offset, so anything hanging below the fold when it pins can never be scrolled to -- the panel
+           was not unscrollable, it was anchored. `static` gives it back to the page, which is the only
+           behaviour that reaches its bottom. The rule and the reasoning are in `stickyCollapse.ts` #720. */
+        ...(mayPin ? {} : styles.actionBarUnpinned),
         /* Design note #597a: `sticky` IS ALREADY A POSITIONED ELEMENT. Reported as the bar no longer travelling
            with the scroll -- that was this line. A previous pass added `position: relative` so the band could pin
            itself, claiming it did so "without the bar's own sticky positioning being disturbed", which is exactly
@@ -1310,7 +1381,10 @@ export default function ContextualActionBar({
                        tooltip is one nobody hovers. */
                     title={
                       activeCorporation.presidentCash !== null
-                        ? `President's Personal Treasury: $${activeCorporation.presidentCash}`
+                        /* Design note #743: "Cash", not "Treasury". This named a PLAYER'S money with the corporation's
+                             word -- and did it in the one place the two sit closest together, where an
+                             emergency purchase is deciding between them. */
+                          ? `President's Cash: $${activeCorporation.presidentCash}`
                         : undefined
                     }
                   >
@@ -1570,9 +1644,67 @@ export default function ContextualActionBar({
              THE CHIPS ARE LIVE, not a readout -- they call the same handlers the planner rows do, so a player can
              still switch which train the map is drafting for. A dead label would show the problem without giving
              anywhere to act on it. */}
+          {/* ==================================================================
+               DESIGN NOTE 739: WATCHING IS PART OF THE GAME
+             ==================================================================
+
+             REQUESTED: "it is normal in a game of 18xx to see/watch rivals set their routes: perhaps during
+             the Run Routes phase, every player's Action bar should show the color-coded train chips as well as
+             the routes on the map and the revenue for each and total?"
+
+             #691 REMOVED THIS ROW FROM INACTIVE SCREENS, and its reasoning was about CONTROLS -- "on somebody
+             else's turn they would be a row of controls that dispatch for a corporation the reader does not
+             hold". Every word of that is still true, and none of it argues against the INFORMATION. A route
+             is public: it is drawn on a shared board out of track everybody can see, and at a table you watch
+             a president trace it with a finger. Hiding it is a departure from the physical game that #691
+             never intended and only made because control and content were the same element.
+
+             SO THE ROW IS SPLIT BY ROLE, NOT REMOVED. The acting president gets buttons; everybody else gets
+             the same chips as static text -- no `onClick`, no `aria-pressed`, no `disabled`, because a
+             disabled control invites a reader to wonder what they did wrong. Hover still highlights the route
+             on the map, which is a reading aid rather than an action.
+
+             AND THE TOTAL, which the report asks for and the president's own row never had: watching is a
+             comparison ("can they beat my run?"), and per-train figures without a sum make the reader do
+             arithmetic the panel is already holding. */}
+          {!mayActThisTurn && orSubPhase === "Routes" && trainDrafts.length > 0 && (
+            <div style={styles.condensedTrainRow} role="group" aria-label="Routes being drafted">
+              {trainDrafts.map((draft) => (
+                <span
+                  key={draft.trainIndex}
+                  onMouseEnter={() => onHighlightRoute?.(draft.trainIndex)}
+                  onMouseLeave={() => onHighlightRoute?.(null)}
+                  style={{
+                    ...styles.condensedTrainChip,
+                    ...styles.spectatorTrainChip,
+                    borderBottomColor: routeTrainColor(draft.trainIndex),
+                  }}
+                  title={
+                    draft.value === null
+                      ? `${draft.model}-train has no route drafted yet.`
+                      : `${draft.model}-train runs for $${draft.value}.`
+                  }
+                >
+                  {draft.model}-Train
+                  <span style={styles.condensedTrainValue}>
+                    {draft.value === null ? "—" : `$${draft.value}`}
+                  </span>
+                </span>
+              ))}
+              {/* Design note #739: the sum, and only when there is more than one figure to sum. On a
+                  one-train corporation a total beside the single value would be the same number twice. */}
+              {trainDrafts.filter((draft) => draft.value !== null).length > 1 && (
+                <span style={styles.spectatorTotal}>
+                  Total $
+                  {trainDrafts.reduce((sum, draft) => sum + (draft.value ?? 0), 0)}
+                </span>
+              )}
+            </div>
+          )}
           {/* Design note #691: and only for the player whose routes these are. The chips are LIVE (see above) --
               on somebody else's turn they would be a row of controls that dispatch for a corporation the reader
-              does not hold. */}
+              does not hold.
+              Design note #739: still true of the BUTTONS. The spectator's read-only twin is above. */}
           {mayActThisTurn && orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
             <div style={styles.condensedTrainRow} role="group" aria-label="Drafted routes">
               {trainDrafts.map((draft) => {
@@ -1786,6 +1918,8 @@ export default function ContextualActionBar({
               canAct={trainPurchase.canAct}
               blockedReason={trainPurchase.blockedReason}
               onBuyFromBank={trainPurchase.onBuyFromBank}
+              onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
+              emergencyAvailable={trainPurchase.emergencyAvailable}
               onProposeTrade={trainPurchase.onProposeTrade}
               labelForAddress={trainPurchase.labelForAddress}
               condensed={condensed}
@@ -1949,25 +2083,40 @@ export default function ContextualActionBar({
             }}
             onClick={onPassTurn}
             disabled={!sessionReady || passDisabledReason !== null}
-            title={passDisabledReason ?? "Pass / skip your turn."}
+            /* Design note #745: the label is the rule. A player who has just sold is looking at the only
+               button that will end their turn, and while it read "Pass Turn" the reasonable inference was
+               that pressing it forfeits something -- which is how the reported bug was found. */
+            title={passDisabledReason ?? passButtonTitle(turnActionTaken === true)}
           >
-            Pass Turn
+            {passButtonLabel(turnActionTaken === true)}
           </button>
           {/* Design note #717: AUTO-PASS SITS BESIDE PASS, because it is the same decision with a duration.
               Only in a Stock Round -- an Operating Round turn is a corporation's, not a player's, and there is
               nothing there a standing instruction could safely stand for.
               ARMED, IT IS A DISARM BUTTON. One control, two states, so a player can always see whether it is
               on -- which is the thing they most need to know about a setting that acts without them. */}
-          {autoPass && roundType === "StockRound" && (
+          {/* Design note #728: SHOWN WHENEVER IT IS ARMED, not only where it can be armed.
+              REPORTED: "Players need a way to disable Auto-Pass once it is on. The Auto-Pass button should be
+              clickable at any time for them to turn it off."
+              The condition was `roundType === "StockRound"`, which is right for OFFERING the control and wrong
+              for WITHDRAWING it: the instant the round turned, the button vanished while the arm was still set,
+              so the only way out was to wait for a Stock Round that would then be passed for you. An off switch
+              that is only reachable in the state it acts on is not an off switch.
+              `armed ||` is the whole fix. Arming still needs a Stock Round; disarming needs nothing. */}
+          {autoPass && (autoPass.armed || roundType === "StockRound") && (
             <button
               type="button"
               style={{
                 ...styles.actionBarButton,
                 ...(autoPass.armed ? styles.autoPassArmed : {}),
-                ...(!sessionReady ? styles.actionBarButtonDisabled : {}),
+                ...(!autoPass.armed && !sessionReady ? styles.actionBarButtonDisabled : {}),
               }}
               onClick={autoPass.armed ? autoPass.onDisarm : autoPass.onOpenSettings}
-              disabled={!sessionReady}
+              /* Design note #728: never disabled while armed. `sessionReady` gates ARMING because a standing
+                 instruction that will dispatch needs a session to dispatch through; clearing one is a local
+                 state write that needs nothing. A dropped connection must not trap a player inside a setting
+                 that keeps taking their turns. */
+              disabled={!autoPass.armed && !sessionReady}
               title={
                 autoPass.armed
                   ? "Auto-Pass is on for this Stock Round. Click to turn it off."
@@ -2085,6 +2234,8 @@ export default function ContextualActionBar({
         actingProtocolId={activeCorporation?.companyId ?? null}
         actingPresident={activeCorporation?.presidentAddress ?? null}
         usedAbilities={usedPrivateAbilities}
+        // Design note #725: the D&H's station stays greyed, with its reason, until its lay resolves.
+        blockedActions={privateActionBlocks}
         abilityError={privateAbilityError}
         onUseAbility={onUsePrivateAbility}
         controlsEnabled={sessionReady}

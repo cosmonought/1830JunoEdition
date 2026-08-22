@@ -120,6 +120,20 @@ export function EmergencyTrainPurchaseModal({
   onConfirm,
   sandbox,
 }: EmergencyTrainPurchaseModalProps) {
+  /* Design note #751e: the DRAFT sale, per corporation. React state rather than the log because nothing has
+     happened yet -- these are certificates a president is considering, and #400's rule ("the reducer settles,
+     the shell narrates") puts an unsubmitted intention squarely on this side of the line. The moment Sell
+     Shares is pressed it becomes ordinary `SellStock` messages and stops living here. */
+  const [saleCounts, setSaleCounts] = React.useState<Record<number, number>>({});
+
+  const saleTotal = Object.values(saleCounts).reduce((sum, count) => sum + count, 0);
+  const saleProceedsTotal = (plan?.holdings ?? []).reduce((sum, holding) => {
+    const count = saleCounts[holding.companyId] ?? 0;
+    return sum + count * (holding.pricePerShare ?? 0);
+  }, 0);
+
+  /* AFTER the hooks, never before: a modal that returns early on `null` and then calls `useState` breaks the
+     rules of hooks the first time the plan appears. */
   if (!plan) return null;
 
   const confirmReason = plan.bankrupt
@@ -207,27 +221,41 @@ export function EmergencyTrainPurchaseModal({
                     <span style={styles.holdingValue}>
                       {holding.pricePerShare === null ? "unpriced" : `$${holding.proceeds}`}
                     </span>
-                    <button
-                      type="button"
-                      style={{
-                        ...styles.sellButton,
-                        ...(sandbox && holding.sellableCertificates > 0
-                          ? styles.sellButtonLive
-                          : styles.sellButtonDisabled),
-                      }}
+                    {/* Design note #751e: A DROPDOWN, NOT AN ALL-OR-NOTHING BUTTON.
+                        REPORTED: "a drop-down for each corporation for players to select how many shares to
+                        sell. Once they have adjusted this table, there should be a button saying 'Sell
+                        Shares' and again the effect on their personal cash."
+                        The old row sold the WHOLE legal block in one click, which is the maximum rather than
+                        the choice -- and every certificate sold costs that corporation a row on the market
+                        chart, so selling one more than needed is a real loss to a president who may still be
+                        holding those shares at the end of the game. */}
+                    <select
+                      style={styles.sellSelect}
+                      value={saleCounts[holding.companyId] ?? 0}
                       disabled={!sandbox || holding.sellableCertificates === 0}
-                      onClick={() =>
-                        onSellShares?.(holding.companyId, holding.sellablePercent)
-                      }
+                      aria-label={`Certificates of ${holding.ticker} to sell`}
                       title={
                         holding.restriction ??
                         (sandbox
-                          ? `Sell ${holding.sellableCertificates} certificate${holding.sellableCertificates === 1 ? "" : "s"} of ${holding.ticker} for $${holding.proceeds}.`
+                          ? `Up to ${holding.sellableCertificates} certificate${holding.sellableCertificates === 1 ? "" : "s"} of ${holding.ticker}, $${holding.pricePerShare ?? 0} each.`
                           : "Emergency share sales need a contract message that does not exist yet (ExecuteMsg has no variant marking a sale as funding a mandatory train buy).")
                       }
+                      onChange={(event) =>
+                        setSaleCounts((prev) => ({
+                          ...prev,
+                          [holding.companyId]: Number(event.target.value),
+                        }))
+                      }
                     >
-                      Sell {holding.sellableCertificates || ""}
-                    </button>
+                      {Array.from(
+                        { length: holding.sellableCertificates + 1 },
+                        (_unused, count) => count,
+                      ).map((count) => (
+                        <option key={count} value={count}>
+                          {count === 0 ? "\u2014" : `${count} \u00d7 10%`}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 ))}
               </div>
@@ -235,6 +263,49 @@ export function EmergencyTrainPurchaseModal({
             {/* Design note #1 in `endgame.ts`: the two restrictions, stated
                 once under the table rather than repeated on every row that
                 happens to hit one. */}
+            {/* Design note #751e: ONE BUTTON FOR THE WHOLE TABLE, because one sale decision is being made
+                even when it spans three corporations -- and because the figure that matters is the TOTAL
+                against the shortfall, which no per-row button could show. */}
+            {sandbox && !plan.bankrupt && (
+              <div style={styles.sellFooter}>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.sellAllButton,
+                    ...(saleTotal > 0 ? {} : styles.sellButtonDisabled),
+                  }}
+                  disabled={saleTotal === 0}
+                  onClick={() => {
+                    for (const holding of plan.holdings) {
+                      const count = saleCounts[holding.companyId] ?? 0;
+                      if (count > 0) onSellShares?.(holding.companyId, count * 10);
+                    }
+                    setSaleCounts({});
+                  }}
+                  title={
+                    saleTotal === 0
+                      ? "Choose how many certificates to sell first."
+                      : `Raise $${saleProceedsTotal} towards the $${plan.mustRaiseBySelling} still needed.`
+                  }
+                >
+                  Sell Shares
+                </button>
+                {saleTotal > 0 && (
+                  <span style={styles.cashProjection}>
+                    Your cash ${plan.presidentCash} &rarr;{" "}
+                    <strong style={styles.cashAfter}>
+                      ${plan.presidentCash + saleProceedsTotal}
+                    </strong>
+                    {saleProceedsTotal < plan.mustRaiseBySelling && (
+                      <span style={styles.sellShort}>
+                        {" "}
+                        &mdash; still ${plan.mustRaiseBySelling - saleProceedsTotal} short
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
             <span style={styles.restrictionNote}>
               A President&#39;s Certificate may only be sold when another player already holds 20%
               of that corporation and the Bank Pool has room for the whole 20% block. No
@@ -248,27 +319,68 @@ export function EmergencyTrainPurchaseModal({
             <strong>Bankruptcy.</strong> Every legal source is exhausted: $
             {plan.treasuryContribution} from the treasury, ${plan.presidentCash} in cash and at most
             ${plan.maxSaleProceeds} from sellable shares — short of the ${plan.trainCost} required.
-            In Project 18XX this ends the game immediately.
+            {plan.maxSaleProceeds > 0 && (
+              <>
+                {" "}
+                Everything sellable above will be sold and the proceeds handed to{" "}
+                {plan.corporationTicker}.
+              </>
+            )}{" "}
+            The game then ends.
           </p>
         )}
 
+        {/* ==================================================================
+            DESIGN NOTE 751d: ONE BUTTON PER STAGE, EACH NAMING ITS OWN COST
+            ==================================================================
+            REPORTED: "a button saying 'You must contribute $x of personal cash to complete this purchase,'
+            with the usual effect on their personal cash shown, i.e., [current cash] > [cash after
+            transaction]" -- and separately a "Sell Shares" button with the same treatment.
+            THE OLD FOOTER HAD ONE BUTTON FOR ALL THREE STAGES. It read "Buy 4-train for $630", which is the
+            corporation's price and never the number the president was actually being asked for. A player
+            reading it had no way to see that $130 of their own money was about to move.
+            SO THE LABEL IS THE PRESIDENT'S FIGURE and the projection underneath is their balance, in the same
+            [before] > [after] shape #682 established for the Stock Round's buy and sell. Same shape, same
+            two surfaces, so the one moment a player spends personal money on a corporation reads like every
+            other time they spend money. */}
         <div style={styles.footer}>
           {confirmReason && <span style={styles.footerReason}>{confirmReason}</span>}
-          <button
-            type="button"
-            style={{
-              ...styles.confirmButton,
-              ...(confirmReason !== null ? styles.confirmButtonDisabled : {}),
-            }}
-            disabled={confirmReason !== null}
-            onClick={onConfirm}
-            title={
-              confirmReason ??
-              `${plan.corporationTicker} pays $${plan.treasuryContribution} and ${plan.presidentLabel} pays $${plan.shortfall}.`
-            }
-          >
-            Buy {plan.trainModel}-train for ${plan.trainCost}
-          </button>
+          {plan.bankrupt ? (
+            /* #751a: there is nothing to decide, so the only control acknowledges rather than chooses. It
+               is still a control -- a screen that resolves itself is how somebody concludes the app
+               cheated them, and a player whose game just ended is owed the arithmetic. */
+            <button type="button" style={styles.confirmButton} onClick={onConfirm}>
+              Sell everything and end the game
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                style={{
+                  ...styles.confirmButton,
+                  ...(confirmReason !== null ? styles.confirmButtonDisabled : {}),
+                }}
+                disabled={confirmReason !== null}
+                onClick={onConfirm}
+                title={
+                  confirmReason ??
+                  `${plan.corporationTicker} pays $${plan.treasuryContribution} and ${plan.presidentLabel} pays $${plan.shortfall}.`
+                }
+              >
+                {plan.fromPlayerCash > 0
+                  ? `Contribute $${plan.fromPlayerCash} of your cash and buy the ${plan.trainModel}-train`
+                  : `Buy ${plan.trainModel}-train for $${plan.trainCost}`}
+              </button>
+              {plan.fromPlayerCash > 0 && confirmReason === null && (
+                <span style={styles.cashProjection}>
+                  Your cash ${plan.presidentCash} &rarr;{" "}
+                  <strong style={styles.cashAfter}>
+                    ${Math.max(0, plan.presidentCash - plan.fromPlayerCash)}
+                  </strong>
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -464,6 +576,39 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#6f7480",
     cursor: "not-allowed",
   },
+  sellSelect: {
+    padding: "4px 8px",
+    borderRadius: "6px",
+    border: "1px solid #4a5163",
+    backgroundColor: "#1a1f2b",
+    color: "#e2e6ee",
+    fontSize: FONT_SIZE.small,
+    fontFamily: "inherit",
+    minWidth: "84px",
+  },
+  sellFooter: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "10px",
+    marginTop: "10px",
+  },
+  sellAllButton: {
+    padding: "7px 14px",
+    borderRadius: "8px",
+    border: "1px solid #4ade80",
+    backgroundColor: "#166534",
+    color: "#ffffff",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  sellShort: { color: "#fbbf24" },
+  /* Design note #751d: the same [before] -> [after] shape #682 gave the Stock Round, because this is the one
+     moment a player spends personal money on a corporation and it should read like every other spend. */
+  cashProjection: { fontSize: FONT_SIZE.small, color: "#9aa1b4" },
+  cashAfter: { color: "#e2e6ee" },
   bankruptNotice: {
     margin: 0,
     padding: "10px 12px",

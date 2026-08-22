@@ -91,6 +91,52 @@ export interface StationTokenCompany {
   station_tokens?: Array<[number, number, number]> | null;
 }
 
+/** Whether `company` has a station token standing on `(q, r)`.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 724: THE PRESENCE QUESTION AND THE WHICH-CITY QUESTION
+ *  ==================================================================
+ *
+ *  REPORTED: "when I upgraded Baltimore (B&O's home station hex), the green tile has a 'ghost' B&O marker on
+ *  it -- I am guessing that is the home station reservation marker ... The home station reservation markers
+ *  need to be hidden after the home station is placed."
+ *
+ *  Correct, and it was hidden by a test on the WRONG FIELD. The renderer asked `station_tokens?.some(...)`,
+ *  which is the `(q, r, city_index)` list -- and the note directly above says what an empty one means: "this
+ *  chain doesn't know", never "no tokens". So on any chain that does not report city indices, `homePlaced`
+ *  was false forever and the reservation badge outlived the token it was reserving for.
+ *
+ *  WHY IT ONLY SHOWED ON THE UPGRADE -- and this paragraph is a CORRECTION, because the first version of it
+ *  asserted that I15's green tile adds a second station slot. It does not. Reported: "I15's green tile does
+ *  NOT give it a second station slot. It simply moves the city/station from its off-center position on the
+ *  preprinted yellow tile to a centered position." The right diagnosis is better than the one I invented and
+ *  points at a second defect, so it is worth stating exactly.
+ *
+ *  THE BADGE IS COMPUTED WITHOUT THE LAID TILE. It called `stationMarkerPoint(q, r, size)` with no
+ *  `laidTile`, which takes the tile-less fallback -- a fixed anchor derived from the hex. Preprinted track is
+ *  not a `tiles` entry, so on yellow I15 the REAL token pass had no tile either: both took the same fallback
+ *  and painted on top of each other. One marker, correct-looking, for the whole early game.
+ *
+ *  Laying green puts a real entry in `tiles`. The token follows the tile's own city anchor -- which is
+ *  exactly the recentring the report describes -- while the badge stays on the fallback it never stopped
+ *  using, and the duplicate that had been there since the placement separates. So the visible symptom is two
+ *  bugs stacked: the badge should not have been drawn at all (this note), and where it IS drawn it should
+ *  follow the tile (fixed alongside). A rendering fault can hide for an entire phase because two things were
+ *  wrong in the same direction.
+ *
+ *  SO THE TWO QUESTIONS GET TWO FUNCTIONS. "Is there a token here" is answered by `station_token_hexes`,
+ *  which is REQUIRED and always populated; "which city is it in" is answered by `station_tokens`, which is
+ *  optional and may legitimately be silent. They were one field apart in the source and are one word apart in
+ *  English, which is exactly why this needs a name rather than an inline `.some()`.
+ *  `tokenCityIndex` below keeps reading the optional field, because unknown really is its answer. */
+export function hasStationTokenAt(
+  company: Pick<StationTokenCompany, "station_token_hexes">,
+  q: number,
+  r: number,
+): boolean {
+  return company.station_token_hexes.some(([tq, tr]) => tq === q && tr === r);
+}
+
 /** Which city on `(q, r)` holds `company`'s token -- design note #134. Prefers the chain's own answer.
  *  Returns `undefined` when the chain has not told us, which is a DIFFERENT answer from `0` and must stay
  *  distinguishable: the caller falls back to the legacy per-hex heuristic rather than asserting city 0 and

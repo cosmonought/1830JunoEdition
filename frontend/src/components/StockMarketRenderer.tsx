@@ -349,6 +349,22 @@ export function projectShareSaleMove(
   return { price, x, y };
 }
 
+/** Where the token lands on the SOLD-OUT rise -- one row UP. Design note #746: the fourth movement, which
+ *  the frontend did not have until the compass rose asked for it by name.
+ *
+ *  `y + 1` is up, on the same inverted axis the sale projection walks down. Clamps at the top of the column
+ *  rather than inventing a cell, so a caller can tell "rose" from "already at the ceiling" by comparing the
+ *  returned cell with the one it passed in -- exactly how the other three are read. */
+export function projectRiseMove(from: {
+  x: number;
+  y: number;
+}): { price: number; x: number; y: number } | null {
+  const start = cellAt(from.x, from.y);
+  if (!start) return null;
+  const above = cellAt(from.x, from.y + 1);
+  return above ? { price: above.price, x: above.x, y: above.y } : start;
+}
+
 /** Where the token lands on a dividend decision -- one column RIGHT on a pay, LEFT on a withhold.
  *  Takes a cell for the same reason the sale projection does. Ordinary move only; clamps at the edge. */
 export function projectDividendCellMove(
@@ -533,6 +549,144 @@ const PAR_TRAY_ROWS: readonly number[] = [100, 90, 82, 76, 71, 67];
  *  (the main grid's exception-zone fills) -- see design note #14. */
 const PAR_TRAY_ROW_BG = "#1d2028";
 const PAR_TRAY_ROW_BORDER = "#333947";
+
+/* ------------------------------------------------------------------ */
+/* Market Compass Rose -- see design note #746                         */
+/* ------------------------------------------------------------------ */
+
+/* ==================================================================
+ *  DESIGN NOTE 747: FOUR ARROWS, FOUR RULES, ONE POCKET
+ * ==================================================================
+ *
+ * ASKED FOR: "a 'compass rose' showing token movements? So an arrow right with 'Paid Dividends,' an arrow
+ * left with 'Withheld Dividends,' an arrow up with 'All shares owned by players,' and an arrow down with
+ * 'Per share sold'." And on placement: "The trouble is I like the current Stock Market panel and adding this
+ * will create a lot of extra vertical space ... is there some way you could put this compass rose in the
+ * lower horizontal space between the IPO/Par tray and the Stock Market Matrix?"
+ *
+ * THERE IS, AND IT COSTS NOTHING. The Par tray is a 168px column beside an eleven-row matrix and is only ever
+ * about six rows tall, so the bottom of its column is already empty -- the rose drops into a pocket that
+ * exists whether or not anything is in it. On a narrow window the tray wraps to its own row (#26's chosen
+ * failure mode) and the rose wraps with it, still costing nothing beside it.
+ *
+ * WHICH IS WHY IT IS SIZED THE WAY IT IS. The pocket is roughly 120px tall at the smallest cell size and
+ * several hundred at the largest, so the rose is built to fit the SMALL case: a compass, four tip labels, and
+ * one clarifying line. Anything richer would have been honest on a wide monitor and a scrollbar on a laptop.
+ *
+ * THE COLOURS ARE THE ONES ALREADY IN USE for a market move -- #489's green rise and red fall, the same pair
+ * the Dividends step draws its arrow in. Reused rather than re-picked so a player who has learned what green
+ * means on one surface has not learned something else here.
+ *
+ * AND EVERY ARM NAMES A MOVEMENT THE CODE PERFORMS. That was not true when this was requested -- the up arrow
+ * had no implementation anywhere in the frontend, which is what #746 is about. The harness asserts the
+ * correspondence rather than trusting it, on #652's precedent: a legend row survived one verification cycle
+ * describing a condition no cell on this board carried. */
+
+interface CompassArm {
+  /** The glyph, and the direction it means. */
+  glyph: string;
+  /** What the player did. Terse because the column is 168px wide. */
+  label: string;
+  rising: boolean;
+  /** The full rule, for the tooltip and for a screen reader. */
+  rule: string;
+}
+
+export const COMPASS_ARMS: Readonly<Record<"up" | "right" | "left" | "down", CompassArm>> = {
+  /* SOLD OUT IS THE ONE THAT NEEDS ITS PARENTHETICAL. The other three are things a player just DID and will
+     recognise; this one is a condition of the board that resolves at a moment nobody clicks, so "sold out"
+     alone would leave them hunting for what they did wrong -- or right. */
+  /* Design note #746c: "and again at the end of the Stock Round" REMOVED from this sentence, along with the
+     second trigger it described. There is one rise and one moment. The caption was accurate about the code as
+     it then stood, which is precisely why a wrong rule reaches a player: the legend agreed with the bug. */
+  up: {
+    glyph: "↑",
+    label: "Sold out",
+    rising: true,
+    rule: "Every share in players' hands — IPO and Bank Pool both empty. Rises once, at the end of the Stock Round.",
+  },
+  right: {
+    glyph: "→",
+    label: "Paid",
+    rising: true,
+    rule: "The corporation paid dividends: one column right.",
+  },
+  left: {
+    glyph: "←",
+    label: "Withheld",
+    rising: false,
+    rule: "The corporation withheld dividends, including a forced $0: one column left.",
+  },
+  down: {
+    glyph: "↓",
+    label: "Each 10% sold",
+    rising: false,
+    rule: "One row down per 10% share sold — per block, not per sale.",
+  },
+};
+
+function CompassTip({ arm, stacked }: { arm: CompassArm; stacked?: boolean }) {
+  return (
+    <span
+      style={{
+        ...styles.compassTip,
+        ...(arm.rising ? styles.compassRising : styles.compassFalling),
+        ...(stacked ? styles.compassTipStacked : {}),
+      }}
+      title={arm.rule}
+    >
+      {arm.label}
+    </span>
+  );
+}
+
+function CompassGlyph({ arm }: { arm: CompassArm }) {
+  return (
+    <span
+      style={{
+        ...styles.compassGlyph,
+        ...(arm.rising ? styles.compassRising : styles.compassFalling),
+      }}
+      role="img"
+      aria-label={arm.rule}
+      title={arm.rule}
+    >
+      {arm.glyph}
+    </span>
+  );
+}
+
+export function MarketCompassRose() {
+  return (
+    <aside style={styles.compass}>
+      <span style={styles.compassTitle}>Which way a token moves</span>
+
+      <CompassTip arm={COMPASS_ARMS.up} stacked />
+      <CompassGlyph arm={COMPASS_ARMS.up} />
+
+      {/* The horizontal arms share one line, labels outboard of their arrows, which is what lets the whole
+          rose read as a compass inside a column this narrow. */}
+      <div style={styles.compassRow}>
+        <CompassTip arm={COMPASS_ARMS.left} />
+        <CompassGlyph arm={COMPASS_ARMS.left} />
+        <span style={styles.compassHub} aria-hidden="true">
+          &#9679;
+        </span>
+        <CompassGlyph arm={COMPASS_ARMS.right} />
+        <CompassTip arm={COMPASS_ARMS.right} />
+      </div>
+
+      <CompassGlyph arm={COMPASS_ARMS.down} />
+      <CompassTip arm={COMPASS_ARMS.down} stacked />
+
+      {/* #651's rule: rules belong on screen, not only in tooltips. The one arm whose trigger is not an
+          action a player takes gets its condition spelled out here rather than left to a hover. */}
+      <span style={styles.compassFootnote}>
+        Sold out = no shares left in the IPO or the Bank Pool.
+      </span>
+    </aside>
+  );
+}
 
 function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, ParMarker[]> }) {
   return (
@@ -1072,7 +1226,12 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
       {/* Design note #452: the same `<style>`-tag escape hatch the tab bar
           and the turn pulse use -- inline styles cannot express `:hover`. */}
       <style>{MARKET_TOKEN_SCATTER_CSS}</style>
-      <ParIpoTray markersByPrice={parMarkersByPrice} />
+      {/* Design note #747: the tray and the rose share one column, and the rose lands in the pocket the
+          tray's six rows leave under it beside an eleven-row matrix -- so it costs no height at all. */}
+      <div style={styles.traySlot}>
+        <ParIpoTray markersByPrice={parMarkersByPrice} />
+        <MarketCompassRose />
+      </div>
       </div>
       <MarketCellLegend />
     </div>
@@ -1218,19 +1377,89 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     width: "100%",
   },
+  /* Design note #747: THE COLUMN, which now holds two things. The width flex-basis moved up here from
+     `parTray` -- inside a column the basis would size the tray's HEIGHT, which is not what #26 meant by it.
+     The tray keeps its own look and simply fills the width it is given. */
+  traySlot: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    // Design note #26's basis, unchanged in value: slim, fixed, wrapping to its own row when it must.
+    flex: "0 0 168px",
+    minWidth: "168px",
+  },
   // ---- Disconnected Par/IPO Tray -- see design notes #10/#17. ----
   parTray: {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
     padding: "12px 14px",
-    // Design note #26: SLIM and fixed -- just enough for a price and a row of ticker chips. It still
-    // wraps to its own row on a narrow window, which is the right failure mode.
-    flex: "0 0 168px",
-    minWidth: "168px",
+    // Design note #747: sizing moved to `traySlot`; this fills it.
+    flex: "0 0 auto",
+    width: "100%",
+    boxSizing: "border-box",
     backgroundColor: "#161922",
     border: "1.5px solid #2a2e3a",
     borderRadius: "10px",
+  },
+  // ---- Market Compass Rose -- see design note #747. ----
+  compass: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "2px",
+    padding: "12px 10px",
+    flex: "0 0 auto",
+    width: "100%",
+    boxSizing: "border-box",
+    backgroundColor: "#161922",
+    border: "1.5px solid #2a2e3a",
+    borderRadius: "10px",
+    textAlign: "center",
+  },
+  compassTitle: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.03em",
+    color: "#9aa1b4",
+    marginBottom: "6px",
+  },
+  compassRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "4px",
+    width: "100%",
+  },
+  compassGlyph: {
+    fontSize: "17px",
+    lineHeight: 1,
+    fontWeight: 700,
+  },
+  compassHub: {
+    fontSize: "7px",
+    color: "#5a6072",
+    margin: "0 2px",
+  },
+  compassTip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  /* The vertical arms' labels sit on their own line, so they get a little breathing room the horizontal
+     pair -- which is already hemmed in by the arrows either side -- must not have. */
+  compassTipStacked: {
+    padding: "1px 0",
+  },
+  // Design note #489's pair, reused: green is a rise, red is a fall, everywhere on this app.
+  compassRising: { color: "#4ade80" },
+  compassFalling: { color: "#f87171" },
+  compassFootnote: {
+    marginTop: "8px",
+    fontSize: "10px",
+    lineHeight: 1.35,
+    color: "#6f7688",
   },
   // ---- Market Rules Legend -- see design note #19/item 2. ----
   legendColumn: {

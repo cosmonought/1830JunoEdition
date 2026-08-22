@@ -1533,6 +1533,41 @@ export function stationMarkerRadius(
 
 /* ASK THE MARKER where the home slot is, rather than adding a second table of home city indices -- this codebase's recurring bug is exactly one fact in two places. NEAREST rather than an index handed across: the two functions compute in the same space by different routes.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #584 */
+/** Whether a home token may go in EITHER city on this hex, rather than one the board has already chosen.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 742: TWO NOTES DISAGREED AND THE RING BELIEVED THE WRONG ONE
+ *  ==================================================================
+ *
+ *  REPORTED: "I floated ERIE after its home hex had been upgraded to a brown tile. The 'Place Home Station'
+ *  glow ring only circled one of the city/station markers rather than both, though it seems possible to place
+ *  the station in either."
+ *
+ *  BOTH HALVES ARE RIGHT, AND THE CODEBASE ALREADY KNEW IT. #43 says of exactly these hexes that "real 1830
+ *  lets that corporation's President choose EITHER of the two slots on its first Operating Round turn after
+ *  floating", and draws the reservation badge in neutral hex-margin space FOR THAT REASON -- "anchoring the
+ *  still-undecided reserved badge onto one specific circle would misleadingly imply that slot is already
+ *  committed."
+ *
+ *  THEN #584 ANCHORED THE RING TO THE BADGE. Its reasoning was sound for the hex it was about: "the slot the
+ *  reservation marker is already drawn in -- so the ring and the badge cannot point at different circles on a
+ *  two-station hex like New York." On New York the home IS a specific circle, so tying them together is
+ *  correct. On an OO hex the badge is deliberately anchored to NO circle, and `homeCityIndexAt` answers a
+ *  question about a marker that was placed to avoid answering it -- returning whichever node happens to be
+ *  nearest the margin, and ringing that one alone.
+ *
+ *  So the ring committed a choice the badge had carefully declined to make. Two notes, each right about its
+ *  own hex, and no code anywhere holding the distinction.
+ *
+ *  BY HEX, NOT BY TILE COUNT. The tempting general rule -- "ring every city with room" -- is wrong on New
+ *  York, where a second city exists and is not the home. Membership of `YELLOW_OO_HEXES` is the question #43
+ *  already answers, and it is a property of the HEX rather than of what is laid on it, which is why the
+ *  report's brown upgrade changes nothing: E11 is an OO hex before and after. The name is about the printed
+ *  yellow; the meaning is "either slot is the President's to pick". */
+export function homeSlotsAreOpen(hexLabel: string | undefined): boolean {
+  return hexLabel !== undefined && YELLOW_OO_HEXES.has(hexLabel);
+}
+
 export function homeCityIndexAt(
   nodes: ReadonlyArray<{ x: number; y: number }>,
   markerPoint: { x: number; y: number },
@@ -1659,17 +1694,31 @@ export function drawStationTokenMarker(
   // Whichever of pure white/black actually contrasts better against THIS fill, computed per badge rather than asserted once -- see the honest caveat that several brand colours cannot reach AAA against either.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #46
   const textColor = bestContrastTextColor(badgeFill);
-  const haloColor = textColor === "#FFFFFF" ? "#000000" : "#FFFFFF";
 
-  // Thinned from #45's lineWidth 2, which choked tight letterform counters at this radius, and recoloured to the OPPOSITE of the text so a black halo behind black text does not do nothing.
-  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #46
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.lineWidth = 0.5;
-  ctx.strokeStyle = haloColor;
-  ctx.strokeText(ticker, point.x, point.y);
-  ctx.restore();
-
+  /* ==================================================================
+   *  DESIGN NOTE 733: THE HALO WAS PROTECTING TEXT FROM NOTHING
+   * ==================================================================
+   *
+   * REPORTED: "some have light backgrounds with dark letters. I can't tell if it's my eyes or something else,
+   * but it seems like the light backgrounds with dark letters have a white outline on the dark letters? If so,
+   * can we remove that since it makes the text blurry and smaller than it needs to be."
+   *
+   * NOT THE EYES. #46 stroked every ticker with the OPPOSITE of its own text colour before filling it, so a
+   * dark badge got white text with a black halo -- invisible against a dark disc, which is why nobody noticed
+   * -- and a light badge got black text with a WHITE halo, eating 0.25px off the outside of every stroke.
+   * Measured across the eight liveries: five are dark and hid it, three (C&O #5bc8e8, Erie #f5cd3a, NNH
+   * #ee7c22) are light and wore it. The asymmetry in the report is the asymmetry in the palette.
+   *
+   * A HALO IS FOR TEXT OVER A VARYING BACKGROUND, and there is not one. This text sits on a SOLID disc whose
+   * colour `bestContrastTextColor` has already read -- the contrast is guaranteed by construction, not hoped
+   * for. Measured: the worst livery clears 5.35:1 and the best 17.4:1, every one of them past AA, before any
+   * halo is drawn. So the halo bought nothing and cost the letterforms their edges.
+   *
+   * IT DID NOT LITERALLY SHRINK THE TEXT, and the distinction is worth keeping: `fitTokenFontSize` above is
+   * handed the RING's `lineWidth`, never the halo's, so the glyphs were always sized correctly. What the halo
+   * did was erode a quarter-pixel from the outside of each stroke, which at this radius reads as thinner and
+   * blurrier -- and thinner reads as smaller. If the tickers still want more size after this, that is
+   * `fitTokenFontSize`'s inset to argue with, and a separate change. */
   ctx.fillStyle = textColor;
   ctx.fillText(ticker, point.x, point.y);
   ctx.restore();

@@ -22,7 +22,7 @@
 // See docs/ai_architecture/stock_market.md, playerFinance.ts #562 / #562a.
 
 import {
-  certificateCount,
+  certificateBreakdown,
   estimatePlayerNetWorth,
   sharePriceFor,
   playerPrivateCompanies,
@@ -79,6 +79,15 @@ export function playerFinances(
   state: GameStateResponse | null,
   marketPrices: Readonly<Record<number, number | null>>,
   settledPrivatePrices?: Readonly<Record<number, number>>,
+  /** Design note #734: price -> zone, so the certificate count can honour the yellow/orange/brown exemption.
+   *
+   *  INJECTED, for the reason design note #7 gives about `certificateBreakdown` itself: the price-to-zone
+   *  table lives in `components/`, which this module may not import.
+   *
+   *  OMITTED MEANS NO EXEMPTION, which is the pre-#734 behaviour exactly -- and is the safe direction for a
+   *  caller that cannot see the chart, since over-counting certificates warns a player away from a purchase
+   *  the reducer would have allowed, while under-counting invites one it will refuse. */
+  zoneForPrice?: (price: number | null | undefined) => string | null,
 ): PlayerFinances | null {
   if (!state) return null;
 
@@ -147,7 +156,27 @@ export function playerFinances(
     stockValue: worth?.stockValue ?? null,
     netWorth: worth?.netWorth ?? null,
     liquidity: liquid,
-    certificates: certificateCount(address, state),
+    /* ==================================================================
+     *  DESIGN NOTE 734: TWO COUNTERS, AND THE CARD TOOK THE BLIND ONE
+     * ==================================================================
+     *
+     * REPORTED: "When a stock is in the yellow zone (and so shares do not count toward cert limit), the Game
+     * Ledger > Player Assets has this listed correctly, but it does not agree with Player Card that players
+     * are most likely to consult in the Stock Round. The Player Card seems to just be counting everything."
+     *
+     * IT WAS. `certificateCount` walks the holdings and counts certificates; `certificateBreakdown` (#7) does
+     * the same walk and splits the result into `counted` and `exempt` using the market zone. Two functions,
+     * one question, and the ONE SURFACE A PLAYER READS MID-DECISION was wired to the one that cannot see the
+     * rule -- while the Ledger, which a player consults after the fact, had it right.
+     *
+     * THE WORSE HALF IS WHICH SURFACE WAS WRONG. #712 encoded the zone exemptions and enforced them in the
+     * reducer, so the game was already refusing and permitting correctly. What the card did was tell a player
+     * they were at their limit when they were not -- talking them out of legal purchases, with the authority
+     * of the number they trust most.
+     *
+     * ONE COUNTER NOW. `counted` is what a limit is measured against, so this reads it rather than keeping a
+     * second arithmetic that happens to agree on boards with no exempt zones. */
+    certificates: certificateBreakdown(address, state, marketPrices, zoneForPrice).counted,
     certificateLimit: certLimitForPlayers(state.player_addresses.length),
     shares,
     holdings,

@@ -518,6 +518,14 @@ export interface PrintedArtwork {
   /** The revenue centre printed on it, or `undefined` for a bare connector
    *  hex (E9, A17, D24 -- the three gray hexes with no station at all). */
   marker?: TileArtworkMarker;
+  /** Design note #737: indices into `tracks` that DO NOT touch `marker` -- a bypass.
+   *
+   *  DECLARED, NOT DERIVED. Whether a bezier passes through the marker's point is answerable by sampling the
+   *  curve, and that answer would be a tolerance argument on every tile in the catalog forever. One hex in
+   *  1830 has a bypass; naming it is honest and checkable, and a wrong entry is visible in a diff.
+   *
+   *  A HEX WITH NO MARKER NEEDS NO ENTRY: nothing to bypass. */
+  bypassTracks?: readonly number[];
 }
 
 /** Every entry's edge set matches hexBoardData's own table for that label, and every marker sits on its own track's apex -- the same three rules the tile catalog's markers follow.
@@ -543,12 +551,62 @@ export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> 
    *  skip this stop" bypass fork (`GrayHexTrack.bypass`), authored here as
    *  the wide arc it is on the board rather than derived at draw time. It
    *  bows clear of the station circle and stays inside the hex. */
+  /* ==================================================================
+   *  DESIGN NOTE 737: ALTOONA'S BYPASS IS DRAWN AND UNREACHABLE
+   * ==================================================================
+   *
+   * REPORTED: "The preprinted gray on Altoona (H12) has unusual track curvature ... (a) I don't think this
+   * preprinted gray ever got updated to the canonical art version ... (b) it does not seem to be functional
+   * for actual routing: there seems to be no way to get a train to use the bypass around Altoona's measly $10
+   * revenue center."
+   *
+   * (b) IS CONFIRMED BY MEASUREMENT, not by reading. Probed against the shipped engine:
+   *
+   *   printedArtworkEdgePairs("H12")            -> [[0,3],[0,3]]     two tracks, same two edges
+   *   printedPathsForTraversal("H12", 0, 3)     -> [0]               only the first is ever offered
+   *   traversalSegments(grid, 2, 7, 0, 3)       -> rail #0 only
+   *
+   * So the bypass exists in the artwork and does not exist to the router. `pathsForTraversal` collapses
+   * alternatives to the first match -- deliberately, and #225 says why: "When several paths share an edge the
+   * first is taken, and that is not a coin flip: the forking tiles are all plain connectors, and a route only
+   * ever ENDS at a revenue centre." That reasoning is sound for every OTHER forking tile and false here,
+   * because H12 is the one hex where the two paths differ in what they PAY.
+   *
+   * AND FIXING THAT ALONE WOULD NOT BE ENOUGH, which is the part worth recording. Revenue is computed by
+   * `sandboxRouteBreakdown` from a list of HEX LABELS -- `{ hex, city_node? }` -- and priced with
+   * `hexStopValue(mapGrid, stop.hex, era)`. A route's representation has nowhere to say "I crossed H12 without
+   * stopping at Altoona", so even a tracer that found the bypass would price it identically to the through
+   * route. The bypass is not merely unrouted; it is inexpressible.
+   *
+   * WHAT A REAL FIX NEEDS, in the order the dependencies fall:
+   *   1. `pathsForTraversal` stops collapsing alternatives, and `stubsForTransit` learns that a multi-element
+   *      result may be ALTERNATIVES rather than a chain -- it currently reads index 0 as "entry rail" and the
+   *      last as "exit rail", which is only true of a chain.
+   *   2. `TracedHex` carries which traversal was taken, beside the `city_node` it already carries.
+   *   3. `sandboxRouteBreakdown` honours it: a hex crossed by a path that touches no marker pays nothing and
+   *      costs no stop.
+   *   4. The route tracer branches on the alternatives, and the manual planner offers the choice.
+   *
+   * #731'S EDGE KEYS ALREADY COVER THE COLLISION HALF, which is worth noting because it is the one piece that
+   * needs no work: both H12 paths cross edges 0 and 3, so two trains cannot take one each -- correctly, since
+   * on cardboard they share the same two stubs of track at the hex border.
+   *
+   * (a) IS SEPARATE AND NOT FIXED HERE. The curve below is this project's approximation, not the canonical
+   * artwork, and replacing it needs the real geometry rather than a guess -- the last time a plausible-looking
+   * substitution was made from memory in this codebase (#724's slot claim) it was wrong. The two tracks and
+   * their edge pairs are right; what is unverified is the SHAPE of the bow.
+   *
+   * See docs/ai_architecture/hex_tile_math.md, TileGraphics.ts #737. */
   H12: {
     tracks: [
       "M 0.866025 0 L -0.866025 0",
       "M 0.866025 0 C 0.433013 -0.55 -0.433013 -0.55 -0.866025 0",
     ],
     marker: { kind: "city", at: { x: 0, y: 0 } },
+    /* Design note #737: track 1 is the bow. It leaves edge 0 and rejoins edge 3 without ever reaching the
+       centre, where the station sits -- which is the whole reason Altoona has it. Track 0 runs straight
+       through (0, 0) and stops. */
+    bypassTracks: [1],
   },
   /** Rochester -- straight 0-3 through the city, with a curved spur in from
    *  edge 4. The spur enters its edge on the normal and eases into the
@@ -892,6 +950,47 @@ function interiorEndsForPrinted(label: string): readonly ({ x: number; y: number
 
 /** Shared body: tiles pass their orientation, a preprinted hex passes 0, because the board's printed track has one fixed facing and stores absolute edge numbers.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #215 */
+/** Every DISTINCT way through the hex from `entryEdge` to `exitEdge`, each as a chain of rail indices.
+ *
+ *  Design note #737: `pathsForTraversal` below returns the FIRST way and #225 explains why that was right --
+ *  "the forking tiles are all plain connectors, and a route only ever ENDS at a revenue centre". True of every
+ *  tile but H12, where the two ways differ in what they PAY. So the collapse stays the default and this is the
+ *  function that sees alternatives; nothing that does not care about revenue has to change.
+ *
+ *  ORDERED, and the order is the authored one: variant 0 is whatever `pathsForTraversal` would have returned,
+ *  so a caller that takes the first is unchanged. */
+function pathVariantsForTraversal(
+  pairs: readonly (readonly [number | null, number | null] | null)[],
+  interior: readonly ({ x: number; y: number } | null)[],
+  rot: number,
+  entryEdge: number,
+  exitEdge: number,
+): number[][] {
+  const rotate = (edge: number | null) => (edge === null ? null : (edge + rot) % 6);
+  const variants: number[][] = [];
+
+  for (let index = 0; index < pairs.length; index += 1) {
+    const pair = pairs[index];
+    if (!pair) continue;
+    const a = rotate(pair[0]);
+    const b = rotate(pair[1]);
+    if (a === null || b === null) continue;
+    if ((a === entryEdge && b === exitEdge) || (a === exitEdge && b === entryEdge)) {
+      variants.push([index]);
+    }
+  }
+
+  /* THE SPOKE-PAIR CASE IS NOT ENUMERATED, deliberately. A hub joins one entry spoke to one exit spoke and
+     `pathsForTraversal` picks the first of each; there is no 1830 hex where two DIFFERENT spoke pairings join
+     the same two edges with different revenue, so enumerating them would invent choices a player cannot use.
+     Falling through to the single answer keeps hubs exactly as they were. */
+  if (variants.length === 0) {
+    const single = pathsForTraversal(pairs, interior, rot, entryEdge, exitEdge);
+    if (single.length > 0) variants.push(single);
+  }
+  return variants;
+}
+
 function pathsForTraversal(
   pairs: readonly (readonly [number | null, number | null] | null)[],
   /** Design note #217: where each spoke ends inside the hex, so two spokes
@@ -968,6 +1067,34 @@ export function printedArtworkEdgePairs(
  *  from `entryEdge` to `exitEdge` runs along. Empty when this hex does not
  *  connect that pair, in which case the caller should fall back to tracing
  *  the whole hex rather than inventing a segment. */
+/** Design note #737: every way through preprinted hex `label`, not just the first. */
+export function printedTraversalVariants(
+  label: string,
+  entryEdge: number,
+  exitEdge: number,
+): number[][] {
+  return pathVariantsForTraversal(
+    printedArtworkEdgePairs(label),
+    interiorEndsForPrinted(label),
+    0,
+    entryEdge,
+    exitEdge,
+  );
+}
+
+/** Whether rail chain `chain` on preprinted hex `label` avoids the printed revenue centre.
+ *
+ *  Design note #737: A CHAIN IS A BYPASS ONLY IF EVERY RAIL IN IT IS. A hub crossing that used one bypass
+ *  spoke and one ordinary spoke would still reach the station, so "some" would be the wrong quantifier -- and
+ *  the case does not arise today only because no hex has both. */
+export function printedChainBypassesCentre(label: string, chain: readonly number[]): boolean {
+  const art = printedArtwork(label);
+  if (!art?.marker) return false;
+  const bypass = art.bypassTracks ?? [];
+  if (bypass.length === 0 || chain.length === 0) return false;
+  return chain.every((index) => bypass.includes(index));
+}
+
 export function printedPathsForTraversal(
   label: string,
   entryEdge: number,

@@ -26,7 +26,8 @@
 // makes a player skip a move they could afford.
 
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { MOUNTAIN_BUILD_FEE, RIVER_BUILD_FEE, STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
+import { terrainBuildFeeAt, MOUNTAIN_BUILD_FEE, RIVER_BUILD_FEE, STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import {
   describePendingTileCost,
   formatPendingTreasury,
@@ -51,6 +52,8 @@ function firstHexOfType(type: string): { q: number; r: number } {
 const MOUNTAIN = firstHexOfType("Mountain");
 const RIVER = firstHexOfType("River");
 const PLAIN = firstHexOfType("Plain");
+/** New York: a RIVER hex carrying a preprinted yellow tile -- design note #723's case. */
+const G19 = { q: 6, r: 6 };
 
 describe("the fixture", () => {
   it("found one hex of each terrain", () => {
@@ -83,21 +86,37 @@ describe("pendingTileCost", () => {
   it("CHARGES NOTHING TO UPGRADE, however expensive the ground", () => {
     /* THE CASE. 1830 bills terrain on the first build; an upgrade onto a tile
        already sitting on a mountain is free. Quoting $120 here would talk a
-       president out of a move they can afford. */
-    const built = withTile(MOUNTAIN.q, MOUNTAIN.r);
-    const cost = pendingTileCost(built, MOUNTAIN.q, MOUNTAIN.r, 1000);
+       president out of a move they can afford.
+       Design note #723: ASKED OF THE PAID LEDGER, NOT OF THE TILE GRID, and the change of source is the whole
+       point rather than a refactor. This test used to build a `mapGrid` with a tile on the mountain and assert
+       $0 -- which passed for two years while the reducer charged $120 for the same lay, because "has a tile"
+       and "has been paid for" are different questions that this fixture could not tell apart. The paid-set is
+       the reducer's own record, so a green test here is now evidence about the debit. */
+    const paid = withTerrainPaid([], MOUNTAIN.q, MOUNTAIN.r, MOUNTAIN_BUILD_FEE);
+    const cost = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, 1000, paid);
     expect(cost.fee).toBe(0);
     expect(cost.after).toBe(1000);
   });
 
+  it("still charges an upgrade over PREPRINTED track nobody has paid for", () => {
+    /* Design note #723, the case the old source got right by accident. G19 carries a printed yellow tile and
+       an $80 river fee; a tile being present there has never meant anybody paid. Our board models preprints as
+       hex properties rather than `tiles` entries, so `hexHasLaidTile` happened to answer correctly -- this
+       asserts the RULE instead of the coincidence. */
+    const cost = pendingTileCost(withTile(G19.q, G19.r), G19.q, G19.r, 1000, []);
+    expect(cost.fee).toBe(RIVER_BUILD_FEE);
+  });
+
   it("agrees with the board badge about which hexes are free", () => {
-    /* `HexGridRenderer` #136 hides the badge once a hex is built, from this
-       same pair of lookups. If the two ever disagree, the board and the card
-       are quoting different prices for one click. */
-    const unbuilt = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, 500);
-    const built = pendingTileCost(withTile(MOUNTAIN.q, MOUNTAIN.r), MOUNTAIN.q, MOUNTAIN.r, 500);
+    /* `HexGridRenderer` #136 hides the badge once the ground is paid for, through `terrainFeeDue` -- the same
+       call this makes. If the two ever disagree, the board and the card are quoting different prices for one
+       click, which is exactly what #723 found had been true of the card and the DEBIT. */
+    const unbuilt = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, 500, []);
+    const paid = withTerrainPaid([], MOUNTAIN.q, MOUNTAIN.r, MOUNTAIN_BUILD_FEE);
+    const built = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, 500, paid);
     expect(unbuilt.fee).toBeGreaterThan(0);
     expect(built.fee).toBe(0);
+    expect(terrainFeeDue(paid, MOUNTAIN.q, MOUNTAIN.r, terrainBuildFeeAt)).toBe(built.fee);
   });
 
   it("charges nothing off the board", () => {

@@ -45,6 +45,7 @@ import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 // Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
 import { playerLiquidity } from "../utils/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
+import { DEPOT_SCHEDULE, rustLabel } from "../utils/depotSchedule";
 import {
   certificateBreakdown,
   formatCertificateCount,
@@ -213,7 +214,17 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
               <th style={styles.thNumB}>Cost</th>
               <th style={styles.thNumB}>Depot Remaining</th>
               <th style={styles.thNumB}>Corporate Train Limit</th>
-              <th style={styles.th}>Obsolescence / Event Trigger</th>
+              {/* Design note #735: FOUR COLUMNS, FOUR FACTS. Reported: "the 'Obsolescence / Event Trigger'
+                 column is doing a lot of work, since it's actually listing [game phase] [tile unlock]
+                 [rust trigger] and [status]."
+                 The split also settles an ambiguity the prose was carrying: "rusts" meant two different
+                 things depending on the row -- what buying this tier does to OTHER fleets, and when THIS
+                 tier's own trains die. Those are now different columns, so neither has to be parsed.
+                 See `depotSchedule.ts` #735. */}
+              <th style={styles.th}>Phase</th>
+              <th style={styles.th}>On First Purchase</th>
+              <th style={styles.th}>Rusts</th>
+              <th style={styles.th}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -247,12 +258,45 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                   </td>
                   <td style={styles.tdNumB}>{row.trainLimit}</td>
                   <td style={styles.td}>
-                    <span style={styles.depotTrigger}>{DEPOT_TRIGGER_NOTES[row.tier]}</span>
+                    <span style={styles.depotPhase}>{DEPOT_SCHEDULE[row.tier]?.phase ?? "—"}</span>
+                  </td>
+                  <td style={styles.td}>
+                    {/* Design note #735: a LIST, because Phase 5 genuinely does two things. Semicolon-joined
+                       prose was how the second one came to look like a footnote to the first. */}
+                    {(DEPOT_SCHEDULE[row.tier]?.onFirstPurchase ?? []).length === 0 ? (
+                      <span style={styles.depotNone}>—</span>
+                    ) : (
+                      <ul style={styles.depotEffects}>
+                        {DEPOT_SCHEDULE[row.tier].onFirstPurchase.map((effect) => (
+                          <li key={effect}>{effect}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </td>
+                  <td style={styles.td}>
+                    {/* Design note #735: THIS tier's own mortality, never somebody else's. "Permanent" is a
+                       real answer and gets the ordinary ink; an em dash here would read as "unknown". */}
+                    <span
+                      style={
+                        DEPOT_SCHEDULE[row.tier]?.rustsWhen === null
+                          ? styles.depotPermanent
+                          : styles.depotTrigger
+                      }
+                    >
+                      {rustLabel(row.tier)}
+                    </span>
+                  </td>
+                  <td style={styles.td}>
                     {row.rusted && <span style={styles.depotRustedBadge}>RUSTED</span>}
                     {!row.rusted && row.soldOut && (
                       <span style={styles.depotSoldOutBadge}>SOLD OUT</span>
                     )}
                     {row.isCurrent && <span style={styles.depotCurrentBadge}>CURRENT</span>}
+                    {/* Design note #735: the status column is the only one that can legitimately be empty --
+                       a tier with nothing live to say about it. An em dash keeps the row from looking clipped. */}
+                    {!row.rusted && !row.soldOut && !row.isCurrent && (
+                      <span style={styles.depotNone}>—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -270,17 +314,11 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
   );
 }
 
-/** What buying the first train of each tier sets off. Plain language: this
- *  is a player-facing table, so it names phases and consequences rather
- *  than the flags that implement them. */
-const DEPOT_TRIGGER_NOTES: Readonly<Record<string, string>> = {
-  "2": "Phase 2 (Rusts when 4-Train bought)",
-  "3": "Phase 3 (Unlocks Green Tiles; Rusts when 6-Train bought)",
-  "4": "Phase 4 (First buy rusts all 2-Trains; Rusts when D-Train bought)",
-  "5": "Phase 5 (First buy unlocks Brown Tiles & closes all Private Companies; Permanent)",
-  "6": "Phase 6 (First buy rusts all 3-Trains; Permanent)",
-  D: "Diesel Era (First buy rusts all 4-Trains; Permanent)",
-};
+/* Design note #735: `DEPOT_TRIGGER_NOTES` is GONE, replaced by `depotSchedule.ts`'s structured table.
+   Deleted rather than left unused: a prose map beside a data one is how the two come to disagree, and this
+   file is the only thing that ever read it. The old strings are quoted in that module's note, where they are
+   evidence rather than a second source of truth. */
+
 
 /* ------------------------------------------------------------------ */
 /* Player Assets -- see design note #6(2)                             */
@@ -867,6 +905,25 @@ const styles: Record<string, React.CSSProperties> = {
   // Dimmed, not hidden: a sold-out tier is still worth knowing the cost of,
   // and a rusted one explains why a rival's fleet vanished.
   depotRowDimmed: { opacity: 0.55 },
+  /* Design note #735: the phase this tier opens. Slightly brighter than the trigger ink -- it is the column a
+     player scans down to find where they are, not a consequence to read. */
+  depotPhase: { fontSize: FONT_SIZE.small, color: "#c8cdd8", fontWeight: 700 },
+  /* One line per effect, unbulleted: the marker would be a third glyph in a table already carrying chips and
+     badges, and two items do not need enumerating to be read as two. */
+  depotEffects: {
+    margin: 0,
+    padding: 0,
+    listStyle: "none",
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    fontSize: FONT_SIZE.small,
+    color: "#aab0bc",
+  },
+  /* "Permanent" is an ANSWER, so it gets ordinary ink rather than the muted tone an absence would take. */
+  depotPermanent: { fontSize: FONT_SIZE.small, color: "#9fb8a4" },
+  /* The em dash for a genuinely empty cell. Muted, so it reads as "nothing here" rather than as content. */
+  depotNone: { fontSize: FONT_SIZE.small, color: "#6d7382" },
   depotTrigger: { color: "#9aa0ac" },
   depotRustedBadge: {
     marginLeft: "8px",

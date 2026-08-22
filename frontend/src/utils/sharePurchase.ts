@@ -34,6 +34,8 @@
 // See docs/ai_architecture/stock_market.md, sharePurchase.ts #712.
 
 import { certificateBreakdown, type GameStateResponse } from "./gameState";
+// Design note #759: the expiry of #7 and #712's zone exemptions.
+import { divestmentDebt, divestmentRefusal } from "./forcedDivestment";
 import { PLAYER_HOLDING_CAP_PERCENT } from "./privateExchange";
 
 /** A 10% certificate. The president's is 20%, and is handled where it is bought. */
@@ -58,6 +60,19 @@ export interface SharePurchaseInput {
   zoneForPrice?: (price: number | null | undefined) => string | null;
   /** Certificates this player has already bought this stock-round turn. */
   boughtThisTurn?: number;
+}
+
+/** Whether `buyer` has sold any of `companyId` in the CURRENT Stock Round.
+ *
+ *  Design note #744: read from `state.sold_this_round`, which the reducer writes on every sale and clears when
+ *  a Stock Round opens. A separate helper because the panel wants the same answer for its tooltip and the
+ *  reducer wants it for its refusal, and two readings of one record is how they come to disagree. */
+export function soldThisRound(
+  state: GameStateResponse,
+  buyer: string,
+  companyId: number,
+): boolean {
+  return (state.sold_this_round?.[buyer] ?? []).includes(companyId);
 }
 
 /** Why this purchase is illegal, or `null` if it is allowed.
@@ -106,7 +121,45 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
     }
   }
 
-  /* ---- 3. One purchase per turn, waived for pool shares in Brown ------------------------------- */
+  /* ---- 3. SOLD THIS ROUND, SO NOT BOUGHT BACK THIS ROUND --------------------------------------
+   *
+   * ==================================================================
+   *  DESIGN NOTE 744: THE ROUND-LONG LOCKOUT
+   * ==================================================================
+   *
+   * REPORTED: "After selling a share in the Stock Round, a player was able to buy a share in the same
+   * corporation on the same Stock Round. This is forbidden ... Otherwise they can dump a corporation's stock
+   * value and then buy their shares back at the lower price."
+   *
+   * THE SECOND SENTENCE IS THE RULE'S WHOLE PURPOSE, and it is why this belongs beside the other three rather
+   * than in a panel. Every other rule here caps what a player may HOLD; this one caps what they may do with
+   * the PRICE. A sale drops the token one row per certificate (#713) and the seller keeps the proceeds -- so
+   * without the lockout, selling and rebuying is a free way to move a corporation down the chart and restock
+   * at the bottom of your own crater. It is the one loophole in 1830's stock round that pays for itself.
+   *
+   * NOT WAIVED BY ANY ZONE, unlike the three around it. The Yellow/Orange/Brown allowances all say "this
+   * corporation is cheap enough that the usual caution does not apply"; this rule is not caution, it is an
+   * anti-manipulation rule, and a cheap corporation is exactly where the manipulation pays best.
+   *
+   * AND IT IS PER CORPORATION, not per player. Selling PRR does not stop you buying B&O -- the loophole needs
+   * the same corporation on both sides of the trade, so the lockout is scoped to it. */
+  /* ---- 0. A divestment debt bars every purchase -------------------------------------------------
+     Design note #759, rule (iii): "they should not be able to buy shares OR skip/pass/auto-pass their turn
+     until these sales have been made."
+     FIRST, AND ABOUT THE PLAYER RATHER THAN THE TRADE. Every other rule here asks whether THIS purchase is
+     legal; this one says the player owes the table a sale and may do nothing else until it is made. Checking
+     it first means the message a player sees is the one that explains why nothing works, rather than a cap
+     they would hit anyway three rules down. */
+  const debt = divestmentRefusal(
+    divestmentDebt({ state, player: buyer, marketPrices, zoneForPrice }),
+  );
+  if (debt !== null) return debt;
+
+  if (soldThisRound(state, buyer, companyId)) {
+    return `You sold ${company.ticker} this Stock Round, so you may not buy it back until the next one.`;
+  }
+
+  /* ---- 4. One purchase per turn, waived for pool shares in Brown ------------------------------- */
   if (boughtThisTurn > 0 && !allowsExtraPoolBuys(zone, source)) {
     return `One certificate purchase per turn. Only Brown-zone shares bought from the Bank Pool may be taken several at a time.`;
   }

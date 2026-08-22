@@ -198,6 +198,12 @@ export function TrainChips({
         return (
           <span
             key={`${model}-${index}`}
+            /* Design note #755: THE PULSE IS THE CRITICAL STEP ONLY, matching the badge it was asked to match
+               -- `phaseShiftBadgeCritical` animates and `phaseShiftBadgeWarn` does not. That keeps #702's
+               rule that "the two countdown steps differ in COLOUR and not merely in whether they pulse", and
+               adds a second axis on top of it: two away is amber and still, one away is red and moving. A
+               board where every at-risk chip pulsed would have nothing left to escalate TO. */
+            className={inDangerWindow === "doomed" ? "app-train-rust-critical" : undefined}
             style={{
               ...styles.chip,
               ...ink.chip,
@@ -219,18 +225,35 @@ export function TrainChips({
             onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}
             onMouseLeave={interactive ? () => onHighlightTrain?.(null) : undefined}
           >
-            {/* Design note #702: THE LOCOMOTIVE HOLDS STILL WHILE THE NUMBER CHANGES COLOUR.
-                REPORTED: "the train icon could be black or something to signal it's still there even as the
-                number turns amber, red."
-                That is the whole job. Once the tint moved to the number, a tinted chip and a plain one differ
-                only by the colour of one numeral -- which is exactly the discrimination that failed at the top
-                of this report ("I actually thought the 3-train purchase had been swapped out"). The glyph is
-                the chip's constant: it never tints, so the reader always has a fixed thing to find, and what
-                the colour changes is legible AGAINST it rather than instead of it.
-                `ink.chip.color`, not the tint -- deliberately the SAME neutral in all three states. */}
+            {/* ==================================================================
+                DESIGN NOTE 755: THE GLYPH TINTS TOO, AND THE PULSE TAKES OVER ITS OLD JOB
+                ==================================================================
+
+                #702 HELD THE GLYPH NEUTRAL ON PURPOSE and its reasoning was this: "The glyph is the chip's
+                constant: it never tints, so the reader always has a fixed thing to find, and what the colour
+                changes is legible AGAINST it rather than instead of it." That was the answer to a report
+                about a 2-train chip vanishing into NNH's livery -- "I actually thought the 3-train purchase
+                had been swapped out with it".
+
+                REQUESTED NOW: "it should be the number AND the train icon that change colors, and they could
+                pulsate like the 'Phase Shift' badge."
+
+                WHICH IS A REVERSAL, AND IT WORKS BECAUSE THE PULSE REPLACES WHAT THE NEUTRAL WAS DOING. #702
+                needed the reader to have something fixed to find, and used COLOUR-CONSTANCY for it. Motion
+                does that job better: a pulsing chip is unmistakably present, where a chip that merely holds
+                one colour steady is only present if you were already looking at it. The constant is now the
+                SHAPE -- the locomotive is still there, still the same drawing, still never absent -- and the
+                colour is free to escalate with the number.
+
+                SO THE ORIGINAL BUG STAYS FIXED. What made a chip disappear was a translucent fill over an
+                arbitrary livery (#702's measurement: 1.00 to 1.14:1 against all eight cards). The body is
+                still opaque, the ring still tints, and the glyph now agrees with the number instead of
+                arguing with it. */}
             <TrainGlyph
               tier={tier ?? model}
-              color={String(ink.chip.color)}
+              color={String(
+                (inDangerWindow ? ink[inDangerWindow].color : undefined) ?? ink.chip.color,
+              )}
               carriages={false}
               height={compact ? 9 : 10}
             />

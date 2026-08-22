@@ -93,3 +93,40 @@ export function buyableNow(input: TrainLimitInput): number {
 export function isTrainLocked(owned: number, currentLimit: number | null): boolean {
   return currentLimit !== null && owned >= currentLimit;
 }
+
+/** How many options the quantity selector shows.
+ *
+ *  Design note #719: THE ROW'S LENGTH IS ONE RULE, AND ITS GREYING IS THE OTHERS.
+ *
+ *  REPORTED: "when a corporation owns a train in, e.g., Phase 2, the [selector] only shows 1 / 2 / 3 options,
+ *  but I think it would be better to show 1 / 2 / 3 / 4 with the 4 option grayed out. The selector should only
+ *  drop options when the train limit forces it, not just because a corporation can't hold that many."
+ *
+ *  THE ROW WAS SAYING TWO THINGS WITH ONE MEASUREMENT. #696 set its length to `buyableNow`, which is
+ *  `min(depot stock, limit headroom)` -- so a row of three meant "the limit is three", or "you already own
+ *  one of four", or "the depot has three left", and nothing on screen said which. A control whose SHAPE
+ *  encodes a rule can only ever encode one, and this one was carrying three.
+ *
+ *  SO THE LENGTH IS THE TRAIN LIMIT, FULL STOP -- the one rule that is a property of the phase rather than of
+ *  this corporation's position in it. It still shrinks as the phases turn, which is the property #696 wanted
+ *  and the reason a row is viable at all; what it no longer does is shrink because you bought something. A
+ *  player who owns one of four now sees four options with one unreachable, which states their position
+ *  instead of hiding it, and the row stops moving under them mid-phase.
+ *  Everything else -- holdings, depot stock, a limit about to drop -- greys an option and explains itself on
+ *  hover through `purchaseCeiling`, which already distinguishes those reasons and was already written.
+ *
+ *  NULL MEANS UNBOUNDED, and an unbounded row cannot be drawn. Falling back to what is actually buyable is the
+ *  conservative answer and matches the pre-#719 behaviour exactly, so a chain that does not report a limit
+ *  renders as it always did rather than rendering nothing.
+ *
+ *  @param currentLimit the phase's train limit, or `null` where the chain did not say
+ *  @param buyable      `buyableNow` for this corporation -- the floor under the fallback
+ */
+export function quantityOptionCount(currentLimit: number | null, buyable: number): number {
+  const floor = Math.max(1, buyable);
+  if (currentLimit === null || !Number.isFinite(currentLimit)) return floor;
+  /* Never SHORTER than what the player can buy. With a finite limit `buyableNow` cannot exceed it, so this is
+     unreachable today -- and it is the guard that keeps a future rule (a private power, a variant) from
+     producing a row too short to select a legal quantity. */
+  return Math.max(floor, Math.max(1, Math.floor(currentLimit)));
+}

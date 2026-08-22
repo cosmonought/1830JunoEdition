@@ -72,6 +72,9 @@ export interface RadialTileSelectorProps {
      Design note #684: shown only while PREVIEWING, like `tokenNote` -- the choosing stage's ring covers the
      caption slot. See the `cost=` prop below for the geometry that decides it. */
   costNote?: string | null;
+  /** Design note #725a: threaded to the confirm caption's `warning` slot, on the same PREVIEWING gate as the
+   *  cost -- a caution a player cannot read is not a warning. */
+  warningNote?: string | null;
   /* Design note #488b: the caption's picture. #271b answered "which half" with a sentence; this is the same
      answer drawn on the tile, and the two MUST come from one computation or the ring can say "city 2 of 2"
      while the marker sits on city 1 -- the near-miss duplicate class TD-1 catalogued, in the version a
@@ -240,6 +243,12 @@ export interface RadialConfirmRingProps {
    *  component draws a caption and does not get an opinion about when a fee is
    *  worth stating. */
   cost?: string | null;
+  /** Design note #725a: a caution about what this lay COSTS BEYOND ITS PRICE -- today, a president about to
+   *  forfeit their own D&H power by laying F16 the ordinary way.
+   *  A SEPARATE SLOT rather than appended to `cost`, because the two are different moods and the price must
+   *  survive: "Costs $120" and "this destroys a power you own" are both wanted, and a warning that displaced
+   *  the figure would trade one surprise for another. */
+  warning?: string | null;
   /** How far out the ring's own contents sit, so the buttons and caption
    *  clear them. */
   radius: number;
@@ -266,6 +275,7 @@ export function RadialConfirmRing({
   cancelTitle,
   cancelAriaLabel,
   cost = null,
+  warning = null,
   radius,
   onConfirm,
   onCancel,
@@ -409,6 +419,10 @@ export function RadialConfirmRing({
               the confirmation (#2), and they have been since the picker gained a preview stage. All that was
               missing is that they never said the price. */}
           {cost && <span style={styles.captionCost}>{cost}</span>}
+          {/* Design note #725a: amber, under the price. Amber and not red for #700's reason -- the lay is
+              legal and occasionally correct, so colouring it as an error would argue with a president who
+              meant it. */}
+          {warning && <span style={styles.captionWarning}>{warning}</span>}
           {/* Design note #290: the migration line, when there is one. */}
           {note && <span style={styles.captionNote}>{note}</span>}
         </div>
@@ -435,6 +449,7 @@ export function RadialTileSelector({
   legalRotationCount,
   tokenNote = null,
   costNote = null,
+  warningNote = null,
   stationMarkersFor,
   stockFor,
   onSelectCandidate,
@@ -499,6 +514,7 @@ export function RadialTileSelector({
          itself, which is what the player is looking at, and the corporation card's provisional treasury (#673)
          updates the moment the ring opens. This caption was the third telling of it, and the one with no room. */
       cost={previewing ? costNote : null}
+      warning={previewing ? warningNote : null}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
       /* Design note #471: the candidate ring's X sits behind its own top
@@ -799,6 +815,13 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #290: brighter than the hint it sits under. The hint
      explains the CONTROL; this reports a consequence of using it, which is
      the more consequential of the two and was previously not said at all. */
+  captionWarning: {
+    fontSize: FONT_SIZE.micro,
+    color: "#e0b062",
+    lineHeight: 1.35,
+    maxWidth: "260px",
+    textAlign: "center",
+  },
   captionNote: {
     fontSize: FONT_SIZE.micro,
     color: "#e0b062",

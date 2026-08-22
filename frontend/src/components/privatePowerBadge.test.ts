@@ -45,11 +45,17 @@ function privates(): PrivateCompanyState[] {
 describe("the hover text describes a power, not a claim", () => {
   it("prints the private's actual power", () => {
     /* THE FIELD THAT WAS ALWAYS RIGHT. The badge used to paraphrase it as "Reserved by DH"; it now prints
-       what the table says, which is the whole correction. */
+       what the table says, which is the whole correction.
+       Design note #725: PINNED AS A SHAPE, NOT A SENTENCE, after this asserted the exact string and broke when
+       the string was corrected. The old wording -- "lay a tile AND place a station here at no cost" -- was
+       wrong twice: the tile costs $120, and the station is not independent of the lay. #548's rule applies and
+       this file cites it three tests down: pin the fact, not the phrasing. What matters is that the badge
+       prints the TABLE'S text, prefixed with the initials. */
     const dh = activeReservations(privates()).find((entry) => entry.initials === "DH")!;
-    expect(withReservationNote("Scranton (F16)", dh)).toBe(
-      "Scranton (F16) — DH: its owner may lay a tile AND place a station here at no cost",
-    );
+    expect(withReservationNote("Scranton (F16)", dh)).toBe(`Scranton (F16) — DH: ${dh.power}`);
+    // And that the text it prints is the corrected one, not the claim #725 removed.
+    expect(dh.power).not.toMatch(/at no cost/i);
+    expect(dh.power).toContain("$120");
   });
 
   it("never tells a player the hex is reserved or locked", () => {

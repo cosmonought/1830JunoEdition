@@ -19,10 +19,11 @@ import React from "react";
 
 import type {
   GameStateResponse,
-  PublicCompanyState,
   QueryCapableClient,
 } from "../utils/gameState";
 import { corporationPrivateCompanies } from "../utils/gameState";
+// Design note #753: the round's frozen queue decides the display order, not a live re-sort.
+import { operatingOrderRanks, sortForOperatingOrder } from "../utils/operatingOrderView";
 // Design note #572: `usePlayerNetWorths` and the Ledger's `PlayerAssetsSection`
 // went with the footer table they fed. The Ledger still owns both.
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
@@ -276,13 +277,19 @@ function OperatingRoundCorporationPanel({
              order, it is absent from it, so it belongs after the queue rather than interleaved by whatever par it
              carries. Dimming is the second half of the same statement: the row is context, not a participant. The
              UNFLOATED badge stays -- the dimming says "not in this round", the badge says which rule. */}
-          {[...gameState.public_companies]
-            .sort((a, b) => {
-              if (a.is_floated !== b.is_floated) return Number(b.is_floated) - Number(a.is_floated);
-              const priceOf = (c: PublicCompanyState) =>
-                priceByCompany.get(c.company_id) ?? (Number(c.par_value ?? 0) || 0);
-              return priceOf(b) - priceOf(a) || a.company_id - b.company_id;
-            })
+          {/* Design note #753: THE ROUND'S OWN QUEUE, not a re-derivation of it.
+             REPORTED: "it appears the Operating Round--Corporations panel re-orders itself after every
+             corporation acts ... you can end up with a corporation appearing to take its turn after another
+             corporation has acted."
+             #449's comparison was correct and its inputs were live. Prices move on every dividend, so the
+             table re-sorted mid-round while the actual turn order -- frozen in `active_operating_order` when
+             the round opened -- did not budge. `sortForOperatingOrder` reads the queue and keeps the old
+             comparison only for corporations the queue does not contain, which cannot misrepresent a turn
+             order because they are not taking one. */}
+          {sortForOperatingOrder(gameState.public_companies, {
+            ranks: operatingOrderRanks(gameState),
+            priceFor: (companyId) => priceByCompany.get(companyId),
+          })
             .map((company) => {
             const isActive = company.company_id === activeCompanyId;
             const price = priceByCompany.get(company.company_id);

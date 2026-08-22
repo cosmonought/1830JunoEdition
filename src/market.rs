@@ -3,8 +3,12 @@
 //! `PROTOCOL_MARKET` tracks each GAME's own marker on it, so two rooms both
 //! running a PRR never clobber each other's price.
 //!
-//!   move_up     sold-out bonus        move_right  Distribute Yield
+//!   move_up     sold out, end of SR   move_right  Distribute Yield
 //!   move_down   dumped shares         move_left   Slash/Retain Yield
+//!
+//! Design note #746c: `move_up` reads "sold-out bonus" no longer. It has ONE caller and ONE moment --
+//! `apply_sold_out_price_rises`, from `conclude_stock_round`. The word "bonus" is what a per-purchase bump
+//! would be, and there was one; in 1830 there is not.
 //!
 //! `x` is the column, `y` the row, and `y = MARKET_MAX_Y` is the TOP.
 //!
@@ -93,7 +97,8 @@ pub const GAME_END_PRICE_TRIGGER: u128 = 350;
 /// True once `cell`'s price has reached (defensively, `>=` rather than
 /// `==`) `GAME_END_PRICE_TRIGGER` -- the $350 Game-End Trigger. Checked by
 /// every caller that applies an ascending market movement
-/// (`trading::execute_buy_stock`'s sold-out bonus,
+/// (`apply_sold_out_price_rises` at the end of a Stock Round -- design note
+/// #746c removed `execute_buy_stock`'s, which listed here and should not have,
 /// `trading::execute_declare_dividends`'s Distribute Yield,
 /// `operations::execute_operating_round`'s Distribute Yield) immediately
 /// after the movement resolves, so the instant a marker lands on the $350
@@ -511,10 +516,16 @@ pub fn initialize_game_market(
 /// one, and is why it must never be invoked speculatively: two calls in one round
 /// would double-raise every sold-out company.
 ///
-/// It coexists with the per-purchase sold-out bonus in `execute_buy_stock` -- a
-/// different trigger with different timing, and both exist in the real game, so a
-/// corporation that goes sold out mid-round and stays that way is legitimately
-/// raised twice.
+/// DESIGN NOTE 746c: THIS IS THE ONLY TRIGGER. The paragraph that stood here said it "coexists with the
+/// per-purchase sold-out bonus in `execute_buy_stock` -- a different trigger with different timing, and both
+/// exist in the real game, so a corporation that goes sold out mid-round and stays that way is legitimately
+/// raised twice." That was wrong, and confidently enough written to be quoted downstream as a citation.
+///
+/// REPORTED: "A corporation's share price only rises, and only rises once, at the end of a stock round when
+/// all of its shares are in the hands of players, period."
+///
+/// The per-purchase block in `execute_buy_stock` is deleted. The sentence below about the single call site was
+/// always the correct account of the rule; the other trigger simply sat in another file and contradicted it.
 ///
 /// `is_floated` is required because an unfloated corporation has never sold a
 /// share, so its IPO pool is untouched -- and an unwritten entry defaults to FULL

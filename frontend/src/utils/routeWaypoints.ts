@@ -112,3 +112,46 @@ export function routeTokenBlockReason(
   }
   return null;
 }
+
+
+/** Why a hand-drawn route is illegal because of a tokened-out city, or `null`.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 730a: THE TRACER CANNOT PRODUCE ONE; A PLAYER CAN DRAW ONE
+ *  ==================================================================
+ *
+ *  #730 taught the auto-tracer to stop at a wall, which fixes every route the app proposes. It fixes nothing
+ *  about the routes a player draws by hand, and those go to the same dispatch -- so the fix has to exist twice
+ *  or the manual path becomes the way around the rule. That is #712's lesson applied before the report rather
+ *  than after it: a rule enforced on one of two paths is a rule with a door next to it.
+ *
+ *  INTERIOR ONLY, which is the whole rule in one word. REPORTED: "the token out city must be treated as a
+ *  terminus." A terminus is legal; passing is not. So the first and last points are exempt by position, and
+ *  everything between them must be passable.
+ *
+ *  BY POSITION RATHER THAN BY ARRIVAL EDGE, unlike the two walks. A drawn route is a list of hexes with no
+ *  recorded entry side, so "which city did this enter" cannot be asked here. Every city on an interior hex is
+ *  therefore tested, which is stricter than the rules on a two-city hex where the route passes through the
+ *  unblocked half. Recorded as known debt rather than hidden: the strict direction refuses a legal route
+ *  visibly, with a sentence naming the hex, which a player can act on -- where the loose direction would let
+ *  an illegal run price up and be refused by the contract with no explanation.
+ */
+export function routeBlockedCityReason(
+  points: readonly { q: number; r: number }[],
+  blocksThrough: ((q: number, r: number, cityIndex: number) => boolean) | undefined,
+  labelFor?: (q: number, r: number) => string | null,
+): string | null {
+  if (!blocksThrough || points.length < 3) return null;
+  for (let at = 1; at < points.length - 1; at += 1) {
+    const point = points[at];
+    for (let city = 0; city < 2; city += 1) {
+      if (!blocksThrough(point.q, point.r, city)) continue;
+      const where = labelFor?.(point.q, point.r) ?? `${point.q},${point.r}`;
+      return (
+        `${where} is tokened out by other corporations, so a train may end its run there but not pass ` +
+        `through. Redraw the route to stop at ${where} or go around it.`
+      );
+    }
+  }
+  return null;
+}

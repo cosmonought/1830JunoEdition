@@ -458,13 +458,21 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "3px",
     textAlign: "center",
     padding: "6px 4px",
-    background: "none",
+    /* Design note #732: `backgroundColor`, NOT the `background` shorthand -- and this line is the whole bug.
+       `trayTileSelected` below toggles `backgroundColor`, and when React clears that longhand on deselect it
+       removes the shorthand's contribution to the same property, leaving the `<button>` on the User Agent's
+       `buttonface` default: light grey on a dark panel. Reported as a white background that appeared on CLOSE
+       and vanished on open -- anti-phase with the selection, which is the tell.
+       Both renders now write the same property, so the diff always has a value to set. */
+    backgroundColor: "transparent",
     border: "1px solid transparent",
     borderRadius: "10px",
     font: "inherit",
     color: "inherit",
     cursor: "pointer",
   },
+  /* Design note #732: pairs with `trayTile`'s `backgroundColor`. If either of these two ever becomes a
+     `background` shorthand again, the tab regains the anti-phase white. */
   trayTileSelected: { backgroundColor: "rgba(255, 255, 255, 0.05)" },
   /* Design note #693: the panel, inside the tray that holds the selected tile. */
   detail: {

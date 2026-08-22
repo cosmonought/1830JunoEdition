@@ -119,9 +119,18 @@ import StockMarketRenderer, {
   parBoxCellFor,
   projectDividendCellMove,
   projectDividendFrom,
+  // Design note #746: the fourth movement, ported from market.rs.
+  projectRiseMove,
   projectShareSaleMove,
   type MarketGridResponse,
 } from "./components/StockMarketRenderer";
+import { describeSoldOutRise, soldOutRises } from "./utils/soldOutRise";
+// Design note #750: the instrument for the phantom $1500 -- a diff, not an annotation.
+import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvenance";
+// Design note #751: the obligation lives on Pass, so the player keeps the choice of how to discharge it.
+import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
+// Design note #759: the zone exemptions expire, and the debt shuts three doors.
+import { divestmentDebt, divestmentRefusal } from "./utils/forcedDivestment";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
 // -- the radial selector replaced it, and its two callbacks went with it.
 // The file is retained on disk, unreferenced, until the radial path has been
@@ -138,6 +147,8 @@ import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
 import ActionToast from "./components/ActionToast";
+// Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
+import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
 import TileReference from "./components/TileReference";
 import TrainTradePanel from "./components/TrainTradePanel";
@@ -190,6 +201,36 @@ import { projectDividendPayouts } from "./utils/dividendProjection";
 import { sharePurchaseBlock } from "./utils/sharePurchase";
 // Design note #713: the sale's guards.
 import { shareSaleBlock } from "./utils/shareSale";
+// Design note #725: the D&H's two halves, and the order between them.
+import { privatePowerGlowKeys } from "./utils/privatePowerGlow";
+// Design note #729: which cities a corporation may not run through.
+import { cityBlockerFor } from "./utils/cityBlocking";
+import { routeBlockedCityReason } from "./utils/routeWaypoints";
+// Design note #738: the one notification a player gets about somebody else's action.
+import { dividendReceipt } from "./utils/dividendReceipt";
+// Design note #740: live, unsaved intent -- a hint, never a fact.
+import {
+  shouldPublishNow,
+  shouldPublishRoutes,
+  visiblePresence,
+  type PresenceState,
+} from "./utils/presence";
+import {
+  clearPresence,
+  publishPresence,
+  subscribeSandboxPresence,
+} from "./utils/sandboxPresence";
+import { printedMarkersFor, tileCitySlotCounts } from "./components/TileGraphics";
+import { tokenCityIndex, type StationTokenCompany } from "./components/hexContractTypes";
+import {
+  CSL_HEX_LABEL,
+  CSL_PRIVATE_ID,
+  DH_PRIVATE_ID,
+  cslPowerState,
+  dhPowerState,
+  dhSelfLayWarning,
+  privateSelfLayWarning,
+} from "./utils/dhPower";
 // Design note #717: the standing-pass instruction and what cancels it.
 import {
   DEFAULT_AUTO_PASS_CONDITIONS,
@@ -228,6 +269,8 @@ import {
   type SandboxScenarioId,
   sandboxMarketPositions,
   sandboxWaterfallState,
+  // Design note #746b: a rise is an arrival, stamped like every other landing (#646).
+  withArrival,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
@@ -255,6 +298,7 @@ import {
   describePrivatePayout,
   describeFleetLoss,
   describeFleetLosses,
+  describePrivateClosures,
   applySandboxLayTile,
   describeFloat,
   isRouteTerminusHex,
@@ -361,6 +405,24 @@ import {
 /* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
    276-entry list inside that loop would be the only expensive thing in the pass. */
 const ALL_TILE_PLACEMENTS = localCatalogPlacements();
+
+/** Design note #740: rivals' live routes are keyed above any real train index, so a watcher's overlay can
+ *  never collide with their own on the key three surfaces join by (#373). A corporation has at most four
+ *  trains; a thousand is room to be wrong in. */
+const RIVAL_ROUTE_INDEX_BASE = 1000;
+
+/** Design note #727: whether the ACTING CORPORATION holds a private -- `owner_protocol_id`, not `owner`.
+ *  A power belongs to the railroad, not to the president personally (#441), so the player's own certificate
+ *  says nothing about whether the corporation now operating may use it. */
+function ownsPrivate(
+  state: GameStateResponse | null,
+  privateId: number,
+  protocolId: number | null,
+): boolean {
+  if (protocolId == null) return false;
+  const entry = state?.private_companies?.find((row) => row.private_id === privateId);
+  return !!entry && entry.owner_protocol_id === protocolId;
+}
 
 /* Move-only extraction: ~3,500 lines left this file for panels/, styles/ and utils/.
    See docs/ai_architecture/ui_shell_layout.md - App.tsx #382 */
@@ -847,6 +909,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // would leave the reference untouched and the canvas would never repaint.
   const [mapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
 
+  /* Design note #757: THE GRID GETS A REF, for #411's reason and #723's. An Undo replays the whole log in
+     one burst, so a legality check reading React state would judge every lay in that burst against the board
+     as it stood before the burst began -- and refuse legitimate upgrades, because the tile they upgrade would
+     not be there yet. The market atom already carries a ref for exactly this ("runGameplayAction refreshes it
+     mid-dispatch, so a closure over state would order the queue on stale prices"); the tile grid needed the
+     same treatment the moment anything started asking it questions. */
+  const mapGridRef = useRef<MapGridResponse>(mapGrid);
+  useEffect(() => {
+    mapGridRef.current = mapGrid;
+  }, [mapGrid]);
+
   // The auto-follow effect is gone; in a room the seat cursor never moves. actingSeatIndex's reasoning lives in utils/gameState.ts.
   // See docs/ai_architecture/state_machine.md - App.tsx #578
 
@@ -958,6 +1031,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (startHexes.length === 0) return false;
 
     const result = assignRouteSet({
+      // Design note #730: a tokened-out city is a terminus, so no drafted route runs past one.
+      blocksThrough: blocksThroughCityRef.current,
       mapGrid,
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
       startHexes,
@@ -1002,9 +1077,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     });
   }, [mustBuyTrain, gameState, orSubPhase, actingProtocolId, sandbox, sandboxMarketPrices]);
 
-  /* The plan IS the mount condition; there is no dismissal.
-     See docs/ai_architecture/contract_economy.md - App.tsx #3 */
-  const emergencyModalPlan = emergencyPurchasePlan;
+  /* ==================================================================
+   *  DESIGN NOTE 751b: THE PLAN IS NO LONGER THE MOUNT CONDITION
+   * ==================================================================
+   *
+   * #3 read "the plan IS the mount condition; there is no dismissal", which enforced the obligation by
+   * removing every other way of meeting it. #751 moves the enforcement to Pass, so the modal opens when the
+   * president ASKS for it -- because buying a rival's train is the other legal answer and it lives on a
+   * different panel.
+   *
+   * ONE EXCEPTION, AND IT IS #751a's: when the president cannot raise the money by any legal combination
+   * there is nothing to choose, so the modal opens itself. Leaving that behind a button would let a player
+   * who has already lost decline to press it and stall the table indefinitely, which is the exact failure
+   * the report asks to prevent. */
+  const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
+
+  const emergencyForced =
+    emergencyPurchasePlan !== null && noDecisionRemains(emergencyPurchasePlan);
+
+  /* Closing the Hardware step closes the modal with it: a plan that has gone away cannot be acted on, and a
+     modal outliving its plan would be a dialog about a turn that has ended. */
+  useEffect(() => {
+    if (emergencyPurchasePlan === null) setEmergencyModalOpen(false);
+  }, [emergencyPurchasePlan]);
+
+  const emergencyModalPlan =
+    emergencyModalOpen || emergencyForced ? emergencyPurchasePlan : null;
 
   /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
@@ -1334,6 +1432,104 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* The Lay Track veil. undefined outside Lay Track, and undefined when the reach is unknowable - dimming everything reads as broken.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #224 */
+  /* Design note #725: the D&H's two halves and the order between them. Derived rather than remembered: the
+     forfeit depends on whether anybody has built on F16, which is a fact about the board, and `usedPrivateAbilities`
+     supplies the rest. */
+  const dhPower = useMemo(() => {
+    const hex = privateHexFor(DH_PRIVATE_ID);
+    const hexBuilt = hex
+      ? mapGrid.tiles.some((tile) => tile.q === hex.q && tile.r === hex.r)
+      : false;
+    return dhPowerState({
+      hexBuilt,
+      layUsed: usedPrivateAbilities.has("dh-tile"),
+      tokenUsed: usedPrivateAbilities.has("dh-token"),
+    });
+  }, [mapGrid, usedPrivateAbilities]);
+
+  /* Design note #726: the C&SL's single half, same shape. */
+  const cslPower = useMemo(() => {
+    const hex = privateHexFor(CSL_PRIVATE_ID);
+    const hexBuilt = hex
+      ? mapGrid.tiles.some((tile) => tile.q === hex.q && tile.r === hex.r)
+      : false;
+    return cslPowerState({ hexBuilt, layUsed: usedPrivateAbilities.has("csl-tile") });
+  }, [mapGrid, usedPrivateAbilities]);
+
+  /* Design note #727: the hexes this corporation may build on by POWER rather than by reach. Both privates
+     answer the same question, so one set covers them and a third power would need no renderer change. */
+  const privatePowerHexes = useMemo(
+    () =>
+      privatePowerGlowKeys([
+        {
+          hex: privateHexFor(DH_PRIVATE_ID),
+          usable:
+            dhPower.layAvailable &&
+            !dhPower.forfeited &&
+            ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId),
+        },
+        {
+          hex: privateHexFor(CSL_PRIVATE_ID),
+          usable:
+            cslPower.layAvailable &&
+            !cslPower.forfeited &&
+            ownsPrivate(gameState, CSL_PRIVATE_ID, actingProtocolId),
+        },
+      ]),
+    [dhPower, cslPower, gameState, actingProtocolId],
+  );
+
+  /* ==================================================================
+   *  DESIGN NOTE 729: WHOSE CITIES ARE SHUT
+   * ==================================================================
+   *
+   * REPORTED: "corporations' networks are not being blocked by tokened out cities."
+   *
+   * ASSEMBLED HERE because the two halves live in places the walk may not reach: the slot COUNTS are in the
+   * tile catalog under `components/`, and the OCCUPANTS are in game state. `cityBlocking.ts` owns the rule,
+   * `trackReach.ts` owns the walk, and this is the only place that can see both. Same shape as #7's callback
+   * pattern and #716's `hasPlaceableTile`.
+   *
+   * PREPRINTED CITIES COUNT TOO -- New York, Baltimore and Boston hold tokens before anybody lays anything, so
+   * a resolver that only read `tiles` would report zero slots on exactly the three hexes most worth blocking,
+   * and #729's rule 3 would then read them as "not a city". */
+  const citySlotsAt = useCallback(
+    (q: number, r: number, cityIndex: number): number => {
+      const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+      if (laid) return tileCitySlotCounts(laid.tile_id)[cityIndex] ?? 0;
+      const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+      if (!hex) return 0;
+      const cities = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city");
+      return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
+    },
+    [mapGrid],
+  );
+
+  /* Design note #730: read through a ref by the route callers.
+     `blocksThroughCity` is a memo built from `gameState` and the board, and three of the four places that need
+     it are callbacks defined ABOVE it in a six-thousand-line file. A ref is the same escape hatch #2339 takes
+     for `logInfo`, and for the same reason: reordering the file for one dependency is a worse trade than
+     naming the indirection. */
+  const blocksThroughCityRef = useRef<((q: number, r: number, city: number) => boolean) | undefined>(
+    undefined,
+  );
+
+  const blocksThroughCity = useMemo(
+    () =>
+      cityBlockerFor({
+        actingCompanyId: actingProtocolId,
+        companies: gameState?.public_companies ?? [],
+        slotsAt: citySlotsAt,
+        cityOf: (company, q, r) =>
+          tokenCityIndex(company as unknown as StationTokenCompany, q, r),
+      }),
+    [actingProtocolId, gameState, citySlotsAt],
+  );
+
+  useEffect(() => {
+    blocksThroughCityRef.current = blocksThroughCity;
+  }, [blocksThroughCity]);
+
   const layTrackFocus = useMemo(() => {
     // Design note #437: the STEP, not the inspector. Veiling the board
     // while a player is merely browsing would tell them they may not build
@@ -1343,6 +1539,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       (entry) => entry.company_id === actingProtocolId,
     );
     const reach = layableHexes({
+      // Design note #729: a tokened-out city is a wall, so the walk stops at it.
+      blocksThrough: blocksThroughCity,
       mapGrid,
       // Design note #686: the recorded city slot travels with the token.
       stationHexes: corporation ? stationTokensOf(corporation) : [],
@@ -1382,8 +1580,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // is too dark to read as light against the veiled board.
       // Design note #561: white, not the livery -- legibility over identity.
       glowColor: STATION_PLACEMENT_HIGHLIGHT_INK,
+      // Design note #727: and the powers, which are marked in spite of being out of reach.
+      powerHexes: privatePowerHexes,
     };
-  }, [tileLayStepActive, gameState, actingProtocolId, mapGrid, currentPhase]);
+  }, [
+    tileLayStepActive,
+    gameState,
+    actingProtocolId,
+    mapGrid,
+    currentPhase,
+    privatePowerHexes,
+    blocksThroughCity,
+  ]);
 
 
   /* Layer 3: close the ring when the sub-phase advances, since that can happen without a board click.
@@ -1438,7 +1646,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          ONLY WHILE A LAY IS GATED. With no focus there is no veil to deepen and no network to be outside of --
          a spectator or a player browsing between turns keeps the inspector on every hex, which is #437's
          point about not telling somebody they may not build on hexes that are not their concern. */
-      if (layTrackFocus && !layTrackFocus.highlighted.has(`${state.q},${state.r}`)) {
+      /* Design note #725: EXCEPT ON A PRIVATE POWER'S OWN HEX. Reported of the D&H: "it illuminates the
+         correct hex, but it does not allow me to actually lay track. The special power allows players to lay
+         the track without respect to network connectivity rules."
+         #716's glow set is the acting corporation's REACH, and reaching F16 before your track does is the
+         entire value of the power -- so the one errand that exists to ignore connectivity was being refused by
+         the gate that enforces it. `privateTileHexKey` is non-null only while that errand is armed, and only
+         for its own hex. */
+      if (
+        layTrackFocus &&
+        !layTrackFocus.highlighted.has(`${state.q},${state.r}`) &&
+        privateTileHexKeyRef.current !== `${state.q},${state.r}`
+      ) {
         setRadialSelector(null);
         setPreviewTile(null);
         return;
@@ -1529,7 +1748,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* The same veil, for tokens. The SET differs: a token needs a city with a free unreserved slot ON the network. Only while targeting is armed.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #240 */
   const tokenTargetFocus = useMemo(() => {
-    if (!tokenTargetMode) return undefined;
+    /* ==================================================================
+     *  DESIGN NOTE 754: THE VEIL BELONGS TO THE STEP, NOT TO THE CURSOR
+     * ==================================================================
+     *
+     * REPORTED: "the 'Place Station' action subphase lifts the network veil, but the network veil is still
+     * very useful for the active corporation at this point, otherwise it appears it can place a station
+     * anywhere on the map."
+     *
+     * THE CONDITION WAS `tokenTargetMode`, WHICH IS AN ARMED CURSOR. So the board unveiled the moment the
+     * Tokens step opened and stayed unveiled until the president pressed Place Station -- which is exactly
+     * backwards: the question "where may I put a token" is what a president is answering BEFORE they reach
+     * for the control, and the answer was withheld until after they had committed to using it.
+     *
+     * THE TILE LAY NEVER HAD THIS PROBLEM because `tileLayStepActive` reads the STEP (#224). The two veils
+     * were written to the same shape and gated on different kinds of thing, and only one of them was a mode.
+     *
+     * THE CURSOR KEEPS ITS OWN GATE. `onHexClick` still routes to `handleTokenHexClick` only while
+     * `tokenTargetMode` is armed, so lighting the network does not make a hex clickable -- the veil informs,
+     * the mode acts. Separating them is the whole fix and it is why this is safe: nothing about what a click
+     * DOES has changed.
+     *
+     * AND THE SET IS ALREADY RIGHT. `placeableStationHexes` is the same predicate the placement uses (#5081
+     * reuses it "so it cannot disagree with the veil"), so this shows the true legal set rather than a
+     * second opinion about it. */
+    if (orSubPhase !== "Tokens") return undefined;
+    if (spectator) return undefined;
     if (!activeStationCompany) return undefined;
     const highlighted = placeableStationHexes({
       mapGrid,
@@ -1542,7 +1786,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const visible = new Set<string>(
       // Design note #686: same resolver as the tile-lay veil, so the two tiers
       // cannot disagree about where this corporation's network reaches.
-      reachableNetwork(mapGrid, stationTokensOf(activeStationCompany)),
+      // Design note #729: the token-placement highlight walks the same blocked network the tile glow does.
+      reachableNetwork(mapGrid, stationTokensOf(activeStationCompany), blocksThroughCity),
     );
     highlighted.forEach((key) => visible.add(key));
     return {
@@ -1552,7 +1797,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          See docs/ai_architecture/canvas_rendering.md - App.tsx #514 */
       glowColor: STATION_PLACEMENT_HIGHLIGHT_INK, // design note #561
     };
-  }, [tokenTargetMode, activeStationCompany, gameState, mapGrid]);
+    // Design note #729: the walk now takes a blocker, so a change to who holds which city must repaint.
+    // Design note #754: keyed on the STEP now, not on the armed cursor.
+  }, [orSubPhase, spectator, activeStationCompany, gameState, mapGrid, blocksThroughCity]);
 
 
   /* Design note #715: `privateTradeOpen` is GONE with the modal. It existed to answer "is the sheet showing",
@@ -1801,6 +2048,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* assignRouteSet chooses the whole set jointly, per-rail rather than per-hex; this loop only unpacks the answer.
        See docs/ai_architecture/routing_pathfinding.md - App.tsx #280 */
     const result = assignRouteSet({
+      // Design note #730: a tokened-out city is a terminus, so no drafted route runs past one.
+      blocksThrough: blocksThroughCityRef.current,
       mapGrid,
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
       // A route must touch a city this corporation has a token in, so its
@@ -2035,7 +2284,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             : false,
         /* A route must touch a city this corporation holds a token in - ANY token, anywhere on the run.
            See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
-        tokenBlockReason: routeTokenBlockReason(points, routeTokenHexes),
+        tokenBlockReason:
+          routeTokenBlockReason(points, routeTokenHexes) ??
+          /* Design note #730a: and the wall, for a route drawn by hand. The tracer cannot produce one; a
+             player can, and both go to the same dispatch. */
+          routeBlockedCityReason(points, blocksThroughCityRef.current, (q, r) =>
+            STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label ?? null,
+          ),
       };
     });
   }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes]);
@@ -2051,6 +2306,134 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     if (orSubPhase !== "Routes") setHighlightedTrainIndex(null);
   }, [orSubPhase]);
+
+  /* ==================================================================
+   *  DESIGN NOTE 740: THE PRESENCE CHANNEL
+   * ==================================================================
+   *
+   * REQUESTED: rivals watch a president draft routes live. #739 built the row that shows them and found the
+   * blocker -- `routeDrafts` is local React state that never leaves the client.
+   *
+   * WHAT ARRIVES HERE IS A HINT AND NOTHING ELSE. It is held in its own state, feeds two read-only surfaces,
+   * and is consulted by nothing that computes game state. `presence.ts` #740 has the full argument; the short
+   * version is that this codebase's guarantees come from having exactly one source of truth, and a second
+   * stream about the same game breaks them the moment anything downstream believes it. */
+  const [presence, setPresence] = useState<PresenceState[]>([]);
+  const lastPresenceAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const room = sandboxRoomCode;
+    if (!room) {
+      setPresence([]);
+      return undefined;
+    }
+    return subscribeSandboxPresence(room, setPresence);
+  }, [sandboxRoomCode]);
+
+  /* PUBLISH, COALESCED. The effect re-runs on every draft keystroke and mostly does nothing -- `shouldPublishNow`
+     is the floor, and a hex click is a keystroke. */
+  useEffect(() => {
+    const room = sandboxRoomCode;
+    const me = viewerAddress;
+    if (!room || !me) return;
+    if (
+      !shouldPublishRoutes({
+        isMyTurn,
+        orSubPhase: orSubPhase ?? null,
+        inRoom: true,
+      })
+    ) {
+      /* Design note #740: CLEARED, not left to go stale. Staleness is the safety net for a client that
+         vanished; a turn that ended cleanly should take its routes off the board immediately. */
+      if (lastPresenceAtRef.current !== null) {
+        lastPresenceAtRef.current = null;
+        void clearPresence(room, me);
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (!shouldPublishNow(lastPresenceAtRef.current, now)) return;
+    lastPresenceAtRef.current = now;
+    void publishPresence(room, {
+      playerId: me,
+      at: now,
+      actingCompanyId: actingProtocolId,
+      routeDrafts: Object.fromEntries(
+        Object.entries(routeDrafts).map(([index, points]) => [
+          Number(index),
+          points.map((point) => [point.q, point.r] as [number, number]),
+        ]),
+      ),
+    });
+  }, [sandboxRoomCode, viewerAddress, isMyTurn, orSubPhase, routeDrafts, actingProtocolId]);
+
+  /** Design note #740: somebody else's live drafts, fresh and worth drawing. */
+  const rivalPresence = useMemo(
+    () => visiblePresence(presence, viewerAddress ?? null, Date.now()),
+    [presence, viewerAddress],
+  );
+
+  /** Design note #740: the spectator's version of `trainDrafts`, built from the presence channel.
+   *
+   *  THE MODEL IS LOOKED UP, NOT CARRIED -- and the first version of this got the conclusion backwards.
+   *
+   *  It labelled the chips "Train 1", reasoning that presence carries a train INDEX and no roster, so the
+   *  model was not knowable. REPORTED: "Nobody knows what 'Train 1' is. Have it display the actual train
+   *  that's running." Correct, and the reasoning behind the placeholder was confused: the roster is not
+   *  missing, it is GAME STATE -- which every client already holds, replayed from the same log. Presence
+   *  carries `actingCompanyId` and an index; `gameState` turns that pair into "3-Train" locally.
+   *
+   *  WHICH IS THE SAME DISCIPLINE THE REVENUE ALREADY USED, and I applied it to one field and not the other.
+   *  Both are DERIVED FROM TRUTH and merely INDEXED BY A HINT: the route being priced is a guess about what a
+   *  rival will do, but the board it is priced against, and the fleet it is attributed to, are facts. Keeping
+   *  the channel thin is right; refusing to join it to state the reader already has is not. */
+  const rivalTrainDrafts = useMemo<TrainRouteDraft[]>(() => {
+    const drafts: TrainRouteDraft[] = [];
+    for (const entry of rivalPresence) {
+      const presenceCompany = entry.actingCompanyId ?? null;
+      for (const [index, hexes] of Object.entries(entry.routeDrafts ?? {})) {
+        const labels = hexes
+          .map(([q, r]) => STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label)
+          .filter((label): label is string => label !== undefined);
+        const priced =
+          labels.length >= 2
+            ? sandboxRouteBreakdown(
+                mapGrid,
+                labels.map((hex) => ({ hex })),
+                ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+              ).revenue
+            : null;
+        /* The fleet this index points into, from the board rather than from the wire. A train rusted or
+           discarded mid-turn leaves the lookup empty, and "Train" unnumbered is the honest answer for a
+           watcher then -- a stale index rendered as a confident model would be the one thing worse than a
+           vague label. */
+        const roster =
+          gameState?.public_companies.find(
+            (entry) => entry.company_id === presenceCompany,
+          )?.owned_trains ?? [];
+        const model = roster[Number(index)];
+
+        drafts.push({
+          trainIndex: RIVAL_ROUTE_INDEX_BASE + Number(index),
+          model: model ? `${model}` : "Train",
+          value: priced,
+          /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a
+             chip and a figure; the fields behind the president's own planner -- capacity, the full path, the
+             legality complaints -- are about a DECISION this reader is not making, and inventing plausible
+             values for them would be the #724 mistake in a new place. */
+          maxDistance: undefined,
+          hexLabels: [],
+          stops: [],
+          revenueCentres: 0,
+          exceedsMaxDistance: false,
+          endsOffTerminus: false,
+          tokenBlockReason: null,
+        });
+      }
+    }
+    return drafts;
+  }, [rivalPresence, mapGrid, currentPhase, gameState]);
 
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
     const overlays: RouteOverlay[] = [];
@@ -2073,8 +2456,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         emphasis: routeEmphasisFor(train.trainIndex, highlightedTrainIndex),
       });
     }
+    /* Design note #740: AND THE RIVALS' LIVE DRAFTS. Appended rather than merged, and after the local ones, so
+       the viewer's own routes are drawn last and stay on top -- their emphasis is the one they are steering.
+       IDENTIFIED BY SEAT, not by train index: two clients both drafting train 0 would otherwise collide on
+       `trainIndex`, which is the key the highlight and the chip row join on. Offsetting into a private range
+       keeps a rival's line un-hoverable from this player's chips, which is correct -- hovering somebody else's
+       chip row is not a thing that exists. */
+    for (const entry of rivalPresence) {
+      for (const [index, hexes] of Object.entries(entry.routeDrafts ?? {})) {
+        if (hexes.length < 2) continue;
+        overlays.push({
+          trainLabel: `${entry.playerId}'s route`,
+          color: routeTrainColor(Number(index)),
+          hexes: hexes.map((hex) => [hex[0], hex[1]] as [number, number]),
+          trainIndex: RIVAL_ROUTE_INDEX_BASE + Number(index),
+          /* Always muted: a live draft belonging to somebody else is context, and drawing it at the same
+             weight as the reader's own route would make the board argue about whose turn it is. */
+          emphasis: "muted",
+        });
+      }
+    }
     return overlays;
-  }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex]);
+  }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex, rivalPresence]);
 
   /* handleTileDispatched/handleCloseTilePopup removed: the radial selector confirms through runGameplayAction, so there is one dispatch route and one log writer.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
@@ -2114,7 +2517,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
     ) as Readonly<Record<number, number | null>>;
     return gameState.player_addresses
-      .map((address) => playerFinances(address, gameState, prices, settledPrivatePrices))
+      .map((address) =>
+        playerFinances(
+          address,
+          gameState,
+          prices,
+          settledPrivatePrices,
+          /* Design note #734: the zone table, so the card's Certs figure honours the same yellow/orange/brown
+             exemption the Ledger and the reducer already do. Without it the card was the only surface in the
+             app counting exempt shares against the limit. */
+          marketZoneForPrice,
+        ),
+      )
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   }, [gameState, marketGrid, settledPrivatePrices]);
 
@@ -2134,8 +2548,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #697: the toast. A token rather than a timestamp, because two identical purchases in a row
      produce the same SENTENCE, and the toast has to re-show for the second one -- which is the repeat this
      whole feature is about. */
-  const [actionToast, setActionToast] = useState<{ text: string; token: number } | null>(null);
+  const [actionToast, setActionToast] = useState<{
+    text: string;
+    token: number;
+    /** Design note #738: the dividend receipt's second line. Absent on an ordinary #697 receipt. */
+    detail?: string | null;
+  } | null>(null);
   const actionToastTokenRef = useRef(0);
+  /* Design note #738: the same toast with a second line. Kept as a separate entry point rather than an extra
+     argument on `showActionToast`, because the two have different RULES about when they fire -- #718's
+     receipt is for your own dispatch, this is a notification about somebody else's -- and one function
+     answering to both invitations is how #718's scope crept in the first place. */
+  const showDividendToast = useCallback((text: string, detail: string | null) => {
+    actionToastTokenRef.current += 1;
+    setActionToast({ text, detail, token: actionToastTokenRef.current });
+  }, []);
+
   const showActionToast = useCallback((text: string) => {
     actionToastTokenRef.current += 1;
     setActionToast({ text, token: actionToastTokenRef.current });
@@ -2239,6 +2667,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       { automatic: true },
     );
   }, []);
+
+  /* Design note #725: greyed with a reason rather than hidden. "Lay the F16 tile first" teaches the rule; a
+     missing button teaches nothing and a live one that refuses on click teaches the wrong thing. */
+  const privateActionBlocks = useMemo(
+    () => ({
+      "dh-tile": dhPower.layBlockedReason,
+      "dh-token": dhPower.tokenBlockedReason,
+      "csl-tile": cslPower.layBlockedReason,
+    }),
+    [dhPower, cslPower],
+  );
 
   /* Hex-holding private powers route through the shared map flow and are marked spent WHEN THE CLICK LANDS. Share exchanges stay marked-and-logged.
      See docs/ai_architecture/contract_economy.md - App.tsx #444 */
@@ -2488,14 +2927,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ).catch(() => false);
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
-          } else if (options?.derived !== true) {
+          } else if (options?.derived !== true && deservesActionReceipt(msg)) {
             /* Design note #697: the receipt, at the moment the action is SENT. That is the moment the player's
                question is about -- they pressed a button and want to know it registered -- and it is the last
                point this browser can distinguish its own dispatch from the replay that follows.
                `label` is the sentence `describeGameplayAction` already derived above, so the toast and the
                Activity Log entry for this action are one string.
                NOT FOR A DERIVED ACTION (#668): the auto-skip and the forced withhold are the game acting, and a
-               receipt for something the player did not do is a notification, not a confirmation. */
+               receipt for something the player did not do is a notification, not a confirmation.
+               Design note #718: AND NOT FOR EVERY ACTION, which is what this branch used to mean. Hanging the
+               toast on `runGameplayAction` gave a receipt to every dispatch in the app -- reported as "toast
+               notifications for literally every action". `deservesActionReceipt` is the scope #697 described
+               and never applied; the funnel is still the right ATTACHMENT point, it was just never the right
+               CONDITION. */
             showActionToast(label);
           }
           return;
@@ -2845,11 +3289,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
         /* The tile grid is its own atom; applying it inside the dispatch is what makes a lay replicate to every client.
            See docs/ai_architecture/firebase_middleware.md - App.tsx #522 */
+        /* Design note #757: ONE PREDICATE, BOTH ATOMS. The tile grid and the game state are separate stores
+           and a lay touches both -- plus the sub-phase cursor. Built once here and handed to each, so a
+           refused placement cannot land on one and be rejected by the other. Board rules only: connectivity
+           is left out because the D&H and C&SL lay track that legally ignores it (#725/#726) and this message
+           does not say which power is in play. */
+        const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
+          filterSandboxPlacements([{ tile_id: tileId, orientation }], {
+            mapGrid: mapGridRef.current,
+            q,
+            r,
+            era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+          }).length === 0;
+
         if ("LayTile" in msg) {
           const lay = msg.LayTile;
-          setMapGrid((current) =>
-            applySandboxLayTile(current, lay.q, lay.r, lay.tile_id, lay.orientation),
+          /* Written through the REF and then to state, synchronously, so the next action in a replay burst
+             sees this tile. `setMapGrid((current) => ...)` alone was correct for one lay and wrong for a
+             sequence, which is every Undo. */
+          const nextGrid = applySandboxLayTile(
+            mapGridRef.current,
+            lay.q,
+            lay.r,
+            lay.tile_id,
+            lay.orientation,
+            layRefused,
           );
+          if (nextGrid !== mapGridRef.current) {
+            mapGridRef.current = nextGrid;
+            setMapGrid(nextGrid);
+          }
         }
 
         /* Resolve first, log second. A ref is written synchronously, which fixes both the cross-atom charge ordering and a loop of dispatches collapsing onto one base state.
@@ -2978,6 +3447,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
           // Design note #291: the dividend decision moves the marker too.
           projectDividend: (from, choice) => projectDividendCellMove(from, choice),
+          /* Design note #748a: the SAME rule the reducer applies below, asked here because this atom runs
+             first. Without it a refused sale still walked the token down and the chart and the board parted
+             company for the rest of the game. `before` is the board the reducer will judge it against. */
+          saleRefused: (companyId, percentage) => {
+            const seller = options?.actor ?? viewerAddressRef.current;
+            if (!before || !seller) return false;
+            return (
+              shareSaleBlock({ state: before, seller, companyId, percentage }) !== null
+            );
+          },
         });
         if (marketResult.prices !== sandboxMarketRef.current) {
           sandboxMarketRef.current = marketResult.prices;
@@ -3031,6 +3510,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             zoneForPrice: marketZoneForPrice,
             // Design note #647: the token's position -- column and arrival.
             marketMarkFor: marketMarkForCompany,
+            /* Design note #746a: the chart's own UP step, so the reducer can raise a sold-out corporation
+               before it sorts the operating queue on the prices that raise produced. */
+            projectRise: (from) => projectRiseMove(from),
             /* The par comes from the MESSAGE's own protocol_id and par_value, not from any ambient ladder selection (#579).
                See docs/ai_architecture/stock_market.md - App.tsx #398 */
             parValue: (() => {
@@ -3043,7 +3525,121 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                map actually draws rather than on a coordinate this reducer
                guessed. */
             homeHexToAxial,
+            // Design note #757: the same refusal the tile grid applies, so the fee and the cursor agree.
+            layRefused,
           });
+
+          /* ==================================================================
+           *  DESIGN NOTE 750: EVERY TREASURY MOVEMENT, NAMED OR FLAGGED
+           * ==================================================================
+           *
+           * Reported: a corporation with $500 arrived at Buy Trains holding $1500. I could not find the
+           * writer by reading, so this reads the DIFF rather than trusting any arm to declare what it
+           * charged -- an arm that reports its own arithmetic will happily report a bug.
+           *
+           * A movement on a message with no business moving a treasury is printed as UNEXPLAINED, which is
+           * the line worth having: the ordinary ones are bookkeeping and the surprising one is the bug. */
+          if (after) {
+            for (const move of describeTreasuryMoves(msg, before, after)) {
+              logInfo(
+                move.unexplained ? "Treasury (unexplained)" : "Treasury",
+                treasuryMoveLine(move, fallbackLabel),
+              );
+            }
+          }
+
+          /* ==================================================================
+           *  DESIGN NOTE 746b: COMMITTING THE RISE TO THE CHART
+           * ==================================================================
+           *
+           * The reducer has already USED these rises -- #746a overlays them so the operating queue sorts on
+           * post-rise prices -- but the market atom is not part of `GameStateResponse`, so the tokens
+           * themselves still have to be moved here. Both sides call `soldOutRises` with the same injected
+           * traversal and the same two states, so the queue's idea of a price and the chart's cannot drift.
+           *
+           * AFTER the state, unlike the three ordinary moves above, and for the opposite reason: a dividend
+           * or a sale is a move the MESSAGE determines, so the state needs the price it produced. A rise is a
+           * move the RESULTING BOARD determines -- who is sold out, and whether the round just closed -- and
+           * neither of those facts exists until the reducer has run. */
+          if (after) {
+            const rises = soldOutRises({
+              before,
+              after,
+              markFor: marketMarkForCompany,
+              projectRise: (from) => projectRiseMove(from),
+            });
+            if (rises.length > 0) {
+              let chart = sandboxMarketRef.current;
+              for (const rise of rises) {
+                chart = {
+                  ...chart,
+                  // Design note #646: a rise is an arrival like any other, so it is stamped like one.
+                  [rise.companyId]: withArrival(chart, rise.companyId, {
+                    price: rise.to,
+                    x: rise.x,
+                    y: rise.y,
+                  }),
+                };
+                logInfo("Market Move", describeSoldOutRise(rise));
+              }
+              sandboxMarketRef.current = chart;
+              setSandboxMarket(chart);
+            }
+          }
+
+          /* ==================================================================
+           *  DESIGN NOTE 738: THE ONE NOTIFICATION, FIRED WHERE EVERY CLIENT SEES IT
+           * ==================================================================
+           *
+           * REQUESTED: a toast when a player receives dividends.
+           *
+           * HERE, AND NOT AT THE DECLARE BUTTON, because the button only exists on the PRESIDENT'S client. A
+           * dividend's whole point is that it reaches players who are not acting -- so the notification has to
+           * be raised on the path every client runs, which is this one: `runGameplayAction` handles a remote
+           * action with `isRemoteReplay: true` exactly as it handles a local one.
+           *
+           * AND `derived` IS EXCLUDED for #668's reason, unchanged: an auto-declared $0 withhold is the game
+           * acting, and it pays nobody anyway.
+           *
+           * THE AMOUNT COMES FROM THE MODULE, THE TRANSITION FROM THE DIFF. `dividendReceipt` composes the
+           * sentence from the same arithmetic the reducer uses, and the before/after cash is read off the two
+           * states this dispatch already holds -- so the figure quoted and the figure that moved cannot come
+           * apart the way #723's preview and debit did. */
+          if (after && "DeclareDividends" in msg && options?.derived !== true) {
+            const viewer = viewerAddressRef.current;
+            const declared = msg.DeclareDividends;
+            const company = before?.public_companies.find(
+              (entry) => entry.company_id === declared.protocol_id,
+            );
+            const held =
+              company?.player_holdings.find((entry) => entry.player === viewer)?.percentage ?? 0;
+            const cashOf = (state: GameStateResponse | null) => {
+              const raw = Number(
+                state?.player_cash.find((row) => row.player === viewer)?.cash_vgp ?? NaN,
+              );
+              return Number.isFinite(raw) ? raw : null;
+            };
+            const receipt = dividendReceipt({
+              ticker: company?.ticker ?? "The corporation",
+              distribute: declared.distribute === true,
+              perShare: Math.floor((Number(company?.last_route_revenue ?? 0) || 0) / 10),
+              viewerPercentage: held,
+              cashBefore: cashOf(before),
+            });
+            if (receipt) {
+              /* The transition is recomputed from the ACTUAL after-state rather than trusted from the module,
+                 which only ever projected it. Where the two disagree the board is right. */
+              const settled = cashOf(after);
+              const beforeCash = cashOf(before);
+              showDividendToast(
+                receipt.headline,
+                beforeCash !== null && settled !== null
+                  ? `$${beforeCash} → $${settled}`
+                  : receipt.transition,
+              );
+            }
+          }
+
           /* A float is announced here by diffing before/after, naming the hex the home token landed on. #401: a par is also a cell on the chart.
              See docs/ai_architecture/state_machine.md - App.tsx #400 */
           /* Design note #688: EVERY PARRED CORPORATION HAS A MARK, checked as an invariant rather than caught as
@@ -3092,6 +3688,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             for (const loss of describeFleetLosses(before, after)) {
               const sentence = describeFleetLoss(loss, limitNow);
               if (sentence) logInfo("Phase Change", sentence);
+            }
+
+            /* Design note #736: AND THE PRIVATES THE PHASE CLOSED. Same division as the fleet losses beside
+               it -- the reducer settled it, this says so. Worth a line of its own because the consequences
+               are spread out and easy to misattribute: income stops, a certificate leaves the limit, and any
+               special power on the board goes with it. */
+            const closures = describePrivateClosures(before, after);
+            if (closures.length > 0) {
+              logInfo(
+                "Phase Change",
+                `${closures.join(", ")} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`,
+              );
             }
           }
 
@@ -3244,6 +3852,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // See docs/ai_architecture/state_machine.md - App.tsx #265
     [
       showActionToast,
+      // Design note #738: stable, like `showActionToast` beside it -- both are `useCallback` with empty lists.
+      showDividendToast,
       session,
       refreshGameState,
       spectator,
@@ -3464,6 +4074,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* null when no home placement is in flight; otherwise the corporation, the one legal hex, and the tab to return to (captured, not assumed).
      See docs/ai_architecture/state_machine.md - App.tsx #440 */
+  /* Design note #725: the armed private-tile errand's hex, as a `"q,r"` key.
+     A REF because `handleHexClickQuery` is a `useCallback` the canvas holds across renders -- reading the
+     state variable there would capture whichever errand was armed when the callback was built, which for a
+     control the player arms and then clicks is reliably the wrong one. */
+  const privateTileHexKeyRef = useRef<string | null>(null);
+
   const [homeStationPlacement, setHomeStationPlacement] = useState<{
     /* One veil, three errands. kind decides which cursor to arm and what the click does; private-tile deliberately does NOT intercept.
        See docs/ai_architecture/canvas_rendering.md - App.tsx #444 */
@@ -3714,6 +4330,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * ARMED PER STOCK ROUND, per the report: the arm carries the round it was made in and `autoPassDecision`
    * refuses on any other. */
   const [autoPassArm, setAutoPassArm] = useState<AutoPassArm | null>(null);
+  /* Design note #728: the seat this arm has already passed for.
+     THE EFFECT RE-RUNS ON EVERY `gameState` CHANGE, and `isMyTurn` is derived from React state while the
+     reducer writes its ref synchronously (#670). So between dispatching a pass and React committing the seat
+     advance there is a window where the effect can fire again and pass twice -- spending a turn the player
+     never had. A ref rather than state because it must be readable and writable inside one effect run, before
+     any re-render. */
+  const autoPassedForSeatRef = useRef<string | null>(null);
   const [autoPassOpen, setAutoPassOpen] = useState(false);
   /** Remembered so re-arming next round does not re-ask from scratch. */
   const [autoPassChoices, setAutoPassChoices] = useState<AutoPassConditions>(
@@ -3731,6 +4354,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (conditions: AutoPassConditions) => {
       if (!gameState || !viewerAddress) return;
       setAutoPassChoices(conditions);
+      autoPassedForSeatRef.current = null;
       setAutoPassArm(armAutoPass(gameState, viewerAddress, conditions));
       setAutoPassOpen(false);
       logInfo("Auto-Pass", "Auto-Pass is on for this Stock Round.");
@@ -3740,6 +4364,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const handleDisarmAutoPass = useCallback(() => {
     setAutoPassArm(null);
+    // Design note #728: a fresh arm may act on the very turn a previous one was disarmed in.
+    autoPassedForSeatRef.current = null;
     logInfo("Auto-Pass", "Auto-Pass is off.");
   }, [logInfo]);
 
@@ -3756,7 +4382,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (autoPassArm.player !== viewerAddress) return;
     if (!isMyTurn) return;
 
-    const decision = autoPassDecision(gameState, autoPassArm);
+    /* Design note #728: one dispatch per seat-turn. The key is the round AND the seat index, so a later turn
+       in the same round is a different key and passes again as it should. */
+    const seatKey = `${gameState.macro_round_number}:${gameState.active_player_index}`;
+    if (autoPassedForSeatRef.current === seatKey) return;
+
+    /* Design note #759a: the debt is computed where the prices are, then handed in. */
+    const decision = autoPassDecision(gameState, {
+      ...autoPassArm,
+      divestmentOwed: divestmentDebt({
+        state: gameState,
+        player: autoPassArm.player,
+        marketPrices: sandboxMarketPrices,
+        zoneForPrice: marketZoneForPrice,
+      }).owed,
+    });
     if (!decision.pass) {
       setAutoPassArm(null);
       /* SAID OUT LOUD, always. A turn that silently did not happen is the failure mode of every feature like
@@ -3764,8 +4404,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       logInfo("Auto-Pass", `${decision.wakeReason} Auto-Pass is off.`);
       return;
     }
+    autoPassedForSeatRef.current = seatKey;
     void handlePassTurn();
-  }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo]);
+    // Design note #759a: the prices decide the debt, so a price move must re-run this.
+  }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo, sandboxMarketPrices]);
 
   const handleSellShares = useCallback(
     (protocolId: number, percentage: number) =>
@@ -4479,6 +5121,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
 
     const result = assignRouteSet({
+      // Design note #730: a tokened-out city is a terminus, so no drafted route runs past one.
+      blocksThrough: blocksThroughCityRef.current,
       mapGrid,
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
       startHexes,
@@ -4697,6 +5341,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* canLayTileNow decides whether the carousel is narrowed to one corporation's reach - the same predicate the confirm button uses. Sandbox/offline path only; a chain answer is used verbatim.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #620 */
+  /** Whether the ring currently open is the D&H's own errand -- the one lay that ignores connectivity. */
+  const onPrivateTileHex =
+    homeStationPlacement?.kind === "private-tile" &&
+    radialSelector !== null &&
+    homeStationPlacement.q === radialSelector.q &&
+    homeStationPlacement.r === radialSelector.r;
+
   const radialCandidates = useMemo<readonly LegalTilePlacement[]>(() => {
     if (!radialSelector) return [];
     if (!radialSelector.provisional) return radialSelector.placements;
@@ -4706,8 +5357,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       r: radialSelector.r,
       // undefined for anyone who may not lay, which lets them browse the whole hex rather than one corporation's slice.
       // See docs/ai_architecture/canvas_rendering.md - App.tsx #620
-      networkHexes: canLayTileNow ? layTrackFocus?.network : undefined,
-      networkPorts: canLayTileNow ? layTrackFocus?.ports : undefined,
+      /* Design note #725: and undefined on the D&H's own hex, for the same reason the ring opens there at all.
+         Passing the network here would hand the picker an empty candidate list -- the second half of the same
+         refusal, and the one that would have survived fixing only the ring. */
+      networkHexes: canLayTileNow && !onPrivateTileHex ? layTrackFocus?.network : undefined,
+      networkPorts: canLayTileNow && !onPrivateTileHex ? layTrackFocus?.ports : undefined,
       // The era comes from `currentPhase.tint`, the SAME derivation the
       // phase badge displays, rather than a second reading of
       // `current_global_era`.
@@ -4718,6 +5372,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     mapGrid,
     currentPhase,
     canLayTileNow,
+    onPrivateTileHex,
     layTrackFocus?.network,
     layTrackFocus?.ports,
   ]);
@@ -5166,12 +5821,70 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       radialSelector.q,
       radialSelector.r,
       activeCorporationContext?.treasury ?? null,
+      /* Design note #723: the reducer's own paid-ground ledger, so the preview quotes the figure the debit will
+         actually be. Before this it read the tile grid and the reducer read nothing -- the preview said $0 on an
+         upgrade and the treasury lost the full fee. */
+      gameState?.terrain_fees_paid,
     );
     return cost.fee > 0 ? cost : null;
-  }, [radialSelector, orSubPhase, canLayTileNow, mapGrid, activeCorporationContext]);
+  }, [
+    radialSelector,
+    orSubPhase,
+    canLayTileNow,
+    mapGrid,
+    activeCorporationContext,
+    gameState?.terrain_fees_paid,
+  ]);
 
   /** Derived from radialSelector: the ring and the veil must appear and vanish together.
    *  See docs/ai_architecture/canvas_rendering.md - App.tsx #472 */
+  /* Design note #725: written in an effect rather than at the two call sites that set the errand, so arming
+     and disarming cannot get out of step -- the ref follows the state by construction. */
+  useEffect(() => {
+    privateTileHexKeyRef.current =
+      homeStationPlacement?.kind === "private-tile"
+        ? `${homeStationPlacement.q},${homeStationPlacement.r}`
+        : null;
+  }, [homeStationPlacement]);
+
+  /* Design note #725a: the flag a president gets before spending their own power by accident. Reported on
+     confirming that a self-lay forfeits like any other: "we may want to include a flag of some sort that says
+     'Hey, you own this private company, do you want to use it?'"
+     Computed on the RING rather than on the hex, so it appears at the moment of committing rather than while
+     browsing -- the same stage rule #684 applies to the fee. */
+  const dhLayWarning = useMemo(() => {
+    if (!radialSelector) return null;
+    const dh = gameState?.private_companies?.find((entry) => entry.private_id === DH_PRIVATE_ID);
+    const forDh = dhSelfLayWarning({
+      q: radialSelector.q,
+      r: radialSelector.r,
+      dhHex: privateHexFor(DH_PRIVATE_ID),
+      actingOwnsDh:
+        !!dh && dh.owner_protocol_id != null && dh.owner_protocol_id === actingProtocolId,
+      power: dhPower,
+      usingPower: onPrivateTileHex,
+    });
+    if (forDh) return forDh;
+
+    // Design note #726: the C&SL has the same trap and one fewer thing to lose.
+    const csl = gameState?.private_companies?.find(
+      (entry) => entry.private_id === CSL_PRIVATE_ID,
+    );
+    return privateSelfLayWarning({
+      q: radialSelector.q,
+      r: radialSelector.r,
+      hex: privateHexFor(CSL_PRIVATE_ID),
+      actingOwns:
+        !!csl && csl.owner_protocol_id != null && csl.owner_protocol_id === actingProtocolId,
+      layAvailable: cslPower.layAvailable,
+      forfeited: cslPower.forfeited,
+      usingPower: onPrivateTileHex,
+      privateName: "Champlain & St. Lawrence",
+      hexLabel: CSL_HEX_LABEL,
+      buttonLabel: `Lay Track (${CSL_HEX_LABEL})`,
+    });
+  }, [radialSelector, gameState, actingProtocolId, dhPower, cslPower, onPrivateTileHex]);
+
   const soleFocusKey = useMemo(
     () => (radialSelector ? `${radialSelector.q},${radialSelector.r}` : undefined),
     [radialSelector],
@@ -5680,9 +6393,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   // WaterfallPass and PassTurn are different contract messages, not one action with two names.
                   // See docs/ai_architecture/contract_economy.md - App.tsx #31
                   onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
-                  /* Design note #717: offered only where a standing pass means something. */
+                  /* Design note #717: offered only where a standing pass means something.
+                     Design note #728: but never WITHDRAWN while one is standing. `isWaterfallPhase` used to
+                     return `null` here, deleting the control outright -- and an arm can survive into the
+                     auction, so the one place a player could not reach the off switch included a phase where
+                     it was still notionally live. The bar decides what to show from `armed`. */
                   autoPass={
-                    isWaterfallPhase
+                    isWaterfallPhase && autoPassArm === null
                       ? null
                       : {
                           armed: autoPassArm !== null,
@@ -5692,11 +6409,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   }
                   /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
                      See docs/ai_architecture/contract_economy.md - App.tsx #311 */
+                  /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
+                     unskippable modal. The obligation is to acquire a train; buying from a rival discharges
+                     it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
                   passDisabledReason={
                     isWaterfallPhase && waterfallState?.mini_auction
                       ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
-                      : null
+                      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
+                           Ahead of the train obligation because the two cannot both apply -- one is a Stock
+                           Round debt and the other an Operating Round one -- and reading the seat's debt
+                           first keeps the Stock Round's refusal from depending on an unrelated check. */
+                        divestmentRefusal(
+                          divestmentDebt({
+                            state: gameState ?? ({ current_round_type: null } as never),
+                            player: viewerAddress ?? "",
+                            marketPrices: sandboxMarketPrices,
+                            zoneForPrice: marketZoneForPrice,
+                          }),
+                        ) ??
+                        trainPurchaseRefusal({
+                          atHardwareStep:
+                            gameState?.current_round_type === "OperatingRound" &&
+                            orSubPhase === "Hardware",
+                          trainless: trainlessAndReported,
+                          couldRunARoute: couldRunARouteIfItHadATrain,
+                          ticker: activeCorporationContext?.ticker ?? "This corporation",
+                        })
                   }
+                  /* Design note #745: read off the replayed state, not off a React flag. The bar is a
+                     narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
+                     an Undo that rewinds past the sale must take the "End Turn" label back with it. */
+                  turnActionTaken={gameState?.turn_action_taken === true}
                   onPlaceStationTokenHint={handlePlaceStationTokenHint}
                   stationTokenCost={stationTokenCost}
                   /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
@@ -5760,6 +6503,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   privatePowerViewer={viewerAddress}
                   sandboxMode={sandbox}
                   usedPrivateAbilities={usedPrivateAbilities}
+                  // Design note #725: the D&H's ordering rule, computed where the board is.
+                  privateActionBlocks={privateActionBlocks}
                   onUsePrivateAbility={handleUsePrivateAbility}
                   privateAbilityError={privateAbilityError}
                   onRunTrains={handleRunTrains}
@@ -5790,6 +6535,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                             ? "One offer at a time — answer or rescind the outstanding one first."
                             : null,
                           onBuyFromBank: handleBuyTrainsFromBank,
+                          /* Design note #751c: the button that replaces #3's unskippable modal. It is
+                             offered exactly when a plan exists, which is the same condition the modal
+                             itself used -- so nothing changed about WHEN the emergency applies, only about
+                             who opens it. */
+                          onEmergencyPurchase: () => setEmergencyModalOpen(true),
+                          emergencyAvailable: emergencyPurchasePlan !== null,
                           onProposeTrade: handleProposeTrainTrade,
                           labelForAddress: (address: string) =>
                             sandboxPlayerLabel(address) ?? truncateAddress(address),
@@ -5848,7 +6599,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   onSelectRouteTrain={handleSelectRouteTrain}
                   highlightedRouteIndex={highlightedTrainIndex}
                   onHighlightRoute={setHighlightedTrainIndex}
-                  trainDrafts={trainDrafts}
+                  /* Design note #740: the acting president reads their OWN drafts; everybody else reads the
+                     presence channel. One prop, two sources, because the bar renders the same row either way --
+                     which is what #739 meant by building it so live drafts would be a data swap. */
+                  trainDrafts={isMyTurn ? trainDrafts : rivalTrainDrafts}
                   activeTrainIndex={activeTrainIndex}
                   routeFeedback={routeFeedback}
                   onClearRoute={handleClearRoute}
@@ -6033,6 +6787,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 <div style={styles.boardPane} ref={setBoardEl}>
                   {activeMainTab === "map" ? (
                     <HexGridRenderer
+                      // Design note #723: so the red cost badge clears when the ground is PAID FOR, which is
+                      // the same moment the reducer stops charging for it.
+                      terrainFeesPaid={gameState?.terrain_fees_paid}
                       mapGrid={mapGrid}
                       // Withholding the four interceptor props is the MECHANISM, not tidiness: route mode, token targeting, preview rotation and being outside Lay Track all want the raw click. Sandbox withholds them to force the offline catalog path (#24).
                       // See docs/ai_architecture/canvas_rendering.md - App.tsx #519
@@ -6303,6 +7060,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          unmounts the depot panel, and the confirmation for that purchase must not go with it. */}
       <ActionToast
         message={actionToast?.text ?? null}
+        // Design note #738: the treasury transition, when there is one.
+        detail={actionToast?.detail ?? null}
         token={actionToast?.token ?? 0}
         onDismiss={() => setActionToast(null)}
       />
@@ -6414,6 +7173,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* Design note #673: the price, on the control that commits to it. Same
              `pendingLayCost` the card's provisional treasury reads. */
           costNote={pendingLayCost ? describePendingTileCost(pendingLayCost) : null}
+          // Design note #725a: and what this lay costs beyond its price, when it costs anything.
+          warningNote={dhLayWarning}
           // Design note #488b: the caption's picture -- the same migration,
           // drawn on each candidate instead of described.
           stationMarkersFor={radialStationMarkersFor}

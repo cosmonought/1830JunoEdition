@@ -401,3 +401,64 @@ describe("the fail-safes that are not toggles", () => {
     expect(decision.wakeReason).toBeTruthy();
   });
 });
+
+
+describe("the off switch is always reachable", () => {
+  /* ==================================================================
+   *  DESIGN NOTE 728 (harness): TURNING IT OFF IS NOT A STOCK ROUND ACTION
+   * ==================================================================
+   *
+   * REPORTED: "Players need a way to disable Auto-Pass once it is on. The Auto-Pass button should be clickable
+   * at any time for them to turn it off."
+   *
+   * THREE SEPARATE WAYS THE CONTROL BECAME UNREACHABLE, all from the same mistake -- treating "disarm" as a
+   * variant of "arm" and gating it on the same conditions. Arming needs a Stock Round and a live session,
+   * because it schedules a dispatch. Disarming clears one local value and needs neither.
+   *
+   * ASSERTED AS SOURCE because all three are render conditions on a component with no rules module to test:
+   * what is wrong is WHEN the button exists and WHEN it is enabled, and both live in JSX. This is the weak
+   * instrument, used because it is the only one that can see the defect. */
+
+  const read = (rel: string) => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  };
+  const bar = read("panels/ContextualActionBar.tsx");
+  const app = read("App.tsx");
+
+  it("renders the control whenever an instruction is standing", () => {
+    /* (1) THE ROUND GATE. `roundType === "StockRound"` is right for offering and wrong for withdrawing: the
+       moment the round turned, the button vanished with the arm still set, so the only way out was to wait for
+       a Stock Round -- which would then be passed for you. */
+    expect(bar).toContain('autoPass && (autoPass.armed || roundType === "StockRound")');
+  });
+
+  it("never disables it while armed", () => {
+    /* (2) THE SESSION GATE. A dropped connection must not trap a player inside a setting that keeps taking
+       their turns. Arming still needs a session; clearing does not. */
+    expect(bar).toContain("disabled={!autoPass.armed && !sessionReady}");
+  });
+
+  it("keeps offering it through the auction while armed", () => {
+    /* (3) THE WATERFALL GATE, which handed the bar `null` and deleted the control outright -- so the one place
+       a player could not reach the off switch was a phase an arm can survive into. */
+    expect(app).toContain("isWaterfallPhase && autoPassArm === null");
+  });
+});
+
+describe("one standing instruction passes a turn once", () => {
+  it("guards the dispatch on the seat it has already passed for", () => {
+    /* Design note #728. The effect re-runs on every `gameState` change and `isMyTurn` is derived from React
+       state, while the reducer writes its ref synchronously (#670) -- so between dispatching a pass and React
+       committing the seat advance, the effect can fire again and spend a turn the player never had. The key is
+       round AND seat, so a later turn in the same round passes again as it should. */
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    expect(app).toContain("if (autoPassedForSeatRef.current === seatKey) return;");
+    expect(app).toContain("autoPassedForSeatRef.current = seatKey;");
+    // Cleared on both arm and disarm, so re-arming can act on the very turn it was set in.
+    expect(app.match(/autoPassedForSeatRef\.current = null;/g) ?? []).toHaveLength(2);
+  });
+});

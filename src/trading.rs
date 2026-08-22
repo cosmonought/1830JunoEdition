@@ -19,8 +19,10 @@
 //!   Buyback lockout    no re-buying a corporation you sold this Stock Round.
 //!   Round gating       no sales in SR1; no trading outside a Stock Round.
 //!
-//! Market movements: sold-out bonus moves up, each certificate sold moves down,
-//! Distribute moves right, Withhold moves left.
+//! Market movements: each certificate sold moves down, Distribute moves right, Withhold moves left.
+//! Buying moves nothing. The one ascending movement -- sold out, both pools empty -- belongs to the END OF A
+//! STOCK ROUND and lives in `market::apply_sold_out_price_rises`; design note #746c removed the per-purchase
+//! bump this line used to advertise.
 //!
 //! Sale pricing is fixed when the sale BEGINS (Audit G-4) -- every certificate
 //! transacts at the price the marker sat on, and the marker walks down only
@@ -889,8 +891,11 @@ enum PoolEffect {
 }
 
 /// Buys `quantity` certificates of `protocol_id` from its IPO or Bank pool.
-/// Payment always flows from the buyer's cash into the game bank. If the purchase
-/// empties BOTH pools the marker advances one row (sold-out bonus).
+/// Payment always flows from the buyer's cash into the game bank.
+///
+/// BUYING MOVES NO MARKER. Design note #746c: the line that used to stand here said "if the purchase empties
+/// BOTH pools the marker advances one row (sold-out bonus)", and the code below did exactly that. In 1830 the
+/// sold-out rise is an end-of-Stock-Round event and happens once -- see `market::apply_sold_out_price_rises`.
 ///
 /// Four invariants, all resolved during the Checks phase so every rejection
 /// leaves storage completely untouched: atomic multi-buy (Brown Zone + Bank
@@ -1374,51 +1379,54 @@ pub fn execute_buy_stock(
         response = response.add_attribute("brown_zone_multiple_buy", "true");
     }
 
-    // $350 Game-End Trigger (module doc comment #16): set once an ascending
-    // movement below lands on the chart's top cell; checked at the very end
-    // of this function, after every other piece of this purchase's own
-    // bookkeeping has already completed normally.
-    let mut game_end_triggered = false;
+    // DESIGN NOTE 746c: THE PER-PURCHASE SOLD-OUT BUMP IS REMOVED. It moved the marker up on any buy that
+    // emptied both pools, and this comment called it "the classic 18xx price bump" -- which it is, in some
+    // 18xx titles. It is not a rule in 1830.
+    //
+    // REPORTED: "A corporation's share price only rises, and only rises once, at the end of a stock round when
+    // all of its shares are in the hands of players, period."
+    //
+    // The rise now happens in exactly one place: `market::apply_sold_out_price_rises`, called once per Stock
+    // Round from `conclude_stock_round`. That function's own doc comment always said the single call site was
+    // "what makes this an end-of-round bonus rather than a per-purchase one" -- this block was the per-purchase
+    // one, sitting in another file, contradicting it.
+    //
+    // WHAT IT COST BEYOND THE EXTRA CELL: a corporation could sell out mid-round and be raised twice before any
+    // player had a chance to respond to the first move, and the $350 game-end trigger could fire on a purchase
+    // rather than at the round boundary where the rules place it.
 
-    // "Sold out" (the classic 18xx price bump) means the protocol's entire
-    // 100% is now in player hands -- both pools empty, not just the one
-    // this particular purchase drew from.
-    let other_pool_pct = match source {
-        SharePurchaseSource::Ipo => BANK_POOL_SHARES
-            .may_load(deps.storage, (game_id, protocol_id))?
-            .unwrap_or(0),
-        SharePurchaseSource::Bank => IPO_POOL_SHARES
-            .may_load(deps.storage, (game_id, protocol_id))?
-            .unwrap_or(FULL_POOL_PERCENTAGE),
-    };
-    if new_pool_pct == 0 && other_pool_pct == 0 {
-        let sold_out_cell = market::move_up(deps.storage, game_id, protocol_id)?;
-        response = response
-            .add_attribute("sold_out", "true")
-            .add_attribute("new_price", sold_out_cell.price)
-            .add_attribute("new_x", sold_out_cell.x.to_string())
-            .add_attribute("new_y", sold_out_cell.y.to_string());
-        if market::price_triggers_game_end(&sold_out_cell) {
-            game_end_triggered = true;
-        }
-    }
-
-    // General flotation: if this purchase brought the total real-player-owned stake
-    // to `FLOAT_THRESHOLD_PERCENTAGE` and it has not already floated by some other
-    // path (the B&O floats for free the instant its private is won), flip it to
-    // floated and capitalize its treasury at 10x its PAR VALUE -- never a market
-    // price, even on a purchase that crosses the float line via a Bank buy.
+    // General flotation: if this purchase brought the share of the corporation that has LEFT THE IPO to
+    // `FLOAT_THRESHOLD_PERCENTAGE` and it has not already floated by some other path (the B&O floats for free
+    // the instant its private is won), flip it to floated and capitalize its treasury at 10x its PAR VALUE --
+    // never a market price, even on a purchase that crosses the float line via a Bank buy.
+    //
+    // DESIGN NOTE 749: THIS ASKED `total_player_owned_percentage` AND WAS WRONG.
+    //
+    // REPORTED: "floating is only contingent on 60% of shares being out of the IPO; if there are 20% in IPO,
+    // 20% in player, and 60% in market, that corporation is floated and operational the same as a corporation
+    // with 40% in IPO and 60% in player."
+    //
+    // The two measures agree until somebody SELLS, because sold shares go to the Bank Pool -- out of the IPO
+    // forever, and out of players' hands. Buy 50% from the IPO (no float), sell 20% into the pool, buy 10%
+    // more: 60% has left the IPO and the corporation must float, while the player total reads 40%. It then had
+    // no way to float at all short of somebody buying back a pool they may not want.
+    //
+    // IT IS ALSO THE RIGHT SHAPE FOR A LATCH. `is_floated` never goes back off and nothing returns a share to
+    // the IPO, so `100 - ipo` only rises. The player total falls on every sale, which made the old rule a
+    // latch computed from a quantity that moves both ways.
+    //
+    // `total_player_owned_percentage` SURVIVES for its other caller: `nothing_issued` above, which really is
+    // asking whether any player holds anything.
     let maybe_company: Option<PublicCompany> =
         PUBLIC_COMPANIES.may_load(deps.storage, (game_id, protocol_id))?;
     if let Some(mut company) = maybe_company {
         if !company.is_floated {
-            let total_player_owned = total_player_owned_percentage(
-                deps.storage,
-                game_id,
-                protocol_id,
-                &session.player_addresses,
-            )?;
-            if total_player_owned >= FLOAT_THRESHOLD_PERCENTAGE {
+            // Design note #749: the IPO pool is read fresh -- this purchase has already drawn from it.
+            let ipo_remaining = IPO_POOL_SHARES
+                .may_load(deps.storage, (game_id, protocol_id))?
+                .unwrap_or(FULL_POOL_PERCENTAGE);
+            let sold_from_ipo = FULL_POOL_PERCENTAGE.saturating_sub(ipo_remaining);
+            if sold_from_ipo >= FLOAT_THRESHOLD_PERCENTAGE {
                 let par_for_treasury = PROTOCOL_PAR_VALUE
                     .may_load(deps.storage, (game_id, protocol_id))?
                     .ok_or(TradingError::MissingParValueAtFloat { protocol_id })?;
@@ -1441,10 +1449,11 @@ pub fn execute_buy_stock(
 
                 response = response
                     .add_attribute("newly_floated", "true")
-                    .add_attribute(
-                        "float_total_player_owned_percentage",
-                        total_player_owned.to_string(),
-                    )
+                    // Design note #749: renamed with the measure. The attribute said
+                    // "total_player_owned_percentage", which is what it was reading and not what floats a
+                    // corporation -- an event log that names the wrong quantity is how the wrong quantity
+                    // gets copied into the next reader.
+                    .add_attribute("float_sold_from_ipo_percentage", sold_from_ipo.to_string())
                     .add_attribute("float_par_value", par_for_treasury)
                     .add_attribute("float_treasury", company.treasury);
             }
@@ -1464,27 +1473,14 @@ pub fn execute_buy_stock(
         president.as_ref().map(Addr::as_str).unwrap_or("none"),
     );
 
-    // $350 Game-End Trigger (module doc comment #16): everything above --
-    // the purchase itself, the float check, the President recalculation --
-    // is this action's own bookkeeping and has already completed normally.
-    // Only now, once all of that is done, does hitting the chart's top
-    // cell close the room out and halt every subsequent turn.
-    if game_end_triggered {
-        let end_game_response =
-            crate::contract::finalize_and_distribute_payouts(deps, game_id, session)
-                .map_err(|e| TradingError::Std(StdError::generic_err(e.to_string())))?;
-        response = response
-            .add_attribute("game_end_triggered", "true")
-            .add_attributes(end_game_response.attributes)
-            // See `operations.rs`'s identical fix for the full rationale:
-            // `Response::messages` is `Vec<SubMsg>`, and `add_messages` needs
-            // `Into<CosmosMsg>` items, so this unwraps each SubMsg back to
-            // its inner `msg` -- lossless, since every one of these
-            // originated from `finalize_and_distribute_payouts` wrapping
-            // plain `BankMsg::Send` values with the default `reply_on:
-            // ReplyOn::Never`.
-            .add_messages(end_game_response.messages.into_iter().map(|m| m.msg));
-    }
+    // DESIGN NOTE 746c: THE $350 CHECK GOES WITH IT. A buy is no longer capable of moving the marker at all,
+    // so nothing here can land on the chart's top cell and `game_end_triggered` was permanently false. The
+    // trigger still lives on the two paths that DO move a marker -- the dividend step in `operations.rs`, and
+    // `conclude_stock_round` via `apply_sold_out_price_rises` -- which is where 1830 puts it.
+    //
+    // Worth recording rather than quietly deleting: while the bump existed, a purchase could end the GAME.
+    // That is the same misplacement as the price move, one step further along, and it would have been read as
+    // a $350 corporation rather than as a rule error.
 
     Ok(response)
 }

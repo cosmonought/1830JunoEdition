@@ -117,6 +117,10 @@ export interface LayableHexInput {
     network: ReadonlySet<string>,
     ports: ReadonlySet<string>,
   ) => boolean;
+  /** Design note #729: cities this corporation may not run THROUGH -- tokened out by others. Injected for the
+   *  same reason `hasPlaceableTile` is: the slot counts live in the tile catalog and the occupants live in
+   *  game state, neither of which this module may read. See `reachableTrack`. */
+  blocksThrough?: (q: number, r: number, cityIndex: number) => boolean;
 }
 
 export interface LayableHexResult {
@@ -178,9 +182,47 @@ export interface ReachableTrack {
 
 /** The walk, with both of its results. `reachableNetwork` below is this
  *  function's `hexes` and exists because most callers want only that. */
+/** Which city on `(q, r)` an arrival across `edge` lands in, or `null` for plain track.
+ *
+ *  Design note #729. Inverted from `cityExitEdges` rather than re-derived: that function already owns the
+ *  rotation arithmetic and the landmark table, and a second reading of `cityGroups` here is how two answers
+ *  about the same tile come to disagree. Tried in index order and the first match wins -- a tile whose two
+ *  city groups shared an edge would be ambiguous, and no 1830 tile does. */
+export function cityForArrival(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  edge: number,
+): number | null {
+  const all = cityExitEdges(mapGrid, q, r, null);
+  for (let city = 0; city < 2; city += 1) {
+    const edges = cityExitEdges(mapGrid, q, r, city);
+    /* `cityExitEdges` FALLS BACK TO EVERY LIVE EDGE when the hex has fewer than two cities or the index is out
+       of range, so an answer equal to `all` is "I do not know which city" and must not be read as "city 0
+       reaches everything". Only a genuinely narrower answer identifies a city. */
+    if (edges.length < all.length && edges.includes(edge)) return city;
+  }
+  /* One city, or none. `hexBlocksThrough` is asked anyway with index 0 -- a single-city hex is the ordinary
+     blocking case and the caller decides whether a city exists there at all. */
+  return all.includes(edge) ? 0 : null;
+}
+
 export function reachableTrack(
   mapGrid: MapGridResponse,
   stationHexes: ReadonlyArray<StationToken>,
+  /** Design note #729: whether a city is tokened out against the corporation whose network this is.
+   *
+   *  REPORTED: "corporations' networks are not being blocked by tokened out cities. A network is defined in
+   *  the rulebook as the hexes a theoretical infinite-length train could reach on its run, so tokened out
+   *  hexes block this train as they should all other trains."
+   *
+   *  INJECTED, for #7's reason: the slot COUNTS live in the tile catalog under `components/`, which `utils/`
+   *  may not import for its tables, and the OCCUPANTS live in game state this module has never seen. The
+   *  caller holds both; this module holds the walk.
+   *
+   *  OMITTED MEANS NO BLOCKING, which reproduces every pre-#729 caller exactly -- and is the honest default
+   *  for a caller that cannot see the tokens, since inventing a block would hide legal track. */
+  blocksThrough?: (q: number, r: number, cityIndex: number) => boolean,
 ): ReachableTrack {
   const hexes = new Set<string>();
   const ports = new Set<string>();
@@ -215,6 +257,32 @@ export function reachableTrack(
     if (visited.has(stateKey)) continue;
     visited.add(stateKey);
 
+    /* ==================================================================
+     *  DESIGN NOTE 729: A TOKENED-OUT CITY IS A WALL, NOT A GAP
+     * ==================================================================
+     *
+     * REPORTED: "A network is defined in the rulebook as the hexes a theoretical infinite-length train could
+     * reach on its run, so tokened out hexes block this train as they should all other trains."
+     *
+     * THE WALK MODELLED TRACK AND IGNORED TOKENS ENTIRELY, so a corporation's network ran straight through
+     * cities it may not pass -- offering tile lays on the far side of a wall, in a place no train of theirs
+     * could ever run. The report's definition is the fix stated precisely: the network IS a run, so every rule
+     * that stops a run stops it.
+     *
+     * REACHED, BUT NOT PASSED. The blocked city is still IN the network and `hexes.add` above has already
+     * recorded it -- a train may end its run in a city it cannot pass through, and a corporation may still
+     * upgrade that tile. What it may not do is continue. So this drops the EXITS and keeps the hex, which is
+     * the whole of the difference between a wall and a hole.
+     *
+     * NEVER FROM A STATION. `arrivalEdge === null` is this corporation standing in its own city, and a
+     * corporation is not blocked by its own token -- nor by anybody else's in a city it also occupies.
+     * Starting nodes are exempt by construction rather than by a rule, because the caller only ever seeds the
+     * walk from cities this corporation holds. */
+    if (at.arrivalEdge !== null && blocksThrough) {
+      const city = cityForArrival(mapGrid, at.q, at.r, at.arrivalEdge);
+      if (city !== null && blocksThrough(at.q, at.r, city)) continue;
+    }
+
     /* Which edges may this visit leave by? From a station, all of them; having arrived on a rail, only the edges
        that rail reaches. `traversalsFrom` is the strict half -- it drops the pair when there is no authored rail
        joining the two edges, which is what makes two curves on one tile two curves rather than a junction. */
@@ -242,8 +310,10 @@ export function reachableTrack(
 export function reachableNetwork(
   mapGrid: MapGridResponse,
   stationHexes: ReadonlyArray<StationToken>,
+  // Design note #729: passed straight through, so every caller of the short form gets the rule too.
+  blocksThrough?: (q: number, r: number, cityIndex: number) => boolean,
 ): Set<string> {
-  return reachableTrack(mapGrid, stationHexes).hexes;
+  return reachableTrack(mapGrid, stationHexes, blocksThrough).hexes;
 }
 
 /** A corporation's tokens as the walk wants them: the recorded `(q, r, city)`
@@ -283,7 +353,7 @@ export function layableHexes(input: LayableHexInput): LayableHexResult {
     };
   }
 
-  const { hexes: network, ports } = reachableTrack(mapGrid, roots);
+  const { hexes: network, ports } = reachableTrack(mapGrid, roots, input.blocksThrough);
 
   // A lay is legal on a hex the network REACHES: one already in the network (an upgrade of track the corporation
   // runs on) or one its track actually exits toward (an extension -- design note #3, where the "every surrounding

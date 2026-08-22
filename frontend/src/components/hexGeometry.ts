@@ -30,6 +30,8 @@ import {
 import { corporationLabel } from "../utils/corporationNames";
 import { TILE_CATALOG, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
+// Design note #724: "is there a token here" asked by name, off the required list.
+import { hasStationTokenAt } from "./hexContractTypes";
 import type {
   HexClickRejection,
   LegalTilePlacement,
@@ -938,6 +940,70 @@ export function hexRouteValue(q: number, r: number, mapGrid: MapGridResponse): n
   return null;
 }
 
+/** What a route earns for stopping on `(q, r)` -- the WHOLE ladder, in one place.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 741: THE TOOLTIP READ A CATEGORY, THE ROUTER READ THE TILE
+ *  ==================================================================
+ *
+ *  REPORTED: "The tooltips for the hexes are not updating the (Value: $ ) field to match the current tiles."
+ *
+ *  TWO LADDERS, AND THE SHORT ONE WAS ON THE TOOLTIP. `hexRouteValue` answers a laid tile with
+ *  `terrainBaseValue(catalogEntry.terrain)` -- the flat figure for its terrain CATEGORY. `hexStopValue`, which
+ *  prices actual routes, asks four questions in order: the chain's own `revenue`, then the catalog entry's
+ *  `revenue`, then the hex's printed override, and only then the terrain bucket.
+ *
+ *  So upgrading Baltimore from its printed yellow to a green tile changed what a train EARNED there and left
+ *  the tooltip quoting a number derived from "this is a major city hub" -- true of the hex forever, and
+ *  therefore never news. The two disagreed the moment any tile with its own revenue was laid, which is most
+ *  of them.
+ *
+ *  THE LADDER MOVES DOWN RATHER THAN THE TOOLTIP MOVING UP. `hexStopValue` lives in `sandboxSession`, which
+ *  imports FROM this file -- so the tooltip could not call it without a cycle. Putting the ladder here, where
+ *  every table it consults already is, lets the reducer delegate upward instead. One function, one answer,
+ *  and the dependency arrow keeps pointing the way it did.
+ *
+ *  `hexRouteValue` SURVIVES as the bottom rung, because that is what it always was: the board's own answer
+ *  about a hex, before any tile-specific figure. It is still the last thing this asks. */
+export function hexValueForEra(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  era: TileColorTier,
+): number {
+  const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+  const label = boardHex?.label;
+
+  /* Off-board terminals FIRST: their value rises with the era, and `hexRouteValue` returns `null` for them
+     precisely because that ladder is a different value system from the terrain one. */
+  if (label) {
+    const offboard = OFFBOARD_LABELS[label];
+    if (offboard) {
+      const tiers = OFFBOARD_REVENUE[offboard];
+      if (tiers) return offboardValueForEra(tiers, era);
+    }
+  }
+
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) {
+    // The chain's own figure wins where there is one -- but only when it is an actual figure. A `"0"` is a
+    // plain connector, not a priced stop.
+    const chainValue = laid.revenue == null ? NaN : Number(laid.revenue);
+    if (Number.isFinite(chainValue) && chainValue > 0) return chainValue;
+    const entry = TILE_CATALOG_BY_ID.get(laid.tile_id);
+    if (typeof entry?.revenue === "number" && entry.revenue > 0) return entry.revenue;
+  }
+
+  // The hex's own printed exception (New York $40, Boston/Baltimore $30, Altoona's real $10).
+  if (label && typeof HEX_START_VALUE_OVERRIDE[label] === "number") {
+    const printed = HEX_START_VALUE_OVERRIDE[label];
+    if (printed > 0) return printed;
+  }
+
+  const boardValue = hexRouteValue(q, r, mapGrid);
+  return typeof boardValue === "number" && boardValue > 0 ? boardValue : 0;
+}
+
 /** Suffixes in a fixed left-to-right order: name, value, terrain cost, stations. #103 suppresses a $0 value. #118 corrected Stations from a CAPACITY count to which corporations actually hold a token here, omitted entirely when none.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #118 */
 export function describeHexWithValue(
@@ -952,17 +1018,11 @@ export function describeHexWithValue(
 
   let result = base;
 
-  const offboardName = boardHex ? OFFBOARD_LABELS[boardHex.label] : undefined;
-  if (offboardName) {
-    const tiers = OFFBOARD_REVENUE[offboardName];
-    if (tiers) {
-      const offboardValue = offboardValueForEra(tiers, currentEra);
-      if (offboardValue !== 0) result = `${result} (Value: $${offboardValue})`;
-    }
-  } else {
-    const value = hexRouteValue(q, r, mapGrid);
-    if (value !== null && value !== 0) result = `${result} (Value: $${value})`;
-  }
+  /* Design note #741: ONE LADDER, not a branch on off-board and a shorter answer for everything else. The old
+     shape asked `hexRouteValue` for every ordinary hex, which stops at the terrain CATEGORY and so never
+     changed when a tile with its own revenue was laid on it. `hexValueForEra` is what the router prices with. */
+  const value = hexValueForEra(mapGrid, q, r, currentEra);
+  if (value !== 0) result = `${result} (Value: $${value})`;
 
   if (boardHex) {
     /* IT IS A PRICE, SO IT STOPS BEING NEWS ONCE PAID. A terrain fee is charged once, by the lay that crosses it -- on a hex that already carries a tile the figure is a receipt, and sitting beside the live route value it read as money still owed.
@@ -975,7 +1035,10 @@ export function describeHexWithValue(
   // The canvas token can only fit an acronym and has no DOM node to hang a title on, so this is the only place a player learns which railroad it is. Multiple tokens stay bare tickers -- three expanded names would bury the hex's own description.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #118
   const tickersHere = publicCompanies
-    .filter((company) => company.station_token_hexes.some(([hexQ, hexR]) => hexQ === q && hexR === r))
+    /* Design note #724: the same presence question, asked by name. This copy was always CORRECT -- it reads
+       `station_token_hexes` -- which is what made the renderer's copy so easy to miss: three call sites agreed
+       and the fourth quietly asked a different field. */
+    .filter((company) => hasStationTokenAt(company, q, r))
     .map((company) => company.ticker);
   if (tickersHere.length === 1) {
     result = `${result} (Station: ${corporationLabel(tickersHere[0])})`;

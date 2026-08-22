@@ -56,3 +56,63 @@ export function stickyTopOffset(declaredTop: string | null | undefined): number 
   const parsed = Number.parseFloat(declaredTop ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 720: A STICKY PANEL TALLER THAN THE VIEWPORT IS A TRAP
+ * ==================================================================
+ *
+ * REPORTED: "The 'Buy Private Company' subpanel is so large and unscrollable that I can't even see it all
+ * ... for some reason my scrolling is taking me down the page but not the subpanel. I guess if a subpanel is
+ * going to be this huge, it would be better to disable the sticky feature."
+ *
+ * THE DIAGNOSIS IS IN THE SECOND SENTENCE, and it is a property of `position: sticky` rather than anything
+ * about this panel. A sticky element travels with the page until its top edge reaches its offset, and then
+ * STOPS. If the element is taller than the space between that offset and the bottom of the viewport, the part
+ * hanging below the fold never moves again: the page scrolls underneath it, the element does not, and there is
+ * no gesture that reaches the bottom of it. Scrolling "takes you down the page but not the subpanel" is the
+ * exact symptom, described precisely.
+ *
+ * IT IS A REGRESSION OF #715, and worth naming as one. Moving Buy Private out of a modal and into the bar was
+ * right -- a modal you have to click into is not a step -- but the bar it moved into is sticky, and nothing
+ * checked whether the bar could still hold what was being put in it. The panel was fine floating; it is the
+ * COMBINATION that traps.
+ *
+ * SO THE BAR STICKS ONLY WHILE IT IS SMALL ENOUGH TO STICK -- measured, not assumed, and not keyed to "is a
+ * subpanel mounted". A proxy would be wrong in both directions: a short panel on a tall screen would lose the
+ * sticky behaviour #297 wants for no reason, and a heavily wrapped bar with no panel at all would still trap
+ * on a short screen. The bug is about height, so the condition is about height.
+ *
+ * HALF THE VIEWPORT, not "does it fit". Fitting is the point at which the panel becomes READABLE; it is not
+ * the point at which sticking it is a good idea. A sticky element is a companion to the content it floats
+ * over, and past half the screen the content is the passenger. That leaves an enormous margin over a real
+ * bar -- 50px of controls against 350 on a small laptop -- so the ordinary case is untouched, which is the
+ * property that matters most here.
+ *
+ * NO INNER SCROLLBAR, which is the other obvious fix and is already twice rejected: #13/item 1 removed
+ * `overflow: auto` from the panes as "exactly the inner scrollbar this item asks to eliminate", and #655 found
+ * a `maxHeight` on this very bar was "the bug it warned about". A nested scroller here would be a third
+ * attempt at a shape this project has twice reported as wrong.
+ */
+
+/** The largest share of the usable viewport a sticky panel may occupy and still pin. */
+export const STICKY_MAX_VIEWPORT_SHARE = 0.5;
+
+/** Whether a panel is short enough to be worth pinning.
+ *
+ *  `false` means render it as an ordinary block: it scrolls away with the page, which is the behaviour a tall
+ *  panel needs and the only one that lets a player reach its bottom.
+ *
+ *  UNMEASURABLE MEANS STICK. A zero or non-finite viewport is the first paint, SSR, or a browser that has not
+ *  laid out yet -- and the pre-#720 behaviour was to stick always, so an unmeasured panel behaving exactly as
+ *  it did before is the change that cannot regress anything. The measurement arrives a frame later. */
+export function canPinWithoutTrapping(
+  panelHeight: number,
+  viewportHeight: number,
+  stickyTop: number,
+): boolean {
+  if (!Number.isFinite(panelHeight) || panelHeight <= 0) return true;
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return true;
+  const usable = viewportHeight - (Number.isFinite(stickyTop) ? stickyTop : 0);
+  if (usable <= 0) return false;
+  return panelHeight <= usable * STICKY_MAX_VIEWPORT_SHARE;
+}

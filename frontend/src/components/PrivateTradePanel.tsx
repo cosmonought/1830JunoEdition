@@ -207,7 +207,9 @@ export function ProposePrivatePurchase({
           <div style={styles.list}>
             {eligible.map((entry) => {
               const isSelected = entry.private_id === selectedId;
-              const entryBounds = privatePriceBounds(Number(entry.cost));
+              /* Design note #721: the per-row band is gone with the cell that showed it. `privatePriceBounds`
+                 is still the authority -- `bounds` below computes it for the SELECTED private, next to the
+                 field where the price is actually chosen, which is where the report moved it to. */
               // Design note #386: shown either way, inert when it cannot be
               // bought, and captioned with the reason.
               const blocked = privatePurchaseBlockReason(entry);
@@ -250,30 +252,46 @@ export function ProposePrivatePurchase({
                     <span style={styles.rowName}>
                       {entry.name}
                       {catalog && <span style={styles.rowAcronym}>{catalog.acronym}</span>}
+                      {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player
+                         currently owns them". For an unsold private it is also the explanation for why the row is
+                         inert, so the two facts are one line rather than two.
+                         Design note #721: ON THE NAME'S LINE. It had a column cell of its own, right-aligned
+                         opposite the face value, which cost a grid row to say three words. */}
+                      <span style={styles.rowOwner}>
+                        {entry.owner
+                          ? `held by ${labelForAddress(entry.owner)}`
+                          : blocked !== null
+                            ? "not for sale"
+                            : "unsold in the auction"}
+                      </span>
                     </span>
-                    <span style={styles.rowBand}>
-                      {blocked === null
-                        ? `$${entryBounds.min} - $${entryBounds.max}`
-                        : "not for sale"}
+                    {/* Design note #721: THE TWO FIGURES, STACKED AND RIGHT-ALIGNED.
+                       REPORTED: "the right column should list 'income' (which should be in green) followed by
+                       'face value'. Let's leave the 50-200% information to the actual offer panel when you
+                       click the PC to buy it."
+                       THE BAND WAS THE MOST PROMINENT THING ON THE ROW AND THE LEAST USEFUL. It had the green
+                       and the monospace, so six rows of "$30 - $120" read as the answer to a question nobody
+                       had yet -- the price is negotiated AFTER choosing, and the offer field states the same
+                       band inline the moment a private is selected. Two statements of one rule, and the
+                       redundant one was shouting.
+                       INCOME TAKES THE GREEN, which is what the report is really about: revenue is the number
+                       a player compares across privates, and it was grey `small` text sharing a line with the
+                       face value. */}
+                    <span style={styles.rowFigures}>
+                      <span style={styles.rowIncome}>${entry.revenue_per_or}/OR</span>
+                      <span style={styles.rowFace}>face ${entry.cost}</span>
                     </span>
-                    <span style={styles.rowMeta}>
-                      face ${entry.cost} &middot; pays ${entry.revenue_per_or}/OR
-                    </span>
-                    {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player currently owns
-                       them". For an unsold private it is also the explanation for why the row is inert, so the two facts are one
-                       line rather than two. */}
-                    <span style={styles.rowOwner}>
-                      {entry.owner
-                        ? `held by ${labelForAddress(entry.owner)}`
-                        : "unsold in the auction"}
-                    </span>
-                    {/* Design note #661: the POWER, on the face of the row. A player choosing between six privates is choosing
-                       between six powers, and the face named every other attribute -- price, revenue, owner, band -- except the one
-                       the decision turns on. */}
-                    {catalog && (
-                      <span style={styles.rowPower}>{catalog.abilitySummary}</span>
-                    )}
                   </button>
+                  {/* Design note #721: THE SUMMARY IS THE DISCLOSURE.
+                     REPORTED: "the 'special power summary' ... should itself be clickable to display the full
+                     rule (so eliminate the 'Full rules' button)".
+                     #661 put the summary on the face of the row and then added a separate "Full rules" toggle
+                     beneath it -- two controls, stacked, about the same sentence, and the second one cost a
+                     line of its own on every card. Making the sentence the control removes a row per private
+                     and removes the question of what the button refers to.
+                     STILL NOT INSIDE THE FACE BUTTON. #661's reason holds exactly: a button inside a button is
+                     invalid markup that browsers repair by unnesting. It is a sibling, full width, which is
+                     also why the group is a flex column rather than one grid. */}
                   {catalog && (
                     <button
                       type="button"
@@ -287,12 +305,16 @@ export function ProposePrivatePurchase({
                       aria-expanded={isExpanded}
                       aria-controls={detailId}
                       style={styles.rowDisclosure}
+                      title={isExpanded ? "Hide the full rule." : "Read the full rule."}
                     >
                       {/* Not gated on `blocked`. An unsold private, or the
                           B&O a corporation may never buy, still has a power
                           worth reading -- design note #386's reason for
                           showing the row at all applies to its rules too. */}
-                      {isExpanded ? "\u25B4 Less" : "\u25BE Full rules"}
+                      <span style={styles.rowDisclosureCaret} aria-hidden="true">
+                        {isExpanded ? "▴" : "▾"}
+                      </span>
+                      <span style={styles.rowPower}>{catalog.abilitySummary}</span>
                     </button>
                   )}
                   {catalog && isExpanded && (
@@ -562,9 +584,13 @@ const styles: Record<string, React.CSSProperties> = {
   row: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
-    gap: "3px 12px",
+    /* Design note #721: ONE GRID ROW, not three. #661's two-column grid was right and it was carrying five
+       cells; with the band gone, the owner inline and the power moved to its own button, the face is a single
+       line -- identity on the left, the two figures on the right. */
+    gap: "2px 12px",
+    alignItems: "start",
     textAlign: "left",
-    padding: "10px 12px 8px",
+    padding: "9px 12px 5px",
     border: "none",
     background: "none",
     color: "#e2e6ee",
@@ -577,9 +603,10 @@ const styles: Record<string, React.CSSProperties> = {
   rowName: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    display: "inline-flex",
+    display: "flex",
+    flexWrap: "wrap",
     alignItems: "baseline",
-    gap: "7px",
+    gap: "4px 7px",
     minWidth: 0,
   },
   /* The acronym beside the name. Every other surface in this app identifies
@@ -592,47 +619,65 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8f98a8",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  rowBand: {
-    fontSize: FONT_SIZE.small,
+  /* Design note #721: `rowBand` and `rowMeta` are GONE, not left unused. The band moved to the offer field
+     where the number is actually chosen, and the meta line split into `rowIncome` and `rowFace`. An orphan
+     style for a thing just removed on report is how the thing comes back -- `palette.ts`'s rule for its
+     retired colour token, and #696's for the dropdown it replaced. */
+  rowFigures: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: "1px",
+    whiteSpace: "nowrap",
+  },
+  /* The comparison figure, in the green this panel already used for money -- freed by the band's removal. */
+  rowIncome: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
     color: "#7ee0a1",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    textAlign: "right",
-    whiteSpace: "nowrap",
   },
-  rowMeta: { fontSize: FONT_SIZE.small, color: "#aab0bc" },
-  rowOwner: {
+  rowFace: {
     fontSize: FONT_SIZE.small,
     color: "#aab0bc",
-    textAlign: "right",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  /* Design note #721: inline beside the name, so it no longer costs a grid row. `micro` because it is the
+     one fact on the line that is not being compared across rows. */
+  rowOwner: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8f98a8",
     whiteSpace: "nowrap",
   },
-  /* Design note #661: the power summary spans BOTH columns and sits under
-     the facts. It is the longest line on the row and the one most likely to
-     wrap, so giving it the full width keeps it from squeezing the price band
-     into two lines beside it. */
   rowPower: {
-    gridColumn: "1 / -1",
-    fontSize: FONT_SIZE.body,
+    fontSize: FONT_SIZE.small,
     color: "#d3d8e2",
-    lineHeight: 1.45,
-    marginTop: "2px",
+    lineHeight: 1.4,
+    textAlign: "left",
+    minWidth: 0,
   },
-  /* A quiet control. It reveals reference text rather than doing anything to
-     the game, so it must not compete with the row it hangs off -- design
-     note #235's distinction between a turn action and a utility, applied to
-     a disclosure. */
+  /* Design note #721: the whole sentence is the control, so this is a full-width row rather than the small
+     bordered pill #661 put under it. No border and no background: a bordered block per private was a second
+     card inside each card, and the caret plus the hover title carry the affordance. */
   rowDisclosure: {
-    alignSelf: "flex-start",
-    margin: "0 12px 8px",
-    padding: "2px 7px",
-    borderRadius: "6px",
-    border: "1px solid #39414f",
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "7px",
+    width: "100%",
+    margin: 0,
+    padding: "0 12px 9px",
+    border: "none",
     backgroundColor: "transparent",
     color: "#9aa0ac",
     fontFamily: "inherit",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
     cursor: "pointer",
+    textAlign: "left",
+  },
+  rowDisclosureCaret: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8f98a8",
+    lineHeight: 1.6,
+    flex: "none",
   },
   rowDetail: {
     margin: "0 12px 10px",

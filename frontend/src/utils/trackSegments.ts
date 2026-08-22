@@ -30,6 +30,8 @@ import {
   artworkPathsForTraversal,
   printedArtwork,
   printedPathsForTraversal,
+  printedTraversalVariants,
+  printedChainBypassesCentre,
 } from "../components/TileGraphics";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
@@ -123,6 +125,37 @@ function segmentKey(q: number, r: number, index: number | typeof WHOLE_HEX_SEGME
   return `${hexKey(q, r)}#${index}`;
 }
 
+/** THE EDGE ITSELF, named without reference to any rail.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 731: A FORK SHARES TRACK BEFORE IT FORKS
+ *  ==================================================================
+ *
+ *  REPORTED: "TRACK CAN NEVER BE REUSED ... tile #24 features a fork, and the very tiny bit of shared track
+ *  before the fork prohibits two trains from running over it. This second case of subtle forking needs to be
+ *  checked against tiles 23-29 and virtually every brown tile."
+ *
+ *  THE MODEL NAMED RAILS AND THE BOARD HAS TRACK. Tile 24 is authored `paths: [[0, 2], [0, 3]]` -- two rails
+ *  that both reach edge 0, which on cardboard is ONE stub of track splitting inside the tile. #669 keyed each
+ *  end as `rail@edge`, so those two ends came out `#0@0` and `#1@0`: two names for one piece of track, and two
+ *  trains could each claim it without ever colliding.
+ *
+ *  AN EDGE CARRIES EXACTLY ONE TRACK, on every tile in the game -- that is what an edge IS on 18xx cardboard,
+ *  which is why tiles connect at all. So the edge is a sounder unit of occupancy than the rail, and this key
+ *  says only "somebody is using this hex's edge N". Two trains crossing a hex by genuinely separate curves
+ *  touch four different edges and still do not clash, which is #4's case and stays legal.
+ *
+ *  ADDED ALONGSIDE THE RAIL STUBS, NOT INSTEAD OF THEM. The stubs still distinguish a terminus from a transit
+ *  (#669) and still separate the two spokes of a hub; this only closes the case where two rails meet an edge.
+ *  Removing them to "simplify" would reopen #669 and #484 together.
+ *
+ *  THE SAME KEY ALSO CATCHES THE OBVIOUS CASE the report leads with -- two trains leaving one token hex by the
+ *  same edge -- which the rail stubs happened to catch already. Both are now one rule instead of two
+ *  coincidences. */
+function edgeKey(q: number, r: number, edge: number): SegmentKey {
+  return `${hexKey(q, r)}~${edge}`;
+}
+
 /** One END of one rail -- design note #669. */
 function stubKey(
   q: number,
@@ -137,6 +170,11 @@ function stubKey(
  *  these rails. */
 export interface HexTraversal {
   exitEdge: number;
+  /** Design note #737: WHICH authored way through, when the hex offers more than one. `0` everywhere but
+   *  Altoona, whose bow is variant 1. */
+  variant?: number;
+  /** Design note #737: this way through never reaches the hex's revenue centre. */
+  bypass?: boolean;
   /** Every rail the transit runs along. Two for a hub crossing (entry spoke
    *  plus exit spoke), one for a through tile. */
   segments: readonly SegmentKey[];
@@ -158,14 +196,20 @@ function stubsForTransit(
   entryEdge: number,
   exitEdge: number,
 ): readonly SegmentKey[] {
-  if (indices.length === 1) {
-    return [stubKey(q, r, indices[0], entryEdge), stubKey(q, r, indices[0], exitEdge)];
-  }
-  return indices.map((index, at) => {
-    if (at === 0) return stubKey(q, r, index, entryEdge);
-    if (at === indices.length - 1) return stubKey(q, r, index, exitEdge);
-    return segmentKey(q, r, index);
-  });
+  /* Design note #731: both edges this transit crosses, named rail-agnostically, APPENDED.
+     The order of this list is load-bearing: `segmentsTouchingEdge` reads element 0 as "the rail entered at
+     `entryEdge`". Putting the edge keys first would hand that function an edge where it expects a rail, and a
+     terminus would claim the whole edge instead of its own stub -- #669's bug, reintroduced by a fix for a
+     different one. They go on the end, where nothing indexes. */
+  const rails: SegmentKey[] =
+    indices.length === 1
+      ? [stubKey(q, r, indices[0], entryEdge), stubKey(q, r, indices[0], exitEdge)]
+      : indices.map((index, at) => {
+          if (at === 0) return stubKey(q, r, index, entryEdge);
+          if (at === indices.length - 1) return stubKey(q, r, index, exitEdge);
+          return segmentKey(q, r, index);
+        });
+  return [...rails, edgeKey(q, r, entryEdge), edgeKey(q, r, exitEdge)];
 }
 
 /** The authored rails joining `entryEdge` to `exitEdge` on this hex, or `null` when the two are not joined by
@@ -180,6 +224,12 @@ export function traversalSegments(
   r: number,
   entryEdge: number,
   exitEdge: number,
+  /** Design note #737: WHICH way through, when the hex offers more than one. `0` is the authored first and
+   *  reproduces every pre-#737 caller; only Altoona (H12) has a second today.
+   *  The segment keys differ per variant, which is what stops one train's bypass and another's through-run
+   *  from being counted as the same rail -- while #731's edge keys still stop them sharing the hex's border
+   *  stubs, correctly, since on cardboard both cross edges 0 and 3. */
+  variant = 0,
 ): readonly SegmentKey[] | null {
   if (entryEdge === exitEdge) return null;
 
@@ -197,7 +247,9 @@ export function traversalSegments(
 
   const label = LABEL_BY_COORD.get(hexKey(q, r));
   if (label !== undefined && printedArtwork(label) !== undefined) {
-    const indices = printedPathsForTraversal(label, entryEdge, exitEdge);
+    // Design note #737: the chosen way through, defaulting to the authored first.
+    const variants = printedTraversalVariants(label, entryEdge, exitEdge);
+    const indices = variants[variant] ?? variants[0] ?? [];
     return indices.length === 0 ? null : stubsForTransit(q, r, indices, entryEdge, exitEdge);
   }
   // New York is authored outside `PRINTED_GRAPHICS_CATALOG` (design note #229), and `printedPathsForTraversal`
@@ -230,8 +282,36 @@ export function traversalsFrom(
   entryEdge: number,
 ): HexTraversal[] {
   const out: HexTraversal[] = [];
+  const label = LABEL_BY_COORD.get(hexKey(q, r));
   for (const exitEdge of liveEdgesForHex(mapGrid, q, r)) {
     if (exitEdge === entryEdge) continue;
+
+    /* Design note #737: ONE ENTRY PER WAY THROUGH, not one per exit. Altoona's two tracks join the same two
+       edges, so the caller has a genuine choice at this hex -- and had no way to see it, because this loop
+       collapsed the pair to a single traversal. Every other hex yields exactly one variant, so the list is
+       unchanged everywhere else.
+       PREPRINTED ONLY. A laid tile's alternatives, if 1830 ever authored one, would need the same treatment in
+       the `artworkPathsForTraversal` branch of `traversalSegments`; nothing on the board needs it today and
+       inventing the case would be a rule with no caller. */
+    const chains =
+      label !== undefined && printedArtwork(label) !== undefined
+        ? printedTraversalVariants(label, entryEdge, exitEdge)
+        : [];
+
+    if (chains.length > 1) {
+      chains.forEach((chain, variant) => {
+        const segments = traversalSegments(mapGrid, q, r, entryEdge, exitEdge, variant);
+        if (!segments) return;
+        out.push({
+          exitEdge,
+          variant,
+          bypass: printedChainBypassesCentre(label as string, chain),
+          segments,
+        });
+      });
+      continue;
+    }
+
     const segments = traversalSegments(mapGrid, q, r, entryEdge, exitEdge);
     if (!segments) continue;
     out.push({ exitEdge, segments });
@@ -280,7 +360,11 @@ export function segmentsTouchingEdge(
   for (const exitEdge of liveEdgesForHex(mapGrid, q, r)) {
     if (exitEdge === edge) continue;
     const segments = traversalSegments(mapGrid, q, r, edge, exitEdge);
-    if (segments && segments.length > 0) return [segments[0]];
+    /* Design note #731: the entry rail's stub AND the edge itself. A train that runs in and stops still
+       occupies the track crossing this edge, so a second train may not enter here -- which is the report's
+       first case ("two trains run the same track to G5") seen from the terminus end. `segments[0]` stays the
+       rail stub for #669's reason; the edge key is added beside it rather than replacing it. */
+    if (segments && segments.length > 0) return [segments[0], edgeKey(q, r, edge)];
   }
   /* A dead-end: rail reaches this edge and goes nowhere else on the hex.
      Still occupied by a train that stops here, so it needs an identity --
@@ -292,7 +376,11 @@ export function segmentsTouchingEdge(
      South claimed one identity for the whole zone -- two trains arriving from different directions blocked each
      other out of a destination 1830 lets them share. There are no transits through a red area at all, so
      naming the end here cannot disagree with anything. */
+  /* Design note #731: the edge key here too, so a dead-end and a red off-board arrival obey the same rule as
+     everything else. It changes nothing for #484's case -- two trains reaching Deep South by DIFFERENT edges
+     still hold different keys and still share the destination -- and it closes the one it did not cover:
+     two trains reaching it across the SAME edge, which is one piece of track. */
   return liveEdgesForHex(mapGrid, q, r).includes(edge)
-    ? [stubKey(q, r, WHOLE_HEX_SEGMENT, edge)]
+    ? [stubKey(q, r, WHOLE_HEX_SEGMENT, edge), edgeKey(q, r, edge)]
     : [];
 }

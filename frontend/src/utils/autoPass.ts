@@ -74,6 +74,9 @@ interface CompanySnapshot {
 }
 
 export interface AutoPassArm {
+  /** Design note #759a: does this player owe a forced sell-down? Passed in rather than computed here, because
+   *  the debt needs live market prices and the zone table, and neither belongs in `utils/` (#7). */
+  divestmentOwed?: boolean;
   player: string;
   /** The Stock Round this was armed in. A different one expires it. */
   macroRoundNumber: number;
@@ -186,6 +189,25 @@ export function autoPassDecision(
   /* THE GUARANTEE, ahead of every toggle and answerable by none of them. Passing a turn while a rival is one
      certificate from a presidency hands them the chance to take it, and losing a company is a thing a player
      chooses, never a thing a convenience does to them. */
+  /* ==================================================================
+     DESIGN NOTE 759a: A DEBT IS NOT A TURN TO PASS
+     ==================================================================
+     Rule (iii) names auto-pass specifically -- "they should not be able to buy shares OR skip/pass/auto-pass
+     their turn until these sales have been made" -- and it belongs beside the presidency guarantee rather
+     than among the toggles below, for the same reason #717 gives about that one: a checkbox cannot consent to
+     an outcome the rules forbid. A player who owes the table a sell-down is not choosing to pass; they have
+     an obligation, and a convenience that discharged it by doing nothing would break the round.
+     THE ARM IS DISARMED, not merely skipped for a turn. The debt persists until the player acts, so waking
+     them once and re-arming would wake them again on the next seat and the one after. */
+  if (arm.divestmentOwed === true) {
+    return {
+      pass: false,
+      wakeReason:
+        "Shares of yours left the Yellow/Orange/Brown zones and now count against your limits — " +
+        "you must sell down before passing.",
+    };
+  }
+
   const exposed = exposedPresidencies(state, arm.player);
   if (exposed.length > 0) {
     const list = exposed.join(", ");

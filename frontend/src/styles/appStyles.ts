@@ -478,6 +478,14 @@ export const styles: Record<string, React.CSSProperties> = {
        own margin scrolls with it and offsets it from `top: 0`. The gap is
        now the following content's `marginTop`, which stays put. */
   },
+  /* Design note #720: the bar, given back to the page. Spread OVER `actionBar` when it has grown past half the
+     viewport -- an embedded step panel, usually -- because a sticky box taller than its own pin space hides its
+     own bottom for the rest of the scroll.
+     `zIndex` stays: the bar still overlaps the panels below it while it travels, and dropping the stacking
+     order here would make it flicker under them instead of trapping. */
+  actionBarUnpinned: {
+    position: "static",
+  },
   // Turn notifications -- design note #18/item 4. Spread onto `actionBar` alongside its base style so only
   // the border colour and the glow are added.
   // Design note #298: the pinned form. Vertical padding halves and the rounding goes -- a floating rounded
@@ -1093,6 +1101,26 @@ export const styles: Record<string, React.CSSProperties> = {
     marginTop: "4px",
     paddingTop: "4px",
     borderTop: "1px solid #2b3242",
+  },
+  /* Design note #739: the spectator's twin of `condensedTrainChip`. Same shape, none of the affordance --
+     no pointer, no pressed state, and slightly muted, because the reader cannot act on it and a chip that
+     looks clickable and is not is worse than one that plainly is not. */
+  spectatorTrainChip: {
+    cursor: "default",
+    opacity: 0.85,
+  },
+  /* The sum, set apart from the per-train chips: it is a different KIND of figure -- theirs are the parts,
+     this is what the corporation actually earns -- and running it in the same chip style would invite it to
+     be read as a fourth train. */
+  spectatorTotal: {
+    alignSelf: "center",
+    marginLeft: "4px",
+    paddingLeft: "8px",
+    borderLeft: "1px solid #3a4150",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#7ee0a1",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   condensedTrainChip: {
     display: "inline-flex",

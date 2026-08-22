@@ -88,8 +88,11 @@ function board(over: Record<string, unknown> = {}): GameStateResponse {
   } as unknown as GameStateResponse;
 }
 
-const cheap = { [PRR]: 20, [BO]: 20 };
-const dear = { [PRR]: 100, [BO]: 100 };
+/* TYPED, NOT INFERRED. `{ [PRR]: 20 }` infers `{ 1: number }`, which cannot be indexed by a `number` under
+   `noImplicitAny` -- and the failure surfaces only where the value is passed somewhere that indexes it
+   loosely, which is why every other use of these two constants compiled fine and `rankPlayers` did not. */
+const cheap: Record<number, number> = { [PRR]: 20, [BO]: 20 };
+const dear: Record<number, number> = { [PRR]: 100, [BO]: 100 };
 
 const debtFor = (
   state: GameStateResponse,
@@ -223,7 +226,7 @@ describe("Yellow waives the certificate limit and not the 60% cap", () => {
   /* THE DISTINCTION MY OWN FIXTURE GOT WRONG, so it is pinned rather than left to the two constants. #7 is
      about how many CARDS you may hold in total; #712 is about how much of ONE corporation. Yellow answers the
      first and says nothing about the second. */
-  const midPrice = { [PRR]: 50, [BO]: 50 };
+  const midPrice: Record<number, number> = { [PRR]: 50, [BO]: 50 };
 
   it("still owes the cap in Yellow", () => {
     const debt = debtFor(board(), midPrice);

@@ -31,6 +31,8 @@
   "scripts": {
     "start": "react-app-rewired start",
     "build": "react-app-rewired build",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run build",
     "test": "react-app-rewired test",
     "eject": "react-scripts eject"
   },

@@ -131,6 +131,8 @@ import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvena
 import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
 import { divestmentDebt, divestmentRefusal } from "./utils/forcedDivestment";
+// Design note #763: a floated corporation with no home token stops the game until the token is down.
+import { homeTokenBlock } from "./utils/homeTokenGate";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
 // -- the radial selector replaced it, and its two callbacks went with it.
 // The file is retained on disk, unreferenced, until the radial path has been
@@ -1021,6 +1023,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return hex ? ([hex.q, hex.r] as const) : null;
   }, []);
 
+  /* ==================================================================
+     DESIGN NOTE 762: A REF IS ONLY AN ESCAPE HATCH FOR CALLBACKS
+     ==================================================================
+     REPORTED: "ReferenceError: can't access lexical declaration 'tr' before initialization" inside a
+     `useMemo`, crashing both clients to a white screen when a share was bought while a home station was
+     still unplaced.
+     #730 CREATED THIS REF AND PUT IT IN THE WRONG PLACE, and its own note says why it thought that was safe:
+     "three of the four places that need it are callbacks defined ABOVE it ... reordering the file for one
+     dependency is a worse trade than naming the indirection." That is correct for a CALLBACK, whose body
+     runs long after every declaration exists. It is false for a MEMO, whose body runs during the render pass
+     at the line where the memo is created -- so `couldRunARouteIfItHadATrain` below was reading a `const`
+     that was still in its temporal dead zone.
+     THE FOURTH PLACE WAS A MEMO AND GOT SWEPT IN WITH THE THREE CALLBACKS. Nothing in the type system says
+     so: TypeScript catches a direct use-before-declaration and cannot catch one inside a closure, because it
+     has no way to know when the closure runs.
+     WHY IT TOOK A PLAYTEST TO FIND. The memo returns early when the acting corporation holds no station
+     token, so the throw is unreachable until somebody's token is on the board -- which in Stock Round 1 is
+     exactly the moment the report describes.
+     THE FIX IS THE DECLARATION MOVING UP, not another indirection. A `useRef` has no dependencies and can
+     sit anywhere; hook ORDER only has to be stable between renders, which it is. */
+  const blocksThroughCityRef = useRef<((q: number, r: number, city: number) => boolean) | undefined>(
+    undefined,
+  );
+
   /* Declared here because it reads sandboxMarketPrices and const bindings are not hoisted. Emergency = obliged AND cannot afford; #433 adds "and has a route to run".
      See docs/ai_architecture/contract_economy.md - App.tsx #332 */
   const couldRunARouteIfItHadATrain = useMemo(() => {
@@ -1503,15 +1529,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
     },
     [mapGrid],
-  );
-
-  /* Design note #730: read through a ref by the route callers.
-     `blocksThroughCity` is a memo built from `gameState` and the board, and three of the four places that need
-     it are callbacks defined ABOVE it in a six-thousand-line file. A ref is the same escape hatch #2339 takes
-     for `logInfo`, and for the same reason: reordering the file for one dependency is a worse trade than
-     naming the indirection. */
-  const blocksThroughCityRef = useRef<((q: number, r: number, city: number) => boolean) | undefined>(
-    undefined,
   );
 
   const blocksThroughCity = useMemo(
@@ -6413,7 +6430,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                      unskippable modal. The obligation is to acquire a train; buying from a rival discharges
                      it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
                   passDisabledReason={
-                    isWaterfallPhase && waterfallState?.mini_auction
+                    /* Design note #763: FIRST, because it outranks every other reason -- while a home token
+                       is owed nothing may happen at all, and a player told about some later rule would fix
+                       that one and still find the button dead. */
+                    homeTokenBlock({
+                      state: gameState ?? ({ public_companies: [] } as never),
+                      homeHexToAxial,
+                      labelForAddress: (address) =>
+                        sandboxPlayerLabel(address) ?? truncateAddress(address),
+                    }) ??
+                    (isWaterfallPhase && waterfallState?.mini_auction
                       ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
                       : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
                            Ahead of the train obligation because the two cannot both apply -- one is a Stock
@@ -6434,7 +6460,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           trainless: trainlessAndReported,
                           couldRunARoute: couldRunARouteIfItHadATrain,
                           ticker: activeCorporationContext?.ticker ?? "This corporation",
-                        })
+                        }))
                   }
                   /* Design note #745: read off the replayed state, not off a React flag. The bar is a
                      narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and

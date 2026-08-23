@@ -36,6 +36,8 @@ import { hasActedThisTurn } from "./turnAction";
 import { roundEndSoldOutRises } from "./soldOutRise";
 import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
+// Design note #763: a float is not finished until its home token is on the board.
+import { homeTokenBlock } from "./homeTokenGate";
 import { stationTokenPrice } from "./stationTokens";
 // Design note #660: the B&O private's two rules, in one place.
 import { isSellableToCorporation, settleBaoPrivate } from "./baltimorePrivate";
@@ -1443,6 +1445,18 @@ export function applySandboxAction(
   if ("LayTile" in msg && ctx?.layRefused) {
     const { q, r, tile_id, orientation } = msg.LayTile;
     if (ctx.layRefused(q, r, tile_id, orientation)) return state;
+  }
+
+  /* Design note #763: NOTHING HAPPENS WHILE A HOME TOKEN IS OWED. Floating a corporation and placing its
+     home token are one event in 1830; #416 split them into a prompt so the player would witness the
+     placement, and that opened a window the physical game does not have. Everything downstream reads the
+     board, so an action settled while a floated corporation has no token is settled against a board that
+     cannot exist.
+     BEFORE EVERY OTHER ARM, because the point is that no message lands -- including the ones that would
+     otherwise be harmless. `homeTokenBlock` lets the placement and Undo through; a gate with no exit turns a
+     bad state into an unrecoverable one. */
+  if (ctx?.homeHexToAxial) {
+    if (homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg }) !== null) return state;
   }
 
   return settleOperatingCursor(

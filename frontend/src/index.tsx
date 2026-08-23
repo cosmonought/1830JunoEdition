@@ -12,6 +12,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 
 import App from "./App";
+// Design note #761: an uncaught render throw becomes a readable, copyable report instead of a blank page.
+import { CrashScreen } from "./components/CrashScreen";
 
 const ROOT_ELEMENT_ID = "root";
 
@@ -25,7 +27,11 @@ if (!container) {
 
 const root = createRoot(container);
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  /* #761: OUTSIDE StrictMode, so the boundary is the outermost thing in the tree and catches a throw from
+     anywhere below -- including one raised by StrictMode's own double-invoked render in development. */
+  <CrashScreen>
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  </CrashScreen>,
 );

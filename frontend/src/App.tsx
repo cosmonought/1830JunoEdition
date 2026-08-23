@@ -1924,6 +1924,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      rather than the log. `null` while it loads or when there is no room. */
   const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
 
+  /* ==================================================================
+     DESIGN NOTE 764: `null` MEANT TWO THINGS AND THE SCREEN PICKED THE WRONG ONE
+     ==================================================================
+     REPORTED: "When players enter the room key and hit 'Join Game' it briefly takes them to the Auction round
+     screen before flashing back to the waiting lobby."
+     `sandboxRoom` STARTS AT `null` AND STAYS THERE UNTIL THE FIRST SNAPSHOT, and the waiting-room gate reads
+     `sandboxRoom?.status === "waiting"`. So for one round trip the answer is "not waiting", the gate falls
+     through, and the board renders on its seeded state -- which is a Waterfall Auction. The snapshot then
+     lands, the gate matches, and the waiting room replaces it. That whole flash is the app confidently
+     answering a question it did not have the data for.
+     THE FIX IS A THIRD STATE, not a longer condition. `null` was carrying "no such room" and "have not heard
+     yet", and those want opposite screens: the first is an error, the second is a wait. Distinguishing them
+     is what lets the gate say "I do not know" instead of guessing.
+     RESET ON THE CODE, not on the doc: joining a second room must go back to not-knowing rather than
+     inheriting the previous room's answer. */
+  const [sandboxRoomResolved, setSandboxRoomResolved] = useState(false);
+  useEffect(() => {
+    setSandboxRoomResolved(false);
+  }, [sandboxRoomCode]);
+
   const sandboxRoomRef = useRef<string | null>(null);
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
@@ -5502,7 +5522,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
     return subscribeSandboxRoom(
       sandboxRoomCode,
-      (room) => setSandboxRoom(room),
+      (room) => {
+        setSandboxRoom(room);
+        // Design note #764: the FIRST snapshot is what ends the not-knowing, whatever it contains.
+        setSandboxRoomResolved(true);
+      },
       (message) => setSandboxRoomError(message),
     );
   }, [sandbox, sandboxRoomCode]);
@@ -6054,6 +6078,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           />
           <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>
             Back to the lobby
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  /* Design note #764: HOLD BEFORE THE FIRST SNAPSHOT. The board is not a safe default -- it renders the seeded
+     Waterfall Auction, which is a screen from the middle of a game the player has not started. Waiting is the
+     honest answer while the room's own state is still in flight, and it is one round trip. */
+  if (sandbox && sandboxRoomCode && !sandboxRoomResolved) {
+    return (
+      <div style={styles.sandboxGateRoot}>
+        <div style={styles.sandboxGateCard}>
+          <h2 style={styles.sandboxGateTitle}>Joining {sandboxRoomCode}…</h2>
+          <p style={styles.sandboxGateBody}>Fetching the room.</p>
+          <button type="button" style={styles.sandboxGateQuiet} onClick={handleLeaveSandboxRoom}>
+            Cancel
           </button>
         </div>
       </div>

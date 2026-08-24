@@ -38,6 +38,9 @@ import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
+import { dividendRefusal } from "./dividendGate";
+import { dividendSplit } from "./dividendSplit";
+import { layEndsTrackStep } from "./bonusLay";
 import { stationTokenPrice } from "./stationTokens";
 // Design note #660: the B&O private's two rules, in one place.
 import { isSellableToCorporation, settleBaoPrivate } from "./baltimorePrivate";
@@ -1329,6 +1332,10 @@ export interface SandboxMarketContext {
    *  visible symptom is a price drop with no matching change in anybody's holdings -- which reads as a market
    *  bug rather than as a refused action. */
   saleRefused?: (companyId: number, percentage: number) => boolean;
+  /** Design note #774: the same split again, for the dividend. This atom advances BEFORE the game state, so
+   *  a declaration the reducer refuses would still walk the token left -- which IS the reported symptom, a
+   *  price that moved further than anything on the board accounts for. One refusal, asked by both. */
+  dividendRefused?: (companyId: number) => boolean;
 }
 
 export function applySandboxMarketAction(
@@ -1384,6 +1391,8 @@ export function applySandboxMarketAction(
        still `applySandboxAction`'s -- this owns only the marker, which is
        the same split every other arm here follows. */
     const { protocol_id, distribute } = msg.DeclareDividends;
+    // Design note #774: a declaration the reducer will decline moves no token either.
+    if (ctx?.dividendRefused?.(protocol_id) === true) return unchanged;
     const mark = prices[protocol_id] ?? null;
     if (mark === null || !ctx?.projectDividend) return unchanged;
     const landed = ctx.projectDividend(mark, distribute ? "pay" : "withhold");
@@ -1445,6 +1454,20 @@ export function applySandboxAction(
   if ("LayTile" in msg && ctx?.layRefused) {
     const { q, r, tile_id, orientation } = msg.LayTile;
     if (ctx.layRefused(q, r, tile_id, orientation)) return state;
+  }
+
+  /* Design note #774: ONE CORPORATION, ONE DIVIDEND DECLARATION, AT THE STEP THAT OWNS THE CHOICE.
+     Reported as a share price that "moved two cells left rather than one" after a trainless first Operating
+     Round. Two cells is two messages: the forced $0 withhold is dispatched by an effect gated on shared
+     state and not on whose turn it is, so every seated browser appended its own copy.
+     THE PER-CLIENT GUARD CANNOT SEE THE OTHER CLIENT. `forcedWithholdRef` is a `Set` in one tab; the
+     property it is trying to enforce belongs to a shared append-only log. So the rule lives here, where a
+     duplicate from ANY source -- a second browser, a stale tab, a hand-built message -- meets the same
+     answer. `settleOperatingCursor` has already moved the cursor off Dividends by the time the second one
+     arrives, so the check is the ordinary rule rather than a duplicate-detector.
+     UNCHANGED ON REFUSAL, on #712's reasoning: a replay must not halt on an entry the log already contains. */
+  if ("DeclareDividends" in msg) {
+    if (dividendRefusal(state, msg.DeclareDividends.protocol_id) !== null) return state;
   }
 
   /* Design note #763: NOTHING HAPPENS WHILE A HOME TOKEN IS OWED. Floating a corporation and placing its
@@ -1531,8 +1554,15 @@ function stepAfterMessage(
   current: OperatingSubPhase | undefined,
   msg: GameplayExecuteMsg,
 ): OperatingSubPhase {
-  // A corporation lays one tile per turn, so the Track step is done.
-  if ("LayTile" in msg) return settleSubPhase(state, "Tokens");
+  /* A corporation lays one tile per turn, so the Track step is done.
+     Design note #776: UNLESS THE LAY WAS EXTRA. This arm was unconditional, and it is the line that both
+     enforces "one tile per turn" and -- wrongly -- ended the Track step on the Champlain & St. Lawrence's
+     bonus lay. The cursor is what withdraws the Lay Track controls, so ending the step here is the second
+     lay being taken away. `layEndsTrackStep` reads a flag the shell sets; an unflagged lay is ordinary, so
+     every message written before #776 behaves exactly as it did. */
+  if ("LayTile" in msg) {
+    return layEndsTrackStep(msg) ? settleSubPhase(state, "Tokens") : settleSubPhase(state, current);
+  }
   // One station placement per turn likewise.
   if ("PlaceStationToken" in msg) return settleSubPhase(state, "Routes");
   /* Running the routes COMPUTES the revenue; declaring dividends chooses
@@ -2112,28 +2142,20 @@ function applyOneAction(
      * ABSENT IS NOT ZERO. The fallback still exists, because a message written before `revenue_amount` was
      * carried has no figure at all and guessing zero for those would silently cancel real dividends. What
      * changed is that an explicit `"0"` is now a FIGURE rather than a missing one. */
-    const rawAmount = msg.DeclareDividends.revenue_amount;
-    const stated =
-      rawAmount === undefined || rawAmount === null || rawAmount === ""
-        ? NaN
-        : Number(rawAmount);
-
-    /* AND A TRAINLESS CORPORATION HAS NO LAST RUN. The belt to the fix above: even where the fallback is
-       legitimately reached, a corporation that owns no trains cannot have run this turn, so its stored figure
-       is a fact about some earlier Operating Round and must not move money now. */
-    const ownsTrain = (company?.owned_trains?.length ?? 0) > 0;
-    const remembered = ownsTrain ? Number(company?.last_route_revenue ?? 0) || 0 : 0;
-
-    const revenue = Number.isFinite(stated) ? Math.max(0, stated) : remembered;
-    if (revenue <= 0 || !company) return state;
+    /* Design note #775: THE ARITHMETIC MOVED TO `dividendSplit`, unchanged. Every rule this branch had
+       settled -- #752's explicit zero, the trainless fallback, #706's two pools, the floor -- now lives in
+       one module, because the LOG LINE and the TOAST were computing the same figures a second time from
+       their own snapshot and getting a different answer. Reported as a payout notice showing double what was
+       actually paid: two implementations, one of which moves money.
+       THE REDUCER IS STILL THE AUTHORITY. It is the only caller that acts on the result; the describers only
+       read it. What changed is that there is now one calculation for them to read. */
+    const settlement = dividendSplit(state, protocol_id, msg.DeclareDividends.revenue_amount, distribute);
+    if (!settlement || !company) return state;
+    const { revenue } = settlement;
 
     if (!distribute) {
       return adjustTreasury(adjustBank(state, -revenue), protocol_id, revenue);
     }
-
-    // Floored, matching `App`'s own per-share figure: 1830 pays whole units,
-    // and rounding up would have the corporation pay out more than it earned.
-    const perShare = Math.floor(revenue / 10);
 
     /* Design note #706: THE TWO POOLS WERE EXACTLY SWAPPED.
        1830: "Shares in the bank pool pay dividends to the corporate treasury. No payments are made for unsold
@@ -2149,19 +2171,14 @@ function applyOneAction(
        from `revenue` minus other slices. The old expression had to stay in step with two figures computed
        elsewhere, and did not. */
     let next = state;
-    let paid = 0;
-    for (const holding of company.player_holdings) {
-      const share = perShare * (holding.percentage / 10);
-      paid += share;
-      next = adjustCash(next, holding.player, share);
+    for (const share of settlement.players) {
+      next = adjustCash(next, share.player, share.amount);
     }
-    const poolSlice = perShare * (company.bank_pool_percentage / 10);
-    if (poolSlice > 0) {
-      paid += poolSlice;
-      next = adjustTreasury(next, protocol_id, poolSlice);
+    if (settlement.poolSlice > 0) {
+      next = adjustTreasury(next, protocol_id, settlement.poolSlice);
     }
     // `ipo_pool_percentage` is deliberately absent: unsold shares pay nobody.
-    return adjustBank(next, -paid);
+    return adjustBank(next, -settlement.totalPaid);
   }
 
   if (

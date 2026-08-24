@@ -281,6 +281,7 @@ import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
+import { dividendRefused } from "./utils/dividendGate";
 import { roundLabelFor } from "./utils/roundLabel";
 
 import {
@@ -2921,15 +2922,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         marketPrices: Object.fromEntries(
           (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
         ),
-        /* Design note #434: steps from the CELL. This took a bare price and
-           re-derived a coordinate from it, so the log quoted the same wrong
-           destination the readout did. `marketGrid.positions` is the same
-           source the panel reads, so the sentence and the screen agree. */
-        projectPrice: (companyId: number, choice: "pay" | "withhold") =>
-          projectDividendFrom(
-            marketGrid?.positions.find((p) => p.company_id === companyId) ?? null,
-            choice,
-          )?.price ?? null,
+        /* `projectPrice` REMOVED with design note #775: the dividend sentence no longer projects a move,
+           because `Market Move` already reports the one the market atom made. */
         /* Design note #478: the step the button was pressed FROM. Read from
            the state variable rather than a ref because the cursor only ever
            moves as a result of a dispatch, so it cannot be mid-flight the
@@ -3540,6 +3534,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* Design note #748a: the SAME rule the reducer applies below, asked here because this atom runs
              first. Without it a refused sale still walked the token down and the chart and the board parted
              company for the rest of the game. `before` is the board the reducer will judge it against. */
+          /* Design note #774: the SAME refusal the reducer applies below, asked here because this atom runs
+             first. Without it the second copy of a forced withhold still stepped the token left, and two
+             browsers meant two steps -- the reported "two cells rather than one". */
+          dividendRefused: (companyId) => (before ? dividendRefused(before, companyId) : false),
           saleRefused: (companyId, percentage) => {
             const seller = options?.actor ?? viewerAddressRef.current;
             if (!before || !seller) return false;
@@ -5331,6 +5329,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return;
     if (spectator) return;
     if (orSubPhase !== "Dividends") return;
+    /* ==================================================================
+     *  DESIGN NOTE 774: ONE CLIENT DISPATCHES, NOT EVERY CLIENT
+     * ==================================================================
+     *
+     * REPORTED: a share price that "moved two cells left rather than one" after a trainless Operating Round.
+     *
+     * EVERY CONDITION ABOVE IS SHARED STATE. The round type, the sub-phase and the revenue are all replayed
+     * identically on every browser in the room, and `spectator` is about how you are WATCHING rather than
+     * whether you are on turn. So every seated player's client reached this line and appended its own
+     * `DeclareDividends`. Two players, two messages, two cells left.
+     *
+     * `forcedWithholdRef` BELOW IS NOT THE GUARD FOR THIS. It is a `Set` in one tab and it does its job --
+     * it stops THIS client dispatching twice. It has no way to know another client exists, and #653 scoping
+     * it to the turn did not change that.
+     *
+     * `automatic: true` IS EXEMPT FROM THE TURN GATE, correctly: `runGameplayAction` skips "is it your turn"
+     * for the messages the game sends on a player's behalf. That exemption is what let the duplicate out, so
+     * the ownership check has to be made here instead.
+     *
+     * THE SAME PREDICATE THE AUTO-PASS EFFECT ALREADY USES, whose note says it in one line: "it is THIS
+     * player's -- `isMyTurn` is the same predicate the turn gate uses". In an Operating Round `isMyTurn`
+     * resolves to the operating corporation's president, so exactly one client passes.
+     *
+     * IF THAT PRESIDENT'S BROWSER IS ABSENT, nothing is dispatched and the turn waits -- which is what
+     * happens for every other action they owe, and a stall is recoverable in a way a corrupted market is
+     * not. The reducer refuses a second declaration regardless (`dividendGate.ts`), so this is the source
+     * and that is the door. */
+    if (!isMyTurn) return;
     /* Having skipped Routes is an OBSERVATION and is enough on its own; the pathfinder prediction declines to answer in exactly this case. Manual skips count too.
        See docs/ai_architecture/state_machine.md - App.tsx #484 */
     if (noEarnableRevenue === null && !skippedRoutesThisTurn) return;
@@ -5353,6 +5379,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [
     gameState,
     spectator,
+    isMyTurn,
     orSubPhase,
     noEarnableRevenue,
     skippedRoutesThisTurn,
@@ -5366,6 +5393,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const autoSkippedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!autoSkipReason) return;
+    /* Design note #774: the same fix as the forced withhold above, for the same reason. `autoSkipReason` is
+       derived entirely from shared state, so every seated browser reached this line and appended its own
+       `AdvanceOperatingSubPhase`. That produced no visible price bug -- the cursor arms are idempotent
+       enough that a second skip usually lands on a step it would have reached anyway -- which is exactly why
+       it would have gone on shipping. Fixed alongside its twin rather than waiting for the report. */
+    if (!isMyTurn) return;
     // Design note #653: the turn is part of the key, so the guard re-arms.
     const key = turnGuardKey(turnIdentity, actingProtocolId, orSubPhase);
     if (autoSkippedRef.current.has(key)) return;
@@ -5378,6 +5411,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     skipSubPhaseAutomatically();
   }, [
     autoSkipReason,
+    isMyTurn,
     actingProtocolId,
     turnIdentity,
     orSubPhase,
@@ -5408,7 +5442,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Three separate writes in three places; the charge goes through runGameplayAction so a lay uses the one dispatch path.
    *  See docs/ai_architecture/canvas_rendering.md - App.tsx #436 */
   const handleSandboxLayTile = useCallback(
-    (q: number, r: number, tileId: number, orientation: number) => {
+    (q: number, r: number, tileId: number, orientation: number, bonusLay = false) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
       runGameplayAction("LayTile (sandbox)", {
@@ -5419,6 +5453,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           r,
           tile_id: tileId,
           orientation,
+          /* Design note #776: ON the message, so every client's reducer reaches the same answer from the log
+             alone. Omitted when false rather than sent as `false`: an ordinary lay's entry must look exactly
+             like the ones written before this field existed. */
+          ...(bonusLay ? { bonus_lay: true } : {}),
         },
       });
 
@@ -6018,11 +6056,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!radialSelector || !previewTile || !canLayTileNow) return;
     const { q, r } = radialSelector;
     const { tileId, orientation } = previewTile;
+    /* Design note #776: THE C&StL'S LAY IS EXTRA, and this is the only place that knows it. The player
+       reached this hex through the `csl-tile` errand, so the shell can state which lay it is instead of
+       leaving the reducer to infer it from the hex -- and a connected B-20 lay CAN legitimately be the
+       ordinary placement, so inference would grant a free second tile in that case.
+       THE D&H IS EXCLUDED ON PURPOSE (#548): `dh-tile` consumes the corporation's placement; only its token
+       is free. The two privates are exact opposites and this is where they part. */
+    const bonusLay =
+      homeStationPlacement?.kind === "private-tile" && homeStationPlacement.abilityKey === "csl-tile";
     if (sandbox) {
-      handleSandboxLayTile(q, r, tileId, orientation);
+      handleSandboxLayTile(q, r, tileId, orientation, bonusLay);
     } else {
       runGameplayAction("LayTile", {
-        LayTile: { game_id: gameId, protocol_id: actingProtocolId, q, r, tile_id: tileId, orientation },
+        LayTile: {
+          game_id: gameId,
+          protocol_id: actingProtocolId,
+          q,
+          r,
+          tile_id: tileId,
+          orientation,
+          ...(bonusLay ? { bonus_lay: true } : {}),
+        },
       });
     }
     /* A private-tile errand only veils, so its round trip ends here - marked spent on the LAY, not on the button press.

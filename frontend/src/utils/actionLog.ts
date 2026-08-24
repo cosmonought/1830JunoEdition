@@ -13,6 +13,7 @@
 // See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0, #1
 
 import type { GameStateResponse } from "./gameState";
+import { dividendSplit } from "./dividendSplit";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
@@ -40,9 +41,12 @@ export interface ActionLogContext {
    *  before/after. `undefined` when the chart is not available, and the line
    *  then omits the price move rather than inventing one. */
   marketPrices?: Readonly<Record<number, number | undefined>>;
-  /** Keyed by COMPANY, not by price: searching the chart for a price finds the first of several matching cells, so the log quoted a destination the token never reached.
-   *  See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #434 */
-  projectPrice?: (companyId: number, choice: "pay" | "withhold") => number | null;
+  /* `projectPrice` REMOVED by design note #775, and #434's warning is why it is worth recording rather than
+     just deleting. That note fixed this callback to step from the CELL because a price-keyed search "quoted a
+     destination the token never reached" -- the right fix to the wrong question. The sentence should not have
+     been projecting a destination at all: `Market Move` reports the one the atom actually reached. A
+     projection is the correct tool for a PREVIEW, where the player has not yet chosen; it is never the
+     correct tool for a record of something that already happened. */
   /* An OR is corporation-driven, so the line names the CORPORATION and the step it declined. The step is not on GameStateResponse, so it is passed in and stays optional.
      See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
   orSubPhase?: OperatingSubPhase | null;
@@ -161,47 +165,46 @@ export function describeGameplayAction(
 
   if ("DeclareDividends" in msg) {
     const { protocol_id, revenue_amount, distribute } = msg.DeclareDividends;
-    const company = gameState?.public_companies.find(
-      (entry) => entry.company_id === protocol_id,
-    );
-    const stated = Number(revenue_amount);
-    const revenue =
-      Number.isFinite(stated) && stated > 0
-        ? stated
-        : Number(company?.last_route_revenue ?? 0) || 0;
     const ticker = corp(gameState, protocol_id);
 
-    // The price move, appended only when the chart can say where the token
-    // is. An invented "moved from ? to ?" would be worse than silence.
-    const price = context.marketPrices?.[protocol_id];
-    const moved =
-      price !== undefined && context.projectPrice
-        ? context.projectPrice(protocol_id, distribute ? "pay" : "withhold")
-        : null;
-    const priceSentence =
-      price !== undefined && moved !== null && moved !== price
-        ? ` Share price moved from $${price} to $${moved}.`
-        : price !== undefined
-          ? ` Share price held at $${price}.`
-          : "";
+    /* ==================================================================
+     *  DESIGN NOTE 775: THIS SENTENCE REPORTS; IT NO LONGER RECOMPUTES
+     * ==================================================================
+     *
+     * THE PRICE CLAUSE IS GONE, and it was the reported bug. It read the corporation's CURRENT price and
+     * then projected a dividend step from it -- but by the time this line is built the market atom has
+     * already made that step, so the sentence quoted the destination of a SECOND move that never happened.
+     * The log showed it exactly: `Market Move — C&O fell from $82 to $76` beside `C&O withheld $0 ... Share
+     * price moved from $76 to $71`. $76 is where the token had just landed.
+     *
+     * ONE QUESTION, ONE ANSWER, AND `Market Move` IS IT. #435 built that line from
+     * `applySandboxMarketAction`'s own `moved` result -- the authority's report of what it did, not a second
+     * opinion about what it should do -- and it is the line that came out right in every log. Confirmed by
+     * the report: "The Market Move log is the correct movement for the corporation's share price."
+     *
+     * WHAT IS LOST, STATED PLAINLY: the "Share price held at $X" case, for a token already at the edge of
+     * the chart. `Market Move` is silent when nothing moves, so a clamped step now goes unremarked. That is
+     * a rare, visible-on-the-chart situation, and it is a much smaller cost than a sentence that regularly
+     * names a price the token never reached.
+     *
+     * THE SPLIT COMES FROM `dividendSplit` for the same reason: the payout toast was reporting double what
+     * was actually paid, because this branch re-derived the revenue and re-split it from its own snapshot
+     * while the reducer split it from the state the action applied to. Now both read one calculation. */
+    const settlement = dividendSplit(gameState, protocol_id, revenue_amount, distribute);
+    const revenue = settlement?.revenue ?? 0;
 
     if (!distribute) {
-      return `${ticker} withheld $${revenue} into its treasury.${priceSentence}`;
+      return `${ticker} withheld $${revenue} into its treasury.`;
     }
 
-    // 1830 splits ten ways -- one certificate is 10%.
-    const perShare = Math.floor(revenue / 10);
-    const split = (company?.player_holdings ?? [])
-      .slice()
-      .sort((a, b) => b.percentage - a.percentage)
-      .map(
-        (holding) =>
-          `$${perShare * (holding.percentage / 10)} to ${context.labelForAddress(holding.player)}`,
-      );
+    /* Sorted for READING only -- largest holding first. The amounts are the reducer's own, so the order
+       here cannot change what anybody is paid. */
+    const split = [...(settlement?.players ?? [])]
+      .sort((a, b) => b.amount - a.amount)
+      .map((share) => `$${share.amount} to ${context.labelForAddress(share.player)}`);
     return (
       `${ticker} paid dividends on $${revenue}` +
-      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.") +
-      priceSentence
+      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.")
     );
   }
 

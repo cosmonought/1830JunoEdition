@@ -219,6 +219,17 @@ export type GameplayExecuteMsg =
         r: number;
         tile_id: number;
         orientation: number;
+        /** Design note #776: THIS LAY IS IN ADDITION TO THE ORDINARY ONE. Set only by the Champlain & St.
+         *  Lawrence's power, whose lay is a bonus rather than a substitute -- reported as "using its power
+         *  advanced the Lay Track subphase completely", because the sub-phase cursor ended the Track step on
+         *  every `LayTile` alike and the cursor is what withdraws the controls.
+         *  THE SHELL KNOWS WHICH BUTTON WAS PRESSED and now says so, rather than the reducer inferring it
+         *  from the hex: a CONNECTED B-20 lay can legitimately be the corporation's ordinary placement, and
+         *  a reducer that assumed otherwise would grant a free second tile in that case.
+         *  OPTIONAL, and absent means ordinary (#712's rule for `quantity`) -- every entry already in a log
+         *  omits it and must keep meaning what it meant when it was written.
+         *  NOT FOR THE D&H, whose lay CONSUMES the placement; only its token is free (#548). */
+        bonus_lay?: boolean;
       };
     }
   // Step 4.5 Batch 3, item 1: Manual Route Validation. `path` replaced the

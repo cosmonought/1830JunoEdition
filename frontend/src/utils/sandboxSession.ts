@@ -1792,7 +1792,29 @@ function applyOneAction(
        AFTER the float check, because a buy that both floats a company and
        crowns a new president must resolve the float against the holdings that
        caused it, not against a board mid-transfer. */
-    return advanceSeat(markTrader(settlePresidencies(floated).state, actor));
+    const settledBuy = markTrader(settlePresidencies(floated).state, actor);
+
+    /* ==================================================================
+       DESIGN NOTE 769: THE SEAT STAYS WITH THE PRESIDENT UNTIL THE TOKEN IS DOWN
+       ==================================================================
+       REPORTED: "After a corporation floated, the president player did not immediately know they needed to
+       place the station ... It immediately moved to the other player's turn, even though the President player
+       hadn't placed their home station: the other player's button clicks were logged in the activity log, but
+       nothing happened."
+       #763 STOPPED THE OTHER PLAYER ACTING AND LEFT THE SEAT WHERE IT SHOULD NOT BE. The float happens ON this
+       purchase, and the purchase ends by advancing the seat -- so the round announced somebody else's turn and
+       then refused everything they tried. Two players both stuck, and neither screen said why.
+       BEING REFUSED IS NOT THE SAME AS NOT BEING ASKED. A gate that blocks actions is correct and invisible;
+       what tells a table whose move it is, is the cursor. So the seat is held rather than advanced, which
+       makes the obligation legible from every screen without anybody reading a message.
+       ONLY WHEN THIS PURCHASE OWES A TOKEN. A buy that floats nothing advances the seat exactly as before --
+       the condition is the debt, not the float, so a corporation with no resolvable home hex (#416) does not
+       freeze the round. */
+    if (ctx?.homeHexToAxial && pendingHomeTokens(settledBuy, ctx.homeHexToAxial).length > 0) {
+      return settledBuy;
+    }
+
+    return advanceSeat(settledBuy);
   }
 
   if ("SellStock" in msg) {
@@ -2286,12 +2308,15 @@ export function placeHomeStationToken(
    *  heuristic in charge, which is right for a single-city hex and is the
    *  only honest answer when the click could not be resolved. */
   cityIndex: number | null = null,
+  /** Design note #769a: the board's label lookup, injected on #7's rule. Absent means the seat is not
+   *  released -- the honest answer for a caller that cannot tell whether anything is still owed. */
+  homeHexToAxial?: (label: string) => readonly [number, number] | null,
 ): GameStateResponse {
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company || !company.is_floated) return state;
   if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
 
-  return {
+  const placed: GameStateResponse = {
     ...state,
     public_companies: state.public_companies.map((entry) =>
       entry.company_id === companyId
@@ -2313,6 +2338,23 @@ export function placeHomeStationToken(
         : entry,
     ),
   };
+
+  /* ==================================================================
+     DESIGN NOTE 769a: THE PLACEMENT COMPLETES THE TURN THE PURCHASE STARTED
+     ==================================================================
+     #769 holds the seat on the President when their purchase floats a corporation, so the round does not
+     announce somebody else's turn and then refuse everything they try. That hold needs a release, and the
+     placement is it -- otherwise the President keeps the seat and takes a second turn, which is a worse bug
+     than the one #769 fixed.
+     ONE TURN, TWO MESSAGES. Floating and placing are a single event in 1830 (#763); we split them into two
+     messages so the player witnesses the placement, and this is where the halves are put back together.
+     GUARDED ON THE ROUND AND ON THE REMAINING DEBT. A Stock Round only: nothing else advances a seat this
+     way. And only when no OTHER corporation still owes a token -- two floats in one purchase is not a board
+     1830 reaches, but a release that fired on the first of two would hand the turn on with an obligation
+     still outstanding, which is exactly the state this pair of notes exists to prevent. */
+  if (state.current_round_type !== "StockRound") return placed;
+  if (homeHexToAxial && pendingHomeTokens(placed, homeHexToAxial).length > 0) return placed;
+  return advanceSeat(placed);
 }
 
 /* Private revenue never became money: revenue_per_or was printed as a property and nothing paid it. #328: once per ROUND, not once per corporation. #329: the bank pays; unowned, closed and corporate-owned are handled distinctly.

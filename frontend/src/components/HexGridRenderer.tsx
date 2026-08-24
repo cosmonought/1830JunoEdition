@@ -72,6 +72,7 @@ import {
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
+import { canvasTouchAction, isTapGesture } from "../utils/mapGesture";
 // Design note #723: the one place that decides whether ground is still unpaid.
 import { terrainFeeDue } from "../utils/terrainFee";
 // Design note #727: the palette a private power's hex is marked with.
@@ -437,6 +438,22 @@ export function withReservationNote(
     : // No power on record is still not a claim of exclusivity -- name the private and stop.
       `${reservation.initials} has a special power here`;
   return `${description} — ${clause}`;
+}
+
+/** Release a pointer capture without caring whether there was one.
+ *  Design note #773: `releasePointerCapture` THROWS `NotFoundError` for a pointer that is no longer active,
+ *  which is exactly the state a cancelled pointer is in -- the browser releases capture implicitly when it
+ *  takes a gesture over for scrolling. Both `pointerup` and `pointercancel` call this, so the unguarded
+ *  version would have turned handing scroll back to the browser into a thrown error on every swipe.
+ *  A module-level `function` rather than a hook: hoisted, so it cannot repeat #762's dead zone. */
+function releaseCapture(event: React.PointerEvent<HTMLCanvasElement>): void {
+  try {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  } catch {
+    /* The pointer ended before we got here. There is nothing left to release. */
+  }
 }
 
 export function HexGridRenderer({
@@ -1821,9 +1838,36 @@ export function HexGridRenderer({
         originPanX: view.panX,
         originPanY: view.panY,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      /* Design note #773: capture only where the drag is live. Following a pointer outside the element is
+         what capture is FOR, and at the baseline there is no pan to follow -- an unnecessary capture on a
+         touch pointer is one more thing standing between a swipe and the browser's scroller. */
+      if (detailedView) {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          /* A pointer that ended between the event and this line. Nothing to capture and nothing to do:
+             the drag state above is still correct, and pointercancel will clear it. */
+        }
+      }
     },
-    [view.panX, view.panY],
+    [view.panX, view.panY, detailedView],
+  );
+
+  /** The browser took the gesture over -- a swipe that became a page scroll, or a palm. Not a click and not
+   *  the end of a pan: the drag state has to go, and it must not run the selection path.
+   *  Design note #773: A REF WITH NO RESET IS THE SHAPE OF THIS SESSION'S LAST THREE BUGS. Handing scroll
+   *  back to the browser means `pointerup` stops being guaranteed -- a cancelled pointer fires this instead,
+   *  and without it `dragStateRef` would keep a dead press's origin until the next `pointerdown`
+   *  overwrote it. */
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      dragStateRef.current = null;
+      releaseCapture(event);
+      cancelTooltipTimer();
+      setHoveredCoordLabel((prev) => (prev === null ? prev : null));
+      setHoveredOffboardHex((prev) => (prev === null ? prev : null));
+    },
+    [cancelTooltipTimer],
   );
 
   const handlePointerMove = useCallback(
@@ -1980,17 +2024,18 @@ export function HexGridRenderer({
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       const drag = dragStateRef.current;
       dragStateRef.current = null;
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      releaseCapture(event);
 
       if (!drag) return;
       const movedX = event.clientX - drag.startX;
       const movedY = event.clientY - drag.startY;
       const movedDistance = Math.sqrt(movedX * movedX + movedY * movedY);
-      // A real pan drag almost always moves several pixels even when the
-      // user "meant" to click; a small dead zone tells the two apart
-      // without feeling laggy on a genuine click.
-      const CLICK_MOVEMENT_THRESHOLD_PX = 4;
-      if (movedDistance > CLICK_MOVEMENT_THRESHOLD_PX) return;
+      /* A real pan drag almost always moves several pixels even when the user "meant" to click; a small dead
+         zone tells the two apart without feeling laggy on a genuine click.
+         Design note #773: THE ZONE DEPENDS ON THE POINTER. It was a flat 4px, which is a mouse's figure. A
+         fingertip rolls further than that in the act of pressing, so on a tablet a genuine tap read as a
+         drag and selected nothing. `isTapGesture` keeps 4px for a mouse and gives a finger 10. */
+      if (!isTapGesture(event.pointerType, movedDistance)) return;
 
       const rect = event.currentTarget.getBoundingClientRect();
       const cssX = event.clientX - rect.left;
@@ -2343,7 +2388,11 @@ export function HexGridRenderer({
         style={{
           width,
           height,
-          touchAction: "none",
+          /* Design note #773: the canvas claims the touch gesture only in the mode that uses one. At the
+             locked baseline `handlePointerMove` returns without panning, so `none` there was a promise to
+             the browser that the map had no intention of keeping -- and on an iPad the board is most of the
+             screen, so there was nowhere left to swipe the page. `manipulation` keeps taps arriving. */
+          touchAction: canvasTouchAction(detailedView),
           // The cursor is the PIECE: a composed PNG rather than the .webp direct, because cursor:url() has no error path and a broken herald would silently become a crosshair -- the feature would look unbuilt rather than broken. Hotspot 16 16, because a token is placed AT a point.
           // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496
           cursor:
@@ -2356,6 +2405,10 @@ export function HexGridRenderer({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        /* Design note #773: with `manipulation` at the baseline the browser may claim a swipe for a page
+           scroll, and a claimed pointer fires this INSTEAD of `pointerup`. Without it the drag origin
+           outlives the press that set it. */
+        onPointerCancel={handlePointerCancel}
         onPointerLeave={handlePointerLeave}
         onWheel={handleWheel}
       />

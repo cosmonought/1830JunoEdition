@@ -215,9 +215,19 @@ describe("the surfaces share one answer", () => {
     expect(app).toContain("layRefused,\n          });");
   });
 
-  it("reads the grid through the ref", () => {
-    // React state is stale inside a replay burst; the market atom already carries a ref for the same reason.
-    expect(read("App.tsx")).toContain("mapGrid: mapGridRef.current,");
+  it("reads the grid through the ref, ONCE", () => {
+    /* THIS TEST USED TO ASSERT `mapGrid: mapGridRef.current,` AND WAS PINNING A BUG.
+       #757 was right that the predicate must read the REF rather than React state -- state is stale inside a
+       replay burst. What it did not notice is that the dispatch calls the predicate TWICE, and writes the
+       grid between the two calls. Reading the ref at CALL time therefore judged the second call against a
+       board that already had the tile on it, the reducer refused a lay it had just performed, and the
+       sub-phase never advanced -- which is the entire one-lay-per-turn rule. Reported as "suddenly the
+       number of tile lays is unlimited" (#766).
+       SO THE REQUIREMENT WAS ALWAYS "the ref, ONCE" and the assertion recorded only the first half. It now
+       pins the snapshot; `oneLayPerTurn.test.ts` covers the consequence. */
+    const app = read("App.tsx");
+    expect(app).toContain("const gridBeforeAction = mapGridRef.current;");
+    expect(app).toContain("mapGrid: gridBeforeAction,");
   });
 
   it("gates before anything settles", () => {

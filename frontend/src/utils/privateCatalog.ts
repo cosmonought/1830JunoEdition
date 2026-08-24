@@ -13,6 +13,25 @@
 //
 // Design notes #13/#312/#423/#548/#661: see `docs/ai_architecture/contract_economy.md`.
 
+/* ==================================================================
+ *  DESIGN NOTE 771: TWO SHARE PILES, TWO NAMES, USED EVERYWHERE
+ * ==================================================================
+ *
+ * REPORTED: on the M&H's power -- "'bank or the pool' is confusing: the terms should be IPO or Bank?"
+ *
+ * THE RULE WAS RIGHT AND THE WORDS WERE NOT. Asked whether the power is IPO-only, the answer came back that
+ * it can come from either pile -- so nothing about the ability changed here, only what it is called. The
+ * sentence said "the bank or the pool", which names one pile twice as far as a reader is concerned: the Bank
+ * Pool IS the pool, and "the bank" is where money lives.
+ *
+ * THE TWO PILES ARE `IPO` AND `BANK POOL`, and they are different things a share can sit in -- unsold
+ * initial shares versus shares players have sold back. Every other surface in this app already says so:
+ * the Par/IPO tray, the purchase source toggle, `sharePurchaseBlock`'s refusals, the compass rose's
+ * "no shares left in the IPO or the Bank Pool".
+ *
+ * SAME RULE AS #743's CASH AND TREASURY, arrived at from the other direction. There the app had one word for
+ * two piles of money; here it had two words for one pile of shares. Both make a player work out which is
+ * meant, and both are fixed by picking the name the rest of the app already uses. */
 /** One private company's display data -- revenue yield and canonical power. */
 export interface PrivateCatalogEntry {
   revenue: number;
@@ -24,8 +43,17 @@ export interface PrivateCatalogEntry {
      descriptions of one power kept in two files is the arrangement that drifts -- and this pair is unusually
      exposed to it, because the long text is the one that gets corrected when a rule is found wrong.
      WRITTEN TO BE SCANNED, not to be complete: it names the hex, says whether the action is free, and says whether
-     it costs the corporation its ordinary lay -- the three things that decide a purchase. */
-  abilitySummary: string;
+     it costs the corporation its ordinary lay -- the three things that decide a purchase.
+     DESIGN NOTE 772 SUPERSEDES THE TYPE, NOT THE REASONING. Reported: "the Special Powers on the PC cards needs to be
+     like 1-2 bullet items, and players can click a 'Full Rules' to read the full paragraph." #661's summary was
+     already the right LENGTH and was already written to be scanned; what it was not was SHAPED. A card printed it as
+     one run-on line, so "free extra lay on B-20" and "keeps the normal lay" -- two independent facts a buyer weighs
+     separately -- arrived as one sentence to be parsed.
+     SO IT IS A LIST NOW, and `abilitySummary` is derived from it rather than stored beside it. A third hand-kept
+     description of the same power is precisely the drift #661 was written to prevent, and the fix for a shape
+     problem should not cost a new copy. One or two entries: a third bullet means the paragraph is being smuggled
+     into the summary. */
+  abilityBullets: readonly string[];
   /** The private's special power, described in this codebase's own words (design note #548), one line.
    *  ENFORCEMENT BADGES REMOVED (design note #13). An earlier pass rendered an "ENFORCED"/"NOT IN THIS RULESET"
    *  badge beside each of these, because `auction.rs` only implements three of the six powers. Gone by explicit
@@ -52,6 +80,12 @@ export interface PrivateCatalogEntry {
      never send an abbreviation, so this is frontend presentation data about a fixed set of six. Keyed by
      `private_id` so it cannot drift from `revenue` and `ability` beside it. */
   acronym: string;
+}
+
+/** #661's one-line summary, derived from #772's bullets so the two can never disagree. For surfaces with a
+ *  single line to spend -- a row, a tooltip -- rather than a card with room for a list. */
+export function abilitySummary(entry: PrivateCatalogEntry): string {
+  return entry.abilityBullets.join(" ");
 }
 
 /** The acronym for a private, or `null` if the id is not one of the six. `null` rather than a fallback to the
@@ -94,7 +128,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     revenue: 5,
     // Said plainly. A blank here would read as missing data rather than as
     // the answer, which is the same reasoning `ability` gives below.
-    abilitySummary: "No special power \u2014 revenue only.",
+    abilityBullets: ["No special power \u2014 revenue only."],
     // Canonically correct: Schuylkill Valley is the one 1830 private with
     // NO special ability. Said outright rather than left blank, because a
     // blank slot reads as missing data.
@@ -103,28 +137,40 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   2: {
     acronym: "C&StL",
     revenue: 10,
-    abilitySummary: "Free extra tile lay on B-20, connected to nothing. Keeps the corporation\u2019s normal lay.",
+    abilityBullets: [
+      "Free extra tile lay on B-20, connected to nothing.",
+      "Keeps the corporation\u2019s normal lay \u2014 it may play two tiles that turn.",
+    ],
     ability:
       "Its owning corporation may tile hex B-20 even where nothing connects to it \u2014 no station of its own, no track at all. The lay is a bonus rather than a substitute: the corporation still gets its ordinary tile placement that turn, so it may lay two.",
   },
   3: {
     acronym: "D&H",
     revenue: 15,
-    abilitySummary: "Tile F-16 (pay the $120 mountain) plus a free station there. Uses the corporation\u2019s lay.",
+    abilityBullets: [
+      "Tile F-16 and drop a free station there, connected to nothing.",
+      "The $120 mountain still applies, and it uses the corporation\u2019s lay for the turn.",
+    ],
     ability:
       "Its owning corporation may tile hex F-16 and drop a station there in one go, connected to nothing. The token is free; the mountain still charges its usual $120 for the tile. Unlike the C&StL this uses up the corporation\u2019s tile placement for the turn. Decline the token then and it can only be placed later under the ordinary connection rules. The power lapses entirely once any other corporation tiles F-16 first.",
   },
   4: {
     acronym: "M&H",
     revenue: 20,
-    abilitySummary: "Owner may trade it for a 10% NYC share at any time. The trade closes it.",
+    abilityBullets: [
+      "Owner may trade it in for a 10% NYC share from the IPO or the Bank Pool.",
+      "Available in either round type, between turns. Taking it closes the company.",
+    ],
     ability:
-      "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the bank or the pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
+      "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the IPO or the Bank Pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
   },
   5: {
     acronym: "C&A",
     revenue: 25,
-    abilitySummary: "Its auction buyer received a 10% PRR share. Nothing further \u2014 the company stays open.",
+    abilityBullets: [
+      "Its auction buyer was handed a 10% PRR share on purchase.",
+      "Nothing further to trigger \u2014 the company stays open.",
+    ],
     ability:
       "Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
   },
@@ -133,7 +179,10 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     revenue: 30,
     // Design note #660: both halves are enforced now, so the summary can
     // state them as facts about the board rather than as flavour.
-    abilitySummary: "Came with the B&O presidency. Never sellable to a corporation; closes on the B&O\u2019s first train.",
+    abilityBullets: [
+      "Came with the B&O president\u2019s certificate and set its par.",
+      "Never sellable to a corporation; closes on the B&O\u2019s first train.",
+    ],
     ability:
       "Its owner takes the B&O president\u2019s certificate free on purchase and sets the corporation\u2019s par price immediately. It can never be sold to a corporation, and it stays with its owner even if they later lose the B&O presidency. It closes the moment the B&O buys its first train.",
   },

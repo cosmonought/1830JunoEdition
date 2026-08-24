@@ -200,7 +200,14 @@ export function useFirestoreChat(
           ...current,
           {
             id: `local-${nextLocalChatId++}`,
-            author: sender || name || "You",
+            /* Design note #765: THE SAME FUNCTION THE DELIVERED MESSAGE USES. This read `sender || name`,
+               which prefers the ADDRESS over the display name -- so an offline echo was labelled with a
+               wallet or a local player id even when a perfectly good name was in hand, and the same message
+               would relabel itself if it ever round-tripped. `seatLabel` is what `decodeMessage` calls, so
+               the optimistic line and the delivered one cannot disagree by construction.
+               `sender ?? ""` because the ADDRESS is nullable here and `seatLabel` is not -- offline with no
+               wallet is exactly the case this branch exists for, and it falls through to "You". */
+            author: seatLabel({ address: sender ?? "", displayName: name }) || "You",
             text: trimmed,
             timestamp: new Date().toLocaleTimeString(),
             timestampMs: Date.now(),

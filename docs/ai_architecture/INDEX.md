@@ -23,6 +23,12 @@ directory is anchored as **`<source file> #<N>`**, so:
 - Superseded notes are retained and marked **`[superseded by #N]`** rather than deleted. The
   reasoning trail is the point.
 
+## Process
+
+| File | Covers |
+|---|---|
+| [working_agreement.md](working_agreement.md) | How changes get verified: `npm run verify`, batch size, playtest boundaries, and the invariants a new ref or cache has to declare. Written after #757 produced #762, #766 and #767 in a row. |
+
 ## Domain files
 
 | File | Covers |

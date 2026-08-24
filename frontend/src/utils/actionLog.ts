@@ -288,6 +288,39 @@ export function describeGameplayAction(
       fromIpo && Number.isFinite(priced) && priced > 0
         ? priced
         : context.marketPrices?.[protocol_id];
+    /* ==================================================================
+       DESIGN NOTE 770: THE OPENING PURCHASE IS NOT A 10% SHARE
+       ==================================================================
+       REPORTED: "When a player first buys a share in a company in the Stock Round, the Activity Log reads:
+       'Player bought a 10% share of C&O from the IPO for $100.' This should state that Player bought the 20%
+       President's share from the IPO and set par at $x."
+       THE LINE WAS WRONG ON ALL THREE COUNTS. The first purchase of an unopened corporation is the President's
+       Certificate: 20%, not 10%; bought at TWICE par, so $200 rather than $100 at a par of $100; and it is the
+       act that SETS the par, which is the single most consequential decision in a Stock Round and was not
+       being recorded at all. A player scrolling back to ask "what did C&O par at" found a line that did not
+       say.
+       THE OPENING PURCHASE IS IDENTIFIED THE WAY THE REDUCER IDENTIFIES IT -- an untouched IPO and no
+       president yet (`trading.rs`: "the first purchase of an unopened corporation is the 20% card at exactly
+       twice par"). Read off the state BEFORE the action, which is what `gameState` is here (#1). */
+    const target = gameState?.public_companies.find((entry) => entry.company_id === protocol_id);
+    const opening =
+      fromIpo &&
+      !!target &&
+      target.president === null &&
+      (target.par_value === null || target.par_value === undefined);
+
+    if (opening) {
+      const par = Number.isFinite(priced) && priced > 0 ? priced : null;
+      /* SILENT ON AN UNKNOWN PAR rather than inventing one -- #554's rule, and the par is precisely the figure
+         a reader cannot reconstruct afterwards. */
+      const parPhrase = par === null ? "" : `, setting par at $${par}`;
+      const paid = par === null ? "" : ` for $${par * 2}`;
+      return (
+        `${actingPlayer(context)} bought the 20% President's Certificate of ` +
+        `${corp(gameState, protocol_id)} from the IPO${paid}${parPhrase}.`
+      );
+    }
+
     const cost = typeof price === "number" && price > 0 ? ` for $${price}` : "";
     return (
       `${actingPlayer(context)} bought a 10% share of ${corp(gameState, protocol_id)} ` +

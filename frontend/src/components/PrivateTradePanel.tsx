@@ -25,7 +25,7 @@ import React, { useMemo, useState } from "react";
 import type { PrivateCompanyState } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
 import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
-import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
+import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -314,7 +314,7 @@ export function ProposePrivatePurchase({
                       <span style={styles.rowDisclosureCaret} aria-hidden="true">
                         {isExpanded ? "▴" : "▾"}
                       </span>
-                      <span style={styles.rowPower}>{catalog.abilitySummary}</span>
+                      <span style={styles.rowPower}>{abilitySummary(catalog)}</span>
                     </button>
                   )}
                   {catalog && isExpanded && (

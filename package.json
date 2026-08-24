@@ -1,0 +1,12 @@
+{
+  "name": "eighteen-cosmos-root",
+  "private": true,
+  "description": "Repo-root conveniences only. The React app is in frontend/ and the CosmWasm contract is a Cargo workspace at this level; this file exists so `npm run verify` works from wherever you happen to be standing.",
+  "scripts": {
+    "verify": "npm --prefix frontend run verify",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test": "npm --prefix frontend test -- --watchAll=false",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend start"
+  }
+}

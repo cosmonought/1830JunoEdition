@@ -15,6 +15,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
+import { SpecialPowerBlock } from "./SpecialPowerBlock";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
@@ -536,12 +537,17 @@ function PrivateCard({
 
       {/* Special power. Design note #13: no enforcement badge -- all six
           privates are standard parts of this ruleset, and the card
-          describes the piece rather than annotating backend coverage. */}
+          describes the piece rather than annotating backend coverage.
+          Design note #772: BULLETS HERE, PARAGRAPH ON REQUEST. Six of these
+          cards are on screen at once during the waterfall, which is the
+          moment a player compares privates rather than studies one. */}
       {catalogEntry && (
-        <div style={styles.privateCardAbilityBlock}>
-          <span style={styles.privateCardAbilityLabel}>Special power</span>
-          <span style={styles.privateCardAbility}>{catalogEntry.ability}</span>
-        </div>
+        <SpecialPowerBlock
+          entry={catalogEntry}
+          ink={CARD_INK_MUTED}
+          captionInk="#8a7332"
+          detailBackground="rgba(138, 115, 50, 0.09)"
+        />
       )}
 
       {/* Design note #19: ONE standings table. This card rendered two -- a standing-bids list and a
@@ -774,10 +780,15 @@ function SoldPrivateCard({
         )}
       </div>
       {catalogEntry && (
-        <div style={styles.privateCardAbilityBlock}>
-          <span style={styles.privateCardAbilityLabel}>Special power</span>
-          <span style={styles.privateCardAbility}>{catalogEntry.ability}</span>
-        </div>
+        /* The sold card keeps the caption: it is the same card in a later
+           state, and dropping the label there would make the two read as
+           different components rather than one before and after. */
+        <SpecialPowerBlock
+          entry={catalogEntry}
+          ink={CARD_INK_MUTED}
+          captionInk="#8a7332"
+          detailBackground="rgba(138, 115, 50, 0.09)"
+        />
       )}
       <div style={styles.soldBadgeWrap}>
         {/* Design note #30: the badge WRAPS. As a single nowrap line a long name plus a price overflowed the card
@@ -1119,11 +1130,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK_MUTED,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  privateCardAbility: {
-    fontSize: FONT_SIZE.micro,
-    color: CARD_INK_MUTED,
-    lineHeight: 1.45,
-  },
   // ---- Paired figure row: the two numbers that decide which private a
   // player wants, sized to be comparable across cards at a glance. ----
   privateCardFigures: { display: "flex", gap: "18px", alignItems: "flex-end" },
@@ -1148,15 +1154,11 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: "0.4px",
   },
-  // ---- Special power, with its enforcement badge. ----
-  privateCardAbilityBlock: { display: "flex", flexDirection: "column", gap: "5px" },
-  privateCardAbilityLabel: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.5px",
-    textTransform: "uppercase",
-    color: "#8a7332",
-  },
+  /* ---- Special power ---- The three keys that lived here (`privateCardAbility`, `...Block`, `...Label`)
+     moved into `SpecialPowerBlock` with #772's markup. Deleted rather than left: `styles` is typed
+     `Record<string, CSSProperties>`, so an unreferenced key is invisible to both `tsc` and ESLint and would
+     sit here indefinitely as a plausible-looking thing to reach for. The block's inks are passed as props
+     from the card -- see the note in that file on why the palette is not a global. */
   statusBadgeRow: {
     display: "flex",
     flexWrap: "wrap",

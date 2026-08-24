@@ -127,6 +127,8 @@ import StockMarketRenderer, {
 import { describeSoldOutRise, soldOutRises } from "./utils/soldOutRise";
 // Design note #750: the instrument for the phantom $1500 -- a diff, not an annotation.
 import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvenance";
+// Design note #768: the board cannot lose tiles; this is what says so out loud when it does.
+import { describeGridChange, gridChangeLine } from "./utils/gridProvenance";
 // Design note #751: the obligation lives on Pass, so the player keeps the choice of how to discharge it.
 import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
@@ -1324,6 +1326,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSrParValues({});
   }, [activeSeatLabel]);
 
+  const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
+
+  /* ==================================================================
+     DESIGN NOTE 764: `null` MEANT TWO THINGS AND THE SCREEN PICKED THE WRONG ONE
+     ==================================================================
+     REPORTED: "When players enter the room key and hit 'Join Game' it briefly takes them to the Auction round
+     screen before flashing back to the waiting lobby."
+     `sandboxRoom` STARTS AT `null` AND STAYS THERE UNTIL THE FIRST SNAPSHOT, and the waiting-room gate reads
+     `sandboxRoom?.status === "waiting"`. So for one round trip the answer is "not waiting", the gate falls
+     through, and the board renders on its seeded state -- which is a Waterfall Auction. The snapshot then
+     lands, the gate matches, and the waiting room replaces it. That whole flash is the app confidently
+     answering a question it did not have the data for.
+     THE FIX IS A THIRD STATE, not a longer condition. `null` was carrying "no such room" and "have not heard
+     yet", and those want opposite screens: the first is an error, the second is a wait. Distinguishing them
+     is what lets the gate say "I do not know" instead of guessing.
+     RESET ON THE CODE, not on the doc: joining a second room must go back to not-knowing rather than
+     inheriting the previous room's answer. */
+  const [sandboxRoomResolved, setSandboxRoomResolved] = useState(false);
+  useEffect(() => {
+    setSandboxRoomResolved(false);
+  }, [sandboxRoomCode]);
+
+
+  /* ==================================================================
+     DESIGN NOTE 765: THE CHAT WAS GIVEN THE WRONG NAME
+     ==================================================================
+     REPORTED: "in the chat box, rather than our display names, the log reads: '[8:41 AM]p-y1p43wnz hello'".
+     TWO NAMES EXIST AND THE CHAT ASKED FOR THE ONE THAT IS EMPTY. `displayName` is the LOBBY name, saved to
+     local storage on the lobby screen; a sandbox room's name of record is the ROSTER NICKNAME, set in the
+     waiting room and written to the room document by `upsertSandboxPlayer`. A player who joins a room by code
+     never touches the lobby field, so `displayName` is "" and `seatLabel` falls back to `truncateAddress` --
+     which in sandbox mode is truncating a local player id rather than a wallet.
+     THE ROSTER IS ALREADY THE AUTHORITY EVERYWHERE ELSE: `SetupGame` maps `player.id` to `player.nickname`
+     when it seeds the game, so the seat labels on the board have been right all along and only the chat was
+     reading a different field.
+     THESE THREE DECLARATIONS MOVED UP FOR THIS, and #762 is why that is worth a sentence: the chat hook's
+     arguments are evaluated during render, so reading `sandboxRoom` from six hundred lines below would be a
+     temporal dead zone -- the same fault that white-screened the game two reports ago. `tsc` catches the
+     direct form, which is the only reason this one was cheap. */
+  const sandboxChatName =
+    (sandbox
+      ? sandboxRoom?.players?.find((player) => player.id === localId)?.nickname
+      : undefined) ?? displayName;
+
   // Chat state lives here so it can merge with actionLog via mergeFeedItems. Keyed on roomId (Firestore), not gameId (contract).
   // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   const {
@@ -1335,7 +1381,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   } = useFirestoreChat(
     sandbox ? sandboxRoomCode : roomId,
     sandbox ? localId : wallet.address,
-    displayName,
+    // Design note #765: the roster nickname in a sandbox room, the lobby name outside one.
+    sandboxChatName,
     sandbox ? SANDBOX_ROOMS_COLLECTION : undefined,
   );
   const [chatDraft, setChatDraft] = useState("");
@@ -1922,28 +1969,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
   /* Design note #527: the anteroom's own state, from the room DOCUMENT
      rather than the log. `null` while it loads or when there is no room. */
-  const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
-
-  /* ==================================================================
-     DESIGN NOTE 764: `null` MEANT TWO THINGS AND THE SCREEN PICKED THE WRONG ONE
-     ==================================================================
-     REPORTED: "When players enter the room key and hit 'Join Game' it briefly takes them to the Auction round
-     screen before flashing back to the waiting lobby."
-     `sandboxRoom` STARTS AT `null` AND STAYS THERE UNTIL THE FIRST SNAPSHOT, and the waiting-room gate reads
-     `sandboxRoom?.status === "waiting"`. So for one round trip the answer is "not waiting", the gate falls
-     through, and the board renders on its seeded state -- which is a Waterfall Auction. The snapshot then
-     lands, the gate matches, and the waiting room replaces it. That whole flash is the app confidently
-     answering a question it did not have the data for.
-     THE FIX IS A THIRD STATE, not a longer condition. `null` was carrying "no such room" and "have not heard
-     yet", and those want opposite screens: the first is an error, the second is a wait. Distinguishing them
-     is what lets the gate say "I do not know" instead of guessing.
-     RESET ON THE CODE, not on the doc: joining a second room must go back to not-knowing rather than
-     inheriting the previous room's answer. */
-  const [sandboxRoomResolved, setSandboxRoomResolved] = useState(false);
-  useEffect(() => {
-    setSandboxRoomResolved(false);
-  }, [sandboxRoomCode]);
-
   const sandboxRoomRef = useRef<string | null>(null);
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
@@ -3216,7 +3241,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           } = msg.PlaceHomeStation;
           const base = sandboxStateRef.current;
           if (!base) return;
-          const placed = placeHomeStationToken(base, companyId, q, r, cityIndex);
+          const placed = placeHomeStationToken(base, companyId, q, r, cityIndex, homeHexToAxial);
           if (placed === base) return;
           sandboxStateRef.current = placed;
           setSandboxState(placed);
@@ -3331,9 +3356,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            refused placement cannot land on one and be rejected by the other. Board rules only: connectivity
            is left out because the D&H and C&SL lay track that legally ignores it (#725/#726) and this message
            does not say which power is in play. */
+        /* ==================================================================
+           DESIGN NOTE 766: THE GATE JUDGED THE BOARD IT HAD JUST CHANGED
+           ==================================================================
+           REPORTED: "corporations are only allowed to lay one tile per turn ... that restriction has been
+           respected until this last build when suddenly the number of tile lays is unlimited."
+           #757's PREDICATE READ THE REF AT CALL TIME, and this dispatch calls it TWICE: once for the tile
+           grid, then again inside `applySandboxAction`. Between those two calls the grid write had already
+           advanced `mapGridRef.current` to the board WITH the new tile on it -- so the second call asked
+           "may a yellow tile go on this hex?" about a hex that now carried yellow, got "no", and the reducer
+           refused a lay it had just performed.
+           THE VISIBLE RESULT IS THE REGRESSION. Refusing returns the state unchanged, so the sub-phase never
+           advanced from Track to Tokens, and the one-lay-per-turn rule is enforced entirely BY that advance.
+           The tile still landed, because the grid is a separate atom that had already been written. Unlimited
+           lays, each one individually "refused".
+           THE FIX IS A SNAPSHOT, NOT A REORDER. Binding the predicate to the board as it stood BEFORE this
+           action means both atoms judge the same thing, which is what #757 said it was doing and is the whole
+           point of building the predicate once. Reordering the two calls would have worked today and left the
+           next reader one edit away from reintroducing it. */
+        const gridBeforeAction = mapGridRef.current;
         const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
           filterSandboxPlacements([{ tile_id: tileId, orientation }], {
-            mapGrid: mapGridRef.current,
+            mapGrid: gridBeforeAction,
             q,
             r,
             era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
@@ -3352,6 +3396,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             lay.orientation,
             layRefused,
           );
+          /* Design note #768: the tile count, before and after, on every lay. The board cannot legitimately
+             lose a tile, so a fall is unconditionally a bug and this is the line that will name it. */
+          const gridChange = describeGridChange(msg, mapGridRef.current, nextGrid, fallbackLabel);
+          if (gridChange) {
+            logInfo(
+              gridChange.unexplained ? "Board (unexplained)" : "Board",
+              gridChangeLine(gridChange),
+            );
+          }
           if (nextGrid !== mapGridRef.current) {
             mapGridRef.current = nextGrid;
             setMapGrid(nextGrid);
@@ -3954,6 +4007,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     settledPrivatePricesRef.current = {};
     setSettledPrivatePrices({});
 
+    /* ==================================================================
+       DESIGN NOTE 767: A REF RESET IS HALF A RESET
+       ==================================================================
+       REPORTED: "in OR2.1, when a corporation laid its second track, all of the laid tiles on the board
+       disappeared."
+       EVERY OTHER ATOM IN THIS FUNCTION IS RESET AS A PAIR -- `sandboxMarketRef.current = market` beside
+       `setSandboxMarket(market)`, `settledPrivatePricesRef.current = {}` beside its setter. #757 gave the tile
+       grid a ref and did not add it here, so a rebuild reset the STATE and left the REF pointing at the board
+       from before the rebuild.
+       THE DISAPPEARANCE IS THE TWO WRITERS FIGHTING. `setMapGrid` is asynchronous, so the replay that follows
+       a rebuild lays its first tiles onto the stale full board through the ref; React then commits the
+       reset render and the mirroring effect writes the EMPTY grid back into the ref; the next lay builds from
+       empty and every tile laid before it is gone. Which is the report exactly -- it takes a second lay,
+       because the first one is what leaves the ref and the state disagreeing.
+       RESET THE REF FIRST, then the state: the synchronous write is the one the replay reads, and the setter
+       only has to agree with it. */
+    /* Design note #768: a reset is legitimate and LOUD. It empties the board on purpose, so it is exempt from
+       the tile-count invariant -- but a reset firing when nobody asked for one is exactly what a player would
+       otherwise experience as "the tiles vanished", so it says so in the log rather than being silent. */
+    if (mapGridRef.current.tiles.length > 0) {
+      /* `logInfoRef`, not `logInfo`: this callback is declared above the logger, and the ref is the escape
+         hatch this file already uses for exactly that (#2339). Adding `logInfo` to the dependency array
+         would rebuild `rebuildSandbox` on every log line. */
+      logInfoRef.current?.(
+        "Board",
+        `Board cleared for a rebuild — ${mapGridRef.current.tiles.length} tiles discarded.`,
+      );
+    }
+    mapGridRef.current = MOCK_MAP_GRID;
     setMapGrid(MOCK_MAP_GRID);
     setLiveOrSubPhase("Track");
 

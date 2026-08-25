@@ -106,34 +106,48 @@ describe("a payout notice goes to the people it paid", () => {
   });
 });
 
-describe("the drain sends it to a watcher only", () => {
+describe("the payout notice reaches a watcher, from the right figure", () => {
   const APP = (() => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the note quotes the append-branch rule while explaining why this sits outside it.
     return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   })();
 
-  it("fires on the replay rather than the dispatch", () => {
-    /* The whole reason the report exists: the append branch is the ACTOR's, and a watcher only ever reaches
-       the replay. */
-    expect(APP).toContain('options?.isRemoteReplay === true && before && "DeclareDividends" in msg');
+  it("uses the dividend toast that has always existed", () => {
+    /* #786 ADDED A SECOND ONE AND #795 WITHDREW IT. `showDividendToast` fires in the drain for every
+       shareholder, actor or not, and has since #400 -- so the reported "I don't receive any toast
+       notifications when another player's corporation pays dividends to me" was never a missing feature. It
+       was a wrong FIGURE, loud enough to read as an absence. I searched for the mechanism I expected instead
+       of the one on screen, in a file I had already read. */
+    expect(APP).toContain("showDividendToast(");
+    expect(APP).not.toContain("paid you $");
   });
 
-  it("asks whether the money was the viewer's", () => {
-    expect(APP).toContain("settlement?.players.find((share) => share.player === viewer)");
+  it("takes the amount from dividendSplit rather than re-deriving it", () => {
+    /* THE ACTUAL BUG. The caller passed a `perShare` floored from `last_route_revenue` -- a running total a
+       multi-train turn fills one message at a time -- which is why every wrong figure reported was one
+       train's worth of a longer run. */
+    expect(APP).toContain("const settlement = dividendSplit(");
+    expect(APP).toContain("declared.revenue_amount");
+    expect(APP).toContain("amount: mine?.amount ?? 0");
   });
 
-  it("does not double up on the actor", () => {
-    // They already have #697's receipt; two notices for one event reads as a bug.
-    expect(APP).toContain("viewer !== options?.actor");
+  it("no longer reads the running total", () => {
+    const receiptCall = APP.slice(
+      APP.indexOf("const settlement = dividendSplit("),
+      APP.indexOf("if (receipt) {"),
+    );
+    expect(receiptCall).not.toContain("last_route_revenue");
   });
 
-  it("says nothing for a zero", () => {
-    /* A 0% holder cannot appear in the list at all, but a floored per-share of $0 can -- a $7 dividend pays
-       whole units, which is nothing. "C&O paid you $0" is worse than silence. */
-    expect(APP).toContain("mine.amount > 0");
+  it("keeps the receipt module out of the arithmetic", () => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const module = fs.readFileSync(path.join(__dirname, "dividendReceipt.ts"), "utf8");
+    const code = module.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).toContain("const amount = input.amount;");
+    expect(code).not.toContain("input.perShare * (input.viewerPercentage / 10)");
   });
 });
 
@@ -168,10 +182,14 @@ describe("the route readout is not a control", () => {
     );
   });
 
-  it("disables the buttons for a watcher", () => {
-    /* Through the panel's OWN rule rather than a second one written at the call site -- `controlsEnabled`
-       already disables the run and clear controls, and reusing it means one answer governs both. */
-    expect(BAR).toContain("controlsEnabled={sessionReady && mayActThisTurn}");
+  it("gives a watcher no controls at all", () => {
+    /* #787 SHOWED THE PANEL TO WATCHERS WITH ITS BUTTONS DISABLED, and #802 removed the panel: a watcher now
+       gets the chip strip, which has no run or clear control to disable in the first place. Absence beats a
+       greyed row -- the same reasoning #783 used for the home-station modal.
+       So the assertion moves from "the buttons are disabled" to "the strip's only control is gated on being
+       able to use it", which is the property that survives the panel it used to describe. */
+    expect(BAR).toContain("canClear={mayActThisTurn && sessionReady}");
+    expect(BAR).not.toContain("<RoutePlannerPanel");
   });
 
   it("still hands a watcher the rival drafts", () => {

@@ -173,6 +173,31 @@ export function TrainPurchasePanel({
     [depot, nextTier],
   );
 
+  /* ==================================================================
+   *  DESIGN NOTE 798: "NEXT" WAS THE FIRST ROW, NOT THE NEXT ONE
+   * ==================================================================
+   *
+   * REPORTED: "The 'Later trains' accordion: at flush right it says 'next:' but for me it is wrong.
+   * Corporations own 3-trains and it says 'next: 2-train ($80)'."
+   *
+   * THE SUMMARY AND THE LIST SHARED ONE ARRAY AND WANTED DIFFERENT ANSWERS. `laterTiers` is everything except
+   * the purchasable tier, and #633 chose that deliberately -- "rusted tiers go with the later ones rather
+   * than being dropped: a 2-train that has left play is still the reason the board looks the way it does."
+   * Right for the LIST. But it leaves the earliest tier at index 0, so `laterTiers[0]` is the OLDEST train in
+   * the game rather than the one coming up, and the caption confidently named a 2-train in Phase 3.
+   *
+   * SO THE SUMMARY GETS ITS OWN LOOKUP: the depot row after the purchasable one, by POSITION. The depot is
+   * ordered cheapest-first and sells in that order, so "the row after this one" is exactly what "next" means
+   * -- and it stays correct without the caption having to know anything about rusting or phases.
+   *
+   * `null` WHEN THERE IS NO ROW AFTER IT, which is Diesels and the honest answer. The caption renders nothing
+   * rather than wrapping round to the front of the list, which is the bug it is replacing. */
+  const upcomingTier = useMemo(() => {
+    if (nextTier === null) return null;
+    const at = depot.findIndex((row) => row.tier === nextTier.tier);
+    return at === -1 ? null : (depot[at + 1] ?? null);
+  }, [depot, nextTier]);
+
   /* Design note #230: THE TRAIN LIMIT IS A SECOND, TIGHTER CEILING. The panel capped quantity at the DEPOT'S
      SUPPLY and nothing else, while 1830 caps holdings per corporation by PHASE -- and the figure was being
      displayed and not enforced, which is the worst of both. The binding ceiling is whichever is smaller, and
@@ -590,8 +615,35 @@ export function TrainPurchasePanel({
                    above, and the total is the one figure that appears nowhere else: the depot table lists the
                    UNIT cost, so `bankTotal` is the only place a multi-buy is priced.
                    THE LIMIT WORDING STAYS, because it is the one state where a price is the wrong thing to
-                   show: the button is dead, and the reason beats a number nobody can pay. */}
-                {atTrainLimit ? "Train Limit Reached" : `$${bankTotal || nextTier.cost}`}
+                   show: the button is dead, and the reason beats a number nobody can pay.
+
+                   ==================================================================
+                   DESIGN NOTE 796: A PRICE IS NOT A VERB
+                   ==================================================================
+
+                   REPORTED: "the clickable button only lists the price that will be paid. It needs to clearly
+                   say 'Buy for $X'."
+
+                   #722'S ARGUMENT WAS ABOUT REDUNDANCY AND MISSED WHAT A BUTTON IS FOR. It was right that
+                   "Buy 2 x 4-Train for $600" repeats the row above almost word for word -- and wrong to
+                   conclude that the fix was to delete the verb. A control has to say what it DOES; "$600" is a
+                   label on a figure, and a figure is the one thing on a purchase panel that a player is
+                   already reading everywhere else. The redundancy #722 removed was the QUANTITY and the TIER,
+                   which really were duplicated. The verb never was.
+
+                   ITS OWN `aria-label` GAVE THE GAME AWAY. #722 wrote a full sentence for screen readers
+                   because "'$600' would be an unusable control" out of context -- which is an admission that
+                   the visible label was leaning on its surroundings to mean anything. A sighted player
+                   scanning a dense panel is closer to that position than the note assumed.
+
+                   "PAY $600" IS BETTER THAN "BUY FOR $600", which was the first draft. Reported: "instead of
+                   'Buy for $X' it could say 'Pay $X' since you mentioned before that the line the button is
+                   on already says 'Buy 1/2/3/4 x-train(s)'."
+                   THAT KEEPS #722'S REAL POINT while fixing what it broke. The row above supplies the verb
+                   "buy" and the object; repeating "Buy" on the button is the duplication #722 objected to,
+                   and "Pay" is the half of the transaction the button uniquely performs. One word, one
+                   figure, no repetition, and it still reads as an action rather than as a caption. */}
+                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost}`}
               </button>
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}
@@ -666,12 +718,14 @@ export function TrainPurchasePanel({
               <span style={styles.laterTrainsTitle}>Later trains</span>
               {/* Design note #633: the collapsed summary answers the
                   commonest reference question -- what is next and what does
-                  it cost -- so opening this is for the rarer ones. */}
+                  it cost -- so opening this is for the rarer ones.
+                  Design note #798: from `upcomingTier`, not `laterTiers[0]`. The list keeps rusted tiers at
+                  the front on purpose; the caption must not read them as "next". */}
               <span style={styles.sectionMeta}>
                 {laterTrainsOpen
                   ? "hide"
-                  : laterTiers[0]
-                    ? `next: ${laterTiers[0].tier}-train $${laterTiers[0].cost}`
+                  : upcomingTier
+                    ? `next: ${upcomingTier.tier}-train $${upcomingTier.cost}`
                     : ""}
               </span>
             </button>

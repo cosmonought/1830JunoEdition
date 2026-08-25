@@ -383,16 +383,37 @@ function candidatePathsFrom(
      * refused is going any further. Blocking on arrival instead would delete the legal run that stops there.
      *
      * NOT AT A START. `arrivalEdge === null` is the train sitting in its own city, and a corporation is never
-     * blocked by the city it holds -- `cityBlocking.ts` rule 2. */
-    const blockedHere =
+     * blocked by the city it holds -- `cityBlocking.ts` rule 2.
+     *
+     * ==================================================================
+     *  DESIGN NOTE 808: A SHUT CITY BARS THE ARMS THAT ENTER IT
+     * ==================================================================
+     *
+     * REPORTED: the auto-router "did not select the highest value route ... it could have run Pittsburgh to
+     * Baltimore (bypassing the tokened out Altoona) for $80" and ran a $70 route instead.
+     *
+     * THE ANSWER WAS RIGHT AND THE QUESTION WAS ASKED TOO EARLY. This is computed on ARRIVAL, which is before
+     * the walk has chosen WHICH WAY THROUGH it will take -- and #737's bow is a property of the way through.
+     * Used as a gate on the whole expansion loop, it refused every arm because one of them enters the city.
+     * MEASURED BEFORE IT WAS CHANGED: with H12's only slot full, the tracer returned `["H14","H12"]` where
+     * `["H14","H12","H10"]` over the bow is legal and worth $40. It was not choosing badly on the reported
+     * board; it was choosing from a board with a wall across the middle of it.
+     *
+     * SO THE CITY IS REMEMBERED RATHER THAN ACTED ON, and the refusal moves into the loop below where each
+     * arm can answer for itself. `blockedCity` is the city an arrival on this edge lands in when that city is
+     * shut, and `null` otherwise -- the two states the loop needs and no more.
+     *
+     * #730'S TERMINUS RULE IS UNTOUCHED. The recording block above has already run, so a route that ENDS in
+     * the shut city is still offered and still priced. What changes is only what may happen after it. */
+    const blockedCity =
       arrivalEdge !== null && blocksThrough !== undefined
         ? (() => {
             const city = cityForArrival(mapGrid, at.q, at.r, arrivalEdge);
-            return city !== null && blocksThrough(at.q, at.r, city);
+            return city !== null && blocksThrough(at.q, at.r, city) ? city : null;
           })()
-        : false;
+        : null;
 
-    if (!blockedHere && breakdown.centres < maxCentres && path.length < MAX_PATH_HEXES) {
+    if (breakdown.centres < maxCentres && path.length < MAX_PATH_HEXES) {
       /* Design note #6: from a start, every rail on the hex is available --
          the train begins inside the city. Having arrived on a rail, only
          the exits that rail reaches. */
@@ -408,6 +429,12 @@ function candidatePathsFrom(
           : traversalsFrom(mapGrid, at.q, at.r, arrivalEdge);
 
       for (const transit of exits) {
+        /* Design note #808: THE REFUSAL, PER ARM. A city full of other corporations' tokens says nothing
+           about track that goes around it -- the bow does not enter the city, so there is nothing for a full
+           city to be full of. Every other arm through this hex reaches the centre and is barred, which is
+           #730's rule unchanged; this is the one case where "may I pass" has two different answers on one
+           hex, and it exists because 1830 printed it that way. */
+        if (blockedCity !== null && transit.bypass !== true) continue;
         const next = neighbourAcross(mapGrid, at.q, at.r, transit.exitEdge);
         if (!next) continue;
         if (onPath.has(`${next.q},${next.r}`)) continue;

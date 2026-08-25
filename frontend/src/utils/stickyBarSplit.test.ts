@@ -56,7 +56,10 @@ const CODE = BAR.replace(/\/\*[\s\S]*?\*\//g, "")
  *
  *  The lifted panels' own condition is the far boundary -- the first thing rendered after the bar closes. */
 const STICKY_START = CODE.lastIndexOf("ref={actionBarRef}");
-const LIFTED_START = CODE.indexOf('{mayActThisTurn && orSubPhase === "BuyPrivate"');
+/* #803 renamed the step test to `orStep`, which is the point of that note: outside an Operating Round the
+   derived value is `null`, so a lifted panel cannot accidentally ask an unqualified question. The anchor
+   follows the code. */
+const LIFTED_START = CODE.indexOf('{mayActThisTurn && orStep === "BuyPrivate"');
 const sticky = CODE.slice(STICKY_START, LIFTED_START);
 const outside = CODE.slice(LIFTED_START);
 
@@ -92,8 +95,8 @@ describe("the tall panels are outside the measured element", () => {
 
   it("keeps the panels rendering at all", () => {
     /* THE CONTROL. Deleting them would satisfy every assertion above and remove two steps of a turn. */
-    expect(CODE).toContain('orSubPhase === "Hardware" && trainPurchase && (');
-    expect(CODE).toContain('orSubPhase === "BuyPrivate" && privatePurchase && (');
+    expect(CODE).toContain('orStep === "Hardware" && trainPurchase && (');
+    expect(CODE).toContain('orStep === "BuyPrivate" && privatePurchase && (');
   });
 
   it("still condenses the depot with the bar", () => {
@@ -133,5 +136,50 @@ describe("no inner scrollbar was reached for", () => {
        bar was "the bug it warned about". A third attempt would be the obvious way to make a tall panel fit. */
     expect(sticky).not.toContain("overflowY");
     expect(sticky).not.toContain("maxHeight");
+  });
+});
+
+describe("the lifted panels kept the gate their nesting used to give them (design note #803)", () => {
+  /* REPORTED as a regression from #785: "now in the Stock Round following the transition to Phase 3, the
+     'Purchase a Private Company' subpanel shows up under the player Action bar ... it shows that the last
+     corporation that operated is now proposing a purchase."
+
+     THE PANELS USED TO BE NESTED INSIDE THE OPERATING ROUND BRANCH, so `roundType === "OperatingRound"` was
+     true by construction and their own conditions never said it. Lifting them out to stop the bar unpinning
+     itself took that away, and nothing failed -- an unqualified `orSubPhase === "BuyPrivate"` compiles, reads
+     correctly, and is wrong only in a round nobody was testing.
+
+     AND THE SECOND SENTENCE OF THE REPORT IS THE MECHANISM. `settleOperatingCursor` clears
+     `operating_sub_phase` outside an Operating Round, so the shell falls back to `liveOrSubPhase` -- local
+     state still pointing at the last corporation's step. The panel was not confused about the round; it was
+     reading a cursor that had been left behind. */
+
+  it("derives a step that is null outside an Operating Round", () => {
+    expect(CODE).toContain(
+      'const orStep = roundType === "OperatingRound" ? orSubPhase : null;',
+    );
+  });
+
+  it("gates Buy Private on it", () => {
+    expect(CODE).toContain('{mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (');
+  });
+
+  it("gates Buy Trains on it", () => {
+    expect(CODE).toContain('{mayActThisTurn && orStep === "Hardware" && trainPurchase && (');
+  });
+
+  it("leaves no lifted panel testing the raw cursor", () => {
+    /* THE ASSERTION THAT WOULD HAVE CAUGHT THIS. Every step test past the bar's closing tag must ask the
+       qualified question -- not because the author will remember, but because `orStep` is the only value
+       available to ask with. */
+    const lifted = CODE.slice(CODE.indexOf("<div ref={stepPanelRef}>"));
+    expect(lifted).not.toContain("orSubPhase ===");
+  });
+
+  it("keeps the route strip's own round gate", () => {
+    // #802's strip was written with `showRouteReadout`, which had the round in it from the start.
+    expect(CODE).toContain(
+      'const showRouteReadout = roundType === "OperatingRound" && orSubPhase === "Routes";',
+    );
   });
 });

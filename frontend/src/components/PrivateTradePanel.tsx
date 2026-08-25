@@ -100,6 +100,37 @@ export function privatePurchaseBlockReason(entry: PrivateCompanyState): string |
   return null;
 }
 
+/** Why the typed offer cannot be sent, or `null` when it can.
+ *
+ *  Design note #804: LIFTED OUT OF THE RENDER, AND ONE ARM DELETED. These five sentences were a nested
+ *  ternary inside the component -- unreachable from a test, and the panel's entire error vocabulary. The
+ *  wording is unchanged. What is gone is the sixth arm, "Choose a private company first.", and it is gone
+ *  BY CONSTRUCTION: the price field now lives inside the card of the private it belongs to, so there is no
+ *  longer a state in which a price has been typed for nothing.
+ *
+ *  DELETED RATHER THAN LEFT AS REASSURANCE, which is #788's lesson. An arm that can no longer be reached
+ *  still passes every test written for it, and reads to the next maintainer as a case that happens. */
+export function offerPriceProblem(input: {
+  priceText: string;
+  faceValue: number;
+  treasury: number;
+  buyerTicker: string;
+}): string | null {
+  const { priceText, faceValue, treasury, buyerTicker } = input;
+  const bounds = privatePriceBounds(faceValue);
+  const price = Number(priceText);
+  /* Each failure named separately. "Invalid price" would leave the player guessing which of five things was
+     wrong, and the band is the one they most often trip on. */
+  if (priceText.trim() === "") return `Enter a price between $${bounds.min} and $${bounds.max}.`;
+  if (!Number.isFinite(price) || !Number.isInteger(price)) return "Price must be a whole number.";
+  if (price < bounds.min) return `$${price} is below 50% of face value ($${bounds.min} minimum).`;
+  if (price > bounds.max) return `$${price} is above 200% of face value ($${bounds.max} maximum).`;
+  if (price > treasury) {
+    return `${buyerTicker}'s treasury holds $${treasury} — it cannot pay $${price}.`;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Propose                                                            */
 /* ------------------------------------------------------------------ */
@@ -145,44 +176,50 @@ export function ProposePrivatePurchase({
   onPropose,
   onClose,
 }: ProposePrivatePurchaseProps) {
-  // Design note #386: the wider set for DISPLAY. `selectable` below is still
-  // the strict predicate, and it is what gates the row and the submit.
+  // Design note #386: the wider set for DISPLAY. `privatePurchaseBlockReason` is still the STRICT predicate,
+  // and it is what gates the offer form and the submit inside each card.
   const eligible = useMemo(() => purchasablePrivatesInPlay(privates), [privates]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [priceText, setPriceText] = useState("");
-  /* Design note #661: which rows have their full power text open. A SET, not
-     a single id, because comparing two privates is the reason a player opens
-     one at all -- an accordion that closes the D&H to show the C&StL defeats
-     the comparison it was opened for. */
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<number>>(() => new Set());
 
-  /* Design note #386: a row that cannot be proposed for cannot be the
-     selection either. Resolving `selected` against the STRICT list means an
-     unsold private can be shown and read without ever becoming the subject
-     of the price field and the submit button below. */
-  const selected =
-    eligible.find(
-      (entry) => entry.private_id === selectedId && privatePurchaseBlockReason(entry) === null,
-    ) ?? null;
-  const faceValue = selected ? Number(selected.cost) : 0;
-  const bounds = privatePriceBounds(faceValue);
-  const price = Number(priceText);
+  /* Design note #804: ONE PIECE OF STATE WHERE THERE WERE TWO.
+     REPORTED: "players click a Private Company and it expands to display the full rule, then they have to
+     click it again for the Offer Price and Purchase button to appear at the very bottom of the subpanel.
+     Why don't we have this all happen on one click inside the PC card?"
+     TWO CLICKS BECAUSE THERE WERE TWO ANSWERS TO ONE QUESTION. `selectedId` meant "which private is the
+     offer form about" and `expandedIds` meant "which rules are open" -- and they were driven by two
+     different controls sitting on top of each other. A player who had done one of them saw half a card.
+     THEY COLLAPSE CLEANLY because the offer form moved INTO the card: a card that is open is the card being
+     read and the card being offered for, so there is nothing left for a second id to say.
+     #661'S SET SURVIVES, and its reason with it: "comparing two privates is the reason a player opens one at
+     all". Two cards may be open at once, and each now carries its own price -- which is why the text is a
+     map rather than the single string a one-at-a-time accordion could have got away with. */
+  const [openIds, setOpenIds] = useState<ReadonlySet<number>>(() => new Set());
+  const [priceTexts, setPriceTexts] = useState<ReadonlyMap<number, string>>(() => new Map());
 
-  // Each failure named separately. "Invalid price" would leave the player
-  // guessing which of four things was wrong.
-  const priceProblem: string | null = !selected
-    ? "Choose a private company first."
-    : priceText.trim() === ""
-      ? `Enter a price between $${bounds.min} and $${bounds.max}.`
-      : !Number.isFinite(price) || !Number.isInteger(price)
-        ? "Price must be a whole number."
-        : price < bounds.min
-          ? `$${price} is below 50% of face value ($${bounds.min} minimum).`
-          : price > bounds.max
-            ? `$${price} is above 200% of face value ($${bounds.max} maximum).`
-            : price > treasury
-              ? `${buyerTicker}'s treasury holds $${treasury} — it cannot pay $${price}.`
-              : null;
+  const toggleCard = (entry: PrivateCompanyState) => {
+    setOpenIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(entry.private_id)) next.add(entry.private_id);
+      return next;
+    });
+    /* Seeded at face value, ONCE. The neutral offer, and the one a player most often wants; starting blank
+       makes them type a number before they can see whether it is in range. Re-opening a card must not
+       overwrite a price they already typed, so an existing entry returns the SAME map -- identity, which is
+       both the refusal idiom this codebase uses and what keeps the re-open from re-rendering. */
+    setPriceTexts((current) => {
+      if (current.has(entry.private_id)) return current;
+      const next = new Map(current);
+      next.set(entry.private_id, String(entry.cost));
+      return next;
+    });
+  };
+
+  const setPriceFor = (privateId: number, text: string) => {
+    setPriceTexts((current) => {
+      const next = new Map(current);
+      next.set(privateId, text);
+      return next;
+    });
+  };
 
   if (!embedded && !open) return null;
 
@@ -212,48 +249,54 @@ export function ProposePrivatePurchase({
         ) : (
           <div style={styles.list}>
             {eligible.map((entry) => {
-              const isSelected = entry.private_id === selectedId;
-              /* Design note #721: the per-row band is gone with the cell that showed it. `privatePriceBounds`
-                 is still the authority -- `bounds` below computes it for the SELECTED private, next to the
-                 field where the price is actually chosen, which is where the report moved it to. */
-              // Design note #386: shown either way, inert when it cannot be
-              // bought, and captioned with the reason.
+              // Design note #386: shown either way, and captioned with the reason it cannot be bought.
               const blocked = privatePurchaseBlockReason(entry);
               const catalog = PRIVATE_COMPANY_CATALOG[entry.private_id];
-              const isExpanded = expandedIds.has(entry.private_id);
-              const detailId = `private-power-${entry.private_id}`;
+              const isOpen = openIds.has(entry.private_id);
+              const detailId = `private-card-${entry.private_id}`;
+              const faceValue = Number(entry.cost);
+              const bounds = privatePriceBounds(faceValue);
+              const priceText = priceTexts.get(entry.private_id) ?? String(entry.cost);
+              const price = Number(priceText);
+              /* A blocked private has no offer form to complain about, so the price is not consulted for it
+                 at all -- the block reason takes that space instead, which is the first time it has been
+                 anywhere a player can read it rather than in a `title` no tablet ever shows. */
+              const priceProblem =
+                blocked !== null
+                  ? null
+                  : offerPriceProblem({ priceText, faceValue, treasury, buyerTicker });
               return (
-                /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON. The whole row used to BE the `<button>`, fine while
-                   selecting was the only thing it did. It now carries a second control -- the power disclosure -- and a button
-                   inside a button is invalid markup that browsers repair by unnesting, which would have put the toggle outside
-                   the row it belongs to.
-                   So the row is a container with two real buttons: the selectable face, and the disclosure. A player can read
-                   what a private DOES without selecting it, which is the point -- the old row made "tell me more" and "I choose
-                   this" the same click. */
+                /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON, and #804 keeps that for a narrower
+                   reason. #661 needed it because the row carried two controls; there is one control on the
+                   face now, but the open card holds a number input and a submit, and an input inside a
+                   button is the same invalid markup a nested button was. So: one face button, and the card
+                   as its sibling. */
                 <div
                   key={entry.private_id}
                   style={{
                     ...styles.rowGroup,
-                    ...(isSelected && blocked === null ? styles.rowGroupSelected : {}),
+                    ...(isOpen && blocked === null ? styles.rowGroupOpen : {}),
                     ...(blocked !== null ? styles.rowGroupBlocked : {}),
                   }}
                 >
+                  {/* Design note #804: THE WHOLE FACE IS THE ONE CLICK. Not disabled when blocked, which is
+                      the change #386 was always heading towards: an unsold private and the B&O both have a
+                      power worth reading and a REASON worth reading, and until now that reason lived only in
+                      a `title` attribute -- invisible on the tablet this game is played on. Opening the card
+                      is how a player finds out why they cannot buy it. */}
                   <button
                     type="button"
-                    disabled={blocked !== null}
-                    title={blocked ?? undefined}
-                    onClick={() => {
-                      setSelectedId(entry.private_id);
-                      // Seed at face value: the neutral offer, and the one a
-                      // player most often wants. Starting blank makes them
-                      // type a number before they can see whether it is in
-                      // range.
-                      setPriceText(String(entry.cost));
-                    }}
-                    style={{
-                      ...styles.row,
-                      ...(blocked !== null ? styles.rowBlocked : {}),
-                    }}
+                    onClick={() => toggleCard(entry)}
+                    aria-expanded={isOpen}
+                    aria-controls={detailId}
+                    title={
+                      isOpen
+                        ? `Close ${entry.name}.`
+                        : blocked !== null
+                          ? `${blocked} Opens the full rule.`
+                          : `Open ${entry.name} to read its rule and make an offer.`
+                    }
+                    style={styles.row}
                   >
                     <span style={styles.rowName}>
                       {/* Design note #779: NUMBERED, AND THE ACRONYM IS PART OF THE NAME.
@@ -264,8 +307,22 @@ export function ProposePrivatePurchase({
                          players say while the auction list is on screen. Both are true and they are not
                          competing -- "1. Schuylkill Valley (SV)" is one title carrying both, where three
                          separate spans made a reader work out which one named the piece. */}
-                      {`${entry.private_id}. ${entry.name}`}
-                      {catalog && <span style={styles.rowAcronym}>({catalog.acronym})</span>}
+                      <span style={styles.rowTitle}>
+                        {`${entry.private_id}. ${entry.name}`}
+                        {/* Design note #804: THE ACRONYM DECLARES NOTHING OF ITS OWN.
+                           REPORTED: "the abbreviated acronyms need to be in the same color and font as the
+                           title, since they are part of the title. Right now you have it in the gray color
+                           for 'held by' which looks strange."
+                           #779 SAID THE SAME THING AND ONLY HALF-DID IT. That pass moved the acronym to the
+                           title's SIZE and WEIGHT and then argued the monospace should stay -- "what makes
+                           an acronym read as a code rather than a word" -- and left the grey untouched
+                           entirely, which is the half the report is about. A different face and a different
+                           colour is a different fact, whatever the size says.
+                           SO IT INHERITS, rather than restating the title's values in a second declaration.
+                           Two declarations that happen to match are two things that can drift; this one
+                           cannot be wrong about the title because it never states it. */}
+                        {catalog && <span style={styles.rowAcronym}>({catalog.acronym})</span>}
+                      </span>
                       {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player
                          currently owns them". For an unsold private it is also the explanation for why the row is
                          inert, so the two facts are one line rather than two.
@@ -297,63 +354,87 @@ export function ProposePrivatePurchase({
                           "unsold in the auction"
                         )}
                       </span>
+                      {/* Design note #804: THE POWER JOINS THE TITLE'S LINE, which is the arrangement asked
+                          for twice: "moving the special power to the same line as the name+owner". It is a
+                          `<span>` in the same wrapping flex row rather than a block beneath one, so a short
+                          summary sits beside the holder and a long one wraps -- with no dead space either
+                          way, because a wrapped flex line is exactly as tall as its content.
+                          IT IS NO LONGER A CONTROL. #721 made the sentence the disclosure button; the face
+                          is the disclosure now, so the sentence goes back to being a sentence. */}
+                      {catalog && <span style={styles.rowPower}>{abilitySummary(catalog)}</span>}
                     </span>
-                    {/* Design note #721: THE TWO FIGURES, STACKED AND RIGHT-ALIGNED.
-                       REPORTED: "the right column should list 'income' (which should be in green) followed by
-                       'face value'. Let's leave the 50-200% information to the actual offer panel when you
-                       click the PC to buy it."
-                       THE BAND WAS THE MOST PROMINENT THING ON THE ROW AND THE LEAST USEFUL. It had the green
-                       and the monospace, so six rows of "$30 - $120" read as the answer to a question nobody
-                       had yet -- the price is negotiated AFTER choosing, and the offer field states the same
-                       band inline the moment a private is selected. Two statements of one rule, and the
-                       redundant one was shouting.
-                       INCOME TAKES THE GREEN, which is what the report is really about: revenue is the number
-                       a player compares across privates, and it was grey `small` text sharing a line with the
-                       face value. */}
-                    <span style={styles.rowFigures}>
+                    {/* Design note #804: ONE FIGURE, ON ONE LINE, AND THAT IS THE FIX FOR THE GAP.
+                       REPORTED as two separate things: "let's remove the 'Face $20' tags since they can be
+                       displayed when a player clicks the private company to buy it", and "the spacing
+                       between the name+owner of the private company and its special power is randomly huge."
+                       THEY ARE ONE BUG. #721 stacked income over face value in a right-hand grid cell two
+                       lines tall, against a left cell one line tall, with `alignItems: "start"` -- so every
+                       row carried a blank line under the name that belonged to a column on the other side of
+                       the panel. Nothing declared that space, which is exactly why it read as random.
+                       Removing the face tag collapses the column to one line and the gap goes with it. The
+                       face value is not lost: it is stated in the open card, beside the field where the
+                       price is chosen, which is where the report asked for it. */}
+                    <span style={styles.rowRight}>
                       <span style={styles.rowIncome}>${entry.revenue_per_or}/OR</span>
-                      <span style={styles.rowFace}>face ${entry.cost}</span>
+                      <span style={styles.rowCaret} aria-hidden="true">
+                        {isOpen ? "▴" : "▾"}
+                      </span>
                     </span>
                   </button>
-                  {/* Design note #721: THE SUMMARY IS THE DISCLOSURE.
-                     REPORTED: "the 'special power summary' ... should itself be clickable to display the full
-                     rule (so eliminate the 'Full rules' button)".
-                     #661 put the summary on the face of the row and then added a separate "Full rules" toggle
-                     beneath it -- two controls, stacked, about the same sentence, and the second one cost a
-                     line of its own on every card. Making the sentence the control removes a row per private
-                     and removes the question of what the button refers to.
-                     STILL NOT INSIDE THE FACE BUTTON. #661's reason holds exactly: a button inside a button is
-                     invalid markup that browsers repair by unnesting. It is a sibling, full width, which is
-                     also why the group is a flex column rather than one grid. */}
-                  {catalog && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedIds((open) => {
-                          const next = new Set(open);
-                          if (!next.delete(entry.private_id)) next.add(entry.private_id);
-                          return next;
-                        })
-                      }
-                      aria-expanded={isExpanded}
-                      aria-controls={detailId}
-                      style={styles.rowDisclosure}
-                      title={isExpanded ? "Hide the full rule." : "Read the full rule."}
-                    >
-                      {/* Not gated on `blocked`. An unsold private, or the
-                          B&O a corporation may never buy, still has a power
-                          worth reading -- design note #386's reason for
-                          showing the row at all applies to its rules too. */}
-                      <span style={styles.rowDisclosureCaret} aria-hidden="true">
-                        {isExpanded ? "▴" : "▾"}
-                      </span>
-                      <span style={styles.rowPower}>{abilitySummary(catalog)}</span>
-                    </button>
-                  )}
-                  {catalog && isExpanded && (
-                    <p id={detailId} style={styles.rowDetail}>
-                      {catalog.ability}
-                    </p>
+
+                  {/* Design note #804: THE CARD. Rule, price and submit in one place, opened by one click.
+                      The offer form used to render once, at the BOTTOM of the panel, about whichever private
+                      was selected -- so a player reading the D&H typed a price under the B&O. Inside the card
+                      there is no question which private the field belongs to. */}
+                  {isOpen && (
+                    <div id={detailId} style={styles.cardBody}>
+                      {catalog && <p style={styles.cardRule}>{catalog.ability}</p>}
+                      {blocked !== null ? (
+                        <p style={styles.cardBlocked}>{blocked}</p>
+                      ) : (
+                        <>
+                          <label style={styles.priceRow}>
+                            <span style={styles.priceLabel}>Offer price</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              value={priceText}
+                              min={bounds.min}
+                              max={bounds.max}
+                              step={1}
+                              onChange={(event) =>
+                                setPriceFor(entry.private_id, event.target.value)
+                              }
+                              style={styles.priceInput}
+                              aria-label={`Offer price for ${entry.name}, between ${bounds.min} and ${bounds.max}`}
+                            />
+                            {/* The face value, rehomed from the row -- and the band beside it, so the two
+                                numbers that constrain the field are read where the field is. */}
+                            <span style={styles.priceBand}>
+                              face ${entry.cost} · ${bounds.min}-${bounds.max}
+                            </span>
+                          </label>
+
+                          {priceProblem && <p style={styles.problem}>{priceProblem}</p>}
+
+                          <button
+                            type="button"
+                            style={{
+                              ...styles.primaryButton,
+                              ...(priceProblem ? styles.buttonDisabled : {}),
+                            }}
+                            disabled={priceProblem !== null}
+                            onClick={() => {
+                              if (priceProblem) return;
+                              onPropose(entry.private_id, price);
+                            }}
+                            title={priceProblem ?? `Offer $${price} for ${entry.name}.`}
+                          >
+                            Propose Purchase
+                          </button>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -361,54 +442,14 @@ export function ProposePrivatePurchase({
           </div>
         )}
 
-        {selected && (
-          <label style={styles.priceRow}>
-            <span style={styles.priceLabel}>Offer price</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={priceText}
-              min={bounds.min}
-              max={bounds.max}
-              step={1}
-              onChange={(event) => setPriceText(event.target.value)}
-              style={styles.priceInput}
-              aria-label={`Offer price, between ${bounds.min} and ${bounds.max}`}
-            />
-            <span style={styles.priceBand}>
-              ${bounds.min} - ${bounds.max}
-            </span>
-          </label>
-        )}
-
-        {priceProblem && selectedId !== null && (
-          <p style={styles.problem}>{priceProblem}</p>
-        )}
-
-        <div style={styles.footer}>
-          {/* Design note #715: Cancel is a modal's word. Embedded, declining is `Skip Buy Private` on the bar
-              -- the control that already exists for it, and the one #674 argued should look like a peer. */}
-          {!embedded && (
-            <button type="button" style={styles.secondaryButton} onClick={onClose}>
-              Cancel
-            </button>
-          )}
-          <button
-            type="button"
-            style={{
-              ...styles.primaryButton,
-              ...(priceProblem ? styles.buttonDisabled : {}),
-            }}
-            disabled={priceProblem !== null}
-            onClick={() => {
-              if (priceProblem || !selected) return;
-              onPropose(selected.private_id, price);
-            }}
-            title={priceProblem ?? `Offer $${price} for ${selected?.name}.`}
-          >
-            Propose Purchase
-          </button>
-        </div>
+        {/* Design note #804: THE PANEL FOOTER IS GONE WITH THE THING IT ACTED ON. It held the one
+            `Propose Purchase` button, which had to reach back up to `selected` to know what it was buying --
+            the indirection that made two clicks necessary. Each card submits itself now.
+            AND CANCEL GOES WITH IT, which costs nothing that is reachable: #715 already withdrew it when
+            embedded ("Cancel is a modal's word"), and nothing in the app renders this panel any other way --
+            the bar passes `embedded` unconditionally and `onOpenPrivateTrade` is a no-op. The modal branch
+            below is vestigial and its header `✖` is its only dismissal. Recorded rather than deleted:
+            removing the branch is a separate change with its own props to unpick. */}
       </div>
   );
 
@@ -605,7 +646,10 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1b2130",
     overflow: "hidden",
   },
-  rowGroupSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
+  /* Design note #804: "selected" and "open" were the same card all along, so the key says the one thing it
+     now means. Not applied to a blocked card: a blue frame is the app's affordance for "this is the one you
+     are acting on", and the B&O is never that. */
+  rowGroupOpen: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
   /* Design note #386: present but plainly not actionable. Recedes rather
      than disappears -- the whole point of showing it is that the player
      learns the private exists and where it is. */
@@ -617,71 +661,78 @@ const styles: Record<string, React.CSSProperties> = {
   row: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
-    /* Design note #721: ONE GRID ROW, not three. #661's two-column grid was right and it was carrying five
-       cells; with the band gone, the owner inline and the power moved to its own button, the face is a single
-       line -- identity on the left, the two figures on the right. */
+    /* Design note #804: `alignItems` is BASELINE, not `start`, and that is deliberate rather than cosmetic.
+       With `start`, the taller column dictated the row's height and the shorter one sat at the top of it --
+       which is how a two-line figures column put a blank line under the name. Baseline aligns the two
+       columns' first lines to each other, so the row is as tall as its content and no taller. */
     gap: "2px 12px",
-    alignItems: "start",
+    alignItems: "baseline",
     textAlign: "left",
     /* Design note #779: TIGHTER. Reported as "considerably reduce the padding from their name to their
        special power" -- six of these stack, so every vertical pixel here is six on the panel, which is what
-       makes this subpanel too tall to sit in the sticky bar. */
-    padding: "6px 12px 2px",
+       makes this subpanel too tall to sit in the sticky bar.
+       Design note #804: SYMMETRIC NOW. #779's `6px 12px 2px` was clipped at the bottom to hand the remaining
+       space to the disclosure button below it; there is no disclosure, so the row owns its own padding. */
+    padding: "7px 12px",
     border: "none",
     background: "none",
     color: "#e2e6ee",
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  /* `not-allowed` over the usual pointer, so the refusal is felt before it
-     is clicked -- design note #386. */
-  rowBlocked: { cursor: "not-allowed" },
+  /* Design note #804: `rowBlocked` is GONE, not unused. It set `cursor: not-allowed` on a face button that
+     was `disabled`; the face is clickable for every private now -- that is how a player reads the reason it
+     is blocked -- so a "you cannot click this" cursor on it would be a false statement. #772's rule: an
+     orphan key in a `Record<string, CSSProperties>` is invisible to both `tsc` and ESLint. */
   rowName: {
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 700,
     display: "flex",
     flexWrap: "wrap",
     alignItems: "baseline",
-    gap: "4px 7px",
+    /* The row gap is what a wrapped power summary falls into, so it is small: 3px reads as a continuation of
+       the same block rather than as a new one. */
+    gap: "3px 8px",
     minWidth: 0,
   },
-  /* The acronym beside the name. Every other surface in this app identifies
-     a private by acronym (`PrivateCompanyPills`, the powers panel), and this
-     modal was the one place a player had to translate. */
-  /* Design note #779: PART OF THE TITLE NOW. It keeps the monospace, because that is what makes an acronym
-     read as a code rather than a word, but it takes the NAME's size and weight so the eye reads one title
-     rather than a name and a separate tag. The old `micro` matched `rowOwner` exactly, which is what made
-     "SV" and "held by Ada" look like two facts of the same kind. */
-  rowAcronym: {
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 700,
-    letterSpacing: "0.02em",
-    color: "#98a1b2",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  },
+  /* Design note #804: the title owns the size and weight, so the acronym inside it can inherit both. */
+  rowTitle: { fontSize: FONT_SIZE.strong, fontWeight: 700, minWidth: 0 },
+  /* The acronym beside the name. Every other surface in this app identifies a private by acronym
+     (`PrivateCompanyPills`, the powers panel), and this modal was the one place a player had to translate.
+     Design note #779 gave it the title's size and weight and kept a grey monospace face, arguing that
+     monospace "is what makes an acronym read as a code rather than a word".
+     Design note #804 WITHDRAWS THAT, on report: "the abbreviated acronyms need to be in the same color and
+     font as the title, since they are part of the title". The argument was for a distinction, and a
+     distinction is precisely what a part of a title must not have -- it is why the grey looked wrong even
+     after the size was fixed. So this declares no colour, no family, no size and no weight; it inherits all
+     four from `rowTitle` and cannot disagree with it. `marginLeft` stands in for the flex gap it lost by
+     moving inside the title, and the letterspacing just opens up a short all-caps run. */
+  rowAcronym: { marginLeft: "5px", letterSpacing: "0.02em" },
   /* Design note #721: `rowBand` and `rowMeta` are GONE, not left unused. The band moved to the offer field
      where the number is actually chosen, and the meta line split into `rowIncome` and `rowFace`. An orphan
      style for a thing just removed on report is how the thing comes back -- `palette.ts`'s rule for its
-     retired colour token, and #696's for the dropdown it replaced. */
-  rowFigures: {
+     retired colour token, and #696's for the dropdown it replaced.
+     Design note #804: and now `rowFigures` and `rowFace` join them. Reported: "let's remove the 'Face $20'
+     tags since they can be displayed when a player clicks the private company to buy it." The face value is
+     restated in the open card beside the price field; the stacked column that held it is what made the row
+     two lines tall, so removing the tag is also the fix for the gap under the name. */
+  rowRight: {
     display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: "1px",
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: "8px",
     whiteSpace: "nowrap",
   },
-  /* The comparison figure, in the green this panel already used for money -- freed by the band's removal. */
+  /* The comparison figure, in the green this panel already used for money -- freed by the band's removal.
+     It keeps the monospace: this one IS a figure read down a column across six rows, which is the case
+     monospace exists for and the case the acronym turned out not to be. */
   rowIncome: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#7ee0a1",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  rowFace: {
-    fontSize: FONT_SIZE.small,
-    color: "#aab0bc",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  },
+  /* Design note #804: the caret moved off the deleted disclosure button and onto the row that now does its
+     job. Small and grey: it is an affordance, not a fact. */
+  rowCaret: { fontSize: FONT_SIZE.micro, color: "#8f98a8" },
   /* Design note #721: inline beside the name, so it no longer costs a grid row. `micro` because it is the
      one fact on the line that is not being compared across rows. */
   rowOwner: {
@@ -691,46 +742,41 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* The name only -- "held by" stays grey so the colour marks the PERSON rather than the phrase. */
   rowOwnerName: { fontWeight: 700 },
+  /* Design note #804: on the title's line now, so it takes the secondary text colour this file already uses
+     for prose rather than the near-white #721 gave it when it was a control. A summary that sits beside the
+     title at the title's contrast competes with it. */
   rowPower: {
     fontSize: FONT_SIZE.small,
-    color: "#d3d8e2",
+    color: "#aab0bc",
     lineHeight: 1.4,
     textAlign: "left",
     minWidth: 0,
   },
-  /* Design note #721: the whole sentence is the control, so this is a full-width row rather than the small
-     bordered pill #661 put under it. No border and no background: a bordered block per private was a second
-     card inside each card, and the caret plus the hover title carry the affordance. */
-  rowDisclosure: {
+  /* Design note #804: the open card -- rule, price and submit, in the row they belong to. It is `rowDetail`
+     grown a form: same inset, same well, and now a flex column because it holds three blocks rather than one
+     paragraph. */
+  cardBody: {
     display: "flex",
+    flexDirection: "column",
     alignItems: "flex-start",
-    gap: "7px",
-    width: "100%",
-    margin: 0,
-    padding: "0 12px 6px",
-    border: "none",
-    backgroundColor: "transparent",
-    color: "#9aa0ac",
-    fontFamily: "inherit",
-    cursor: "pointer",
-    textAlign: "left",
-  },
-  rowDisclosureCaret: {
-    fontSize: FONT_SIZE.micro,
-    color: "#8f98a8",
-    lineHeight: 1.6,
-    flex: "none",
-  },
-  rowDetail: {
+    gap: "8px",
     margin: "0 12px 10px",
     padding: "8px 10px",
     borderRadius: "6px",
     backgroundColor: "#151a25",
-    fontSize: FONT_SIZE.small,
-    color: "#c1c7d3",
-    lineHeight: 1.5,
   },
-  priceRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
+  cardRule: { margin: 0, fontSize: FONT_SIZE.small, color: "#c1c7d3", lineHeight: 1.5 },
+  /* Design note #804: the reason, where a player can read it. #386 showed a blocked private and put its
+     reason in a `title` attribute -- a hover, on a game played on a tablet. Amber rather than red: "still
+     unsold in the auction" is the state of the board, not the player's mistake. */
+  cardBlocked: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.45 },
+  priceRow: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "6px 10px",
+  },
   priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
   priceInput: {
     width: "130px",
@@ -748,13 +794,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
-  footer: {
-    display: "flex",
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: "8px",
-    marginTop: "4px",
-  },
+  /* Design note #804: `footer` and `secondaryButton` are GONE with the panel-level submit and the Cancel
+     button beside it -- #772's rule again, since neither `tsc` nor ESLint can see an orphan key here. */
   primaryButton: {
     padding: "9px 18px",
     borderRadius: "8px",
@@ -763,16 +804,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffffff",
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
-    fontFamily: "inherit",
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    padding: "9px 18px",
-    borderRadius: "8px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
-    fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
     cursor: "pointer",
   },

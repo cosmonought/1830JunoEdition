@@ -72,7 +72,9 @@ describe("no player's money is called a Treasury", () => {
 
   it("still lets the design notes quote what was wrong", () => {
     /* #490a's rule, and the reason the scan reads a comment-stripped copy. #743's note quotes
-       "President's Personal Treasury" as the string it replaced, and that quotation is the argument. */
+       "President's Personal Treasury" as the string it replaced, and that quotation is the argument.
+       #806 removed the tooltip that carried the corrected wording and quoted THAT on the way out, which is
+       why this still passes against the raw file: the record of a fix outlives the code it fixed. */
     const bar = fs.readFileSync(path.join(SRC, "panels", "ContextualActionBar.tsx"), "utf8");
     expect(bar).toMatch(/Treasury/);
     expect(bar).toContain("President's Cash:");
@@ -91,12 +93,27 @@ describe("the two labels that were reported", () => {
     expect(block).not.toMatch(/>\s*Treasury\s*</);
   });
 
-  it("names the president's own money Cash in the emergency panel", () => {
-    /* The place the two piles sit closest together -- an emergency purchase is precisely the moment a player
-       must tell them apart, and it was the one calling both "Treasury". */
-    expect(code(path.join(SRC, "panels", "ContextualActionBar.tsx"))).toContain(
-      "President's Cash:",
-    );
+  it("names the president's own money Cash where the two piles meet", () => {
+    /* The place they sit closest together -- an emergency purchase is precisely the moment a player must
+       tell them apart, and it was the one calling both "Treasury".
+       DESIGN NOTE 806 MOVED THIS ASSERTION, and the move is worth recording because the old one had drifted
+       from its own title. It said "in the emergency panel" and read `ContextualActionBar.tsx`, checking the
+       bar's president-cash TOOLTIP -- a different surface from the one it named. That tooltip is now gone
+       (its figure is on `PlayerCashStrip` for the whole table, under the board), so the example points at the
+       panel the title always claimed: `EmergencyTrainPurchaseModal`, which spends a president's cash and
+       calls it cash. */
+    const modal = code(path.join(SRC, "components", "EmergencyTrainPurchaseModal.tsx"));
+    expect(modal).toContain("Your cash $");
+    expect(modal).not.toMatch(/Your Treasury/i);
+  });
+
+  it("heads the Operating Round strip Cash, because its rows are players", () => {
+    /* THE SURFACE THAT REPLACED THE TOOLTIP. #670's strip is the reason #326's hover became redundant, so it
+       is now the load-bearing example: one heading over a row per seat, in the round where money moves. */
+    const strip = code(path.join(SRC, "components", "PlayerCashStrip.tsx"));
+    expect(strip).toContain("<h4 style={styles.title}>Cash</h4>");
+    expect(strip).toContain('aria-label="Player cash"');
+    expect(strip).not.toMatch(/Treasury/i);
   });
 });
 

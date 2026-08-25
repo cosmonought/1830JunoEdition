@@ -31,6 +31,27 @@ export {};
 //
 // A SOURCE SCAN because the branch is JSX and this suite has no DOM. What it can pin is that both arms exist,
 // that the button is inside the president's arm only, and that the default keeps hotseat unchanged.
+//
+// ==================================================================
+//  DESIGN NOTE 788: AND EXISTING IS NOT THE SAME AS RENDERING
+// ==================================================================
+//
+// REPORTED after #783 shipped: "no modal popped up on other players' screen. However, their attempted actions
+// were recorded in the activity log as REFUSED."
+//
+// THE WATCHER ARM WAS UNREACHABLE. `pendingHomeToken` returned `null` for anybody who was not the president,
+// so the modal rendered nothing at all and `viewerIsPresident` was never consulted. #783's fix was a branch
+// with no way in -- #757's shape ("a predicate that was never asked"), committed while fixing another
+// instance of the same thing.
+//
+// AND EVERY TEST IN THIS FILE PASSED. They assert the copy EXISTS in the source, and it did. A source scan
+// cannot tell a rendered branch from a dead one, which is #490a's limitation applied to markup rather than to
+// comments. The REFUSED lines are what caught it: `homeTokenBlock` saw the debt on the watcher's client while
+// the memo one file away decided that client had nothing to be told about.
+//
+// SO THE GUARD BELOW IS ABOUT THE MEMO, NOT THE MARKUP. "Does the board owe a token" is a fact about the
+// BOARD and identical on every client; "is this viewer the one who must place it" is a different question
+// with its own home. A viewer test creeping back into the first is the regression to catch.
 
 const PROMPT = (() => {
   const fs = require("fs") as typeof import("fs");
@@ -118,6 +139,49 @@ describe("the default cannot regress an existing caller", () => {
 
   it("compares the seat rather than the corporation", () => {
     expect(APP_CODE).toContain("pendingHomeToken.president === viewerAddress");
+  });
+});
+
+describe("the watcher's arm can actually be reached (design note #788)", () => {
+  /** The memo that decides whether the modal renders at all. */
+  const MEMO = APP_CODE.slice(
+    APP_CODE.indexOf("const pendingHomeToken = useMemo"),
+    APP_CODE.indexOf("const privateTileHexKeyRef"),
+  );
+
+  it("has a memo to inspect", () => {
+    // The slice guard: a boundary that moves silently would make every assertion below vacuous.
+    expect(MEMO.length).toBeGreaterThan(50);
+    expect(MEMO).toContain("pendingHomeTokens(gameState, homeHexToAxial)");
+  });
+
+  it("does not withhold the token from a non-president", () => {
+    /* THE ACTUAL BUG. `if (!owed.president || owed.president !== viewerAddress) return null;` is what made
+       #783's watcher arm dead code, and it read as an obviously correct line -- the prompt IS the
+       president's. What it also did was decide, one file away from the component, that nobody else needed
+       telling. */
+    expect(MEMO).not.toContain("owed.president !== viewerAddress");
+    expect(MEMO).not.toContain("viewerAddress");
+  });
+
+  it("keeps the viewer out of its dependencies", () => {
+    /* Belt to the above: if the memo does not read the viewer, it cannot depend on one. A stray dependency
+       here would be the first sign the filter had come back. */
+    expect(MEMO).toContain("}, [gameState, homeHexToAxial]);");
+  });
+
+  it("still decides the ASK by the viewer, at the prop", () => {
+    // The question did not disappear; it moved to where it can be answered without hiding the modal.
+    expect(APP_CODE).toContain("pendingHomeToken.president === viewerAddress");
+  });
+
+  it("covers the screen while it waits", () => {
+    /* The other half of the report: "prohibit players from doing anything until the Home Station is placed."
+       `position: fixed` with `inset: 0` over the whole viewport is what makes the modal a stop rather than a
+       notice -- #763's gate refuses the action, and this stops the click being worth attempting. */
+    expect(CODE).toContain('position: "fixed"');
+    expect(CODE).toContain("inset: 0");
+    expect(CODE).toContain('aria-modal="true"');
   });
 });
 

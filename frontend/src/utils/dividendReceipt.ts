@@ -42,6 +42,10 @@ export interface DividendReceiptInput {
   viewerPercentage: number;
   /** The viewer's cash before the payout. `null` when it is not known. */
   cashBefore: number | null;
+  /** Design note #795: what the viewer actually received, from `dividendSplit` -- the same value the reducer
+   *  spends and #775's Activity Log sentence prints. Passed in rather than computed here, because a receipt
+   *  that does its own arithmetic is a second opinion about somebody else's money. */
+  amount: number;
 }
 
 export interface DividendReceipt {
@@ -63,11 +67,26 @@ export function dividendReceipt(input: DividendReceiptInput): DividendReceipt | 
   if (!Number.isFinite(input.perShare) || input.perShare <= 0) return null;
   if (!Number.isFinite(input.viewerPercentage) || input.viewerPercentage <= 0) return null;
 
-  /* The reducer's own arithmetic, deliberately duplicated in shape rather than in source: it pays
-     `perShare * (percentage / 10)`, and a receipt quoting a different figure from the one that moved would be
-     worse than no receipt at all. `dividendReceipt.test.ts` holds the two together. */
-  const amount = input.perShare * (input.viewerPercentage / 10);
-  if (amount <= 0) return null;
+  /* ==================================================================
+   *  DESIGN NOTE 795: THE THIRD COPY OF ONE CALCULATION
+   * ==================================================================
+   *
+   * THE COMMENT THIS REPLACES ADMITTED THE PROBLEM AND ACCEPTED IT: "the reducer's own arithmetic,
+   * deliberately duplicated in shape rather than in source ... `dividendReceipt.test.ts` holds the two
+   * together." A test holding two implementations in step is a rope, not a fix, and #775 had already made the
+   * same argument about the Activity Log's sentence -- which is now built from `dividendSplit`, the value the
+   * reducer actually spends.
+   *
+   * SO THIS TAKES THE AMOUNT RATHER THAN RECOMPUTING IT. `perShare` survives because the headline quotes it,
+   * but the figure a player is told they received is no longer this module's opinion.
+   *
+   * REPORTED: "the Dividends and the Activity Log showed the correct amounts, but the toast notification said
+   * B&O paid $5 per share ... I'm not sure why you don't have the toast notifications pulling from the same
+   * source as the Activity Log." The caller was passing a `perShare` derived from `last_route_revenue`
+   * instead of from the declaration -- see App.tsx #795 -- and no amount of arithmetic here could have
+   * rescued a wrong input. */
+  const amount = input.amount;
+  if (!Number.isFinite(amount) || amount <= 0) return null;
 
   const before = input.cashBefore;
   const known = before !== null && Number.isFinite(before);

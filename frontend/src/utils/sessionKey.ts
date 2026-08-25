@@ -128,6 +128,18 @@ export interface PublicCompanyPayoutChoiceDto {
 export interface RouteWaypointDto {
   hex: string;
   city_node?: number;
+  /** Design note #808: WHICH ARM OF A FORKED HEX, and A FIELD THE CONTRACT DOES NOT HAVE YET.
+   *
+   *  Flagged loudly rather than added quietly, because every other field in this file is a mirror of a real
+   *  `msg.rs` struct and this one is a mirror of nothing. Altoona (H12) prints two tracks joining the same two
+   *  edges -- one through its station, one around it -- so a waypoint naming only the hex is ambiguous there,
+   *  and `pathfinding.rs` will need this same distinction before manual routes can be validated on chain.
+   *  Until then the sandbox reducer is the authority and reads it (`sandboxSession.ts` #737): a bypassed hex
+   *  pays nothing and spends no stop.
+   *  OMITTED unless true, so every route that does not touch H12's bow is byte-identical to what this app has
+   *  always sent -- which is what keeps the gap from being a change to the wire format for anybody else.
+   *  Same shape of gap, and the same treatment, as `PrivateTradePanel.tsx` #0's missing offer message. */
+  bypass?: boolean;
 }
 
 /** Distribute Yield vs Slash/Retain Yield -- mirrors `msg.rs`'s

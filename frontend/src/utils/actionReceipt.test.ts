@@ -102,24 +102,66 @@ describe("every toast is mounted behind a rule", () => {
     return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
   })();
 
-  it("has exactly three call sites", () => {
+  it("has exactly two call sites", () => {
     /* THE STRUCTURAL HALF. The predicate could be perfect and the bug could return tomorrow by way of a
        `showActionToast` somewhere else in the file -- which is exactly how the first one spread. Reading the
        source is a weak instrument, and it is the only one that can see this.
-       WAS ONE, AND TWO PASSES HAVE ADDED TO IT deliberately: #784's refusal notice (the report was "there was
-       no notification that the player was at certificate limit", and the rule lived in a disabled button's
-       tooltip), then #786's payout notice ("I don't receive any toast notifications when another player's
-       corporation pays dividends to me").
+       WAS ONE; #784 ADDED THE REFUSAL NOTICE (reported as "there was no notification that the player was at
+       certificate limit", the rule having lived in a disabled button's tooltip). #786 briefly added a third
+       and #795 withdrew it -- see the note there: `showDividendToast` had covered that case since #400 and I
+       built a duplicate while hunting the reason the original quoted a wrong figure.
        THE COUNT IS NOT THE PROPERTY WORTH GUARDING -- #718's actual complaint was "toast notifications for
        literally every action", which is about toasts that are not behind a CONDITION. The count is pinned so
-       that adding one is a decision rather than a drift, and each site's guard is named individually below.
-       Bumping this number without adding a guard test is the thing to refuse. */
+       that changing it is a decision rather than a drift, and each site's guard is named individually below.
+       Moving this number without moving the guard list is the thing to refuse. */
     const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
   });
 
   it("gates the receipt on the message deserving one", () => {
     expect(APP).toContain("deservesActionReceipt(msg)");
+  });
+
+  it("raises the receipt from the sentence the log gets", () => {
+    /* ==================================================================
+     *  DESIGN NOTE 794: THE RECEIPT MOVED TO WHERE THE TRUTH IS
+     * ==================================================================
+     *
+     * REPORTED three runs running: "the Dividends and the Activity Log showed the correct amounts, but the
+     * toast notification said B&O paid $5 per share ... I'm not sure why you don't have the toast
+     * notifications pulling from the same source as the Activity Log."
+     *
+     * THE FIGURES NAMED IT. $100 reported as $50; $150 as $50; $190 as $70; PRR's $70 as $30. Every wrong
+     * number is one train's worth of a multi-train run -- the toast was built at DISPATCH time from this
+     * browser's React state, which had caught up with some of the turn's `RunManualRoute` messages and not
+     * all of them. The drain has all of them, which is why the log was right every time.
+     *
+     * SO THE ORDER MATTERS AND IS ASSERTED: the toast must sit AFTER the label is rebuilt with `afterState`,
+     * not before. Raising it a few lines earlier would silently restore the bug with the code in the right
+     * file. */
+    const rebuilt = APP.indexOf("afterState: after }) ?? label;");
+    const raised = APP.indexOf("showActionToast(label)");
+    expect(rebuilt).toBeGreaterThan(-1);
+    expect(raised).toBeGreaterThan(rebuilt);
+  });
+
+  it("no longer fires from the append branch", () => {
+    /* #697 put it there to be immediate, and immediacy bought a figure that could be wrong. A receipt whose
+       whole job is to be trusted must not quote a number the player did not receive. */
+    const appendBranch = APP.slice(
+      APP.indexOf("const ok = await appendSandboxAction"),
+      APP.indexOf("Setup is handled first and returns"),
+    );
+    expect(appendBranch).not.toContain("showActionToast(");
+  });
+
+  it("still reaches only the player who acted", () => {
+    /* The drain runs on every client, so the actor test does the job #697's placement used to. It is #786's
+       comparison inverted, which is what makes the receipt and the payout notice mutually exclusive rather
+       than two notices for one event. */
+    expect(APP).toContain(
+      "(options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current",
+    );
   });
 
   it("gates the refusal notice on there being a refusal and a reason", () => {
@@ -128,21 +170,18 @@ describe("every toast is mounted behind a rule", () => {
     expect(APP).toContain("if (refusalWasRefused && refusalReason && options?.isRemoteReplay !== true)");
   });
 
-  it("gates the payout notice on the money being the viewer's", () => {
-    /* #786's site, and the narrowest of the three. Not "was this interesting" but "did this move MY money",
-       read off `dividendSplit`'s own list -- which is what stops a six-player table getting five notices per
-       dividend. */
-    expect(APP).toContain("mine && mine.amount > 0 && viewer !== options?.actor");
+  it("leaves the payout notice to the function that already had it", () => {
+    /* #795: the dividend notice is `showDividendToast`, a separate control with its own gate, and it reaches
+       every shareholder rather than only the actor. #786 added a second one to `showActionToast` and was
+       withdrawn -- the case was covered, the FIGURE was wrong, and I mistook one for the other. */
+    expect(APP).toContain("showDividendToast(");
+    expect(APP).not.toContain("viewer !== options?.actor");
   });
 
   it("leaves no unguarded call", () => {
     /* The property #718 was really after: every call site sits inside an `if`/`else if`. One named guard per
        call, so the count above and this list have to be changed together. */
-    const guards = [
-      "deservesActionReceipt(msg)",
-      "refusalWasRefused && refusalReason",
-      "mine && mine.amount > 0",
-    ];
+    const guards = ["deservesActionReceipt(msg)", "refusalWasRefused && refusalReason"];
     for (const guard of guards) {
       expect(APP).toContain(guard);
     }

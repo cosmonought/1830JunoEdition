@@ -24,11 +24,17 @@
 
 import { dividendReceipt } from "./dividendReceipt";
 
+/* Design note #795: `amount` is now an INPUT rather than something this module works out. It used to compute
+   `perShare * (viewerPercentage / 10)` and its own comment called that "deliberately duplicated in shape
+   rather than in source" -- a third implementation of a figure the reducer already spends, and the one that
+   ended up on screen quoting a wrong number. The fixture keeps the pair consistent (20% of $27 is $54) so
+   every case below still reads as one coherent payout. */
 const BASE = {
   ticker: "C&O",
   distribute: true,
   perShare: 27,
   viewerPercentage: 20,
+  amount: 54,
   cashBefore: 412,
 };
 
@@ -46,9 +52,16 @@ describe("a shareholder is told what arrived", () => {
     expect(dividendReceipt(BASE)?.transition).toBe("$412 → $466");
   });
 
-  it("scales with the holding rather than assuming a president", () => {
-    expect(dividendReceipt({ ...BASE, viewerPercentage: 10 })?.amount).toBe(27);
-    expect(dividendReceipt({ ...BASE, viewerPercentage: 60 })?.amount).toBe(162);
+  it("reports the amount it was given, whatever the holding", () => {
+    /* THIS TEST USED TO PROVE THE ARITHMETIC and now proves the opposite property, which is the point of
+       #795: the module no longer works the figure out, so "scales with the holding" is not its job any more
+       -- it is `dividendSplit`'s, and `holdingCapBadge`/`watcherVisibility` check it there against the cash
+       the reducer actually moved.
+       WHAT IS LEFT TO GUARD HERE is that the amount is passed through untouched. A module that quietly
+       adjusted it would be the third implementation coming back. */
+    expect(dividendReceipt({ ...BASE, viewerPercentage: 10, amount: 27 })?.amount).toBe(27);
+    expect(dividendReceipt({ ...BASE, viewerPercentage: 60, amount: 162 })?.amount).toBe(162);
+    expect(dividendReceipt({ ...BASE, viewerPercentage: 60, amount: 162 })?.headline).toContain("$162");
   });
 });
 
@@ -62,11 +75,11 @@ describe("it stays silent far more often than it fires", () => {
   it("says nothing to a player holding no shares", () => {
     /* THE ONE THAT KEEPS THIS FROM BEING A FLOOD. In a four-player game most declarations pay most players
        nothing, and a toast reading "$0" on each of them is the noise #718 removed. */
-    expect(dividendReceipt({ ...BASE, viewerPercentage: 0 })).toBeNull();
+    expect(dividendReceipt({ ...BASE, viewerPercentage: 0, amount: 0 })).toBeNull();
   });
 
   it("says nothing when the corporation earned nothing", () => {
-    expect(dividendReceipt({ ...BASE, perShare: 0 })).toBeNull();
+    expect(dividendReceipt({ ...BASE, perShare: 0, amount: 0 })).toBeNull();
   });
 
   it("says nothing when a rounded share comes to zero", () => {

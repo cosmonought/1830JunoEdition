@@ -209,6 +209,10 @@ import { shareSaleBlock } from "./utils/shareSale";
 import { privatePowerGlowKeys } from "./utils/privatePowerGlow";
 // Design note #729: which cities a corporation may not run through.
 import { cityBlockerFor } from "./utils/cityBlocking";
+// Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
+import { hexOffersBypass, withForcedBypass } from "./utils/cityBypass";
+// Design note #809: whose clicks the Lay Track glow may swallow -- watchers keep the inspector.
+import { inspectorClickRefused } from "./utils/inspectorClick";
 import { routeBlockedCityReason } from "./utils/routeWaypoints";
 // Design note #738: the one notification a player gets about somebody else's action.
 import { dividendReceipt } from "./utils/dividendReceipt";
@@ -872,17 +876,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : null,
       // Design note #441: the identity, for the corporate-power gate.
       presidentAddress: company.president ?? null,
-      /** Design note #326: the president's OWN wallet, not the treasury.
-       *  `null` when there is no president or the room does not report their
-       *  cash -- the tooltip is then omitted entirely rather than promising
-       *  a figure it does not have. */
-      presidentCash: company.president
-        ? (() => {
-            const entry = gameState?.player_cash.find((row) => row.player === company.president);
-            const value = entry ? Number(entry.cash_vgp) : NaN;
-            return Number.isFinite(value) ? value : null;
-          })()
-        : null,
+      /* Design note #806: `presidentCash` is GONE from this object, with the bar tooltip that was its only
+         reader. #326 resolved it here -- "the president's OWN wallet, not the treasury", null when the room
+         does not report it -- and that resolution was correct while the bar was the only Operating Round
+         surface naming a player's money. `PlayerCashStrip` (#670) now shows every seat's cash under the
+         board, so this lookup was being done on every render of the acting corporation to feed a hover that
+         duplicated a visible row. The reasoning is kept at the render site rather than here. */
       treasury: Number(company.treasury) || 0,
       // Design note #237: the row needs every token and its own price, not a
       // remaining-count. `stationTokenSlots` owns 1830's schedule.
@@ -1724,10 +1723,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          entire value of the power -- so the one errand that exists to ignore connectivity was being refused by
          the gate that enforces it. `privateTileHexKey` is non-null only while that errand is armed, and only
          for its own hex. */
+      /* Design note #809: AND ONLY THE PLAYER WHO IS LAYING. Reported as a regression -- "non-active players
+         used to be able to click the rail map and view possible track lays on any tile at any time. This
+         ability seems to be blocked now during the active player's Lay Track subphase."
+         The paragraph above already says a watcher "keeps the inspector on every hex"; the condition never
+         asked. `layTrackFocus` is derived from the STEP, so it is defined for every seated viewer during
+         anybody's Track step -- and it is built from the ACTING corporation's reach, so a watcher's clicks
+         were being measured against somebody else's track.
+         `isMyTurnRef` rather than `isMyTurn`, matching the two refs read beside it: this closure is rebuilt
+         on `layTrackFocus`, and a click is a user event long after the commit that set the ref. */
       if (
-        layTrackFocus &&
-        !layTrackFocus.highlighted.has(`${state.q},${state.r}`) &&
-        privateTileHexKeyRef.current !== `${state.q},${state.r}`
+        inspectorClickRefused({
+          actingViewer: isMyTurnRef.current,
+          layFocusHighlighted: layTrackFocus?.highlighted,
+          hexKey: `${state.q},${state.r}`,
+          privateTileHexKey: privateTileHexKeyRef.current,
+        })
       ) {
         setRadialSelector(null);
         setPreviewTile(null);
@@ -2134,10 +2145,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
     const drafted: Record<number, RoutePoint[]> = {};
     for (const assignment of result.assignments) {
+      /* Design note #808: `variant` AND `bypass` COME ACROSS NOW. This map used to copy three fields and
+         drop the two that say WHICH WAY THROUGH -- so a bow the tracer had correctly chosen arrived in the
+         draft as a plain hex and was re-priced through the station. The reported "$10 counted rather than the
+         bypass followed" happened on auto routes for this reason and on hand-drawn ones for another; this is
+         the half that was pure loss, since the answer had already been worked out and was thrown away. */
       drafted[assignment.trainIndex] = assignment.path.map((point) => ({
         q: point.q,
         r: point.r,
         hexLabel: point.hexLabel,
+        ...(point.variant !== undefined ? { variant: point.variant } : {}),
+        ...(point.bypass === true ? { bypass: true } : {}),
       }));
     }
 
@@ -2322,7 +2340,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const trainDrafts = useMemo<TrainRouteDraft[]>(() => {
     const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
     return ownedTrainRoster.map((train) => {
-      const points = routeDrafts[train.trainIndex] ?? [];
+      /* Design note #808: DERIVED AT THE PRICING BOUNDARY, not at click time. A hand-drawn route is a list of
+         hexes; whether one of them must be crossed on a bow depends on who is acting and who holds tokens
+         where, and both change under the player while the draft sits there. Marking it here means the answer
+         cannot go stale, and means the pricing below and the dispatch in `handleRunTrains` apply the SAME
+         function to the same points rather than two copies of one rule (#775's lesson). */
+      const points = withForcedBypass(
+        routeDrafts[train.trainIndex] ?? [],
+        mapGrid,
+        blocksThroughCityRef.current,
+      );
       const breakdown =
         points.length < 2
           ? null
@@ -2357,8 +2384,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           routeTokenBlockReason(points, routeTokenHexes) ??
           /* Design note #730a: and the wall, for a route drawn by hand. The tracer cannot produce one; a
              player can, and both go to the same dispatch. */
-          routeBlockedCityReason(points, blocksThroughCityRef.current, (q, r) =>
-            STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label ?? null,
+          routeBlockedCityReason(
+            points,
+            blocksThroughCityRef.current,
+            (q, r) => STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label ?? null,
+            /* Design note #808: and the hex that is not a wall. Altoona's bow does not enter its city, so a
+               full city has nothing to say about it -- and refusing here is what produced the reported "it
+               spit back the error that Altoona is tokened out" on a route the rules allow. */
+            (q, r) => hexOffersBypass(mapGrid, q, r),
           ),
       };
     });
@@ -2988,21 +3021,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ).catch(() => false);
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
-          } else if (options?.derived !== true && deservesActionReceipt(msg)) {
-            /* Design note #697: the receipt, at the moment the action is SENT. That is the moment the player's
-               question is about -- they pressed a button and want to know it registered -- and it is the last
-               point this browser can distinguish its own dispatch from the replay that follows.
-               `label` is the sentence `describeGameplayAction` already derived above, so the toast and the
-               Activity Log entry for this action are one string.
-               NOT FOR A DERIVED ACTION (#668): the auto-skip and the forced withhold are the game acting, and a
-               receipt for something the player did not do is a notification, not a confirmation.
-               Design note #718: AND NOT FOR EVERY ACTION, which is what this branch used to mean. Hanging the
-               toast on `runGameplayAction` gave a receipt to every dispatch in the app -- reported as "toast
-               notifications for literally every action". `deservesActionReceipt` is the scope #697 described
-               and never applied; the funnel is still the right ATTACHMENT point, it was just never the right
-               CONDITION. */
-            showActionToast(label);
           }
+          /* ==================================================================
+           *  DESIGN NOTE 794: THE RECEIPT MOVED TO WHERE THE TRUTH IS
+           * ==================================================================
+           *
+           * REPORTED, three runs in a row: "the Dividends and the Activity Log showed the correct amounts, but
+           * the toast notification said B&O paid $5 per share ... I'm not sure why you don't have the toast
+           * notifications pulling from the same source as the Activity Log."
+           *
+           * THAT SENTENCE IS THE DIAGNOSIS. The toast used to fire HERE, from the label derived at DISPATCH
+           * time; the Activity Log's line is rebuilt in the drain from the state the action actually applied
+           * to. Same function, same message, two snapshots -- and #775 had already established that the
+           * difference between two snapshots is exactly where this project's narration bugs live.
+           *
+           * THE FIGURES CONFIRM IT. B&O ran $100 and the toast said $50; $150, still $50; $190, $70. PRR ran
+           * $30 correctly, then $70 and the toast said $30. Every wrong figure is a PARTIAL run -- one train's
+           * worth. A turn dispatches one `RunManualRoute` per train, and at the instant the dividend button is
+           * pressed this browser's React state has only caught up with some of them. The drain has all of
+           * them, which is why the log was right every time.
+           *
+           * WHAT #697 WANTED AND WHAT IT COST. That note put the receipt at the moment of SENDING because
+           * "they pressed a button and want to know it registered", which is the right instinct -- and it
+           * bought immediacy with a figure that could be wrong. A receipt quoting a number the player did not
+           * receive is worse than one arriving a round-trip later; the whole point of a receipt is that it can
+           * be trusted. So the toast is raised in the drain now, from the SAME string the log entry gets.
+           *
+           * STILL ONLY THE PLAYER WHO ACTED, which is what #697's placement was also buying. The drain runs on
+           * every client, so the actor test does that job instead -- and it is the same comparison #786 makes
+           * in reverse for the payout notice, so the two can never both fire. */
           return;
         }
 
@@ -3711,11 +3758,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               );
               return Number.isFinite(raw) ? raw : null;
             };
+            /* ==================================================================
+             *  DESIGN NOTE 795: THE TOAST HAD ITS OWN IDEA OF THE REVENUE
+             * ==================================================================
+             *
+             * REPORTED across three runs: "the Dividends and the Activity Log showed the correct amounts, but
+             * the toast notification said B&O paid $5 per share ... I'm not sure why you don't have the toast
+             * notifications pulling from the same source as the Activity Log."
+             *
+             * BECAUSE IT DID NOT. This line read `company.last_route_revenue` off the BEFORE state and floored
+             * it -- a THIRD implementation of the per-share figure, beside the reducer's and the log's, and
+             * the only one not fed by the declaration itself. `revenue_amount` is what the corporation
+             * actually declared and what the reducer actually pays; `last_route_revenue` is a running total
+             * that a multi-train turn fills in one message at a time, which is why every wrong figure the
+             * report lists is one train's worth of a longer run.
+             *
+             * `dividendSplit` NOW ANSWERS ALL THREE. #775 pointed the log at it and #791's markers at the same
+             * discipline; this was the copy that got missed, and it was the one on screen. */
+            const settlement = dividendSplit(
+              before,
+              declared.protocol_id,
+              declared.revenue_amount,
+              declared.distribute === true,
+            );
+            const mine = settlement?.players.find((share) => share.player === viewer);
             const receipt = dividendReceipt({
               ticker: company?.ticker ?? "The corporation",
               distribute: declared.distribute === true,
-              perShare: Math.floor((Number(company?.last_route_revenue ?? 0) || 0) / 10),
+              perShare: settlement?.perShare ?? 0,
               viewerPercentage: held,
+              /* The figure the reducer spent on this viewer, not a re-derivation of it. `0` when they are not
+                 on the list at all, which `dividendReceipt` turns into no toast. */
+              amount: mine?.amount ?? 0,
               cashBefore: cashOf(before),
             });
             if (receipt) {
@@ -3827,6 +3901,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         label =
           describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
 
+        /* Design note #794: the receipt, from the sentence the Activity Log is about to show. One string, one
+           snapshot, so the two cannot disagree about a figure. */
+        if (
+          options?.derived !== true &&
+          deservesActionReceipt(msg) &&
+          (options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current
+        ) {
+          showActionToast(label);
+        }
+
         /* Design note #784: computed ONCE, above the entry that reads it three times -- and once rather than
            three times is not only tidiness here: `refusalReasonFor` runs the real purchase and sale gates,
            and three identical calls per action is three times the work for one answer. */
@@ -3853,38 +3937,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
 
         /* ==================================================================
-         *  DESIGN NOTE 786: THE MONEY ARRIVED AND NOBODY SAID SO
+         *  DESIGN NOTE 786, WITHDRAWN BY #795: THERE WAS ALREADY A PAYOUT NOTICE
          * ==================================================================
          *
-         * REPORTED: "I also don't receive any toast notifications when another player's corporation pays
-         * dividends to me."
+         * #786 answered "I don't receive any toast notifications when another player's corporation pays
+         * dividends to me" by adding one here. It was a duplicate: `showDividendToast` below has fired for
+         * every shareholder since #400, actor or not, and is not gated on who dispatched. Two notices for one
+         * payout is the flood #718 removed, and I built half of it while looking for the reason the other
+         * half was quoting a wrong figure.
          *
-         * TRUE OF EVERY ACTION, BY CONSTRUCTION. `showActionToast` lives in the APPEND branch, which only the
-         * dispatching browser reaches -- a replayed action returns long before it. That is exactly right for
-         * #697's question ("did my button register?") and gives the other four players nothing at all.
+         * THE REAL FAULT WAS THAT THE EXISTING NOTICE READ `last_route_revenue`, so on a multi-train turn it
+         * announced one train's worth -- which reads exactly like "no notification arrived" if the number is
+         * wrong enough. #795 fixed the figure; the notice never needed replacing.
          *
-         * DIVIDENDS ARE WHERE THAT HURTS, and the reason is specific rather than aesthetic: a payout is the
-         * one event that changes YOUR position while somebody else is acting. Every other silent action
-         * changes theirs.
-         *
-         * NARROW ON PURPOSE, because #718 already had to fix "toast notifications for literally every
-         * action". The test is not "was this interesting" but "did this move MY money" -- read off
-         * `dividendSplit`'s own player list, the same value the reducer spent and #775's sentence describes,
-         * so a notice can never quote a figure nobody received.
-         *
-         * AND NOT FOR THE ACTOR, who has their own receipt from the append branch and does not need two. */
-        if (options?.isRemoteReplay === true && before && "DeclareDividends" in msg) {
-          const paid = msg.DeclareDividends;
-          const settlement = dividendSplit(before, paid.protocol_id, paid.revenue_amount, paid.distribute);
-          const viewer = viewerAddressRef.current;
-          const mine = settlement?.players.find((share) => share.player === viewer);
-          if (mine && mine.amount > 0 && viewer !== options?.actor) {
-            const ticker =
-              before.public_companies.find((entry) => entry.company_id === paid.protocol_id)?.ticker ??
-              `#${paid.protocol_id}`;
-            showActionToast(`${ticker} paid you $${mine.amount}.`);
-          }
-        }
+         * RECORDED RATHER THAN DELETED because the lesson is mine: I added a feature that existed, in a file
+         * I had already read, because I searched for the mechanism I expected instead of the one on screen. */
 
         setActionLog((log) => [
           {
@@ -4257,11 +4324,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const owed = pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
     if (!owed) return null;
 
-    /* The prompt fires immediately on the FACT of the float, and only for the president - strict identity, one render after the seat sync lands (#440/#455).
-       See docs/ai_architecture/state_machine.md - App.tsx #460 */
-    if (!owed.president || owed.president !== viewerAddress) return null;
+    /* ==================================================================
+     *  DESIGN NOTE 788: THE WATCHER'S MODAL COULD NOT RENDER
+     * ==================================================================
+     *
+     * REPORTED, after #783 shipped: "During the Place Home Station action of the Stock Round, no modal
+     * popped up on other players' screen. However, their attempted actions were recorded in the activity log
+     * as REFUSED."
+     *
+     * MY OWN BUG, AND THE EXACT SHAPE I HAD JUST SPENT THE DAY FIXING. #783 added a watcher arm to
+     * `HomeStationPrompt` and a `viewerIsPresident` prop to choose between the two -- and this memo returned
+     * `null` for anybody who was not the president, so the prop was never consulted and the arm never ran. A
+     * branch that cannot be reached, exactly like #757's predicate that nothing asked.
+     *
+     * AND MY TEST COULD NOT SEE IT. `homeStationWait.test.ts` asserts the watcher copy EXISTS in the source,
+     * which it did. A source scan cannot tell a rendered branch from a dead one; #490a already recorded that
+     * limitation for design notes, and this is the same weakness applied to markup. The REFUSED lines in the
+     * report are what proved the state knew -- `homeTokenBlock` saw the debt on the watcher's client while
+     * this memo, one file away, was deciding the same client had nothing to be told about.
+     *
+     * SO THE FILTER MOVES TO WHERE THE DECISION IS. This memo answers "does the board owe a home token", which
+     * is a fact about the BOARD and true identically on every client. Whether THIS viewer is the one who must
+     * place it is a different question, and it already has a home: the `viewerIsPresident` prop below.
+     *
+     * ONE QUESTION, ONE ANSWER, in the place that can act on it -- the rule this project keeps rediscovering.
+     * `viewerAddress` leaves the dependency list because nothing here reads it any more. */
     return owed;
-  }, [gameState, homeHexToAxial, viewerAddress]);
+  }, [gameState, homeHexToAxial]);
 
   /* #455's hotseat seat move is gone; in a room the prompt is already on the right client and there is no cursor to fight.
      See docs/ai_architecture/state_machine.md - App.tsx #578 */
@@ -4672,7 +4761,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        message and nothing beside it, and every client applies by replaying. The turn change clears the
        figure now, which every client reaches from the log alone. */
     for (const draft of runnable) {
-      const points = routeDraftsRef.current[draft.trainIndex] ?? [];
+      /* Design note #808: the SAME marking the readout used. A route priced with the bow and dispatched
+         without it would be re-priced through the station by the reducer, and the panel and the log would
+         disagree about what just ran -- which is #775's failure in a different currency. */
+      const points = withForcedBypass(
+        routeDraftsRef.current[draft.trainIndex] ?? [],
+        mapGrid,
+        blocksThroughCityRef.current,
+      );
       if (points.length < 2) continue;
       // eslint-disable-next-line no-await-in-loop
       await runGameplayAction(
@@ -4702,7 +4798,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Optimistic advance to Dividends: running trains produces the figure that step decides about.
     // See docs/ai_architecture/state_machine.md - App.tsx #142
     setLiveOrSubPhase("Dividends");
-  }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain]);
+    // Design note #808: `mapGrid` joins the deps because `withForcedBypass` reads the board -- whether a hex
+    // offers a way round its centre is a fact about the tiles, and a stale grid here would dispatch a route
+    // priced against a board that has since changed.
+  }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain, mapGrid]);
 
   // revenue_amount reads the same field the panel renders, so the figure on screen and the figure in the message cannot differ. Read inside the callback for declaration order.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #198

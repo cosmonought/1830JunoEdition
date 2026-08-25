@@ -38,9 +38,10 @@ import {
   ZonedPrice,
   PAR_BOX_PRICES,
 } from "./StockMarketRenderer";
-// Design note #780: the holding cap, shared with `sharePurchaseBlock` so the roster and the Buy button
-// cannot disagree about whether a player has room.
-import { atHoldingCap } from "../utils/sharePurchase";
+// Design note #791: the roster's one-word annotation -- "max", "tied", or nothing. Built on #780's
+// `atHoldingCap`, which is shared with `sharePurchaseBlock` so the roster and the Buy button cannot disagree
+// about whether a player has room.
+import { holdingMarker } from "../utils/holdingMarkers";
 // Design note #713: the sale's arithmetic and its two guards.
 import { certificatesIn, saleProceeds } from "../utils/shareSale";
 // Design note #749: the float rule, shared with the reducer so the card and the board cannot disagree.
@@ -308,13 +309,40 @@ function CorporationRoster({
           const isActive = company.company_id === activeCompanyId;
           const market = marketPrices?.[company.company_id] ?? null;
 
-          // Sorted by stake, largest first. The president is NOT forced to
-          // the top: seeing them sitting second on an equal stake is
-          // precisely the situation a player needs to notice, and hoisting
-          // them would hide it.
+          /* ==================================================================
+           *  DESIGN NOTE 790: THE PRESIDENT SITS FIRST, ALWAYS
+           * ==================================================================
+           *
+           * REPORTED: "when players become tied for control of a corporation (e.g., P1 holds 30%, P2 holds
+           * 20% and buys a 10% share), the ordering on the corporation card switches president P1 with P2. I
+           * think the president of the corporation should always appear first, even if they're tied."
+           *
+           * THE NOTE THIS REPLACES ARGUED THE OPPOSITE, and is kept because it was not stupid: "the president
+           * is NOT forced to the top: seeing them sitting second on an equal stake is precisely the situation
+           * a player needs to notice, and hoisting them would hide it." The thing it wanted to surface is
+           * real -- a tie means somebody is one certificate from the presidency.
+           *
+           * IT CHOSE THE WRONG CARRIER FOR THAT SIGNAL. Row order in a table sorted by stake means "who holds
+           * more", and on a tie it means nothing at all -- so the old arrangement did not say "these two are
+           * level", it just moved a row, which reads as the presidency having changed. In 1830 a tie does NOT
+           * transfer the presidency; the challenger must EXCEED the incumbent. So the card was animating a
+           * transfer that the rules had not made.
+           *
+           * AND THE CROWN IS THE THING THAT MARKS THE PRESIDENT (#552), which is exactly why the position can
+           * be spent on something else: first row now means "this is the President", the crown confirms it,
+           * and the two agree instead of competing.
+           *
+           * STABLE BENEATH THE TWO KEYS. `Array.prototype.sort` has been required to be stable since ES2019,
+           * so equal stakes keep `player_holdings`' own order -- which the reducer builds deterministically
+           * and identically on every client. That matters more here than tidiness: two browsers rendering one
+           * roster in two orders is a bug report nobody would know how to describe. */
           const holdings: RosterHolding[] = company.player_holdings
             .slice()
-            .sort((a, b) => b.percentage - a.percentage)
+            .sort((a, b) => {
+              const presidency =
+                Number(company.president === b.player) - Number(company.president === a.player);
+              return presidency !== 0 ? presidency : b.percentage - a.percentage;
+            })
             .map((h) => ({
               address: h.player,
               percentage: h.percentage,
@@ -619,15 +647,27 @@ function CorporationRoster({
                        ZONE-AWARE THROUGH THE SHARED PREDICATE, not a local `>= 60`: Orange and Brown waive
                        this cap, and a roster printing "max" where the Buy button correctly allows the
                        purchase would be the two-surfaces-one-question bug this project keeps finding. */
-                    const capped = atHoldingCap(holding.percentage, marketZoneForPrice(market));
+                    /* Design note #791: "tied" joins "max", and they cannot both apply -- two players at the
+                       60% cap would be 120% of a 100% corporation. `holdingMarker` returns ONE word, so the
+                       cell cannot print both even if that arithmetic were ever wrong. */
+                    const marker = holdingMarker(
+                      holding.percentage,
+                      marketZoneForPrice(market),
+                      company.player_holdings,
+                    );
                     return (
                       <div
                         key={holding.address}
                         role="row"
                         title={
-                          capped
+                          marker === "max"
                             ? `${playerLabel?.(holding.address) ?? truncateHolder(holding.address)} holds the maximum ${holding.percentage}% of this corporation. The Orange and Brown zones lift this cap.`
-                            : undefined
+                            : marker === "tied"
+                              ? /* Design note #791: the title carries the RULE, which is the half a bare word
+                                   cannot: a tie does not move the presidency, so a reader who sees two equal
+                                   figures needs telling that nothing has changed hands yet. */
+                                `Level at ${holding.percentage}% for the largest holding. A tie does not move the presidency — a challenger must EXCEED the President's holding.`
+                              : undefined
                         }
                         style={{
                           ...styles.ownershipRow,
@@ -644,17 +684,11 @@ function CorporationRoster({
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                         </span>
-                        <span
-                          style={{
-                            ...styles.ownershipNum,
-                            ...(capped ? styles.ownershipNumCapped : {}),
-                          }}
-                          role="cell"
-                        >
+                        <span style={styles.ownershipNum} role="cell">
                           {/* "5 (60% max)" rather than "5 (60%, max)": the comma buys nothing and this
                              column is fixed-width (#466), so every character is a real constraint. */}
                           {certificateCount(holding.percentage, holding.isPresident)} (
-                          {holding.percentage}%{capped ? " max" : ""})
+                          {holding.percentage}%{marker === null ? "" : ` ${marker}`})
                         </span>
                         {/* Design note #394: blank, not a dash. */}
                         <span style={styles.ownershipNum} role="cell" />
@@ -1606,6 +1640,12 @@ export function StockRoundPanel({
   onSelectParValue,
   onBuyShare,
   onSellShares,
+  /* Design note #799: destructured at last. These three were declared on `StockRoundPanelProps`, forwarded
+     from `CorporationRoster` to `CompanyActions`, and asked for by `App` -- and never taken out of `props`
+     here, so the value stopped one component short of the button that needed it. */
+  purchaseBlockFor,
+  saleBlockFor,
+  salePriceAfter,
   sessionReady,
   isMyTurn,
   hotseat = false,
@@ -1724,6 +1764,37 @@ export function StockRoundPanel({
         onSelectParValue={onSelectParValue}
         onBuyShare={onBuyShare}
         onSellShares={onSellShares}
+        /* ==================================================================
+           DESIGN NOTE 799: THREE INTERFACES DECLARED IT AND NOBODY PASSED IT
+           ==================================================================
+
+           REPORTED: "P1 is at max certificate limit for B&O, but when they open the B&O corp card on a Stock
+           Round, the Buy 1 Share button is not grayed out. When they click it, the activity log correctly
+           REFUSED the action."
+
+           THE PANEL AND THE REDUCER NEVER DISAGREED -- the panel was never asked. `purchaseBlockFor` is
+           declared on `StockRoundPanelProps`, on `CorporationRosterProps` and on `CompanyActionsProps`; the
+           roster forwards it to the actions; `App` passes it to the panel. This element, the one hop in the
+           middle, did not. So `CompanyActions` called `purchaseBlockFor?.(...) ?? null`, got `null`, and read
+           it as "no rule objects" -- which is what an optional callback with an optional-call operator says
+           when it is absent.
+
+           #712 SAID IT HAD DONE THIS. "Enforce them on the panel and in the reducer" -- and the reducer half
+           landed, which is why the log said REFUSED. The panel half was written, typed, threaded through two
+           components, and never connected. A missing optional prop is invisible to `tsc`, silent at runtime
+           and indistinguishable from a rule that simply does not fire.
+
+           WHICH IS WHY THIS IS THE THIRD REPORT FROM ONE CAUSE: #778's phantom purchase in the log, #784's
+           "no notification that the player was at certificate limit", and now the button itself. I read the
+           first two as a panel/reducer disagreement and wrote that down twice. They agreed all along; one of
+           them was simply never consulted.
+
+           `saleBlockFor` AND `salePriceAfter` ARE WIRED HERE FOR THE SAME REASON -- both are declared on all
+           three interfaces and neither was passed, so the sell side had the identical hole. Nobody has
+           reported it yet, which is not evidence that it works. */
+        purchaseBlockFor={purchaseBlockFor}
+        saleBlockFor={saleBlockFor}
+        salePriceAfter={salePriceAfter}
         controlsDisabled={controlsDisabled}
         controlsBlockedReason={controlsBlockedReason}
         actingSeatColor={actingSeatColor}
@@ -1752,8 +1823,13 @@ export default StockRoundPanel;
 /* Design note #466: wide enough for the longest value it can hold -- was "9 (100%)" at 68px.
    Design note #780 widened it for "9 (100% max)", the new longest, because the report asked for exactly
    this: "make sure to leave enough room on that column for it to live on one line instead of spilling into
-   a second". The name column is `minmax(0, 1fr)` and ellipsises, so it absorbs the difference. */
-const OWNERSHIP_NUM_WIDTH = "92px";
+   a second". The name column is `minmax(0, 1fr)` and ellipsises, so it absorbs the difference.
+   Design note #791: "tied" is one letter longer than "max" and does NOT extend the longest cell, because a
+   tie cannot occur above 50% -- two players sharing the largest holding is at most 50% each. So the widest
+   pair is `9 (100% max)` and `4 (50% tied)`, both twelve characters (`holdingMarkers.ts` derives this rather
+   than asserting it). Nudged to 100px anyway: the COUNT matches and the letterforms do not, and eight pixels
+   of slack is cheaper than re-measuring a proportional font against a fixed cell. */
+const OWNERSHIP_NUM_WIDTH = "100px";
 const OWNERSHIP_GRID = `minmax(0, 1fr) ${OWNERSHIP_NUM_WIDTH} ${OWNERSHIP_NUM_WIDTH}`;
 
 const styles: Record<string, React.CSSProperties> = {
@@ -2226,11 +2302,20 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: OWNERSHIP_NUM_WIDTH,
     whiteSpace: "nowrap",
   },
-  /* Design note #780: WEIGHT AND INK, not one or the other. Bold alone is easy to miss in a column of
-     figures; colour alone is #732's rule against a distinction a colour-blind player cannot read. Amber
-     because nothing has gone WRONG -- the player has simply run out of room, which is a binding rule rather
-     than an error. */
-  ownershipNumCapped: { fontWeight: 800, color: "#d8a53a" },
+  /* Design note #789: THE WORD IS THE MARKER, and #780's bold-plus-amber is gone.
+     REPORTED: "I'm not sure '5 (60% max)' needs to be bolded and turned amber. One counter against the bold
+     is that the display already renders the player's holdings in bold; a counter to the amber is that the
+     active player's highlight is a yellow box, so amber on it is somewhat odd."
+     BOTH LAND, AND THE SECOND IS THE ONE I SHOULD HAVE CAUGHT. #421 highlights the reader's own row in a warm
+     box -- so the row a player looks at FIRST is exactly where an amber figure had the least contrast and the
+     most competition. A signal that is weakest on the row it matters most on is not a signal.
+     THE BOLD WAS ALSO REDUNDANT: `ownershipRow` already carries the holdings at weight, so #780's "bold is
+     easy to miss in a column of figures" was arguing against a column this is not.
+     AND TEXT BEATS BOTH ON #732's OWN TERMS. That note says colour alone is not a distinction every player
+     can read; "max" is a word, which every player can read and no palette can clash with. Losing the styling
+     makes the marker MORE accessible rather than less -- the rare case where the smaller change is also the
+     better one. The style key is deleted rather than left unused, per #772: a `Record<string, CSSProperties>`
+     hides an orphan from both `tsc` and ESLint. */
   /* Design note #378: the line between shares nobody owns and shares
      somebody does. Reset from the browser default, which is an inset 3D
      bevel that reads as a separator between SECTIONS rather than as a rule

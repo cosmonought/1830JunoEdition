@@ -17,13 +17,18 @@
 import React from "react";
 
 import { TrainChips } from "../components/TrainBadges";
+import { RouteChipDetail } from "../components/RouteChipDetail";
 import PrivatePowerPanel, {
   type PrivateAbility,
   type PrivateAbilityAction,
 } from "../components/PrivatePowerPanel";
 // Design note #623: `RunRoutesButton` joins them -- the step's finishing
 // action belongs on the bar that follows the player down the page.
-import { RoutePlannerPanel, AutoRouteButton, RunRoutesButton } from "../components/RoutePlannerPanel";
+/* Design note #802: `RoutePlannerPanel` itself is no longer imported -- the chip detail replaced it. The
+   FILE stays, and deliberately: it exports `AutoRouteButton` and `RunRoutesButton`, which the bar's button
+   row still renders, and `TrainRouteDraft`, which is the shape the shell, the map and the new strip all
+   speak. Deleting the component would take three live exports with it. */
+import { AutoRouteButton, RunRoutesButton } from "../components/RoutePlannerPanel";
 // Design note #715: the private-purchase panel, embedded rather than modal.
 import { ProposePrivatePurchase } from "../components/PrivateTradePanel";
 import TrainPurchasePanel, {
@@ -102,6 +107,15 @@ interface ActionBarButton {
   disabled?: boolean;
   title?: string;
 }
+
+/** Design note #805: the herald's height, in one place because TWO things now depend on it.
+ *
+ *  The corporation card is two columns of two rows. On the left, the herald sits above the full name; on the
+ *  right, the treasury sits above the president. The president lands on the full name's line ONLY IF the
+ *  right column's first row is exactly as tall as the herald -- which is a relationship, not a coincidence,
+ *  and the sort of thing that survives about one refactor when it is written as `24` in two places.
+ *  A number rather than a style key because `appStyles.ts` cannot see the `size` prop this is passed to. */
+const CORPORATION_HERALD_PX = 24;
 
 
 
@@ -393,8 +407,10 @@ export default function ContextualActionBar({
      *  corporation's controls, and that is an identity comparison -- two
      *  seats can share a truncated label, so the label cannot answer it. */
     presidentAddress: string | null;
-    /** Design note #326: the president's personal cash, for the tooltip. */
-    presidentCash: number | null;
+    /* Design note #806: `presidentCash` is GONE, and #326's figure with it -- see the render site for the
+       argument. The prop had exactly one consumer, the tooltip, so leaving it declared would be a value the
+       shell computes every render for nobody: #660a's dead `eligiblePrivatesForPurchase` in miniature, and
+       invisible to both `tsc` and ESLint because an unread prop is legal. */
     treasury: number;
     /** Design note #237: the whole allowance, one entry per token, with its
      *  own escalating price. Replaces the `stationsLeft`/`stationLimit`
@@ -588,6 +604,89 @@ export default function ContextualActionBar({
    *  orientation rows and keeps only what is needed while reading the map. */
   const [actionBarRef, condensed, mayPin] = useCondensedWhenPinned();
 
+  /* ==================================================================
+   *  DESIGN NOTE 792: THE JUMP BUTTON COMES BACK, AND SO DOES ITS REASON
+   * ==================================================================
+   *
+   * REPORTED: "During the Buy Trains action, there is no 'Buy Trains' button on the sticky to scroll them to
+   * the subpanel. The only button on the sticky Action Bar is 'End Turn,' which signals the wrong thing to a
+   * player who has to buy a train this subphase."
+   *
+   * THIS IS #491's BUTTON, WHICH #508 RETIRED, AND BOTH WERE RIGHT AT THE TIME. #491 added a jump because the
+   * purchase panel lived below a sticky bar and scrolled away from it. #508 removed the cause instead by
+   * moving the panel INSIDE the bar -- "sticky by inheritance, with nothing to jump to" -- and deleted the
+   * button as redundant. Correct, until #720 taught the bar to unpin itself when it grew past half the
+   * viewport, which the depot table reliably does; and #785 then moved the panel back out to stop that.
+   * So the panel is a sibling below the bar again, and the jump has a job again.
+   *
+   * WHAT THE BAR WAS SAYING WITHOUT IT is the sharper half of the report. On the Hardware step the bar held
+   * exactly one control, "End Turn" -- and #293 disables it while a corporation is trainless, so a player who
+   * MUST buy saw a single greyed button and no route to the thing they had to do. A bar whose only offer is
+   * an exit reads as "you are finished here" at the one moment that is least true.
+   *
+   * A SCROLL IS NOT AN ACTION, and the label says so: it names the destination rather than the purchase, so
+   * it cannot be mistaken for the buy itself. #263's "two controls for one outcome" objection -- which #715
+   * used to refuse a Buy Private button -- does not apply to a control that dispatches nothing.
+   *
+   * DESIGN NOTE 793: THE ARROW IS GONE, AND IT WAS WRONG BEFORE IT WAS UNNECESSARY. The first draft labelled
+   * these "Buy Trains \u2193". Asked whether it should point UP instead, since the panel is often above a
+   * scrolled-down player -- and the answer is that the button cannot know. The panel sits below the bar in
+   * DOCUMENT order and anywhere at all relative to the VIEWPORT, which is the only direction a player
+   * experiences. A glyph asserting one of them is a surface stating something it has not got the information
+   * to state, which is the shape of most of the bugs this project has found.
+   *
+   * AND THE SECOND HALF OF THAT REPORT SETTLES IT: "just clicking the button to auto scroll to the panel
+   * seems adequate". It is. The arrow was decorating a claim rather than making one, and the `title` already
+   * says "scrolls to ... below" -- prose can hedge a direction; an arrowhead cannot. */
+  const stepPanelRef = React.useRef<HTMLDivElement>(null);
+
+  /* ==================================================================
+   *  DESIGN NOTE 797: A SCROLL BUTTON FOR A PANEL ALREADY ON SCREEN
+   * ==================================================================
+   *
+   * REPORTED: "when a player is scrolled up, the Action Bar should still show 'Buy Trains' and 'End Turn,'
+   * but 'Buy Trains' should be grayed out when there's no need to scroll them to the subpanel."
+   *
+   * A CONTROL THAT DOES NOTHING SHOULD LOOK LIKE ONE. `block: "nearest"` already makes the click harmless
+   * when the panel is visible -- it scrolls by zero -- and a button that responds to a press by doing nothing
+   * is indistinguishable from a broken one. The greying is the difference between "no need" and "no effect".
+   *
+   * MEASURED RATHER THAN GUESSED, because the alternative is comparing scroll offsets against element
+   * heights, which is the arithmetic `IntersectionObserver` exists to replace and gets wrong at every
+   * zoom level and on every rubber-band scroll.
+   *
+   * UNMEASURABLE MEANS ENABLED, which is #720's rule pointed the same way: before the first callback, in a
+   * test environment, or in a browser without the API, the button stays live. Offering a scroll that turns
+   * out to be unnecessary costs a player nothing; withholding one they needed strands them, and stranding
+   * them at the Buy Trains step is exactly what was reported one note ago. */
+  const [stepPanelInView, setStepPanelInView] = React.useState(false);
+  React.useEffect(() => {
+    const node = stepPanelRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        /* HEIGHT AS WELL AS INTERSECTION. The wrapper renders on every step and holds a panel on two of
+           them, so on the other steps it is a zero-height div sitting wherever the layout puts it -- which
+           an observer will happily report as intersecting. `isIntersecting` alone would grey a button that
+           has a real panel to reach. */
+        setStepPanelInView(entry.isIntersecting && entry.boundingClientRect.height > 0);
+      },
+      /* A quarter of the panel is enough to count as "you can see it". Requiring all of it would keep the
+         button live for a depot table taller than the viewport, which is precisely when scrolling to the
+         TOP of it is still useful. */
+      { threshold: 0.25 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollToStepPanel = React.useCallback(() => {
+    /* `block: "start"` under a sticky bar would tuck the panel's heading behind it; `nearest` scrolls the
+       least that brings it into view, which on a short page is nothing at all -- the honest outcome when the
+       panel was already visible. */
+    stepPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, []);
+
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
      same -1 case `OperatingSubPhaseStepper` guards, and the same answer:
@@ -706,8 +805,27 @@ export default function ContextualActionBar({
         /* Design note #715: NO BUTTON. It opened a modal, and the panel that modal held now renders below --
            so the button's only remaining job would be scrolling to something already on screen.
            #691 removed the Buy Trains button for the same reason one step later, and #263's argument applies
-           here too: two controls for one outcome implies a distinction a player then has to work out. */
-        contextualButtons = [];
+           here too: two controls for one outcome implies a distinction a player then has to work out.
+           DESIGN NOTE 792 REINSTATES IT, and the premise that failed is the parenthetical: "already on
+           screen". That was true while #508 had the panel inside the sticky bar; #720 then unpinned the bar
+           whenever the panel made it tall, and #785 moved the panel out to fix that. It is below the fold
+           again, so the jump has a job again.
+           #263 STILL HOLDS, because this is not a second control for one outcome: it scrolls and dispatches
+           nothing, and its label names the destination rather than the purchase. */
+        contextualButtons = privatePurchase
+          ? [
+              {
+                key: "go-to-privates",
+                label: "Buy Private Company",
+                onClick: scrollToStepPanel,
+                // Design note #797: same rule, same panel wrapper.
+                disabled: stepPanelInView,
+                title: stepPanelInView
+                  ? "The Buy Private Company panel is already on screen."
+                  : "Scrolls to the Buy Private Company panel below.",
+              },
+            ]
+          : [];
         break;
       case "Tokens":
         contextualButtons = [
@@ -782,6 +900,26 @@ export default function ContextualActionBar({
           // exit and precisely when 1830 refuses it, so the button stays disabled on an empty treasury too and the
           // tooltip names the president's purchase rather than implying the step is stuck.
           // The gate is "owns a train", not "has bought one this turn" -- one acquired by trade satisfies the rule.
+          /* Design note #792: the step's own destination, first -- an obligation should be offered before an
+             exit. Only when the panel is actually on screen to be scrolled to. */
+          ...(trainPurchase
+            ? [
+                {
+                  key: "go-to-trains",
+                  /* Design note #793: one label, no glyph. The obligation lives in the `title` and in End
+                     Turn's greying beside it; the button's job is to be findable and to say where it goes. */
+                  label: "Buy Trains",
+                  onClick: scrollToStepPanel,
+                  // Design note #797: nothing to scroll to means nothing to press.
+                  disabled: stepPanelInView,
+                  title: stepPanelInView
+                    ? "The Buy Trains panel is already on screen."
+                    : mustBuyTrain
+                      ? "This corporation must own a train. Scrolls to the Buy Trains panel below."
+                      : "Scrolls to the Buy Trains panel below.",
+                },
+              ]
+            : []),
           {
             key: "end-turn",
             label: "End Turn",
@@ -849,7 +987,7 @@ export default function ContextualActionBar({
      Hiding the button alone would leave hazard (1) intact -- the mode would just become unreachable while
      still ON -- so the owning component force-clears `routeSelectMode` when this condition goes false. */
   /* Design note #691: `mayActThisTurn` folded in here rather than repeated at three call sites -- this one flag
-     gates the Auto Route button, the Run Routes button and `RoutePlannerPanel` below, which are the whole of the
+     gates the Auto Route button and the Run Routes button, which after #802 are the whole of the
      Run Routes step's interface. Three separate conditions is three chances to miss one. */
   const showRouteToggle =
     roundType === "OperatingRound" && orSubPhase === "Routes" && mayActThisTurn;
@@ -876,6 +1014,44 @@ export default function ContextualActionBar({
    * carries `mayActThisTurn` so a watcher's buttons are disabled by the panel's own rule rather than by a
    * second one written here. */
   const showRouteReadout = roundType === "OperatingRound" && orSubPhase === "Routes";
+
+  /* ==================================================================
+   *  DESIGN NOTE 803: A GATE THAT WAS PROVIDED BY NESTING
+   * ==================================================================
+   *
+   * REPORTED as a regression: "now in the Stock Round following the transition to Phase 3, the 'Purchase a
+   * Private Company' subpanel shows up under the player Action bar. If it matters, it shows that the last
+   * corporation that operated is now proposing a purchase."
+   *
+   * MINE, FROM #785. Those panels used to sit INSIDE the bar's Operating Round branch, so `roundType ===
+   * "OperatingRound"` was true by construction and their own conditions never had to say it. Lifting them out
+   * to stop the bar unpinning itself moved them out of that branch too -- and their conditions, which read
+   * only `orSubPhase === "BuyPrivate"`, were suddenly asking an unqualified question.
+   *
+   * AND `orSubPhase` LIES OUTSIDE AN OPERATING ROUND, which is what made the gap visible rather than
+   * harmless. `settleOperatingCursor` clears `operating_sub_phase` when the round ends, so the shell falls
+   * back to `liveOrSubPhase` -- local state still holding whatever step the last corporation was on. Hence
+   * the second sentence of the report: the panel names the corporation that operated last, because that is
+   * genuinely what the stale cursor still points at.
+   *
+   * ONE DERIVED VALUE RATHER THAN TWO MORE CONJUNCTIONS. `orStep` is `null` outside an Operating Round, so
+   * every step test is answering the qualified question whether or not its author remembered to ask it --
+   * which is the property the nesting used to provide for free and the reason this is not just `&& roundType
+   * === "OperatingRound"` pasted twice. */
+  const orStep = roundType === "OperatingRound" ? orSubPhase : null;
+
+  /* Design note #802: which chip is open. LOCAL to the bar and not lifted: it is one viewer's reading
+     position, not a fact about the game, and the shell already owns the two cursors that ARE shared (the
+     hovered train and the active one). Cleared when the step ends so a chip cannot stay open into a round
+     that has no routes in it. */
+  const [openTrainIndex, setOpenTrainIndex] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (!showRouteReadout) setOpenTrainIndex(null);
+  }, [showRouteReadout]);
+  const openDraft =
+    openTrainIndex === null
+      ? null
+      : (trainDrafts.find((draft) => draft.trainIndex === openTrainIndex) ?? null);
 
   /* Design note #278: the Dividends step's Pay-or-Withhold binary, derived here because both halves are
      already props and a second boolean saying what they jointly mean can disagree with them.
@@ -1163,7 +1339,7 @@ export default function ContextualActionBar({
                   <>
                     <CorporateLogo
                       ticker={activeCorporation.ticker}
-                      size={24}
+                      size={CORPORATION_HERALD_PX}
                       color={corporationBarInk.ink}
                       title={activeCorporation.fullName ?? activeCorporation.ticker}
                       fallbackStyle={styles.orContextTicker}
@@ -1202,46 +1378,112 @@ export default function ContextualActionBar({
 
             {activeCorporation && (
               <span style={styles.orContextFacts}>
-                {/* Design note #673: THE PROVISIONAL TREASURY. While a tile lay is being previewed, this reads
-                   "$1000 → $920" -- where the corporation stands and where the pending lay leaves it.
-                   THE ARROW, NOT A LONE CHANGED NUMBER. A single amber "$920" is the same failure the dividend
-                   report named (#670): a figure only reads as a change to somebody who had memorised the one
-                   before it. Both ends, and the reader does no arithmetic.
-                   IT IS NOT A COMMITMENT. The lay has not happened -- the player still has a tick and a cross
-                   above the hex -- so the pending figure is styled as pending and the standing one is left
-                   legible beside it rather than replaced. */}
-                <span
-                  style={styles.orContextFact}
-                  title={
-                    pendingTreasury
-                      ? `Treasury $${activeCorporation.treasury} now. The previewed tile lay costs $${pendingTreasury.fee}, leaving $${pendingTreasury.after}. Nothing is spent until you confirm.`
-                      : "Everything this corporation can spend this turn."
-                  }
-                >
-                  <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
-                    Treasury
-                  </span>
+                {/* Design note #805: THE FIRST FACT IS A COLUMN, AND THE PRESIDENT IS ITS SECOND ROW.
+                   REQUESTED: "the president information is currently the last item on a line in small font. I
+                   wonder if it would make sense to place it under the Treasury information on the same line as
+                   the corporation's full name, if possible? This would not add vertical space to the
+                   corporation card, but would keep the president identifier right by the name of the
+                   corporation."
+                   THE HEIGHT REASONING IS THE REPORT'S OWN AND IT IS RIGHT. The identity block is two lines
+                   tall (herald over full name) and this rail was one, so the card's height has always been set
+                   by the left column and there is a spare line of it on the right. A second row here spends
+                   slack that already existed.
+                   IT ALSO ANSWERS #671 ON #671's TERMS. That note moved the president off the name line
+                   because "the full name is the LONGEST string here and the president's name sat downstream of
+                   it. Every company shifted the crown to a different x" -- and then parked it at the END of a
+                   WRAPPING rail, which is the least stable position on the card: the crown moved with the
+                   number of privates, the length of the fleet and the window width. Anchored under the
+                   treasury it has a landmark; whatever x the rail starts at, the crown is under the money.
+                   WHAT IS GIVEN UP, stated rather than glossed: an absolute fixed x is still not available,
+                   because the rail begins where the identity column ends and that column is as wide as the
+                   full name. #671 wanted one and could not have one either. */}
+                <span style={styles.orContextTreasuryStack}>
+                  {/* Design note #673: THE PROVISIONAL TREASURY. While a tile lay is being previewed, this
+                     reads "$1000 → $920" -- where the corporation stands and where the pending lay leaves it.
+                     THE ARROW, NOT A LONE CHANGED NUMBER. A single amber "$920" is the same failure the
+                     dividend report named (#670): a figure only reads as a change to somebody who had
+                     memorised the one before it. Both ends, and the reader does no arithmetic.
+                     IT IS NOT A COMMITMENT. The lay has not happened -- the player still has a tick and a
+                     cross above the hex -- so the pending figure is styled as pending and the standing one is
+                     left legible beside it rather than replaced. */}
                   <span
-                    style={{
-                      ...styles.orContextFactValue,
-                      // Dimmed to the muted ink while pending: the standing figure is
-                      // about to stop being the answer, and the arrow's right-hand side
-                      // is what the player is deciding about.
-                      color: pendingTreasury ? corporationBarInk.inkMuted : corporationBarInk.ink,
-                    }}
+                    /* Design note #805: as tall as the herald opposite it, which is what puts the row BELOW
+                       this one on the full name's line. Without it the treasury's own line height decides,
+                       and the two columns' second rows drift apart by a few pixels per type-scale change. */
+                    style={{ ...styles.orContextFact, minHeight: `${CORPORATION_HERALD_PX}px` }}
+                    title={
+                      pendingTreasury
+                        ? `Treasury $${activeCorporation.treasury} now. The previewed tile lay costs $${pendingTreasury.fee}, leaving $${pendingTreasury.after}. Nothing is spent until you confirm.`
+                        : "Everything this corporation can spend this turn."
+                    }
                   >
-                    ${activeCorporation.treasury}
-                  </span>
-                  {pendingTreasury && (
+                    <span style={{ ...styles.orContextFactLabel, color: corporationBarInk.inkMuted }}>
+                      Treasury
+                    </span>
                     <span
-                      style={{ ...styles.orContextTreasuryPending, color: corporationBarInk.ink }}
-                      /* A live region: the figure changes as the player moves between hexes without
-                         anything being focused or clicked, which is exactly the update assistive tech
-                         has no other way to learn about. */
-                      aria-live="polite"
-                      aria-label={`After the previewed tile lay, $${pendingTreasury.after}`}
+                      style={{
+                        ...styles.orContextFactValue,
+                        // Dimmed to the muted ink while pending: the standing figure is
+                        // about to stop being the answer, and the arrow's right-hand side
+                        // is what the player is deciding about.
+                        color: pendingTreasury ? corporationBarInk.inkMuted : corporationBarInk.ink,
+                      }}
                     >
-                      {"→"} ${pendingTreasury.after}
+                      ${activeCorporation.treasury}
+                    </span>
+                    {pendingTreasury && (
+                      <span
+                        style={{ ...styles.orContextTreasuryPending, color: corporationBarInk.ink }}
+                        /* A live region: the figure changes as the player moves between hexes without
+                           anything being focused or clicked, which is exactly the update assistive tech
+                           has no other way to learn about. */
+                        aria-live="polite"
+                        aria-label={`After the previewed tile lay, $${pendingTreasury.after}`}
+                      >
+                        {"→"} ${pendingTreasury.after}
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Design note #671: NO CAPTION, unlike its four neighbours. The crown IS the caption -- it
+                     is the mark every other surface in this app uses for exactly this fact (`PlayerCards`
+                     #567 settled the same question the same way), and "PRESIDENT [crown] Ada" says it twice.
+                     The one thing that would justify the word is if the crown were ambiguous here, and next
+                     to a rail of money and trains it is not.
+                     Design note #805: and it is now directly under the word "Treasury", which is a caption --
+                     so the column reads "Treasury / [crown] Ada" and the absence of a second caption is what
+                     keeps those two from looking like a label and its value. */}
+                  {/* Design note #806: THE CASH TOOLTIP IS GONE, AND THE FIGURE IS NOT.
+                     REQUESTED: "I believe we can remove the tooltip on the President's treasury/cash since
+                     we've added this information at the bottom panel of the screen."
+                     CHECKED RATHER THAN TAKEN ON TRUST, because the whole point of #326 was that this figure
+                     existed on no Operating Round surface: `PlayerCashStrip` (#670) renders a row per seat
+                     under the corporation panel, headed "Cash", for the whole table. Every president's cash
+                     is on screen, visibly, all round -- which is strictly more than a hover on one name.
+                     #326's ARGUMENT IS SATISFIED, NOT OVERRULED. It wanted the number attached to a person
+                     rather than to "the acting turn"; the strip attaches it to every person by name. What
+                     made it a tooltip was that there was nowhere to put it, and there is now.
+                     AND #805 MADE THE CASE FOR REMOVING IT WITHOUT NOTICING. One turn ago I argued this
+                     tooltip was "MORE load-bearing" once the president sat directly under the treasury,
+                     because the two purses must not read as one figure. A hidden second number under a
+                     visible first one is exactly the arrangement that invites that reading. A name is a name.
+                     THE UNDERLINE GOES WITH IT: a dotted underline is a promise that hovering says something,
+                     so leaving it over a tooltip-free element would be a control that refuses.
+                     THE REMOVED STRING, for the record, was "President's Cash: $420" -- #743 corrected its
+                     wording from "President's Personal Treasury" and #743's harness has been asserting on
+                     this exact sentence since. The vocabulary RULE it was protecting is a sweep over every
+                     surface and is untouched; what changes is which surface the example points at. */}
+                  {activeCorporation.presidentLabel && (
+                    <span
+                      style={{
+                        ...styles.orContextPresident,
+                        color: corporationBarInk.inkMuted,
+                      }}
+                    >
+                      {/* Design note #552: our own crown, not U+1F451 -- the same drawing every other surface
+                          uses. */}
+                      <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
+                      {activeCorporation.presidentLabel}
                     </span>
                   )}
                 </span>
@@ -1301,6 +1543,16 @@ export default function ContextualActionBar({
                       interactive={orSubPhase === "Routes"}
                       highlightedTrainIndex={highlightedRouteIndex}
                       onHighlightTrain={onHighlightRoute}
+                      /* Design note #802: clicking a chip opens that train's route under the row. Available
+                         to every viewer -- the chips and the drafts both are -- which is what answers "the
+                         train chips with their respective revenue values are still not displaying on other
+                         players' Action bars". */
+                      selectedTrainIndex={openTrainIndex}
+                      onSelectTrain={(index) => {
+                        setOpenTrainIndex((open) => (open === index ? null : index));
+                        // The acting player's own cursor follows the chip they opened; a watcher has none.
+                        if (mayActThisTurn) onSelectRouteTrain?.(index);
+                      }}
                     />
                   )}
                   {/* Design note #248: the limit, beside the fleet it caps. The chips say WHICH trains; this says how much
@@ -1374,51 +1626,15 @@ export default function ContextualActionBar({
                   </span>
                 )}
 
-                {/* Design note #671: THE PRESIDENT, AT THE END OF THE RAIL.
-                   Moved off the name line (see #589 above for what it was doing there). LAST rather than first,
-                   because this rail is ordered by what a president acts ON -- treasury, then tokens, then the fleet
-                   and its ceiling -- and whose company it is decides nothing during the turn. It is identity, and
-                   identity belongs at the end of a rail of figures rather than in front of them.
-                   NO CAPTION, unlike its four neighbours. The crown IS the caption -- it is the mark every other
-                   surface in this app uses for exactly this fact (`PlayerCards` #567 settled the same question the
-                   same way), and "PRESIDENT [crown] Ada" says it twice. The one thing that would justify the word is
-                   if the crown were ambiguous here, and next to a rail of money and trains it is not. */}
-                {activeCorporation.presidentLabel && (
-                  <span
-                    style={{
-                      ...styles.orContextFact,
-                      ...styles.orContextPresident,
-                      /* `orContextFact`'s 6px is the gap between a CAPTION and its
-                         value. There is no caption here, and the crown carries its
-                         own 3px, so inheriting it would set the crown 9px off a name
-                         it belongs against. */
-                      gap: 0,
-                      color: corporationBarInk.inkMuted,
-                      ...(activeCorporation.presidentCash !== null
-                        ? { cursor: "help", textDecoration: "underline dotted 1px" }
-                        : {}),
-                    }}
-                    /* Design note #326: THE PERSONAL PURSE, ON THE PERSON. Where #325's figure went -- attached to the
-                       president's NAME, so a number beside a crown is a fact about that human, where the same number in
-                       the rail below was a fact about "the acting turn", which in an Operating Round means the company.
-                       A tooltip rather than visible text because it is reference: it answers "can they cover the
-                       emergency buy" when asked. The dotted underline is what makes it discoverable -- an unmarked
-                       tooltip is one nobody hovers. */
-                    title={
-                      activeCorporation.presidentCash !== null
-                        /* Design note #743: "Cash", not "Treasury". This named a PLAYER'S money with the corporation's
-                             word -- and did it in the one place the two sit closest together, where an
-                             emergency purchase is deciding between them. */
-                          ? `President's Cash: $${activeCorporation.presidentCash}`
-                        : undefined
-                    }
-                  >
-                    {/* Design note #552: our own crown, not U+1F451 -- the
-                        same drawing every other surface uses. */}
-                    <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
-                    {activeCorporation.presidentLabel}
-                  </span>
-                )}
+                {/* Design note #671: THE PRESIDENT WAS HERE, AT THE END OF THE RAIL, and #805 moved it under
+                   the treasury. #671's placement argument was that the rail "is ordered by what a president
+                   acts ON -- treasury, then tokens, then the fleet and its ceiling -- and whose company it is
+                   decides nothing during the turn", so identity belonged after the figures.
+                   THAT ORDERING SURVIVES; what it could not survive was WRAPPING. "Last" in a rail whose
+                   length changes with the number of privates a corporation owns is not a position at all --
+                   the crown moved down a line the moment a company bought its second private. Under the
+                   treasury it keeps the same claim (identity is not a figure) while having somewhere fixed to
+                   be, and it is beside the corporation's name again, which is what was asked for. */}
               </span>
             )}
           </div>
@@ -1595,17 +1811,26 @@ export default function ContextualActionBar({
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
               )}
-              {/* Design note #707/#619: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
-                  Dividends silently, which was survivable there because the two buttons it leaves behind are
-                  self-explanatory. Here the player has just been offered Auto Route and a manual draft, and a
-                  Skip that is simply absent reads as a panel that failed rather than as a rule.
-                  IT NAMES NO FIGURE. The first draft quoted `maxRouteRevenue`, which reads as a requirement
-                  to EARN it -- and corporations are not required to run the best route they can reach. The
-                  probe is an existence proof; the sentence says so by ending on the president's discretion
-                  rather than on an amount. */}
-              {mayActThisTurn && routeObligation && (
-                <span style={styles.orPanelObligation}>{routeObligation}</span>
-              )}
+              {/* Design note #707/#619 said: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
+                  Dividends silently, and this note argued that here "a Skip that is simply absent reads as a
+                  panel that failed rather than as a rule".
+                  ==================================================================
+                   DESIGN NOTE 800: THE SENTENCE IS GONE; THE RULE IT DESCRIBED IS NOT
+                  ==================================================================
+                  REPORTED: "There's a string on the action panel: 'B&O has a route it can run, so it must.
+                  Which route is up to you.' Get rid of this, it's unnecessary to state what the UI already
+                  enforces. For 'Which route is up to you,' we will include a section of the future lightboxing
+                  tutorial, so it can go too."
+                  #707's WORRY WAS ABOUT A GAP AND THE GAP CLOSED. It was written when Skip's absence left an
+                  unexplained hole; the step now shows a route planner, an Auto Route control and a Run button
+                  in that space, so nothing reads as a panel that failed. A caption explaining why a button a
+                  player never saw is missing is prose about an absence they cannot perceive.
+                  AND THE SECOND SENTENCE HAS A BETTER HOME. "Which route is up to you" is a RULE, not a
+                  status -- it belongs in the tutorial being built, where a player meets it once, rather than
+                  on a bar that repeats it every Operating Round for the rest of the game.
+                  `routeObligation` SURVIVES AS THE GATE. It still withdraws Skip four lines above (#41),
+                  which is the enforcement the report calls "what the UI already enforces" -- deleting the
+                  predicate along with its sentence would have removed the rule while satisfying the request. */}
               {/* The one line that replaces the whole control set for a
                   player who is not acting. Without it the centre column is
                   simply empty, which reads as a panel that failed to load
@@ -1909,7 +2134,10 @@ export default function ContextualActionBar({
              makes the greyed button feel like a rule rather than a malfunction. */}
           {/* Design note #691: the obligation is the ACTING president's. #619 wrote it to stop an errant click on
               a greyed button; on a screen with no button it is a rule addressed to somebody else. */}
-          {mayActThisTurn && orSubPhase === "Hardware" && mustBuyTrain && (
+          {/* Design note #803: `orStep` here too. This one is still inside the Operating Round branch and is
+              therefore already safe -- switched anyway so every step test in the file reads the same way. A
+              rule that holds only where somebody remembered to nest it is the rule that broke. */}
+          {mayActThisTurn && orStep === "Hardware" && mustBuyTrain && (
             <div style={styles.mustBuyTrainNotice} role="status">
               This corporation owns no train and has a route to run — it must buy one before the
               turn can end. If the treasury cannot cover the cheapest train, the president pays
@@ -2240,13 +2468,16 @@ export default function ContextualActionBar({
           trade #720 identified and twice refused to solve with an inner scrollbar (#13/item 1 removed one;
           #655 found a `maxHeight` on this very bar was "the bug it warned about"). A player scrolls the page;
           the controls stay with them. */}
+      {/* Design note #792: ONE WRAPPER, so the bar's jump button has a single destination whichever step is
+          live. Both panels are mutually exclusive by sub-phase, so this holds exactly one at a time. */}
+      <div ref={stepPanelRef}>
       {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
           button are the largest block in this bar, and on three of four screens they were furniture. */}
       {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
           be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
           Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
           present -- so the two purchase steps of a turn have one shape. */}
-      {mayActThisTurn && orSubPhase === "BuyPrivate" && privatePurchase && (
+      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (
         <ProposePrivatePurchase
           embedded
           open
@@ -2260,7 +2491,7 @@ export default function ContextualActionBar({
           onClose={() => undefined}
         />
       )}
-      {mayActThisTurn && orSubPhase === "Hardware" && trainPurchase && (
+      {mayActThisTurn && orStep === "Hardware" && trainPurchase && (
         <TrainPurchasePanel
           depot={trainPurchase.depot}
           buyer={trainPurchase.buyer}
@@ -2279,6 +2510,7 @@ export default function ContextualActionBar({
           condensed={condensed}
         />
       )}
+      </div>
 
       {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
           ownership and on the round they may be used in. Renders nothing
@@ -2301,21 +2533,36 @@ export default function ContextualActionBar({
         onUseAbility={onUsePrivateAbility}
         controlsEnabled={sessionReady}
       />
+      {/* ==================================================================
+           DESIGN NOTE 802: THE PLANNER PANEL IS GONE; THE CHIP CARRIES THE ROUTE
+          ==================================================================
+
+          REQUESTED twice: "the Run Routes fixed subpanel can be completely done away with in exchange for the
+          ability to click the train chips and have the sticky Action bar expand slightly to list its route."
+
+          AND IT ANSWERS THE BUG BESIDE IT. "The train chips with their respective revenue values are still
+          not displaying on other players' Action bars" -- #787 tried to fix that by showing the whole panel
+          to watchers, which widened the audience for a surface that should not have been that size. The
+          figures a watcher wants are one train's, on demand. So are the acting player's.
+
+          THE CONTROLS SPLIT BY WHAT THEY ACT ON, which is the arrangement asked for: "Auto Route and Run in
+          the sticky bar beside the chips. Clear in the expanded chip panel?" Auto Route and Run are TURN
+          actions and were already in the button row (#623); Clear is a TRAIN action and travels with the
+          train it clears.
+
+          WHAT IS LOST WITH THE PANEL, stated rather than glossed: the all-trains-at-once view. A president
+          with three drafted routes now reads them one chip at a time. That is the trade the request makes
+          explicitly -- "players can click through each one to see what it's doing" -- and the running total
+          they used to get from the panel's footer is the figure the Dividends step opens with anyway. */}
       {showRouteReadout && (
-        <RoutePlannerPanel
-          drafts={trainDrafts}
-          activeTrainIndex={trainDrafts.length === 0 ? null : activeTrainIndex}
-          // Design note #9 there: transient, and NOT the active train.
-          highlightedTrainIndex={highlightedRouteIndex}
-          onHighlightTrain={onHighlightRoute}
-          onSelectTrain={onSelectRouteTrain}
+        <RouteChipDetail
+          draft={openDraft}
+          canClear={mayActThisTurn && sessionReady}
           onClearRoute={onClearRoute}
-          onRunRoute={onRunTrains}
-          ownsAnyTrain={ownsAnyTrain}
-          // Design note #787: a watcher reads the figures; the buttons stay the acting player's.
-          controlsEnabled={sessionReady && mayActThisTurn}
-          noTrainReason={NO_TRAIN_ROUTE_REASON}
-          clickFeedback={routeFeedback}
+          onClose={() => setOpenTrainIndex(null)}
+          /* #802: the panel's click feedback had nowhere else to go. A refused draft explaining itself here
+             beats it explaining itself nowhere, which is what deleting the panel would otherwise have done. */
+          feedback={mayActThisTurn ? routeFeedback : null}
         />
       )}
       {!sessionReady && (

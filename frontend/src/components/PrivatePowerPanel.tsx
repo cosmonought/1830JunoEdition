@@ -81,9 +81,21 @@ export interface PrivateAbility {
   /** Design note #441: whether the PRIVATE must be held by the viewer, or
    *  by the corporation currently operating. */
   scope: AbilityScope;
-  /** Design note #349: narrows to one Operating Round step. Omitted means
-   *  the whole round. */
-  subPhase?: OperatingSubPhase;
+  /* Design note #807: `subPhase` IS GONE FROM THE ABILITY, and this is what it did on its way out.
+   *
+   * REPORTED: "I was able to correctly use the Lay Track action and was bumped into the Place Station action,
+   * but the Special Power for Place Station is grayed out."
+   *
+   * THIS PANEL HAD TWO STEP GATES READING TWO DIFFERENT FIELDS. #782 moved the step onto the ACTION and
+   * taught the FILTER to read it -- correctly, and its own note says why: "`subPhase` sat on the ABILITY, and
+   * the D&H is one ability spanning two steps ... An ability-level field cannot express that." It then left
+   * the ability field in place, where `reason` was still reading it to decide whether to GREY the button.
+   * So on the Tokens step the D&H's `dh-token` action passed the filter (its own step matched) and was
+   * disabled by the reason (its ABILITY still said "Track"). On screen: the right button, in the right step,
+   * greyed out with a tooltip naming a step the player had already left.
+   *
+   * ONE FIELD, ONE READER. The step is a property of the action, and the filter is the only thing that asks
+   * it -- an action out of its step is not rendered at all, so there is no second question to answer. */
   /** Design note #349: hidden entirely outside its round rather than shown
    *  disabled. Set for powers whose round is far away when it is not the
    *  current one; left off where the wait is short enough that a disabled
@@ -108,10 +120,9 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     // Design note #441: "A railroad owning the CL may lay a tile on the
     // CL's hex" -- the corporation, not the player holding the certificate.
     scope: "corporation",
-    /* Design note #349: a tile lay is legal in ONE step of the round, and
-       the panel is hidden outside the round entirely -- a Stock Round has
-       no track step to be waiting for. */
-    subPhase: "Track",
+    /* Design note #349: a tile lay is legal in ONE step of the round, and the panel is hidden outside the
+       round entirely -- a Stock Round has no track step to be waiting for. The step now rides on the action
+       above (#782), which is the only place that can be right for a power spanning two steps (#807). */
     hideOutOfRound: true,
   },
   {
@@ -144,7 +155,10 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     description: DH_POWER_DESCRIPTION,
     phase: "OperatingRound",
     scope: "corporation",
-    subPhase: "Track",
+    /* Design note #807: THE LINE THAT GREYED THE FREE STATION. `subPhase: "Track"` was true of the D&H's
+       FIRST action and false of its second, and there is no single value that would have been right -- which
+       is the whole reason #782 moved the field onto the actions. Removing it here is the other half of that
+       move; the two actions above carry "Track" and "Tokens" and nothing else needs to know. */
     hideOutOfRound: true,
   },
   {
@@ -324,18 +338,19 @@ export function PrivatePowerPanel({
           company than the row that produced it. */}
       {abilityError && <p style={styles.abilityError}>{abilityError}</p>}
 
+      {/* Design note #807: `reason` IS GONE, AND BOTH OF ITS ARMS WERE DEAD OR WRONG.
+         It read:
+           `!inPhase  ? "Only usable during an Operating Round." : !inSubPhase ? "Only usable during the
+            {ability.subPhase} step..." : null`
+         THE ROUND ARM WAS UNREACHABLE. `owned` above filters on `roundType === entry.ability.phase`, so by
+         the time a row renders, `inPhase` is true by construction -- #470 made it so and this sentence was
+         never revisited. An arm that cannot fire still passes every test written for it (#788).
+         THE STEP ARM WAS THE REPORTED BUG. It asked the ABILITY's step while the filter asked the ACTION's,
+         and the D&H is the one power where those differ.
+         SO THERE IS NO THIRD GATE. An action reaches this map only if its own step is the current one, which
+         means the only remaining questions are the per-action block (`dhPower.ts`'s ordering) and whether it
+         has been spent. Both are below, and both are about the POWER rather than about the clock. */}
       {owned.map(({ ability, priv }) => {
-        const inPhase = roundType === ability.phase;
-        /* Design note #349: the subphase gate, which only applies inside
-           the right round. `undefined` means the whole round, so an
-           ability without one is in-step by definition. */
-        const inSubPhase =
-          ability.subPhase === undefined || orSubPhase === ability.subPhase;
-        const reason = !inPhase
-            ? `Only usable during ${ability.phase === "OperatingRound" ? "an Operating Round" : "a Stock Round"}.`
-            : !inSubPhase
-              ? `Only usable during the ${ability.subPhase} step of an Operating Round.`
-              : null;
         return (
           <div key={ability.privateId} style={styles.row}>
             <div style={styles.rowText}>
@@ -367,9 +382,11 @@ export function PrivatePowerPanel({
                 const used = usedAbilities.has(action.key);
                 /* Design note #725: the per-action reason wins over the generic "already used", because it is
                    the more specific true statement -- "lay the F16 tile first" tells a player what to do and
-                   "already used" would be a lie about a power they still hold. */
+                   "already used" would be a lie about a power they still hold.
+                   Design note #807: and it is now FIRST rather than second. `reason` used to sit in front of
+                   it and shadowed it whenever it fired -- so the one sentence that could tell a D&H president
+                   what to do next was unreachable in the step where they needed it. */
                 const blocked =
-                  reason ??
                   blockedActions?.[action.key] ??
                   (used ? "Already used this game." : null);
                 return (

@@ -28,6 +28,16 @@ export interface RoutePoint {
    *  so `routePointsToWaypoints` stays a pure rename of fields, and so adding that
    *  picker later changes ONE click handler rather than the payload shape. */
   cityNode?: number;
+  /** Design note #808: WHICH WAY THROUGH, carried at last.
+   *
+   *  `variant` names the authored rail chain and `bypass` says that chain misses the hex's revenue centre.
+   *  #737 put both on `TracedHex` and taught `sandboxRouteBreakdown` to read `bypass`; `RoutePoint` -- which
+   *  sits between them, and is what every drafted route actually is -- had neither. So `App` converted a
+   *  traced path to route points, dropped the two fields, and the route was re-priced through the station.
+   *  The reported "$10 counted rather than the bypass followed" is that gap, and it applied to an AUTO route
+   *  as much as to a hand-drawn one -- the flag existed at both ends of the pipe and nothing carried it. */
+  variant?: number;
+  bypass?: boolean;
 }
 
 /** Converts the map's in-progress route into the contract's `RunManualRoute`
@@ -40,11 +50,16 @@ export interface RoutePoint {
  *  the cleaner encoding of "unspecified". */
 
 export function routePointsToWaypoints(points: readonly RoutePoint[]): RouteWaypointDto[] {
-  return points.map((point) =>
-    point.cityNode === undefined
-      ? { hex: point.hexLabel }
-      : { hex: point.hexLabel, city_node: point.cityNode },
-  );
+  return points.map((point) => {
+    const waypoint: RouteWaypointDto = { hex: point.hexLabel };
+    if (point.cityNode !== undefined) waypoint.city_node = point.cityNode;
+    /* Design note #808: only when TRUE. `bypass` is absent on every hex but Altoona's bow, and an explicit
+       `false` on 40 waypoints would be noise on the wire and a diff on every route -- the same argument the
+       paragraph above makes for omitting `city_node` rather than sending null. #737's own compatibility case
+       asserts that an unflagged route prices exactly as it did before, and this keeps that true by default. */
+    if (point.bypass === true) waypoint.bypass = true;
+    return waypoint;
+  });
 }
 
 /** Standard axial-coordinate hex distance -- the number of hex-to-hex steps
@@ -140,10 +155,22 @@ export function routeBlockedCityReason(
   points: readonly { q: number; r: number }[],
   blocksThrough: ((q: number, r: number, cityIndex: number) => boolean) | undefined,
   labelFor?: (q: number, r: number) => string | null,
+  /** Design note #808: whether this hex offers a way through that misses its centre.
+   *
+   *  A CALLBACK, because the paragraph at the top of this file is a promise: it validates route points
+   *  "without importing anything from that component", and answering this needs the tile artwork. Injected
+   *  like `blocksThrough` and `labelFor` above, and omitted by every caller that has no board to consult --
+   *  which reproduces the pre-#808 behaviour exactly. */
+  offersBypass?: (q: number, r: number) => boolean,
 ): string | null {
   if (!blocksThrough || points.length < 3) return null;
   for (let at = 1; at < points.length - 1; at += 1) {
     const point = points[at];
+    /* Design note #808: THE ONE HEX WHERE "MAY I PASS" HAS TWO ANSWERS. A full city says nothing about track
+       that goes around it, so a hex with a bow is not a wall -- and refusing here is what made Altoona
+       impassable for the seven corporations that are not the PRR, whose home token fills its only slot.
+       Checked before the cities rather than inside the loop: the bow clears the hex, not one of its cities. */
+    if (offersBypass?.(point.q, point.r)) continue;
     for (let city = 0; city < 2; city += 1) {
       if (!blocksThrough(point.q, point.r, city)) continue;
       const where = labelFor?.(point.q, point.r) ?? `${point.q},${point.r}`;

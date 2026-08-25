@@ -762,8 +762,32 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #671: a step BELOW the figures it now sits beside, deliberately.
      The rail's values are 14px tabular monospace because they are quantities a
      president compares; a name is not, and matching their weight would make the
-     rail read as five figures with a typo in the last one. */
-  orContextPresident: { fontSize: FONT_SIZE.small, whiteSpace: "nowrap" },
+     rail read as five figures with a typo in the last one.
+     Design note #805: MORE important now that it sits directly under the treasury figure rather than beside
+     four of them. A name and a quantity in one column, at one size and one weight, would read as two rows of
+     the same table -- and the two things in this particular column are the corporation's money and the
+     person's, which #743 has already had to stop the UI conflating once.
+     It also carries its own layout now: it was spreading `orContextFact` for that and then overriding the
+     6px gap back to 0, because `orContextFact`'s gap is the space between a CAPTION and its value and there
+     is no caption here -- the crown brings its own 3px margin. Two declarations to reach one arrangement. */
+  orContextPresident: {
+    display: "inline-flex",
+    alignItems: "center",
+    fontSize: FONT_SIZE.small,
+    whiteSpace: "nowrap",
+    minWidth: 0,
+  },
+  /* Design note #805: the first fact is a two-row column -- treasury above, president below.
+     `alignItems: flex-start` so the crown starts at the treasury caption's x rather than centring itself
+     against a wider row; the 1px gap is `orContextIdentity`'s, so that the left column (herald over full
+     name) and this one space their two rows identically and the second rows land together. */
+  orContextTreasuryStack: {
+    display: "inline-flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "1px",
+    minWidth: 0,
+  },
   /* Design note #236: the figures CONTINUE FROM THE LEFT. `marginLeft: auto` flung them to the far edge, so
      reading "PRR ... $640" meant crossing the bar and the figures ended up further from their own label than
      from the window edge. They flow inline after the identity, which is how the sentence reads. */
@@ -1276,13 +1300,11 @@ export const styles: Record<string, React.CSSProperties> = {
      muted and italic, which is right for orientation nobody was looking for. This line stands where a BUTTON
      was, and a player hunting for Skip needs to find the sentence explaining its absence rather than read past
      it. Upright, brighter, and no italic; still not an alert, because nothing has gone wrong. */
-  orPanelObligation: {
-    fontSize: FONT_SIZE.small,
-    color: "#c8cdd8",
-    fontWeight: 600,
-    maxWidth: "42ch",
-    lineHeight: 1.35,
-  },
+  /* `orPanelObligation` REMOVED by design note #800 with the sentence it styled -- "B&O has a route it can
+     run, so it must. Which route is up to you." The rule it described still withdraws Skip (#41); only the
+     prose is gone, and the second half of it moves to the tutorial being built.
+     DELETED RATHER THAN LEFT UNUSED, per #772: `styles` is typed `Record<string, CSSProperties>`, so an
+     orphan key is invisible to both `tsc` and ESLint and sits there looking like a thing to reach for. */
   // ---- Operating Round Phase 4 hardware marketplace tray -- see design
   // note #10/item 2, upscaled alongside the rest of the action bar (design
   // note #12/item 5). ----

@@ -74,6 +74,24 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
      only the Operating Round strip during Run Routes has a cursor to share. */
   highlightedTrainIndex?: number | null;
   onHighlightTrain?: (trainIndex: number | null) => void;
+  /* ==================================================================
+   *  DESIGN NOTE 801: A CHIP IS A HANDLE, NOT ONLY A BADGE
+   * ==================================================================
+   *
+   * REQUESTED: "the Run Routes fixed subpanel can be completely done away with in exchange for the ability to
+   * click the train chips and have the sticky Action bar expand slightly to list its route. Players can click
+   * through each one to see what it's doing without needing the huge subpanel."
+   *
+   * #375 MADE THE CHIP SHARE A CURSOR AND STOPPED THERE. It gave the chip hover -- "a chip and a route line
+   * are two views of one thing" -- while the route line itself lived in a panel below. Selection is the other
+   * half of that idea: if the chip and the line are one thing, the chip is where you ask for the line.
+   *
+   * SELECT AND HIGHLIGHT ARE DIFFERENT AND BOTH SURVIVE. Hover still previews on the map and is transient
+   * (#9's rule); a CLICK is durable and is what opens the detail. Two cursors because they answer two
+   * questions -- "what is this one" and "which one am I reading" -- and collapsing them would make the detail
+   * flicker as the pointer crossed the row. */
+  selectedTrainIndex?: number | null;
+  onSelectTrain?: (trainIndex: number) => void;
   /** Design note #375: only the surface that shares a cursor makes its
    *  chips interactive. Elsewhere they stay inert badges. */
   interactive?: boolean;
@@ -131,6 +149,8 @@ export function TrainChips({
   outlook,
   highlightedTrainIndex = null,
   onHighlightTrain,
+  selectedTrainIndex = null,
+  onSelectTrain,
   interactive = false,
 }: TrainChipsProps) {
   const ink = surface === "light" ? lightInk : darkInk;
@@ -215,6 +235,10 @@ export function TrainChips({
               gap: compact ? "3px" : "4px",
               ...(inDangerWindow ? ink[inDangerWindow] : {}),
               ...(isPrimary ? styles.chipHighlighted : {}),
+              /* Design note #801: SELECTED OUTRANKS HIGHLIGHTED. Hover is transient and selection is what the
+                 open detail is about, so a pointer crossing another chip must not make the panel's subject
+                 look like a different train. */
+              ...(selectedTrainIndex === index ? styles.chipSelected : {}),
               ...(isMuted ? styles.chipMuted : {}),
               // Every chip carries a tooltip now (design note #4), so every
               // chip gets the help cursor -- and never the text I-beam,
@@ -224,6 +248,24 @@ export function TrainChips({
             title={warning}
             onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}
             onMouseLeave={interactive ? () => onHighlightTrain?.(null) : undefined}
+            /* Design note #801: a click OPENS this train's route. `role`/`tabIndex`/`onKeyDown` rather than a
+               `<button>` because the chip is a styled `span` shared by four surfaces, and wrapping it would
+               change its layout everywhere to give one of them a handler. The keyboard half is not optional:
+               a control reachable only by mouse is not a control on a tablet or for a keyboard player. */
+            role={interactive && onSelectTrain ? "button" : undefined}
+            tabIndex={interactive && onSelectTrain ? 0 : undefined}
+            aria-pressed={interactive && onSelectTrain ? selectedTrainIndex === index : undefined}
+            onClick={interactive && onSelectTrain ? () => onSelectTrain(index) : undefined}
+            onKeyDown={
+              interactive && onSelectTrain
+                ? (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    // Space scrolls a page by default, which is the wrong answer inside a sticky bar.
+                    event.preventDefault();
+                    onSelectTrain(index);
+                  }
+                : undefined
+            }
           >
             {/* ==================================================================
                 DESIGN NOTE 755: THE GLYPH TINTS TOO, AND THE PULSE TAKES OVER ITS OLD JOB
@@ -436,6 +478,13 @@ const LIGHT_CHIP_RING = [
 ].join(", ");
 
 const styles: Record<string, React.CSSProperties> = {
+  /* Design note #801: the open chip. An outline rather than a fill, because the chip's fill already carries
+     the rust state (#755) and a second meaning on the same channel is how #732's colour-only signals go
+     wrong. `outlineOffset` keeps it clear of #702's ring. */
+  chipSelected: {
+    outline: "2px solid rgba(255, 255, 255, 0.92)",
+    outlineOffset: "1px",
+  },
   /* Design note #370: the chip had no height of its own -- `lineHeight: 1.25` on a
      15px font plus padding and borders gave a FRACTIONAL 24.75px box, which rounds
      unpredictably by zoom and subpixel offset and drops the 1px bottom border.

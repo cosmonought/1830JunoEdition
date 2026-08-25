@@ -1985,11 +1985,42 @@ function applyOneAction(
        THE SET LIVES IN STATE, not on the tile grid -- `terrainFee.ts` #723 has the reasoning, and it is about
        replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
        here would be right live and wrong on every rebuild. */
-    const { protocol_id, q, r } = msg.LayTile;
+    const { protocol_id, q, r, token_city } = msg.LayTile;
     const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
     const recorded: GameStateResponse = {
       ...state,
       terrain_fees_paid: withTerrainPaid(state.terrain_fees_paid, q, r, fee),
+      /* ==================================================================
+         DESIGN NOTE 824: THE TOKEN GOES WHERE THE PRESIDENT PUT IT
+         ==================================================================
+
+         REPORTED, of ERIE's home: "in an actual physical game, when a player upgrades ERIE's home hex, the
+         station is removed from the board to place the new tile, then the player sets their token where they
+         want it. Because there is no marking for 'City 1' vs 'City 2' on the preprinted yellow hex, there is
+         no way to debate whether one city or the other is the correct one."
+
+         SO THE INDEX WAS OURS AND NOT THE BOARD'S. `tokenMigration.ts` #824 has the argument; this is the
+         half that makes it stick, because a choice the log does not carry is a choice that does not survive
+         a replay -- and "the log is the game" (#522).
+
+         EVERY TOKEN ON THE HEX MOVES, not only the acting corporation's. On an unlaid preprinted OO hex the
+         cities are indistinguishable for whoever is standing there, so a second occupant's index is exactly
+         as arbitrary as the first's. In practice there is one -- nobody else may token these hexes before
+         they are upgraded -- but a rule that quietly assumed that would be a rule about the board rather than
+         about the cardboard.
+         ABSENT MEANS UNCHANGED, which is every ordinary upgrade in the game. */
+      public_companies:
+        token_city === undefined
+          ? state.public_companies
+          : state.public_companies.map((company) => ({
+              ...company,
+              station_tokens:
+                company.station_tokens?.map((entry) =>
+                  entry[0] === q && entry[1] === r
+                    ? ([entry[0], entry[1], token_city] as [number, number, number])
+                    : entry,
+                ) ?? null,
+            })),
     };
     return fee > 0 ? adjustTreasury(recorded, protocol_id, -fee) : recorded;
   }

@@ -65,6 +65,7 @@ import {
   type HexClickQueryState,
   type LegalTilePlacementsResponse,
   type MapGridResponse,
+  type MapTileEntry,
   type QueryCapableClient,
   type StationTokenCompany,
 } from "./hexContractTypes";
@@ -279,7 +280,16 @@ export interface HexGridRendererProps {
   /** When set, draws a translucent dashed-outline "ghost" preview of
    *  `tileId` at `orientation` on hex `(q, r)` -- the live map preview (see
    *  design note #7 / item 3 of the popup feature). */
-  previewTile?: { q: number; r: number; tileId: number; orientation: number } | null;
+  previewTile?: {
+    q: number;
+    r: number;
+    tileId: number;
+    orientation: number;
+    /** Design note #824: the city the token on this hex is being placed into while the ghost is up. Only
+     *  meaningful where that is a choice -- an unlaid preprinted double city, whose two cities the cardboard
+     *  never distinguished. `undefined` everywhere else, where the index is simply preserved. */
+    tokenCity?: number;
+  } | null;
   /** The live current_global_era, driving which off-board revenue tier renders. Defaults to Yellow so this still renders before a live query is wired.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
   currentEra?: TileColorTier;
@@ -1010,8 +1020,38 @@ export function HexGridRenderer({
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
         for (const [q, r] of company.station_token_hexes) {
-          const laidTile = mapGrid.tiles.find((laid) => laid.q === q && laid.r === r);
-          const chainCity = tokenCityIndex(company, q, r);
+          /* Design note #822: THE TILE THE PLAYER IS LOOKING AT. While a preview is up on this hex the token
+             is about to sit on the PREVIEWED tile, so its slot geometry is what the marker must be drawn
+             against -- otherwise a two-city upgrade puts the token in the city it used to be in rather than
+             the one this orientation gives it.
+             AND ON A PREPRINTED HEX THERE IS NO OTHER ANSWER. ERIE's home is an unlaid OO hex, so `laid` is
+             `undefined` until the green upgrade lands: without this the preview has no tile to anchor to at
+             all, which is exactly where the report starts. */
+          const laid = mapGrid.tiles.find((entry) => entry.q === q && entry.r === r);
+          const laidTile: MapTileEntry | undefined =
+            previewTile && previewTile.q === q && previewTile.r === r
+              ? /* Everything the geometry reads comes from `tile_id` and `orientation`; `landmark` is carried
+                   across from the real entry, or null on a preprinted hex that has no entry yet. Spelling the
+                   whole shape out rather than casting, so a field added to `MapTileEntry` later fails here
+                   instead of arriving as `undefined` inside a renderer. */
+                {
+                  q,
+                  r,
+                  tile_id: previewTile.tileId,
+                  orientation: previewTile.orientation,
+                  paths: laid?.paths ?? null,
+                  revenue: laid?.revenue ?? null,
+                  landmark: laid?.landmark ?? null,
+                }
+              : laid;
+          /* Design note #824: while a preview is up on this hex and the president is choosing a destination,
+             the marker belongs in the city they are looking at rather than the one the chain recorded --
+             which on an unlaid preprinted pair was never a fact about the board anyway. */
+          const previewCity =
+            previewTile && previewTile.q === q && previewTile.r === r
+              ? previewTile.tokenCity
+              : undefined;
+          const chainCity = previewCity ?? tokenCityIndex(company, q, r);
           const tokenCenter = axialToPixel(q, r, hexSize);
 
           let point: { x: number; y: number } | undefined;
@@ -1681,8 +1721,27 @@ export function HexGridRenderer({
 
     /* Design note #222/#588: tokens go on last -- above every badge, every
        nameplate AND the focus veil. */
-    drawStationTokenPass();
-
+    /* ==================================================================
+        DESIGN NOTE 822: #222 SAID TOKENS ARE DRAWN LAST, AND THE PREVIEW WAS DRAWN AFTER THEM
+       ==================================================================
+    
+       REPORTED: "the tileselector radial menu renders the stations, but when players click the tile to
+       preview it on the hex, no station marker appears. It's only after they confirm placement that the
+       station marker appears."
+    
+       THE PREVIEW IS OPAQUE ON PURPOSE (#167: "at 0.65 the board bled through and a yellow tile over a
+       green hex became a muddy third colour") and it was painted AFTER `drawStationTokenPass`, so it
+       covered every token on its hex. #222's rule is right there above that pass -- "tokens are drawn
+       LAST, not merely late ... a token says whose network this is, and a route's legality turns on it" --
+       and this one block was the exception nobody had noticed.
+    
+       SO THE PREVIEW MOVES UP RATHER THAN THE TOKENS MOVING DOWN, which keeps #222 as written and makes
+       the ghost tile obey the same ordering as a real one. The pass then draws the carried tokens ON the
+       preview, at the previewed tile's own city geometry -- see the tile lookup in that pass.
+    
+       REPORTED FOR ERIE FIRST and correctly suspected to be general: "I suspect it may be worth checking
+       whether all the double city tiles (OO and NY) continue previewing preexisting stations." It is every
+       tile on every hex -- ERIE's home is simply where a two-city upgrade makes the omission unmissable. */
     // The preview is FULLY OPAQUE. Transparency was costing the one thing it exists for: at 0.65 the board bled through and a yellow tile over a green hex became a muddy third colour. The dashed outline stays -- the cheap half of the old signal.
     // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #167
     if (previewTile) {
@@ -1718,6 +1777,9 @@ export function HexGridRenderer({
       }
       ctx.restore();
     }
+
+    drawStationTokenPass();
+
 
     // ---- Off-board hover tooltip (design note #15/item 4), drawn LAST so
     // it's always on top of everything else, including the ghost preview

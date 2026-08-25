@@ -135,6 +135,33 @@ export function TrainPurchasePanel({
 
   /* ---- Corporate section state ---- */
   const [corporateOpen, setCorporateOpen] = useState(defaultCorporateOpen);
+  /* ==================================================================
+     DESIGN NOTE 812: THE BANK STANDS ASIDE FOR THE ROSTER
+     ==================================================================
+
+     REQUESTED TWICE, and I declined it the first time for a reason the second version answers: "I think Buy
+     Trains from the Bank should collapse when opening Buy Trains from a Corporation. The collapsed title
+     could still list the current train and its price off to the side without all the actions needing to be
+     visible."
+
+     I EVALUATED THE WRONG PROPOSAL. What I turned down was "collapse it", on the grounds that comparing the
+     depot's price against a corporation's asking price is the entire reason a player opens the roster -- so
+     hiding the depot hides the number the comparison is against. That objection was sound and it does not
+     apply here: the collapsed header KEEPS the tier and its price. What goes away is the depot table, the
+     quantity selector and the buy button, none of which are part of the comparison.
+
+     A DEFAULT, NOT A LOCK. Opening the roster closes the bank; closing the roster opens it again; in between
+     the player may toggle either freely. A panel that refused to show both at once would be making a decision
+     that is theirs, and there are boards where seeing both in full is exactly right.
+
+     AND IT IS THE PREREQUISITE FOR A BIGGER QUESTION. Whether these panels can live inside the sticky bar
+     (#813) turns on the bar's tallest state, and the roster with eight operating corporations open UNDER a
+     full depot table is that state. This removes the worst case rather than merely shrinking the ordinary
+     one. */
+  const [bankOpen, setBankOpen] = useState(true);
+  useEffect(() => {
+    setBankOpen(!corporateOpen);
+  }, [corporateOpen]);
   /* Design note #633: CLOSED by default. The five tiers behind it are
      reference, and a reference list that opens itself is the vertical space
      this pass exists to give back. */
@@ -402,13 +429,50 @@ export function TrainPurchasePanel({
     canTrade && !!selectedSeller && !priceProblem;
 
   return (
-    <div style={{ ...styles.root, ...(condensed ? styles.rootCondensed : {}) }}>
+    <div
+      style={{
+        ...styles.root,
+        /* Design note #810: THE LIVERY EDGE, tying this panel to the bar above it. `buyer` is the acting
+           corporation, and `stationTickerColor` is the same palette the bar, the map tokens and the herald
+           already use -- so the edge says "this belongs to the corporation whose turn it is" in the one
+           channel this app has already taught. Grey when there is no buyer, which is a real state (a
+           corporation with no president reported) rather than a colour worth inventing. */
+        borderLeft: `4px solid ${buyer ? stationTickerColor(buyer.company_id) : "#3a3f4b"}`,
+        ...(condensed ? styles.rootCondensed : {}),
+      }}
+    >
       {/* ================= BANK ================= */}
       <section style={styles.section}>
-        <div style={styles.sectionHeader}>
+        {/* Design note #812: the header is a disclosure now, matching the roster's below it -- two sections
+            that behave differently while looking the same is the kind of difference a player learns by being
+            surprised. The treasury stays on the header in both states: it is the figure that decides whether
+            EITHER purchase is possible, so it belongs to the panel rather than to one section's body. */}
+        <button
+          type="button"
+          style={styles.accordionHeader}
+          onClick={() => setBankOpen((open) => !open)}
+          aria-expanded={bankOpen}
+          title={bankOpen ? "Hide the depot table." : "Show the depot table and the buy controls."}
+        >
+          <span style={styles.accordionCaret} aria-hidden="true">
+            {bankOpen ? "▼" : "▶"}
+          </span>
           <span style={styles.sectionTitle}>Buy Trains from the Bank</span>
+          {/* Design note #812: THE FIGURE THE COMPARISON IS AGAINST, kept when everything else folds away.
+              This is the whole difference between the proposal I declined and the one that was made: with the
+              tier and its price on the header, a player weighing a corporation's asking price against the
+              depot's can still read both at once. Absent when the depot is empty, which the body says in a
+              sentence rather than the header saying it in a dash. */}
+          {!bankOpen && nextTier && (
+            <span style={styles.sectionSummary}>
+              {nextTier.tier}-train ${nextTier.cost}
+            </span>
+          )}
           {buyer && <span style={styles.sectionMeta}>{buyer.ticker} treasury ${treasury}</span>}
-        </div>
+        </button>
+
+        {bankOpen && (
+          <>
 
         {/* The whole depot, not only the purchasable row. A player deciding
             whether to buy the last 3-train needs to see that a 4-train costs
@@ -674,16 +738,19 @@ export function TrainPurchasePanel({
                 Emergency Train Purchase
               </button>
             )}
-            {/* Design note #1: stated, because it is the question a player asks the moment they see a quantity field.
-               Design note #508: except when pinned. This is the longest piece of prose in the panel and it explains a
-               rule rather than a value -- read once, not on every scroll -- so it is the first thing the condensed form
-               gives back to the board. */}
-            {!condensed && (
-              <p style={styles.note}>
-                One tier per purchase. The depot sells cheapest-first, so a 3-train and a 4-train
-                are two separate actions with a phase change between them.
-              </p>
-            )}
+            {/* Design note #1 stated this here, "because it is the question a player asks the moment they see a
+               quantity field", and #508 hid it when pinned because it "explains a rule rather than a value --
+               read once, not on every scroll".
+               DESIGN NOTE 810 FINISHES THAT THOUGHT. Requested: "I'm not sure we need 'One tier per purchase...'
+               any longer. We can move the important information (buying through a tier requires two actions) to
+               a tutorial box."
+               #508 HAD ALREADY IDENTIFIED IT AS THE WRONG KIND OF TEXT for this surface and only found half the
+               remedy: hiding a rule on scroll makes it intermittent, not relocated. A rule read once belongs
+               where rules are read once, and this app has that place -- `TutorialModal`'s "Steps 5 and 6" slide,
+               which already covers Buy Trains and did not carry this. The sentence is there now, in full.
+               THE PANEL KEEPS EVERY FACT A PLAYER ACTS ON: the purchasable tier, its price, the quantity, the
+               button and the "next" caption on the accordion all say cheapest-first in figures rather than in
+               prose. What is gone is the paragraph explaining them. */}
           </>
         ) : (
           <p style={styles.empty}>{bankProblem}</p>
@@ -736,6 +803,8 @@ export function TrainPurchasePanel({
                 ))}
               </div>
             )}
+          </>
+        )}
           </>
         )}
       </section>
@@ -1164,29 +1233,72 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  /* ==================================================================
+     DESIGN NOTE 810: IT RECEDED BECAUSE IT WAS THE DARKEST THING ON THE PAGE
+     ==================================================================
+
+     REPORTED: "there is something about this subpanel that doesn't quite grab me or clarify itself: all the
+     information is there, but I think the dark blue background that is the same as the main app makes it
+     'recede' ... I hesitate to say we should swap it for a parchment color like we have on the corporation,
+     company, and player cards ... Maybe the parchment background IS the right choice?"
+
+     THE DIAGNOSIS IS ONE SHADE OFF THE REPORT AND IT MATTERS. This was `#12141b`, which is not the same as
+     the app -- it is DARKER than everything around it (`orContextCard` is `#171c28`, the private panel
+     `#141a26`). A surface that sinks below its own container reads as a well, and a well is where an app puts
+     things it wants you to stop looking at. The instinct "it recedes" is exact; the cause is depth, not hue.
+
+     PARCHMENT IS NOT THE ANSWER HERE, and the reason is a rule this app already keeps rather than a
+     preference. Every parchment surface in Project 18XX is a NOUN -- a corporation card, a company card, a
+     player card: a thing you hold and read. This panel is a VERB. It is the step's controls, and dressing it
+     as a card would say there is a fourth thing to read at the moment a player is being asked to act.
+     (It also costs what a swept repaint costs: roughly twenty-five colour tokens in this file are tuned
+     against a dark ground, and #732 is the record of what happens when those drift apart.)
+
+     SO IT RISES INSTEAD OF CHANGING MATERIAL. Three changes, each doing one job: the ground goes ABOVE its
+     surroundings rather than below; a shadow makes that a lift rather than a lighter patch; and a livery edge
+     ties it to the bar overhead, which is the same channel #236 used to make the bar itself findable.
+     WHETHER IT NOW GRABS is a playtest question and nothing here can answer it. If it still does not, the
+     parchment version is a bigger change and remains available -- and this note is the argument to overrule. */
   root: {
     display: "flex",
     flexDirection: "column",
     gap: "14px",
     padding: "14px 18px",
-    backgroundColor: "#12141b",
-    border: "1px solid #3a3f4b",
+    backgroundColor: "#1e2331",
+    border: "1px solid #454c5c",
     borderRadius: "10px",
+    boxShadow: "0 6px 18px rgba(0, 0, 0, 0.45)",
   },
   /* Design note #508: the pinned form. Tighter on every axis and without
      the standalone card treatment -- inside the action bar it is a SECTION
      of that panel rather than a panel of its own, and a bordered box inside
-     a bordered box reads as two things when it is one. */
+     a bordered box reads as two things when it is one.
+     Design note #810: which is also why the lift is dropped when condensed -- a raised, shadowed slab INSIDE
+     the bar would be the second box #508 removed, wearing a highlight. The livery edge is spread before this,
+     so `borderLeft` is cleared here too and the condensed form keeps its single top rule. */
   rootCondensed: {
     gap: "8px",
     padding: "8px 10px",
     backgroundColor: "transparent",
     border: "none",
+    borderLeft: "none",
     borderTop: "1px solid #2b3242",
     borderRadius: 0,
+    boxShadow: "none",
   },
   section: { display: "flex", flexDirection: "column", gap: "10px" },
   sectionHeader: { display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" },
+  /* Design note #812: the tier and price on a collapsed bank header. Monospace and green because it is a
+     FIGURE being compared against another figure -- the corporation's asking price a few pixels below -- and
+     that is the one job monospace has in this app (#804 settled the same question for the private row's
+     income against its acronym). */
+  sectionSummary: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#7ee0a1",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    whiteSpace: "nowrap",
+  },
   sectionTitle: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,

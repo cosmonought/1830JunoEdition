@@ -107,13 +107,14 @@ describe("the two labels that were reported", () => {
     expect(modal).not.toMatch(/Your Treasury/i);
   });
 
-  it("heads the Operating Round strip Cash, because its rows are players", () => {
-    /* THE SURFACE THAT REPLACED THE TOOLTIP. #670's strip is the reason #326's hover became redundant, so it
-       is now the load-bearing example: one heading over a row per seat, in the round where money moves. */
-    const strip = code(path.join(SRC, "components", "PlayerCashStrip.tsx"));
-    expect(strip).toContain("<h4 style={styles.title}>Cash</h4>");
-    expect(strip).toContain('aria-label="Player cash"');
-    expect(strip).not.toMatch(/Treasury/i);
+  it("names a player's money Cash on the cards that show it", () => {
+    /* THE SURFACE THAT REPLACED THE TOOLTIP, twice over now. #806 pointed this example at `PlayerCashStrip`;
+       #819 replaced that strip with `PlayerCards` in the Operating Round too, so the example follows the
+       component rather than the file -- which is the whole reason the rule is a SWEEP and these are only
+       illustrations. The sweep above is what actually holds the line. */
+    const cards = code(path.join(SRC, "components", "PlayerCards.tsx"));
+    expect(cards).toMatch(/Cash/);
+    expect(cards).not.toMatch(/Your Treasury|Player Treasury/i);
   });
 });
 

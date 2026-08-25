@@ -173,7 +173,9 @@ describe("nothing about the fact itself was lost in the move", () => {
        AND #805 ARGUED FOR THE REMOVAL WITHOUT NOTICING. Its note claimed the cash tooltip was "MORE
        load-bearing" once the president sat directly under the treasury, because the two purses must not read
        as one figure. That is the reasoning for deleting it: a hidden number under a visible number is exactly
-       what invites the conflation. The figure is on `PlayerCashStrip` for the whole table (#670).
+       what invites the conflation. The figure is on the player cards under the board for the whole table
+       (#670's strip, replaced by `PlayerCards` itself at #819 -- the surface changed, the availability did
+       not, which is the only part this assertion ever depended on).
        THE UNDERLINE IS ASSERTED SEPARATELY because it is the half a tidy would leave behind -- a dotted
        underline promises that hovering says something. */
     expect(CODE).not.toContain("presidentCash");

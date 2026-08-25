@@ -163,6 +163,44 @@ export function exposedPresidencies(
     .map((company) => company.ticker);
 }
 
+/** Whether a standing arm has already dispatched for the turn now on screen.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 816: ONE PASS PER TURN NEEDS A TURN, NOT A SEAT
+ *  ==================================================================
+ *
+ *  REPORTED: "when an opposing player triggers the Auto-Pass conditions in a Stock Round, the Auto-Passed
+ *  player still gets their turn, but the Auto-Pass button reads 'Auto-Pass: On' even though it has been and
+ *  is supposed to be disabled."
+ *
+ *  #728 GUARDED AGAINST A DOUBLE DISPATCH AND WROTE DOWN A PREMISE THAT IS FALSE. Its key was
+ *  `${macro_round_number}:${active_player_index}`, and its note said: "the key is the round AND the seat
+ *  index, so a later turn in the same round is a different key and passes again as it should." A later turn
+ *  in the same round has the SAME seat index -- that is what a seat index is. A Stock Round rotates until
+ *  everybody passes consecutively, so every player gets as many turns as the round lasts, and all of them
+ *  carry one key.
+ *
+ *  SO AUTO-PASS FIRED ONCE PER PLAYER PER ROUND AND THEN WENT QUIET. The guard returned early on every
+ *  subsequent turn, before the decision was even evaluated -- which is why the player got the turn, why the
+ *  button still said On (nothing had disarmed it), and why nothing was logged. #717's rule that a wake is
+ *  "said out loud, always" was bypassed by a guard that ran first.
+ *
+ *  AND THE REPORT'S FRAMING IS EXACTLY RIGHT ABOUT THE TRIGGER, though not about the mechanism: your seat
+ *  only comes round a second time if somebody else BOUGHT or SOLD, because that is what resets the pass
+ *  count and keeps the round alive. An opponent acting is precisely the condition under which this shows up.
+ *
+ *  THE LOG IS THE TURN COUNTER, and it already exists. Every action appends an entry with a monotonic index
+ *  (`sandboxRoom.ts`; "the log is the game", #522), so "has anything happened since I dispatched" is a
+ *  comparison the app can already make and cannot get wrong. A seat index answers "who"; the log answers
+ *  "when", which is what one-per-turn was always asking.
+ *
+ *  A FAILED DISPATCH STAYS GUARDED, deliberately. If the pass never lands the log does not move, so this
+ *  keeps returning true and auto-pass does not spin -- the player keeps a turn they can act on by hand,
+ *  which is the recoverable failure. */
+export function autoPassAlreadyActed(actedAtLogIndex: number | null, lastLogIndex: number): boolean {
+  return actedAtLogIndex !== null && actedAtLogIndex === lastLogIndex;
+}
+
 export interface AutoPassDecision {
   /** Dispatch the pass. */
   pass: boolean;

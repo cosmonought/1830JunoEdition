@@ -172,7 +172,7 @@ describe("the lifted panels kept the gate their nesting used to give them (desig
     /* THE ASSERTION THAT WOULD HAVE CAUGHT THIS. Every step test past the bar's closing tag must ask the
        qualified question -- not because the author will remember, but because `orStep` is the only value
        available to ask with. */
-    const lifted = CODE.slice(CODE.indexOf("<div ref={stepPanelRef}>"));
+    const lifted = CODE.slice(CODE.indexOf("<div ref={stepPanelRef}"));
     expect(lifted).not.toContain("orSubPhase ===");
   });
 

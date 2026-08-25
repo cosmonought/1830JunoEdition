@@ -184,7 +184,6 @@ import {
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
 // Design note #670: the payout confirmation. The arithmetic is in the util so
 // the replay and undo cases can be tested as sequences rather than screenshots.
-import PlayerCashStrip from "./components/PlayerCashStrip";
 import {
   cashByPlayer,
   cashChanges,
@@ -213,6 +212,14 @@ import { cityBlockerFor } from "./utils/cityBlocking";
 import { hexOffersBypass, withForcedBypass } from "./utils/cityBypass";
 // Design note #809: whose clicks the Lay Track glow may swallow -- watchers keep the inspector.
 import { inspectorClickRefused } from "./utils/inspectorClick";
+/* Design note #817: an armed errand's lifecycle -- what a click means, which lay is its own, and when it
+   stops being relevant. Three questions that used to be answered by three unrelated `if`s. */
+import {
+  errandCancelLabel,
+  errandClaimsLay,
+  errandClickIntent,
+  errandSurvivesStep,
+} from "./utils/privateErrand";
 import { routeBlockedCityReason } from "./utils/routeWaypoints";
 // Design note #738: the one notification a player gets about somebody else's action.
 import { dividendReceipt } from "./utils/dividendReceipt";
@@ -236,6 +243,9 @@ import {
   DH_PRIVATE_ID,
   cslPowerState,
   dhPowerState,
+  dhStationDeclineForfeits,
+  dhStationPromptNext,
+  type DhStationPrompt as DhStationPromptState,
   dhSelfLayWarning,
   privateSelfLayWarning,
 } from "./utils/dhPower";
@@ -243,17 +253,23 @@ import {
 import {
   DEFAULT_AUTO_PASS_CONDITIONS,
   armAutoPass,
+  autoPassAlreadyActed,
   autoPassDecision,
   exposedPresidencies,
   type AutoPassArm,
   type AutoPassConditions,
 } from "./utils/autoPass";
 import AutoPassModal from "./components/AutoPassModal";
+// Design note #818: the D&H's free station, asked for rather than left to be noticed.
+import DhStationPrompt from "./components/DhStationPrompt";
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
 import { localCatalogPlacements } from "./components/hexGeometry";
 
-import { describeTokenMigration, previewTokenMigration } from "./utils/tokenMigration";
+// Design note #823: `describeTokenMigration` is no longer imported -- the ring stopped printing its
+// sentence. The function survives in `tokenMigration.ts` with its own note; the arithmetic beside it is
+// still what the radial thumbnails read.
+import { previewTokenMigration, tokenDestinationChoices } from "./utils/tokenMigration";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
   OPERATING_SUB_PHASE_LABELS,
@@ -476,6 +492,32 @@ let nextLogEntryId = 1;
 let replayClock: number | null = null;
 let lastLogStampMs = 0;
 
+/* ==================================================================
+   DESIGN NOTE 825: A TOAST MARKS A MOVE, NOT A CATCH-UP
+   ==================================================================
+
+   REPORTED: "when Undoing any action, a toast notification surfaces about the last corporation's payout.
+   There shouldn't be any toast notifications on Undo."
+
+   #670 WROTE THIS EXACT RULE AND APPLIED IT TO ONE SURFACE. Its note, still in the drain below, says: "A
+   BADGE MARKS A MOVE, NOT A CATCH-UP ... Joining a room replays a whole game, and an undo rebuilds from the
+   fixture -- in both, every balance on the board changes, and firing a badge per change would carpet the
+   strip with figures about events that are minutes old." The cash badges have honoured that ever since. The
+   TOASTS were added afterwards (#718's receipt, #786/#795's payout notice) and never asked.
+
+   SO AN UNDO REPLAYED THE WHOLE GAME AND THE LAST DIVIDEND ANNOUNCED ITSELF AGAIN -- which is worse than
+   merely noisy, because a payout toast is a claim that money has just moved, and during a rebuild nothing
+   has: the board is being restored to a state it already reached.
+
+   A FLAG BESIDE THE CLOCK, and for the same reason `replayClock` is one: the drain sets it around a
+   dispatch, and everything downstream that needs to know "is this history or is this now" reads it without
+   the answer being threaded through a dozen call sites. `isOrdinaryPlay` is the drain's own name for the
+   distinction and already existed -- this only publishes it.
+
+   GATED AT THE TWO DOORS rather than at the three call sites, which is #748a's rule: a call site that has to
+   remember is a call site that will forget, and the next toast added would have forgotten too. */
+let replayingHistory = false;
+
 /** The instant to stamp the next entry with. `at` when the caller has one (a
  *  replayed action), the replay clock when a derived line is being written
  *  during one, and the wall clock otherwise -- never going backwards. */
@@ -492,6 +534,8 @@ function stampLogTime(at?: number): number {
 function resetLogClock(): void {
   replayClock = null;
   lastLogStampMs = 0;
+  // Design note #825: and the replay flag, so a rebuild that throws cannot leave the app permanently silent.
+  replayingHistory = false;
 }
 
 // Chat ids are Firestore document ids, not a local counter, so they match across clients.
@@ -1490,7 +1534,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // See docs/ai_architecture/canvas_rendering.md - App.tsx #7
   const [hexClickQuery, setHexClickQuery] = useState<HexClickQueryState | null>(null);
   const [previewTile, setPreviewTile] = useState<
-    { q: number; r: number; tileId: number; orientation: number } | null
+    {
+      q: number;
+      r: number;
+      tileId: number;
+      orientation: number;
+      /** Design note #824: which city the token on this hex is being placed into, when that is a choice at
+       *  all. `undefined` on every ordinary lay -- the index is preserved and there is nothing to pick. */
+      tokenCity?: number;
+    } | null
   >(null);
 
   /** The board's DOM node, for anchoring the radial ring to the canvas
@@ -2551,6 +2603,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            runs were literally the same line drawn twice. */
         color: routeTrainColor(train.trainIndex),
         hexes: points.map((point) => [point.q, point.r] as [number, number]),
+        /* Design note #820: and WHICH WAY THROUGH each one. #808 taught `RoutePoint` to carry the variant so
+           the wire and the pricing agree; the drawing was the last surface still guessing, so a route priced
+           on Altoona's bow was drawn through its station. Index-aligned with `hexes` above, from the same
+           `points` in the same order. */
+        variants: points.map((point) => point.variant),
         // Design note #373: the join key the three surfaces share.
         trainIndex: train.trainIndex,
         /* Connects highlightedTrainIndex to the renderer's primary/muted emphasis; normal when nothing is highlighted.
@@ -2604,17 +2661,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* One PlayerFinances per seat, memoised - sellableHoldings walks every corporation for every player.
      See docs/ai_architecture/stock_market.md - App.tsx #563 */
-  const stockRoundPlayerFinances = useMemo(() => {
-    /* Design note #593: both seat-driven rounds. The Operating Round is
-       excluded for the reason `actingSeatIndex` draws the same line -- its
-       turn belongs to a corporation. */
-    if (
-      !gameState ||
-      (gameState.current_round_type !== "StockRound" &&
-        gameState.current_round_type !== "WaterfallAuction")
-    ) {
-      return [];
-    }
+  const playerFinancesBySeat = useMemo(() => {
+    /* Design note #593 excluded the Operating Round here, "for the reason `actingSeatIndex` draws the same
+       line -- its turn belongs to a corporation."
+       Design note #819: THE ROUND GATE MOVES TO THE RENDER SITES, because the cards now render in an
+       Operating Round too and finances are not a fact about a round. #606 had already taken the other half of
+       this out -- `showSeatOrder` went because "`activeAddress` already carries the same fact" -- and what was
+       left was a DATA gate doing a LAYOUT job. Nothing downstream changes: an OR passes the acting
+       president's address, which is the line #593 wanted drawn, drawn where it belongs. */
+    if (!gameState) return [];
     const prices = Object.fromEntries(
       (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
     ) as Readonly<Record<number, number | null>>;
@@ -2662,11 +2717,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      receipt is for your own dispatch, this is a notification about somebody else's -- and one function
      answering to both invitations is how #718's scope crept in the first place. */
   const showDividendToast = useCallback((text: string, detail: string | null) => {
+    // Design note #825: nothing has just happened during a rebuild -- see the flag's own note.
+    if (replayingHistory) return;
     actionToastTokenRef.current += 1;
     setActionToast({ text, detail, token: actionToastTokenRef.current });
   }, []);
 
   const showActionToast = useCallback((text: string) => {
+    /* Design note #825: and #718's receipt likewise. "Did my button register" is a question about a click
+       that just happened; replayed a minute later it answers about somebody's move from ten turns ago. */
+    if (replayingHistory) return;
     actionToastTokenRef.current += 1;
     setActionToast({ text, token: actionToastTokenRef.current });
   }, []);
@@ -2721,17 +2781,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [cashDeltaByPlayer],
   );
 
-  /** Design note #670: the strip's rows. Seating order, cash only -- everything
-   *  else a player might want is a tab away, and a second copy of it here would
-   *  be a second thing to keep true. */
-  const playerCashRows = useMemo(() => {
-    if (!gameState) return [];
-    const cash = cashByPlayer(gameState);
-    return gameState.player_addresses.map((address) => ({
-      address,
-      cash: address in cash ? cash[address] : null,
-    }));
-  }, [gameState]);
+  /* Design note #670 built `playerCashRows` for the strip: "seating order, cash only -- everything else a
+     player might want is a tab away, and a second copy of it here would be a second thing to keep true."
+     Design note #819: DELETED WITH THE STRIP. `PlayerCards` reads `playerFinances`, which already carries the
+     cash alongside everything else, so this was a second shape over one dataset -- exactly the "second thing
+     to keep true" its own note warned about, kept alive by the component that needed the narrower one.
+     ESLint found it; `tsc` would not have. */
 
   /* Pass stamps come from the two consecutive-pass counters, which self-clear. Suppressed during a mini-auction, empty in an Operating Round.
      See docs/ai_architecture/ui_shell_layout.md - App.tsx #610 */
@@ -4377,6 +4432,89 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     returnTab: MainTab;
   } | null>(null);
 
+  /* ==================================================================
+     DESIGN NOTE 818: THE FREE STATION, ASKED FOR
+     ==================================================================
+
+     The transition table is in `dhPower.ts`; this holds the cursor and does the three things a table cannot:
+     arm the board, forfeit the ability, and say so in the log.
+
+     `abandon` IS THE GUARD THAT #817 EXISTS BECAUSE OF. A prompt that outlived its turn would be a modal
+     over a board doing something else -- which is exactly 4c one layer up, and the reason it is wired to the
+     same step change rather than left to be noticed. */
+  const [dhStationPrompt, setDhStationPrompt] = useState<DhStationPromptState>(null);
+
+  useEffect(() => {
+    if (orSubPhase !== "Track" && orSubPhase !== "Tokens") {
+      setDhStationPrompt((current) => dhStationPromptNext(current, "abandon"));
+    }
+  }, [orSubPhase]);
+
+  /** Design note #818: whose token, and how many are left to spend.
+   *
+   *  FREE IS NOT COSTLESS -- #725: "free means no cash, not no token" -- so the modal names the supply the
+   *  marker comes out of. A corporation down to its last one is choosing between Scranton and wherever else
+   *  it wanted that marker, which is a real decision and not a formality.
+   *  `null` rather than a guess when there is no corporation to read, which is #250's rule for a figure the
+   *  room has not reported: an absent number is ignorance and must not read as zero. */
+  const dhStationSupply = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    if (!company) return { ticker: "This corporation", tokensLeft: null as number | null };
+    return {
+      ticker: company.ticker,
+      tokensLeft: stationTokenSlots(company).filter((slot) => !slot.placed).length,
+    };
+  }, [gameState, actingProtocolId]);
+
+  const handleAcceptDhStation = useCallback(() => {
+    const reservation = privateHexFor(DH_PRIVATE_ID);
+    if (!reservation) return;
+    setDhStationPrompt((current) => dhStationPromptNext(current, "accept"));
+    /* The SAME errand the power's own button arms (#725), so the placement, the veil and the confirmation
+       ring are one mechanism rather than a second copy for this entry point. */
+    setHomeStationPlacement({
+      kind: "private-station",
+      companyId: actingProtocolId,
+      q: reservation.q,
+      r: reservation.r,
+      hexLabel: reservation.hexLabel,
+      abilityKey: "dh-token",
+      returnTab: activeMainTab,
+    });
+    setActiveMainTab("map");
+  }, [actingProtocolId, activeMainTab]);
+
+  const handleDeclineDhStation = useCallback(() => {
+    setDhStationPrompt((current) => {
+      /* Design note #818: THE FORFEIT IS A DECISION, not a timeout. `dhStationDeclineForfeits` is what keeps
+         "I chose not to" apart from "the turn moved on" -- only the first spends the ability, and the second
+         cannot happen anyway because `dhPowerState` refuses the token on any later turn. */
+      if (dhStationDeclineForfeits(current, "decline")) {
+        setUsedPrivateAbilities((prev) => new Set(prev).add("dh-token"));
+        logInfoRef.current?.(
+          "Private Power",
+          "Delaware & Hudson — the free station on F16 was forfeited.",
+        );
+      }
+      return dhStationPromptNext(current, "decline");
+    });
+  }, []);
+
+  /* Design note #817: THE ERRAND ENDS WITH ITS STEP.
+     REPORTED: "even once I skipped the Station Marker subphase into the Run Routes one, my cursor still
+     showed the herald like a Place Station action, and indeed I was then able to place the station for free
+     on the untiled F16 *in the middle* of Run Routes."
+     Nothing tore the errand down, because nothing had ever been asked to. A tile errand belongs to Track and
+     a station errand to Tokens; a home station belongs to no Operating Round step at all and survives, which
+     is the distinction `errandSurvivesStep` exists to keep. */
+  useEffect(() => {
+    setHomeStationPlacement((armed) =>
+      armed === null || errandSurvivesStep(armed, orSubPhase) ? armed : null,
+    );
+  }, [orSubPhase]);
+
   /** Design note #440: the single lit hex. Shaped exactly like
    *  `layTrackFocus`/`tokenTargetFocus` so it drops into the same `layFocus`
    *  prop -- one veil mechanism, three users, rather than a third way of
@@ -4454,8 +4592,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* The veil already refuses every other hex (`layFocus.highlighted` is
          a one-element set), so this is a second lock on the same door --
          cheap, and the kind of guard that matters if the veil is ever
-         loosened for a reason unrelated to this flow. */
-      if (q !== placement.q || r !== placement.r) return;
+         loosened for a reason unrelated to this flow.
+         Design note #817: AND THE OFF-HEX CLICK IS AN ANSWER NOW, not a silent `return`. Reported: "I have no
+         clear way of escaping this action if I decide I don't want to do it." An optional power clicked away
+         from is cancelled and the click goes on to be an ordinary one -- which is the escape the report found
+         by accident and liked. A HOME station is compulsory and keeps its old behaviour of doing nothing,
+         because the whole table is waiting on it (#783). */
+      const intent = errandClickIntent(placement, q, r);
+      if (intent === "ignore") return;
+      if (intent === "cancel") {
+        setHomeStationPlacement(null);
+        return;
+      }
       // Design note #444: a tile lay is not staged here. It falls through
       // to the tile picker and finishes in `handleConfirmRadialLay`.
       if (placement.kind === "private-tile") return;
@@ -4508,6 +4656,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (placement.abilityKey) {
         setUsedPrivateAbilities((prev) => new Set(prev).add(placement.abilityKey as string));
       }
+      // Design note #818: the tick closes the question as well as the placement.
+      setDhStationPrompt((current) => dhStationPromptNext(current, "placed"));
       setHomeStationPlacement(null);
       // Back where they came from -- see the state's own note on why this
       // is captured rather than hardcoded to the Stocks tab.
@@ -4613,13 +4763,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * ARMED PER STOCK ROUND, per the report: the arm carries the round it was made in and `autoPassDecision`
    * refuses on any other. */
   const [autoPassArm, setAutoPassArm] = useState<AutoPassArm | null>(null);
-  /* Design note #728: the seat this arm has already passed for.
+  /* Design note #728: the turn this arm has already passed for.
      THE EFFECT RE-RUNS ON EVERY `gameState` CHANGE, and `isMyTurn` is derived from React state while the
      reducer writes its ref synchronously (#670). So between dispatching a pass and React committing the seat
      advance there is a window where the effect can fire again and pass twice -- spending a turn the player
      never had. A ref rather than state because it must be readable and writable inside one effect run, before
-     any re-render. */
-  const autoPassedForSeatRef = useRef<string | null>(null);
+     any re-render.
+     Design note #816: THE LOG INDEX, not the seat. #728 keyed this on `${round}:${seat}` and claimed "a later
+     turn in the same round is a different key" -- which is false, because a later turn in the same round is
+     the same SEAT. See `autoPass.ts` #816 for the whole account; the short version is that auto-pass fired
+     once per player per Stock Round and was silently guarded off every turn after. */
+  const autoPassedAtLogIndexRef = useRef<number | null>(null);
   const [autoPassOpen, setAutoPassOpen] = useState(false);
   /** Remembered so re-arming next round does not re-ask from scratch. */
   const [autoPassChoices, setAutoPassChoices] = useState<AutoPassConditions>(
@@ -4637,7 +4791,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (conditions: AutoPassConditions) => {
       if (!gameState || !viewerAddress) return;
       setAutoPassChoices(conditions);
-      autoPassedForSeatRef.current = null;
+      autoPassedAtLogIndexRef.current = null;
       setAutoPassArm(armAutoPass(gameState, viewerAddress, conditions));
       setAutoPassOpen(false);
       logInfo("Auto-Pass", "Auto-Pass is on for this Stock Round.");
@@ -4648,7 +4802,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const handleDisarmAutoPass = useCallback(() => {
     setAutoPassArm(null);
     // Design note #728: a fresh arm may act on the very turn a previous one was disarmed in.
-    autoPassedForSeatRef.current = null;
+    autoPassedAtLogIndexRef.current = null;
     logInfo("Auto-Pass", "Auto-Pass is off.");
   }, [logInfo]);
 
@@ -4665,10 +4819,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (autoPassArm.player !== viewerAddress) return;
     if (!isMyTurn) return;
 
-    /* Design note #728: one dispatch per seat-turn. The key is the round AND the seat index, so a later turn
-       in the same round is a different key and passes again as it should. */
-    const seatKey = `${gameState.macro_round_number}:${gameState.active_player_index}`;
-    if (autoPassedForSeatRef.current === seatKey) return;
+    /* Design note #816: one dispatch per TURN, measured against the append-only log. Nothing has happened
+       since this arm last acted means this is still that same turn; anything at all in the log means it is
+       not. The seat index this used to key on cannot tell those apart, because a Stock Round gives every
+       player the same seat index over and over. */
+    const log = sandboxLogRef.current;
+    const lastLogIndex = log.length > 0 ? log[log.length - 1].index : -1;
+    if (autoPassAlreadyActed(autoPassedAtLogIndexRef.current, lastLogIndex)) return;
 
     /* Design note #759a: the debt is computed where the prices are, then handed in. */
     const decision = autoPassDecision(gameState, {
@@ -4687,7 +4844,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       logInfo("Auto-Pass", `${decision.wakeReason} Auto-Pass is off.`);
       return;
     }
-    autoPassedForSeatRef.current = seatKey;
+    autoPassedAtLogIndexRef.current = lastLogIndex;
     void handlePassTurn();
     // Design note #759a: the prices decide the debt, so a price move must re-run this.
   }, [autoPassArm, gameState, viewerAddress, isMyTurn, handlePassTurn, logInfo, sandboxMarketPrices]);
@@ -5128,9 +5285,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [pendingToken, gameId, runGameplayAction, actingProtocolId, commitFreeStationPlacement]);
 
   /** The red X. Discards the staging and leaves targeting armed, so the
-   *  player is back where they were rather than having to re-open the mode. */
+   *  player is back where they were rather than having to re-open the mode.
+   *
+   *  Design note #818: AND FOR THE D&H'S FREE STATION, "back where they were" IS THE QUESTION. Requested:
+   *  "if they click yes and then decide they don't want to, they click the X which takes them back to the
+   *  modal where they can decline the power." Cancelling a PLACEMENT is not declining a POWER -- the X keeps
+   *  meaning what it means everywhere else in this app, and the forfeit stays behind a button that says so. */
   const handleCancelTokenPlacement = useCallback(() => {
     setPendingToken(null);
+    setDhStationPrompt((current) => dhStationPromptNext(current, "cancel-placement"));
   }, []);
 
   // A staged placement must not outlive the mode that produced it -- the
@@ -5628,7 +5791,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Three separate writes in three places; the charge goes through runGameplayAction so a lay uses the one dispatch path.
    *  See docs/ai_architecture/canvas_rendering.md - App.tsx #436 */
   const handleSandboxLayTile = useCallback(
-    (q: number, r: number, tileId: number, orientation: number, bonusLay = false) => {
+    (
+      q: number,
+      r: number,
+      tileId: number,
+      orientation: number,
+      bonusLay = false,
+      /** Design note #824: where the token on this hex goes, when the president had a say. */
+      tokenCity?: number,
+    ) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
       runGameplayAction("LayTile (sandbox)", {
@@ -5643,6 +5814,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              alone. Omitted when false rather than sent as `false`: an ordinary lay's entry must look exactly
              like the ones written before this field existed. */
           ...(bonusLay ? { bonus_lay: true } : {}),
+          /* Design note #824: ON the message for #776's reason, said again because it is the same reason --
+             every client's reducer must reach the same answer from the log alone, and a choice the log does
+             not carry is a choice that does not survive a replay. */
+          ...(tokenCity !== undefined ? { token_city: tokenCity } : {}),
         },
       });
 
@@ -5752,28 +5927,74 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         // nowhere else the tile may face -- and with none it leaves the
         // orientation alone rather than inventing one.
         if (legalRotations.length === 0) return current;
+        /* ==================================================================
+           DESIGN NOTE 824: THE CYCLE GAINS A SECOND DIMENSION
+           ==================================================================
+
+           REQUESTED: "if we can simply let players click through every possible Green tile upgrade with the
+           station marker on one city, then do it again on the other city, this will resolve the ERIE home
+           station issue."
+
+           EXACTLY THAT, AND NO NEW CONTROL. The rotate gesture already means "show me the next arrangement";
+           where the token's city is undetermined there are simply twice as many arrangements. Orientation is
+           the INNER loop and the city the outer, so a president sees every facing with the marker in one
+           city before it moves -- which is the order the question is actually asked in ("can I get the
+           facing I want?" then "and with the token where?").
+
+           ONE CHOICE MEANS ONE PASS, so every ordinary upgrade on the board cycles exactly as it did: the
+           city list has a single entry, the outer loop never advances, and `tokenCity` stays put. */
         const at = legalRotations.indexOf(current.orientation);
-        const next = legalRotations[(at + 1) % legalRotations.length];
-        return next === current.orientation ? current : { ...current, orientation: next };
+        const wrapped = at + 1 >= legalRotations.length;
+        const nextAngle = legalRotations[(at + 1) % legalRotations.length];
+
+        const cities = tokenDestinationChoices(
+          mapGrid,
+          current.q,
+          current.r,
+          gameState?.public_companies ?? [],
+          current.tileId,
+        );
+        const cityAt = cities.indexOf(current.tokenCity ?? cities[0] ?? -1);
+        const nextCity =
+          wrapped && cities.length > 1
+            ? cities[(Math.max(cityAt, 0) + 1) % cities.length]
+            : (current.tokenCity ?? cities[0]);
+
+        if (nextAngle === current.orientation && nextCity === current.tokenCity) return current;
+        return { ...current, orientation: nextAngle, tokenCity: nextCity };
       });
     },
-    [radialSelector, handleDismissRadial, legalRotations],
+    [radialSelector, handleDismissRadial, legalRotations, mapGrid, gameState],
   );
 
   /** A live preview gives the canvas to rotation, so the query interceptor is disarmed. Token destinations are recomputed per candidate tile.
    *  See docs/ai_architecture/canvas_rendering.md - App.tsx #448 */
   const radialTokenNote = useMemo(() => {
-    if (!radialSelector || !previewTile) return null;
-    return describeTokenMigration(
-      previewTokenMigration(
-        mapGrid,
-        radialSelector.q,
-        radialSelector.r,
-        gameState?.public_companies ?? [],
-        previewTile.tileId,
-      ),
-    );
-  }, [radialSelector, previewTile, mapGrid, gameState]);
+    /* ==================================================================
+       DESIGN NOTE 823: THE BOARD SAYS IT BETTER THAN THE SENTENCE DID
+       ==================================================================
+
+       REQUESTED: "there is a tooltip that says 'Station marker on city 1 of 2' but nobody playing the game
+       knows what that means. We can remove that string and have the preview render the station marker."
+
+       RIGHT, AND THE SENTENCE WAS ALWAYS STANDING IN FOR A PICTURE. "City 1 of 2" is an INDEX -- a number
+       with no meaning on a board where the two cities are distinguished by where they sit, not by an order
+       nobody can see. It existed because the preview could not show the answer, and #822 has just made it
+       able to: the marker is now drawn on the ghost tile, in the circle it will occupy.
+       A DRAWING BEATS A COORDINATE, which is the same trade #237 made when it replaced "2/4 - $40 ea" with
+       the station circles themselves, and #779 made when a private's holder became a colour.
+
+       `previewTokenMigration` STAYS, AND THE FIRST DRAFT OF THIS NOTE SAID IT STAYS *HERE*, which was false
+       within four lines of being written: this memo no longer calls it at all. It is still called below, once
+       per radial candidate, to decide which destination each thumbnail draws (#449) -- so the arithmetic has
+       a live reader and the prose does not. Corrected rather than quietly reworded, because a note asserting
+       something the code beneath it does not do is the single failure this project keeps finding.
+
+       THE MEMO ITSELF IS KEPT, returning `null`, rather than deleting the `tokenNote` prop: the ring's
+       caption is a general facility (#684 shows it only while previewing) and a future note may earn it.
+       Nothing is computed for it, so it costs nothing. */
+    return null as string | null;
+  }, []);
 
   /* One previewTokenMigration per candidate, keyed on its tile id - the destination depends on how many cities that tile carries. #628: tray counts read the live board.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #449 */
@@ -5947,6 +6168,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                through `logInfo` -- Float, Round, Auto-Skip -- is stamped with
                this action's instant rather than the rebuild's. */
             replayClock = action.at ?? null;
+            /* Design note #825: and whether this is history or now. `isOrdinaryPlay` is the drain's own name
+               for the distinction (#670) and was already deciding whether a cash badge fires; publishing it
+               is what lets the toasts ask the same question. */
+            replayingHistory = !isOrdinaryPlay;
             /* Design note #670: read off the REF, not the state variable. The
                reducer writes `sandboxStateRef` synchronously and React commits
                later, so the ref is the only thing that can be compared either
@@ -5967,6 +6192,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               // Cleared even if the dispatch threw: a stuck clock would stamp
               // every later live action with a replayed instant.
               replayClock = null;
+              // Design note #825: and a stuck flag would silence every later toast, which is the failure
+              // that reads as "notifications stopped working" and has no obvious cause.
+              replayingHistory = false;
             }
             if (cashBefore && live) {
               noteCashChanges(cashChanges(cashBefore, cashByPlayer(sandboxStateRef.current)));
@@ -6251,7 +6479,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const bonusLay =
       homeStationPlacement?.kind === "private-tile" && homeStationPlacement.abilityKey === "csl-tile";
     if (sandbox) {
-      handleSandboxLayTile(q, r, tileId, orientation, bonusLay);
+      handleSandboxLayTile(q, r, tileId, orientation, bonusLay, previewTile.tokenCity);
     } else {
       runGameplayAction("LayTile", {
         LayTile: {
@@ -6262,19 +6490,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           tile_id: tileId,
           orientation,
           ...(bonusLay ? { bonus_lay: true } : {}),
+          /* Design note #824: and where the token goes, when the president had a say. Omitted otherwise, so
+             every ordinary lay is byte-identical to what this app has always sent -- the containment #808's
+             `bypass` has, for the same reason. */
+          ...(previewTile?.tokenCity !== undefined ? { token_city: previewTile.tokenCity } : {}),
         },
       });
     }
     /* A private-tile errand only veils, so its round trip ends here - marked spent on the LAY, not on the button press.
-       See docs/ai_architecture/contract_economy.md - App.tsx #444 */
-    if (homeStationPlacement?.kind === "private-tile") {
-      if (homeStationPlacement.abilityKey) {
+       See docs/ai_architecture/contract_economy.md - App.tsx #444
+       Design note #817: AND ON *ITS* LAY. The test used to be that an errand was ARMED, which is the right
+       intent asked the wrong way -- so a tile laid anywhere while the D&H's power was armed consumed that
+       power and unlocked its free token. Reported: "I placed a tile that was not the F16 one, and it seems
+       the DH power was consumed." `errandClaimsLay` asks the question the note always meant. */
+    if (errandClaimsLay(homeStationPlacement, q, r)) {
+      if (homeStationPlacement?.abilityKey) {
         setUsedPrivateAbilities((prev) =>
           new Set(prev).add(homeStationPlacement.abilityKey as string),
         );
       }
+      /* Design note #818: the D&H's lay is half a power, so landing it raises the other half as a question.
+         Only the D&H -- the C&SL's lay is the whole of its power and has nothing to follow. */
+      if (homeStationPlacement?.abilityKey === "dh-tile") {
+        setDhStationPrompt((current) => dhStationPromptNext(current, "lay-landed"));
+      }
       setHomeStationPlacement(null);
-      setActiveMainTab(homeStationPlacement.returnTab);
+      if (homeStationPlacement) setActiveMainTab(homeStationPlacement.returnTab);
     }
     handleDismissRadial();
   }, [
@@ -6450,7 +6691,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <section style={styles.playerCardsSection}>
         <h3 style={styles.playerCardsTitle}>Players</h3>
         <PlayerCards
-          players={stockRoundPlayerFinances}
+          players={playerFinancesBySeat}
           label={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
           activeAddress={actingAddress(gameState, waterfallState)}
           priorityAddress={gameState.player_addresses[gameState.priority_deal_index] ?? null}
@@ -6883,6 +7124,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       : null
                   }
                   onOpenPrivateTrade={() => undefined}
+                  /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
+                     returns `null` for the compulsory home station, which collapses the whole control. */
+                  armedErrand={
+                    errandCancelLabel(homeStationPlacement)
+                      ? {
+                          label: errandCancelLabel(homeStationPlacement) as string,
+                          onCancel: () => setHomeStationPlacement(null),
+                        }
+                      : null
+                  }
                   ownsAnyTrain={ownsAnyTrain}
                   mustBuyTrain={mustBuyTrain}
                   /* Design note #570: the acting seat's colour, so the bar
@@ -7335,19 +7586,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     breaking it: two readouts of one dataset make the reader prove they agree. The cards carry
                     the same badge (`PlayerCards` #670), so the confirmation is continuous across a round
                     change while the table showing it is not duplicated. */}
+                {/* ==================================================================
+                     DESIGN NOTE 819: THE SAME CARDS, IN EVERY ROUND
+                    ==================================================================
+
+                    REQUESTED: "at the bottom of the Rail Map during the Operating Rounds, we added a 'Cash'
+                    panel to show players' holdings. I think we should just make this the Players panel from
+                    the Stock Round and show them everything."
+
+                    #670 CHOSE THE STRIP OVER THE CARDS FOR TWO REASONS AND ONLY ONE OF THEM HOLDS.
+                      THE ONE THAT DISSOLVES: "it is not a second ledger ... a second opinion on any of them
+                      is a fact in two places, which is how the two come to disagree." That argues against a
+                      NEW readout, and `PlayerCards` is not one -- it is the component the Stock Round has
+                      always used, reading `playerFinances` exactly as the Ledger does. Rendering one
+                      component in a second place adds no second derivation, which is what #562's rule is
+                      actually about. The duplication #670 feared was already there and was already fine.
+                      THE ONE THAT SURVIVES: height. "Underneath an already-tall corporation panel, on the one
+                      tab where the board is competing for every vertical pixel." That is a measurement, and
+                      this session has twice been wrong about a height by reasoning about it (#508, #785).
+                      It is a playtest question, and if the answer is "too tall" the fix is a collapse, not a
+                      second component.
+
+                    NOTHING IS LOST IN THE SWAP, which is the part that had to be checked rather than assumed:
+                    #670 threaded `cashDelta` into `PlayerCards` at the time -- "so the card asks the same
+                    question the strip asks" -- so the badge that answers "did that money arrive" comes across
+                    intact. Had it not, this change would have re-opened the report #670 exists for. */}
                 {gameState?.current_round_type === "OperatingRound" && (
-                  <PlayerCashStrip
-                    players={playerCashRows}
+                  <PlayerCards
+                    players={playerFinancesBySeat}
                     label={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+                    /* The seat whose corporation is operating. An OR's turn belongs to a
+                       corporation and `actingAddress` already draws that line, so the cards
+                       do not draw a second one. */
+                    activeAddress={actingAddress(gameState, waterfallState)}
+                    /* Design note #819: NO PRIORITY MARK IN AN OPERATING ROUND. The Priority Deal decides who
+                       opens the next STOCK round; naming it here would answer a question nobody is asking
+                       mid-OR, which is #593's own argument about the seat ordinal. */
+                    priorityAddress={null}
+                    viewerAddress={viewerAddress ?? null}
                     colorForSeat={(index) =>
                       seatColor(gameState.player_addresses[index] ?? "", index)
                     }
-                    deltas={cashDeltaByPlayer}
-                    /* The seat whose corporation is operating. An OR's turn belongs to a
-                       corporation and `actingAddress` already draws that line, so the strip
-                       does not draw a second one. */
-                    activeAddress={actingAddress(gameState, waterfallState)}
-                    viewerAddress={viewerAddress ?? null}
+                    privateDescription={(privateId) =>
+                      PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
+                    }
+                    cashDelta={cashDeltaFor}
                   />
                 )}
               </>
@@ -7478,6 +7761,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          is the ANSWER, not the offer. */}
       {/* Design note #717: the conditions, asked at the moment of arming rather than buried in a settings
          panel -- this is the one control that acts while the player is not looking. */}
+      {/* Design note #818: only while the question is open. `"placing"` puts the board in front of the
+          player instead -- the modal is the question, not the placement. */}
+      {dhStationPrompt === "asking" && (
+        <DhStationPrompt
+          ticker={dhStationSupply.ticker}
+          tokensLeft={dhStationSupply.tokensLeft}
+          onAccept={handleAcceptDhStation}
+          onDecline={handleDeclineDhStation}
+        />
+      )}
       <AutoPassModal
         open={autoPassOpen}
         initial={autoPassChoices}
@@ -7568,7 +7861,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // (design note #173), so the preview never opens on an angle the
           // rotate cycle would then refuse to return to.
           onSelectCandidate={(tileId, orientation) =>
-            setPreviewTile({ q: radialSelector.q, r: radialSelector.r, tileId, orientation })
+            setPreviewTile({
+              q: radialSelector.q,
+              r: radialSelector.r,
+              tileId,
+              orientation,
+              /* Design note #824: the first of the destinations this tile offers, which on every ordinary
+                 upgrade is the preserved index and on an unlaid preprinted pair is simply where the cycle
+                 starts. `undefined` when nothing is standing here at all. */
+              tokenCity: tokenDestinationChoices(
+                mapGrid,
+                radialSelector.q,
+                radialSelector.r,
+                gameState?.public_companies ?? [],
+                tileId,
+              )[0],
+            })
           }
           legalRotationCount={legalRotations.length}
           // Design note #0 in `utils/tokenMigration.ts`: where the tokens

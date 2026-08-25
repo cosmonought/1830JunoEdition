@@ -413,7 +413,34 @@ function candidatePathsFrom(
           })()
         : null;
 
-    if (breakdown.centres < maxCentres && path.length < MAX_PATH_HEXES) {
+    /* ==================================================================
+     *  DESIGN NOTE 821: THE STOP BUDGET WAS SPENT BEFORE THE ARM WAS CHOSEN
+     * ==================================================================
+     *
+     * REPORTED, after #808 and #820: "the auto-route feature still stops a route at Altoona instead of
+     * bypassing it for a higher value final revenue center."
+     *
+     * A THIRD GATE WITH THE SECOND ONE'S MISTAKE. #808 moved the BLOCKING test into the loop because the arm
+     * decides whether a full city is in the way. This is the CAPACITY test and it has exactly the same shape:
+     * `breakdown` prices the path with the current hex counted as a STOP, because at this point in the walk
+     * nothing has yet said otherwise -- and a hex crossed on the bow is not a stop at all (#737: "a bypassed
+     * hex pays nothing AND costs no stop -- the second is what makes the bow worth taking").
+     *
+     * SO A TRAIN AT ITS LIMIT STOPPED DEAD AT ALTOONA. Arriving there put it on its last stop; the gate then
+     * refused to expand, and the run ended on a $10 city instead of passing it for free and finishing
+     * somewhere worth more. Which is the report, in its own words.
+     *
+     * AND IT WAS NEVER ABOUT BLOCKING, which is why #808 and #820 did not touch it: this happens whether or
+     * not the city is shut, so it applies to the PENNSYLVANIA too -- the one corporation for which Altoona is
+     * never a wall. The two bugs share a hex and nothing else.
+     *
+     * THE COUNT IS ADJUSTED RATHER THAN RE-PRICED. `stops` already names the hexes that pay, and the path is
+     * simple, so "does this hex pay" is one lookup -- where a second `sandboxRouteBreakdown` per transit
+     * would be the same answer at a search's cost. */
+    const hexPays = breakdown.stops.some((stop) => stop.hex === at.hexLabel);
+    const centresIfBypassed = breakdown.centres - (hexPays ? 1 : 0);
+
+    if (path.length < MAX_PATH_HEXES) {
       /* Design note #6: from a start, every rail on the hex is available --
          the train begins inside the city. Having arrived on a rail, only
          the exits that rail reaches. */
@@ -435,6 +462,10 @@ function candidatePathsFrom(
            #730's rule unchanged; this is the one case where "may I pass" has two different answers on one
            hex, and it exists because 1830 printed it that way. */
         if (blockedCity !== null && transit.bypass !== true) continue;
+        /* Design note #821: and the stop budget, per arm. A bypassing transit does not spend this hex, so the
+           count it must fit under is the one that excludes it. Every other hex on the board pays the same
+           either way and this is `breakdown.centres`, unchanged. */
+        if ((transit.bypass === true ? centresIfBypassed : breakdown.centres) >= maxCentres) continue;
         const next = neighbourAcross(mapGrid, at.q, at.r, transit.exitEdge);
         if (!next) continue;
         if (onPath.has(`${next.q},${next.r}`)) continue;

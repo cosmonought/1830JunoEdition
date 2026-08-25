@@ -423,6 +423,20 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#6f7480",
     margin: "0 0 4px",
   },
+  /* Design note #813: the sticky-fit probe's readout. Deliberately plain and deliberately ugly -- it is an
+     instrument, not a feature, and it should look like something that is going to be removed. Monospace and
+     tabular so the figures do not jitter as they update on every scroll frame. */
+  fitProbe: {
+    margin: "4px 0 0",
+    padding: "3px 8px",
+    borderRadius: "4px",
+    border: "1px dashed #4a5163",
+    backgroundColor: "#141a26",
+    color: "#8f98a8",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.micro,
+    fontVariantNumeric: "tabular-nums",
+  },
   canvasPane: {
     /* Design note #600: `flex: 1` MEANS `flex-basis: 0`, AND THAT IS THE BUG. A sticky element travels only
        within its PARENT'S BOX, and `flex: 1` expands to `1 1 0%` -- a basis of ZERO, grown to fill a flex line
@@ -607,6 +621,14 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #426: nudged back up. #31 slimmed these on the reasoning that a chrome strip only has to be
      comfortably clickable, which took them below comfortable. These are the primary actions of a turn and
      several are destructive-ish, so they get one step of the type scale back. */
+  /* Design note #817: the exit from an armed private power. Amber, not red -- leaving an unspent power costs
+     nothing, and a destructive colour here would make the escape hatch look like the dangerous option when
+     the dangerous option is the one that spends the power by accident. */
+  actionBarCancelErrand: {
+    borderColor: "#c9a227",
+    color: "#e6cf7a",
+    backgroundColor: "#2a2415",
+  },
   actionBarButton: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
@@ -1126,12 +1148,19 @@ export const styles: Record<string, React.CSSProperties> = {
     paddingTop: "4px",
     borderTop: "1px solid #2b3242",
   },
-  /* Design note #739: the spectator's twin of `condensedTrainChip`. Same shape, none of the affordance --
-     no pointer, no pressed state, and slightly muted, because the reader cannot act on it and a chip that
-     looks clickable and is not is worse than one that plainly is not. */
-  spectatorTrainChip: {
-    cursor: "default",
-    opacity: 0.85,
+  /* Design note #739 gave the spectator a muted twin of `condensedTrainChip` -- "same shape, none of the
+     affordance ... because the reader cannot act on it and a chip that looks clickable and is not is worse
+     than one that plainly is not."
+     Design note #815: `spectatorTrainChip` is DELETED, because the premise expired. A watcher CAN act on
+     these chips now: #802 made a click open that train's route, and reading a rival's route is the whole
+     point of the row. There is no longer a viewer for whom the chip is inert, so there is no longer a second
+     style. #772's rule is why this is a deletion rather than an unused key -- neither `tsc` nor ESLint can
+     see an orphan in a `Record<string, CSSProperties>`.
+     Design note #815: and its replacement, marking the chip whose route is OPEN. An outline rather than a
+     fill, because the fill already carries the drafting cursor -- two meanings on one channel is #732. */
+  condensedTrainChipOpen: {
+    outline: "2px solid #7fb2ff",
+    outlineOffset: "1px",
   },
   /* The sum, set apart from the per-train chips: it is a different KIND of figure -- theirs are the parts,
      this is what the corporation actually earns -- and running it in the same chip style would invite it to

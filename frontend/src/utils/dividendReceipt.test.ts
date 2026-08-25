@@ -119,13 +119,33 @@ describe("the toast is raised where every client runs, and the row carries no co
     expect(read("App.tsx")).toContain('options?.derived !== true');
   });
 
-  it("gives spectators a static row, not disabled buttons", () => {
-    /* Design note #739. A disabled control invites the reader to wonder what they did wrong; a plain span
-       says "this is information". The president's own row keeps its buttons -- the two are split by role
-       rather than the one being greyed. */
+  it("gives spectators information, not disabled buttons", () => {
+    /* ==================================================================
+        DESIGN NOTE 815 REPLACED THE ROW THIS USED TO ASSERT
+       ==================================================================
+
+       #739's rule is intact and its implementation is not. It split the Run Routes chips into two rows -- the
+       president's live one and a static twin for everybody else -- "because a disabled control invites the
+       reader to wonder what they did wrong; a plain span says 'this is information'."
+
+       #815 MERGED THEM, on a report that the chips carrying revenue neither opened a route nor survived the
+       bar docking. There is one row now, and #739's rule is kept a better way than by a second component:
+       nothing on it is disabled for ANYONE, because opening a readout dispatches nothing. A watcher gets a
+       live control that does the one thing a watcher wants.
+
+       THIS ASSERTION SURVIVED #815 BY NOT BEING RUN. Same miss as `dhPower.test.ts` after #809: the suites I
+       ran were the ones I had just edited, and a harness for a rule can outlive the code it was checking
+       while still passing on the day it was written. */
     const bar = read("panels/ContextualActionBar.tsx");
-    expect(bar).toContain('!mayActThisTurn && orSubPhase === "Routes" && trainDrafts.length > 0');
-    expect(bar).toContain('aria-label="Routes being drafted"');
+    expect(bar).not.toContain('!mayActThisTurn && orSubPhase === "Routes"');
+    expect(bar).toContain('{orSubPhase === "Routes" && trainDrafts.length > 0 && (');
+    expect(bar).toContain('aria-label="Drafted routes"');
+    // The rule itself: no greyed chip for a viewer whose only use of the row is to read it.
+    const row = bar.slice(
+      bar.indexOf('{orSubPhase === "Routes" && trainDrafts.length > 0 && ('),
+      bar.indexOf("styles.spectatorTotal"),
+    );
+    expect(row).not.toContain("disabled={!sessionReady}");
   });
 
   it("shows the total the report asked for, and only when it means something", () => {

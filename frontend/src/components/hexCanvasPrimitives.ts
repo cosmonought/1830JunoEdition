@@ -79,6 +79,7 @@ import {
   printedPathsForEdge,
   printedTerminalRailAtEdge,
   printedPathsForTraversal,
+  printedTraversalVariants,
   terminalRailAtEdge,
   tileArtworkPaths,
   tileCityAnchors,
@@ -99,6 +100,22 @@ export interface RouteOverlay {
    *  adjacent; a non-adjacent pair is skipped rather than drawn as a straight
    *  line across the board (see `drawRouteOverlays`). */
   hexes: Array<[number, number]>;
+  /** Design note #820: WHICH WAY THROUGH each hex, index-aligned with `hexes`.
+   *
+   *  REPORTED: "the Run Routes action now lets a route pass Altoona, but it draws the route going directly
+   *  through the tokened out city marker (it does not count the city/station toward the revenue) instead of
+   *  following the bypass."
+   *
+   *  THE PARENTHESIS IS THE TELL. The revenue was already right -- #737's `bypass` flag reaches
+   *  `sandboxRouteBreakdown` and #808 got it as far as the wire -- so the route was PRICED on the bow and
+   *  DRAWN on the station arm. That is the fourth surface in this one feature to be handed a hex and left to
+   *  guess which of H12's two tracks was meant, and the only one still guessing.
+   *
+   *  A PARALLEL ARRAY, and stated as such rather than pretended away: `hexes` is a tuple array read by index
+   *  in the walk below, and threading a third element through every construction site would have touched more
+   *  code than the fix. Shorter or absent means "the first way through, everywhere", which is every hex on the
+   *  board except this one and is exactly the pre-#820 behaviour. */
+  variants?: readonly (number | undefined)[];
   /* trainIndex is the join key the map, the planner rows and the train chips all share -- one number in App.tsx, no id scheme, nothing that can drift. emphasis is computed by the CALLER, since callers with no cursor exist.
      See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #373 */
   trainIndex?: number;
@@ -783,9 +800,18 @@ export function drawRouteOverlays(
           }
         }
 
+        /* Design note #820: THE ARM THE ROUTE ACTUALLY TOOK. `printedPathsForTraversal` collapses to the
+           first way through -- #225's choice, correct for every hex on the board except Altoona, whose two
+           tracks join the same two edges. `printedTraversalVariants` returns both, and the route's own
+           `variant` picks between them.
+           FALLS BACK RATHER THAN FAILING: an absent variant, or one the artwork does not have, takes the
+           collapsed answer, which is what every hex without a fork returns anyway. */
+        const variant = overlay.variants?.[index];
         const indices =
           entryEdge !== null && exitEdge !== null
-            ? printedPathsForTraversal(printedLabel, entryEdge, exitEdge)
+            ? (variant !== undefined
+                ? printedTraversalVariants(printedLabel, entryEdge, exitEdge)[variant]
+                : undefined) ?? printedPathsForTraversal(printedLabel, entryEdge, exitEdge)
             : printedPathsForEdge(printedLabel, terminalEdge!);
         const paths = indices.length > 0 ? printedArtworkPaths(printedLabel) : undefined;
         if (paths && indices.every((index) => paths[index])) {

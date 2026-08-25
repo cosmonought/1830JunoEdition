@@ -278,18 +278,44 @@ export function reachableTrack(
      * corporation is not blocked by its own token -- nor by anybody else's in a city it also occupies.
      * Starting nodes are exempt by construction rather than by a rule, because the caller only ever seeds the
      * walk from cities this corporation holds. */
-    if (at.arrivalEdge !== null && blocksThrough) {
-      const city = cityForArrival(mapGrid, at.q, at.r, at.arrivalEdge);
-      if (city !== null && blocksThrough(at.q, at.r, city)) continue;
-    }
+    /* ==================================================================
+     *  DESIGN NOTE 820: THE WALL HAS A DOOR IN IT, AND THIS WALK DID NOT KNOW
+     * ==================================================================
+     *
+     * REPORTED: "during the Lay Track action, the corporation's veil and legal placement options are being
+     * blocked when its network reaches Altoona, despite the bypass."
+     *
+     * THE SAME MISTAKE #808 FOUND IN THE ROUTE TRACER, in the other walk, and #729/#730 warned that these two
+     * have to be fixed together: "they had to be fixed together or the board would have promised reach the
+     * router then refused." #808 fixed the router half and left this one, so the promise now runs the other
+     * way -- a route may cross Altoona and the network says the far side is unreachable.
+     *
+     * ASKED TOO EARLY, exactly as before. The answer is computed on ARRIVAL and used to `continue`, which
+     * drops every exit -- and the bow is a property of the EXIT. H12's two tracks join the same two edges;
+     * one enters the city and one goes round it, and a city full of other corporations' tokens has nothing to
+     * say about track that never touches it.
+     *
+     * #729's "REACHED, BUT NOT PASSED" IS UNCHANGED for a hex with no bow: `hexes.add` above has already
+     * recorded the blocked city, and filtering the exits to nothing leaves it in the network without a way
+     * out, which is what the old `continue` achieved. What changes is only that a bow counts as a way out. */
+    const blockedCity =
+      at.arrivalEdge !== null && blocksThrough
+        ? (() => {
+            const city = cityForArrival(mapGrid, at.q, at.r, at.arrivalEdge);
+            return city !== null && blocksThrough(at.q, at.r, city) ? city : null;
+          })()
+        : null;
 
     /* Which edges may this visit leave by? From a station, all of them; having arrived on a rail, only the edges
        that rail reaches. `traversalsFrom` is the strict half -- it drops the pair when there is no authored rail
-       joining the two edges, which is what makes two curves on one tile two curves rather than a junction. */
+       joining the two edges, which is what makes two curves on one tile two curves rather than a junction.
+       Design note #820: and when the city here is shut, only the ways through that miss it. */
     const exits =
       at.arrivalEdge === null
         ? cityExitEdges(mapGrid, at.q, at.r, at.cityIndex)
-        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).map((t) => t.exitEdge);
+        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge)
+            .filter((t) => blockedCity === null || t.bypass === true)
+            .map((t) => t.exitEdge);
 
     for (const edge of exits) {
       /* Design note #483: recorded BEFORE the two-sided join is tested. An

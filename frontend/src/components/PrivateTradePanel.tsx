@@ -236,10 +236,26 @@ export function ProposePrivatePurchase({
           )}
         </div>
 
-        <p style={styles.body}>
-          A corporation may buy a private company from its owner between 50% and 200% of face
-          value. The owner has to agree.
-        </p>
+        {/* Design note #814: THE INTRO PARAGRAPH IS GONE, and #810 removed its twin one report earlier.
+           REQUESTED: "I think we can also remove this from the Buy Private Companies subpanel ... It is
+           already effective in the propose purchase window and can be in the tutorial instead."
+           THE REMOVED PARAGRAPH, quoted whole and on one line each so #490a's guard can find it:
+             "A corporation may buy a private company from its owner between 50% and 200% of face value."
+             "The owner has to agree."
+           (Kept unwrapped deliberately. A comment that wraps mid-sentence preserves the words and destroys
+           the STRING, and a harness asserting the record survived searches for the string -- which is the
+           third time in two passes that source text has read as contiguous and been split: a JSX `$` beside
+           an expression, a `+`-joined tutorial line, and now this.)
+           I FLAGGED THIS TWO REPORTS AGO AND DID NOT ACT ON IT: "#721 already made this argument -- 'two
+           statements of one rule, and the redundant one was shouting' -- and I left the paragraph alone
+           because it also carried 'the owner has to agree', which nothing else said." That second clause is
+           the whole reason this needed a destination rather than a deletion, and it now has one.
+           #661 SIZED THIS UP DELIBERATELY, from `small` to `body`, "because both halves are load-bearing".
+           Both halves still are; what changed is where they load. The BAND is stated inline beside the price
+           field the moment a card opens (#804), which is where a player meets it, and the CONSENT rule is in
+           the Operating Round tutorial with the rest of the things that are true before you click anything.
+           A rule read once does not belong on a surface read every turn -- the same conclusion #810 reached
+           about the depot's caption, arrived at from the other direction. */}
 
         {eligible.length === 0 ? (
           <p style={styles.empty}>
@@ -428,9 +444,25 @@ export function ProposePrivatePurchase({
                               if (priceProblem) return;
                               onPropose(entry.private_id, price);
                             }}
-                            title={priceProblem ?? `Offer $${price} for ${entry.name}.`}
+                            title={
+                              priceProblem ??
+                              `Offer $${price} to ${entry.owner ? labelForAddress(entry.owner) : "the owner"} for ${entry.name}.`
+                            }
                           >
-                            Propose Purchase
+                            {/* Design note #811: THE BUTTON NAMES WHO IT GOES TO.
+                               REQUESTED: "let's add who the purchase is being proposed to: e.g., 'Propose
+                               Purchase to P1.' Even though the owner is listed above, it just helps cement
+                               what's happening."
+                               AND THE REASON IT HELPS IS SPECIFIC TO THIS TRANSACTION. Every other button in
+                               this app commits a corporation against the bank or the board -- this one asks
+                               another PERSON for something they may refuse (`PrivateTradePanel` #0: the
+                               contract has no accept step yet, so on chain it is worse than that, it takes it
+                               outright). A control that moves somebody else's property should say whose.
+                               FALLS BACK TO "the owner" rather than omitting the clause, so the sentence
+                               keeps its shape on a row whose holder the room has not resolved -- the same
+                               reason #779's colour falls back to grey rather than to a guess. */}
+                            Propose Purchase to{" "}
+                            {entry.owner ? labelForAddress(entry.owner) : "the owner"}
                           </button>
                         </>
                       )}
@@ -622,10 +654,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  /* Design note #661: `small` -> `body`. This paragraph states the 50-200%
-     rule and that the owner must agree -- both load-bearing, and both were
-     set at the size used for timestamps. */
-  body: { margin: 0, fontSize: FONT_SIZE.body, color: "#aab0bc", lineHeight: 1.55 },
+  /* Design note #661 sized this paragraph up from `small` to `body`, "because it states the 50-200% rule and
+     that the owner must agree -- both load-bearing, and both were set at the size used for timestamps".
+     Design note #814: `body` is DELETED with the paragraph. Both halves are still load-bearing and both moved
+     -- the band to the offer line beside the price field, the consent rule to the Operating Round tutorial --
+     so what is gone is a surface, not a fact. An orphan key here would be invisible to `tsc` and to ESLint
+     alike (#772), and is how the paragraph comes back. */
   empty: { margin: 0, fontSize: FONT_SIZE.body, color: "#c9b98a", lineHeight: 1.55 },
   list: { display: "flex", flexDirection: "column", gap: "8px" },
   /* Design note #661: A ROW PER PRIVATE, AT A READABLE SIZE. Both halves of the report were true and they had

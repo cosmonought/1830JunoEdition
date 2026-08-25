@@ -95,6 +95,76 @@ describe("the predicate is not fooled by the shape of its input", () => {
   });
 });
 
+describe("a toast marks a move, not a catch-up (design note #825)", () => {
+  /* ==================================================================
+      #670 WROTE THIS RULE FOR BADGES AND THE TOASTS NEVER ASKED IT
+     ==================================================================
+
+     REPORTED: "when Undoing any action, a toast notification surfaces about the last corporation's payout.
+     There shouldn't be any toast notifications on Undo."
+
+     #670's note is still in the drain, unchanged: "A BADGE MARKS A MOVE, NOT A CATCH-UP ... Joining a room
+     replays a whole game, and an undo rebuilds from the fixture -- in both, every balance on the board
+     changes, and firing a badge per change would carpet the strip with figures about events that are minutes
+     old." The cash badges have honoured that since the day it was written. #718's receipt and #786/#795's
+     payout notice arrived afterwards and inherited nothing.
+
+     AND A PAYOUT TOAST IS WORSE THAN NOISE HERE, because it is a CLAIM: money has just moved. During a
+     rebuild nothing has -- the board is being restored to a state it already reached, and the entry being
+     replayed is one the player is in the middle of undoing.
+
+     `isOrdinaryPlay` ALREADY EXISTED and was already deciding whether a badge fires. Publishing it as a flag
+     is the whole change; the rule was never in doubt, only its audience. */
+
+  const APP = (() => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs
+      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+  })();
+
+  it("gates both doors rather than the call sites", () => {
+    /* #748a's rule: a call site that has to remember is one that will forget, and the next toast added would
+       have forgotten too. Two entry points, two guards, three call sites covered. */
+    expect(APP.match(/if \(replayingHistory\) return;/g)).toHaveLength(2);
+    expect(APP).toContain("const showDividendToast = useCallback(");
+    expect(APP).toContain("const showActionToast = useCallback(");
+  });
+
+  it("takes the answer from the drain's own predicate", () => {
+    // Not a second definition of "is this a replay" -- #670's `isOrdinaryPlay`, published.
+    expect(APP).toContain("replayingHistory = !isOrdinaryPlay;");
+    expect(APP).toContain("const isOrdinaryPlay = !rewound && pending === 1;");
+  });
+
+  it("clears the flag even when a dispatch throws", () => {
+    /* A stuck flag silences every later toast, which reads as "notifications stopped working" and has no
+       obvious cause -- the same reasoning the `replayClock` beside it already carries, and the reason both
+       are cleared in the same `finally`. */
+    const drain = APP.slice(
+      APP.indexOf("replayingHistory = !isOrdinaryPlay;"),
+      APP.indexOf("if (cashBefore && live)"),
+    );
+    expect(drain).toContain("} finally {");
+    expect(drain).toContain("replayingHistory = false;");
+  });
+
+  it("resets with the log clock on a rewind", () => {
+    // `resetLogClock` runs before the replay loop; a flag left true from a previous run would silence it.
+    const start = APP.indexOf("function resetLogClock");
+    expect(start).toBeGreaterThan(-1);
+    expect(APP.slice(start, start + 220)).toContain("replayingHistory = false;");
+  });
+
+  it("leaves the badges alone", () => {
+    /* THE CONTROL. #670's own gate is what this borrows from, and borrowing must not disturb it -- the cash
+       badge still asks `isOrdinaryPlay` directly, one line away. */
+    expect(APP).toContain("const cashBefore = isOrdinaryPlay ? cashByPlayer(sandboxStateRef.current) : null;");
+  });
+});
+
 describe("every toast is mounted behind a rule", () => {
   const APP = (() => {
     const fs = require("fs") as typeof import("fs");

@@ -132,6 +132,102 @@ export const DH_POWER_DESCRIPTION =
   `If any other corporation builds on ${DH_HEX_LABEL} first, both powers are forfeited.`;
 
 
+/* ==================================================================
+ *  DESIGN NOTE 818: THE FREE STATION IS ASKED FOR, NOT LEFT LYING ABOUT
+ * ==================================================================
+ *
+ * REQUESTED: "if they do lay the F16 tile, a modal pops up and asks them 'Do you want to place a Station
+ * Marker on this tile for free? If you do not use this power now, it will be forfeited,' then (i) if they
+ * click yes we auto-place it on the tile with the usual green checkmark and red x ... (ii) if they click yes
+ * and then decide they don't want to, they click the X which takes them back to the modal where they can
+ * decline the power ... or (iii) they click no and the game advances."
+ *
+ * I ARGUED FOR THE TICK/X ALONE AND WAS WRONG, on a point that is worth keeping because it generalises.
+ * REPORTED BACK: "I fear without the station marker modal that players may not realize they are forfeiting
+ * the special power." Exactly so -- and the sharper version is about the CONTROL rather than the player.
+ * Everywhere else in this app a red X dismisses: nothing happened, come back later. Making it spend
+ * something irreversible would invert its meaning on the one screen where the mistake cannot be undone, and a
+ * player who has learned "X backs out safely" would learn otherwise by losing the power. That is #732's
+ * one-channel-one-meaning applied to a verb instead of a colour.
+ *
+ * SO THE MODAL SAYS THE IRREVERSIBLE THING IN WORDS, and the tick/X keeps meaning what it always meant --
+ * which is why (ii) returns to the modal rather than forfeiting: cancelling a PLACEMENT is not declining a
+ * POWER, and the two decisions get one control each.
+ *
+ * WHY THERE IS A DEADLINE AT ALL. #725 settled that the token is the second half of the lay ("the station is
+ * only available with the lay") and #725a that both halves are one turn. A power that could be taken three
+ * turns later would be a different power. The forfeit is the rule; what was missing is that nothing said so
+ * at the moment it applied.
+ */
+
+/** Where the free-station decision has got to.
+ *
+ *  `"asking"`  -- the modal is up: take it, or forfeit it.
+ *  `"placing"` -- accepted; the board is armed and the confirmation ring is waiting.
+ *  `null`      -- nothing pending, which is every other moment in the game. */
+export type DhStationPrompt = "asking" | "placing" | null;
+
+export type DhStationPromptEvent =
+  /** The power's own F16 tile has just landed. */
+  | "lay-landed"
+  /** "Yes" in the modal. */
+  | "accept"
+  /** "No" in the modal -- the forfeit. */
+  | "decline"
+  /** The confirmation ring's red X. */
+  | "cancel-placement"
+  /** The confirmation ring's green tick. */
+  | "placed"
+  /** The turn or the step moved on underneath the prompt. */
+  | "abandon";
+
+/** The whole flow, as one transition table.
+ *
+ *  A TABLE RATHER THAN FOUR `setState` CALLS SPREAD THROUGH `App`, because #817 is the record of what happens
+ *  when a small lifecycle lives as scattered `if`s: four reports, one missing set of rules. This one is five
+ *  lines and it can be asked questions. */
+export function dhStationPromptNext(
+  current: DhStationPrompt,
+  event: DhStationPromptEvent,
+): DhStationPrompt {
+  if (event === "abandon") return null;
+  switch (current) {
+    case null:
+      return event === "lay-landed" ? "asking" : null;
+    case "asking":
+      return event === "accept" ? "placing" : event === "decline" ? null : "asking";
+    case "placing":
+      /* THE RETURN PATH, and the reason this is a machine rather than a boolean. A red X means "not this
+         placement", which leaves the OFFER standing -- so it goes back to the question rather than to
+         nothing. Forfeiting from here would be the inversion the modal exists to avoid. */
+      return event === "cancel-placement" ? "asking" : event === "placed" ? null : "placing";
+  }
+}
+
+/** Whether declining at this point forfeits the power.
+ *
+ *  Only from the question. Abandoning because the turn moved on is not a decision the player made, and
+ *  #725a's forfeit is a consequence of choosing not to take it -- not of the clock. (The power is bounded by
+ *  the turn anyway: `dhPowerState` refuses the token on any later one, so nothing is left lying about.) */
+export function dhStationDeclineForfeits(
+  current: DhStationPrompt,
+  event: DhStationPromptEvent,
+): boolean {
+  return current === "asking" && event === "decline";
+}
+
+export const DH_STATION_PROMPT_TITLE = "Free station on Scranton?";
+
+export const DH_STATION_PROMPT_BODY =
+  `The Delaware & Hudson's tile is down on ${DH_HEX_LABEL}. Its second half lets this corporation place a ` +
+  `station token there for $0, in addition to its normal placement this turn.`;
+
+/** Design note #818: the forfeit, stated before it happens rather than discovered afterwards. The same
+ *  treatment #725a gives the self-lay trap, for the same reason: this is a cost a player cannot see coming
+ *  and cannot undo. */
+export const DH_STATION_PROMPT_FORFEIT =
+  "If you do not use this power now, it is forfeited for the rest of the game.";
+
 /** The warning shown to a president about to forfeit their own D&H power by laying F16 the ordinary way.
  *
  *  Design note #725a. REPORTED, on confirming that a self-lay forfeits like any other: "we may want to include

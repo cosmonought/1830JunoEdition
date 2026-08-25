@@ -139,11 +139,16 @@ describe("both connectivity gates are overridden, not just the visible one", () 
 
   it("lets the ring open on the power's own hex", () => {
     /* (a)'s FIRST half: #716 refuses to open a picker outside the acting corporation's reach, which is exactly
-       what this power exists to ignore. */
-    /* The needle drops the leading `${`, for `appNaming.test.ts`'s reason: written in full it is a literal
-       `${...}` inside a plain string and `no-template-curly-in-string` reads it as a template the author
-       forgot to write. */
-    expect(app).toContain("privateTileHexKeyRef.current !== `");
+       what this power exists to ignore.
+       DESIGN NOTE 809 MOVED THE GATE AND THIS ASSERTION DID NOT FOLLOW. It used to read the inline
+       comparison `privateTileHexKeyRef.current !== \`...\``; #809 lifted the whole gate into
+       `inspectorClickRefused` so a watcher's clicks would stop being swallowed, and the exemption became a
+       named argument. The RULE is unchanged and is now asserted where it lives -- `privateErrand.test.ts`
+       and `inspectorClick.test.ts` both cover it -- so what is left here is that the shell still HANDS the
+       exemption over.
+       AND I DID NOT RUN THIS FILE AFTER #809, which is how a harness fails for a whole pass without anybody
+       noticing: the suites I ran were the ones I had just edited. */
+    expect(app).toContain("privateTileHexKey: privateTileHexKeyRef.current,");
   });
 
   it("lets the picker offer candidates there too", () => {

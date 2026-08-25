@@ -142,11 +142,61 @@ describe("a jump is not an action", () => {
     expect(CODE).toContain("Scrolls to the Buy Trains panel below.");
   });
 
-  it("scrolls the least that works", () => {
-    /* `block: "nearest"` rather than `"start"`: under a sticky bar, `start` tucks the panel's heading behind
-       it, and on a short page `nearest` correctly does nothing at all. */
-    expect(CODE).toContain('block: "nearest"');
-    expect(CODE).not.toContain('block: "start"');
+  it("scrolls to the top of the panel, below the bar", () => {
+    /* ==================================================================
+        DESIGN NOTE 810: BOTH ALIGNMENTS WERE WRONG, FOR ONE REASON
+       ==================================================================
+
+       REPORTED: "the auto-scroll 'works,' but the Action Bar covers the actual Buy Trains subpanel, so
+       players who click it may still be confused what they need to do. Can you have it scroll all the way to
+       the top of the subpanel, below the Action Bar?"
+
+       THIS ASSERTION USED TO SAY THE OPPOSITE AND ITS REASONING IS WORTH KEEPING: "`block: "nearest"` rather
+       than `"start"`: under a sticky bar, `start` tucks the panel's heading behind it, and on a short page
+       `nearest` correctly does nothing at all." The first clause is true of a bare `scrollIntoView`. The
+       second is the part that did not survive contact: `nearest` stops as soon as ANY of the panel is on
+       screen, which is usually with the heading behind the bar -- so it dodged the problem into a different
+       corner rather than out of the room.
+       NEITHER KNEW THE BAR'S HEIGHT, which is the actual missing input, and `scroll-margin-top` is the
+       feature that supplies it. With the margin on the element, `start` means "start, below the bar". */
+    expect(CODE).toContain('block: "start"');
+    expect(CODE).not.toContain('block: "nearest"');
+  });
+
+  it("carries the clearance on the destination rather than the call", () => {
+    /* Stated once, where the element is. `scroll-margin-top` is honoured by every scroll into this element,
+       including ones no call site here knows about -- a browser restoring a scroll position, a future
+       `:target` link -- so a caller cannot forget the bar exists. */
+    const dollar = String.fromCharCode(36);
+    expect(CODE).toContain(
+      "<div ref={stepPanelRef} style={{ scrollMarginTop: `" + dollar + "{barClearance}px` }}>",
+    );
+  });
+
+  it("measures the clearance rather than assuming one", () => {
+    /* THE NUMBER WAS ALREADY BEING READ. `useCondensedWhenPinned` takes the bar's rect every frame for
+       #720's pin test and threw both figures away; two other places then had to guess about a quantity this
+       hook already knew. `stickyTop + height`, because the bar sits AT its sticky offset. */
+    expect(CODE).toContain("const clearance = pinnable ? Math.round(stickyTop + rect.height) : 0;");
+    expect(CODE).toContain("return [ref, condensed, mayPin, barClearance];");
+  });
+
+  it("reserves nothing when the bar cannot pin", () => {
+    /* #720's own state: a bar too tall to pin is `position: static` and scrolls away with the page, so it
+       covers nothing. The ternary above is the whole of it, asserted separately because a constant clearance
+       would leave a gap under a bar that is not there. */
+    expect(CODE).toContain("pinnable ? Math.round(stickyTop + rect.height) : 0");
+  });
+
+  it("does not count a panel hidden behind the bar as seen", () => {
+    /* #797 greys this button when the panel is in view. Without the same clearance the observer counts the
+       strip behind the bar, so the button disables itself at exactly the moment the panel is invisible --
+       the reported confusion, with the one control that would fix it turned off. */
+    const dollar = String.fromCharCode(36);
+    expect(CODE).toContain(
+      "rootMargin: `-" + dollar + "{barClearance}px 0px 0px 0px`",
+    );
+    expect(CODE).toContain("}, [barClearance]);");
   });
 });
 
@@ -154,9 +204,9 @@ describe("there is exactly one destination", () => {
   it("wraps both panels in the referenced container", () => {
     /* One wrapper rather than a ref per panel: the two steps are mutually exclusive, so a single target is
        always correct and cannot point at a panel that is not rendered. */
-    expect(CODE).toContain("<div ref={stepPanelRef}>");
+    expect(CODE).toContain("<div ref={stepPanelRef}");
     const wrapper = CODE.slice(
-      CODE.indexOf("<div ref={stepPanelRef}>"),
+      CODE.indexOf("<div ref={stepPanelRef}"),
       CODE.indexOf("<PrivatePowerPanel"),
     );
     expect(wrapper).toContain("<TrainPurchasePanel");
@@ -167,8 +217,8 @@ describe("there is exactly one destination", () => {
     /* #785's property, restated because this pass touched the same region: if the wrapper drifted back inside
        the bar, the bar would start unpinning itself again AND the jump would point at itself. */
     const stickyStart = CODE.lastIndexOf("ref={actionBarRef}");
-    expect(CODE.indexOf("<div ref={stepPanelRef}>")).toBeGreaterThan(stickyStart);
-    const sticky = CODE.slice(stickyStart, CODE.indexOf("<div ref={stepPanelRef}>"));
+    expect(CODE.indexOf("<div ref={stepPanelRef}")).toBeGreaterThan(stickyStart);
+    const sticky = CODE.slice(stickyStart, CODE.indexOf("<div ref={stepPanelRef}"));
     expect(sticky).not.toContain("<TrainPurchasePanel");
   });
 });
@@ -176,7 +226,7 @@ describe("there is exactly one destination", () => {
 describe("the jump greys out with nothing to reach (design note #797)", () => {
   it("disables both buttons when the panel is in view", () => {
     /* REPORTED: "'Buy Trains' should be grayed out when there's no need to scroll them to the subpanel."
-       `block: "nearest"` already made the click harmless -- it scrolls by zero -- and a control that responds
+       the alignment already made the click harmless -- it scrolls by zero -- and a control that responds
        to a press by doing nothing is indistinguishable from a broken one. */
     expect(CODE).toContain("disabled: stepPanelInView");
     expect(CODE.match(/disabled: stepPanelInView/g)?.length).toBe(2);

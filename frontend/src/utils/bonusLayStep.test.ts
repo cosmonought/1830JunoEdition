@@ -173,8 +173,24 @@ describe("the shell says which lay it is", () => {
 
   it("does not flag the D&H's lay", () => {
     /* #548: the D&H's tile CONSUMES the corporation's placement -- only its token is free. The two privates
-       are exact opposites and conflating them is the easy mistake. */
-    expect(APP).not.toContain('abilityKey === "dh-tile"');
+       are exact opposites and conflating them is the easy mistake.
+       SCOPED TO THE EXPRESSION, and the first version was not. It asserted that `abilityKey === "dh-tile"`
+       appeared NOWHERE in `App.tsx`, using a whole-file absence as a proxy for a property of one line -- so
+       #818 broke it by testing that same key for an unrelated reason (raising the free-station question after
+       the D&H's lay lands, which is a fact about the TOKEN and says nothing about a bonus lay).
+       A proxy assertion fails on the first legitimate use of the thing it was standing in for, and it fails
+       in a way that reads as a real regression. The property was always "the `bonusLay` expression is
+       C&SL-only"; that is what is checked now. */
+    /* The end anchor is searched FROM the start anchor. `if (sandbox) {` occurs earlier in the file too, so
+       a bare `indexOf` produced a backwards range and an empty slice -- which then failed the `toContain`
+       and would have silently passed the `not.toContain` beside it. Half of a slice guard is worse than
+       none: #785's harness lost a whole assertion the same way. */
+    const start = APP.indexOf("const bonusLay =");
+    const bonus = APP.slice(start, APP.indexOf("if (sandbox) {", start));
+    expect(start).toBeGreaterThan(-1);
+    expect(bonus.length).toBeGreaterThan(0);
+    expect(bonus).toContain('abilityKey === "csl-tile"');
+    expect(bonus).not.toContain("dh-tile");
   });
 
   it("omits the field entirely for an ordinary lay", () => {

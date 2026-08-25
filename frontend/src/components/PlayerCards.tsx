@@ -25,7 +25,8 @@ import { bestContrastTextColor } from "../styles/corporationLivery";
 // cards are where cash lives in a Stock Round, so this is where the confirmation
 // has to appear there -- and one component means the two rounds cannot end up
 // signalling the same event two different ways.
-import { CashDeltaBadge } from "./PlayerCashStrip";
+// Design note #819: its own file now -- the strip it used to live in has been replaced by these cards.
+import { CashDeltaBadge } from "./CashDeltaBadge";
 import type { PlayerFinances } from "../utils/playerFinance";
 
 export interface PlayerCardsProps {

@@ -158,6 +158,90 @@ describe("the readout belongs to everyone", () => {
   });
 });
 
+describe("there is one row of chips, and it is the handle (design note #815)", () => {
+  /* ==================================================================
+      THIS FILE PASSED THROUGH THE BUG IT WAS WRITTEN FOR
+     ==================================================================
+
+     REPORTED: "the sticky/traveling Action Panel shows the train chips, but clicking them does not have the
+     drop-down showing their route", and "when the Action Bar docks at the top, the train chips with their
+     revenue values disappear completely."
+
+     EVERY ASSERTION ABOVE WAS TRUE THE WHOLE TIME. They are about the corporation card's FLEET chips, which
+     #802 wired correctly and which carry no revenue figures. The bar was drawing train chips in two other
+     places -- a president's row with the money on it, gated on `condensed` and wired to the draft cursor, and
+     a static read-only twin for everybody else -- and this harness knew about neither. A player clicking the
+     chips that showed the money got nothing, because the chips that drop down are the ones without the money.
+
+     SO THE NEW ASSERTIONS ARE ABOUT COUNTING, not about wiring. "Is this control wired" was never the
+     question; "how many of this control are there" was, and it is the question this codebase has had to ask
+     four times now (#748a, #775, #791, and here). */
+
+  it("draws the revenue chips once, for everybody", () => {
+    /* The twin is gone. `!mayActThisTurn && orSubPhase === "Routes"` was a whole second row that existed only
+       because #691 had removed the first one from watchers and #739 gave it back as static text. */
+    expect(BAR).toContain('{orSubPhase === "Routes" && trainDrafts.length > 0 && (');
+    expect(BAR).not.toContain('{!mayActThisTurn && orSubPhase === "Routes"');
+    expect(BAR.match(/styles\.condensedTrainRow/g)).toHaveLength(1);
+  });
+
+  it("shows them in both bar states", () => {
+    /* THE (2a) HALF. `condensed &&` was right while this row was the small twin of `RoutePlannerPanel`, which
+       carried the same figures in the full-size bar. #802 deleted that panel and left the gate, so the
+       figures survived only while the bar was pinned -- inverted from every other row here, and from #590's
+       "nothing is dropped when pinned". */
+    /* ASSERTED ON THE GATE, not on the block. The first draft searched the whole rendered row for the word
+       "condensed" and failed on `styles.condensedTrainRow` -- every style key in here is named after the
+       arrangement this row USED to be, which is a fair sign the naming is now historical rather than
+       descriptive. What matters is that the flag is not in the render condition. */
+    expect(BAR).not.toContain('orSubPhase === "Routes" && condensed');
+    expect(BAR).not.toContain("condensed && trainDrafts.length");
+  });
+
+  it("opens the route on click, like the fleet chips do", () => {
+    /* THE (2) HALF, and the property that makes the two rows one control: both call the same setter, so
+       whichever a player clicks, the same strip opens under the bar. */
+    expect(BAR).toContain("open === draft.trainIndex ? null : draft.trainIndex,");
+    expect(BAR.match(/setOpenTrainIndex\(\(open\) =>/g)).toHaveLength(2);
+  });
+
+  it("still moves the president's draft cursor, and only theirs", () => {
+    // A watcher has no cursor to move and must not be offered one.
+    expect(BAR).toContain("if (mayActThisTurn) onSelectRouteTrain(draft.trainIndex);");
+  });
+
+  it("does not grey the chips for a viewer with no session key", () => {
+    /* Opening a readout dispatches nothing, and a watcher has no session key by construction -- so the
+       `disabled={!sessionReady}` the president's row carried would have greyed the row for exactly the
+       readers #802 built it for. #783's rule: a disabled control invites a reader to wonder what they did. */
+    const row = BAR.slice(
+      BAR.indexOf('{orSubPhase === "Routes" && trainDrafts.length > 0 && ('),
+      BAR.indexOf("styles.spectatorTotal"),
+    );
+    expect(row).not.toContain("disabled={!sessionReady}");
+  });
+
+  it("keeps the drafting cursor and the open route on different channels", () => {
+    /* #732's rule. They usually coincide, because a click sets both -- but Auto Route moves the cursor
+       without opening anything, which is precisely when a president needs to see where it went. */
+    expect(BAR).toContain("...(isDrafting ? styles.condensedTrainChipActive : {})");
+    expect(BAR).toContain("...(isOpen ? styles.condensedTrainChipOpen : {})");
+    expect(strip(read("styles/appStyles.ts"))).toContain("condensedTrainChipOpen: {");
+  });
+
+  it("deleted the spectator's inert twin style", () => {
+    /* #739's premise was that a watcher "cannot act on it". They can now: a click opens the route, which is
+       the whole point of the row. #772 is why the key goes rather than idles. */
+    expect(strip(read("styles/appStyles.ts"))).not.toContain("spectatorTrainChip:");
+  });
+
+  it("gives the total to the president too", () => {
+    // #739 gave it only to watchers; a president comparing their own trains was doing arithmetic the panel
+    // was already holding for somebody else.
+    expect(BAR).toContain("styles.spectatorTotal");
+  });
+});
+
 describe("the obligation sentence is gone and its rule is not", () => {
   it("no longer prints the caption", () => {
     /* #800. "B&O has a route it can run, so it must. Which route is up to you." -- reported as unnecessary

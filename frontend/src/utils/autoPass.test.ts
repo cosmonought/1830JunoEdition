@@ -21,6 +21,7 @@
 
 import {
   armAutoPass,
+  autoPassAlreadyActed,
   autoPassDecision,
   exposedPresidencies,
   isInsecurePresidency,
@@ -448,17 +449,99 @@ describe("the off switch is always reachable", () => {
 });
 
 describe("one standing instruction passes a turn once", () => {
-  it("guards the dispatch on the seat it has already passed for", () => {
-    /* Design note #728. The effect re-runs on every `gameState` change and `isMyTurn` is derived from React
-       state, while the reducer writes its ref synchronously (#670) -- so between dispatching a pass and React
-       committing the seat advance, the effect can fire again and spend a turn the player never had. The key is
-       round AND seat, so a later turn in the same round passes again as it should. */
+  /* ==================================================================
+      DESIGN NOTE 816 (harness): THIS BLOCK ASSERTED THE BUG IN #728's OWN WORDS
+     ==================================================================
+
+     REPORTED: "when an opposing player triggers the Auto-Pass conditions in a Stock Round, the Auto-Passed
+     player still gets their turn, but the Auto-Pass button reads 'Auto-Pass: On' even though it has been and
+     is supposed to be disabled."
+
+     WHAT STOOD HERE, verbatim: "The key is round AND seat, so a later turn in the same round passes again as
+     it should." It does not. A later turn in the same round has the same SEAT INDEX -- that is what a seat
+     index is -- so `${round}:${seat}` is one key for every turn a player takes in a Stock Round. Auto-Pass
+     fired once per player per round and was guarded off silently for the rest of it: the guard returns before
+     the decision is evaluated, so nothing disarmed the arm and nothing was logged.
+
+     THE HARNESS COPIED THE CLAIM OUT OF THE NOTE AND ASSERTED THE CODE THAT IMPLEMENTED IT, which is the most
+     expensive way for a test to be green. Both sentences were written in the same pass by somebody who had
+     not asked what a seat index does across a round -- and a source scan cannot ask.
+
+     AND THE REPORT'S TRIGGER IS EXACTLY RIGHT: your seat only comes round a second time if somebody else
+     bought or sold, because that is what resets the consecutive-pass count and keeps the round alive. "An
+     opposing player triggers it" is the precise condition, arrived at from the symptom.
+
+     SO THE ASSERTIONS BELOW ARE ABOUT THE PREDICATE, not about the wiring. `autoPassAlreadyActed` is three
+     lines and can be asked the question the note got wrong. */
+
+  it("has not acted before it acts", () => {
+    expect(autoPassAlreadyActed(null, 41)).toBe(false);
+  });
+
+  it("refuses a second dispatch while the log has not moved", () => {
+    /* THE CASE #728 EXISTS FOR, and it still holds. Between dispatching a pass and the log carrying it, the
+       effect can re-run with `isMyTurn` still true -- and a second pass spends a turn the player never had. */
+    expect(autoPassAlreadyActed(41, 41)).toBe(true);
+  });
+
+  it("acts again once anything at all has happened", () => {
+    /* THE CASE #728 GOT WRONG. Any entry in the log means this is a different turn: the player's own pass,
+       an opponent's purchase, a corporation floating. The log is monotonic, so this cannot collide the way a
+       seat index does. */
+    expect(autoPassAlreadyActed(41, 42)).toBe(false);
+    expect(autoPassAlreadyActed(41, 97)).toBe(false);
+  });
+
+  it("acts on an empty log", () => {
+    // `-1` is the app's "nothing has happened yet", and it must not read as "already acted".
+    expect(autoPassAlreadyActed(null, -1)).toBe(false);
+  });
+
+  it("would have been fooled by a seat index and is not fooled by a log index", () => {
+    /* THE OLD KEY AND THE NEW ONE, side by side over one Stock Round: P1 passes, P2 buys, P3 passes, P1's
+       seat comes round again. The seat key repeats and the log index does not -- which is the whole bug in
+       four rows. Written as a table rather than by importing the removed code, and labelled as an
+       illustration of the premise rather than a test of anything shipped. */
+    const turns = [
+      { seatKey: "3:0", logIndex: 40 },
+      { seatKey: "3:1", logIndex: 41 },
+      { seatKey: "3:2", logIndex: 42 },
+      { seatKey: "3:0", logIndex: 43 },
+    ];
+    const p1 = turns.filter((turn) => turn.seatKey === "3:0");
+    expect(p1).toHaveLength(2);
+    expect(p1[0].seatKey).toBe(p1[1].seatKey);
+    expect(autoPassAlreadyActed(p1[0].logIndex, p1[1].logIndex)).toBe(false);
+  });
+
+  it("is wired to the append-only log rather than to the seat", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    expect(app).toContain("if (autoPassedForSeatRef.current === seatKey) return;");
-    expect(app).toContain("autoPassedForSeatRef.current = seatKey;");
+    expect(app).toContain(
+      "if (autoPassAlreadyActed(autoPassedAtLogIndexRef.current, lastLogIndex)) return;",
+    );
+    expect(app).toContain("autoPassedAtLogIndexRef.current = lastLogIndex;");
+    expect(app).not.toContain("active_player_index}`;");
     // Cleared on both arm and disarm, so re-arming can act on the very turn it was set in.
-    expect(app.match(/autoPassedForSeatRef\.current = null;/g) ?? []).toHaveLength(2);
+    expect(app.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).toHaveLength(2);
+  });
+
+  it("leaves the wake path able to say so out loud", () => {
+    /* #717's rule, and the thing the old guard was jumping in front of: a turn that silently did not happen
+       is this feature's worst failure, and the reported symptom was precisely a turn with no explanation
+       attached to it. The guard now returns only when nothing has happened, so a real turn always reaches the
+       decision -- which either passes or disarms and logs. */
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    expect(app).toContain("setAutoPassArm(null);");
+    /* `${...}` in a plain string trips `no-template-curly-in-string`, and the rule is right to fire -- this
+       is the fourth time this pass that source text being SEARCHED for has needed assembling rather than
+       quoting. See #779's harness for the standing reason. */
+    const dollar = String.fromCharCode(36);
+    expect(app).toContain(
+      'logInfo("Auto-Pass", `' + dollar + "{decision.wakeReason} Auto-Pass is off.`);",
+    );
   });
 });

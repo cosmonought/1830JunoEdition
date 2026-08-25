@@ -246,6 +246,11 @@ export const OPERATING_ROUND_TUTORIAL: readonly TutorialPage[] = [
     body:
       "1. Buy Private Companies: Corporations may purchase private companies from players (at " +
       "50%\u2013200% face value) once Phase 3 begins.\n" +
+      /* Design note #814: rehomed from the Buy Private panel, whose intro paragraph stated the band AND the
+         consent rule. The band was already on this slide; the consent half was not, and it is the half that
+         had no other home -- which is why the paragraph could not simply be deleted. */
+      "\u2022 The OWNER has to agree: a corporation proposes a price, the holder accepts or refuses. It " +
+      "is a negotiation, not a purchase you can force.\n" +
       "2. Lay Track: Place yellow tiles or upgrade existing tiles following strict color " +
       "progression (Yellow -> Green -> Brown).\n" +
       "\u2022 Upgrade tiles must preserve all existing track connections.\n" +
@@ -303,7 +308,15 @@ export const OPERATING_ROUND_TUTORIAL: readonly TutorialPage[] = [
       "out increases player net worth to win the game!\n" +
       "6. Buy Trains: Purchase trains from the Bank Depot at face value, or from other " +
       "corporations at negotiated prices ($1+). Both are paid out of the Corporation's " +
-      "Treasury, not your personal cash. You cannot buy a train that exceeds your train limit!",
+      "Treasury, not your personal cash. You cannot buy a train that exceeds your train limit!\n" +
+      /* Design note #810: rehomed from the Buy Trains panel, where #1 put it and #508 had already found it
+         to be the wrong kind of text for that surface -- "it explains a rule rather than a value -- read
+         once, not on every scroll". This slide already described step 6 and was the one place that did not
+         mention the depot's ordering, which is the rule a player is most likely to be surprised by: you
+         cannot reach past a tier, you have to buy through it. */
+      "• The Depot sells CHEAPEST-FIRST, one tier per purchase. To get a 4-train while 3-trains " +
+      "are still on sale, somebody must buy the 3-trains out first — so buying through a tier is two " +
+      "separate actions, with a phase change in between.",
   },
   {
     title: "Train Obsolescence & Rusting Rules",

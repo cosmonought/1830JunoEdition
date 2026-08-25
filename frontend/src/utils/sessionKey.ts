@@ -231,6 +231,23 @@ export type GameplayExecuteMsg =
         r: number;
         tile_id: number;
         orientation: number;
+        /** Design note #824: WHERE THE TOKEN GOES, and A FIELD THE CONTRACT DOES NOT HAVE YET.
+         *
+         *  `tokenMigration.ts` #1 declared the destination un-sendable and preserved the index instead: "a UI
+         *  letting the president pick would collect an answer it cannot send and the contract would apply its
+         *  own rule regardless -- the worst of the three outcomes, because the player would have been asked."
+         *  That reasoning was right and the conclusion has an expiry: the answer becomes sendable the moment
+         *  the message carries it.
+         *
+         *  ONLY MEANINGFUL ON AN UNLAID PREPRINTED DOUBLE CITY, where nothing on the cardboard distinguishes
+         *  the two cities and the physical game resolves it by lifting the marker off before laying. Every
+         *  other upgrade preserves the index and omits this, so a route that never touches Dunkirk & Buffalo
+         *  or New York is byte-identical to what this app has always sent -- the same containment #808's
+         *  `bypass` has.
+         *
+         *  `pathfinding.rs` / `hexmap.rs` will need the same field before manual lays can be validated on
+         *  chain. Flagged loudly rather than added quietly, as `PrivateTradePanel.tsx` #0 flags its own gap. */
+        token_city?: number;
         /** Design note #776: THIS LAY IS IN ADDITION TO THE ORDINARY ONE. Set only by the Champlain & St.
          *  Lawrence's power, whose lay is a bonus rather than a substitute -- reported as "using its power
          *  advanced the Lay Track subphase completely", because the sub-phase cursor ended the Track step on

@@ -205,9 +205,27 @@ function MarketMoveLine({
    coalesced to one per frame. `resize` is listened to alongside `scroll` because a reflow above the
    panel moves its pin line without the scroll position changing -- and a media query may change the
    sticky offset too. */
-function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, boolean] {
+function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, boolean, number] {
   const ref = React.useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = React.useState(false);
+  /* Design note #810: how much of the viewport's top edge this bar covers when it is pinned.
+   *
+   * REPORTED: "the Buy Trains auto-scroll 'works,' but the Action Bar covers the actual Buy Trains subpanel,
+   * so players who click it may still be confused what they need to do."
+   *
+   * ALREADY MEASURED, NEVER PUBLISHED. `measure` below reads the bar's height and its sticky offset every
+   * frame for #720's pin test, and both numbers were thrown away afterwards -- so two other places had to
+   * guess about a quantity this hook already knew. That is the same shape as the last four reports: an
+   * authority that was never asked.
+   *
+   * `stickyTop + height` rather than `height`, because the bar sits AT `stickyTop`, so the first pixel a
+   * scrolled-to panel may occupy is below both. ZERO WHEN IT CANNOT PIN -- a `position: static` bar scrolls
+   * away with the page and covers nothing, which is #720's own state and would otherwise reserve a gap for a
+   * bar that is not there.
+   *
+   * ROUNDED, AND ONLY SET WHEN IT CHANGES. `measure` runs in a rAF on every scroll event; a sub-pixel rect
+   * would re-render the bar and re-create the observer below on every frame of a drag. */
+  const [barClearance, setBarClearance] = React.useState(0);
   /* Design note #720: whether the bar is short enough to pin at all. Starts `true` -- the pre-#720 behaviour --
      so the first paint is unchanged and the measurement corrects it a frame later. */
   const [mayPin, setMayPin] = React.useState(true);
@@ -232,6 +250,9 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
          two forced layouts per frame for numbers that must agree with each other. */
       const pinnable = canPinWithoutTrapping(rect.height, window.innerHeight, stickyTop);
       setMayPin(pinnable);
+      // Design note #810: the same rect, in the same frame, for the same reason the pin test uses it.
+      const clearance = pinnable ? Math.round(stickyTop + rect.height) : 0;
+      setBarClearance((was) => (was === clearance ? was : clearance));
       const distanceToPin = rect.top - stickyTop;
       /* A bar that cannot pin must not CONDENSE either. Condensing is a response to being stuck, and a static
          element's rect top goes negative simply by scrolling past it -- so the untouched predicate would shed
@@ -296,7 +317,99 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
     };
   }, []);
 
-  return [ref, condensed, mayPin];
+  return [ref, condensed, mayPin, barClearance];
+}
+
+/** ==================================================================
+ *   DESIGN NOTE 813: WOULD THEY FIT? MEASURE IT INSTEAD OF GUESSING AGAIN
+ *  ==================================================================
+ *
+ *  ASKED: "we have slimmed the Buy Trains subpanel so much that I am wondering if it makes sense to condense
+ *  it into the sticky Action Bar ... My only fear is that Buy Trains from Corporation, when there are 8
+ *  operating corporations, may expand and create a scrolling problem like we had before."
+ *
+ *  THE FEAR IS THE RIGHT ONE AND WE HAVE GUESSED THIS TWICE. #508 moved the panel INTO the bar on the
+ *  reasoning that it would be "sticky by inheritance"; #720 then found that a sticky element past half the
+ *  viewport traps the page and taught the bar to unpin itself; #785 moved the panel back OUT because the depot
+ *  reliably tripped that. Two moves, two guesses about one number, and the failure mode is silent -- a bar
+ *  that stops being sticky looks like a bar that was never sticky, which is exactly how it was reported.
+ *
+ *  SO THIS MEASURES THE QUESTION RATHER THAN ANSWERING IT. The number that matters is not the bar's height
+ *  today: it is what the bar WOULD be with the step panel inside it, against the viewport it is actually
+ *  played on. Both nodes already carry refs, so both can be read.
+ *
+ *  IT CONSULTS THE AUTHORITY RATHER THAN REIMPLEMENTING IT. The verdict comes from `canPinWithoutTrapping`,
+ *  the same predicate #720 enforces, so the probe cannot say "would pin" about a bar the rule would unpin --
+ *  which is the failure this session has found four times in other guises.
+ *
+ *  RENDERED OUTSIDE THE BAR, deliberately. A readout inside the element being measured adds its own height to
+ *  the reading, and a measurement that changes what it measures is worse than none.
+ *
+ *  TEMPORARY, and saying so is part of it: this exists to settle one question. Once the answer is in, either
+ *  the panels move and this comes out, or they stay and this comes out. */
+function useStickyFitProbe(
+  barRef: React.RefObject<HTMLDivElement>,
+  panelRef: React.RefObject<HTMLDivElement>,
+): string | null {
+  const [reading, setReading] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let queued = false;
+
+    const measure = () => {
+      const bar = barRef.current;
+      if (!bar) return;
+      const barHeight = Math.round(bar.getBoundingClientRect().height);
+      const panelHeight = Math.round(panelRef.current?.getBoundingClientRect().height ?? 0);
+      // Nothing rendered on this step: a probe about a panel that is not there would read as a verdict.
+      if (panelHeight === 0) {
+        setReading((was) => (was === null ? was : null));
+        return;
+      }
+      const viewport = window.innerHeight;
+      const stickyTop = stickyTopOffset(window.getComputedStyle(bar).top);
+      const combined = barHeight + panelHeight;
+      const share = viewport > 0 ? Math.round((combined / viewport) * 100) : 0;
+      const verdict = canPinWithoutTrapping(combined, viewport, stickyTop)
+        ? "would stay pinned"
+        : "WOULD UNPIN";
+      const next =
+        `fit probe · bar ${barHeight} + panel ${panelHeight} = ${combined}px · ` +
+        `${share}% of ${viewport}px · ${verdict}`;
+      setReading((was) => (was === next ? was : next));
+    };
+
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(() => {
+        queued = false;
+        measure();
+      });
+    };
+
+    measure();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    /* #758's lesson, applied here from the start rather than after a report: the panel's height changes with
+       the corporate accordion and with the number of operating corporations, neither of which is a scroll or
+       a resize. Feature-detected for the same reason -- jsdom does not always define it. */
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule());
+    if (observer) {
+      if (barRef.current) observer.observe(barRef.current);
+      if (panelRef.current) observer.observe(panelRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+    };
+  }, [barRef, panelRef]);
+
+  return reading;
 }
 
 
@@ -318,6 +431,7 @@ export default function ContextualActionBar({
   onSkipSubPhase,
   orSequence = null,
   trainPurchase = null,
+  armedErrand = null,
   privatePurchase,
   onOpenPrivateTrade,
   ownsAnyTrain,
@@ -487,6 +601,16 @@ export default function ContextualActionBar({
      `sub_round_index`, rendered "3.2"). PASSED RATHER THAN DERIVED, because this bar has no game state.
      `null` before the first poll keeps the bare "Operating Round" wording rather than a placeholder pair. */
   orSequence?: { cycle: number; index: number } | null;
+  /** Design note #817: the private power currently holding the board, and the way out of it.
+   *
+   *  REPORTED: "I have no clear way of escaping this action if I decide I don't want to do it ... they may
+   *  think once they click the Special Power they have no choice but to follow through on it."
+   *
+   *  THE ESCAPE EXISTED AND WAS INVISIBLE, which is the worse of the two failures: clicking off the hex has
+   *  always cancelled in effect, and #817 makes that official -- but a rule a player has to discover by
+   *  disobeying the interface is not a rule they have. So the bar names it.
+   *  `null` for a compulsory home-station errand, which has no exit by design. */
+  armedErrand?: { label: string; onCancel: () => void } | null;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
    *  shape and for the same reason as `trainPurchase` below. `null` renders no panel. */
   privatePurchase?: {
@@ -602,7 +726,7 @@ export default function ContextualActionBar({
   const phaseAlert = phaseAlertLevel(phase ?? null);
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
-  const [actionBarRef, condensed, mayPin] = useCondensedWhenPinned();
+  const [actionBarRef, condensed, mayPin, barClearance] = useCondensedWhenPinned();
 
   /* ==================================================================
    *  DESIGN NOTE 792: THE JUMP BUTTON COMES BACK, AND SO DOES ITS REASON
@@ -640,6 +764,9 @@ export default function ContextualActionBar({
    * says "scrolls to ... below" -- prose can hedge a direction; an arrowhead cannot. */
   const stepPanelRef = React.useRef<HTMLDivElement>(null);
 
+  // Design note #813: the temporary instrument that decides whether these panels can move back into the bar.
+  const stickyFitProbe = useStickyFitProbe(actionBarRef, stepPanelRef);
+
   /* ==================================================================
    *  DESIGN NOTE 797: A SCROLL BUTTON FOR A PANEL ALREADY ON SCREEN
    * ==================================================================
@@ -673,18 +800,33 @@ export default function ContextualActionBar({
       },
       /* A quarter of the panel is enough to count as "you can see it". Requiring all of it would keep the
          button live for a depot table taller than the viewport, which is precisely when scrolling to the
-         TOP of it is still useful. */
-      { threshold: 0.25 },
+         TOP of it is still useful.
+         Design note #810: AND THE STRIP BEHIND THE BAR DOES NOT COUNT AS SEEN. `rootMargin` shrinks the
+         observer's top edge by exactly the height the pinned bar covers, so a panel tucked underneath it
+         reads as out of view and the jump button stays live. Without this the button greys itself the moment
+         the panel is hidden -- the reported confusion, with the one control that would fix it disabled. */
+      { threshold: 0.25, rootMargin: `-${barClearance}px 0px 0px 0px` },
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+    // The margin is baked into the observer at construction, so a changed clearance needs a new one. It is
+    // rounded and set only on change (see the hook), so this re-subscribes on a condense or a resize, not
+    // on every frame of a scroll.
+  }, [barClearance]);
 
   const scrollToStepPanel = React.useCallback(() => {
-    /* `block: "start"` under a sticky bar would tuck the panel's heading behind it; `nearest` scrolls the
-       least that brings it into view, which on a short page is nothing at all -- the honest outcome when the
-       panel was already visible. */
-    stepPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    /* Design note #810: `block: "start"`, AND THE CLEARANCE IS ON THE ELEMENT.
+       REPORTED: "the auto-scroll 'works,' but the Action Bar covers the actual Buy Trains subpanel ... Can
+       you have it scroll all the way to the top of the subpanel, below the Action Bar?"
+       #792 CHOSE `nearest` TO DODGE THIS AND DODGED IT IN THE OTHER DIRECTION. Its note says `"start"`
+       "would tuck the panel's heading behind" the bar -- true of a bare `scrollIntoView`, and `nearest` then
+       stops as soon as any of the panel is on screen, which is usually with its heading behind the bar
+       anyway. Both alignments were wrong because neither knew the bar's height.
+       `scroll-margin-top` IS THE FEATURE FOR EXACTLY THIS. It is honoured by `scrollIntoView` for every
+       alignment, so the panel's own box carries the clearance and "start" now means "start, below the bar".
+       With the margin in place `nearest` would work too -- `start` is chosen because the request is for the
+       TOP of the subpanel, which is the one alignment that says so. */
+    stepPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
   /* Design note #481: the strip, as three facts instead of six chips.
@@ -1917,68 +2059,83 @@ export default function ContextualActionBar({
              AND THE TOTAL, which the report asks for and the president's own row never had: watching is a
              comparison ("can they beat my run?"), and per-train figures without a sum make the reader do
              arithmetic the panel is already holding. */}
-          {!mayActThisTurn && orSubPhase === "Routes" && trainDrafts.length > 0 && (
-            <div style={styles.condensedTrainRow} role="group" aria-label="Routes being drafted">
-              {trainDrafts.map((draft) => (
-                <span
-                  key={draft.trainIndex}
-                  onMouseEnter={() => onHighlightRoute?.(draft.trainIndex)}
-                  onMouseLeave={() => onHighlightRoute?.(null)}
-                  style={{
-                    ...styles.condensedTrainChip,
-                    ...styles.spectatorTrainChip,
-                    borderBottomColor: routeTrainColor(draft.trainIndex),
-                  }}
-                  title={
-                    draft.value === null
-                      ? `${draft.model}-train has no route drafted yet.`
-                      : `${draft.model}-train runs for $${draft.value}.`
-                  }
-                >
-                  {draft.model}-Train
-                  <span style={styles.condensedTrainValue}>
-                    {draft.value === null ? "—" : `$${draft.value}`}
-                  </span>
-                </span>
-              ))}
-              {/* Design note #739: the sum, and only when there is more than one figure to sum. On a
-                  one-train corporation a total beside the single value would be the same number twice. */}
-              {trainDrafts.filter((draft) => draft.value !== null).length > 1 && (
-                <span style={styles.spectatorTotal}>
-                  Total $
-                  {trainDrafts.reduce((sum, draft) => sum + (draft.value ?? 0), 0)}
-                </span>
-              )}
-            </div>
-          )}
-          {/* Design note #691: and only for the player whose routes these are. The chips are LIVE (see above) --
-              on somebody else's turn they would be a row of controls that dispatch for a corporation the reader
-              does not hold.
-              Design note #739: still true of the BUTTONS. The spectator's read-only twin is above. */}
-          {mayActThisTurn && orSubPhase === "Routes" && condensed && trainDrafts.length > 0 && (
+          {/* ==================================================================
+               DESIGN NOTE 815: THREE ROWS OF TRAIN CHIPS, ONE OF WHICH OPENED THE ROUTE
+              ==================================================================
+
+              REPORTED, two halves of one thing:
+                2)  "on the Run Routes subphase, the sticky/traveling Action Panel shows the train chips, but
+                     clicking them does not have the drop-down showing their route and the option to clear
+                     them for manual routing."
+                2a) "when the Action Bar docks at the top, the train chips with their revenue values disappear
+                     completely. Usually the docked version is larger than the sticky. Here, they should be
+                     the same size."
+
+              THE BAR WAS DRAWING TRAIN CHIPS IN THREE PLACES AND ONLY ONE OF THEM WAS #802's HANDLE.
+                * The corporation card's fleet chips (`TrainChips`, above) -- correctly wired to open the
+                  route detail, and carrying no revenue figures, because the fleet is not a route.
+                * This row, for the acting president -- revenue figures, gated on `condensed`, and its click
+                  moved the DRAFT CURSOR rather than opening anything.
+                * A read-only twin of this row for everybody else (#739) -- revenue figures, static spans.
+              So a president clicked the chips that showed the money and nothing dropped down, because the
+              chips that drop down are the ones without the money on them. Both halves of #802 shipped; they
+              shipped on different rows.
+
+              AND (2a) IS THE SAME SPLIT SEEN FROM THE OTHER SIDE. `condensed &&` was correct when this row
+              was the SMALL twin of `RoutePlannerPanel`, which carried the per-train figures in the full-size
+              bar. #802 deleted that panel and left the gate, so the figures existed only while the bar was
+              pinned -- exactly inverted from the report's expectation, and from every other row here, which
+              #590 settled: "nothing is dropped when pinned".
+
+              ONE ROW NOW, for every viewer, in both bar states. The president's click still moves their draft
+              cursor; a watcher has no cursor to move and is not offered one. The TOTAL, which #739 gave only
+              to watchers, is on the row everybody sees -- a president comparing their own trains was doing
+              arithmetic the panel was already holding for somebody else. */}
+          {orSubPhase === "Routes" && trainDrafts.length > 0 && (
             <div style={styles.condensedTrainRow} role="group" aria-label="Drafted routes">
               {trainDrafts.map((draft) => {
-                const isActive = draft.trainIndex === activeTrainIndex;
+                const isOpen = draft.trainIndex === openTrainIndex;
+                /* Design note #815: TWO STATES, TWO CHANNELS, and they are genuinely different facts. OPEN is
+                   "this chip's route is showing" and belongs to every viewer; DRAFTING is "map clicks land on
+                   this train" and belongs only to the president. A click sets both for them, so they usually
+                   coincide -- but `AutoRouteButton` moves the cursor without opening anything, and that is
+                   exactly the moment a president needs to know which train they are about to draw for.
+                   The fill carries the cursor and an outline carries the open state, which is the same split
+                   #802 used on the fleet chips for the same reason (#732: one channel, one meaning). */
+                const isDrafting = mayActThisTurn && draft.trainIndex === activeTrainIndex;
                 return (
                   <button
                     key={draft.trainIndex}
                     type="button"
-                    aria-pressed={isActive}
-                    onClick={() => onSelectRouteTrain(draft.trainIndex)}
+                    aria-pressed={isOpen}
+                    aria-expanded={isOpen}
+                    /* NOT `disabled` ON `sessionReady`, unlike the row this replaces. Opening a readout
+                       dispatches nothing, and a watcher has no session key by construction -- greying the
+                       chips for them would be #783's "disabled control invites a reader to wonder what they
+                       did wrong" on the one surface #802 built for exactly those readers. */
+                    onClick={() => {
+                      setOpenTrainIndex((open) =>
+                        open === draft.trainIndex ? null : draft.trainIndex,
+                      );
+                      // The acting president's draft cursor follows the chip; a watcher has none.
+                      if (mayActThisTurn) onSelectRouteTrain(draft.trainIndex);
+                    }}
                     onMouseEnter={() => onHighlightRoute?.(draft.trainIndex)}
                     onMouseLeave={() => onHighlightRoute?.(null)}
-                    disabled={!sessionReady}
                     style={{
                       ...styles.condensedTrainChip,
-                      ...(isActive ? styles.condensedTrainChipActive : {}),
+                      ...(isDrafting ? styles.condensedTrainChipActive : {}),
+                      ...(isOpen ? styles.condensedTrainChipOpen : {}),
                       // Design note #494: the route's own ink, so the chip and
                       // the line on the map are the same colour.
                       borderBottomColor: routeTrainColor(draft.trainIndex),
                     }}
                     title={
                       draft.value === null
-                        ? `${draft.model}-train has no route drafted yet. Click to draft for it, then click hexes on the map.`
-                        : `${draft.model}-train runs for $${draft.value}. Click to draft for it.`
+                        ? `${draft.model}-train has no route drafted yet. Click to open it${
+                            mayActThisTurn ? " and draft for it" : ""
+                          }.`
+                        : `${draft.model}-train runs for $${draft.value}. Click to see its route.`
                     }
                   >
                     {draft.model}-Train
@@ -1992,6 +2149,14 @@ export default function ContextualActionBar({
                   </button>
                 );
               })}
+              {/* Design note #739: the sum, and only when there is more than one figure to sum. On a
+                  one-train corporation a total beside the single value would be the same number twice.
+                  Design note #815: and now for the president too -- see above. */}
+              {trainDrafts.filter((draft) => draft.value !== null).length > 1 && (
+                <span style={styles.spectatorTotal}>
+                  Total ${trainDrafts.reduce((sum, draft) => sum + (draft.value ?? 0), 0)}
+                </span>
+              )}
             </div>
           )}
           {/* Design note #509: THE DECISION TRAVELS WITH THE BUTTONS. #490 gated this on `!condensed`, reasoning
@@ -2352,6 +2517,21 @@ export default function ContextualActionBar({
              several real states: an auction round, a Stock Round with no corporation selected, and a room whose game
              has not been dealt. A rule divides things, and there was nothing to divide.
              Gated on the group they frame rather than on any particular round, so every empty case is covered. */}
+          {/* Design note #817: THE WAY OUT, where a player is already looking. It sits before the divider
+              rather than among `contextualButtons` because it is not a step's control -- it belongs to a MODE
+              the board is currently in, and it appears and vanishes with that mode rather than with the step.
+              Amber rather than red: cancelling an unspent power costs nothing, and a destructive colour on the
+              escape hatch is the wrong sort of hesitation to introduce. */}
+          {armedErrand && (
+            <button
+              type="button"
+              style={{ ...styles.actionBarButton, ...styles.actionBarCancelErrand }}
+              onClick={armedErrand.onCancel}
+              title="Leaves this special power armed and unspent. Nothing is used up."
+            >
+              {armedErrand.label}
+            </button>
+          )}
           {contextualButtons.length > 0 && <span style={styles.actionBarDivider} />}
           {contextualButtons.map((btn) => (
             <button
@@ -2470,7 +2650,17 @@ export default function ContextualActionBar({
           the controls stay with them. */}
       {/* Design note #792: ONE WRAPPER, so the bar's jump button has a single destination whichever step is
           live. Both panels are mutually exclusive by sub-phase, so this holds exactly one at a time. */}
-      <div ref={stepPanelRef}>
+      {/* Design note #813: the probe, OUTSIDE both measured elements -- see the hook for why that matters. */}
+      {stickyFitProbe && (
+        <div style={styles.fitProbe} title="Temporary instrument (design note #813): what the sticky bar would measure with this step's panel inside it, judged by the same rule that unpins it.">
+          {stickyFitProbe}
+        </div>
+      )}
+      {/* Design note #810: the clearance rides on the DESTINATION, not on the scroll call. `scroll-margin-top`
+          is honoured by `scrollIntoView`, by `:target`, by a browser's own restore-scroll and by anything
+          else that ever scrolls to this element -- so the bar's height is stated once, where the element is,
+          rather than at each call site that has to remember the bar exists. */}
+      <div ref={stepPanelRef} style={{ scrollMarginTop: `${barClearance}px` }}>
       {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
           button are the largest block in this bar, and on three of four screens they were furniture. */}
       {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe

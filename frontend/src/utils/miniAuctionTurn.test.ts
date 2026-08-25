@@ -303,8 +303,14 @@ describe("mini-auction rotation", () => {
       { WaterfallMiniAuctionPass: {} } as never,
       SEATS,
     ).waterfall;
+    /* The `if (mini)` guard this replaces was a long-standing `jest/no-conditional-expect` error, and the
+       rule was right about it: a test whose only assertion sits behind a condition can pass by never
+       asserting -- and the condition here was "did the mini-auction survive two actions", which is precisely
+       what a regression would break. So the auction's SURVIVAL is now an assertion in its own right, and the
+       pointer check follows unconditionally. */
     const mini = wf.mini_auction;
-    if (mini) expect(mini.bidders).toContain(mini.current_turn);
+    expect(mini).not.toBeNull();
+    expect(mini?.bidders).toContain(mini?.current_turn);
   });
 
   it("agrees with the action bar at every step", () => {

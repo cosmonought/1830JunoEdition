@@ -38,6 +38,20 @@ export interface HomeStationPromptProps {
   liveryInk: string;
   /** Places the token. The caller dispatches; this only asks. */
   onPlace: (companyId: number, q: number, r: number) => void;
+  /** Design note #783: WHETHER THIS VIEWER IS THE ONE BEING ASKED.
+   *
+   *  REPORTED: "when another player buys the share that floats your corporation, the screen just hangs on
+   *  that player's turn until the corporation president places the home station. This is confusing players
+   *  who think they still need to do something."
+   *
+   *  THE GAME STOPS FOR EVERYONE AND ONLY ONE PERSON IS TOLD WHY. #763 refuses every action while a home
+   *  token is owed and #769 holds the seat on the President -- both correct, and both silent. A table of four
+   *  watches a turn that will not advance with no statement anywhere that it is waiting on somebody.
+   *
+   *  THE SAME CARD, NOT A SECOND COMPONENT. The other players need the identical facts -- which corporation,
+   *  whose move -- and a separate "waiting" modal would be a second place for that copy to drift. What
+   *  changes is the verb and the absence of a button. Defaults `true` so an existing caller is unaffected. */
+  viewerIsPresident?: boolean;
 }
 
 export function HomeStationPrompt({
@@ -46,6 +60,7 @@ export function HomeStationPrompt({
   liveryColor,
   liveryInk,
   onPlace,
+  viewerIsPresident = true,
 }: HomeStationPromptProps) {
   if (!pending) return null;
 
@@ -56,7 +71,11 @@ export function HomeStationPrompt({
       style={styles.backdrop}
       role="dialog"
       aria-modal="true"
-      aria-label={`Place the ${pending.ticker} home station token`}
+      aria-label={
+        viewerIsPresident
+          ? `Place the ${pending.ticker} home station token`
+          : `Waiting for the ${pending.ticker} home station token`
+      }
     >
       <div style={styles.card}>
         {/* The livery stripe, the same treatment the stock card and the
@@ -74,14 +93,29 @@ export function HomeStationPrompt({
         </div>
 
         <span style={styles.heading}>
-          {presidentLabel
-            ? `${presidentLabel} — place the home station`
-            : "Place the home station"}
+          {/* Design note #783: the heading already NAMED the president, which is most of what a watching
+             player needs -- it just addressed them as if they were that person. */}
+          {viewerIsPresident
+            ? presidentLabel
+              ? `${presidentLabel} — place the home station`
+              : "Place the home station"
+            : `${pending.ticker} has floated`}
         </span>
 
         <p style={styles.body}>
-          The {pending.ticker} has floated. As President you place its first station token,
-          free, on its printed home hex.
+          {viewerIsPresident ? (
+            <>
+              The {pending.ticker} has floated. As President you place its first station token, free, on its
+              printed home hex.
+            </>
+          ) : (
+            <>
+              {/* Says WHO and says the game is waiting rather than broken -- the two things the report
+                 identifies as missing. No estimate of how long: this clears on an action, not a timer. */}
+              Waiting for {presidentLabel ?? `the ${pending.ticker} President`} to place its first station
+              token. Play resumes as soon as it is down.
+            </>
+          )}
         </p>
 
         {/* The hex, given the emphasis of the thing the player is being
@@ -106,13 +140,17 @@ export function HomeStationPrompt({
             caller arms the placement cursor, veils the board down to this
             one hex and navigates there, so the token goes down under the
             player's own click on the board it belongs to. */}
-        <button
-          type="button"
-          style={styles.confirm}
-          onClick={() => onPlace(pending.companyId, pending.q, pending.r)}
-        >
-          Place the {pending.ticker} station on {pending.hexLabel} &#8250;
-        </button>
+        {/* Design note #783: NO BUTTON FOR A WATCHER. A disabled control would invite the click this modal
+           exists to explain away, and #763's gate would refuse it silently -- confusion on top of confusion. */}
+        {viewerIsPresident && (
+          <button
+            type="button"
+            style={styles.confirm}
+            onClick={() => onPlace(pending.companyId, pending.q, pending.r)}
+          >
+            Place the {pending.ticker} station on {pending.hexLabel} &#8250;
+          </button>
+        )}
       </div>
     </div>
   );

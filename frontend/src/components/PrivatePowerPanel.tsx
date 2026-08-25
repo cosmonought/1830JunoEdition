@@ -56,6 +56,16 @@ export interface PrivateAbilityAction {
    *  per private. The D&H grants a tile lay AND a token placement, and 1830 lets a corporation take both in the
    *  same turn; keying by `private_id` would have made either one consume the other. */
   key: string;
+  /** Design note #782: THE STEP THIS ACTION BELONGS TO.
+   *
+   *  REPORTED: "During Run Routes, the 'Private Powers' subpanel is still visible. There's no reason for it
+   *  to be visible." It was gated on the ROUND, and #349's `subPhase` on the ability was never consulted --
+   *  so both corporate powers rendered at every step of an Operating Round, including two they can do
+   *  nothing in.
+   *  ON THE ACTION RATHER THAN THE ABILITY, because the D&H spans two steps: its tile is a Track action and
+   *  its free station is a Tokens action. An ability-level field cannot say that, which is probably why the
+   *  one #349 added went unused. */
+  subPhase?: OperatingSubPhase;
   /** The button's label -- a full phrase, not a verb, because two buttons
    *  on one row have to be told apart at a glance. */
   label: string;
@@ -90,7 +100,7 @@ export interface PrivateAbility {
 export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
   {
     privateId: 2,
-    actions: [{ key: "csl-tile", label: "Lay Track (B20)" }],
+    actions: [{ key: "csl-tile", label: "Lay Track (B20)", subPhase: "Track" }],
     /* Design note #726: the connection waiver named. The old sentence was right about the EXTRA lay -- unlike
        the D&H's, which #725 had to correct -- and silent about the half that makes the power worth owning. */
     description: CSL_POWER_DESCRIPTION,
@@ -121,8 +131,11 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
        So: one caption stating both costs honestly, and two buttons. */
     privateId: 3,
     actions: [
-      { key: "dh-tile", label: "Lay Track (F16)" },
-      { key: "dh-token", label: "Place Station Token for $0 (F16)" },
+      { key: "dh-tile", label: "Lay Track (F16)", subPhase: "Track" },
+      /* Design note #781/#782: the free station is a TOKENS-step action. Naming the step here is the second
+         half of #781, which taught `stationPlacementBlockReason` that this placement exists -- together they
+         mean the step stays open AND the button is on screen when it does. */
+      { key: "dh-token", label: "Place Station Token for $0 (F16)", subPhase: "Tokens" },
     ],
     /* Design note #725: THE CAPTION WAS WRONG TWICE MORE. #442 corrected an earlier version and introduced two
        fresh errors of its own -- "AND/OR", which made the token reachable without the lay, and "in addition to
@@ -268,7 +281,30 @@ export function PrivatePowerPanel({
          SO THE ROUND MUST MATCH, ALWAYS. The opt-in becomes redundant rather than wrong, and is left on the two
          entries that set it as a statement of intent. A power is shown in its own round or not at all. */
       roundType === entry.ability.phase,
-  );
+  )
+    /* Design note #782: WHAT IS LEFT TO DO HERE, RIGHT NOW.
+     *
+     * Two reports, one filter. "During Run Routes, the Private Powers subpanel is still visible -- there's no
+     * reason for it to be visible", and "once CSL and DH's powers are used, they do not need to be displayed".
+     *
+     * A SPENT ACTION IS NOT CONTEXT. #349 argued that a disabled row is "useful context rather than noise"
+     * when the wait is short, and #470 already found the limit of that: a row whose wait is not short is a
+     * different subject. A row whose wait is FOREVER -- the power is gone -- is not a subject at all.
+     * FILTERED ON THE ACTIONS, then the ability, so the D&H keeps its token row after its tile row goes and
+     * disappears only when both are spent. An ability with nothing left to offer is dropped whole rather than
+     * rendered as a heading over an empty list. */
+    .map((entry) => ({
+      ...entry,
+      ability: {
+        ...entry.ability,
+        actions: entry.ability.actions.filter(
+          (action) =>
+            !usedAbilities.has(action.key) &&
+            (action.subPhase === undefined || action.subPhase === orSubPhase),
+        ),
+      },
+    }))
+    .filter((entry) => entry.ability.actions.length > 0);
 
   // Design note #2: nothing owned means nothing to say. A permanent empty
   // panel is a permanent reminder of a thing the player does not have.

@@ -282,6 +282,12 @@ import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
 import { dividendRefused } from "./utils/dividendGate";
+import { dividendSplit } from "./utils/dividendSplit";
+import {
+  actionWasRefused,
+  refusalReasonFor,
+  refusedActionLineWithReason,
+} from "./utils/refusedAction";
 import { roundLabelFor } from "./utils/roundLabel";
 
 import {
@@ -2902,7 +2908,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          *  offer, and the drain refuses an answer that does not match the offer standing in shared state. A
          *  turn gate would add nothing to either. */
         offTurn?: boolean;
-        resetRouteRevenue?: boolean;
         isRemoteReplay?: boolean;
         /** Design note #643: the log entry's own `createdAt`, so a replayed
          *  action is timestamped when it HAPPENED rather than when it was
@@ -3577,7 +3582,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // for every route regardless of length.
             mapGrid,
             // Design note #492a: likewise read only by `RunManualRoute`.
-            resetRouteRevenue: options?.resetRouteRevenue ?? false,
             era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
             // Design note #273: what the chart says this share is worth, so
             // the wallet and the market agree about one trade.
@@ -3823,13 +3827,86 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         label =
           describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
 
+        /* Design note #784: computed ONCE, above the entry that reads it three times -- and once rather than
+           three times is not only tidiness here: `refusalReasonFor` runs the real purchase and sale gates,
+           and three identical calls per action is three times the work for one answer. */
+        const refusalWasRefused = actionWasRefused(before, after, msg);
+        const refusalReason = refusalWasRefused
+          ? refusalReasonFor(before, msg, {
+              actor: options?.actor ?? viewerAddressRef.current,
+              marketZoneFor: (companyId: number) =>
+                marketZoneForPrice(marketPriceForCompany(companyId)),
+              marketPricesByCompany: Object.fromEntries(
+                (marketGrid?.positions ?? []).map((entry) => [
+                  entry.company_id,
+                  Number(entry.price),
+                ]),
+              ),
+              zoneForPrice: marketZoneForPrice,
+            })
+          : null;
+        /* THE PLAYER IS LOOKING AT THE BOARD, NOT THE LOG. Reported as "there was no notification that the
+           player was at certificate limit" -- the rule existed in a disabled button's tooltip, which is
+           invisible on a tablet. A refused action is exactly the moment a receipt is owed. */
+        if (refusalWasRefused && refusalReason && options?.isRemoteReplay !== true) {
+          showActionToast(refusalReason);
+        }
+
+        /* ==================================================================
+         *  DESIGN NOTE 786: THE MONEY ARRIVED AND NOBODY SAID SO
+         * ==================================================================
+         *
+         * REPORTED: "I also don't receive any toast notifications when another player's corporation pays
+         * dividends to me."
+         *
+         * TRUE OF EVERY ACTION, BY CONSTRUCTION. `showActionToast` lives in the APPEND branch, which only the
+         * dispatching browser reaches -- a replayed action returns long before it. That is exactly right for
+         * #697's question ("did my button register?") and gives the other four players nothing at all.
+         *
+         * DIVIDENDS ARE WHERE THAT HURTS, and the reason is specific rather than aesthetic: a payout is the
+         * one event that changes YOUR position while somebody else is acting. Every other silent action
+         * changes theirs.
+         *
+         * NARROW ON PURPOSE, because #718 already had to fix "toast notifications for literally every
+         * action". The test is not "was this interesting" but "did this move MY money" -- read off
+         * `dividendSplit`'s own player list, the same value the reducer spent and #775's sentence describes,
+         * so a notice can never quote a figure nobody received.
+         *
+         * AND NOT FOR THE ACTOR, who has their own receipt from the append branch and does not need two. */
+        if (options?.isRemoteReplay === true && before && "DeclareDividends" in msg) {
+          const paid = msg.DeclareDividends;
+          const settlement = dividendSplit(before, paid.protocol_id, paid.revenue_amount, paid.distribute);
+          const viewer = viewerAddressRef.current;
+          const mine = settlement?.players.find((share) => share.player === viewer);
+          if (mine && mine.amount > 0 && viewer !== options?.actor) {
+            const ticker =
+              before.public_companies.find((entry) => entry.company_id === paid.protocol_id)?.ticker ??
+              `#${paid.protocol_id}`;
+            showActionToast(`${ticker} paid you $${mine.amount}.`);
+          }
+        }
+
         setActionLog((log) => [
           {
             id,
             seq: id, // design note #668
-            label,
-            status: "success",
-            detail: "Sandbox: applied to local mock state (nothing signed, no chain).",
+            /* Design note #778: THE LOG SAYS WHETHER IT HAPPENED. This entry was written `success` for every
+               dispatch that reached the drain, describing the MESSAGE rather than its effect -- so every
+               silent gate (#712, #748, #757, #763, #774) announced its refusals as completed actions.
+               Reported as "the activity log printed the purchase went through but it didn't".
+               IDENTITY, NOT A GUESS: every gate refuses by returning the state it was handed, so
+               `before === after` is exact. `mayLegitimatelyDoNothing` carries the short list of messages for
+               which an unchanged board means nothing is wrong.
+               Design note #784: AND IT NAMES THE RULE, when one owns up. `refusalReasonFor` calls the very
+               functions the reducer called, on the very state it called them with -- so the sentence is the
+               reducer's own answer rather than a second opinion about it. */
+            label: refusalWasRefused
+              ? refusedActionLineWithReason(label, refusalReason)
+              : label,
+            status: refusalWasRefused ? "error" : "success",
+            detail: refusalWasRefused
+              ? "Sandbox: the reducer declined this message and the board is unchanged."
+              : "Sandbox: applied to local mock state (nothing signed, no chain).",
             timestamp,
             timestampMs,
             /* Stamp the entry with the round the action was taken IN (before), not the one it resolved to.
@@ -4590,7 +4667,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
-    let firstOfBatch = true;
+    /* Design note #777: `firstOfBatch` is gone with `resetRouteRevenue`. It flagged the message that was
+       supposed to zero the running total, and the flag could never reach the reducer -- the log carries the
+       message and nothing beside it, and every client applies by replaying. The turn change clears the
+       figure now, which every client reaches from the log alone. */
     for (const draft of runnable) {
       const points = routeDraftsRef.current[draft.trainIndex] ?? [];
       if (points.length < 2) continue;
@@ -4607,11 +4687,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             payout_strategy: "Withhold",
           },
         },
-        /* Only the first message of a turn's batch clears the running total, flagged inside the loop because short drafts are skipped.
-           See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
-        { resetRouteRevenue: firstOfBatch },
       );
-      firstOfBatch = false;
     }
 
     /* Record the total from the list actually dispatched, so the Dividends step spends the number the player watched being assembled.
@@ -5283,8 +5359,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       company: activeStationCompany,
       allCompanies: gameState?.public_companies ?? [],
       boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
+      /* Design note #781: the D&H's free, unconnected station, which every arm of that predicate was blind
+         to -- so a corporation whose only placement WAS the D&H's got auto-skipped past the step and never
+         reached the control. `dhPower` is declared far above this (line ~1513), so no dead zone: #762's
+         lesson, checked rather than assumed.
+         SCOPED TO THE OWNING CORPORATION, read from the roster here rather than trusted from the power
+         state: `dhPowerState` knows whether the ABILITY is spent, not whose it is, and a rival mid-turn must
+         not have its Tokens step held open by somebody else's private. */
+      extraTokenAvailable:
+        dhPower.tokenAvailable &&
+        (gameState?.private_companies?.find((entry) => entry.private_id === DH_PRIVATE_ID)
+          ?.owner_protocol_id ?? null) === actingProtocolId,
     });
-  }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
+  }, [gameState, orSubPhase, activeStationCompany, mapGrid, dhPower, actingProtocolId]);
 
   /** The re-entrancy guard is per TURN, not per game: macro_round_number + sub_round_index + active_corporation_index, built in utils/turnGuardKey.ts.
    *  See docs/ai_architecture/state_machine.md - App.tsx #653 */
@@ -6384,6 +6471,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               truncateAddress(pendingHomeToken.president)
             : null
         }
+        /* Design note #783: the whole table sees the card; only the President sees the ask. `viewerAddress`
+           is null in hotseat, where one screen IS the president's, so the default there is the actionable
+           form -- the same reasoning `holding.isSelf` uses on the roster. */
+        viewerIsPresident={
+          !pendingHomeToken?.president ||
+          !viewerAddress ||
+          pendingHomeToken.president === viewerAddress
+        }
         liveryColor={
           pendingHomeToken ? stationTickerColor(pendingHomeToken.companyId) : "#171c28"
         }
@@ -6676,6 +6771,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           ),
                           labelForAddress: (address: string) =>
                             sandboxPlayerLabel(address) ?? truncateAddress(address),
+                          /* Design note #779: `seatColor` wants the roster INDEX and the panel is given a
+                             lookup by address, so the resolution happens here where both exist. `null` for
+                             an address off the roster rather than a fallback colour -- on a table where
+                             colour identifies a person, a wrong colour is worse than none. */
+                          colorForAddress: (address: string) => {
+                            const seat = gameState.player_addresses.indexOf(address);
+                            return seat === -1 ? null : seatColor(address, seat);
+                          },
                           onPropose: handleProposePrivatePurchase,
                         }
                       : null

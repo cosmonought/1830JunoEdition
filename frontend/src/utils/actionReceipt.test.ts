@@ -95,16 +95,57 @@ describe("the predicate is not fooled by the shape of its input", () => {
   });
 });
 
-describe("the toast is mounted once, behind the rule", () => {
-  it("has exactly one call site, and it is guarded", () => {
-    /* THE STRUCTURAL HALF. The predicate could be perfect and the bug could return tomorrow by way of a second
-       `showActionToast` somewhere else in the file -- which is exactly how the first one spread. Reading the
-       source is a weak instrument, and it is the only one that can see this. */
+describe("every toast is mounted behind a rule", () => {
+  const APP = (() => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    const calls = app.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(1);
-    expect(app).toContain("deservesActionReceipt(msg)");
+    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+  })();
+
+  it("has exactly three call sites", () => {
+    /* THE STRUCTURAL HALF. The predicate could be perfect and the bug could return tomorrow by way of a
+       `showActionToast` somewhere else in the file -- which is exactly how the first one spread. Reading the
+       source is a weak instrument, and it is the only one that can see this.
+       WAS ONE, AND TWO PASSES HAVE ADDED TO IT deliberately: #784's refusal notice (the report was "there was
+       no notification that the player was at certificate limit", and the rule lived in a disabled button's
+       tooltip), then #786's payout notice ("I don't receive any toast notifications when another player's
+       corporation pays dividends to me").
+       THE COUNT IS NOT THE PROPERTY WORTH GUARDING -- #718's actual complaint was "toast notifications for
+       literally every action", which is about toasts that are not behind a CONDITION. The count is pinned so
+       that adding one is a decision rather than a drift, and each site's guard is named individually below.
+       Bumping this number without adding a guard test is the thing to refuse. */
+    const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
+    expect(calls).toHaveLength(3);
+  });
+
+  it("gates the receipt on the message deserving one", () => {
+    expect(APP).toContain("deservesActionReceipt(msg)");
+  });
+
+  it("gates the refusal notice on there being a refusal and a reason", () => {
+    /* #784's site. Three conditions, and the third is the one that matters at a table: a replayed refusal
+       must not tell all four players about one player's blocked purchase. */
+    expect(APP).toContain("if (refusalWasRefused && refusalReason && options?.isRemoteReplay !== true)");
+  });
+
+  it("gates the payout notice on the money being the viewer's", () => {
+    /* #786's site, and the narrowest of the three. Not "was this interesting" but "did this move MY money",
+       read off `dividendSplit`'s own list -- which is what stops a six-player table getting five notices per
+       dividend. */
+    expect(APP).toContain("mine && mine.amount > 0 && viewer !== options?.actor");
+  });
+
+  it("leaves no unguarded call", () => {
+    /* The property #718 was really after: every call site sits inside an `if`/`else if`. One named guard per
+       call, so the count above and this list have to be changed together. */
+    const guards = [
+      "deservesActionReceipt(msg)",
+      "refusalWasRefused && refusalReason",
+      "mine && mine.amount > 0",
+    ];
+    for (const guard of guards) {
+      expect(APP).toContain(guard);
+    }
+    expect(guards).toHaveLength((APP.match(/^\s*showActionToast\(/gm) ?? []).length);
   });
 });

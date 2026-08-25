@@ -478,6 +478,8 @@ export default function ContextualActionBar({
     privates: readonly PrivateCompanyState[];
     treasury: number;
     labelForAddress: (address: string) => string;
+    /** Design note #779: the holder's seat colour, resolved by the shell (it has the roster index). */
+    colorForAddress?: (address: string) => string | null;
     onPropose: (privateId: number, price: number) => void;
   } | null;
   /** Design note #508: everything `TrainPurchasePanel` needs, as ONE object. These are not facts this bar
@@ -851,6 +853,29 @@ export default function ContextualActionBar({
      Run Routes step's interface. Three separate conditions is three chances to miss one. */
   const showRouteToggle =
     roundType === "OperatingRound" && orSubPhase === "Routes" && mayActThisTurn;
+
+  /* ==================================================================
+   *  DESIGN NOTE 787: A WATCHER SEES THE ROUTES AND NOT THE FIGURES
+   * ==================================================================
+   *
+   * REPORTED: "During other players' run routes action, I can see the highlighted routes on the rail map, but
+   * on the sticky Action bar I don't see the trains listed with their individual revenues."
+   *
+   * THE DATA WAS ALREADY THERE AND THE GATE HID IT. `rivalTrainDrafts` prices every rival route through
+   * `sandboxRouteBreakdown` and names the train from the board -- the shell hands the bar exactly that when
+   * it is not your turn (`trainDrafts={isMyTurn ? trainDrafts : rivalTrainDrafts}`). The panel that would
+   * print it was gated on `mayActThisTurn`, so the one surface carrying the numbers was withheld from
+   * everyone who was not producing them.
+   *
+   * A HALF-VISIBLE EVENT IS WORSE THAN A HIDDEN ONE. The map already draws the rival's routes, so a watcher
+   * could see WHERE the train went and not what it earned -- which reads as a missing readout rather than as
+   * a deliberate scope.
+   *
+   * THE CONTROLS ARE STILL THE ACTOR'S. Two flags rather than one widened flag: this decides whether the
+   * READOUT renders, `showRouteToggle` still decides whether the mode toggle does, and `controlsEnabled`
+   * carries `mayActThisTurn` so a watcher's buttons are disabled by the panel's own rule rather than by a
+   * second one written here. */
+  const showRouteReadout = roundType === "OperatingRound" && orSubPhase === "Routes";
 
   /* Design note #278: the Dividends step's Pay-or-Withhold binary, derived here because both halves are
      already props and a second boolean saying what they jointly mean can disagree with them.
@@ -1891,40 +1916,8 @@ export default function ContextualActionBar({
               the difference personally.
             </div>
           )}
-          {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
-              button are the largest block in this bar, and on three of four screens they were furniture. */}
-          {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
-              be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
-              Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
-              present -- so the two purchase steps of a turn have one shape. */}
-          {mayActThisTurn && orSubPhase === "BuyPrivate" && privatePurchase && (
-            <ProposePrivatePurchase
-              embedded
-              open
-              buyerTicker={privatePurchase.buyerTicker}
-              privates={privatePurchase.privates}
-              treasury={privatePurchase.treasury}
-              labelForAddress={privatePurchase.labelForAddress}
-              onPropose={privatePurchase.onPropose}
-              onClose={() => undefined}
-            />
-          )}
-          {mayActThisTurn && orSubPhase === "Hardware" && trainPurchase && (
-            <TrainPurchasePanel
-              depot={trainPurchase.depot}
-              buyer={trainPurchase.buyer}
-              companies={trainPurchase.companies}
-              sessionReady={sessionReady}
-              canAct={trainPurchase.canAct}
-              blockedReason={trainPurchase.blockedReason}
-              onBuyFromBank={trainPurchase.onBuyFromBank}
-              onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
-              emergencyAvailable={trainPurchase.emergencyAvailable}
-              onProposeTrade={trainPurchase.onProposeTrade}
-              labelForAddress={trainPurchase.labelForAddress}
-              condensed={condensed}
-            />
-          )}
+          {/* Design note #785: THE TWO TALL PANELS MOVED OUT OF THE STICKY ELEMENT -- see the note beside
+              them, below the bar's closing tag. They were the only reason it kept unpinning itself. */}
         </div>
       ) : (
       <div style={styles.actionBarPanel}>
@@ -2219,6 +2212,74 @@ export default function ContextualActionBar({
          It renders on the whole `Routes` sub-phase rather than only while route mode is engaged: the old panel
          was gated on `routeSelectMode`, which forced the toggle that turns route mode ON to live elsewhere by
          necessity -- a control cannot switch on the panel it is inside. */}
+      {/* ==================================================================
+           DESIGN NOTE 785: THE BAR UNPINNED ITSELF, AND IT WAS RIGHT TO
+          ==================================================================
+
+          REPORTED across two rounds of playtesting: "buy trains is not sticky and does not travel: it is
+          fixed at the top of the screen", and the same of Buy Private.
+
+          NOT A CSS FAILURE. `styles.actionBar` declares `position: sticky` correctly, and no ancestor sets an
+          `overflow` -- I checked the whole chain, `html` and `body` included. What happens is #720 doing its
+          job: `canPinWithoutTrapping` unpins the bar the moment it exceeds half the usable viewport, because
+          a sticky element taller than that traps the page behind it. `actionBarUnpinned` sets
+          `position: static`, and a static bar sits where it is written and scrolls away.
+
+          THE EVIDENCE WAS IN WHICH PANELS WERE REPORTED. `PrivatePowerPanel` and `RoutePlannerPanel` have
+          always rendered out here, past the bar's closing tag, and neither was ever reported as broken. The
+          two that were are precisely the two that lived INSIDE the sticky element and pushed it past the
+          budget.
+
+          SO THE FIX IS THE PLAYER'S OWN SUGGESTION: "at least Action bar with the corporation card should be
+          sticky". The bar keeps the identity row and the controls -- short, fixed height, never near 50% --
+          and the tall step panels become ordinary blocks beneath it, which is what the other two already
+          were. Nothing is hidden and nothing needs a jump button, because the pinned half no longer
+          disqualifies itself.
+
+          WHAT THIS DOES NOT DO is make a long depot table reachable without scrolling. That is the honest
+          trade #720 identified and twice refused to solve with an inner scrollbar (#13/item 1 removed one;
+          #655 found a `maxHeight` on this very bar was "the bug it warned about"). A player scrolls the page;
+          the controls stay with them. */}
+      {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
+          button are the largest block in this bar, and on three of four screens they were furniture. */}
+      {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
+          be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
+          Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
+          present -- so the two purchase steps of a turn have one shape. */}
+      {mayActThisTurn && orSubPhase === "BuyPrivate" && privatePurchase && (
+        <ProposePrivatePurchase
+          embedded
+          open
+          buyerTicker={privatePurchase.buyerTicker}
+          privates={privatePurchase.privates}
+          treasury={privatePurchase.treasury}
+          labelForAddress={privatePurchase.labelForAddress}
+          // Design note #779: the holder's seat colour, from the shell that has the roster.
+          colorForAddress={privatePurchase.colorForAddress}
+          onPropose={privatePurchase.onPropose}
+          onClose={() => undefined}
+        />
+      )}
+      {mayActThisTurn && orSubPhase === "Hardware" && trainPurchase && (
+        <TrainPurchasePanel
+          depot={trainPurchase.depot}
+          buyer={trainPurchase.buyer}
+          companies={trainPurchase.companies}
+          sessionReady={sessionReady}
+          canAct={trainPurchase.canAct}
+          blockedReason={trainPurchase.blockedReason}
+          onBuyFromBank={trainPurchase.onBuyFromBank}
+          onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
+          emergencyAvailable={trainPurchase.emergencyAvailable}
+          onProposeTrade={trainPurchase.onProposeTrade}
+          labelForAddress={trainPurchase.labelForAddress}
+          /* Design note #785: still `condensed` when the BAR is condensed. The panel is no longer inside the
+             sticky element, but the two are read together and a bar that has shed its prose beside a panel
+             that has not would look like a rendering fault rather than a density choice. */
+          condensed={condensed}
+        />
+      )}
+
       {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
           ownership and on the round they may be used in. Renders nothing
           outside sandbox, and nothing when the viewer owns none. */}
@@ -2240,7 +2301,7 @@ export default function ContextualActionBar({
         onUseAbility={onUsePrivateAbility}
         controlsEnabled={sessionReady}
       />
-      {showRouteToggle && (
+      {showRouteReadout && (
         <RoutePlannerPanel
           drafts={trainDrafts}
           activeTrainIndex={trainDrafts.length === 0 ? null : activeTrainIndex}
@@ -2251,7 +2312,8 @@ export default function ContextualActionBar({
           onClearRoute={onClearRoute}
           onRunRoute={onRunTrains}
           ownsAnyTrain={ownsAnyTrain}
-          controlsEnabled={sessionReady}
+          // Design note #787: a watcher reads the figures; the buttons stay the acting player's.
+          controlsEnabled={sessionReady && mayActThisTurn}
           noTrainReason={NO_TRAIN_ROUTE_REASON}
           clickFeedback={routeFeedback}
         />

@@ -171,6 +171,26 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
 }
 
 /** Orange and Brown lift the 60% ownership cap. */
+/* ==================================================================
+ *  DESIGN NOTE 780: THE CAP, SAID ON THE CARD
+ * ==================================================================
+ *
+ * REPORTED: "we could somehow indicate it on the corporation card ... that shares column entry reads
+ * '5 (60%, max)'". The report before it: a purchase refused at the 60% cap with nothing on screen saying so
+ * until the player hovered a disabled button.
+ *
+ * THE PREDICATE LIVES BESIDE THE RULE IT DESCRIBES, which is the only reason this is here rather than in the
+ * panel. `sharePurchaseBlock` already refuses at this cap and already knows Orange and Brown waive it; a card
+ * that computed "max" for itself would be a second implementation, and the failure mode is specific and ugly
+ * -- a roster reading "60% max" beside a Buy button that correctly allows the purchase, or the reverse. That
+ * is #712's bug shape, and #706's, and #774's.
+ *
+ * THE ZONE IS NOT OPTIONAL. Printing "max" at 60% in the Orange or Brown zone would state a rule that does
+ * not apply there, which is worse than saying nothing: a player who believes it stops trying. */
+export function atHoldingCap(percentage: number, zone: PriceZone): boolean {
+  return !exceeds60Allowed(zone) && percentage >= PLAYER_HOLDING_CAP_PERCENT;
+}
+
 export function exceeds60Allowed(zone: PriceZone): boolean {
   return zone === "Orange" || zone === "Brown";
 }

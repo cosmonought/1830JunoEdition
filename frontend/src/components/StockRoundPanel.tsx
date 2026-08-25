@@ -38,6 +38,9 @@ import {
   ZonedPrice,
   PAR_BOX_PRICES,
 } from "./StockMarketRenderer";
+// Design note #780: the holding cap, shared with `sharePurchaseBlock` so the roster and the Buy button
+// cannot disagree about whether a player has room.
+import { atHoldingCap } from "../utils/sharePurchase";
 // Design note #713: the sale's arithmetic and its two guards.
 import { certificatesIn, saleProceeds } from "../utils/shareSale";
 // Design note #749: the float rule, shared with the reducer so the card and the board cannot disagree.
@@ -609,10 +612,23 @@ function CorporationRoster({
                        presidency unmistakably, so an amber row behind it emphasised a fact needing none -- while the one
                        row a reader scans for was marked by a pale pill in the weakest position. The two swap weights and
                        the "you" tag is deleted rather than moved. `isSelf` needs an address, so hotseat highlights none. */
-                    holdings.map((holding) => (
+                    holdings.map((holding) => {
+                    /* Design note #780: AT THE CAP, SAID HERE. Reported after a purchase was refused at 60%
+                       with nothing on screen explaining it -- the rule lived in a disabled button's tooltip,
+                       which is invisible on touch and easy to miss anywhere.
+                       ZONE-AWARE THROUGH THE SHARED PREDICATE, not a local `>= 60`: Orange and Brown waive
+                       this cap, and a roster printing "max" where the Buy button correctly allows the
+                       purchase would be the two-surfaces-one-question bug this project keeps finding. */
+                    const capped = atHoldingCap(holding.percentage, marketZoneForPrice(market));
+                    return (
                       <div
                         key={holding.address}
                         role="row"
+                        title={
+                          capped
+                            ? `${playerLabel?.(holding.address) ?? truncateHolder(holding.address)} holds the maximum ${holding.percentage}% of this corporation. The Orange and Brown zones lift this cap.`
+                            : undefined
+                        }
                         style={{
                           ...styles.ownershipRow,
                           ...(holding.isSelf ? styles.rosterHoldingRowSelf : {}),
@@ -628,13 +644,23 @@ function CorporationRoster({
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                         </span>
-                        <span style={styles.ownershipNum} role="cell">
-                          {certificateCount(holding.percentage, holding.isPresident)} ({holding.percentage}%)
+                        <span
+                          style={{
+                            ...styles.ownershipNum,
+                            ...(capped ? styles.ownershipNumCapped : {}),
+                          }}
+                          role="cell"
+                        >
+                          {/* "5 (60% max)" rather than "5 (60%, max)": the comma buys nothing and this
+                             column is fixed-width (#466), so every character is a real constraint. */}
+                          {certificateCount(holding.percentage, holding.isPresident)} (
+                          {holding.percentage}%{capped ? " max" : ""})
                         </span>
                         {/* Design note #394: blank, not a dash. */}
                         <span style={styles.ownershipNum} role="cell" />
                       </div>
-                    ))
+                    );
+                    })
                   )}
 
                   {/* Design note #395: THE PRIVATES THIS COMPANY OWNS. They belong in the ownership table because they ARE
@@ -1723,7 +1749,11 @@ export default StockRoundPanel;
    Neither site looked wrong alone; they were only wrong together. Both now read one constant, so "the
    track is at least as wide as its content" is true by construction. The space comes from the entity
    column, the only track that can give and one that already ellipsises. */
-const OWNERSHIP_NUM_WIDTH = "68px";
+/* Design note #466: wide enough for the longest value it can hold -- was "9 (100%)" at 68px.
+   Design note #780 widened it for "9 (100% max)", the new longest, because the report asked for exactly
+   this: "make sure to leave enough room on that column for it to live on one line instead of spilling into
+   a second". The name column is `minmax(0, 1fr)` and ellipsises, so it absorbs the difference. */
+const OWNERSHIP_NUM_WIDTH = "92px";
 const OWNERSHIP_GRID = `minmax(0, 1fr) ${OWNERSHIP_NUM_WIDTH} ${OWNERSHIP_NUM_WIDTH}`;
 
 const styles: Record<string, React.CSSProperties> = {
@@ -2196,6 +2226,11 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: OWNERSHIP_NUM_WIDTH,
     whiteSpace: "nowrap",
   },
+  /* Design note #780: WEIGHT AND INK, not one or the other. Bold alone is easy to miss in a column of
+     figures; colour alone is #732's rule against a distinction a colour-blind player cannot read. Amber
+     because nothing has gone WRONG -- the player has simply run out of room, which is a binding rule rather
+     than an error. */
+  ownershipNumCapped: { fontWeight: 800, color: "#d8a53a" },
   /* Design note #378: the line between shares nobody owns and shares
      somebody does. Reset from the browser default, which is an inset 3D
      bevel that reads as a separator between SECTIONS rather than as a rule

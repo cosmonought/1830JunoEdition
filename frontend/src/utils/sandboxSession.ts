@@ -499,11 +499,11 @@ export interface SandboxActionContext {
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #549 */
   actor?: string | null;
   mapGrid?: MapGridResponse;
-  /** Design note #492a: this is the FIRST `RunManualRoute` of a turn's
-   *  batch, so `last_route_revenue` starts from zero rather than adding to
-   *  whatever the previous turn left. Read by that arm alone; every other
-   *  message ignores it. */
-  resetRouteRevenue?: boolean;
+  /* `resetRouteRevenue` REMOVED by design note #777, and it is worth recording WHY rather than deleting
+     quietly: it was a dispatch-time option meant to zero `last_route_revenue` on a turn's first route
+     message, and `appendSandboxAction` writes only the message into the log -- so no replay ever saw it, and
+     every client applies by replaying. An option the authority can never receive is worse than no option:
+     it reads at the call site as a rule that is being enforced. The zeroing is a turn-change event now. */
   /** Scales red off-board terminals, whose value rises with the era. */
   era?: TileColorTier;
   /** Market price injected by the caller: the chart is a separate atom this reducer must not reach into. Omitted falls back to par.
@@ -1538,7 +1538,43 @@ function settleOperatingCursor(
     before.sub_round_index !== after.sub_round_index ||
     before.macro_round_number !== after.macro_round_number;
   if (turnChanged) {
-    return { ...after, operating_sub_phase: openingSubPhase(after) };
+    /* ==================================================================
+     *  DESIGN NOTE 777: THE TURN CLEARS THE RUN, BECAUSE THE LOG CAN SAY SO
+     * ==================================================================
+     *
+     * REPORTED: "B&O just ran for $200 and the toast said it paid out at $39 per share", and before that
+     * "$190 ... $22 per share". $390 is $200 plus the previous run's $190; $220 is $190 plus the run before
+     * that. `last_route_revenue` was carrying turns forward.
+     *
+     * THE RESET EXISTED AND COULD NEVER ARRIVE. `RunManualRoute` adds to the stored figure -- correct, since
+     * one message per train is how a multi-train turn is recorded -- and `ctx.resetRouteRevenue` was supposed
+     * to zero it on the batch's first message. But that flag is a DISPATCH-TIME OPTION, and
+     * `appendSandboxAction` writes only the message and `derived` into the log. Every client, including the
+     * one that pressed the button, applies actions by REPLAYING them, so the flag was never present when the
+     * arm read it. The reset was unreachable on every code path in the app.
+     *
+     * SO THE RULE BECOMES A FACT ABOUT STATE. A corporation's route revenue describes THIS turn; the moment
+     * the turn changes it describes a turn that is over. This function already computes `turnChanged` for the
+     * cursor, and the same event is what makes the figure stale -- so it is cleared here rather than signalled
+     * from outside. Derivable from the log alone, which is #642's standing rule for anything the reducer owns.
+     *
+     * ALL CORPORATIONS, NOT JUST THE OUTGOING ONE. The field is only ever read for the corporation currently
+     * operating, so clearing the rest costs nothing and removes the question of which one to clear -- and a
+     * round transition changes the queue itself, where "the outgoing one" is not well defined. */
+    const cleared = after.public_companies.some(
+      (company) => (company.last_route_revenue ?? "0") !== "0",
+    )
+      ? after.public_companies.map((company) =>
+          (company.last_route_revenue ?? "0") === "0"
+            ? company
+            : { ...company, last_route_revenue: "0" },
+        )
+      : after.public_companies;
+    return {
+      ...after,
+      public_companies: cleared,
+      operating_sub_phase: openingSubPhase(after),
+    };
   }
 
   const current = after.operating_sub_phase;
@@ -2081,14 +2117,17 @@ function applyOneAction(
     const earned = ctx?.mapGrid
       ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow")
       : SANDBOX_NOMINAL_ROUTE_REVENUE;
-    /* The treasury credit moved to DeclareDividends, or Withhold credited it twice. #492a: a turn's routes ADD (one message per train) and ctx.resetRouteRevenue marks the batch's first message.
+    /* The treasury credit moved to DeclareDividends, or Withhold credited it twice. #492a: a turn's routes ADD
+       (one message per train).
+       Design note #777: THE ZEROING MOVED TO THE TURN CHANGE and `ctx.resetRouteRevenue` is gone. It was a
+       dispatch-time option, and the log carries only the message -- so it was absent on every replay, which
+       is every path that reaches this arm. The figure accumulated across turns for the whole game.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #192 */
-    const previous = ctx?.resetRouteRevenue
-      ? 0
-      : Number(
-          state.public_companies.find((entry) => entry.company_id === protocol_id)
-            ?.last_route_revenue ?? 0,
-        ) || 0;
+    const previous =
+      Number(
+        state.public_companies.find((entry) => entry.company_id === protocol_id)
+          ?.last_route_revenue ?? 0,
+      ) || 0;
     const running = Math.max(0, previous) + earned;
     return {
       ...state,

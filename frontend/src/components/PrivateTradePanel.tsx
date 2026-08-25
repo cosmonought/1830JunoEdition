@@ -122,6 +122,11 @@ export interface ProposePrivatePurchaseProps {
   privates: readonly PrivateCompanyState[];
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
+  /** Design note #779: the holder's seat colour, injected rather than derived.
+   *  `seatColor` needs the roster INDEX and this panel is given a lookup by address, so the shell -- which
+   *  has both -- answers. Optional: a caller without a roster gets the grey it had before rather than a
+   *  wrong colour, which on a table where colour identifies a person is the worse failure. */
+  colorForAddress?: (address: string) => string | null;
   /** The buying corporation's treasury, so an unaffordable price is caught
    *  before it is proposed. */
   treasury: number;
@@ -135,6 +140,7 @@ export function ProposePrivatePurchase({
   buyerTicker,
   privates,
   labelForAddress,
+  colorForAddress,
   treasury,
   onPropose,
   onClose,
@@ -250,19 +256,46 @@ export function ProposePrivatePurchase({
                     }}
                   >
                     <span style={styles.rowName}>
-                      {entry.name}
-                      {catalog && <span style={styles.rowAcronym}>{catalog.acronym}</span>}
+                      {/* Design note #779: NUMBERED, AND THE ACRONYM IS PART OF THE NAME.
+                         REPORTED: "the private companies here lack the numbering we've given them everywhere
+                         else"; and the acronym "on the same line and in the same font as the 'held by'
+                         information" read as a third fact rather than as part of the title.
+                         #423 SETTLED THAT THE ACRONYM IS THE IDENTITY and #341 that the NUMBER is what
+                         players say while the auction list is on screen. Both are true and they are not
+                         competing -- "1. Schuylkill Valley (SV)" is one title carrying both, where three
+                         separate spans made a reader work out which one named the piece. */}
+                      {`${entry.private_id}. ${entry.name}`}
+                      {catalog && <span style={styles.rowAcronym}>({catalog.acronym})</span>}
                       {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player
                          currently owns them". For an unsold private it is also the explanation for why the row is
                          inert, so the two facts are one line rather than two.
                          Design note #721: ON THE NAME'S LINE. It had a column cell of its own, right-aligned
                          opposite the face value, which cost a grid row to say three words. */}
                       <span style={styles.rowOwner}>
-                        {entry.owner
-                          ? `held by ${labelForAddress(entry.owner)}`
-                          : blocked !== null
-                            ? "not for sale"
-                            : "unsold in the auction"}
+                        {entry.owner ? (
+                          <>
+                            {"held by "}
+                            {/* Design note #779: THE HOLDER IN THEIR OWN COLOUR. Six privates against six
+                               seats is exactly the lookup a colour solves -- and the colour is already how
+                               this table identifies a person everywhere else (the seat trail, the cash
+                               strip, the turn pulse). Weight as well as hue: #732's rule, that colour alone
+                               is not a distinction a colour-blind player can read. */}
+                            <span
+                              style={{
+                                ...styles.rowOwnerName,
+                                ...(colorForAddress?.(entry.owner)
+                                  ? { color: colorForAddress(entry.owner) as string }
+                                  : {}),
+                              }}
+                            >
+                              {labelForAddress(entry.owner)}
+                            </span>
+                          </>
+                        ) : blocked !== null ? (
+                          "not for sale"
+                        ) : (
+                          "unsold in the auction"
+                        )}
                       </span>
                     </span>
                     {/* Design note #721: THE TWO FIGURES, STACKED AND RIGHT-ALIGNED.
@@ -590,7 +623,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "2px 12px",
     alignItems: "start",
     textAlign: "left",
-    padding: "9px 12px 5px",
+    /* Design note #779: TIGHTER. Reported as "considerably reduce the padding from their name to their
+       special power" -- six of these stack, so every vertical pixel here is six on the panel, which is what
+       makes this subpanel too tall to sit in the sticky bar. */
+    padding: "6px 12px 2px",
     border: "none",
     background: "none",
     color: "#e2e6ee",
@@ -612,11 +648,15 @@ const styles: Record<string, React.CSSProperties> = {
   /* The acronym beside the name. Every other surface in this app identifies
      a private by acronym (`PrivateCompanyPills`, the powers panel), and this
      modal was the one place a player had to translate. */
+  /* Design note #779: PART OF THE TITLE NOW. It keeps the monospace, because that is what makes an acronym
+     read as a code rather than a word, but it takes the NAME's size and weight so the eye reads one title
+     rather than a name and a separate tag. The old `micro` matched `rowOwner` exactly, which is what made
+     "SV" and "held by Ada" look like two facts of the same kind. */
   rowAcronym: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.04em",
-    color: "#8f98a8",
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    color: "#98a1b2",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   /* Design note #721: `rowBand` and `rowMeta` are GONE, not left unused. The band moved to the offer field
@@ -649,6 +689,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8f98a8",
     whiteSpace: "nowrap",
   },
+  /* The name only -- "held by" stays grey so the colour marks the PERSON rather than the phrase. */
+  rowOwnerName: { fontWeight: 700 },
   rowPower: {
     fontSize: FONT_SIZE.small,
     color: "#d3d8e2",
@@ -665,7 +707,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "7px",
     width: "100%",
     margin: 0,
-    padding: "0 12px 9px",
+    padding: "0 12px 6px",
     border: "none",
     backgroundColor: "transparent",
     color: "#9aa0ac",

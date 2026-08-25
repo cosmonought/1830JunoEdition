@@ -275,13 +275,39 @@ export function placeableStationHexes(input: {
    PHRASED AS A REASON, NOT A BOOLEAN: an exhausted allowance is permanent, a short treasury is fixable next
    turn, and no reachable slot is a fact about the map that a tile lay might change. A bare `true` would
    collapse them. */
+/* ==================================================================
+ *  DESIGN NOTE 781: A FREE TOKEN THIS PREDICATE COULD NOT SEE
+ * ==================================================================
+ *
+ * REPORTED, twice and as two bugs: "as soon as the track was laid the subphase autoskipped to Run Routes
+ * (skipping the Station Token step)", and "on the turn after using its special Lay Track power, the Place
+ * Station special power suddenly became available. I believe these are supposed to be done on the same turn".
+ *
+ * ONE CAUSE. This function is what the auto-skip asks, and every one of its arms describes an ORDINARY
+ * placement: a token the corporation pays for, dropped on a city its network reaches. The D&H's token is
+ * neither -- it is free and it ignores connectivity entirely (`dhPower.ts`: "drop a station there in one go,
+ * connected to nothing"). So a corporation whose only available placement was the D&H's reported "its network
+ * reaches no city with a free station slot", the step skipped itself, and the player never reached the
+ * control. The power then looked available the NEXT turn only because that was the next time the Tokens step
+ * was reachable at all.
+ *
+ * #776'S SHAPE, FOR THE TOKEN. That note made the C&StL's lay extra; this one makes the D&H's token visible
+ * to the thing that decides whether the step has anything in it. Both are the same underlying error: a
+ * private's power is an exception to a rule, and the code enforcing the rule had never been told.
+ *
+ * WHICH ARMS IT BYPASSES, AND WHICH IT DOES NOT. Free, so the treasury arm does not apply; unconnected, so
+ * the network arm does not apply. THE TOKEN LIMIT STILL APPLIES -- a corporation has a finite pile of station
+ * markers and the D&H does not conjure one, so bypassing that would let it place a token it does not own. */
 export function stationPlacementBlockReason(input: {
   mapGrid: MapGridResponse;
   company: (StationPlacementCompany & { treasury: string }) | null | undefined;
   allCompanies: readonly StationPlacementCompany[];
   boardHexes: ReadonlyArray<readonly [number, number]>;
+  /** Design note #781: a placement this corporation may make that is free and ignores connectivity -- the
+   *  D&H's station. `false`/omitted keeps the ordinary rules exactly as they were. */
+  extraTokenAvailable?: boolean;
 }): string | null {
-  const { mapGrid, company, allCompanies, boardHexes } = input;
+  const { mapGrid, company, allCompanies, boardHexes, extraTokenAvailable = false } = input;
   // No corporation resolved: not a block, an absence. The caller must not
   // skip a step over missing data -- see App design note #293b's reasoning
   // about ignorance permitting rather than refusing.
@@ -291,6 +317,11 @@ export function stationPlacementBlockReason(input: {
   if (placed >= company.station_token_limit) {
     return `all ${company.station_token_limit} of its station tokens are already on the board`;
   }
+
+  /* Design note #781: BOTH REMAINING ARMS ARE ABOUT AN ORDINARY PLACEMENT, and the D&H's is not one. Placed
+     after the token-limit check on purpose -- that arm is a fact about the corporation's own pile of markers
+     and no private power adds to it. */
+  if (extraTokenAvailable) return null;
 
   const cost = nextStationTokenCost(company);
   const treasury = Number(company.treasury) || 0;

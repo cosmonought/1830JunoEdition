@@ -127,8 +127,29 @@ describe("a jump is not an action", () => {
     /* REPORTED: "it's the one panel that doesn't have a clear action button when it's one of the more
        consequential actions of the whole game." The map IS that step's panel; it was simply owned elsewhere. */
     expect(CODE).toContain('key: "go-to-map"');
-    expect(CODE).toContain('label: "Lay Track"');
     expect(CODE).toContain("disabled: mapInView,");
+  });
+
+  it("counts the lays, because sometimes there are two (design note #832)", () => {
+    /* ASKED as "Lay 1 Track ... then after a player is done it grays out to 'Lay 0 Track'", and the zero
+       withdrawn by the asker before it was built: "I guess 'Lay 0 Track' is unnecessary since I think it
+       autoskips." `bonusLay.ts` agrees -- `layEndsTrackStep` is `!isBonusLay`, so an ordinary lay ends the
+       step and takes the button with it. A zero state would have been #788's unreachable arm.
+       WHAT THE COUNT IS FOR IS TWO. The C&SL's power is an EXTRA lay (#726), and nothing on screen had ever
+       said so -- which is exactly what #776 was reported as. */
+    const dollar = String.fromCharCode(36);
+    expect(CODE).toContain("label: `Lay " + dollar + "{trackLays} Track`");
+    expect(CODE).toContain("trackLays = 1,");
+  });
+
+  it("does not let the count drive the greying", () => {
+    /* THE PROPERTY THAT KEEPS THIS HONEST, and the answer to the doubt raised two reports ago about greyed
+       buttons meaning two things. `disabled` is `mapInView` and nothing else: greyed means "pressing this
+       would not move you". The label says how many lays the turn holds. Two facts, two channels (#732). */
+    const mapCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
+    expect(mapCase).toContain("disabled: mapInView,");
+    expect(mapCase).not.toContain("trackLays === 0");
+    expect(mapCase).not.toContain("disabled: trackLays");
   });
 
   it("shortens the sentence the button replaces", () => {

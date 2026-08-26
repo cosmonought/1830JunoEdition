@@ -198,6 +198,28 @@ describe("the shell says which lay it is", () => {
     expect(APP).not.toContain("bonus_lay: false");
   });
 
+  it("counts the turn's lays for the bar, and only counts to two (design note #832)", () => {
+    /* THE SAME FACT, SAID WHERE A PLAYER LOOKS. #776's fix made the second lay REAL; nothing made it VISIBLE,
+       and the catalog sentence above is only read by someone who already suspects. The bar's label carries
+       the count now, and this is where it is derived.
+       THE POWER MUST BE THE OPERATING CORPORATION'S (#441) AND STILL UNSPENT: `layAvailable` is what stops
+       the label reading "Lay 2 Track" on the second lay, when only one remains. */
+    const start = APP.indexOf("const trackLaysThisTurn =");
+    expect(start).toBeGreaterThan(-1);
+    const memo = APP.slice(start, APP.indexOf("}, [gameState", start));
+    expect(memo.length).toBeGreaterThan(0);
+    expect(memo).toContain("CSL_PRIVATE_ID");
+    expect(memo).toContain("csl.owner_protocol_id === actingProtocolId");
+    expect(memo).toContain("cslPower.layAvailable");
+    expect(memo).toContain("return 1 + (");
+    // The D&H's tile replaces the lay rather than adding one (#548), so it must not reach this count.
+    expect(memo).not.toContain("dh");
+  });
+
+  it("hands the count to the bar", () => {
+    expect(APP).toContain("trackLays={trackLaysThisTurn}");
+  });
+
   it("keeps the catalog's description in step with the code", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");

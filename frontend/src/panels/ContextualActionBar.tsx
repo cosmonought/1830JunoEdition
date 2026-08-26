@@ -453,6 +453,7 @@ export default function ContextualActionBar({
   trainPurchase = null,
   armedErrand = null,
   mapRef,
+  trackLays = 1,
   privatePurchase,
   onOpenPrivateTrade,
   ownsAnyTrain,
@@ -636,6 +637,10 @@ export default function ContextualActionBar({
    *  Owned by the shell, because the bar has no canvas -- and optional, because a caller without one gets a
    *  greyed button rather than a broken one. */
   mapRef?: React.RefObject<HTMLElement | null>;
+  /** Design note #832: how many tile lays this turn holds -- one ordinarily, two while the C&SL's extra is
+   *  unspent. Resolved by the shell, which has the private's ownership and the power's state; the bar prints
+   *  it. Defaults to 1, the number every corporation has every turn. */
+  trackLays?: number;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
    *  shape and for the same reason as `trainPurchase` below. `null` renders no panel. */
   privatePurchase?: {
@@ -1007,12 +1012,21 @@ export default function ContextualActionBar({
         contextualButtons = [
           {
             key: "go-to-map",
-            label: "Lay Track",
+            /* Design note #832: the COUNT, because sometimes it is two. The C&SL's power is an extra lay
+               (#726) and nothing on screen ever said so -- which is what #776 was reported as.
+               THE COUNT SHOWS EVEN AT ONE, as asked ("Lay 1 Track"): a number that appears only in the rare
+               case is a number nobody learns to read. "Track" stays singular at two -- 1830 counts tile
+               LAYS, not tracks, and "Lay 2 Tracks" would name a thing the rules do not have. */
+            label: `Lay ${trackLays} Track`,
             onClick: scrollToMap,
             disabled: mapInView,
-            title: mapInView
-              ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
-              : "Scrolls to the Rail Map, where the track is laid.",
+            title:
+              (trackLays > 1
+                ? `${trackLays} lays this turn — the Champlain & St. Lawrence's is extra. `
+                : "") +
+              (mapInView
+                ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
+                : "Scrolls to the Rail Map, where the track is laid."),
           },
         ];
         break;

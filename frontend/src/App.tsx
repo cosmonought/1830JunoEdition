@@ -1590,6 +1590,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return cslPowerState({ hexBuilt, layUsed: usedPrivateAbilities.has("csl-tile") });
   }, [mapGrid, usedPrivateAbilities]);
 
+  /* ==================================================================
+     DESIGN NOTE 832: HOW MANY LAYS, BECAUSE SOMETIMES IT IS TWO
+     ==================================================================
+
+     ASKED: "How about if the 'Lay Track' button said 'Lay 1 Track' and then after a player is done it grays
+     out to 'Lay 0 Track'?" -- and answered a moment later by the asker: "I guess 'Lay 0 Track' is unnecessary
+     since I think it autoskips to the next round."
+
+     EXACTLY SO, and `bonusLay.ts` says why: `layEndsTrackStep` is `!isBonusLay`, so an ordinary lay ends the
+     step and the button goes with it. A zero state would have been #788's unreachable arm -- rendered by
+     nothing, asserted by a test, and read by the next maintainer as a case that happens.
+
+     WHAT SURVIVES IS THE COUNT ITSELF, and it earns its place on exactly one number: TWO. The C&SL's power is
+     an EXTRA lay (#726: "IN ADDITION TO its normal tile lay", unlike the D&H's, which replaces it), and
+     nothing on screen has ever said so. That is the confusion #776 was reported as -- "CSL's special power is
+     supposed to allow for a SECOND track lay, but in my playthrough using its power advanced the Lay Track
+     subphase completely." The rule was fixed; the player still had to know it.
+
+     THE COUNT DOES NOT DRIVE THE GREYING, which is the whole reason this stays honest. The button greys when
+     the map is on screen (#797/#831) and for no other reason, so "greyed" keeps one meaning. The label says
+     how many lays this turn holds; the disabled state says whether pressing would move you. */
+  const trackLaysThisTurn = useMemo(() => {
+    const csl = gameState?.private_companies.find(
+      (entry) => entry.private_id === CSL_PRIVATE_ID,
+    );
+    /* OWNED BY THE OPERATING CORPORATION, not merely owned. #441's rule: a corporate power belongs to
+       whichever railroad holds the certificate, and only on its own turn. */
+    const cslIsOurs =
+      csl?.owner_protocol_id !== null &&
+      csl?.owner_protocol_id !== undefined &&
+      csl.owner_protocol_id === actingProtocolId;
+    return 1 + (cslIsOurs && cslPower.layAvailable ? 1 : 0);
+  }, [gameState, actingProtocolId, cslPower]);
+
   /* Design note #727: the hexes this corporation may build on by POWER rather than by reach. Both privates
      answer the same question, so one set covers them and a third power would need no renderer change. */
   const privatePowerHexes = useMemo(
@@ -7132,6 +7166,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   onOpenPrivateTrade={() => undefined}
                   // Design note #831: the Lay Track step's destination.
                   mapRef={canvasPaneRef}
+                  // Design note #832: one lay, or two while the C&SL's extra is unspent.
+                  trackLays={trackLaysThisTurn}
                   /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
                      returns `null` for the compulsory home station, which collapses the whole control. */
                   armedErrand={

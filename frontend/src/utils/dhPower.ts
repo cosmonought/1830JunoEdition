@@ -186,6 +186,17 @@ export type DhStationPromptEvent =
  *  A TABLE RATHER THAN FOUR `setState` CALLS SPREAD THROUGH `App`, because #817 is the record of what happens
  *  when a small lifecycle lives as scattered `if`s: four reports, one missing set of rules. This one is five
  *  lines and it can be asked questions. */
+/* ==================================================================
+    DESIGN NOTE 849: THIS TABLE NO LONGER HAS A CALLER, AND IS KEPT ANYWAY
+   ==================================================================
+   #818 built the cursor because the question and the placement were two moments of one modal with no other
+   memory. #848's flow modal derives both from the power's own record -- "asking" is a laid tile with an
+   unresolved station, "placing" is an armed errand -- so `App.tsx` stopped reading it.
+   NORMALLY THAT MAKES IT AN ORPHAN and #772 says delete it. The exception is what it ENCODES: the
+   distinction between forfeiting by choice and forfeiting by timeout, which is #818's whole argument and is
+   the property most likely to be quietly lost in a future pass at this power. It is tested, it is short, and
+   the note above it is the reasoning. Recorded here so the next reader knows it is unused ON PURPOSE rather
+   than by an oversight -- which is the failure #660a describes, a rule living in a function nobody calls. */
 export function dhStationPromptNext(
   current: DhStationPrompt,
   event: DhStationPromptEvent,

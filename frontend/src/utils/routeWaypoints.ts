@@ -6,6 +6,9 @@
 // out on its own.
 
 import type { RouteWaypointDto } from "./sessionKey";
+import type { MapGridResponse } from "../components/hexContractTypes";
+import { HEX_NEIGHBOR_OFFSETS, cityExitEdges } from "../components/hexGeometry";
+import type { StationToken } from "./trackReach";
 
 /* ------------------------------------------------------------------ */
 /* Manual Route Point UI -- see design note #11                       */
@@ -94,14 +97,69 @@ export function axialHexDistance(a: { q: number; r: number }, b: { q: number; r:
 
    COMPARED BY COORDINATE, never by label: `hexLabel` is a display name ("New
    York (G19)", design note #242) and `station_token_hexes` is `(q, r)` pairs. */
+/* ==================================================================
+    DESIGN NOTE 853: THE ROUTE'S OWN SHAPE NAMES THE CITY
+   ==================================================================
+
+   ASKED, after #852 fixed the auto-router: "Are you saying a manual route would still be able to run from
+   city 1 even without NNH's network connected to it?"
+
+   YES, IT COULD, and the gap was not where I had put it. #852a blamed `bridgeWaypoints` and said the fix
+   needed `RouteWaypointDto` to carry a city -- a contract change. That was wrong twice over:
+
+     THE REAL HOLE IS THIS FUNCTION. It compared `(q, r)` pairs, so ANY route touching New York satisfied
+     "contains one of your tokens" -- including one that only ever entered by the other city's rail. The
+     bridge is a way to draw such a route; this is what accepts it.
+
+     AND NO CONTRACT CHANGE IS NEEDED. A drawn route is a list of hexes, and the hexes on either side of a
+     point determine the edges the route uses AT that point. `cityForArrival` needs an arrival edge and #730a
+     concluded one "cannot be asked here" -- true of a single hex in isolation, false of a hex with a
+     neighbour before or after it. `hexCanvasPrimitives.ts` #689 has been deriving exactly these edges to
+     DRAW the route through the right city; the rule simply never asked the same question.
+
+   THE FIRST AND LAST POINTS ARE NOT SPECIAL. A first point has no predecessor and a successor, a last point
+   has a predecessor and no successor, and either one is enough to name a city. Only a one-hex "route" has
+   neither, and that is not a route (#256).
+
+   `[q, r]` STILL MEANS THE WHOLE HEX, as everywhere else since #686: one city, or a caller that did not say.
+   Without `mapGrid` the check also falls back to coordinates, which is the pre-#853 behaviour exactly -- a
+   fixture with no board cannot be asked about geometry, and refusing every route would be the worse answer. */
+
+/** The edge index from `(q, r)` toward an adjacent hex, or `null` when they are not neighbours. */
+function edgeToward(
+  from: { q: number; r: number },
+  to: { q: number; r: number } | undefined,
+): number | null {
+  if (!to) return null;
+  const index = HEX_NEIGHBOR_OFFSETS.findIndex(
+    ([dq, dr]) => from.q + dq === to.q && from.r + dr === to.r,
+  );
+  return index < 0 ? null : index;
+}
+
 export function routeIncludesOwnedToken(
   points: readonly { q: number; r: number }[],
-  tokenHexes: ReadonlyArray<readonly [number, number]>,
+  tokens: ReadonlyArray<StationToken>,
+  /** Design note #853: needed only to resolve a city's edges. Omitted keeps the coordinate-only rule. */
+  mapGrid?: MapGridResponse,
 ): boolean {
-  if (points.length === 0 || tokenHexes.length === 0) return false;
-  return points.some((point) =>
-    tokenHexes.some(([q, r]) => q === point.q && r === point.r),
-  );
+  if (points.length === 0 || tokens.length === 0) return false;
+  return points.some((point, index) => {
+    const match = tokens.find(([q, r]) => q === point.q && r === point.r);
+    if (!match) return false;
+    const cityIndex = match.length > 2 ? (match[2] as number) : null;
+    if (cityIndex === null || mapGrid === undefined) return true;
+    /* THE EDGES THIS ROUTE ACTUALLY USES HERE -- toward the hex before, and toward the hex after. A route
+       that merely lists the hex is not passing through the token's city unless one of its own rails belongs
+       to that city. */
+    const used = [
+      edgeToward(point, points[index - 1]),
+      edgeToward(point, points[index + 1]),
+    ].filter((edge): edge is number => edge !== null);
+    if (used.length === 0) return true; // a lone point: not a route, and #256 says so elsewhere.
+    const owned = cityExitEdges(mapGrid, point.q, point.r, cityIndex);
+    return used.some((edge) => owned.includes(edge));
+  });
 }
 
 /** Why this route cannot run for want of a token, or `null` when it can.
@@ -116,13 +174,17 @@ export function routeIncludesOwnedToken(
  *  route, and design note #256's own message covers it. */
 export function routeTokenBlockReason(
   points: readonly { q: number; r: number }[],
-  tokenHexes: ReadonlyArray<readonly [number, number]>,
+  tokens: ReadonlyArray<StationToken>,
+  /** Design note #853: the board, so a two-city hex can be judged by the city rather than the coordinate. */
+  mapGrid?: MapGridResponse,
 ): string | null {
   if (points.length < 2) return null;
-  if (tokenHexes.length === 0) {
+  if (tokens.length === 0) {
     return "This corporation has no station token on the board yet, so no route can include one. Place its home station first.";
   }
-  if (!routeIncludesOwnedToken(points, tokenHexes)) {
+  if (!routeIncludesOwnedToken(points, tokens, mapGrid)) {
+    /* THE SENTENCE ALREADY SAID "A CITY", not "a hex", which is what made the old implementation a quiet lie
+       rather than a documented simplification. It needs no rewording now that it is true. */
     return "A route must pass through a city this corporation has a station token in — anywhere along the run, not just at the ends.";
   }
   return null;

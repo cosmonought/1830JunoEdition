@@ -79,10 +79,13 @@ import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { passButtonLabel, passButtonTitle } from "../utils/turnAction";
 import {
   canPinWithoutTrapping,
+  restingHeight,
   shouldCondenseSticky,
+  shouldReleasePin,
   stickyTopOffset,
 } from "../utils/stickyCollapse";
 import type { DepotTier } from "../utils/gamePhase";
+import { purchaseWarnings } from "../utils/purchaseWarnings";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
@@ -117,10 +120,8 @@ interface ActionBarButton {
  *  A number rather than a style key because `appStyles.ts` cannot see the `size` prop this is passed to. */
 const CORPORATION_HERALD_PX = 24;
 
-/** Design note #831: a stand-in for a caller with no map on screen. A ref that never resolves makes the hook
- *  a no-op and the button greyed -- the same answer an absent step panel gets, reached the same way, rather
- *  than a second branch inside the hook for "no target". */
-const EMPTY_JUMP_REF: React.RefObject<HTMLElement | null> = { current: null };
+/* Design note #831's `EMPTY_JUMP_REF` is GONE, and #833 says why: the map now arrives as an ELEMENT rather
+   than a ref, so "no map on screen" is spelled `null` and needs no stand-in object. See `useJumpTarget`. */
 
 
 
@@ -232,8 +233,11 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
    * would re-render the bar and re-create the observer below on every frame of a drag. */
   const [barClearance, setBarClearance] = React.useState(0);
   /* Design note #720: whether the bar is short enough to pin at all. Starts `true` -- the pre-#720 behaviour --
-     so the first paint is unchanged and the measurement corrects it a frame later. */
+     so the first paint is unchanged and the measurement corrects it a frame later.
+     Design note #851: mirrored in a ref because the answer now depends on the PREVIOUS answer, and `measure`
+     runs on scroll frames long after the commit that set the state. */
   const [mayPin, setMayPin] = React.useState(true);
+  const mayPinRef = React.useRef(true);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -252,8 +256,23 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
       }
       const rect = node.getBoundingClientRect();
       /* Design note #720: measured on the SAME rect as the pin distance, in the same rAF. Two reads would be
-         two forced layouts per frame for numbers that must agree with each other. */
-      const pinnable = canPinWithoutTrapping(rect.height, window.innerHeight, stickyTop);
+         two forced layouts per frame for numbers that must agree with each other.
+         Design note #837: THE PIN TEST READS THE RESTING HEIGHT, not the rect. Asking whether the bar fits
+         while measuring a subtree whose height the answer controls is a loop, and it settled differently in
+         OR 1.1 and OR 2.1 for no better reason than a few pixels. See `stickyCollapse.ts` #837.
+         THE CLEARANCE STILL READS THE RECT, and the two must not be confused: "can I pin" is about the bar's
+         resting form, "how much am I covering" is about the pixels actually on screen right now. */
+      /* Design note #851: TWO QUESTIONS, AND ONLY ONE OF THEM APPLIES AT A TIME. An unpinned bar asks whether
+         it MAY pin -- a comfort test, on the resting height. A pinned bar asks whether it is TRAPPING -- a
+         reachability test, on the height actually on screen. Asking the comfort question of a pinned bar is
+         what made a refusal sentence and one button drop it out of the viewport mid-decision.
+         THE PREVIOUS ANSWER COMES FROM A REF, not from `mayPin`: this closure is rebuilt only when the effect
+         re-subscribes, and `measure` runs on every scroll frame in between. */
+      const wasPinned = mayPinRef.current;
+      const pinnable = wasPinned
+        ? !shouldReleasePin(rect.height, window.innerHeight, stickyTop)
+        : canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop);
+      mayPinRef.current = pinnable;
       setMayPin(pinnable);
       // Design note #810: the same rect, in the same frame, for the same reason the pin test uses it.
       const clearance = pinnable ? Math.round(stickyTop + rect.height) : 0;
@@ -390,13 +409,20 @@ function useStickyFitProbe(
       const nested = panelRef.current !== null && bar.contains(panelRef.current);
       const combined = nested ? barHeight : barHeight + panelHeight;
       const share = viewport > 0 ? Math.round((combined / viewport) * 100) : 0;
-      const verdict = canPinWithoutTrapping(combined, viewport, stickyTop)
+      /* Design note #837: THE VERDICT IS TAKEN ON THE SAME NUMBER THE PIN TEST USES, which is the resting
+         height. It read `combined` -- the pixels on screen -- so the probe agreed with the deadlock instead of
+         exposing it: it said WOULD UNPIN while the bar was unpinned BECAUSE it was unpinned, which is a
+         reading that confirms whatever it finds. #828a's own warning, one turn later. */
+      const resting = Math.round(restingHeight(bar));
+      const verdict = canPinWithoutTrapping(resting, viewport, stickyTop)
         ? "would stay pinned"
         : "WOULD UNPIN";
       const shape = nested
         ? `bar ${barHeight} (panel ${panelHeight} inside)`
         : `bar ${barHeight} + panel ${panelHeight}`;
-      const next = `fit probe · ${shape} = ${combined}px · ${share}% of ${viewport}px · ${verdict}`;
+      const next =
+        `fit probe · ${shape} = ${combined}px · ${share}% of ${viewport}px` +
+        ` · resting ${resting}px · ${verdict}`;
       setReading((was) => (was === next ? was : next));
     };
 
@@ -452,8 +478,10 @@ export default function ContextualActionBar({
   orSequence = null,
   trainPurchase = null,
   armedErrand = null,
-  mapRef,
-  trackLays = 1,
+  mapEl = null,
+  onShowMap,
+  powerOffers = [],
+  onUsePowerOffer,
   privatePurchase,
   onOpenPrivateTrade,
   ownsAnyTrain,
@@ -634,13 +662,33 @@ export default function ContextualActionBar({
    *  `null` for a compulsory home-station errand, which has no exit by design. */
   armedErrand?: { label: string; onCancel: () => void } | null;
   /** Design note #831: the Rail Map, so the Lay Track step can offer the same jump the purchase steps do.
-   *  Owned by the shell, because the bar has no canvas -- and optional, because a caller without one gets a
-   *  greyed button rather than a broken one. */
-  mapRef?: React.RefObject<HTMLElement | null>;
-  /** Design note #832: how many tile lays this turn holds -- one ordinarily, two while the C&SL's extra is
-   *  unspent. Resolved by the shell, which has the private's ownership and the power's state; the bar prints
-   *  it. Defaults to 1, the number every corporation has every turn. */
-  trackLays?: number;
+   *  Owned by the shell, because the bar has no canvas.
+   *  Design note #833: AN ELEMENT, NOT A REF, and the board pane rather than the pane that holds this bar.
+   *  `null` means the map is not rendered -- a different tab, not "no map exists" -- so the button stays live
+   *  and `onShowMap` is what makes pressing it do something. */
+  mapEl?: HTMLElement | null;
+  /** Design note #833: bring the Rail Map tab forward. Not a game action and it dispatches nothing (#263):
+   *  it is the first half of the same jump, for a player who is looking at the Stock Market. */
+  onShowMap?: () => void;
+  /** ==================================================================
+   *   DESIGN NOTE 846: THE POWER, WHERE A PLAYER IS ALREADY LOOKING
+   *  ==================================================================
+   *
+   *  REPORTED as a principle: "what a player needs to do needs to be present on the screen without scrolling
+   *  or guessing where they need to look." The powers subpanel is below the fold, and the Lay Track step is
+   *  spent looking at the map -- so a corporation could hold the C&SL's extra lay all turn and never learn it.
+   *
+   *  AT MOST TWO, EVER. The fear raised with the request -- "if somehow a corporation bought all five PCs,
+   *  the sticky might overwhelm the screen" -- does not arise: only the D&H's F16 lay and the C&SL's B20 lay
+   *  are Lay Track powers. SV has none, M&H and C&A are share exchanges, the B&O's share arrives at purchase.
+   *  `privatePowerOffer.ts` carries the working.
+   *
+   *  IT OPENS THE SAME PROMPT THE HEX DOES, rather than arming the errand directly. One question, asked one
+   *  way, whichever door a player came through -- and it keeps this bar's rule that a chip here dispatches
+   *  nothing (#263/#793). */
+  powerOffers?: readonly { abilityKey: string; chipLabel: string }[];
+  /** Raises the prompt for one of them. Absent means no chips, the same way an absent `mapEl` means no jump. */
+  onUsePowerOffer?: (abilityKey: string) => void;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
    *  shape and for the same reason as `trainPurchase` below. `null` renders no panel. */
   privatePurchase?: {
@@ -754,6 +802,13 @@ export default function ContextualActionBar({
   // the train chips. Computed here rather than inline in the JSX because
   // both the badge's style and its wording branch on it.
   const phaseAlert = phaseAlertLevel(phase ?? null);
+  /* Design note #839: what the next purchase destroys, as badges rather than as hover text and rather than
+     as a line inside a table the scroll folds away. `purchaseWarnings` owns WHAT; `phaseAlertLevel` above
+     still owns HOW LOUD, which is why neither re-derives the other. */
+  const buyWarnings = React.useMemo(
+    () => purchaseWarnings(phase ?? null, trainPurchase?.depot ?? []),
+    [phase, trainPurchase],
+  );
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
   const [actionBarRef, condensed, mayPin, barClearance] = useCondensedWhenPinned();
@@ -837,14 +892,26 @@ export default function ContextualActionBar({
      panel's own element and argued for it there: "stated once, where the element is, rather than at each call
      site that has to remember the bar exists." A second target owned by a different component makes that
      argument stronger, not weaker -- so the hook writes it, and neither caller has to know. */
+  /* ==================================================================
+      DESIGN NOTE 833: A TARGET THAT MOUNTS LATER NEEDS TO BE AN ELEMENT
+     ==================================================================
+
+     A `RefObject` mutates without re-rendering, so an effect keyed on it never re-runs when the node appears.
+     That is harmless for the step panel, which is mounted for the whole life of the bar; it is fatal for the
+     Rail Map, which unmounts every time the player looks at the Stock Market tab. Passing the ELEMENT makes
+     the identity change part of the render, so the observer re-subscribes when the pane comes back.
+
+     THE UNION RATHER THAN A SECOND HOOK. Two implementations of one question is the failure this session has
+     found repeatedly (#815's three chip rows, #829's two acronym vocabularies). One hook, two ways to name a
+     node, and the resolution happens in one line below. */
   function useJumpTarget(
-    target: React.RefObject<HTMLElement | null>,
+    target: React.RefObject<HTMLElement | null> | HTMLElement | null,
     clearance: number,
   ): [boolean, () => void] {
     const [inView, setInView] = React.useState(false);
 
     React.useEffect(() => {
-      const node = target.current;
+      const node = target instanceof HTMLElement ? target : (target?.current ?? null);
       if (!node) return undefined;
       // Design note #810/#831: the destination carries the bar's height, whoever owns the element.
       node.style.scrollMarginTop = `${clearance}px`;
@@ -872,17 +939,55 @@ export default function ContextualActionBar({
     const scrollTo = React.useCallback(() => {
       /* Design note #810: `block: "start"` with the clearance on the element -- see that note for why both
          `start` and `nearest` were wrong before the height was known. */
-      target.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const node = target instanceof HTMLElement ? target : (target?.current ?? null);
+      node?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, [target]);
 
     return [inView, scrollTo];
   }
 
   const [stepPanelInView, scrollToStepPanel] = useJumpTarget(stepPanelRef, barClearance);
-  /* Design note #831: the map is the Lay Track step's panel. It is owned by the shell rather than by this
-     bar, so it arrives as a ref -- `null` for any caller that has no map on screen, which greys the button
-     the same way an absent panel does. */
-  const [mapInView, scrollToMap] = useJumpTarget(mapRef ?? EMPTY_JUMP_REF, barClearance);
+  /* ==================================================================
+      DESIGN NOTE 833: THE JUMP POINTED AT THE PANE THAT HOLDS THE BAR
+     ==================================================================
+
+     REPORTED: "if they do click it let's have the page scroll to the map?" -- which reads as a feature request
+     and was a bug report. #831 attached the target to `<main>`, and `<main>` CONTAINS this action bar as well
+     as everything under it. So the node the bar observed had the bar at its top edge and ran thousands of
+     pixels down the page: at `threshold: 0.25` it could never be a quarter visible in a 652px viewport, so
+     `mapInView` never turned true, and `scrollIntoView` landed on the top of the whole pane rather than on
+     the board.
+
+     THE MISTAKE IS THE ONE THIS SESSION KEEPS FINDING, in its third form. #824 asserted an index the board
+     never had; #831 asserted a destination the ref never pointed at. A target picked because it was the
+     convenient node to hang a ref on, rather than because it was the thing meant.
+
+     `boardPane` IS THE THING MEANT, and the shell already held it in state for the radial selector -- so it
+     arrives as an element and the observer follows it across a tab change. */
+  const [mapInView, scrollToMap] = useJumpTarget(mapEl ?? null, barClearance);
+
+  /* THE MAP TAB IS PART OF "NOT ALREADY ON IT". Asked for as "scrolled players to the rail map if they
+     weren't already on it", and a player reading the Stock Market tab is not already on it. Without this the
+     button would be live (no element, so nothing intersects) and pressing it would do nothing -- the one
+     outcome #797's greying rule exists to prevent.
+     A PENDING FLAG RATHER THAN A FRAME CALLBACK: the pane mounts on the next commit, and the effect that
+     scrolls runs after the hook's own effect has written `scroll-margin-top` on it. Guessing at a delay
+     would be a third guess where a measurement is available (#813). */
+  const [mapJumpPending, setMapJumpPending] = React.useState(false);
+  React.useEffect(() => {
+    if (!mapJumpPending || !mapEl) return;
+    setMapJumpPending(false);
+    scrollToMap();
+  }, [mapJumpPending, mapEl, scrollToMap]);
+
+  const goToMap = React.useCallback(() => {
+    if (!mapEl) {
+      onShowMap?.();
+      setMapJumpPending(true);
+      return;
+    }
+    scrollToMap();
+  }, [mapEl, onShowMap, scrollToMap]);
 
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
@@ -1009,24 +1114,52 @@ export default function ContextualActionBar({
            request: a greyed control here means "pressing this would do nothing", exactly as it does on the
            other two, because the map is already in front of you. It never means "you may not lay track" --
            that refusal lives on the hex, where #716 put it. */
+        /* ==================================================================
+            DESIGN NOTE 834: THE COUNT IS WITHDRAWN, AND THE NUMBER STAYS AT ONE
+           ==================================================================
+
+           #832 made the label read the turn's lay count, so the C&SL's extra one would show as "Lay 2 Track".
+
+           RULED OUT BY THE PERSON WHO ASKED FOR THE COUNT: "There should actually never be a 'Lay 2 Track'
+           button because a 'second' track lay is ONLY provided by the special power of a private company, for
+           which we've already built a modal. The Action Bar should be used for the standard actions, let's
+           leave the Special Powers where they are without trying to display them again."
+
+           THE ARGUMENT IS ABOUT WHERE A FACT LIVES, not about whether it is true. #832 was right that nothing
+           on screen said the C&SL's lay is extra, and wrong about the remedy: the private's power already has
+           a surface of its own (#817's errand lifecycle, #818's modal), and a second display of it on the bar
+           is the two-surfaces-one-question failure this session has found in #815 and #829 -- reached this
+           time by adding the second surface deliberately.
+
+           SO THE NUMBER IS A CONSTANT, not a `trackLays` of 1. A prop whose only reachable value is 1 is
+           #788's unreachable arm wearing a variable: rendered by nothing else, and read by the next
+           maintainer as a quantity that varies. It does not.
+           "LAY 0 TRACK" IS STILL UNREACHABLE, as established at #832: `layEndsTrackStep` is `!isBonusLay`, so
+           an ordinary lay ends the step and takes this button with it. Raised again as a maybe -- "I suppose
+           'Lay 0 Track' may be necessary if a player Undo's back into the Lay Track subphase" -- and an Undo
+           that returns to Track has REVERSED the lay it is undoing, so the lay is available again. One. */
         contextualButtons = [
+          /* Design note #846: BEFORE the map jump, because a power is a thing you may not know you have and
+             the map is a place you already know how to reach. #792's ordering argument, one step over: an
+             obligation before an exit, and here an opportunity before a destination. */
+          ...(onUsePowerOffer
+            ? powerOffers.map((offer) => ({
+                key: `power-${offer.abilityKey}`,
+                label: offer.chipLabel,
+                onClick: () => onUsePowerOffer(offer.abilityKey),
+                disabled: false,
+                title:
+                  "Opens the question the hex asks — the same prompt, for a player who has not scrolled to the map.",
+              }))
+            : []),
           {
             key: "go-to-map",
-            /* Design note #832: the COUNT, because sometimes it is two. The C&SL's power is an extra lay
-               (#726) and nothing on screen ever said so -- which is what #776 was reported as.
-               THE COUNT SHOWS EVEN AT ONE, as asked ("Lay 1 Track"): a number that appears only in the rare
-               case is a number nobody learns to read. "Track" stays singular at two -- 1830 counts tile
-               LAYS, not tracks, and "Lay 2 Tracks" would name a thing the rules do not have. */
-            label: `Lay ${trackLays} Track`,
-            onClick: scrollToMap,
+            label: "Lay 1 Track",
+            onClick: goToMap,
             disabled: mapInView,
-            title:
-              (trackLays > 1
-                ? `${trackLays} lays this turn — the Champlain & St. Lawrence's is extra. `
-                : "") +
-              (mapInView
-                ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
-                : "Scrolls to the Rail Map, where the track is laid."),
+            title: mapInView
+              ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
+              : "Scrolls to the Rail Map, where the track is laid.",
           },
         ];
         break;
@@ -1915,12 +2048,13 @@ export default function ContextualActionBar({
                       ? styles.phaseShiftBadgeCritical
                       : styles.phaseShiftBadgeWarn),
                   }}
-                  title={
-                    phase?.shiftWarning ??
-                    (phase?.depotRemaining === 0
-                      ? `No ${phase.tier}-Trains left in the Bank Depot.`
-                      : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
-                  }
+                  /* Design note #839: THE TOOLTIP IS GONE. It carried `phase.shiftWarning` -- the exact consequence of the
+                     coming shift, the rust included -- which put the most consequential sentence in an 1830 game behind a
+                     hover. Asked for directly: "Keeping with our policy of not hiding critical information in hover
+                     tooltips ... The Phase Change can stay and have its tooltip removed." #806 withdrew a tooltip from
+                     this same bar on the same grounds.
+                     NOT DELETED, PROMOTED: the badges beside this one say what is coming in text, and carry the whole
+                     sentence in `aria-label` for a reader who cannot see them. */
                 >
                   {phaseAlert === "critical" ? (
                     <>&#9888; Phase Shift Imminent</>
@@ -1929,6 +2063,22 @@ export default function ContextualActionBar({
                   )}
                 </span>
               )}
+              {/* Design note #839: the two facts the phase badge used to whisper. Same row, same shape and the
+                  same escalation -- a warning drawn differently from the warning beside it reads as a different KIND
+                  of thing, which is the distinction #732 keeps on one channel. */}
+              {buyWarnings.map((warning) => (
+                <span
+                  key={warning.key}
+                  className={warning.imminent ? "app-phase-shift-critical" : undefined}
+                  style={{
+                    ...styles.phaseShiftBadge,
+                    ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
+                  }}
+                  aria-label={warning.detail}
+                >
+                  &#9888; {warning.label}
+                </span>
+              ))}
             </div>
 
             {/* CENTRE -- only what this sub-phase can actually do. */}
@@ -1949,10 +2099,23 @@ export default function ContextualActionBar({
                  is what survives.
                  THE CONDITION LOSES `contextualButtons.length === 0`, which was how this rendered at all: the
                  Track case had no buttons, and now it has one. Kept on `mayActThisTurn` for #413's reason --
-                 told to a watcher it is an instruction they cannot follow. */}
-              {mayActThisTurn && orSubPhase === "Track" && (
-                <span style={styles.orPanelNoActions}>Click a laid preview to rotate it.</span>
-              )}
+                 told to a watcher it is an instruction they cannot follow.
+                 ==================================================================
+                  DESIGN NOTE 835: THE HINT MOVES BELOW THE BUTTONS AND CHANGES ITS SUBJECT
+                 ==================================================================
+                 REPORTED: "there's a character string: 'Click a laid preview to rotate it.' This should be in
+                 the tutorial, not printed on the Action Bar." Rotation is a RULE of the interface -- true on
+                 every lay in every Operating Round for the rest of the game -- and #800 settled where those
+                 belong: "a player meets it once, rather than on a bar that repeats it every Operating Round".
+                 It is now on the tutorial's Lay Track slide.
+                 WHAT REPLACES IT IS NOT A RULE BUT A DESTINATION, asked for in the same breath: "maybe below
+                 the 'Lay 1 Track' and 'Skip Track' buttons you can place a character string: 'Click a hex on
+                 the Rail Map to lay track.'" That is #279's own test for the sentence it kept -- "it says
+                 where the action IS, which the player cannot otherwise know" -- and it is the answer to the
+                 misreading that prompted all of this: the button looks like it performs the lay, so the line
+                 under it names the thing that actually does.
+                 BELOW, NOT BEFORE. It rendered first in a wrapping flex row, so it sat to the LEFT of the
+                 controls it describes. `orPanelStepHint` claims a full row, and it renders after Skip. */}
               {/* Design note #510: the "Buy Trains" jump button is GONE. #491 added it because the purchase panels sat
                  far below a pinned bar; #508 moved those panels INTO the bar, so they travel with it -- and a button
                  whose only job was to scroll to something that no longer goes anywhere has nothing left to do. */}
@@ -2048,6 +2211,11 @@ export default function ContextualActionBar({
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
+              )}
+              {/* Design note #835: the line under the pair. See the note above the button group for why this
+                 sentence and not the rotation one, and why it renders here rather than first. */}
+              {mayActThisTurn && orSubPhase === "Track" && (
+                <span style={styles.orPanelStepHint}>Click a hex on the Rail Map to lay track.</span>
               )}
               {/* Design note #707/#619 said: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
                   Dividends silently, and this note argued that here "a Skip that is simply absent reads as a
@@ -2254,6 +2422,39 @@ export default function ContextualActionBar({
                 </span>
               )}
             </div>
+          )}
+          {/* ==================================================================
+               DESIGN NOTE 855: THE DETAIL BELONGS TO THE CHIP THAT OPENS IT
+              ==================================================================
+
+              REPORTED: "when a player clicks the train chips with the revenue, the route information (e.g.
+              G19 > F20 > etc) opens *below the action panel* in a fixed spot above the rail map. This needs to
+              be rendering inside the Action Panel, below the train chips."
+
+              #802 MOUNTED IT AS A SIBLING OF THE STICKY ELEMENT, not inside it -- in the same trailing
+              fragment as the private-powers panel, which is a separate surface and belongs there. So the
+              disclosure opened somewhere the bar had already scrolled away from, and the two halves of one
+              control were in different places on the page. #828's sentence, exactly: "anything inside it
+              follows" -- and anything outside it does not.
+
+              UNDER THE ROW RATHER THAN UNDER THE BUTTONS. The chips are the control; a disclosure that opens
+              anywhere but immediately beneath its trigger makes the reader find it. It is the same placement
+              rule #835 applied to the Track hint one step over.
+
+              AND IT COSTS NOTHING IN RESTING HEIGHT, because it is a disclosure a player opened on purpose:
+              #851's release test asks whether the bar is TRAPPING, at 80% of the viewport, so one route line
+              cannot unpin the bar the way a content change did before that pass. */}
+          {showRouteReadout && (
+            <RouteChipDetail
+              draft={openDraft}
+              canClear={mayActThisTurn && sessionReady}
+              onClearRoute={onClearRoute}
+              onClose={() => setOpenTrainIndex(null)}
+              /* #802: the panel's click feedback had nowhere else to go. A refused draft explaining itself
+                 here beats it explaining itself nowhere, which is what deleting the panel would otherwise
+                 have done. */
+              feedback={mayActThisTurn ? routeFeedback : null}
+            />
           )}
           {/* Design note #509: THE DECISION TRAVELS WITH THE BUTTONS. #490 gated this on `!condensed`, reasoning
              from #298's rule -- and this was the wrong side of it: the payout table and the two market moves are
@@ -2534,15 +2735,13 @@ export default function ContextualActionBar({
                   ? styles.phaseShiftBadgeCritical
                   : styles.phaseShiftBadgeWarn),
               }}
-              // The exact consequence, per tier. Falls back to a plain
-              // depot-count statement for the 2-train case, which empties
-              // without triggering anything -- see `PHASE_SHIFT_CONSEQUENCE`.
-              title={
-                phase?.shiftWarning ??
-                (phase?.depotRemaining === 0
-                  ? `No ${phase.tier}-Trains left in the Bank Depot.`
-                  : `Only one ${phase?.tier}-Train left in the Bank Depot.`)
-              }
+              /* Design note #839: THE TOOLTIP IS GONE. It carried `phase.shiftWarning` -- the exact consequence of the
+                 coming shift, the rust included -- which put the most consequential sentence in an 1830 game behind a
+                 hover. Asked for directly: "Keeping with our policy of not hiding critical information in hover
+                 tooltips ... The Phase Change can stay and have its tooltip removed." #806 withdrew a tooltip from
+                 this same bar on the same grounds.
+                 NOT DELETED, PROMOTED: the badges beside this one say what is coming in text, and carry the whole
+                 sentence in `aria-label` for a reader who cannot see them. */
             >
               {phaseAlert === "critical" ? (
                 <>&#9888; Phase Shift Imminent</>
@@ -2551,6 +2750,22 @@ export default function ContextualActionBar({
               )}
             </span>
           )}
+          {/* Design note #839: the two facts the phase badge used to whisper. Same row, same shape and the
+              same escalation -- a warning drawn differently from the warning beside it reads as a different KIND
+              of thing, which is the distinction #732 keeps on one channel. */}
+          {buyWarnings.map((warning) => (
+            <span
+              key={warning.key}
+              className={warning.imminent ? "app-phase-shift-critical" : undefined}
+              style={{
+                ...styles.phaseShiftBadge,
+                ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
+              }}
+              aria-label={warning.detail}
+            >
+              &#9888; {warning.label}
+            </span>
+          ))}
           </span>
           <span style={styles.actionBarButtonsCentre}>
           {/* Design note #31: Pass leads -- it is the action available in
@@ -2867,17 +3082,9 @@ export default function ContextualActionBar({
           with three drafted routes now reads them one chip at a time. That is the trade the request makes
           explicitly -- "players can click through each one to see what it's doing" -- and the running total
           they used to get from the panel's footer is the figure the Dividends step opens with anyway. */}
-      {showRouteReadout && (
-        <RouteChipDetail
-          draft={openDraft}
-          canClear={mayActThisTurn && sessionReady}
-          onClearRoute={onClearRoute}
-          onClose={() => setOpenTrainIndex(null)}
-          /* #802: the panel's click feedback had nowhere else to go. A refused draft explaining itself here
-             beats it explaining itself nowhere, which is what deleting the panel would otherwise have done. */
-          feedback={mayActThisTurn ? routeFeedback : null}
-        />
-      )}
+      {/* Design note #855: `RouteChipDetail` MOVED INTO THE BAR, beneath the chip row that opens it. It
+          rendered here -- outside the sticky element -- so a chip in a travelling bar opened a panel that
+          stayed behind. See the chip row for the note. */}
       {!sessionReady && (
         <span style={styles.sidebarHint}>Initialize the session key above to enable these actions.</span>
       )}

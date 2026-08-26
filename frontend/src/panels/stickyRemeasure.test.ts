@@ -73,8 +73,15 @@ describe("what #720 built is untouched", () => {
   it("still asks the shared predicate", () => {
     /* The rule is not restated here. `stickyTrap.test.ts` owns `canPinWithoutTrapping`; this file only
        asserts that the bar is still the thing asking it, so a future edit cannot quietly answer the question
-       locally. */
-    expect(HOOK).toContain("canPinWithoutTrapping(rect.height, window.innerHeight, stickyTop)");
+       locally.
+       DESIGN NOTE 837 CHANGED WHAT IS MEASURED, not who asks. It read `rect.height` -- a rect that has
+       included the step panel since #828 -- so the pin test measured a subtree whose height the pin test's
+       own answer controlled. Reported as "in OR 1.1 it's not [sticky], but in OR 2.1 it is", which is a
+       deadlock settling on whichever side of the threshold the first frame landed. `restingHeight` is the
+       bar with every collapsible body taken out, which does not move when the fold moves. */
+    expect(HOOK).toContain("canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)");
+    // AND THE CLEARANCE STILL READS THE RECT: "can I pin" and "what am I covering" are different questions.
+    expect(HOOK).toContain("Math.round(stickyTop + rect.height)");
   });
 
   it("still measures pin distance and height on one rect", () => {

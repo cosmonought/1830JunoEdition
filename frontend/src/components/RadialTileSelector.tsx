@@ -631,6 +631,17 @@ export interface RadialTokenConfirmProps {
    *  caption for the same reason design note #181 put it on the button: the
    *  UI knows the number and the player is about to commit to it. */
   cost: number;
+  /** Design note #836: "Costs $40 — treasury $960 after", from `describePendingSpend` -- the SAME sentence
+   *  the tile ring's `costNote` carries, built by the same function.
+   *
+   *  REPORTED: "the Station Marker tooltip confirmation should list the Treasury effect", pointing at the
+   *  terrain lay as the thing to match. `cost` above answers "what does this cost" and this answers "what am
+   *  I left with", which #673 argued is the question a president actually has. Two slots because they are two
+   *  questions, and the price must survive -- the same reasoning #725a gave for keeping `warning` separate.
+   *
+   *  `null` for a free placement, where the ring already says $0 (#454) and a remainder that has not moved is
+   *  an arrow pointing at itself. */
+  costNote?: string | null;
   /** The corporation the token belongs to. */
   ticker: string;
   /** Design note #462: the corporation's livery, so the ring shows the
@@ -655,6 +666,7 @@ export function RadialTokenConfirm({
   canvasEl,
   hexLabel,
   cost,
+  costNote = null,
   ticker,
   liveryColor,
   liveryInk,
@@ -677,7 +689,16 @@ export function RadialTokenConfirm({
       showConfirm
       canConfirm={canConfirm}
       confirmDisabledReason={confirmDisabledReason}
-      confirmTitle={`Place ${ticker}'s token on ${hexLabel} and charge $${cost} to its treasury.`}
+      /* Design note #836: the caption slot the tile ring has always used, so the two rings say the treasury
+         effect in one voice rather than two. */
+      cost={costNote}
+      /* AND THE SAME FACT IN THE TOOLTIP, which is what the report actually names -- "the Station Marker
+         TOOLTIP confirmation should list the Treasury effect". Appended rather than substituted: the
+         sentence already says what is charged and to whom, and this says what survives it. */
+      confirmTitle={
+        `Place ${ticker}'s token on ${hexLabel} and charge $${cost} to its treasury.` +
+        (costNote === null ? "" : ` ${costNote}.`)
+      }
       confirmAriaLabel="Confirm station token placement"
       cancelTitle="Cancel — nothing is placed and nothing is charged."
       cancelAriaLabel="Cancel station token placement"

@@ -117,63 +117,18 @@ describe("abandoning is not declining", () => {
   });
 });
 
-describe("the shell drives the machine rather than duplicating it", () => {
-  const read = (relative: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
-  };
-  const APP = read("App.tsx")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-  const MODAL = read("components/DhStationPrompt.tsx");
-
-  it("raises the question on the D&H's lay and no other", () => {
-    /* The C&SL's lay is the WHOLE of its power (#726) and has nothing to follow -- a prompt after it would be
-       an offer of something that does not exist. */
-    expect(APP).toContain('if (homeStationPlacement?.abilityKey === "dh-tile") {');
-    expect(APP).toContain('dhStationPromptNext(current, "lay-landed")');
-  });
-
-  it("arms the same errand the power's own button arms", () => {
-    /* One mechanism, two entry points, rather than a second copy of the placement for this one. #817 gave
-       that errand a lifecycle; a bespoke path here would not have it. */
-    expect(APP).toContain('kind: "private-station"');
-    expect(APP).toContain('abilityKey: "dh-token"');
-  });
-
-  it("sends the ring's X back to the question", () => {
-    expect(APP).toContain('dhStationPromptNext(current, "cancel-placement")');
-  });
-
-  it("spends the ability only through the forfeit check", () => {
-    expect(APP).toContain('if (dhStationDeclineForfeits(current, "decline")) {');
-    expect(APP).toContain('new Set(prev).add("dh-token")');
-  });
-
-  it("records the forfeit in the log", () => {
-    // #717's rule: a thing that quietly stopped being available is this app's worst failure mode.
-    expect(APP).toContain("the free station on F16 was forfeited.");
-  });
-
-  it("abandons the question when the step moves on", () => {
-    expect(APP).toContain('dhStationPromptNext(current, "abandon")');
-  });
-
-  it("offers no third exit from the modal", () => {
-    /* THE ONE PLACE THIS DEPARTS FROM THE APP'S OTHER MODALS. `AutoPassModal` has a close button and a
-       backdrop dismiss, because a settings dialog dismissed unanswered leaves the world as it was. Here a
-       dismissal is either an acceptance or a forfeit, and there is no third thing an X in the corner could
-       honestly mean. */
-    expect(MODAL).not.toContain('aria-label="Close"');
-    expect(MODAL).not.toContain("event.currentTarget");
-  });
-
-  it("names the supply the marker comes out of", () => {
-    // #725: "free means no cash, not no token". A corporation on its last marker is making a real choice.
-    expect(MODAL).toContain("station {tokensLeft === 1 ?");
-    expect(MODAL).toContain("disabled={tokensLeft === 0}");
-    expect(APP).toContain("stationTokenSlots(company).filter((slot) => !slot.placed).length");
-  });
-});
+/* ==================================================================
+    DESIGN NOTE 849: THE SHELL NO LONGER DRIVES THIS MACHINE
+   ==================================================================
+   The block that stood here asserted `App.tsx` called `dhStationPromptNext` at five sites and that
+   `DhStationPrompt.tsx` refused a close button. #848 folded that modal into `PrivatePowerFlowModal` and #849
+   derived the cursor from the power's own record, so both subjects are gone -- the assertions would now be
+   about files that do not exist.
+   THE PROPERTIES THEY GUARDED MOVED WITH THEM, and are asserted in `privatePowerFlow.test.ts`:
+     - the question is raised on the D&H's lay and never on the C&SL's        -> "csl has one step"
+     - the forfeit is a DECISION, distinguished from a turn moving on          -> "the X is gone once anything is committed"
+     - the same errand is armed, not a second copy of the placement            -> "one arming callback"
+     - the forfeit is written to the log                                       -> App assertion, same wording
+   THE TRANSITION TABLE'S OWN TESTS ABOVE ARE UNTOUCHED. `dhPower.ts` #849 records that the table is
+   deliberately unused rather than orphaned by oversight, and these are what keep it honest if it is ever
+   read again. Deleting them along with the wiring would throw away the reasoning with the plumbing. */

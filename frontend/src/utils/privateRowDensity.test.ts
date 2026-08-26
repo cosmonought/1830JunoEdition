@@ -265,10 +265,14 @@ describe("one click opens the card, and the card is the whole transaction", () =
   it("puts the price field and the submit inside the card", () => {
     /* THE REPORT. The form used to render once, at the bottom of the panel, about whichever private was
        selected -- so a player reading the D&H typed a price under the B&O. */
-    const card = CODE.slice(
-      CODE.indexOf("<div id={detailId} style={styles.cardBody}>"),
-      CODE.indexOf("if (embedded) return body;"),
-    );
+    /* Design note #841 changed the opening tag: the card body carries `{...STICKY_OPTIONAL}` now, so the bar
+       does not count reference behind a disclosure as part of its resting height. The anchor is the shorter,
+       stable prefix rather than the whole tag -- an anchor that includes every attribute breaks on the next
+       attribute, which is what happened here. */
+    const start = CODE.indexOf("<div id={detailId} style={styles.cardBody}");
+    expect(start).toBeGreaterThan(-1);
+    const card = CODE.slice(start, CODE.indexOf("if (embedded) return body;", start));
+    expect(card.length).toBeGreaterThan(0);
     expect(card).toContain("styles.cardRule");
     expect(card).toContain("styles.priceInput");
     expect(card).toContain("onPropose(entry.private_id, price)");
@@ -307,10 +311,24 @@ describe("nothing was fixed by deleting a fact", () => {
     }
   });
 
-  it("restates the face value where the report asked for it", () => {
-    // "they can be displayed when a player clicks the private company to buy it" -- beside the price field.
-    expect(CODE).toContain("face " + DOLLAR + "{entry.cost}");
-    expect(CODE).toContain("styles.priceBand");
+  it("moves the face value on, rather than dropping it (design note #843)", () => {
+    /* #804 REHOMED IT FROM THE ROW TO THE PRICE FIELD -- "they can be displayed when a player clicks the
+       private company to buy it" -- and #842 moved it once more, off the field entirely:
+         "The face value does explain the range we're giving players, but in the grand scheme of things I'm
+          not sure it matters that we give them the value to compute the range themselves when we already
+          give them the range."
+       THE GUARD IS THE POINT OF THIS DESCRIBE BLOCK, so it is kept rather than deleted: the number still
+       exists, in `privateCatalog.ts` and in the Rules Reference table built from it. What is asserted is the
+       DESTINATION, because "not on the field" alone would pass equally well if the fact had been lost. */
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const catalog = fs.readFileSync(path.join(__dirname, "privateCatalog.ts"), "utf8");
+    expect(CODE).not.toContain("face " + DOLLAR + "{entry.cost}");
+    expect(CODE).not.toContain("styles.priceBand");
+    expect(catalog).toContain("faceValue: 220");
+    expect(
+      fs.readFileSync(path.join(__dirname, "..", "components", "RulesReference.tsx"), "utf8"),
+    ).toContain(DOLLAR + "{row.faceValue}");
   });
 
   it("still shows the full rule on the same click", () => {

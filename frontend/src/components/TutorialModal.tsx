@@ -253,6 +253,11 @@ export const OPERATING_ROUND_TUTORIAL: readonly TutorialPage[] = [
       "is a negotiation, not a purchase you can force.\n" +
       "2. Lay Track: Place yellow tiles or upgrade existing tiles following strict color " +
       "progression (Yellow -> Green -> Brown).\n" +
+      /* Design note #835: rehomed from the action bar's Track step, where it printed on every Operating Round
+         for the rest of the game. #800's rule: a RULE of the interface belongs where a player meets it once.
+         The bar keeps the half that is not a rule -- where the action is -- which is #279's own test. */
+      "\u2022 Click a hex to place a tile, then click the laid preview again to ROTATE it before you " +
+      "confirm.\n" +
       "\u2022 Upgrade tiles must preserve all existing track connections.\n" +
       "\u2022 Laid tracks can never be downgraded or exchanged for other tracks of the same " +
       "type. Be careful when laying track to ensure your routes go where you want!",

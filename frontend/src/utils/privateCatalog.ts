@@ -35,6 +35,22 @@
 /** One private company's display data -- revenue yield and canonical power. */
 export interface PrivateCatalogEntry {
   revenue: number;
+  /** ==================================================================
+   *   DESIGN NOTE 843: THE FACE VALUE, BECAUSE IT LEFT THE OFFER FIELD
+   *  ==================================================================
+   *
+   *  ASKED, after the offer row stopped printing it: "Perhaps under Rules Reference we can add a table for
+   *  all the PCs with their face value?"
+   *
+   *  IT SITS BESIDE `revenue` FOR THE REASON #423 GAVE for keying this table by `private_id`: "so it cannot
+   *  drift from `revenue` and `ability` beside it". The two numbers are the certificate's whole economic
+   *  description and they are read together.
+   *
+   *  THE CONTRACT IS STILL THE AUTHORITY AT RUN TIME. `PrivateCompanyState.cost` is what the price band is
+   *  computed from and what a purchase is checked against; this is presentation data for a lookup table
+   *  about a fixed set of six, exactly as `acronym` is. `privateCatalogFaces.test.ts` pins the two together
+   *  against `sandboxState.ts`'s setup list, so a divergence is a failing test rather than a wrong table. */
+  faceValue: number;
   /* Design note #661: THE POWER, IN ONE LINE, BEFORE THE PARAGRAPH. `ability` is exactly right for the powers
      panel, where a player has gone to LEARN the piece; it is the wrong length for a buying decision -- six
      paragraphs in a modal is not a comparison, it is a reading assignment, and a player deciding between the D&H
@@ -144,6 +160,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   1: {
     acronym: "SV",
     revenue: 5,
+    faceValue: 20,
     // Said plainly. A blank here would read as missing data rather than as
     // the answer, which is the same reasoning `ability` gives below.
     abilityBullets: ["No special power \u2014 revenue only."],
@@ -155,6 +172,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   2: {
     acronym: "CSL",
     revenue: 10,
+    faceValue: 40,
     abilityBullets: [
       "Free extra tile lay on B-20, connected to nothing.",
       "Keeps the corporation\u2019s normal lay \u2014 it may play two tiles that turn.",
@@ -165,6 +183,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   3: {
     acronym: "DH",
     revenue: 15,
+    faceValue: 70,
     abilityBullets: [
       "Tile F-16 and drop a free station there, connected to nothing.",
       "The $120 mountain still applies, and it uses the corporation\u2019s lay for the turn.",
@@ -175,6 +194,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   4: {
     acronym: "MH",
     revenue: 20,
+    faceValue: 110,
     abilityBullets: [
       "Owner may trade it in for a 10% NYC share from the IPO or the Bank Pool.",
       "Available in either round type, between turns. Taking it closes the company.",
@@ -185,6 +205,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   5: {
     acronym: "CA",
     revenue: 25,
+    faceValue: 160,
     abilityBullets: [
       "Its auction buyer was handed a 10% PRR share on purchase.",
       "Nothing further to trigger \u2014 the company stays open.",
@@ -195,6 +216,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
   6: {
     acronym: "BO",
     revenue: 30,
+    faceValue: 220,
     // Design note #660: both halves are enforced now, so the summary can
     // state them as facts about the board rather than as flavour.
     abilityBullets: [

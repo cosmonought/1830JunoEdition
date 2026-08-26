@@ -58,7 +58,11 @@ export function sandboxPlayerLabel(address: string): string | null {
 
 /** `(private_id, name, face value, revenue per OR)`, ascending by face
  *  value = waterfall order. Mirrors the contract table exactly. */
-const SANDBOX_PRIVATES: ReadonlyArray<{
+/** Design note #843: EXPORTED so `privateOfferRow.test.ts` can pin `privateCatalog.ts`'s face values against
+ *  it. Two tables of the same six numbers is the shape this codebase keeps finding wrong; they are not merged
+ *  -- one is the sandbox's setup and one is presentation data for a lookup table -- so they are checked
+ *  against each other instead, and a divergence is a failing test rather than a table that lies to a player. */
+export const SANDBOX_PRIVATES: ReadonlyArray<{
   id: number;
   name: string;
   cost: number;

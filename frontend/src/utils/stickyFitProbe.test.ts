@@ -60,8 +60,25 @@ describe("the probe measures the question that was asked", () => {
     /* A SECOND ARITHMETIC WOULD BE THE FAILURE THIS SESSION KEEPS FINDING (#748a, #775, #791): two surfaces
        answering one question two ways. Here it would be worse than usual, because the whole purpose of the
        readout is to be believed. */
-    expect(BAR).toContain("canPinWithoutTrapping(combined, viewport, stickyTop)");
+    expect(BAR).toContain("canPinWithoutTrapping(resting, viewport, stickyTop)");
     expect(BAR).not.toContain("> 0.5");
+  });
+
+  it("does not confirm whatever it finds (design note #837)", () => {
+    /* THE INSTRUMENT AGREED WITH THE BUG. The verdict was taken on `combined` -- the pixels on screen -- and
+       once the bar was unpinned it reported WOULD UNPIN, which was true and useless: it said the bar would
+       unpin BECAUSE it had unpinned. A reading that confirms whatever state it is taken in is #828a's own
+       warning ("an instrument that lies is worse than none") arriving one pass later.
+       IT NOW TAKES THE VERDICT ON THE SAME NUMBER THE PIN TEST USES, and still PRINTS `combined`, because
+       what a player sees on screen is the other half of the question. Two numbers, both reported. */
+    expect(BAR).toContain("const resting = Math.round(restingHeight(bar));");
+    /* `String.fromCharCode(36)` for the interpolations: a literal `${` inside a plain string trips
+       `no-template-curly-in-string`, and the rule reads the literal rather than the intent. The source lines
+       are template literals, so ONE dollar each here -- these are the interpolation's, not a printed one.
+       (The third time this session; `tokenSpendNote.test.ts` has the case where both are wanted.) */
+    const d = String.fromCharCode(36);
+    expect(BAR).toContain("resting " + d + "{resting}px");
+    expect(BAR).toContain("= " + d + "{combined}px");
   });
 
   it("says nothing on a step with no panel", () => {
@@ -171,9 +188,14 @@ describe("the private panel's intro moved to the tutorial (design note #814)", (
 
   it("still states the band where the price is chosen", () => {
     /* THE HALF THAT WAS ALREADY DUPLICATED. #721 said it first -- "two statements of one rule, and the
-       redundant one was shouting" -- and #804 put the surviving one inline beside the offer field. */
+       redundant one was shouting" -- and #804 put the surviving one inline beside the offer field.
+       #842 MOVED IT INTO THE FIELD'S LABEL and changed the separator to an en dash, so the literal moved
+       with it. The PROPERTY is unchanged and is what this pins: the band is stated where the number is
+       typed, rather than only in a paragraph the panel no longer has. */
     const dollar = String.fromCharCode(36);
-    expect(PRIVATE).toContain(dollar + "{bounds.min}-" + dollar + "{bounds.max}");
+    expect(PRIVATE).toContain(
+      "Offer price (" + dollar + "{bounds.min}&#8211;" + dollar + "{bounds.max})",
+    );
   });
 
   it("gives the consent rule a home, since it had none", () => {

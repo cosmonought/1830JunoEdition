@@ -112,7 +112,13 @@ export interface PrivateAbility {
 export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
   {
     privateId: 2,
-    actions: [{ key: "csl-tile", label: "Lay Track (B20)", subPhase: "Track" }],
+    /* Design note #849: "USE POWER", NOT THE FIRST STEP'S NAME.
+       ASKED: "rather than 'Lay Track,' I would rather the text for the Private Power subpanel read 'Use
+       Power' and then a modal pop up that clearly walks players through the steps/options."
+       A BUTTON LABELLED WITH ONE STEP IS A BUTTON THAT LIES ABOUT A TWO-STEP POWER -- which is the D&H's
+       case, and the C&SL takes the same label so the two powers do not appear to be different KINDS of
+       thing. What each one actually does is the modal's first line. */
+    actions: [{ key: "csl-tile", label: "Use Power", subPhase: "Track" }],
     /* Design note #726: the connection waiver named. The old sentence was right about the EXTRA lay -- unlike
        the D&H's, which #725 had to correct -- and silent about the half that makes the power worth owning. */
     description: CSL_POWER_DESCRIPTION,
@@ -142,11 +148,16 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
        So: one caption stating both costs honestly, and two buttons. */
     privateId: 3,
     actions: [
-      { key: "dh-tile", label: "Lay Track (F16)", subPhase: "Track" },
-      /* Design note #781/#782: the free station is a TOKENS-step action. Naming the step here is the second
-         half of #781, which taught `stationPlacementBlockReason` that this placement exists -- together they
-         mean the step stays open AND the button is on screen when it does. */
-      { key: "dh-token", label: "Place Station Token for $0 (F16)", subPhase: "Tokens" },
+      /* Design note #849: ONE BUTTON FOR A TWO-STEP POWER, because the modal is what walks the steps.
+         #442 SPLIT IT INTO TWO and its reasoning was right at the time: "the rulebook grants the tile and
+         the token independently -- a corporation may take either, both, or neither -- and one button could
+         not express that". The modal expresses exactly that, in two lines with their own buttons, and does
+         it better: the second is GREYED until the first is done (#725's order), which two peer buttons on a
+         panel could only imply.
+         Design note #781/#782 SURVIVES IN THE MODAL, not here. The free station is a Tokens-step action and
+         `stationPlacementBlockReason` still knows it exists; what changed is that the player reaches it
+         through the flow rather than through a second panel button that appears a step later. */
+      { key: "dh-tile", label: "Use Power", subPhase: "Track" },
     ],
     /* Design note #725: THE CAPTION WAS WRONG TWICE MORE. #442 corrected an earlier version and introduced two
        fresh errors of its own -- "AND/OR", which made the token reachable without the lay, and "in addition to

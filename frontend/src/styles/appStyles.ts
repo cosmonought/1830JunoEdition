@@ -1325,6 +1325,19 @@ export const styles: Record<string, React.CSSProperties> = {
      button at all -- a caption about an empty div, which is exactly what
      that note deleted. An empty centre column is now allowed to be empty. */
   orPanelNoActions: { fontSize: FONT_SIZE.small, color: "#6f7480", fontStyle: "italic" },
+  /* Design note #835: the Track step's "the action is on the map" line, on its OWN row beneath the controls.
+     `orPanelActions` wraps, so a hint sharing the row sat to the left of the buttons it describes -- which is
+     where it has been since #279, and reads as a label for them rather than as a note under them.
+     `flexBasis: 100%` forces the wrap; `textAlign: center` matches the row's `justifyContent`.
+     ITS OWN KEY RATHER THAN A SPREAD-PLUS-OVERRIDE, per #772: a style assembled at the call site is invisible
+     to the sheet, and this one carries a layout fact (the full-width row) that belongs with the layout. */
+  orPanelStepHint: {
+    flexBasis: "100%",
+    textAlign: "center",
+    fontSize: FONT_SIZE.small,
+    color: "#6f7480",
+    fontStyle: "italic",
+  },
   /* Design note #707: NOT `orPanelNoActions`. That is the Track step's "the action is on the map" hint --
      muted and italic, which is right for orientation nobody was looking for. This line stands where a BUTTON
      was, and a player hunting for Skip needs to find the sentence explaining its absence rather than read past

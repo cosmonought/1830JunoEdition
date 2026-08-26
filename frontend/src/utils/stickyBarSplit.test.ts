@@ -87,6 +87,31 @@ const sticky = CODE.slice(STICKY_START, STICKY_END);
    probe and the private-powers panel, neither of which this file is about. Deleted rather than left unused:
    ESLint found it, which is the only reason it is not still here as a slice nobody reads. */
 
+describe("the route detail is inside the bar too (design note #855)", () => {
+  it("mounts under the chip row that opens it", () => {
+    /* REPORTED: "the route information ... opens *below the action panel* in a fixed spot above the rail map.
+       This needs to be rendering inside the Action Panel, below the train chips."
+       #802 PUT IT IN THE TRAILING FRAGMENT, beside the private-powers panel -- a sibling of the sticky
+       element rather than a child of it. So a chip in a travelling bar opened a disclosure that stayed behind.
+       #828's own sentence, from the other side: "anything inside it follows".
+       NOTHING ASSERTED ITS POSITION. `routeChipDetail.test.ts` checked which props reach it and that the old
+       planner panel is gone -- both true wherever it renders. The bug lived in the one property no test had,
+       which is why this assertion is here rather than there: this file is the one about what is inside the
+       sticky element. */
+    expect(sticky).toContain("<RouteChipDetail");
+    const chips = sticky.indexOf('aria-label="Drafted routes"');
+    const detail = sticky.indexOf("<RouteChipDetail");
+    expect(chips).toBeGreaterThan(-1);
+    expect(detail).toBeGreaterThan(chips);
+  });
+
+  it("leaves nothing of it outside", () => {
+    /* THE OTHER HALF, because "inside" and "not also outside" are different claims and a copy left behind
+       would satisfy the first. `CODE` is the whole component. */
+    expect((CODE.match(/<RouteChipDetail/g) ?? []).length).toBe(1);
+  });
+});
+
 describe("the panels are back inside the bar, on a measurement (design note #828)", () => {
   /* ==================================================================
       THIS BLOCK ASSERTED THE OPPOSITE, AND WENT ON PASSING WHEN IT STOPPED BEING TRUE

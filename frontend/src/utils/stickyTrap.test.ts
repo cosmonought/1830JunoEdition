@@ -110,9 +110,29 @@ describe("the bar wires both flags to the same measurement", () => {
     /* Two `getBoundingClientRect()` calls would be two forced layouts per frame for figures that have to agree
        with each other -- and the cheapest way for them to disagree is to be read at different moments. */
     const bar = read("panels/ContextualActionBar.tsx");
-    expect(bar).toContain("canPinWithoutTrapping(rect.height, window.innerHeight, stickyTop)");
+    /* Design note #837: the PIN TEST reads the resting height and the clearance reads the rect, and both come
+       off the one `getBoundingClientRect()` this test guards -- `restingHeight` takes its own total from the
+       node it is handed, which is why the count below is still one here. */
+    expect(bar).toContain("canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)");
     expect(bar).toContain("const distanceToPin = rect.top - stickyTop;");
-    expect(bar.match(/getBoundingClientRect\(\)/g) ?? []).toHaveLength(1);
+    /* ==================================================================
+        SCOPED TO THE HOOK, AND IT WAS NOT (design note #837a)
+       ==================================================================
+       This counted `getBoundingClientRect()` across the WHOLE FILE and required exactly one -- which stopped
+       being true at #813, when `useStickyFitProbe` was added with two reads of its own. The file has had
+       three since; the assertion has been false ever since; and it went green anyway because the `toContain`
+       above it in the same `it` failed first only today, and passed silently before.
+       AN ASSERTION MASKED BY ITS NEIGHBOUR is the fourth flavour of stale harness this session has turned up,
+       after the migrating slice boundary, the reproduced-rule copy, and the whole-file absence used as a
+       proxy. Two of those were in this same batch of sticky tests.
+       THE PROPERTY WAS ALWAYS ABOUT THE HOOK: the pin test and the pin distance must come off ONE rect, so
+       they cannot be read at different moments and disagree. The probe is a separate instrument that reads
+       separate nodes, and it was never in scope. */
+    const hookStart = bar.indexOf("function useCondensedWhenPinned(");
+    expect(hookStart).toBeGreaterThan(-1);
+    const hook = bar.slice(hookStart, bar.indexOf("function useStickyFitProbe(", hookStart));
+    expect(hook.length).toBeGreaterThan(0);
+    expect(hook.match(/getBoundingClientRect\(\)/g) ?? []).toHaveLength(1);
   });
 
   it("applies the unpinned style to every form of the bar", () => {

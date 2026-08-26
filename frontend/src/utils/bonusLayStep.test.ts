@@ -198,26 +198,20 @@ describe("the shell says which lay it is", () => {
     expect(APP).not.toContain("bonus_lay: false");
   });
 
-  it("counts the turn's lays for the bar, and only counts to two (design note #832)", () => {
-    /* THE SAME FACT, SAID WHERE A PLAYER LOOKS. #776's fix made the second lay REAL; nothing made it VISIBLE,
-       and the catalog sentence above is only read by someone who already suspects. The bar's label carries
-       the count now, and this is where it is derived.
-       THE POWER MUST BE THE OPERATING CORPORATION'S (#441) AND STILL UNSPENT: `layAvailable` is what stops
-       the label reading "Lay 2 Track" on the second lay, when only one remains. */
-    const start = APP.indexOf("const trackLaysThisTurn =");
-    expect(start).toBeGreaterThan(-1);
-    const memo = APP.slice(start, APP.indexOf("}, [gameState", start));
-    expect(memo.length).toBeGreaterThan(0);
-    expect(memo).toContain("CSL_PRIVATE_ID");
-    expect(memo).toContain("csl.owner_protocol_id === actingProtocolId");
-    expect(memo).toContain("cslPower.layAvailable");
-    expect(memo).toContain("return 1 + (");
-    // The D&H's tile replaces the lay rather than adding one (#548), so it must not reach this count.
-    expect(memo).not.toContain("dh");
-  });
-
-  it("hands the count to the bar", () => {
-    expect(APP).toContain("trackLays={trackLaysThisTurn}");
+  it("leaves the second lay to the private's own surface (design note #834)", () => {
+    /* #832 DERIVED A COUNT HERE -- `trackLaysThisTurn`, one ordinarily and two while the C&SL's extra was
+       unspent -- so the action bar could label its jump "Lay 2 Track".
+       WITHDRAWN BY THE PERSON WHO ASKED FOR IT: "There should actually never be a 'Lay 2 Track' button
+       because a 'second' track lay is ONLY provided by the special power of a private company, for which
+       we've already built a modal. The Action Bar should be used for the standard actions, let's leave the
+       Special Powers where they are without trying to display them again."
+       #832 WAS RIGHT ABOUT THE GAP AND WRONG ABOUT THE REMEDY. Nothing on screen said the C&SL's lay is
+       extra; the place to say it is the power's own surface (#817's errand, #818's modal), and putting it on
+       the bar as well is the two-surfaces-one-question failure of #815 and #829, reached deliberately.
+       THE RULE IS UNTOUCHED -- the tests above still pin `bonus_lay` on both dispatch paths. Only the second
+       DISPLAY of it is gone, which is what makes this a withdrawal rather than a regression. */
+    expect(APP).not.toContain("trackLaysThisTurn");
+    expect(APP).not.toContain("trackLays=");
   });
 
   it("keeps the catalog's description in step with the code", () => {

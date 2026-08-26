@@ -54,26 +54,16 @@
 //
 // See docs/ai_architecture/hex_tile_math.md, pendingTileCost.ts #673.
 
+// DESIGN NOTE #836: THE ARITHMETIC AND THE SENTENCE MOVED to `pendingSpend.ts`, because a station marker
+// asks the same question of the same treasury and a second copy of the answer is how two surfaces come to
+// disagree. What stays here is what is genuinely about GROUND: which terrain costs what, and the rule that it
+// is charged once. `describePendingTileCost` is gone with the arithmetic -- it is `describePendingSpend` now,
+// and the rename is the point: it was never about tiles.
+
 import { terrainBuildFeeAt } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { pendingSpend, type PendingSpend } from "./pendingSpend";
 import { terrainFeeDue } from "./terrainFee";
-
-export interface PendingTileCost {
-  /** What the lay will cost. `0` for clear ground and for an upgrade, which
-   *  are different reasons for the same figure and both genuinely free. */
-  fee: number;
-  /** The treasury as it stands. `null` when it is not known -- offline, or
-   *  before the first poll. */
-  before: number | null;
-  /** What it will be afterwards. `null` whenever `before` is: an unknown
-   *  balance minus a known fee is still unknown, and rendering `-$80` there
-   *  would be a figure no corporation has. */
-  after: number | null;
-  /** Whether the treasury cannot cover this. Reported, NOT enforced --
-   *  1830's rules about an unaffordable lay belong to the contract, and this
-   *  module's job is to say what the player is looking at. */
-  short: boolean;
-}
 
 /** The cost of laying on `(q, r)`, given the board and the acting treasury.
  *
@@ -91,14 +81,11 @@ export function pendingTileCost(
    *  which is the honest default: a caller who cannot see the ledger should quote the posted price rather
    *  than assume somebody else has settled it. */
   feesPaid?: readonly string[] | null,
-): PendingTileCost {
+): PendingSpend {
   /* Design note #723: one rule, asked by both sides. `mapGrid` stays in the signature -- the caller needs it
      for everything else about a preview -- but the FEE no longer reads it, because "is there a tile here" and
      "has this ground been paid for" are different questions that happen to agree on most hexes. */
-  const fee = terrainFeeDue(feesPaid, q, r, terrainBuildFeeAt);
-  const before = treasury === null || !Number.isFinite(treasury) ? null : treasury;
-  const after = before === null ? null : before - fee;
-  return { fee, before, after, short: after !== null && after < 0 };
+  return pendingSpend(terrainFeeDue(feesPaid, q, r, terrainBuildFeeAt), treasury);
 }
 
 /** "$1000 → $920", or `null` when there is nothing pending to say.
@@ -110,17 +97,7 @@ export function pendingTileCost(
  *  A REAL ARROW, not `->`. The two are a glyph apart and only one of them reads
  *  as a transition rather than as a typo -- the same reasoning `cashDelta.ts`
  *  applies to its minus sign. */
-export function formatPendingTreasury(cost: PendingTileCost): string | null {
+export function formatPendingTreasury(cost: PendingSpend): string | null {
   if (cost.fee <= 0 || cost.before === null || cost.after === null) return null;
   return `$${cost.before} → $${cost.after}`;
-}
-
-/** The sentence the confirm step says, or `null` for a free lay.
- *
- *  Names the FEE and the remainder together, because the two answer different
- *  questions and the player is about to press a button that settles both. */
-export function describePendingTileCost(cost: PendingTileCost): string | null {
-  if (cost.fee <= 0) return null;
-  if (cost.after === null) return `Costs $${cost.fee}`;
-  return `Costs $${cost.fee} — treasury $${cost.after} after`;
 }

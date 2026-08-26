@@ -20,7 +20,17 @@
 
 import {
   HEX_NEIGHBOR_OFFSETS,
+  /* Design note #852: `liveEdgesForHex` is no longer called here, for the reason `trackReach.ts` #686 gives
+     for dropping it there: it answers "every rail on this hex", which is the hex-as-a-node model, and the
+     start of a route is the last place that model survived. `cityExitEdges` answers the same question for a
+     one-city hex and a narrower one for a hex with two. */
+  cityExitEdges,
   hexRouteValue,
+  /* STILL USED BY `bridgeWaypoints` ALONE, and #852 leaves it there deliberately. The bridge starts at a hex
+     the PLAYER CLICKED, not at a token, and a click carries no city -- so scoping it would need waypoints to
+     name a city, which is a contract change (`RouteWaypointDto` has no such field) rather than a fix. The gap
+     is real and is recorded at that function rather than papered over here: a manual route bridging out of a
+     two-city hex can still leave by the wrong arm. */
   liveEdgesForHex,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -28,7 +38,7 @@ import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
 // Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
-import { cityForArrival } from "./trackReach";
+import { cityForArrival, type StationToken } from "./trackReach";
 import {
   neighbourAcross,
   segmentsTouchingEdge,
@@ -103,7 +113,25 @@ export function bridgeWaypoints(
   const toKey = `${to.q},${to.r}`;
   if (fromKey === toKey) return null;
 
-  /* Design note #9: THE BRIDGE WALKS RAILS TOO. Reported: with tile #56 on G7, the router bridges H8 to F6
+  /* ==================================================================
+      DESIGN NOTE 852a: THE BRIDGE STILL LEAVES BY ANY RAIL, AND THAT IS A GAP
+     ==================================================================
+     #852 scoped the SEARCH's start to the tokened city, because a token knows which city it is in. A BRIDGE
+     starts at a hex the player CLICKED, and a click carries no city: `RouteWaypointDto` has a hex and nothing
+     else, so there is no city index to scope by and inventing one here would be a guess dressed as a rule.
+     THE CONSEQUENCE, NARROWED BY #853. This paragraph originally said a manual route out of a two-city hex
+     was accepted and that fixing it needed `RouteWaypointDto` to carry a city -- a contract change. BOTH
+     HALVES WERE WRONG, and the correction is kept rather than quietly rewritten:
+       WHAT ACCEPTED SUCH A ROUTE was `routeIncludesOwnedToken`, comparing coordinates. #853 makes it ask
+       which city the route's own rails belong to, so a run touching New York by the other arm is refused
+       whatever drew it.
+       NO NEW FIELD WAS NEEDED. The hexes either side of a point determine the edges the route uses at that
+       point -- which `hexCanvasPrimitives.ts` #689 has been deriving to DRAW the route all along.
+     WHAT SURVIVES HERE is smaller and is about SEARCH rather than legality: this walk may still explore out
+     of the wrong arm while looking for a path between two waypoints, so it can propose a bridge the token
+     rule will then refuse. A rejected suggestion rather than an illegal route -- worth fixing, not urgent.
+
+     Design note #9: THE BRIDGE WALKS RAILS TOO. Reported: with tile #56 on G7, the router bridges H8 to F6
      across two curves that do not touch. `trackSegments.ts #0` fixed this class of bug in the network reach and
      in the auto-tracer, and this function was missed -- it kept its own hex-to-hex Dijkstra, which is the
      hex-as-a-node model that cannot see a crossover.
@@ -292,6 +320,8 @@ function candidatePathsFrom(
   mapGrid: MapGridResponse,
   era: TileColorTier,
   start: TracedHex,
+  /** Design note #852: which city on `start` the token sits in, or `null` for "the whole hex". */
+  startCity: number | null,
   maxCentres: number,
   occupied: ReadonlySet<SegmentKey>,
   keep: number,
@@ -449,7 +479,10 @@ function candidatePathsFrom(
          fields became unreachable on both. */
       const exits: HexTraversal[] =
         arrivalEdge === null
-          ? liveEdgesForHex(mapGrid, at.q, at.r).map((exitEdge) => ({
+          ? /* Design note #852: THE TOKEN'S CITY, NOT THE HEX. `cityExitEdges` returns every live edge when
+               `startCity` is `null` -- one city, or a caller that did not say -- so the ordinary board is
+               untouched and New York is not. See `AutoTraceInput.startHexes` for the report. */
+            cityExitEdges(mapGrid, at.q, at.r, startCity).map((exitEdge) => ({
               exitEdge,
               segments: [] as readonly SegmentKey[],
             }))
@@ -509,9 +542,33 @@ export type BlocksThrough = (q: number, r: number, cityIndex: number) => boolean
 export interface AutoTraceInput {
   mapGrid: MapGridResponse;
   era: TileColorTier;
-  /** The corporation's station token hexes. A route must touch one, so these
-   *  are the only legal places to start looking. */
-  startHexes: ReadonlyArray<readonly [number, number]>;
+  /** The corporation's station tokens. A route must touch one, so these are the only legal places to start
+   *  looking.
+   *
+   *  ==================================================================
+   *   DESIGN NOTE 852: `[q, r]` IS NOT ENOUGH, AND NEW YORK PROVES IT
+   *  ==================================================================
+   *
+   *  REPORTED: "NNH has two 3-trains. In Run Routes, one train runs from its home station (on the upper right
+   *  city) to Providence, and the other train is running from the disconnected lower left city. This is
+   *  actually two major problems: i) the two cities are not part of NNH's network, and ii) the second train
+   *  doesn't run through any NNH station. This had been fixed before and has now returned."
+   *
+   *  IT WAS FIXED IN THE OTHER TRACER. `trackReach.ts` #686 -- "A TOKEN IS IN A CITY, NOT ON A HEX" -- was
+   *  reported on this exact corporation and this exact hex, and it fixed the NETWORK walk. This module is the
+   *  ROUTE search, a separate DFS, and it kept the model: from a start it took every live edge on the hex.
+   *  New York (G19) is `[{edges:[1]}, {edges:[4]}]`, two cities whose spurs do not touch. NNH's token is in
+   *  the top-right city, which owns edge 1. Edge 4 belongs to the other one -- so the search departed from a
+   *  city NNH holds nothing in, and every route down that arm satisfies neither half of the rule.
+   *
+   *  #730 SAW THIS COMING AND SAID SO: "the same defect as #729 and the same shape of fix, in the other
+   *  tracer. They had to be fixed together or the board would have promised reach the router then refused."
+   *  #686 was the same defect one layer down, and only one tracer was told.
+   *
+   *  `[q, r]` STILL WORKS and means "the whole hex", which is the right answer for the ~90% of the board with
+   *  one city on it and is exactly the pre-#852 behaviour. What must be passed for a two-city hex is
+   *  `[q, r, cityIndex]` -- `stationTokensOf` in `trackReach.ts` produces precisely that. */
+  startHexes: ReadonlyArray<StationToken>;
   /** The train's capacity in REVENUE CENTRES (`sandboxSession.ts #156`); the Diesel is treated as uncapped.
    *  TOWNS COUNT: every hex that pays is a centre, so `City -> Town -> City` is three stops and a 2-train cannot
    *  run it. Verified rather than assumed -- see the regression tests. */
@@ -553,15 +610,21 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
   const occupied = excludeSegments ?? new Set<SegmentKey>();
 
   const all: SearchResult[] = [];
-  for (const [q, r] of startHexes) {
+  for (const entry of startHexes) {
+    const [q, r] = entry;
     const hexLabel = labelFor(q, r);
     if (hexLabel === null) continue;
+    /* Design note #852: `[q, r, cityIndex]` where the caller knows, `[q, r]` where it does not -- the same
+       `StationToken` shape `trackReach.ts` #686 introduced, so the two tracers read one record. `null` means
+       "the whole hex", which is right for a one-city hex and is the pre-#852 behaviour everywhere. */
+    const startCity = entry.length > 2 ? (entry[2] as number) : null;
     const token: TracedHex = { q, r, hexLabel };
 
       const oneArm = candidatePathsFrom(
       mapGrid,
       era,
       token,
+      startCity,
       cap,
       occupied,
       CANDIDATES_PER_TOKEN,
@@ -578,7 +641,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       const barred = new Set<SegmentKey>();
       occupied.forEach((key) => barred.add(key));
       armA.segments.forEach((key) => barred.add(key));
-      const armsB = candidatePathsFrom(mapGrid, era, token, cap, barred, 2, input.blocksThrough);
+      const armsB = candidatePathsFrom(mapGrid, era, token, startCity, cap, barred, 2, input.blocksThrough);
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
         const joined = [...armB.path.slice(1).reverse(), ...armA.path];
@@ -654,7 +717,8 @@ export interface RouteSetTrain {
 export interface RouteSetInput {
   mapGrid: MapGridResponse;
   era: TileColorTier;
-  startHexes: ReadonlyArray<readonly [number, number]>;
+  /** Design note #852: tokens, not hexes -- `[q, r]` or `[q, r, cityIndex]`. See `AutoTraceInput`. */
+  startHexes: ReadonlyArray<StationToken>;
   trains: readonly RouteSetTrain[];
   /** Design note #730: threaded to every train's search, so a corporation's whole draft respects the walls. */
   blocksThrough?: BlocksThrough;

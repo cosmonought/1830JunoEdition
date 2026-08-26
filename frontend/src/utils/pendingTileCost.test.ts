@@ -28,8 +28,8 @@
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 import { terrainBuildFeeAt, MOUNTAIN_BUILD_FEE, RIVER_BUILD_FEE, STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { describePendingSpend } from "./pendingSpend";
 import {
-  describePendingTileCost,
   formatPendingTreasury,
   pendingTileCost,
 } from "./pendingTileCost";
@@ -178,10 +178,10 @@ describe("formatPendingTreasury", () => {
   });
 });
 
-describe("describePendingTileCost", () => {
+describe("describePendingSpend", () => {
   it("names the fee and what is left", () => {
     const cost = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, 1000);
-    expect(describePendingTileCost(cost)).toBe(
+    expect(describePendingSpend(cost)).toBe(
       `Costs $${MOUNTAIN_BUILD_FEE} — treasury $${1000 - MOUNTAIN_BUILD_FEE} after`,
     );
   });
@@ -191,12 +191,12 @@ describe("describePendingTileCost", () => {
        property of the ground, and withholding it would make an offline board
        quieter than it needs to be. */
     const cost = pendingTileCost(EMPTY, MOUNTAIN.q, MOUNTAIN.r, null);
-    expect(describePendingTileCost(cost)).toBe(`Costs $${MOUNTAIN_BUILD_FEE}`);
+    expect(describePendingSpend(cost)).toBe(`Costs $${MOUNTAIN_BUILD_FEE}`);
   });
 
   it("says nothing about a free lay", () => {
     // A permanent "Costs $0" teaches a player to stop reading the line that
     // matters on the two terrains where it does.
-    expect(describePendingTileCost(pendingTileCost(EMPTY, PLAIN.q, PLAIN.r, 1000))).toBeNull();
+    expect(describePendingSpend(pendingTileCost(EMPTY, PLAIN.q, PLAIN.r, 1000))).toBeNull();
   });
 });

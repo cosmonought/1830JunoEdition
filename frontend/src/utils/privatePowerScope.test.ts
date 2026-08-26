@@ -93,10 +93,25 @@ describe("every corporate action names its step", () => {
     expect(abilityFor(DH).actions.find((a) => a.key === "dh-tile")?.subPhase).toBe("Track");
   });
 
-  it("puts the D&H's free station on Tokens", () => {
-    /* THE CASE THE OLD ABILITY-LEVEL FIELD COULD NOT EXPRESS, and the reason it went unused: one ability,
-       two steps. Paired with #781, which taught the step-skipper that this placement exists. */
-    expect(abilityFor(DH).actions.find((a) => a.key === "dh-token")?.subPhase).toBe("Tokens");
+  it("gives each power one entry point, not one per step (design note #849)", () => {
+    /* THE PANEL'S `dh-token` ACTION IS GONE, and #782's property is not. That note put the free station on
+       the Tokens step so "the step stays open AND the button is on screen when it does"; #848's flow modal
+       is the surface that walks the two steps now, and it reaches the station step during Tokens exactly as
+       the button did.
+       #442 SPLIT THIS INTO TWO BUTTONS for a reason that still holds -- "the rulebook grants the tile and
+       the token independently" -- and the modal expresses it BETTER: two lines with their own buttons, the
+       second greyed until the first is done, which two peer buttons on a panel could only imply.
+       WHAT WOULD BE A REGRESSION is the step-skipper forgetting the placement exists, so that is asserted
+       directly rather than through the button that used to imply it. */
+    expect(abilityFor(DH).actions).toHaveLength(1);
+    expect(abilityFor(DH).actions[0].key).toBe("dh-tile");
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const tokens = fs.readFileSync(path.join(__dirname, "stationTokens.ts"), "utf8");
+    expect(tokens).toContain("extraTokenAvailable");
+    expect(fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")).toContain(
+      "stationPlacementBlockReason({",
+    );
   });
 
   it("leaves no corporate action unassigned", () => {
@@ -132,8 +147,11 @@ describe("the panel is empty where nothing can be done", () => {
     expect(liveActions(DH, "Track", NONE)).toEqual(["dh-tile"]);
   });
 
-  it("offers the free station on Tokens", () => {
-    expect(liveActions(DH, "Tokens", NONE)).toEqual(["dh-token"]);
+  it("offers nothing on Tokens, because the flow is what asks there", () => {
+    /* #849: the panel is an ENTRY POINT and the entry is on Track. A D&H that has laid its tile is carried
+       to the station question by `activePowerFlow`, which raises the modal whether or not anybody asked --
+       so a second control here would be a second way into one question. */
+    expect(liveActions(DH, "Tokens", NONE)).toEqual([]);
   });
 });
 
@@ -142,12 +160,13 @@ describe("a spent power stops being displayed", () => {
     expect(liveActions(CSL, "Track", new Set(["csl-tile"]))).toEqual([]);
   });
 
-  it("drops the D&H's tile but keeps its station", () => {
-    /* THE HALF THAT MAKES THIS PER-ACTION RATHER THAN PER-ABILITY. Spending the lay is exactly when the token
-       becomes available (`dhPower.ts` #725), so dropping the whole ability here would hide the power at the
-       moment it is finally usable. */
+  it("drops the D&H's entry once its lay is taken", () => {
+    /* THE PROPERTY THIS GUARDED -- that spending the lay is exactly when the token becomes available
+       (`dhPower.ts` #725), so the power must not vanish at the moment it is finally usable -- MOVED WITH THE
+       CONTROL. `privatePowerFlow.test.ts` asserts the station step goes live on `layDone`, which is the same
+       rule where the buttons now are. Here, the entry point is spent. */
     expect(liveActions(DH, "Track", new Set(["dh-tile"]))).toEqual([]);
-    expect(liveActions(DH, "Tokens", new Set(["dh-tile"]))).toEqual(["dh-token"]);
+    expect(liveActions(DH, "Tokens", new Set(["dh-tile"]))).toEqual([]);
   });
 
   it("drops the D&H entirely once both halves are spent", () => {

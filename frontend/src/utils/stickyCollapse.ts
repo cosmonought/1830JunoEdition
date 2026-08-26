@@ -116,3 +116,122 @@ export function canPinWithoutTrapping(
   if (usable <= 0) return false;
   return panelHeight <= usable * STICKY_MAX_VIEWPORT_SHARE;
 }
+
+/* ==================================================================
+    DESIGN NOTE 837: THE PIN TEST WAS MEASURING WHAT THE PIN DECIDES
+   ==================================================================
+
+   REPORTED: "The Buy Trains subphase Action Panel is supposed to be sticky and in OR 1.1 it's not, but in OR
+   2.1 it is."
+
+   NOT A FACT ABOUT ROUNDS. It is a deadlock, and which round trips it is an accident of a few pixels:
+
+     - #828 renders the step panel INSIDE the sticky element, so `measure()` reads a rect containing it.
+     - `pinnable` is `canPinWithoutTrapping(rect.height, ...)` -- the bar PLUS the open depot table.
+     - `condensed` is only ever true when `pinnable`.
+     - `TrainPurchasePanel` folds its depot table only when `condensed`.
+
+   So the table folds because the bar pinned, and the bar pinned because the table folded. Whichever side of
+   the 50% threshold the FIRST measurement lands on is where it stays for the rest of the step: one more
+   corporation on the roster, or one rust flag on a depot card, decides it permanently. OR 2.1 lands under and
+   OR 1.1 lands over.
+
+   THE FIX IS TO ASK A QUESTION THAT DOES NOT DEPEND ON ITS OWN ANSWER. "Can this bar be a sticky bar at all"
+   is properly about its RESTING height -- what it occupies with every optional, collapsible body folded away.
+   That number does not move when the fold moves, so the loop is cut rather than merely broken this time.
+
+   AND IT MAKES #828'S RULE MEAN WHAT IT SAYS. "Pinned means collapsed" now fires on the scroll that pins the
+   bar rather than on the first paint, so a player ARRIVING at Buy Trains sees the depot open -- asked for
+   directly: "The Buy Trains subphase Action Panel initializes with both carets closed... Shouldn't the Bank
+   one be expanded?" -- and it folds as they scroll away, which is when the compact bar is what they want.
+
+   A DOM ATTRIBUTE RATHER THAN A PROP CHAIN. The bar does not know what its step panel is made of, and
+   threading "how tall is your collapsible part" up through `trainPurchase` would put a layout measurement in
+   a props object that is otherwise pure game state. The marker says what it means where it is. */
+
+/* ==================================================================
+    DESIGN NOTE 851: PINNING IS A COMFORT TEST; RELEASING IS A TRAPPING TEST
+   ==================================================================
+
+   REPORTED: "when my corporation had insufficient funds to buy another train, the sticky panel jumped to its
+   fixed position up top. It doesn't need to do that."
+
+   IT DID NOT JUMP UP -- IT STOPPED TRAVELLING. An insufficient treasury adds a refusal sentence and the
+   Emergency Train Purchase button (#751c) to the bar. #758 gave the bar a `ResizeObserver` so that ANY height
+   change re-asks whether it may pin, and its own note listed this exact case as a feature: "a longer refusal
+   message wrapping to three lines". The bar crossed 50% of the viewport, `mayPin` went false, `position:
+   sticky` became `position: static`, and a bar that was stuck at the top snapped back to its place in the
+   document -- which is up the page, out of view.
+
+   #758's FIX WAS RIGHT AND ITS TRIGGER IS TOO BROAD. It was built for a roster a player had DELIBERATELY
+   opened, growing until the page beneath could not be reached. #828 had already written the distinction it
+   needs: "a player may open the table while pinned, and if that tips the bar past the threshold #720 unpins
+   it -- which is the right outcome for something they deliberately expanded, and is a different event from
+   the bar unpinning by surprise, which is what was reported twice." Three times now.
+
+   AND THE DISTINCTION IS MEASURABLE WITHOUT GUESSING AT INTENT, which is what makes this a rule rather than a
+   heuristic. The two questions were never the same question:
+
+     "MAY I PIN?"     is about comfort. Half the viewport is where a companion becomes the passenger (#720),
+                      and it is asked of the RESTING height (#837) so the answer does not depend on itself.
+     "AM I TRAPPING?" is about reachability. A bar is only harmful when the content beneath it cannot be
+                      reached, and it is asked of the ACTUAL height, because that is what is on screen.
+
+   A DELIBERATELY OPENED ROSTER blows past the trapping threshold and releases the pin, exactly as #758
+   intended. A REFUSAL SENTENCE AND ONE BUTTON take the bar from comfortable to slightly-less-comfortable and
+   change nothing, because nothing is out of reach. The player mid-decision is not made to chase the panel.
+
+   HYSTERESIS RATHER THAN A SECOND CONSTANT DOING THE SAME JOB: `shouldCondenseSticky` above already takes its
+   own previous answer for this reason (`STICKY_RELEASE_SLACK_PX`), and a mode that flips on a boundary is the
+   failure both are avoiding. */
+
+/** Past this share of the usable viewport, a pinned bar is hiding content rather than accompanying it. */
+export const STICKY_RELEASE_VIEWPORT_SHARE = 0.8;
+
+/** Whether a bar that IS pinned has grown enough to be in the way.
+ *
+ *  `false` for an unmeasurable height, matching `canPinWithoutTrapping`'s "unmeasurable means stick": the
+ *  first paint must not release a pin on the strength of a rect nobody has laid out yet. */
+export function shouldReleasePin(
+  actualHeight: number,
+  viewportHeight: number,
+  stickyTop: number,
+): boolean {
+  if (!Number.isFinite(actualHeight) || actualHeight <= 0) return false;
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return false;
+  const usable = viewportHeight - (Number.isFinite(stickyTop) ? stickyTop : 0);
+  if (usable <= 0) return true;
+  return actualHeight > usable * STICKY_RELEASE_VIEWPORT_SHARE;
+}
+
+/** Marks a subtree as collapsible reference rather than part of the bar's resting height. */
+export const STICKY_OPTIONAL_ATTR = "data-sticky-optional";
+
+/** Spread onto the element: `<div {...STICKY_OPTIONAL}>`.
+ *
+ *  Built from the constant above rather than written out at each site, so a marker and a reader that must
+ *  agree on one string cannot come to disagree about it. */
+export const STICKY_OPTIONAL: Readonly<Record<string, string>> = {
+  [STICKY_OPTIONAL_ATTR]: "true",
+};
+
+/** `node`'s height with every marked subtree taken out of it.
+ *
+ *  NESTED MARKS COUNT ONCE. Only the outermost marked elements are subtracted -- a marked body inside a
+ *  marked body would otherwise be removed twice and report a resting height below zero, which
+ *  `canPinWithoutTrapping` reads as "unmeasurable, so stick" and would hide the very case it was asked
+ *  about. */
+export function restingHeight(node: HTMLElement): number {
+  const total = node.getBoundingClientRect().height;
+  const marked = Array.from(
+    node.querySelectorAll<HTMLElement>(`[${STICKY_OPTIONAL_ATTR}]`),
+  );
+  const outermost = marked.filter(
+    (element) => !marked.some((other) => other !== element && other.contains(element)),
+  );
+  const optional = outermost.reduce(
+    (sum, element) => sum + element.getBoundingClientRect().height,
+    0,
+  );
+  return Math.max(0, total - optional);
+}

@@ -46,6 +46,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 // Design note #640: which build the browser is actually running.
 import { UI_BUILD_LABEL } from "../utils/buildStamp";
 
@@ -67,6 +68,20 @@ interface TrainRow {
   rusts: string;
   reach: string;
 }
+
+/** Design note #843: the six privates as a lookup row each, derived from `PRIVATE_COMPANY_CATALOG` rather
+ *  than typed out here. A second hand-written list of the same six numbers is how the table and the cards
+ *  would come to disagree -- the failure #829 found between two acronym vocabularies and #815 between three
+ *  chip rows. `Object.entries` keys are strings, so the id is parsed back rather than re-declared. */
+const PRIVATE_CATALOG_ROWS = Object.entries(PRIVATE_COMPANY_CATALOG)
+  .map(([id, entry]) => ({
+    id: Number(id),
+    acronym: entry.acronym,
+    faceValue: entry.faceValue,
+    revenue: entry.revenue,
+    power: abilitySummary(entry),
+  }))
+  .sort((a, b) => a.id - b.id);
 
 const TRAIN_ROSTER: TrainRow[] = [
   { model: "2", quantity: "6", cost: "$80", rusts: "When the first 4-train is bought", reach: "2 revenue centres" },
@@ -666,6 +681,48 @@ export function RulesReference({ className, roundType, operatingSubPhase }: Rule
                       <td style={styles.td}>{row.cost}</td>
                       <td style={styles.td}>{row.reach}</td>
                       <td style={styles.td}>{row.rusts}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* ==================================================================
+               DESIGN NOTE 843: THE PRIVATES, AND WHERE THEIR FACE VALUE WENT
+              ==================================================================
+              ASKED: "Perhaps under Rules Reference we can add a table for all the PCs with their face value?"
+              -- immediately after ruling the number off the offer field: "The face value does explain the
+              range we're giving players, but in the grand scheme of things I'm not sure it matters that we
+              give them the value to compute the range themselves when we already give them the range."
+              SO THIS IS THE REHOMING, not an addition. It is the same move #800 made for the route
+              obligation's prose and #835 for the rotation rule: a number read ONCE belongs where a player
+              looks things up, not on a control they use every turn.
+              IT SITS WITH THE OTHER LOOKUP TABLES, beside Trains, for the reason G-15 gave about that one --
+              "the numbers a player checks mid-decision".
+              THE POWER COLUMN IS `abilitySummary`, which #661 built from the same bullets the private's card
+              renders, so the table and the card cannot describe one company two ways. */}
+          <section style={{ ...styles.section, ...styles.sectionSpaced }}>
+            <h3 style={styles.sectionTitle}>Private Companies</h3>
+            <div style={styles.tableScroll}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Private</th>
+                    <th style={styles.th}>Face</th>
+                    <th style={styles.th}>Revenue</th>
+                    <th style={styles.th}>Special Power</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {PRIVATE_CATALOG_ROWS.map((row) => (
+                    <tr key={row.id}>
+                      <td style={styles.td}>
+                        {row.id}. {row.acronym}
+                      </td>
+                      <td style={styles.tdNum}>${row.faceValue}</td>
+                      <td style={styles.tdNum}>${row.revenue}</td>
+                      <td style={styles.td}>{row.power}</td>
                     </tr>
                   ))}
                 </tbody>

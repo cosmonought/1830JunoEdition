@@ -120,7 +120,7 @@ describe("a jump is not an action", () => {
        taken, but here it means 'Resolve this action elsewhere'." It does not -- it means pressing it would
        do nothing, because the destination is already on screen. */
     expect(CODE.match(/onClick: scrollToStepPanel/g)?.length).toBe(2);
-    expect(CODE).toContain("onClick: scrollToMap,");
+    expect(CODE).toContain("onClick: goToMap,");
   });
 
   it("gives the Lay Track step the jump it lacked", () => {
@@ -130,34 +130,75 @@ describe("a jump is not an action", () => {
     expect(CODE).toContain("disabled: mapInView,");
   });
 
-  it("counts the lays, because sometimes there are two (design note #832)", () => {
-    /* ASKED as "Lay 1 Track ... then after a player is done it grays out to 'Lay 0 Track'", and the zero
-       withdrawn by the asker before it was built: "I guess 'Lay 0 Track' is unnecessary since I think it
-       autoskips." `bonusLay.ts` agrees -- `layEndsTrackStep` is `!isBonusLay`, so an ordinary lay ends the
-       step and takes the button with it. A zero state would have been #788's unreachable arm.
-       WHAT THE COUNT IS FOR IS TWO. The C&SL's power is an EXTRA lay (#726), and nothing on screen had ever
-       said so -- which is exactly what #776 was reported as. */
-    const dollar = String.fromCharCode(36);
-    expect(CODE).toContain("label: `Lay " + dollar + "{trackLays} Track`");
-    expect(CODE).toContain("trackLays = 1,");
+  it("says Lay 1 Track and could never say two (design note #834)", () => {
+    /* #832 BUILT THE COUNT AND #834 WITHDREW IT, on the instruction of the person who asked for it: "There
+       should actually never be a 'Lay 2 Track' button because a 'second' track lay is ONLY provided by the
+       special power of a private company, for which we've already built a modal. The Action Bar should be
+       used for the standard actions, let's leave the Special Powers where they are without trying to display
+       them again."
+       A LITERAL RATHER THAN A PROP PINNED AT 1. A `trackLays` whose only reachable value is one is #788's
+       unreachable arm wearing a variable -- and the next reader would take it for a quantity that varies.
+       "LAY 0 TRACK" REMAINS UNREACHABLE. `layEndsTrackStep` is `!isBonusLay`, so an ordinary lay ends the
+       step and takes the button with it; and an Undo back into Track has reversed the lay it undid. */
+    expect(CODE).toContain('label: "Lay 1 Track"');
+    expect(CODE).not.toContain("trackLays");
+    expect(CODE).not.toContain("Lay 0 Track");
   });
 
-  it("does not let the count drive the greying", () => {
-    /* THE PROPERTY THAT KEEPS THIS HONEST, and the answer to the doubt raised two reports ago about greyed
-       buttons meaning two things. `disabled` is `mapInView` and nothing else: greyed means "pressing this
-       would not move you". The label says how many lays the turn holds. Two facts, two channels (#732). */
+  it("keeps the greying on one channel", () => {
+    /* THE ANSWER TO THE DOUBT RAISED THREE REPORTS AGO about greyed buttons meaning two things. `disabled` is
+       `mapInView` and nothing else, so greyed means "pressing this would not move you" and never "you may
+       not lay track" -- that refusal lives on the hex (#716). */
     const mapCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
+    expect(mapCase.length).toBeGreaterThan(0);
     expect(mapCase).toContain("disabled: mapInView,");
-    expect(mapCase).not.toContain("trackLays === 0");
-    expect(mapCase).not.toContain("disabled: trackLays");
+    expect(mapCase.match(/disabled:/g)?.length).toBe(1);
   });
 
-  it("shortens the sentence the button replaces", () => {
+  it("takes a player on another tab to the map rather than nowhere (design note #833)", () => {
+    /* THE HOLE #833 CLOSED, and the reason the button is not simply greyed when the map is absent: with no
+       element there is nothing to intersect, so `mapInView` is false and the control looks live. A live
+       control that does nothing is the exact outcome #797's greying rule exists to prevent. */
+    expect(CODE).toContain("onShowMap?.()");
+    expect(CODE).toContain("setMapJumpPending(true)");
+  });
+
+  it("moves the rotation rule off the bar (design note #835)", () => {
     /* #279 kept "Select a hex on the map to lay or upgrade track" because "it says where the action IS, which
-       the player cannot otherwise know". The button says that now, so what survives is the half a button
-       cannot carry. */
+       the player cannot otherwise know", and #831 trimmed it to the rotation half.
+       REPORTED: "there's a character string: 'Click a laid preview to rotate it.' This should be in the
+       tutorial, not printed on the Action Bar." A rule of the interface, true every Operating Round forever,
+       which is #800's test for tutorial prose. The tutorial assertion below is what stops this from being a
+       deletion. */
     expect(CODE).not.toContain("Select a hex on the map to lay or upgrade track");
-    expect(CODE).toContain("Click a laid preview to rotate it.");
+    expect(CODE).not.toContain("rotate it.");
+    expect(CODE).toContain("Click a hex on the Rail Map to lay track.");
+  });
+
+  it("puts that line under the buttons rather than beside them", () => {
+    /* ASKED FOR AS A POSITION: "maybe BELOW the 'Lay 1 Track' and 'Skip Track' buttons". The row wraps, so a
+       hint rendered first sat to the LEFT of the controls it describes -- which is where #279 left it.
+       BOTH HALVES, because either alone passes while the other is wrong: the style key claims the full row,
+       and the source order puts it after Skip. */
+    expect(CODE).toContain("styles.orPanelStepHint");
+    expect(CODE.indexOf("Skip {OPERATING_SUB_PHASE_LABELS")).toBeLessThan(
+      CODE.indexOf("Click a hex on the Rail Map to lay track."),
+    );
+  });
+
+  it("keeps the rotation rule somewhere", () => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const tutorial = fs.readFileSync(
+      path.join(__dirname, "..", "components", "TutorialModal.tsx"),
+      "utf8",
+    );
+    // #490a in reverse: the bar's note QUOTES the sentence while explaining its removal, so `CODE` above is
+    // comment-stripped and this reads the file that is supposed to have it for real.
+    expect(tutorial).toContain("click the laid preview again to ROTATE it");
+    expect(tutorial.indexOf("click the laid preview again to ROTATE it")).toBeGreaterThan(
+      tutorial.indexOf("OPERATING_ROUND_TUTORIAL"),
+    );
   });
 
   it("names the destination rather than the purchase", () => {

@@ -34,7 +34,7 @@ import HexGridRenderer, {
 } from "./components/HexGridRenderer";
 import { liveEdgesForHex } from "./components/hexGeometry";
 import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
-import { layableHexes, reachableNetwork, stationTokensOf } from "./utils/trackReach";
+import { layableHexes, reachableNetwork, stationTokensOf, type StationToken } from "./utils/trackReach";
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
@@ -205,7 +205,16 @@ import { sharePurchaseBlock } from "./utils/sharePurchase";
 // Design note #713: the sale's guards.
 import { shareSaleBlock } from "./utils/shareSale";
 // Design note #725: the D&H's two halves, and the order between them.
-import { privatePowerGlowKeys } from "./utils/privatePowerGlow";
+import {
+  privatePowerHexKeys,
+  privatePowerOfferAt,
+  privatePowerOffers,
+} from "./utils/privatePowerOffer";
+import {
+  powerFlowOpen,
+  privatePowerFlow,
+  type PowerAbilityKey,
+} from "./utils/privatePowerFlow";
 // Design note #729: which cities a corporation may not run through.
 import { cityBlockerFor } from "./utils/cityBlocking";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
@@ -243,9 +252,10 @@ import {
   DH_PRIVATE_ID,
   cslPowerState,
   dhPowerState,
-  dhStationDeclineForfeits,
-  dhStationPromptNext,
-  type DhStationPrompt as DhStationPromptState,
+  /* `dhStationDeclineForfeits`, `dhStationPromptNext` and `DhStationPrompt` are no longer imported: #849
+     retired the prompt cursor into `activePowerFlow`, which derives the same two states from the power's own
+     record. The transition table survives in `dhPower.ts` with its reasoning and its tests; see #849 there
+     for why it is kept rather than deleted. */
   dhSelfLayWarning,
   privateSelfLayWarning,
 } from "./utils/dhPower";
@@ -261,7 +271,6 @@ import {
 } from "./utils/autoPass";
 import AutoPassModal from "./components/AutoPassModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
-import DhStationPrompt from "./components/DhStationPrompt";
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
 import { localCatalogPlacements } from "./components/hexGeometry";
@@ -420,7 +429,9 @@ import {
 import { effectiveActions, undoReachFor } from "./utils/logRevert";
 // Design note #673: one computation of what a previewed lay costs, read by the
 // corporation card and by the radial confirm caption.
-import { describePendingTileCost, pendingTileCost } from "./utils/pendingTileCost";
+import { describePendingSpend, pendingSpend } from "./utils/pendingSpend";
+import { pendingTileCost } from "./utils/pendingTileCost";
+import { PrivatePowerFlowModal } from "./components/PrivatePowerFlowModal";
 import { truncateAddress } from "./utils/address";
 /* Design note #559: ONE label resolver, shared. `App.tsx` used to declare
    its own room-aware copy at module scope while two components imported the
@@ -1105,7 +1116,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const corporation = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
-    const startHexes = corporation?.station_token_hexes ?? [];
+    /* Design note #852: TOKENS, NOT HEXES. `station_token_hexes` drops the city index, and on New York that
+       is the difference between NNH's own city and the disconnected one beside it. `stationTokensOf` is the
+       same reader the network walk uses (#686), so the router and the veil agree about where a route may
+       begin. */
+    const startHexes = corporation ? stationTokensOf(corporation) : [];
     if (startHexes.length === 0) return false;
 
     const result = assignRouteSet({
@@ -1533,8 +1548,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // Tile-selection state. previewTile is lifted here so it can be threaded into <HexGridRenderer>.
   // See docs/ai_architecture/canvas_rendering.md - App.tsx #7
   const [hexClickQuery, setHexClickQuery] = useState<HexClickQueryState | null>(null);
-  /** Design note #831: the Rail Map pane, handed to the action bar as the Lay Track step's jump target. */
-  const canvasPaneRef = useRef<HTMLElement | null>(null);
+  /* Design note #831's `canvasPaneRef` is DELETED by #833. It was attached to `<main>`, which contains the
+     action bar itself as well as the board -- so the node the bar observed as "the map" had the bar at its
+     top edge and ran the length of the page. The jump target is `boardEl` below, which is the board pane and
+     nothing else, and which the shell already held in state for the radial selector. */
 
   const [previewTile, setPreviewTile] = useState<
     {
@@ -1591,45 +1608,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [mapGrid, usedPrivateAbilities]);
 
   /* ==================================================================
-     DESIGN NOTE 832: HOW MANY LAYS, BECAUSE SOMETIMES IT IS TWO
+     DESIGN NOTE 832 IS WITHDRAWN BY #834: `trackLaysThisTurn` IS GONE
      ==================================================================
 
-     ASKED: "How about if the 'Lay Track' button said 'Lay 1 Track' and then after a player is done it grays
-     out to 'Lay 0 Track'?" -- and answered a moment later by the asker: "I guess 'Lay 0 Track' is unnecessary
-     since I think it autoskips to the next round."
+     IT COUNTED the turn's tile lays -- one ordinarily, two while the C&SL's extra was unspent -- so the bar
+     could label its jump "Lay 2 Track". #832's premise was sound and its remedy was not: "the C&SL's power is
+     an EXTRA lay (#726) and nothing on screen ever said so" is true, and the place to say it is the private's
+     own surface (#817's errand, #818's modal), not a second copy on the action bar.
 
-     EXACTLY SO, and `bonusLay.ts` says why: `layEndsTrackStep` is `!isBonusLay`, so an ordinary lay ends the
-     step and the button goes with it. A zero state would have been #788's unreachable arm -- rendered by
-     nothing, asserted by a test, and read by the next maintainer as a case that happens.
+     RULED OUT BY THE PERSON WHO ASKED FOR IT: "There should actually never be a 'Lay 2 Track' button because a
+     'second' track lay is ONLY provided by the special power of a private company, for which we've already
+     built a modal. The Action Bar should be used for the standard actions, let's leave the Special Powers
+     where they are without trying to display them again."
 
-     WHAT SURVIVES IS THE COUNT ITSELF, and it earns its place on exactly one number: TWO. The C&SL's power is
-     an EXTRA lay (#726: "IN ADDITION TO its normal tile lay", unlike the D&H's, which replaces it), and
-     nothing on screen has ever said so. That is the confusion #776 was reported as -- "CSL's special power is
-     supposed to allow for a SECOND track lay, but in my playthrough using its power advanced the Lay Track
-     subphase completely." The rule was fixed; the player still had to know it.
+     THE MEMO IS DELETED RATHER THAN LEFT FEEDING A CONSTANT, per #772's rule about orphans: a derivation
+     nobody reads is invisible to `tsc` and to ESLint and sits there looking like the authority for something.
+     The bar's label is the literal "Lay 1 Track" now, which is the only value it could ever have had.
+     `cslPower` SURVIVES UNTOUCHED -- it still gates the errand below, which is the enforcement. Only the
+     display of it here is gone. */
 
-     THE COUNT DOES NOT DRIVE THE GREYING, which is the whole reason this stays honest. The button greys when
-     the map is on screen (#797/#831) and for no other reason, so "greyed" keeps one meaning. The label says
-     how many lays this turn holds; the disabled state says whether pressing would move you. */
-  const trackLaysThisTurn = useMemo(() => {
-    const csl = gameState?.private_companies.find(
-      (entry) => entry.private_id === CSL_PRIVATE_ID,
-    );
-    /* OWNED BY THE OPERATING CORPORATION, not merely owned. #441's rule: a corporate power belongs to
-       whichever railroad holds the certificate, and only on its own turn. */
-    const cslIsOurs =
-      csl?.owner_protocol_id !== null &&
-      csl?.owner_protocol_id !== undefined &&
-      csl.owner_protocol_id === actingProtocolId;
-    return 1 + (cslIsOurs && cslPower.layAvailable ? 1 : 0);
-  }, [gameState, actingProtocolId, cslPower]);
+  /* Design note #833: bring the Rail Map forward for the bar's Lay Track jump. A tab change, not a game
+     action -- see the bar's #833 for why the jump owns both halves. */
+  const handleShowMap = useCallback(() => setActiveMainTab("map"), []);
 
   /* Design note #727: the hexes this corporation may build on by POWER rather than by reach. Both privates
      answer the same question, so one set covers them and a third power would need no renderer change. */
-  const privatePowerHexes = useMemo(
+  /* Design note #845: ONE LIST, TWO ENTRY POINTS. The hexes the board rings and the chips the bar offers are
+     the same offers -- `privatePowerGlowKeys` used to take its own reading of the same state, so a hex could
+     ring while nothing offered it, which is exactly the "why is this glowing" the report describes. */
+  const privatePowerOfferList = useMemo(
     () =>
-      privatePowerGlowKeys([
+      privatePowerOffers([
         {
+          privateId: DH_PRIVATE_ID,
+          abilityKey: "dh-tile",
           hex: privateHexFor(DH_PRIVATE_ID),
           usable:
             dhPower.layAvailable &&
@@ -1637,6 +1649,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId),
         },
         {
+          privateId: CSL_PRIVATE_ID,
+          abilityKey: "csl-tile",
           hex: privateHexFor(CSL_PRIVATE_ID),
           usable:
             cslPower.layAvailable &&
@@ -1646,6 +1660,71 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ]),
     [dhPower, cslPower, gameState, actingProtocolId],
   );
+  /* ==================================================================
+     DESIGN NOTE 849: THE MODAL IS DERIVED, NOT ONLY OPENED
+     ==================================================================
+
+     SPECIFIED: "Once a player has clicked the 'Lay Track on F16' button and completed that action, the modal
+     should pop back up with the 'Lay Track on F16' button grayed out, and the 'Place Station Token on F16'
+     and 'Forfeit Station Token' buttons now clickable."
+
+     SO IT CANNOT BE A BOOLEAN SOMEBODY REMEMBERS TO SET. The D&H's second step happens AFTER the lay, and a
+     D&H lay ENDS the Track step (`layEndsTrackStep` is `!isBonusLay`, and only the C&SL's lay is a bonus) --
+     so the reopening spans a sub-phase change, a board dispatch and a re-render. An open flag set at the
+     click site would have to survive all three.
+     A REQUEST PLUS A STANDING OBLIGATION. `privatePowerRequest` is what a click sets; the D&H's unresolved
+     second step raises the modal on its own, because at that point the game is WAITING for an answer that no
+     other surface asks for. #818's whole reason for existing, made structural. */
+  const [privatePowerRequest, setPrivatePowerRequest] = useState<PowerAbilityKey | null>(null);
+  /* The forfeit is a DECISION and must be remembered as one (#818): `usedPrivateAbilities` records a token
+     that was PLACED, and forfeiting spends the ability without placing anything. Kept apart so the modal can
+     say which of the two happened. */
+  const [dhStationForfeited, setDhStationForfeited] = useState(false);
+
+  /* Design note #849: the flow the modal renders, or `null`. Derived from the same power state the panel and
+     the board read -- so what the modal says has happened and what the game thinks has happened are one
+     reading, not two. */
+  const activePowerFlow = useMemo(() => {
+    const dhStation: "pending" | "placed" | "forfeited" = usedPrivateAbilities.has("dh-token")
+      ? "placed"
+      : dhStationForfeited
+        ? "forfeited"
+        : "pending";
+    /* THE STANDING OBLIGATION FIRST. A D&H lay with the station unresolved raises the modal whether or not
+       anybody asked for it: the game is waiting on an answer, and #818 exists because a player who is not
+       asked does not know they are deciding. */
+    const dhLaid = usedPrivateAbilities.has("dh-tile");
+    const dhOwed =
+      dhLaid && dhStation === "pending" && !dhPower.forfeited && ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId);
+    const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : privatePowerRequest;
+    if (key === null) return null;
+    const hex = privateHexFor(key === "dh-tile" ? DH_PRIVATE_ID : CSL_PRIVATE_ID);
+    if (!hex) return null;
+    return privatePowerFlow({
+      abilityKey: key,
+      hexLabel: hex.hexLabel,
+      layDone: usedPrivateAbilities.has(key),
+      station: key === "dh-tile" ? dhStation : "none",
+    });
+  }, [
+    privatePowerRequest,
+    usedPrivateAbilities,
+    dhStationForfeited,
+    dhPower,
+    gameState,
+    actingProtocolId,
+  ]);
+
+  const privatePowerHexes = useMemo(
+    () => privatePowerHexKeys(privatePowerOfferList),
+    [privatePowerOfferList],
+  );
+  /* Read through a ref for the same reason `isMyTurnRef` is: the click handler is a `useCallback` the canvas
+     holds across renders, and a click is a user event long after the commit that set it. */
+  const privatePowerOffersRef = useRef(privatePowerOfferList);
+  useEffect(() => {
+    privatePowerOffersRef.current = privatePowerOfferList;
+  }, [privatePowerOfferList]);
 
   /* ==================================================================
    *  DESIGN NOTE 729: WHOSE CITIES ARE SHUT
@@ -1723,6 +1802,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        See docs/ai_architecture/canvas_rendering.md - App.tsx #241 */
     const visible = new Set<string>(reach.network);
     reach.hexes.forEach((key) => visible.add(key));
+    /* ==================================================================
+       DESIGN NOTE 844: THE VEIL NEVER LEARNED WHAT THE GLOW ALREADY KNEW
+       ==================================================================
+
+       REPORTED: "the relevant hexes currently have the rainbow outline on them (but for some reason in a
+       recent pass they have been veiled again, rather than marked/highlighted for inclusion in a
+       corporation's network as usual...this should be fixed)."
+
+       #727 TAUGHT ONE PREDICATE AND NOT ITS SIBLING. That note is explicit -- "a private power's hex glows
+       whether or not it is in the reach set -- being outside it is the point" -- and the renderer's GLOW arm
+       honours it with an `||`. The VEIL arm three blocks above it asks `!layFocus.visible.has(key)`, and
+       `powerHexes` was handed over beside `visible` rather than added to it.
+
+       SO THE BOARD SAID BOTH THINGS AT ONCE and the darker one won: a rainbow outline drawn underneath the
+       dim, which reads as "this is special" and "this is not for you" in the same pixel.
+
+       THE SHAPE IS THE ONE THIS SESSION KEEPS FINDING -- a rule stated in one place and never asked in the
+       authority beside it (#807, #809, #816, #820, #824, #825, #826, #831). Added HERE rather than excepted
+       in the renderer, so there is one set that means "not veiled" and `powerHexes` keeps its own job of
+       saying which hexes get the hue ring. */
+    privatePowerHexes.forEach((key) => visible.add(key));
     // `network` is carried alongside for the rotation filter, which needs
     // the hexes that ACTUALLY CARRY TRACK -- not `visible`, which also holds
     // the empty extension candidates. A tile cannot join a bare hex.
@@ -1782,6 +1882,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #622: a ring is already open. This click is a dismissal
          if it landed on a different hex, and nothing at all if it landed on
          the one already open. Either way it does not open a new ring. */
+      /* ==================================================================
+         DESIGN NOTE 850: TWO RINGS ON ONE HEX, AND THE PICKER WON
+         ==================================================================
+         REPORTED: "when I clicked yes to place the Station Marker and then clicked the tile itself, the
+         tileselector radial menu popped up on top of the checkmark/x for the station. I then had to click
+         off the hex to remove the tileselector menu and only see the checkmark/x."
+         TWO CONFIRMATIONS FOR TWO DIFFERENT ACTIONS, drawn at the same place, and only one of them was
+         asked about. `pendingToken` is a placement waiting for a tick; opening a tile picker over it offers
+         a second, unrelated decision on top of an unanswered one -- and the player has to dismiss the thing
+         they did not ask for to reach the thing they did.
+         REFUSED HERE RATHER THAN RE-LAYERED. A `z-index` fight would leave both mounted, so a click could
+         still land on the wrong one; the honest fix is that a hex with a staged placement is not accepting
+         a second question. Same argument as #716's swallowed click, one layer up. */
+      if (pendingTokenRef.current !== null) return;
+
       const openOn = openRingHexRef.current;
       if (openOn) {
         if (openOn.q !== state.q || openOn.r !== state.r) {
@@ -1821,6 +1936,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          were being measured against somebody else's track.
          `isMyTurnRef` rather than `isMyTurn`, matching the two refs read beside it: this closure is rebuilt
          on `layTrackFocus`, and a click is a user event long after the commit that set the ref. */
+      /* ==================================================================
+         DESIGN NOTE 845: THE RINGED HEX ANSWERS THE CLICK IT WAS ATTRACTING
+         ==================================================================
+         The board has marked B20 and F16 with a hue ring since #727, and clicking one did what clicking any
+         out-of-network hex does: nothing (#716). So the one affordance pointing at the power was inert, and
+         the power itself lived in a subpanel below the fold -- which is the report.
+         BEFORE `inspectorClickRefused`, deliberately. That gate exists to swallow clicks on hexes with
+         nothing to offer, and this hex has something to offer precisely BECAUSE it is out of network. The
+         same ordering #725 needed for the armed errand, one step earlier in the flow. */
+      const powerOffer = privatePowerOfferAt({
+        hexKey: `${state.q},${state.r}`,
+        actingViewer: isMyTurnRef.current,
+        errandArmed: privateTileHexKeyRef.current !== null,
+        offers: privatePowerOffersRef.current,
+      });
+      if (powerOffer) {
+        setRadialSelector(null);
+        setPreviewTile(null);
+        setPrivatePowerRequest(powerOffer.abilityKey);
+        return;
+      }
+
       if (
         inspectorClickRefused({
           actingViewer: isMyTurnRef.current,
@@ -1915,6 +2052,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     offsetX: number;
     offsetY: number;
   } | null>(null);
+
+  /* Design note #850: read through a ref for the same reason `isMyTurnRef` is -- the click handler is a
+     `useCallback` the canvas holds across renders, and a click is a user event long after that commit. */
+  const pendingTokenRef = useRef(pendingToken);
+  useEffect(() => {
+    pendingTokenRef.current = pendingToken;
+  }, [pendingToken]);
 
   /* The same veil, for tokens. The SET differs: a token needs a city with a free unreserved slot ON the network. Only while targeting is armed.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #240 */
@@ -2221,9 +2365,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       blocksThrough: blocksThroughCityRef.current,
       mapGrid,
       era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
-      // A route must touch a city this corporation has a token in, so its
-      // tokens are the only legal places to start looking.
-      startHexes: corporation?.station_token_hexes ?? [],
+      /* A route must touch a city this corporation has a token in, so its tokens are the only legal places
+         to start looking -- and design note #852: the CITY, which `station_token_hexes` cannot say. */
+      startHexes: corporation ? stationTokensOf(corporation) : [],
       trains: ownedTrainRoster.map((train) => ({
         trainIndex: train.trainIndex,
         // `999` is the Diesel's unlimited; 4 is the safe default for a model
@@ -2419,12 +2563,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   // Every draft priced in one memo, so the panel, the total and the dispatch cannot disagree. #474: the corporation's tokens, derived once.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #275
-  const routeTokenHexes = useMemo<ReadonlyArray<readonly [number, number]>>(
-    () =>
-      gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
-        ?.station_token_hexes ?? [],
-    [gameState, actingProtocolId],
-  );
+  /* Design note #853: TOKENS, NOT HEXES -- the same correction #852 made to the router's start, on the rule
+     that judges a hand-drawn route. `station_token_hexes` cannot say which city on New York NNH holds, so a
+     route entering by the other city's rail satisfied "contains one of your tokens". */
+  const routeTokenHexes = useMemo<ReadonlyArray<StationToken>>(() => {
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    return corporation ? stationTokensOf(corporation) : [];
+  }, [gameState, actingProtocolId]);
 
   const trainDrafts = useMemo<TrainRouteDraft[]>(() => {
     const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
@@ -2470,7 +2617,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* A route must touch a city this corporation holds a token in - ANY token, anywhere on the run.
            See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
         tokenBlockReason:
-          routeTokenBlockReason(points, routeTokenHexes) ??
+          routeTokenBlockReason(points, routeTokenHexes, mapGrid) ??
           /* Design note #730a: and the wall, for a route drawn by hand. The tracer cannot produce one; a
              player can, and both go to the same dispatch. */
           routeBlockedCityReason(
@@ -2875,6 +3022,92 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* Hex-holding private powers route through the shared map flow and are marked spent WHEN THE CLICK LANDS. Share exchanges stay marked-and-logged.
      See docs/ai_architecture/contract_economy.md - App.tsx #444 */
+  /* ==================================================================
+     DESIGN NOTE 845: THE ARMING IS EXTRACTED, BECAUSE IT NOW HAS TWO CALLERS
+     ==================================================================
+     `handleUsePrivateAbility` owned this: set the errand, switch to the map, say which hex is lit. #845 adds
+     a second way in -- the prompt raised by clicking the ringed hex, and the chip on the action bar that
+     opens the same prompt -- and a second copy of four lines that must agree about `kind`, `returnTab` and
+     the log entry is how the two paths come to arm different errands.
+     THE `kind` MAPPING IS THE PART THAT WOULD HAVE DRIFTED: `dh-token` is a STATION placement and the two
+     tile powers are not, which is #548's distinction and is invisible from the call site. */
+  const armPrivateHexErrand = useCallback(
+    (privateId: number, abilityKey: string, label: string) => {
+      const reservation = privateHexFor(privateId);
+      if (!reservation) return;
+      setHomeStationPlacement({
+        kind: abilityKey === "dh-token" ? "private-station" : "private-tile",
+        companyId: actingProtocolId,
+        q: reservation.q,
+        r: reservation.r,
+        hexLabel: reservation.hexLabel,
+        abilityKey,
+        returnTab: activeMainTab,
+      });
+      setActiveMainTab("map");
+      logInfoRef.current?.(
+        "Private Power",
+        `${label} — click ${reservation.hexLabel} on the Rail Map, the only hex left lit.`,
+      );
+    },
+    [actingProtocolId, activeMainTab],
+  );
+
+  /* Design note #846: the chip RAISES THE PROMPT, it does not arm. A chip that armed directly would be a
+     third path into the errand and a second thing "use this power" can mean -- one door asking and one door
+     acting. It also keeps #263 satisfied: nothing on the bar dispatches. */
+  const handleChipPowerOffer = useCallback(
+    (abilityKey: string) => {
+      const offer = privatePowerOffersRef.current.find(
+        (entry) => entry.abilityKey === abilityKey,
+      );
+      if (offer) setPrivatePowerRequest(offer.abilityKey);
+    },
+    [],
+  );
+
+  /* Design note #849: the modal's three answers, all landing on machinery that already existed. The flow
+     module decides WHICH buttons are live; these decide what each one does, and neither duplicates the
+     other's judgement. */
+  const handlePowerFlowAct = useCallback(
+    (step: "lay" | "station") => {
+      const key = activePowerFlow?.abilityKey;
+      if (!key) return;
+      if (step === "lay") {
+        /* The SAME arming the powers panel does (#845), so a lay reached through the modal and a lay reached
+           through the panel are one errand. */
+        armPrivateHexErrand(
+          key === "dh-tile" ? DH_PRIVATE_ID : CSL_PRIVATE_ID,
+          key,
+          key === "dh-tile" ? "Lay Track (F16)" : "Lay Track (B20)",
+        );
+        return;
+      }
+      armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", "Place Station Token for $0 (F16)");
+    },
+    [activePowerFlow, armPrivateHexErrand],
+  );
+
+  const handlePowerFlowDecline = useCallback((step: "lay" | "station") => {
+    /* ONLY THE STATION STEP OFFERS A DECLINE, and `privatePowerFlow` renders no decline button on the lay --
+       so this arm exists to make that explicit rather than to be reached. Spending the ability is what makes
+       the forfeit a DECISION (#818) rather than a turn that moved on. */
+    if (step !== "station") return;
+    setDhStationForfeited(true);
+    setPrivatePowerRequest(null);
+    logInfoRef.current?.(
+      "Private Power",
+      "Delaware & Hudson — the free placement on F16 was forfeited. The marker returns to the supply.",
+    );
+  }, []);
+
+  const handlePowerFlowCancel = useCallback(() => {
+    /* Design note #849: the X, and it can only be reached while `cancellable`. Nothing has been spent, so
+       nothing is marked used -- #573's rule that "a refusal must leave the power alone". */
+    setPrivatePowerRequest(null);
+    setHomeStationPlacement(null);
+  }, []);
+
   const handleUsePrivateAbility = useCallback(
     (ability: PrivateAbility, action: PrivateAbilityAction) => {
       const reservation = privateHexFor(ability.privateId);
@@ -2882,20 +3115,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         action.key === "csl-tile";
 
       if (targetsHex && reservation) {
-        setHomeStationPlacement({
-          kind: action.key === "dh-token" ? "private-station" : "private-tile",
-          companyId: actingProtocolId,
-          q: reservation.q,
-          r: reservation.r,
-          hexLabel: reservation.hexLabel,
-          abilityKey: action.key,
-          returnTab: activeMainTab,
-        });
-        setActiveMainTab("map");
-        logInfoRef.current?.(
-          "Private Power",
-          `${action.label} — click ${reservation.hexLabel} on the Rail Map, the only hex left lit.`,
-        );
+        /* Design note #849: THE PANEL ASKS, IT DOES NOT ACT. Its button is "Use Power" now, and a power is a
+           sequence -- so this raises the flow modal rather than arming the first step directly. That is what
+           closes 6a: "Once I clicked the 'Lay Track' button in the Private Powers panel for DH, there is no
+           way to escape/cancel that track lay." There was a cancel on the action bar (#817) and the player
+           was looking at the map; the modal's X is where they are.
+           `dh-token` STILL ARMS DIRECTLY, because it is not an entry point -- nothing renders it now, and if
+           something does, arming is what it means. */
+        if (action.key === "dh-tile" || action.key === "csl-tile") {
+          setPrivatePowerRequest(action.key);
+          return;
+        }
+        armPrivateHexErrand(ability.privateId, action.key, action.label);
         return;
       }
 
@@ -2938,7 +3169,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setUsedPrivateAbilities((prev) => new Set(prev).add(action.key));
       logInfoRef.current?.("Private Power", `${action.label} — ${ability.description}`);
     },
-    [actingProtocolId, activeMainTab],
+    /* Design note #845: `activeMainTab` and `actingProtocolId` moved INTO `armPrivateHexErrand` with the
+       four lines that read them, so this list carries the callback instead of the values. Listing both
+       would leave two stale-closure risks where there is now one. */
+    [armPrivateHexErrand],
   );
 
   /* round is an optional override; the default ref is right for every caller except a round transition, which announces a round the ref does not know yet.
@@ -4479,12 +4713,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      `abandon` IS THE GUARD THAT #817 EXISTS BECAUSE OF. A prompt that outlived its turn would be a modal
      over a board doing something else -- which is exactly 4c one layer up, and the reason it is wired to the
      same step change rather than left to be noticed. */
-  const [dhStationPrompt, setDhStationPrompt] = useState<DhStationPromptState>(null);
-
+  /* ==================================================================
+     DESIGN NOTE 849: `dhStationPrompt` IS RETIRED, AND SO IS ITS TABLE
+     ==================================================================
+     #818 held a three-state cursor -- asking / placing / null -- because the question and the placement were
+     two moments of one modal with no other memory. `activePowerFlow` derives both from the power state
+     itself: "asking" is `layDone && station === "pending"`, and "placing" is `homeStationPlacement !== null`,
+     which is a fact the board already owns.
+     THE RULES IT ENCODED ARE NOT LOST. `dhStationDeclineForfeits` distinguished "I chose not to" from "the
+     turn moved on"; the modal now has no dismissal that could be mistaken for the second, because after the
+     lay the only way out is the Forfeit button (#848). `abandon` guarded a prompt outliving its step, which
+     the effect below still does for the request.
+     DELETED RATHER THAN LEFT UNREAD, per #772: a state machine nobody consults is a second account of the
+     truth, waiting to disagree with the first. */
+  /* ==================================================================
+     DESIGN NOTE 849a: THE CLOSE GUARD HAD TO WIDEN, AND #845 GOT IT WRONG
+     ==================================================================
+     It read `orSubPhase !== "Track"`. A D&H LAY ENDS THE TRACK STEP -- `layEndsTrackStep` is `!isBonusLay`
+     and only the C&SL's lay is a bonus -- so that guard would have closed the modal at exactly the moment
+     step two became live, which is the whole feature. #818's own condition was Track OR Tokens, for this
+     reason, and that is what it is again. #817's rule is unchanged: the prompt still ends with its step. */
   useEffect(() => {
-    if (orSubPhase !== "Track" && orSubPhase !== "Tokens") {
-      setDhStationPrompt((current) => dhStationPromptNext(current, "abandon"));
-    }
+    if (orSubPhase !== "Track" && orSubPhase !== "Tokens") setPrivatePowerRequest(null);
   }, [orSubPhase]);
 
   /** Design note #818: whose token, and how many are left to spend.
@@ -4505,40 +4755,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
   }, [gameState, actingProtocolId]);
 
-  const handleAcceptDhStation = useCallback(() => {
-    const reservation = privateHexFor(DH_PRIVATE_ID);
-    if (!reservation) return;
-    setDhStationPrompt((current) => dhStationPromptNext(current, "accept"));
-    /* The SAME errand the power's own button arms (#725), so the placement, the veil and the confirmation
-       ring are one mechanism rather than a second copy for this entry point. */
-    setHomeStationPlacement({
-      kind: "private-station",
-      companyId: actingProtocolId,
-      q: reservation.q,
-      r: reservation.r,
-      hexLabel: reservation.hexLabel,
-      abilityKey: "dh-token",
-      returnTab: activeMainTab,
-    });
-    setActiveMainTab("map");
-  }, [actingProtocolId, activeMainTab]);
-
-  const handleDeclineDhStation = useCallback(() => {
-    setDhStationPrompt((current) => {
-      /* Design note #818: THE FORFEIT IS A DECISION, not a timeout. `dhStationDeclineForfeits` is what keeps
-         "I chose not to" apart from "the turn moved on" -- only the first spends the ability, and the second
-         cannot happen anyway because `dhPowerState` refuses the token on any later turn. */
-      if (dhStationDeclineForfeits(current, "decline")) {
-        setUsedPrivateAbilities((prev) => new Set(prev).add("dh-token"));
-        logInfoRef.current?.(
-          "Private Power",
-          "Delaware & Hudson — the free station on F16 was forfeited.",
-        );
-      }
-      return dhStationPromptNext(current, "decline");
-    });
-  }, []);
-
+  /* `handleAcceptDhStation` / `handleDeclineDhStation` are GONE (#849). The accept armed the same errand
+     `armPrivateHexErrand` arms and the decline spent the ability; both are the flow modal's `onAct` and
+     `onDecline` now, reaching the same two mechanisms without a second copy of either. */
   /* Design note #817: THE ERRAND ENDS WITH ITS STEP.
      REPORTED: "even once I skipped the Station Marker subphase into the Run Routes one, my cursor still
      showed the herald like a Place Station action, and indeed I was then able to place the station for free
@@ -4693,8 +4912,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (placement.abilityKey) {
         setUsedPrivateAbilities((prev) => new Set(prev).add(placement.abilityKey as string));
       }
-      // Design note #818: the tick closes the question as well as the placement.
-      setDhStationPrompt((current) => dhStationPromptNext(current, "placed"));
+      /* Design note #849: the tick closes the question as well as the placement, and now does so by
+         RECORDING the placement -- `usedPrivateAbilities` gains `dh-token` two lines up, which is what makes
+         `activePowerFlow` report the step done. One fact, read; not a second cursor, written. */
       setHomeStationPlacement(null);
       // Back where they came from -- see the state's own note on why this
       // is captured rather than hardcoded to the Stocks tab.
@@ -5329,8 +5549,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  modal where they can decline the power." Cancelling a PLACEMENT is not declining a POWER -- the X keeps
    *  meaning what it means everywhere else in this app, and the forfeit stays behind a button that says so. */
   const handleCancelTokenPlacement = useCallback(() => {
+    /* Design note #818/#849: cancelling a PLACEMENT is not declining a POWER. Clearing the errand as well
+       returns the player to the modal, where the forfeit is a button that says what it does -- so the X on
+       the confirmation ring keeps the single meaning it has everywhere else in this app. */
     setPendingToken(null);
-    setDhStationPrompt((current) => dhStationPromptNext(current, "cancel-placement"));
+    setHomeStationPlacement(null);
   }, []);
 
   // A staged placement must not outlive the mode that produced it -- the
@@ -5605,7 +5828,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      *  DESIGN NOTE 484a: NO TOKEN IS A FACT, NOT AN ABSENCE OF ONE
      * ============================================================== */
     if (!corporation) return null; // the chain has not answered at all.
-    const startHexes = corporation.station_token_hexes ?? [];
+    /* Design note #852: TOKENS, NOT HEXES. `station_token_hexes` drops the city index, and on New York that
+       is the difference between NNH's own city and the disconnected one beside it. `stationTokensOf` is the
+       same reader the network walk uses (#686), so the router and the veil agree about where a route may
+       begin. */
+    const startHexes = stationTokensOf(corporation);
     if (startHexes.length === 0) {
       /* A corporation the chain reported with an empty token list has nowhere to start: that is the answer, not ignorance. Absent from the response stays null.
          See docs/ai_architecture/state_machine.md - App.tsx #414 */
@@ -6546,11 +6773,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           new Set(prev).add(homeStationPlacement.abilityKey as string),
         );
       }
-      /* Design note #818: the D&H's lay is half a power, so landing it raises the other half as a question.
-         Only the D&H -- the C&SL's lay is the whole of its power and has nothing to follow. */
-      if (homeStationPlacement?.abilityKey === "dh-tile") {
-        setDhStationPrompt((current) => dhStationPromptNext(current, "lay-landed"));
-      }
+      /* Design note #818/#849: the D&H's lay is half a power, so landing it raises the other half as a
+         question -- and nothing has to be told. `usedPrivateAbilities` gains `dh-tile` four lines up, and
+         `activePowerFlow` reads a laid D&H with an unresolved station as an open flow. The reopening is a
+         derivation, not an event somebody has to remember to fire across a sub-phase change. */
       setHomeStationPlacement(null);
       if (homeStationPlacement) setActiveMainTab(homeStationPlacement.returnTab);
     }
@@ -7000,10 +7226,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           {/* Design note #18/item 1: the old fixed-width left sidebar
               (ActivityFeed) is removed entirely -- `canvasPane` now renders
               directly, claiming the panel's full available width. */}
-          {/* Design note #831: the Lay Track step's jump destination. The bar observes this node and scrolls
-              to it, exactly as it does its own step panel -- the map is that step's panel, it just happens to
-              be owned out here. */}
-          <main ref={canvasPaneRef} style={styles.canvasPane}>
+          {/* Design note #833: this is NOT the jump destination, and #831 made it one by mistake -- the bar
+              renders inside here. See `boardEl`, which is the board pane the bar now observes. */}
+          <main style={styles.canvasPane}>
             {/* Design note #31: THE one action bar, hoisted above the phase branch so it renders on every active tab.
                It used to live inside the non-auction branch only, which is why the auction grew its own Pass and the
                phase tab ended up with two bars. */}
@@ -7164,10 +7389,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       : null
                   }
                   onOpenPrivateTrade={() => undefined}
-                  // Design note #831: the Lay Track step's destination.
-                  mapRef={canvasPaneRef}
-                  // Design note #832: one lay, or two while the C&SL's extra is unspent.
-                  trackLays={trackLaysThisTurn}
+                  /* Design note #833: the Lay Track step's destination -- the board pane itself, and ONLY
+                     while the Rail Map tab is the one showing. `boardEl` is the Stock Market's chart on that
+                     tab (both render `boardPane`), and jumping a player to the market chart because they
+                     asked for the map is #831's mistake in a smaller size. `null` elsewhere, which is what
+                     `onShowMap` exists to resolve. */
+                  mapEl={activeMainTab === "map" ? boardEl : null}
+                  onShowMap={handleShowMap}
+                  /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
+                     disagree about whether a power is available. Empty outside Lay Track by construction --
+                     `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
+                  powerOffers={privatePowerOfferList}
+                  onUsePowerOffer={handleChipPowerOffer}
                   /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
                      returns `null` for the compulsory home station, which collapses the whole control. */
                   armedErrand={
@@ -7805,14 +8038,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          is the ANSWER, not the offer. */}
       {/* Design note #717: the conditions, asked at the moment of arming rather than buried in a settings
          panel -- this is the one control that acts while the player is not looking. */}
-      {/* Design note #818: only while the question is open. `"placing"` puts the board in front of the
-          player instead -- the modal is the question, not the placement. */}
-      {dhStationPrompt === "asking" && (
-        <DhStationPrompt
-          ticker={dhStationSupply.ticker}
+      {/* ==================================================================
+           DESIGN NOTE 848/#849: ONE MODAL, WHERE THERE WERE TWO HALVES
+          ==================================================================
+          `DhStationPrompt` (#818) and `PrivatePowerPrompt` (#845) are both retired into this. They were the
+          second step and the first step of one flow, built a report apart, which is why "only the 'Station
+          Marker' modal pops up" was the report: each was doing its own job correctly and neither knew it was
+          half of something.
+          NOT MOUNTED WHILE THE PLACEMENT IS IN FLIGHT. #818's own condition, kept: once the player has
+          accepted, the board is the thing to look at and a modal over it is asking a question already
+          answered. `armedErrand` is that state, and `powerFlowOpen` refuses a completed flow. */}
+      {powerFlowOpen(activePowerFlow) && homeStationPlacement === null && activePowerFlow && (
+        <PrivatePowerFlowModal
+          flow={activePowerFlow}
+          ticker={activeCorporationContext?.ticker ?? "This corporation"}
           tokensLeft={dhStationSupply.tokensLeft}
-          onAccept={handleAcceptDhStation}
-          onDecline={handleDeclineDhStation}
+          onAct={handlePowerFlowAct}
+          onDecline={handlePowerFlowDecline}
+          onCancel={handlePowerFlowCancel}
         />
       )}
       <AutoPassModal
@@ -7867,6 +8110,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              be the ring describing a charge that never happens -- the same
              mismatch design note #239 removed from the button. */
           cost={pendingToken.kind === "free" ? 0 : stationTokenCost}
+          /* Design note #836: and what the treasury is left with, in the same sentence the terrain lay uses.
+             THE PLACEMENT'S OWN CORPORATION PAYS, not the operating cursor -- #556's rule, and it matters
+             more here than for the ticker: quoting the acting company's balance while charging another
+             company's token would be a figure belonging to nobody in the transaction.
+             A free placement projects to `null` inside `describePendingSpend`, which is #454 arriving at the
+             same answer from the fee rather than from a second branch here. */
+          costNote={describePendingSpend(
+            pendingSpend(
+              pendingToken.kind === "free" ? 0 : stationTokenCost,
+              (() => {
+                const payer = gameState?.public_companies.find(
+                  (c) => c.company_id === (pendingToken.companyId ?? actingProtocolId),
+                );
+                /* `Number(...)` WITHOUT this file's usual `|| 0` tail. `pendingSpend` turns a non-finite
+                   balance into "unknown" and prints the price alone, which is the honest answer; `|| 0`
+                   would report a corporation as broke on a figure nobody could read. */
+                return payer === undefined ? null : Number(payer.treasury);
+              })(),
+            ),
+          )}
           /* Design note #556: the staged placement's own corporation, and
              only then the operating cursor. */
           ticker={
@@ -7929,7 +8192,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           tokenNote={radialTokenNote}
           /* Design note #673: the price, on the control that commits to it. Same
              `pendingLayCost` the card's provisional treasury reads. */
-          costNote={pendingLayCost ? describePendingTileCost(pendingLayCost) : null}
+          costNote={pendingLayCost ? describePendingSpend(pendingLayCost) : null}
           // Design note #725a: and what this lay costs beyond its price, when it costs anything.
           warningNote={dhLayWarning}
           // Design note #488b: the caption's picture -- the same migration,

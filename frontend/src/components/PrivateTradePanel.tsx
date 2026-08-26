@@ -24,6 +24,7 @@ import React, { useMemo, useState } from "react";
 
 import type { PrivateCompanyState } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
+import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 
@@ -418,36 +419,64 @@ export function ProposePrivatePurchase({
                       The offer form used to render once, at the BOTTOM of the panel, about whichever private
                       was selected -- so a player reading the D&H typed a price under the B&O. Inside the card
                       there is no question which private the field belongs to. */}
+                  {/* Design note #841: the open card is reference behind a disclosure, so it is not part of
+                      the bar's resting height. Reported as "The Buy Private Companies action bar is not
+                      sticky (at least, not in the first OR it is available--perhaps a similar bug as with
+                      Buy Trains in OR 1.1?)" -- a good guess, and a different half of the same rule: #837
+                      cut the deadlock, and this panel was simply never marked, so its 273px counted in full
+                      against a 326px budget it shares with the bar. Nothing about the first OR; it is
+                      whether any card happens to be open. */}
                   {isOpen && (
-                    <div id={detailId} style={styles.cardBody}>
+                    <div id={detailId} style={styles.cardBody} {...STICKY_OPTIONAL}>
                       {catalog && <p style={styles.cardRule}>{catalog.ability}</p>}
                       {blocked !== null ? (
                         <p style={styles.cardBlocked}>{blocked}</p>
                       ) : (
                         <>
-                          <label style={styles.priceRow}>
-                            <span style={styles.priceLabel}>Offer price</span>
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              value={priceText}
-                              min={bounds.min}
-                              max={bounds.max}
-                              step={1}
-                              onChange={(event) =>
-                                setPriceFor(entry.private_id, event.target.value)
-                              }
-                              style={styles.priceInput}
-                              aria-label={`Offer price for ${entry.name}, between ${bounds.min} and ${bounds.max}`}
-                            />
-                            {/* The face value, rehomed from the row -- and the band beside it, so the two
-                                numbers that constrain the field are read where the field is. */}
-                            <span style={styles.priceBand}>
-                              face ${entry.cost} · ${bounds.min}-${bounds.max}
-                            </span>
-                          </label>
-
-                          {priceProblem && <p style={styles.problem}>{priceProblem}</p>}
+                          {/* ==================================================================
+                               DESIGN NOTE 842: ONE ROW FOR THE OFFER AND THE OFFER'S BUTTON
+                              ==================================================================
+                              ASKED: "there's currently three rows: the special power information, the Offer
+                              Price, and the Propose Purchase button. Can we move the Propose Purchase button
+                              to the right of the Offer price?"
+                              A `<div>` WRAPPING A `<label>`, not a label wrapping both. A `<button>` inside a
+                              `<label>` makes the label's click target the button as well as the field, so
+                              pressing it would also focus the input -- the same class of invalid nesting
+                              #804 removed when it took the input out of a button. */}
+                          <div style={styles.priceRow}>
+                            <label style={styles.priceField}>
+                              {/* Design note #842: THE BAND IS THE LABEL NOW, AND THE FACE VALUE IS GONE.
+                                 REPORTED: "'face $20 $10-$40' isn't working for me. For one thing it's all in
+                                 the same green font, so green font is being used here for revenue, face
+                                 value, and offer range... The current version 'empowers' players to
+                                 calculate the range themselves, but I think many players may only care to be
+                                 empowered enough to know what their legal options are, not WHY their legal
+                                 options are."
+                                 THREE FIGURES IN ONE TYPEFACE IS THE BUG UNDER THE BUG. #804 settled that
+                                 monospace-green is this app's channel for A FIGURE BEING COMPARED, and here
+                                 it was carrying a comparison (the band), an input (the face) and a
+                                 derivation between them -- so the one channel said three things.
+                                 THE FACE VALUE IS NOT DELETED, IT IS REHOMED to the Rules Reference's own
+                                 table (#843), which is where a number a player looks up once belongs -- the
+                                 same move #800 and #835 made for rules prose. What survives on the field is
+                                 the only fact it needs: what may legally be typed into it. */}
+                              <span style={styles.priceLabel}>
+                                Offer price (${bounds.min}&#8211;${bounds.max})
+                              </span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                value={priceText}
+                                min={bounds.min}
+                                max={bounds.max}
+                                step={1}
+                                onChange={(event) =>
+                                  setPriceFor(entry.private_id, event.target.value)
+                                }
+                                style={styles.priceInput}
+                                aria-label={`Offer price for ${entry.name}, between ${bounds.min} and ${bounds.max}`}
+                              />
+                            </label>
 
                           <button
                             type="button"
@@ -480,6 +509,13 @@ export function ProposePrivatePurchase({
                             Propose Purchase to{" "}
                             {entry.owner ? labelForAddress(entry.owner) : "the owner"}
                           </button>
+                          </div>
+
+                          {/* Design note #842: the problem stays on its OWN line, below the row it is about.
+                             It is prose of variable length and it appears only when something is wrong;
+                             putting it in the row would make the row change height as a player types, moving
+                             the button they are reaching for. */}
+                          {priceProblem && <p style={styles.problem}>{priceProblem}</p>}
                         </>
                       )}
                     </div>
@@ -688,11 +724,37 @@ const styles: Record<string, React.CSSProperties> = {
      THE GROUP CARRIES THE CHROME, THE FACE CARRIES THE CLICK: border, background and selected state moved to the
      group because the row now holds two buttons and a paragraph, and a border drawn on one of the three would
      frame part of a row. */
+  /* ==================================================================
+      DESIGN NOTE 840: THE WHITE OUTLINE WAS A BORDER REACT COULD NOT PUT BACK
+     ==================================================================
+
+     REPORTED: "Once you've clicked on a Private Company and closed it, it retains a white outline around it
+     that wasn't there before and doesn't go away on subsequent clicks. So a player who clicks three PCs has
+     three outlined in white and two without outlines."
+
+     THIS ROW MIXED A SHORTHAND WITH A LONGHAND ACROSS RENDERS. The base declared `border: "1px solid
+     #3a4150"`; `rowGroupOpen` overrode `borderColor` and `rowGroupBlocked` overrode `borderStyle`. On the
+     render where the card CLOSES, React diffs the two style objects, finds `borderColor` gone, and sets
+     `style.borderColor = ""` -- and because the `border` shorthand's value did not change between renders,
+     it is not re-applied. An empty `border-color` resolves to `currentColor`, and this panel's ink is
+     `#e2e6ee`. A near-white frame, on exactly the cards that have been opened and closed, permanently.
+
+     WHICH IS WHY THREE STAY OUTLINED AND THREE DO NOT. It is not focus and it is not a leftover flag: it is
+     one DOM property per card that nothing will write again.
+
+     LONGHANDS THROUGHOUT, SO EVERY STATE NAMES EVERY PART. With `borderColor` and `borderStyle` declared in
+     the base, the closing render finds them present and writes them back. The rule for this file: a key that
+     any sibling state overrides must be declared as the longhand it overrides, never as a shorthand
+     containing it.
+     THIS IS THE CLASS #732's SWEEP LEFT UNVERIFIED -- "~38 `border`/`borderColor` pairs" noted and not
+     checked. It has now produced a real report, so the rest of that list is worth the pass. */
   rowGroup: {
     display: "flex",
     flexDirection: "column",
     borderRadius: "8px",
-    border: "1px solid #3a4150",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a4150",
     backgroundColor: "#1b2130",
     overflow: "hidden",
   },
@@ -846,14 +908,28 @@ const styles: Record<string, React.CSSProperties> = {
      reason in a `title` attribute -- a hover, on a game played on a tablet. Amber rather than red: "still
      unsold in the auction" is the state of the board, not the player's mistake. */
   cardBlocked: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.45 },
+  /* Design note #842: the field and its submit on one line. `flexWrap` survives -- on a narrow card the
+     button drops below rather than squeezing the input, which is the stacked form this replaced and is the
+     right fallback rather than a worse version of the new shape. */
   priceRow: {
     display: "flex",
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: "6px 10px",
+    justifyContent: "space-between",
+    gap: "8px 12px",
   },
-  priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
+  /* The label and its input, kept together so the pair wraps as one thing. */
+  priceField: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "8px",
+  },
+  /* Design note #842: plain panel ink, NOT the monospace green. That channel means "a figure being
+     compared" (#804), and the band is a constraint on what may be typed rather than something to weigh --
+     using it here is what made revenue, face value and the offer range look like the same kind of number. */
+  priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8", whiteSpace: "nowrap" },
   priceInput: {
     width: "130px",
     padding: "8px 10px",
@@ -864,11 +940,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
   },
-  priceBand: {
-    fontSize: FONT_SIZE.small,
-    color: "#7ee0a1",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  },
+  /* `priceBand` is GONE, not left unused (#772): it was the monospace-green "face $20 · $10-$40" span, and
+     both of its facts moved -- the band into `priceLabel`, the face value into the Rules Reference (#843). */
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
   /* Design note #804: `footer` and `secondaryButton` are GONE with the panel-level submit and the Cancel
      button beside it -- #772's rule again, since neither `tsc` nor ESLint can see an orphan key here. */

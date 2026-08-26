@@ -24,6 +24,7 @@ import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
 import { buyableNow, isTrainLocked, quantityOptionCount } from "../utils/trainLimit";
+import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
@@ -167,7 +168,19 @@ export function TrainPurchasePanel({
      326px budget it shares with a 185px bar. Folded, the section is a header and the buy row.
      A DEFAULT, NOT A LOCK, like #812's: a player may open the table while pinned, and if that tips the bar
      past the threshold #720 unpins it -- which is the right outcome for something they deliberately expanded,
-     and is a different event from the bar unpinning by surprise, which is what was reported twice. */
+     and is a different event from the bar unpinning by surprise, which is what was reported twice.
+
+     DESIGN NOTE 837: THIS LINE WAS HALF OF A DEADLOCK, and the half that was easiest to miss. `condensed` was
+     only ever true when the bar had PINNED, and the bar could only pin if this table was already folded --
+     so the table folded because the bar pinned and the bar pinned because the table folded. Reported as "in
+     OR 1.1 it's not [sticky], but in OR 2.1 it is", which is not a fact about rounds at all: it is whichever
+     side of the threshold the first measurement happened to land on.
+     THE LINE SURVIVES BECAUSE ITS TRIGGER CHANGED, not because the rule was wrong. `stickyCollapse.ts` #837
+     makes the pin test read the bar's RESTING height -- what it occupies with this table folded away -- which
+     no longer depends on whether it is folded. So `condensed` now means what it says: the bar has stuck and
+     travelled. A player ARRIVING at Buy Trains is not scrolled, so the depot is open, which is what was asked
+     for ("Shouldn't the Bank one be expanded?"); it folds as they scroll away, which is the moment a compact
+     bar is worth having. */
   useEffect(() => {
     if (condensed) setBankOpen(false);
   }, [condensed]);
@@ -344,7 +357,7 @@ export function TrainPurchasePanel({
      its answer by MOOD -- a caption volunteered permanently, a reason asked for by hovering a dead option.
      The reasoning, including why the depot's sentence left the caption, is recorded there rather than here:
      it is a rule about what the panel already draws, and it now has one statement. */
-  const { caption: ceilingCaption, reason: ceilingReason } = purchaseCeiling({
+  const { reason: ceilingReason } = purchaseCeiling({
     hasTierForSale: nextTier !== null,
     atTrainLimit,
     limitHeadroom,
@@ -489,8 +502,9 @@ export function TrainPurchasePanel({
             -- and then left its body as a bare fragment at the section's own level, where the roster's sits
             in `accordionBody` with the inset that makes it read as contained. So the two now look the same
             until you open them, which is the same complaint one layer down. */}
+        {/* Design note #837: reference behind a caret, not part of the bar's resting height. */}
         {bankOpen && (
-          <div style={styles.accordionBody}>
+          <div style={styles.accordionBody} {...STICKY_OPTIONAL}>
 
         {/* The whole depot, not only the purchasable row. A player deciding
             whether to buy the last 3-train needs to see that a 4-train costs
@@ -671,7 +685,19 @@ export function TrainPurchasePanel({
                     tense the bare number needed. */}
               </span>
 
-              {ceilingCaption && <span style={styles.ceilingNote}>{ceilingCaption}</span>}
+              {/* ==================================================================
+                   DESIGN NOTE 838: THE CEILING CAPTION IS GONE FROM THE BUY LINE
+                  ==================================================================
+                  REPORTED: "to help with horizontal compression, there's a character string on the Buy line
+                  that reads: 'Current Train Limit 2 / 4 Room for 2 more before the 4-train limit.' There's no
+                  need for the string."
+                  #247 ADDED IT WHEN THE CEILING WAS INVISIBLE -- the panel "showed the depot's 2 and enforced
+                  the limit's 1 without ever mentioning the limit". It is mentioned now, twice over and better:
+                  the `<select>` lists exactly what is buyable, and "2 / 4" sits immediately to its left.
+                  A sentence restating two adjacent numbers is what #703 removed from the line below it.
+                  `ceilingReason` SURVIVES, and that is the half that still has no other home: it is the
+                  `title` on a dead option, answering "why can I not pick 3" at the moment it is asked. */}
+
 
               <button
                 type="button"
@@ -813,7 +839,7 @@ export function TrainPurchasePanel({
                  it counts rows behind a caret, and it decrements as the game advances in a way that invites
                  reading it as trains remaining. The summary beside it already answers the question a player
                  actually has, which is what comes next and what it costs. */}
-              <span style={styles.laterTrainsTitle}>Later trains</span>
+              <span style={styles.laterTrainsTitle}>Upcoming Trains</span>
               {/* Design note #633: the collapsed summary answers the
                   commonest reference question -- what is next and what does
                   it cost -- so opening this is for the rarer ones.
@@ -828,7 +854,9 @@ export function TrainPurchasePanel({
               </span>
             </button>
             {laterTrainsOpen && (
-              <div style={styles.depotGrid}>
+              /* Design note #837: the same marker the depot table carries -- five tiers of reference a player
+                 opened deliberately, which must not be what decides whether the bar can pin at all. */
+              <div style={styles.depotGrid} {...STICKY_OPTIONAL}>
                 {laterTiers.map((tier) => (
                   <DepotRow key={tier.tier} tier={tier} isNext={false} />
                 ))}
@@ -859,8 +887,9 @@ export function TrainPurchasePanel({
           </span>
         </button>
 
+        {/* Design note #837: reference behind a caret, not part of the bar's resting height. */}
         {corporateOpen && (
-          <div style={styles.accordionBody}>
+          <div style={styles.accordionBody} {...STICKY_OPTIONAL}>
             {tradeBlockedReason && <p style={styles.problem}>{tradeBlockedReason}</p>}
             {!canAct && (
               <p style={styles.note}>
@@ -1288,10 +1317,34 @@ const styles: Record<string, React.CSSProperties> = {
      ties it to the bar overhead, which is the same channel #236 used to make the bar itself findable.
      WHETHER IT NOW GRABS is a playtest question and nothing here can answer it. If it still does not, the
      parchment version is a bigger change and remains available -- and this note is the argument to overrule. */
+  /* ==================================================================
+      DESIGN NOTE 838: TWO SOURCES, SIDE BY SIDE
+     ==================================================================
+
+     ASKED: "it appears you've shrunk the horizontal width of the Buy Trains subpanel, and I'm now wondering
+     if it would make sense to have the two options (Buy from Bank, Buy from Corps) side-by-side in a
+     two-column layout. That might be 'too much' but it also might help players realize there are two sources
+     to buy trains from."
+
+     TWO REASONS AND THE SECOND IS THE BETTER ONE. Stacked accordions make the roster something a player has
+     to go looking for, and #293 makes buying compulsory -- so the moment the bank cannot help is exactly the
+     moment the second source has to be findable. #765 reported the same shape as "not enough. Buying a train
+     from another corporation is the other way out", and the answer then was a sentence.
+     AND IT HALVES THE PANEL, which is what lets the depot table stay open inside a pinned bar (#837).
+
+     `auto-fit` PLUS `minmax`, NOT A BREAKPOINT. The fallback to a single column happens when the columns
+     would be narrower than 320px, measured by the browser against the panel's actual width -- so it is right
+     inside the sticky bar, inside the wider standalone panel, and at any window size, without this file
+     holding an opinion about viewport widths it cannot see. A `matchMedia` here would be a third place with a
+     guess about layout, and #813 settled that argument: measure, do not assume.
+
+     `alignItems: start` because the two columns are independent. Stretching them to a shared height would
+     draw a roster of two corporations as tall as a full depot table and imply a relationship. */
   root: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "14px",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    alignItems: "start",
+    gap: "14px 18px",
     padding: "14px 18px",
     backgroundColor: "#1e2331",
     border: "1px solid #454c5c",
@@ -1306,7 +1359,10 @@ const styles: Record<string, React.CSSProperties> = {
      the bar would be the second box #508 removed, wearing a highlight. The livery edge is spread before this,
      so `borderLeft` is cleared here too and the condensed form keeps its single top rule. */
   rootCondensed: {
-    gap: "8px",
+    /* Design note #838: the columns survive the condense. It is the same two sources either way, and a bar
+       that reflowed them into a stack on the scroll that pins it would move the roster under the player's
+       cursor -- `auto-fit` already stacks them when the width genuinely cannot hold two. */
+    gap: "8px 14px",
     padding: "8px 10px",
     backgroundColor: "transparent",
     border: "none",

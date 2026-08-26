@@ -162,6 +162,15 @@ export function TrainPurchasePanel({
   useEffect(() => {
     setBankOpen(!corporateOpen);
   }, [corporateOpen]);
+  /* Design note #828: AND PINNED MEANS COLLAPSED, which is what lets this panel live inside the sticky bar.
+     #720 unpins a bar past half the viewport, and the probe (#813) measured the open panel at 242px against a
+     326px budget it shares with a 185px bar. Folded, the section is a header and the buy row.
+     A DEFAULT, NOT A LOCK, like #812's: a player may open the table while pinned, and if that tips the bar
+     past the threshold #720 unpins it -- which is the right outcome for something they deliberately expanded,
+     and is a different event from the bar unpinning by surprise, which is what was reported twice. */
+  useEffect(() => {
+    if (condensed) setBankOpen(false);
+  }, [condensed]);
   /* Design note #633: CLOSED by default. The five tiers behind it are
      reference, and a reference list that opens itself is the vertical space
      this pass exists to give back. */
@@ -471,8 +480,17 @@ export function TrainPurchasePanel({
           {buyer && <span style={styles.sectionMeta}>{buyer.ticker} treasury ${treasury}</span>}
         </button>
 
+        {/* Design note #827: THE BODY BELONGS TO THE HEADER THAT OPENS IT.
+            REPORTED: "the 'Buy Trains from the Bank' expands/collapses a section that isn't actually inside
+            the Buy Trains from the Bank subpanel, which kind of makes it appear like those contents are
+            disconnected."
+            MY OWN #812, HALF-DONE. That pass gave the bank the roster's HEADER -- "two sections that behave
+            differently while looking the same is the kind of difference a player learns by being surprised"
+            -- and then left its body as a bare fragment at the section's own level, where the roster's sits
+            in `accordionBody` with the inset that makes it read as contained. So the two now look the same
+            until you open them, which is the same complaint one layer down. */}
         {bankOpen && (
-          <>
+          <div style={styles.accordionBody}>
 
         {/* The whole depot, not only the purchasable row. A player deciding
             whether to buy the last 3-train needs to see that a 4-train costs
@@ -502,7 +520,20 @@ export function TrainPurchasePanel({
             />
           ))}
         </div>
+          </div>
+        )}
 
+        {/* ==================================================================
+             DESIGN NOTE 828: THE CARET HIDES THE REFERENCE, NEVER THE ACTION
+            ==================================================================
+
+            The buy row sits OUTSIDE the disclosure now. #812 folded the whole bank section away when the
+            roster opened, action included, which was right for the problem it was solving and wrong as a
+            general shape: the depot table is reference (#633: "five of the six are reference") and the buy
+            row is the step. A caret that can hide the only control on a step is a caret that can leave a
+            player looking at a step with nothing on it.
+            AND IT IS WHAT MAKES THE PANEL FIT IN THE STICKY BAR. Measured at 242px with the table open,
+            against a 326px budget shared with a 185px bar; the row alone is a fraction of that. */}
         {nextTier ? (
           <>
             <div style={styles.buyRow}>
@@ -765,7 +796,7 @@ export function TrainPurchasePanel({
            between the one purchasable tier and the control that buys it. The two halves of a single decision
            had a filing cabinet between them, and opening the accordion pushed the buy row off the bottom of a
            condensed panel entirely. */}
-        {laterTiers.length > 0 && (
+        {bankOpen && laterTiers.length > 0 && (
           <>
             <button
               type="button"
@@ -803,8 +834,6 @@ export function TrainPurchasePanel({
                 ))}
               </div>
             )}
-          </>
-        )}
           </>
         )}
       </section>

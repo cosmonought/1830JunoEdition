@@ -79,6 +79,24 @@ export interface PrivateCatalogEntry {
      WHY THE CATALOG AND NOT THE STATE: `PrivateCompanyState.name` carries the full name and the contract will
      never send an abbreviation, so this is frontend presentation data about a fixed set of six. Keyed by
      `private_id` so it cannot drift from `revenue` and `ability` beside it. */
+  /** ==================================================================
+   *   DESIGN NOTE 829: THE MAP HAD ALREADY DROPPED THE AMPERSANDS
+   *  ==================================================================
+   *
+   *  REQUESTED: "the abbreviations here are not the abbreviations we used on the map. I'm not sure the
+   *  ampersand is necessary for any of these, and C&StL is a lot easier for me at least to read as CSL. Can we
+   *  drop the ampersands here in this panel and in the Game Ledger abbreviations?"
+   *
+   *  AND THE MAP DECIDED THIS ALREADY, with a note: `hexCanvasPrimitives.ts` types its reservation label as
+   *  "the private's initials, e.g. `CSL`. No ampersand -- design note #364", and `privateReservations.ts` has
+   *  carried `CSL` and `DH` ever since. This table kept `C&StL` and `D&H`, so one private wore two names
+   *  depending on which surface a player was looking at -- the same object, two vocabularies, which is the
+   *  failure this codebase keeps finding in other guises.
+   *
+   *  ONE HAPPY SIDE EFFECT worth naming, because #660 spent a whole pass on it: the B&O PRIVATE is now `BO`
+   *  and the B&O CORPORATION keeps its `B&O` ticker. Those two being hard to tell apart is exactly what
+   *  produced "B&O (corp) has purchased a train and [the private] is still appearing in this modal", and the
+   *  two names now differ by a character rather than by context. */
   acronym: string;
 }
 
@@ -135,7 +153,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     ability: "No special power \u2014 bought for its revenue and as cheap entry into the auction.",
   },
   2: {
-    acronym: "C&StL",
+    acronym: "CSL",
     revenue: 10,
     abilityBullets: [
       "Free extra tile lay on B-20, connected to nothing.",
@@ -145,7 +163,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
       "Its owning corporation may tile hex B-20 even where nothing connects to it \u2014 no station of its own, no track at all. The lay is a bonus rather than a substitute: the corporation still gets its ordinary tile placement that turn, so it may lay two.",
   },
   3: {
-    acronym: "D&H",
+    acronym: "DH",
     revenue: 15,
     abilityBullets: [
       "Tile F-16 and drop a free station there, connected to nothing.",
@@ -155,7 +173,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
       "Its owning corporation may tile hex F-16 and drop a station there in one go, connected to nothing. The token is free; the mountain still charges its usual $120 for the tile. Unlike the C&StL this uses up the corporation\u2019s tile placement for the turn. Decline the token then and it can only be placed later under the ordinary connection rules. The power lapses entirely once any other corporation tiles F-16 first.",
   },
   4: {
-    acronym: "M&H",
+    acronym: "MH",
     revenue: 20,
     abilityBullets: [
       "Owner may trade it in for a 10% NYC share from the IPO or the Bank Pool.",
@@ -165,7 +183,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
       "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the IPO or the Bank Pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
   },
   5: {
-    acronym: "C&A",
+    acronym: "CA",
     revenue: 25,
     abilityBullets: [
       "Its auction buyer was handed a 10% PRR share on purchase.",
@@ -175,7 +193,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
       "Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
   },
   6: {
-    acronym: "B&O",
+    acronym: "BO",
     revenue: 30,
     // Design note #660: both halves are enforced now, so the summary can
     // state them as facts about the board rather than as flavour.

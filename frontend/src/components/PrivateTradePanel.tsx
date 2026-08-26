@@ -339,45 +339,61 @@ export function ProposePrivatePurchase({
                            cannot be wrong about the title because it never states it. */}
                         {catalog && <span style={styles.rowAcronym}>({catalog.acronym})</span>}
                       </span>
-                      {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which player
-                         currently owns them". For an unsold private it is also the explanation for why the row is
-                         inert, so the two facts are one line rather than two.
-                         Design note #721: ON THE NAME'S LINE. It had a column cell of its own, right-aligned
-                         opposite the face value, which cost a grid row to say three words. */}
-                      <span style={styles.rowOwner}>
-                        {entry.owner ? (
-                          <>
-                            {"held by "}
-                            {/* Design note #779: THE HOLDER IN THEIR OWN COLOUR. Six privates against six
-                               seats is exactly the lookup a colour solves -- and the colour is already how
-                               this table identifies a person everywhere else (the seat trail, the cash
-                               strip, the turn pulse). Weight as well as hue: #732's rule, that colour alone
-                               is not a distinction a colour-blind player can read. */}
-                            <span
-                              style={{
-                                ...styles.rowOwnerName,
-                                ...(colorForAddress?.(entry.owner)
-                                  ? { color: colorForAddress(entry.owner) as string }
-                                  : {}),
-                              }}
-                            >
-                              {labelForAddress(entry.owner)}
-                            </span>
-                          </>
-                        ) : blocked !== null ? (
-                          "not for sale"
-                        ) : (
-                          "unsold in the auction"
-                        )}
-                      </span>
-                      {/* Design note #804: THE POWER JOINS THE TITLE'S LINE, which is the arrangement asked
-                          for twice: "moving the special power to the same line as the name+owner". It is a
-                          `<span>` in the same wrapping flex row rather than a block beneath one, so a short
-                          summary sits beside the holder and a long one wraps -- with no dead space either
-                          way, because a wrapped flex line is exactly as tall as its content.
-                          IT IS NO LONGER A CONTROL. #721 made the sentence the disclosure button; the face
-                          is the disclosure now, so the sentence goes back to being a sentence. */}
-                      {catalog && <span style={styles.rowPower}>{abilitySummary(catalog)}</span>}
+                    </span>
+                    {/* Design note #804 put the power in the same wrapping flex as the title, which was the
+                       arrangement asked for then: "moving the special power to the same line as the name".
+                       Design note #830: A LINE, BUT ALSO A COLUMN. Requested: "the powers ... are probably
+                       the most important part ... I'm wondering if the special powers summary shouldn't also
+                       be in a column that makes it quick to see where the information starts and ends."
+                       In one flex row the power began wherever the title happened to end, so six rows had six
+                       different left edges for the fact a player is actually comparing. A grid column gives
+                       it one, and gives it the slack -- it is the only cell that should absorb a wide panel.
+                       IT IS NOT A CONTROL. #721 made the sentence the disclosure button; the face is the
+                       disclosure now, so the sentence goes back to being a sentence. */}
+                    <span style={styles.rowPower}>
+                      {catalog ? abilitySummary(catalog) : ""}
+                    </span>
+                    {/* Design note #386: WHO HOLDS IT, named -- the requirement's "clearly marking which
+                     player currently owns them". For an unsold private it is also the explanation for why
+                     the row is inert.
+                     Design note #830: IN ITS OWN COLUMN, flush right beside the income. Requested exactly
+                     that -- "moved flush right before the round income, in a column that would keep the
+                     ownership quickly checkable" -- and it is what lets "held by" go: a column labels its
+                     contents by position, where the phrase had to label them six times over. */}
+                    <span style={styles.rowOwner}>
+                      {entry.owner ? (
+                        <>
+                          {/* Design note #830: "held by " BECAME "Owner:", not nothing.
+                             First asked as a deletion -- "'held by Player' seems like it could be reduced
+                             to just 'Player' and moved flush right before the round income, in a column" --
+                             and corrected a moment later: "the Player name by itself may not be intuitively
+                             obvious until someone clicks to make an offer on a company."
+                             THE CORRECTION IS THE INTERESTING PART. A column labels by position only once a
+                             reader has learned what the column IS, and this panel has no header row to teach
+                             them. So the label stays and gets shorter: "Owner:" is a noun naming the fact,
+                             where "held by" was a clause that needed the name to finish it. */}
+                          {"Owner: "}
+                          {/* Design note #779: THE HOLDER IN THEIR OWN COLOUR. Six privates against six
+                             seats is exactly the lookup a colour solves -- and the colour is already how
+                             this table identifies a person everywhere else (the seat trail, the cash
+                             strip, the turn pulse). Weight as well as hue: #732's rule, that colour alone
+                             is not a distinction a colour-blind player can read. */}
+                          <span
+                            style={{
+                              ...styles.rowOwnerName,
+                              ...(colorForAddress?.(entry.owner)
+                                ? { color: colorForAddress(entry.owner) as string }
+                                : {}),
+                            }}
+                          >
+                            {labelForAddress(entry.owner)}
+                          </span>
+                        </>
+                      ) : blocked !== null ? (
+                        "not for sale"
+                      ) : (
+                        "unsold in the auction"
+                      )}
                     </span>
                     {/* Design note #804: ONE FIGURE, ON ONE LINE, AND THAT IS THE FIX FOR THE GAP.
                        REPORTED as two separate things: "let's remove the 'Face $20' tags since they can be
@@ -694,7 +710,24 @@ const styles: Record<string, React.CSSProperties> = {
   },
   row: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) auto",
+    /* ==================================================================
+       DESIGN NOTE 830: FOUR COLUMNS, BECAUSE SIX ROWS ARE READ DOWNWARD
+       ==================================================================
+
+       REQUESTED: "the single line looks good for this, but the elements need a little more separation or
+       definition to be quickly scannable ... I'm wondering if the special powers summary shouldn't also be in
+       a column that makes it quick to see where the information starts and ends."
+
+       #804 PUT EVERYTHING IN ONE WRAPPING FLEX, which answered the question then asked ("move the special
+       power to the same line as the name") and answers this one badly: in a flex row the power begins wherever
+       the title happens to end, so six privates gave the fact a player is comparing six different left edges.
+       A player reading this panel is reading DOWN one column at a time -- #618 made exactly this argument
+       about the depot table, "columns put every cost under every other cost", and this row is the same
+       comparison in a different currency.
+
+       TITLE | POWER | OWNER | FIGURES. The power takes the `1fr` because it is the one cell that should
+       absorb a wide panel; everything else is as wide as its content and no wider. */
+    gridTemplateColumns: "auto minmax(0, 1fr) auto auto",
     /* Design note #804: `alignItems` is BASELINE, not `start`, and that is deliberate rather than cosmetic.
        With `start`, the taller column dictated the row's height and the shorter one sat at the top of it --
        which is how a two-line figures column put a blank line under the name. Baseline aligns the two
@@ -718,13 +751,12 @@ const styles: Record<string, React.CSSProperties> = {
      was `disabled`; the face is clickable for every private now -- that is how a player reads the reason it
      is blocked -- so a "you cannot click this" cursor on it would be a false statement. #772's rule: an
      orphan key in a `Record<string, CSSProperties>` is invisible to both `tsc` and ESLint. */
+  /* Design note #830: the TITLE cell now, nothing else. The owner and the power have columns of their own,
+     so this no longer wraps three facts against each other -- it holds one, and `minWidth: 0` is what lets a
+     long company name shorten the power's column rather than overflow the row. */
   rowName: {
     display: "flex",
-    flexWrap: "wrap",
     alignItems: "baseline",
-    /* The row gap is what a wrapped power summary falls into, so it is small: 3px reads as a continuation of
-       the same block rather than as a new one. */
-    gap: "3px 8px",
     minWidth: 0,
   },
   /* Design note #804: the title owns the size and weight, so the acronym inside it can inherit both. */
@@ -769,19 +801,29 @@ const styles: Record<string, React.CSSProperties> = {
   rowCaret: { fontSize: FONT_SIZE.micro, color: "#8f98a8" },
   /* Design note #721: inline beside the name, so it no longer costs a grid row. `micro` because it is the
      one fact on the line that is not being compared across rows. */
+  /* Design note #830: its own column, flush right beside the figures. `micro` because it is the one fact on
+     the row nobody compares ACROSS rows -- you look up one private's owner, you do not rank them. */
   rowOwner: {
     fontSize: FONT_SIZE.micro,
     color: "#8f98a8",
     whiteSpace: "nowrap",
+    textAlign: "right",
   },
   /* The name only -- "held by" stays grey so the colour marks the PERSON rather than the phrase. */
   rowOwnerName: { fontWeight: 700 },
-  /* Design note #804: on the title's line now, so it takes the secondary text colour this file already uses
-     for prose rather than the near-white #721 gave it when it was a control. A summary that sits beside the
-     title at the title's contrast competes with it. */
+  /* Design note #804 dimmed this to `#aab0bc`, reasoning that "a summary that sits beside the title at the
+     title's contrast competes with it".
+     Design note #830 REVERSES THAT, on report: "the powers are in a gray font that kind of repels reading on
+     the already-dark background, but they are probably the most important part. Since they are already set
+     off from the title by the size of the font, what if we kept that all in white?"
+     RIGHT, AND MY ARGUMENT HAD THE HIERARCHY UPSIDE DOWN. I dimmed the most important text on the row to
+     protect the title -- but nobody scans this panel for the names, they scan it for what the powers DO. The
+     title is a label on the thing; the summary is the thing. And the second sentence of the report is the
+     answer to my objection: the size difference already separates them, so contrast was carrying a
+     distinction that did not need carrying twice. */
   rowPower: {
     fontSize: FONT_SIZE.small,
-    color: "#aab0bc",
+    color: "#e2e6ee",
     lineHeight: 1.4,
     textAlign: "left",
     minWidth: 0,

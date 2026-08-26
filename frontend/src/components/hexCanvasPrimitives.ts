@@ -1682,6 +1682,30 @@ export function drawStationTokenMarker(
   /** The DOCKING radius for a token placed into a laid tile's slot. Optional rather than required, so no caller with nothing to measure is forced to invent a figure.
    *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #151 */
   radiusOverride?: number,
+  /** ==================================================================
+   *   DESIGN NOTE 826: A RING MEANS A SLOT, AND THIS BADGE IS NOT IN ONE
+   *  ==================================================================
+   *
+   *  REPORTED: "the home station reservation marker has a yellow border which kind of looks like the glowing
+   *  border of legal station placements for other corporations (even though the ERIE hex is not illuminated
+   *  for them). Since that ERIE home station reservation marker isn't actually on a city/station, I wonder if
+   *  we could remove the border from it? That's how it is on my physical 1830 board: 'ERIE' is just printed
+   *  on that hex away from the two cities/stations."
+   *
+   *  BOTH HALVES ARE RIGHT AND THE SECOND IS THE RULE. The confusion is real -- #48 draws this ring in the
+   *  corporation's own livery, and ERIE's is `#f5cd3a`, which is yellow, against a placement glow that is
+   *  also yellow. But the reason it should go is not the collision: it is that a RING is this app's shape for
+   *  "a token is in this slot, or could be". #43 already established that ERIE's reservation badge sits in
+   *  neutral hex-margin space precisely BECAUSE it is not committed to a circle -- "anchoring the
+   *  still-undecided reserved badge onto one specific circle would misleadingly imply that slot is already
+   *  committed" -- and then drew a slot's ring around it anyway.
+   *
+   *  SO THIS IS SCOPED TO THE MARGIN BADGE, not to reservations in general. On Baltimore or Boston the
+   *  reservation badge sits ON the city, marking the circle the token will occupy, and there the ring says
+   *  something true. Turning it off everywhere would trade one wrong shape for another.
+   *
+   *  Defaults to `true`, so the two callers that draw a real token are untouched. */
+  ringed = true,
 ): void {
   const radius = radiusOverride ?? size * 0.22;
 
@@ -1700,11 +1724,21 @@ export function drawStationTokenMarker(
 
   // The unfloated ring is the corporation's own brand colour at a fixed 1.75px, deliberately NOT size-scaled: a constant thin ring reads clean at every zoom where a scaled one balloons.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #48
-  ctx.strokeStyle = muted ? color : STATION_TOKEN_RING;
-  /* Scaled off the TOKEN's radius, not the hex's size -- one absolute width for three different radii made a docked token wear a collar half again as heavy. The floor drops 2 -> 1 and has to: a 2px floor is the same bug in miniature.
-     See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #487 */
-  ctx.lineWidth = muted ? 1.75 : Math.max(1, radius * STATION_TOKEN_RING_WIDTH_RATIO);
-  ctx.stroke();
+  /* Design note #826: `ringed` is false only for a badge standing in the hex's margin rather than in a city
+     -- see the parameter. The fill and the ticker still identify the corporation; what is dropped is the one
+     mark that would claim a slot. */
+  if (ringed) {
+    ctx.strokeStyle = muted ? color : STATION_TOKEN_RING;
+    /* Scaled off the TOKEN's radius, not the hex's size -- one absolute width for three different radii made a docked token wear a collar half again as heavy. The floor drops 2 -> 1 and has to: a 2px floor is the same bug in miniature.
+       See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #487 */
+    ctx.lineWidth = muted ? 1.75 : Math.max(1, radius * STATION_TOKEN_RING_WIDTH_RATIO);
+    ctx.stroke();
+  } else {
+    /* `fitTokenFontSize` below measures against the ring's width to keep the ticker clear of it. With no ring
+       there is nothing to clear, and leaving a stale `lineWidth` from an earlier draw would shrink the text
+       for a collar that is not there. */
+    ctx.lineWidth = 0;
+  }
 
   if (!ticker) {
     ctx.restore();

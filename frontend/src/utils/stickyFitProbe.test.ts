@@ -48,10 +48,11 @@ const PRIVATE = strip(PRIVATE_RAW);
 const TUTORIAL = strip(read("components/TutorialModal.tsx"));
 
 describe("the probe measures the question that was asked", () => {
-  it("adds the panel to the bar rather than reporting the bar alone", () => {
-    /* THE POINT. The bar's height today is not the question -- it is what the bar WOULD be with the step
-       panel inside it, which is the arrangement being considered. */
-    expect(BAR).toContain("const combined = barHeight + panelHeight;");
+  it("measures the bar as it would be with the panel in it", () => {
+    /* THE POINT, and #828a corrected how it is reached. While the two were siblings the answer was
+       `bar + panel`; nested, the bar's own rect already contains the panel and adding them again is the
+       double count that would have reported 65% for a 38% arrangement. Both arms asserted below. */
+    expect(BAR).toContain("const combined = nested ? barHeight : barHeight + panelHeight;");
     expect(BAR).toContain("panelRef.current?.getBoundingClientRect().height ?? 0");
   });
 
@@ -68,14 +69,36 @@ describe("the probe measures the question that was asked", () => {
     expect(BAR).toContain("if (panelHeight === 0) {");
   });
 
-  it("renders outside both measured elements", () => {
-    /* A readout INSIDE the bar adds its own height to the reading. Asserted by position: the probe's markup
-       must come after the sticky element closes and before the step panel opens. */
+  it("renders outside the element it measures", () => {
+    /* A readout INSIDE the bar adds its own height to the reading.
+       DESIGN NOTE 828a REVERSED HALF OF THIS ASSERTION. It used to require the probe to sit between the bar's
+       closing tag and the step panel, which was the arrangement #813 measured -- panel as a sibling. #828 put
+       the panel inside the bar, so "before the panel" would now mean "inside the bar", which is the one place
+       the probe must not be. What survives is the property: it comes after the sticky element closes. */
     const stickyStart = BAR.lastIndexOf("ref={actionBarRef}");
     const probe = BAR.indexOf("{stickyFitProbe && (");
     const panel = BAR.indexOf("<div ref={stepPanelRef}");
     expect(probe).toBeGreaterThan(stickyStart);
-    expect(probe).toBeLessThan(panel);
+    expect(probe).toBeGreaterThan(panel);
+  });
+
+  it("stops adding the panel once the bar contains it", () => {
+    /* THE FAILURE THIS FILE'S OWN HEADER WARNS ABOUT: "a lying instrument is worse than none -- it would
+       settle the question in the wrong direction and look authoritative doing it." #813's arithmetic was
+       `bar + panel` because the two were siblings; nested, that double-counts, reports about 65% where the
+       truth is 38%, and says WOULD UNPIN with total confidence.
+       ASKED OF THE DOM, so the probe cannot fall out of step with a later move. */
+    expect(BAR).toContain("const nested = panelRef.current !== null && bar.contains(panelRef.current);");
+    expect(BAR).toContain("const combined = nested ? barHeight : barHeight + panelHeight;");
+  });
+
+  it("says which arrangement it measured", () => {
+    /* A number with no shape attached is how the last one got believed in the wrong context.
+       `${...}` in a plain string trips `no-template-curly-in-string`, and rightly -- sixth time this session
+       that searched-for source text has needed assembling rather than quoting. */
+    const dollar = String.fromCharCode(36);
+    expect(BAR).toContain("(panel " + dollar + "{panelHeight} inside)");
+    expect(BAR).toContain("+ panel " + dollar + "{panelHeight}");
   });
 
   it("re-measures when the panel grows, not only when the window does", () => {

@@ -113,9 +113,30 @@ describe("Buy Private gets the same treatment", () => {
 
 describe("a jump is not an action", () => {
   it("scrolls rather than dispatching", () => {
-    /* #263'S OBJECTION, ANSWERED. Both buttons call the same scroller and neither is wired to a handler that
-       buys anything -- so there is one control for the outcome and one signpost to it. */
+    /* #263'S OBJECTION, ANSWERED. Every jump calls a scroller and none is wired to a handler that buys or
+       lays anything -- so there is one control per outcome and one signpost to it.
+       #831 ADDED A THIRD, to the map. It is the same kind of control and the same greying rule, which is what
+       answers the doubt raised with the request: "sometimes a grayed out button means an action can't be
+       taken, but here it means 'Resolve this action elsewhere'." It does not -- it means pressing it would
+       do nothing, because the destination is already on screen. */
     expect(CODE.match(/onClick: scrollToStepPanel/g)?.length).toBe(2);
+    expect(CODE).toContain("onClick: scrollToMap,");
+  });
+
+  it("gives the Lay Track step the jump it lacked", () => {
+    /* REPORTED: "it's the one panel that doesn't have a clear action button when it's one of the more
+       consequential actions of the whole game." The map IS that step's panel; it was simply owned elsewhere. */
+    expect(CODE).toContain('key: "go-to-map"');
+    expect(CODE).toContain('label: "Lay Track"');
+    expect(CODE).toContain("disabled: mapInView,");
+  });
+
+  it("shortens the sentence the button replaces", () => {
+    /* #279 kept "Select a hex on the map to lay or upgrade track" because "it says where the action IS, which
+       the player cannot otherwise know". The button says that now, so what survives is the half a button
+       cannot carry. */
+    expect(CODE).not.toContain("Select a hex on the map to lay or upgrade track");
+    expect(CODE).toContain("Click a laid preview to rotate it.");
   });
 
   it("names the destination rather than the purchase", () => {
@@ -166,11 +187,13 @@ describe("a jump is not an action", () => {
   it("carries the clearance on the destination rather than the call", () => {
     /* Stated once, where the element is. `scroll-margin-top` is honoured by every scroll into this element,
        including ones no call site here knows about -- a browser restoring a scroll position, a future
-       `:target` link -- so a caller cannot forget the bar exists. */
+       `:target` link -- so a caller cannot forget the bar exists.
+       DESIGN NOTE 831 MOVED IT OFF THE JSX. With a second destination owned by a different component, an
+       inline style would have made the map's owner responsible for this bar's height. The hook writes it to
+       whatever target it is handed, which is #810's own argument applied to two targets instead of one. */
     const dollar = String.fromCharCode(36);
-    expect(CODE).toContain(
-      "<div ref={stepPanelRef} style={{ scrollMarginTop: `" + dollar + "{barClearance}px` }}>",
-    );
+    expect(CODE).toContain("node.style.scrollMarginTop = `" + dollar + "{clearance}px`;");
+    expect(CODE).toContain("<div ref={stepPanelRef}>");
   });
 
   it("measures the clearance rather than assuming one", () => {
@@ -193,10 +216,10 @@ describe("a jump is not an action", () => {
        strip behind the bar, so the button disables itself at exactly the moment the panel is invisible --
        the reported confusion, with the one control that would fix it turned off. */
     const dollar = String.fromCharCode(36);
-    expect(CODE).toContain(
-      "rootMargin: `-" + dollar + "{barClearance}px 0px 0px 0px`",
-    );
-    expect(CODE).toContain("}, [barClearance]);");
+    /* #831 lifted this into `useJumpTarget`, so the margin is spelled from the hook's parameter rather than
+       from the bar's state -- one observer definition serving the step panel and the map. */
+    expect(CODE).toContain("rootMargin: `-" + dollar + "{clearance}px 0px 0px 0px`");
+    expect(CODE).toContain("}, [target, clearance]);");
   });
 });
 

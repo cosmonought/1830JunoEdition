@@ -144,9 +144,15 @@ describe("the holder is marked by colour and by weight", () => {
     expect(CODE).toContain(": {}),");
   });
 
-  it("colours the name and not the phrase", () => {
-    // "held by" stays grey so the colour marks the PERSON.
-    expect(CODE).toContain('{"held by "}');
+  it("colours the name and not the label", () => {
+    /* "held by" stays grey so the colour marks the PERSON.
+       DESIGN NOTE 830 SHORTENED THE LABEL AND KEPT IT. First asked as a deletion -- "'held by Player' seems
+       like it could be reduced to just 'Player'" -- then corrected: "the Player name by itself may not be
+       intuitively obvious until someone clicks to make an offer." A column labels by position only once a
+       reader has learned the column, and this panel has no header row to teach them. So: "Owner:", a noun
+       naming the fact, where "held by" was a clause needing the name to finish it. */
+    expect(CODE).toContain('{"Owner: "}');
+    expect(CODE).not.toContain('{"held by "}');
     expect(CODE).toContain("styles.rowOwnerName");
   });
 
@@ -215,8 +221,12 @@ describe("the special power sits on the title's line", () => {
   it("wraps rather than truncating", () => {
     /* A long summary (the D&H's) must fall to a second line intact. Truncation would trade the reported
        spacing problem for a hidden-information problem, which is the worse of the two. */
-    const nameStyle = CODE.slice(CODE.indexOf("rowName: {"), CODE.indexOf("rowTitle: {"));
-    expect(nameStyle).toContain('flexWrap: "wrap"');
+    /* DESIGN NOTE 830 MOVED THE WRAP OFF `rowName`. #804 held the title, the owner and the power in one
+       wrapping flex, so wrapping was that container's job. They are grid columns now -- the power has its own
+       and takes the `1fr`, which is what lets a long summary wrap without pushing anything else around. The
+       property asserted is unchanged: a long power falls to a second line rather than being cut. */
+    const row = CODE.slice(CODE.indexOf("  row: {"), CODE.indexOf("rowName: {"));
+    expect(row).toContain('gridTemplateColumns: "auto minmax(0, 1fr) auto auto"');
     const power = CODE.slice(CODE.indexOf("rowPower: {"), CODE.indexOf("cardBody: {"));
     expect(power).not.toContain("textOverflow");
     expect(power).not.toContain("WebkitLineClamp");

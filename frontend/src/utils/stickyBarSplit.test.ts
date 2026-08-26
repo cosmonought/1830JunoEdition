@@ -33,6 +33,17 @@ import { canPinWithoutTrapping, STICKY_MAX_VIEWPORT_SHARE } from "./stickyCollap
 // where the empty export was the only thing making them one. Putting one here anyway is what tripped
 // `import/first`.)
 
+const read = (relative: string) => {
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
+};
+const strip = (raw: string) =>
+  raw
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
 const BAR = (() => {
   const fs = require("fs") as typeof import("fs");
   const path = require("path") as typeof import("path");
@@ -56,41 +67,76 @@ const CODE = BAR.replace(/\/\*[\s\S]*?\*\//g, "")
  *
  *  The lifted panels' own condition is the far boundary -- the first thing rendered after the bar closes. */
 const STICKY_START = CODE.lastIndexOf("ref={actionBarRef}");
-/* #803 renamed the step test to `orStep`, which is the point of that note: outside an Operating Round the
-   derived value is `null`, so a lifted panel cannot accidentally ask an unqualified question. The anchor
-   follows the code. */
-const LIFTED_START = CODE.indexOf('{mayActThisTurn && orStep === "BuyPrivate"');
-const sticky = CODE.slice(STICKY_START, LIFTED_START);
-const outside = CODE.slice(LIFTED_START);
+/* ==================================================================
+    DESIGN NOTE 828: THE FAR BOUNDARY MOVED INSIDE THE REGION IT BOUNDED
+   ==================================================================
 
-describe("the tall panels are outside the measured element", () => {
-  it("puts Buy Trains after the bar closes", () => {
-    /* THE REPORT, as structure. `PrivatePowerPanel` is the marker for "past the closing tag" -- it has always
-       rendered there and was never reported as failing to travel. */
-    expect(CODE.lastIndexOf("<TrainPurchasePanel")).toBeGreaterThan(
-      CODE.lastIndexOf("</div>\n      ) : ("),
-    );
-    expect(outside).toContain("<TrainPurchasePanel");
-  });
+   This used to end at the Buy Private condition, on the reasoning that it was "the first thing rendered after
+   the bar closes". #828 moved the panels INTO the bar, so that condition is now in the middle of the region
+   -- and `slice` happily returned the shorter span, over which "neither panel is inside the sticky element"
+   was true because neither panel was in the TEXT.
 
-  it("puts Buy Private there too", () => {
-    expect(CODE.lastIndexOf("<ProposePrivatePurchase")).toBeLessThan(
-      CODE.lastIndexOf("<PrivatePowerPanel"),
-    );
-  });
+   A GREEN TEST OVER THE WRONG TEXT is the failure this file already records once, in the note above: the
+   first draft sliced from `indexOf` and swallowed the whole component. That one failed loudly. This one did
+   not, which is worse, and is why the anchor is now something that CANNOT move inside: the fit probe renders
+   after the bar closes and its own harness asserts so. */
+const STICKY_END = CODE.indexOf("{stickyFitProbe && (");
+const sticky = CODE.slice(STICKY_START, STICKY_END);
+/* `outside` is GONE with the arrangement it described. Every assertion that used it was about a panel lifted
+   past the bar's closing tag, and #828 put both of them back inside -- so the region it named is now the
+   probe and the private-powers panel, neither of which this file is about. Deleted rather than left unused:
+   ESLint found it, which is the only reason it is not still here as a slice nobody reads. */
+
+describe("the panels are back inside the bar, on a measurement (design note #828)", () => {
+  /* ==================================================================
+      THIS BLOCK ASSERTED THE OPPOSITE, AND WENT ON PASSING WHEN IT STOPPED BEING TRUE
+     ==================================================================
+
+     #785 lifted the panels OUT of the sticky element and this file pinned that: "leaves neither inside the
+     sticky element ... if either creeps back in, the bar starts unpinning itself again."
+
+     #828 PUT THEM BACK, on the number #813's probe finally produced -- 427px against a 326px budget, with
+     101px to find -- and found the 101px in the panel rather than the bar: the depot table folds behind its
+     caret when the bar is pinned (#828), leaving a header and the buy row.
+
+     AND THE OLD ASSERTIONS DID NOT NOTICE. `LIFTED_START` anchored on the Buy Private condition, so once that
+     condition moved inside the bar the `sticky` slice ended before it and "not inside the sticky element"
+     passed over text that no longer contained it. A slice whose boundary moves INTO the region it was
+     bounding measures nothing and says so in green. The guard below is the same one this file already had
+     for a different boundary -- and it did not cover this case, because it only checked the two anchors were
+     ordered, not that the region between them still meant anything.
+
+     WHAT THE FILE IS FOR IS UNCHANGED: the bar must not exceed the budget. What changed is that the budget is
+     now met by folding rather than by relocating -- so the assertions move from WHERE the panels are to
+     WHETHER the pinned form is small. */
 
   it("has a sticky region to talk about at all", () => {
-    /* The guard on the slice above. If either boundary moves or disappears, `slice` quietly returns something
-       and every assertion below passes over the wrong text -- which is exactly what the first draft did. */
+    /* The guard on the slice, kept and strengthened. Ordering alone was not enough -- both anchors stayed in
+       order while one of them wandered inside -- so the region is also required to contain the thing every
+       assertion below is about. */
     expect(STICKY_START).toBeGreaterThan(-1);
-    expect(LIFTED_START).toBeGreaterThan(STICKY_START);
+    expect(STICKY_END).toBeGreaterThan(STICKY_START);
+    expect(sticky).toContain("<div ref={stepPanelRef}");
   });
 
-  it("leaves neither inside the sticky element", () => {
-    /* THE ASSERTION THAT MATTERS. If either creeps back in, the bar starts unpinning itself again and the
-       symptom returns looking like a fresh CSS bug -- which is how it read the first two times. */
-    expect(sticky).not.toContain("<TrainPurchasePanel");
-    expect(sticky).not.toContain("<ProposePrivatePurchase");
+  it("puts both panels inside it", () => {
+    expect(sticky).toContain("<TrainPurchasePanel");
+    expect(sticky).toContain("<ProposePrivatePurchase");
+  });
+
+  it("folds the depot table when the bar is pinned", () => {
+    /* THE 101 PIXELS. Reference folds, the action does not -- see `TrainPurchasePanel` #828. Without this the
+       panel is 242px and the bar unpins, which is the bug #785 was fixing by relocation. */
+    const depot = strip(read("components/TrainPurchasePanel.tsx"));
+    expect(depot).toContain("if (condensed) setBankOpen(false);");
+  });
+
+  it("never folds the buy row", () => {
+    /* A caret that can hide the only control on a step can leave a player looking at a step with nothing on
+       it. The row sits outside the disclosure. */
+    const depot = strip(read("components/TrainPurchasePanel.tsx"));
+    const body = depot.slice(depot.indexOf("{bankOpen && ("), depot.indexOf("{nextTier ? ("));
+    expect(body).not.toContain("styles.buyRow");
   });
 
   it("keeps the panels rendering at all", () => {
@@ -100,8 +146,10 @@ describe("the tall panels are outside the measured element", () => {
   });
 
   it("still condenses the depot with the bar", () => {
-    // Read together, so a condensed bar beside an uncondensed panel would look like a fault.
-    expect(outside).toContain("condensed={condensed}");
+    /* Read together, so a condensed bar beside an uncondensed panel would look like a fault -- and #828 makes
+       this load-bearing rather than cosmetic: `condensed` is what folds the depot table, which is what keeps
+       the bar under #720's budget. */
+    expect(sticky).toContain("condensed={condensed}");
   });
 });
 

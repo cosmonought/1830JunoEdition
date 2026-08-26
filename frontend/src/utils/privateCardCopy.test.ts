@@ -141,14 +141,21 @@ describe("the one-liner is derived, not a third copy", () => {
 });
 
 describe("the catalog's other guarantees still hold", () => {
-  it("keeps an acronym for all six", () => {
+  it("keeps an acronym for all six, without ampersands (design note #829)", () => {
+    /* REQUESTED: "the abbreviations here are not the abbreviations we used on the map ... C&StL is a lot
+       easier for me at least to read as CSL."
+       AND THE MAP HAD ALREADY DECIDED IT. `hexCanvasPrimitives.ts` types its reservation label as "the
+       private's initials, e.g. `CSL`. No ampersand -- design note #364", and `privateReservations.ts` has
+       carried `CSL` and `DH` since. This table kept `C&StL`, so one private wore two names depending on which
+       surface a player was looking at. The list below used to assert the ampersanded set, which is how a
+       harness pins a divergence in place. */
     expect(ENTRIES.map(([id]) => privateAcronym(Number(id)))).toEqual([
       "SV",
-      "C&StL",
-      "D&H",
-      "M&H",
-      "C&A",
-      "B&O",
+      "CSL",
+      "DH",
+      "MH",
+      "CA",
+      "BO",
     ]);
   });
 

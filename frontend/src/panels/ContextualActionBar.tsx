@@ -117,6 +117,11 @@ interface ActionBarButton {
  *  A number rather than a style key because `appStyles.ts` cannot see the `size` prop this is passed to. */
 const CORPORATION_HERALD_PX = 24;
 
+/** Design note #831: a stand-in for a caller with no map on screen. A ref that never resolves makes the hook
+ *  a no-op and the button greyed -- the same answer an absent step panel gets, reached the same way, rather
+ *  than a second branch inside the hook for "no target". */
+const EMPTY_JUMP_REF: React.RefObject<HTMLElement | null> = { current: null };
+
 
 
 
@@ -369,14 +374,29 @@ function useStickyFitProbe(
       }
       const viewport = window.innerHeight;
       const stickyTop = stickyTopOffset(window.getComputedStyle(bar).top);
-      const combined = barHeight + panelHeight;
+      /* ==================================================================
+         DESIGN NOTE 828a: THE PROBE HAD TO STOP ADDING WHAT IT NOW CONTAINS
+         ==================================================================
+
+         #813 measured `bar + panel` because the panel was a SIBLING and the question was what the bar would
+         become if it swallowed it. #828 moved the panel inside, so `getBoundingClientRect` on the bar already
+         includes it -- and the same arithmetic would have reported roughly double, said WOULD UNPIN, and been
+         believed. An instrument that lies is worse than none, which is the sentence its own harness opens
+         with; this is that sentence being tested.
+
+         ASKED OF THE DOM RATHER THAN OF A FLAG. `contains` is true exactly when the panel is nested, so the
+         probe cannot fall out of step with a later move the way a hand-set boolean would. It is also what
+         makes the readout self-describing: it says which arrangement it measured. */
+      const nested = panelRef.current !== null && bar.contains(panelRef.current);
+      const combined = nested ? barHeight : barHeight + panelHeight;
       const share = viewport > 0 ? Math.round((combined / viewport) * 100) : 0;
       const verdict = canPinWithoutTrapping(combined, viewport, stickyTop)
         ? "would stay pinned"
         : "WOULD UNPIN";
-      const next =
-        `fit probe · bar ${barHeight} + panel ${panelHeight} = ${combined}px · ` +
-        `${share}% of ${viewport}px · ${verdict}`;
+      const shape = nested
+        ? `bar ${barHeight} (panel ${panelHeight} inside)`
+        : `bar ${barHeight} + panel ${panelHeight}`;
+      const next = `fit probe · ${shape} = ${combined}px · ${share}% of ${viewport}px · ${verdict}`;
       setReading((was) => (was === next ? was : next));
     };
 
@@ -432,6 +452,7 @@ export default function ContextualActionBar({
   orSequence = null,
   trainPurchase = null,
   armedErrand = null,
+  mapRef,
   privatePurchase,
   onOpenPrivateTrade,
   ownsAnyTrain,
@@ -611,6 +632,10 @@ export default function ContextualActionBar({
    *  disobeying the interface is not a rule they have. So the bar names it.
    *  `null` for a compulsory home-station errand, which has no exit by design. */
   armedErrand?: { label: string; onCancel: () => void } | null;
+  /** Design note #831: the Rail Map, so the Lay Track step can offer the same jump the purchase steps do.
+   *  Owned by the shell, because the bar has no canvas -- and optional, because a caller without one gets a
+   *  greyed button rather than a broken one. */
+  mapRef?: React.RefObject<HTMLElement | null>;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
    *  shape and for the same reason as `trainPurchase` below. `null` renders no panel. */
   privatePurchase?: {
@@ -786,48 +811,73 @@ export default function ContextualActionBar({
    * test environment, or in a browser without the API, the button stays live. Offering a scroll that turns
    * out to be unnecessary costs a player nothing; withholding one they needed strands them, and stranding
    * them at the Buy Trains step is exactly what was reported one note ago. */
-  const [stepPanelInView, setStepPanelInView] = React.useState(false);
-  React.useEffect(() => {
-    const node = stepPanelRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") return undefined;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        /* HEIGHT AS WELL AS INTERSECTION. The wrapper renders on every step and holds a panel on two of
-           them, so on the other steps it is a zero-height div sitting wherever the layout puts it -- which
-           an observer will happily report as intersecting. `isIntersecting` alone would grey a button that
-           has a real panel to reach. */
-        setStepPanelInView(entry.isIntersecting && entry.boundingClientRect.height > 0);
-      },
-      /* A quarter of the panel is enough to count as "you can see it". Requiring all of it would keep the
-         button live for a depot table taller than the viewport, which is precisely when scrolling to the
-         TOP of it is still useful.
-         Design note #810: AND THE STRIP BEHIND THE BAR DOES NOT COUNT AS SEEN. `rootMargin` shrinks the
-         observer's top edge by exactly the height the pinned bar covers, so a panel tucked underneath it
-         reads as out of view and the jump button stays live. Without this the button greys itself the moment
-         the panel is hidden -- the reported confusion, with the one control that would fix it disabled. */
-      { threshold: 0.25, rootMargin: `-${barClearance}px 0px 0px 0px` },
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-    // The margin is baked into the observer at construction, so a changed clearance needs a new one. It is
-    // rounded and set only on change (see the hook), so this re-subscribes on a condense or a resize, not
-    // on every frame of a scroll.
-  }, [barClearance]);
+  /* ==================================================================
+     DESIGN NOTE 831: ONE JUMP MECHANISM, TWO DESTINATIONS
+     ==================================================================
 
-  const scrollToStepPanel = React.useCallback(() => {
-    /* Design note #810: `block: "start"`, AND THE CLEARANCE IS ON THE ELEMENT.
-       REPORTED: "the auto-scroll 'works,' but the Action Bar covers the actual Buy Trains subpanel ... Can
-       you have it scroll all the way to the top of the subpanel, below the Action Bar?"
-       #792 CHOSE `nearest` TO DODGE THIS AND DODGED IT IN THE OTHER DIRECTION. Its note says `"start"`
-       "would tuck the panel's heading behind" the bar -- true of a bare `scrollIntoView`, and `nearest` then
-       stops as soon as any of the panel is on screen, which is usually with its heading behind the bar
-       anyway. Both alignments were wrong because neither knew the bar's height.
-       `scroll-margin-top` IS THE FEATURE FOR EXACTLY THIS. It is honoured by `scrollIntoView` for every
-       alignment, so the panel's own box carries the clearance and "start" now means "start, below the bar".
-       With the margin in place `nearest` would work too -- `start` is chosen because the request is for the
-       TOP of the subpanel, which is the one alignment that says so. */
-    stepPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
+     ASKED, of the Lay Track step: "'Lay Track' button should autoscroll players into the map and gray out
+     while they're on it?"
+
+     AND THAT DISSOLVES THE OBJECTION RAISED ALONGSIDE IT -- "sometimes a grayed out button means an action
+     can't be taken, but here it means 'Resolve this action elsewhere'." It does not have to mean that. This
+     button greys for the reason #797 already established and the only reason `disabled` means anywhere else
+     in this app: pressing it would do nothing, because the thing it scrolls to is already on screen. One
+     channel, one meaning (#732).
+
+     SO THE MECHANISM IS LIFTED RATHER THAN COPIED. #792/#797/#810 built observe-and-scroll for the step
+     panel; the map wants the same three parts and a different target, and a second copy is how the two would
+     come to disagree about the clearance -- which is exactly what #810 had to fix once already.
+
+     THE CLEARANCE IS APPLIED TO THE TARGET, not at the call site. #810 put `scroll-margin-top` on the step
+     panel's own element and argued for it there: "stated once, where the element is, rather than at each call
+     site that has to remember the bar exists." A second target owned by a different component makes that
+     argument stronger, not weaker -- so the hook writes it, and neither caller has to know. */
+  function useJumpTarget(
+    target: React.RefObject<HTMLElement | null>,
+    clearance: number,
+  ): [boolean, () => void] {
+    const [inView, setInView] = React.useState(false);
+
+    React.useEffect(() => {
+      const node = target.current;
+      if (!node) return undefined;
+      // Design note #810/#831: the destination carries the bar's height, whoever owns the element.
+      node.style.scrollMarginTop = `${clearance}px`;
+      if (typeof IntersectionObserver === "undefined") return undefined;
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          /* HEIGHT AS WELL AS INTERSECTION. The step wrapper renders on every step and holds a panel on two
+             of them, so elsewhere it is a zero-height div sitting wherever the layout puts it -- which an
+             observer will happily report as intersecting. `isIntersecting` alone would grey a button that has
+             a real destination. */
+          setInView(entry.isIntersecting && entry.boundingClientRect.height > 0);
+        },
+        /* A quarter is enough to count as "you can see it". Requiring all of it would keep the button live
+           for a target taller than the viewport, which is precisely when scrolling to the TOP of it is still
+           useful.
+           Design note #810: and the strip behind the bar does not count as seen. */
+        { threshold: 0.25, rootMargin: `-${clearance}px 0px 0px 0px` },
+      );
+      observer.observe(node);
+      return () => observer.disconnect();
+      // The margin is baked into the observer at construction, so a changed clearance needs a new one. It is
+      // rounded and set only on change (see the hook above), so this re-subscribes on a condense or a resize.
+    }, [target, clearance]);
+
+    const scrollTo = React.useCallback(() => {
+      /* Design note #810: `block: "start"` with the clearance on the element -- see that note for why both
+         `start` and `nearest` were wrong before the height was known. */
+      target.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, [target]);
+
+    return [inView, scrollTo];
+  }
+
+  const [stepPanelInView, scrollToStepPanel] = useJumpTarget(stepPanelRef, barClearance);
+  /* Design note #831: the map is the Lay Track step's panel. It is owned by the shell rather than by this
+     bar, so it arrives as a ref -- `null` for any caller that has no map on screen, which greys the button
+     the same way an absent panel does. */
+  const [mapInView, scrollToMap] = useJumpTarget(mapRef ?? EMPTY_JUMP_REF, barClearance);
 
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
@@ -937,7 +987,33 @@ export default function ContextualActionBar({
   if (roundType === "OperatingRound") {
     switch (orSubPhase) {
       case "Track":
+        /* ==================================================================
+           DESIGN NOTE 831: THE STEP WITH NO BUTTON WAS THE MOST CONSEQUENTIAL ONE
+           ==================================================================
+
+           REPORTED: "I now find it weird that it's the one panel that doesn't have a clear action button when
+           it's one of the more consequential actions of the whole game. Maybe we should look at it in the
+           reverse of how we're thinking of the Buy Trains button, i.e., 'Lay Track' button should autoscroll
+           players into the map and gray out while they're on it?"
+
+           THE REVERSAL IS THE FIX. Every other step's panel is in the bar, so its jump button is greyed
+           almost always; Lay Track's panel is the MAP, which is the one destination a player really can be
+           scrolled away from. Same control, same rule, and the step that needed it most was the one without.
+
+           IT DISPATCHES NOTHING, which is what keeps #263 satisfied and answers the doubt raised with the
+           request: a greyed control here means "pressing this would do nothing", exactly as it does on the
+           other two, because the map is already in front of you. It never means "you may not lay track" --
+           that refusal lives on the hex, where #716 put it. */
         contextualButtons = [
+          {
+            key: "go-to-map",
+            label: "Lay Track",
+            onClick: scrollToMap,
+            disabled: mapInView,
+            title: mapInView
+              ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
+              : "Scrolls to the Rail Map, where the track is laid.",
+          },
         ];
         break;
       case "BuyPrivate":
@@ -1852,10 +1928,16 @@ export default function ContextualActionBar({
                  opposite kind of string: it says where the action IS, which the player cannot otherwise know. */}
               {/* Design note #413: and it is only true for the player who may actually click that hex. Told to a
                  non-acting player it is an instruction they cannot follow, on a map that will refuse them. */}
-              {mayActThisTurn && contextualButtons.length === 0 && orSubPhase === "Track" && (
-                <span style={styles.orPanelNoActions}>
-                  Select a hex on the map to lay or upgrade track. Click the preview to rotate.
-                </span>
+              {/* Design note #831: TRIMMED, BECAUSE THE BUTTON NOW SAYS THE FIRST HALF.
+                 #279 kept this sentence on the grounds that "it says where the action IS, which the player
+                 cannot otherwise know" -- true then, and the Lay Track button says it now, in a control
+                 rather than a paragraph. What a button cannot say is what to do once you are there, so that
+                 is what survives.
+                 THE CONDITION LOSES `contextualButtons.length === 0`, which was how this rendered at all: the
+                 Track case had no buttons, and now it has one. Kept on `mayActThisTurn` for #413's reason --
+                 told to a watcher it is an instruction they cannot follow. */}
+              {mayActThisTurn && orSubPhase === "Track" && (
+                <span style={styles.orPanelNoActions}>Click a laid preview to rotate it.</span>
               )}
               {/* Design note #510: the "Buy Trains" jump button is GONE. #491 added it because the purchase panels sat
                  far below a pinned bar; #508 moved those panels INTO the bar, so they travel with it -- and a button
@@ -2588,6 +2670,78 @@ export default function ContextualActionBar({
         </div>
       </div>
       )}
+      {/* ==================================================================
+           DESIGN NOTE 828: BACK INSIDE THE BAR, ON A MEASUREMENT THIS TIME
+          ==================================================================
+
+          #508 put these panels in the bar by reasoning. #785 took them out by reasoning. Both were right
+          about the mechanism and neither had the number, which is why #813 built a probe instead of a
+          third argument. It reported, on the device this is played on:
+
+              fit probe . bar 185 + panel 242 = 427px . 65% of 652px . WOULD UNPIN
+
+          427 AGAINST A 326px BUDGET -- half of a 652px viewport, #720's threshold. So the answer to "can
+          the panel be sticky" was no, and the answer to "can it be MADE sticky" was 101 pixels.
+
+          #828 FINDS THEM IN THE PANEL RATHER THAN THE BAR. The depot table is reference (#633: "five of
+          the six are reference") and folds behind its caret when the bar is pinned; the buy row, which is
+          the step, never folds. The pinned panel is a header and a row.
+
+          AND #720 REMAINS THE SAFETY NET, which is what makes this reversible rather than a bet. If a
+          player opens the depot table or the corporate roster while pinned and the bar exceeds the
+          budget, it unpins -- the same behaviour that was reported twice as a bug. The difference is that
+          it now follows an expansion the player asked for, rather than arriving with the step. The probe
+          stays until a playtest says the pinned default reads "would stay pinned". */}
+      {/* Design note #810: the clearance rides on the DESTINATION, not on the scroll call. `scroll-margin-top`
+          is honoured by `scrollIntoView`, by `:target`, by a browser's own restore-scroll and by anything
+          else that ever scrolls to this element -- so the bar's height is stated once, where the element is,
+          rather than at each call site that has to remember the bar exists.
+          Design note #831: WRITTEN BY `useJumpTarget` NOW, not inline. #810's argument gets stronger with a
+          second destination that a different component owns: if the clearance were an inline style, the map's
+          owner would have to know about this bar's height. The hook applies it to whatever target it is
+          given, so neither caller has to. */}
+      <div ref={stepPanelRef}>
+      {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
+          button are the largest block in this bar, and on three of four screens they were furniture. */}
+      {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
+          be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
+          Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
+          present -- so the two purchase steps of a turn have one shape. */}
+      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (
+        <ProposePrivatePurchase
+          embedded
+          open
+          buyerTicker={privatePurchase.buyerTicker}
+          privates={privatePurchase.privates}
+          treasury={privatePurchase.treasury}
+          labelForAddress={privatePurchase.labelForAddress}
+          // Design note #779: the holder's seat colour, from the shell that has the roster.
+          colorForAddress={privatePurchase.colorForAddress}
+          onPropose={privatePurchase.onPropose}
+          onClose={() => undefined}
+        />
+      )}
+      {mayActThisTurn && orStep === "Hardware" && trainPurchase && (
+        <TrainPurchasePanel
+          depot={trainPurchase.depot}
+          buyer={trainPurchase.buyer}
+          companies={trainPurchase.companies}
+          sessionReady={sessionReady}
+          canAct={trainPurchase.canAct}
+          blockedReason={trainPurchase.blockedReason}
+          onBuyFromBank={trainPurchase.onBuyFromBank}
+          onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
+          emergencyAvailable={trainPurchase.emergencyAvailable}
+          onProposeTrade={trainPurchase.onProposeTrade}
+          labelForAddress={trainPurchase.labelForAddress}
+          /* Design note #785: still `condensed` when the BAR is condensed. The panel is no longer inside the
+             sticky element, but the two are read together and a bar that has shed its prose beside a panel
+             that has not would look like a rendering fault rather than a density choice. */
+          condensed={condensed}
+        />
+      )}
+      </div>
+
     </div>
 
     {/* Contextual trays -- design note #31. Panels, not bar content: a train marketplace, a private-company
@@ -2656,51 +2810,6 @@ export default function ContextualActionBar({
           {stickyFitProbe}
         </div>
       )}
-      {/* Design note #810: the clearance rides on the DESTINATION, not on the scroll call. `scroll-margin-top`
-          is honoured by `scrollIntoView`, by `:target`, by a browser's own restore-scroll and by anything
-          else that ever scrolls to this element -- so the bar's height is stated once, where the element is,
-          rather than at each call site that has to remember the bar exists. */}
-      <div ref={stepPanelRef} style={{ scrollMarginTop: `${barClearance}px` }}>
-      {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
-          button are the largest block in this bar, and on three of four screens they were furniture. */}
-      {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe
-          be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
-          Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
-          present -- so the two purchase steps of a turn have one shape. */}
-      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (
-        <ProposePrivatePurchase
-          embedded
-          open
-          buyerTicker={privatePurchase.buyerTicker}
-          privates={privatePurchase.privates}
-          treasury={privatePurchase.treasury}
-          labelForAddress={privatePurchase.labelForAddress}
-          // Design note #779: the holder's seat colour, from the shell that has the roster.
-          colorForAddress={privatePurchase.colorForAddress}
-          onPropose={privatePurchase.onPropose}
-          onClose={() => undefined}
-        />
-      )}
-      {mayActThisTurn && orStep === "Hardware" && trainPurchase && (
-        <TrainPurchasePanel
-          depot={trainPurchase.depot}
-          buyer={trainPurchase.buyer}
-          companies={trainPurchase.companies}
-          sessionReady={sessionReady}
-          canAct={trainPurchase.canAct}
-          blockedReason={trainPurchase.blockedReason}
-          onBuyFromBank={trainPurchase.onBuyFromBank}
-          onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
-          emergencyAvailable={trainPurchase.emergencyAvailable}
-          onProposeTrade={trainPurchase.onProposeTrade}
-          labelForAddress={trainPurchase.labelForAddress}
-          /* Design note #785: still `condensed` when the BAR is condensed. The panel is no longer inside the
-             sticky element, but the two are read together and a bar that has shed its prose beside a panel
-             that has not would look like a rendering fault rather than a density choice. */
-          condensed={condensed}
-        />
-      )}
-      </div>
 
       {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
           ownership and on the round they may be used in. Renders nothing

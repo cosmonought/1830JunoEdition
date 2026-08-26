@@ -969,10 +969,15 @@ export function HexGridRenderer({
            THE TWO OO BRANCHES ARE UNTOUCHED. #43 anchors those in neutral hex-margin space ON PURPOSE, because
            the President still gets to choose either slot and committing the badge to one would lie about it. */
         const homeLaidTile = mapGrid.tiles.find((tile) => tile.q === home.q && tile.r === home.r);
+        /* Design note #826: THE BADGE THAT STANDS IN THE MARGIN. #43 put the OO hexes' reservations in
+           neutral hex-margin space because the President has not chosen a circle yet; every other home hex
+           marks the city its token will occupy. That difference is what decides whether a RING belongs --
+           see `drawStationTokenMarker`'s `ringed`. */
+        const inMargin = YELLOW_OO_HEXES.has(home.label);
         const point =
           home.label === "E11"
             ? { x: homeCenter.x + erieVertex2.x * hexSize * 0.46, y: homeCenter.y + erieVertex2.y * hexSize * 0.46 }
-            : YELLOW_OO_HEXES.has(home.label)
+            : inMargin
               ? { x: homeCenter.x, y: homeCenter.y + hexSize * 0.46 }
               : stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile);
         // Design note #55: Strict Hex Boundary Clipping, extended to
@@ -988,6 +993,9 @@ export function HexGridRenderer({
             company?.ticker || stationTickerLabel(home.companyId),
             stationTickerColor(home.companyId),
             true,
+            undefined,
+            // Design note #826: no ring on a badge that is not in a city.
+            !inMargin,
           );
         });
       }

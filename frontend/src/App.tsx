@@ -1533,6 +1533,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // Tile-selection state. previewTile is lifted here so it can be threaded into <HexGridRenderer>.
   // See docs/ai_architecture/canvas_rendering.md - App.tsx #7
   const [hexClickQuery, setHexClickQuery] = useState<HexClickQueryState | null>(null);
+  /** Design note #831: the Rail Map pane, handed to the action bar as the Lay Track step's jump target. */
+  const canvasPaneRef = useRef<HTMLElement | null>(null);
+
   const [previewTile, setPreviewTile] = useState<
     {
       q: number;
@@ -6963,7 +6966,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           {/* Design note #18/item 1: the old fixed-width left sidebar
               (ActivityFeed) is removed entirely -- `canvasPane` now renders
               directly, claiming the panel's full available width. */}
-          <main style={styles.canvasPane}>
+          {/* Design note #831: the Lay Track step's jump destination. The bar observes this node and scrolls
+              to it, exactly as it does its own step panel -- the map is that step's panel, it just happens to
+              be owned out here. */}
+          <main ref={canvasPaneRef} style={styles.canvasPane}>
             {/* Design note #31: THE one action bar, hoisted above the phase branch so it renders on every active tab.
                It used to live inside the non-auction branch only, which is why the auction grew its own Pass and the
                phase tab ended up with two bars. */}
@@ -7124,6 +7130,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       : null
                   }
                   onOpenPrivateTrade={() => undefined}
+                  // Design note #831: the Lay Track step's destination.
+                  mapRef={canvasPaneRef}
                   /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
                      returns `null` for the compulsory home station, which collapses the whole control. */
                   armedErrand={

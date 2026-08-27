@@ -22,8 +22,10 @@
 
 import {
   STICKY_MAX_VIEWPORT_SHARE,
+  STICKY_RELEASE_VIEWPORT_SHARE,
   canPinWithoutTrapping,
   shouldCondenseSticky,
+  shouldReleasePin,
 } from "./stickyCollapse";
 
 /** A 900px laptop viewport with the bar pinned to the very top. */
@@ -112,8 +114,12 @@ describe("the bar wires both flags to the same measurement", () => {
     const bar = read("panels/ContextualActionBar.tsx");
     /* Design note #837: the PIN TEST reads the resting height and the clearance reads the rect, and both come
        off the one `getBoundingClientRect()` this test guards -- `restingHeight` takes its own total from the
-       node it is handed, which is why the count below is still one here. */
-    expect(bar).toContain("canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)");
+       node it is handed, which is why the count below is still one here.
+       Design note #863 CHANGED THE CALL THIS NAMED. It used to read
+         expect(bar).toContain('canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)');
+       and the property it was defending is unchanged: the pin test reads `restingHeight(node)`, not the rect.
+       Only the function asking has changed, so the needle follows it. */
+    expect(bar).toContain("wasPinned ? rect.height : restingHeight(node)");
     expect(bar).toContain("const distanceToPin = rect.top - stickyTop;");
     /* ==================================================================
         SCOPED TO THE HOOK, AND IT WAS NOT (design note #837a)
@@ -152,5 +158,111 @@ describe("the bar wires both flags to the same measurement", () => {
     expect(body).toContain('position: "static"');
     expect(body).not.toContain("maxHeight");
     expect(body).not.toContain("overflow");
+  });
+});
+
+// ==================================================================
+//  DESIGN NOTE 863 (harness): THE BAND BETWEEN THE TWO THRESHOLDS
+// ==================================================================
+//
+// REPORTED TWICE, IDENTICALLY. 4d: "when I closed that Upcoming trans section, the Action Bar stayed pinned
+// instead of becoming sticky again." 5d: "Like 4d before, closing the PC leaves the Action Bar pinned and
+// doesn't return it to being sticky."
+//
+// THE ARITHMETIC IS THE PROOF, so it is asserted rather than described. A bar whose resting height sits
+// between the two thresholds -- above 50% of the usable viewport, below 80% -- was sticky (nothing under 80%
+// ever released it) and, once released by a fold the player opened, could not come back (nothing above 50%
+// ever readmitted it). The first test below pins that band down as a real, non-empty set of heights; the
+// second shows the old rule refusing and the new rule allowing on the SAME number.
+describe("a bar released by a fold comes back when the fold closes", () => {
+  /* The file's own 900px laptop, pinned at the top, so every figure below is a share of the same 900.
+     The bar's own height with everything foldable CLOSED -- 60% of the viewport. Above the comfort
+     threshold, below the trapping one: the band both reports landed in. */
+  const RESTING = 540;
+  /* The same bar with a five-private list or the train roster open. */
+  const EXPANDED = 800;
+
+  it("puts a real range of heights between the two thresholds", () => {
+    /* THE BAND IS NOT EMPTY, which is what makes this a bug rather than a corner. If the constants ever move
+       so that the comfort threshold meets or passes the trapping one, this whole class of fault disappears
+       and so should the test -- so it asserts the relationship rather than the numbers. */
+    expect(STICKY_MAX_VIEWPORT_SHARE).toBeLessThan(STICKY_RELEASE_VIEWPORT_SHARE);
+    expect(RESTING).toBeGreaterThan(VIEWPORT * STICKY_MAX_VIEWPORT_SHARE);
+    expect(RESTING).toBeLessThan(VIEWPORT * STICKY_RELEASE_VIEWPORT_SHARE);
+  });
+
+  it("released the bar for the right reason", () => {
+    // The expansion is genuinely trapping, so #758's release is correct and stays.
+    expect(shouldReleasePin(EXPANDED, VIEWPORT, TOP)).toBe(true);
+    // And the resting form never was.
+    expect(shouldReleasePin(RESTING, VIEWPORT, TOP)).toBe(false);
+  });
+
+  it("would have refused to take it back under the old comfort test", () => {
+    /* THE BUG, PRESERVED AS ARITHMETIC. This is what the return edge used to ask, and on a bar that had been
+       happily sticky at this exact height one second earlier it answers no -- permanently, because closing
+       the fold does not change the resting height it is judging. */
+    expect(canPinWithoutTrapping(RESTING, VIEWPORT, TOP)).toBe(false);
+  });
+
+  it("takes it back on the trapping test the release used", () => {
+    // The new return edge: same height, same viewport, and the answer a player expects.
+    expect(shouldReleasePin(RESTING, VIEWPORT, TOP)).toBe(false);
+  });
+
+  it("still refuses a bar that is oversized at rest", () => {
+    /* THE OTHER SIDE, so "come back" is not "always come back". A bar past the trapping threshold with
+       everything closed has nothing to fold away and must stay put -- #720's outcome, reached by the rule
+       that actually runs. */
+    const OVERSIZED = 760; // 84% of 900
+    expect(OVERSIZED).toBeGreaterThan(VIEWPORT * STICKY_RELEASE_VIEWPORT_SHARE);
+    expect(shouldReleasePin(OVERSIZED, VIEWPORT, TOP)).toBe(true);
+  });
+});
+
+describe("the bar asks the two questions of the two heights", () => {
+  const read = (rel: string) => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  };
+  const BAR = read("panels/ContextualActionBar.tsx");
+  const CODE = BAR.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("keeps #851's split of resting from actual", () => {
+    /* THE HYSTERESIS IS THE HEIGHT SOURCE. A pinned bar is judged on the pixels on screen, an unpinned one on
+       its resting form -- which is what lets a deliberately opened fold release the pin and closing it undo
+       that. Collapsing these to one height in either direction is the regression. */
+    expect(CODE).toContain("wasPinned ? rect.height : restingHeight(node)");
+  });
+
+  it("asks one threshold on both edges", () => {
+    /* #863: the comfort test is no longer a decision anywhere in the hook. Asserted as an ABSENCE from the
+       hook rather than from the file, because the fit probe still consults it as an instrument and that is
+       deliberate -- see the next test. */
+    const start = CODE.indexOf("function useCondensedWhenPinned(");
+    expect(start).toBeGreaterThan(-1);
+    const end = CODE.indexOf("function useStickyFitProbe(", start);
+    expect(end).toBeGreaterThan(start);
+    const hook = CODE.slice(start, end);
+    expect(hook).not.toContain("canPinWithoutTrapping");
+    expect(hook).toContain("shouldReleasePin(");
+  });
+
+  it("leaves the comfort rule available to the instrument", () => {
+    /* NOT DELETED, AND THE DISTINCTION MATTERS. #720's constant still describes something true -- half the
+       viewport is where a companion becomes a passenger -- and the fit probe reports that verdict so a
+       playtest can see it. What #863 withdrew is its power to decide, not its opinion. */
+    expect(CODE).toContain("canPinWithoutTrapping(resting, viewport, stickyTop)");
+  });
+
+  it("still carries the player when it releases (design note #861)", () => {
+    /* ASKED AGAIN FOR THIS PANEL: "I think 4e's solution is necessary here as well: if the Action Bar is
+       going to abruptly pin, it needs to carry the player with it through an auto-scroll."
+       IT ALREADY DOES, AND THIS IS WHY -- the scroll lives in `measure`, which is one function serving every
+       step. There is no per-panel path for it to miss. Asserted here rather than assumed, because "the
+       general mechanism covers this case" is a claim, and an untested claim about a shared code path is how
+       #862's list fell out of date. */
+    expect(CODE).toContain("if (wasPinned && !pinnable) node.scrollIntoView(");
   });
 });

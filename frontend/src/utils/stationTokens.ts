@@ -552,3 +552,81 @@ export function cityNodePoints(
   }
   return out;
 }
+
+/* ==================================================================
+    DESIGN NOTE 866: THE SLOT A FREE STATION LANDS IN, RESOLVED ONCE
+   ==================================================================
+
+   REPORTED of the D&H: "clicking F16 to place the free station token is still calling up the tileselector
+   radial menu. Why don't we just have the station automatically placed there with the green checkmark and
+   red x above it, since there's no other placement possible in this private power?"
+
+   RIGHT, AND THE CLICK WAS NEVER CARRYING INFORMATION. F16 is Scranton -- a single-city Mountain hex -- so
+   by the time the D&H's station step is live there is exactly one slot the token can occupy. The click was
+   asking a question with one answer, and because it was a click it also reached the tile inspector, which
+   answered a different question on top of it.
+
+   SO THE ANCHOR HAS TO BE COMPUTABLE WITHOUT A POINTER, which it was not: the arithmetic lived inside the
+   canvas's own pointer handler, over `view.zoom`/`view.panX` that only the renderer has. This function is
+   that arithmetic lifted out whole, so the click path and the auto-staged path resolve the same point by
+   construction rather than by two copies agreeing -- the rule this codebase keeps arriving at (#686, #852,
+   and #862 for what happens when two surfaces answer one question separately).
+
+   THE FALLBACK CHAIN IS #698'S, UNCHANGED AND IN ITS ORDER: the next free SLOT, then the CITY's own anchor,
+   then the sole node, then the hex centroid. Each is a strictly worse answer than the one before and each is
+   right when the one before cannot be computed. */
+export interface StationSlotAnchor {
+  /** Board-relative canvas pixels, through the live pan/zoom -- what a ring anchors to. */
+  nodeX: number;
+  nodeY: number;
+  centroidX: number;
+  centroidY: number;
+}
+
+export function stationSlotAnchor(input: {
+  mapGrid: MapGridResponse;
+  publicCompanies: readonly StationTokenCompany[];
+  q: number;
+  r: number;
+  cityIndex: number | null;
+  hexSize: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+}): StationSlotAnchor {
+  const { mapGrid, publicCompanies, q, r, cityIndex, hexSize, zoom, panX, panY } = input;
+  const centre = axialToPixel(q, r, hexSize);
+  const centroidX = centre.x * zoom + panX;
+  const centroidY = centre.y * zoom + panY;
+  const nodes = cityNodePoints(mapGrid, q, r, hexSize);
+  /* #557: ONE CITY IS NOT AN AMBIGUOUS CITY -- the centroid fallback is right when the geometry cannot say
+     and wrong when there is exactly one node. */
+  const soleNode = nodes.length === 1 ? nodes[0] : undefined;
+  const slotPoint = nextCitySlotPoint(mapGrid, publicCompanies, q, r, cityIndex, centre, hexSize);
+  const chosenNode = slotPoint ?? (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
+  return {
+    nodeX: chosenNode ? chosenNode.x * zoom + panX : centroidX,
+    nodeY: chosenNode ? chosenNode.y * zoom + panY : centroidY,
+    centroidX,
+    centroidY,
+  };
+}
+
+/** The one city on this hex, or `null` where the choice is real.
+ *
+ *  THE GUARD ON AUTO-STAGING, and #858's lesson pointed forwards. That report was "a player can select
+ *  G19's other city and place the home station there", and its fix was that a token is in a CITY, not on a
+ *  hex. Auto-staging is only honest where the hex has one city to stage into -- so this returns `null` for
+ *  two, and the caller falls back to asking. F16 has one today; a future tile catalogue is not this
+ *  function's promise to keep. */
+export function soleCityIndex(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  hexSize: number,
+): number | null {
+  /* `hexSize` is passed through rather than assumed: it does not change the COUNT, but `cityNodePoints` is
+     the authority on what a city is here and calling it with a made-up size would be a second opinion about
+     that -- the shape of bug #862 caught twice this session. */
+  return cityNodePoints(mapGrid, q, r, hexSize).length === 1 ? 0 : null;
+}

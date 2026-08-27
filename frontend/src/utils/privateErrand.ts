@@ -109,6 +109,49 @@ export function errandSurvivesStep(
  *  invisible, so "they may think once they click the Special Power they have no choice but to follow
  *  through." A cancel that only works by doing something else is a rule the player has to guess.
  *  `null` for the home station, which has no exit by design. */
+/* ==================================================================
+    DESIGN NOTE 858: THE HEX WAS LOCKED AND THE CITY WAS NOT
+   ==================================================================
+
+   REPORTED: "for NNH's Home Station, the correct city is shown with the glow ring, but a player can select
+   G19's other city and place the home station there. This should not be allowed: NNH's home station is
+   locked to that one city."
+
+   `errandClickIntent` ABOVE LOCKS THE HEX and always has -- a click anywhere else is ignored or cancels. The
+   CITY had no such gate: `handleStageFreeStation` took whatever `cityIndex` the pointer resolved to and
+   staged it. On every one-city hex that is harmless, which is why it survived; New York is the hex where the
+   two questions come apart.
+
+   NEXT TO `errandClickIntent` BECAUSE IT IS THE SAME QUESTION at a finer grain: what does this click mean for
+   the errand that is armed. Keeping them together is what stops the next reader fixing the hex rule and
+   forgetting the city rule, which is precisely how this arose.
+
+   `null` FROM THE BOARD MEANS "EITHER", NOT "UNKNOWN" (#742): on ERIE's E11 the president genuinely chooses,
+   and a rule that read the absence as "no answer available" and refused would break the hex it was written
+   to protect. Absent restriction is a restriction of none.
+
+   AND A CLICK THAT RESOLVED NO CITY IS ALLOWED THROUGH. `cityIndex` is `null` when the geometry cannot say
+   (#453), and the contract applies its own documented fallback -- refusing here would turn "I could not tell"
+   into "you may not", which is the inversion #764 spent a whole note on. */
+
+/** Why this city may not take the home station, or `null` when it may.
+ *
+ *  Phrased as a sentence because the player is looking at a ring on the other circle and needs to be told
+ *  which one, not merely refused -- #619's rule that a refusal carries its reason. */
+export function homeCityRefusal(input: {
+  /** Which city the click landed in, or `null` where the geometry could not say. */
+  clickedCityIndex: number | null;
+  /** Which city the home is locked to, or `null` where either is allowed. */
+  homeCityIndex: number | null;
+  hexLabel: string;
+}): string | null {
+  const { clickedCityIndex, homeCityIndex, hexLabel } = input;
+  if (homeCityIndex === null) return null;
+  if (clickedCityIndex === null) return null;
+  if (clickedCityIndex === homeCityIndex) return null;
+  return `${hexLabel}'s home station is reserved for the other city — the one with the glowing ring.`;
+}
+
 export function errandCancelLabel(errand: ArmedErrand | null): string | null {
   if (!errand || errand.kind === "home-station") return null;
   return errand.kind === "private-tile" ? "Cancel Track Lay" : "Cancel Station";

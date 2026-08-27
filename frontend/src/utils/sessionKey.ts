@@ -248,6 +248,24 @@ export type GameplayExecuteMsg =
          *  `pathfinding.rs` / `hexmap.rs` will need the same field before manual lays can be validated on
          *  chain. Flagged loudly rather than added quietly, as `PrivateTradePanel.tsx` #0 flags its own gap. */
         token_city?: number;
+        /* ==================================================================
+            DESIGN NOTE 880: ONE INDEX CANNOT SEAT TWO TOKENS
+           ==================================================================
+           ASKED: "If a tile has multiple stations and a corporation upgrades it, it is necessary that all the
+           stations maintain their connectivity, not just the one whose corporation is upgrading."
+           EXACTLY, AND `token_city` ABOVE CANNOT EXPRESS IT. It is a single number applied to every token on
+           the hex, which is right for the one case #824 built it for -- ERIE's home, where in practice only
+           one token stands -- and wrong the moment two corporations share an OO hex: both would be stacked
+           into the same city. Its absence is worse still, because "unchanged" is what an ordinary upgrade
+           sends, and unchanged is precisely what a token that must MOVE cities cannot be.
+           SO THE MESSAGE CARRIES A MAP: `[company_id, city_index]` per token standing on the hex, derived
+           from connectivity (#878) rather than chosen. `token_city` is kept and still read, because logs
+           written before this exist and "the log is the game" (#522) -- a replay of an old lay must land
+           where it landed then.
+           THE RUST SIDE STILL NEEDS THIS. `pathfinding.rs` / `hexmap.rs` carry neither field; the sandbox
+           reducer is the authority today and this is flagged in the same breath as `token_city` above and
+           #808's `bypass`. */
+        token_cities?: Array<[number, number]>;
         /** Design note #776: THIS LAY IS IN ADDITION TO THE ORDINARY ONE. Set only by the Champlain & St.
          *  Lawrence's power, whose lay is a bonus rather than a substitute -- reported as "using its power
          *  advanced the Lay Track subphase completely", because the sub-phase cursor ended the Track step on

@@ -189,7 +189,27 @@ describe("both doors, one question (design note #846)", () => {
   });
 
   it("feeds the chip the same list the board rings", () => {
-    expect(APP).toContain("powerOffers={privatePowerOfferList}");
+    /* #846's PROPERTY, WHICH #871 DID NOT WEAKEN. This read `powerOffers={privatePowerOfferList}` and broke
+       when the M&H joined the bar as a Stock Round chip. The rule it defends is about the HEX powers: the
+       list that rings the board is the list that draws the chips, so a glow and a chip cannot disagree about
+       whether a power is available.
+       THE M&H CANNOT AFFECT THAT and the two assertions below are why. It is appended rather than mixed in,
+       so `privatePowerOfferList` still reaches the bar whole; and it is built only in a Stock Round, where
+       there is no board veil and no Lay Track step, so the two lists are disjoint by round rather than by
+       filtering. `privatePowerHexKeys` -- the thing the glow actually reads -- is handed the hex list alone,
+       which the next test pins. */
+    expect(APP).toContain("powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}");
+    expect(APP).toContain("privatePowerHexKeys(privatePowerOfferList)");
+  });
+
+  it("never lets a hexless power reach the board's glow (design note #871)", () => {
+    /* THE FAILURE THIS FORECLOSES: `privatePowerHexKeys` maps offers to `"q,r"` keys the veil looks up. An
+       exchange has no hex (#312), so putting one in that list would hand the map a key nothing resolves --
+       and the veil would either miss a hex or light an undefined one. Asserted as the ABSENCE of the M&H
+       from the module that builds hex offers, because that is where a future tidy-up would merge them. */
+    const offers = read("utils/privatePowerOffer.ts");
+    expect(offers).not.toContain("mh-exchange");
+    expect(offers).not.toContain("MH_PRIVATE_ID");
   });
 
   it("puts the chips before the map jump", () => {

@@ -186,6 +186,38 @@ describe("a jump is not an action", () => {
     );
   });
 
+  it("shows the hint only where it costs no map (design note #870)", () => {
+    /* ==================================================================
+        REPORTED: "this eats up some vertical space that is needed for viewing the map"
+       ==================================================================
+       #835 GATED THIS ON THE STEP AND THE TURN AND NOTHING ELSE, so a bar stuck to the top of the viewport
+       carried a full-width orientation row over the board. `orPanelStepHint` claims `flexBasis: 100%`, so it
+       is a whole line of map spent naming a destination the player has already arrived at.
+       `!mayPin` IS THE PROPERTY, not `!condensed`: a bar that may pin travels and covers the viewport's top;
+       one that may not is `position: static` (#720), parked above the map, where an extra line is free.
+       `condensed` would have worked and then flickered -- it means "has stuck and travelled", so the row
+       would vanish mid-scroll rather than being a property of the bar's shape. */
+    const at = CODE.indexOf("Click a hex on the Rail Map to lay track.");
+    expect(at).toBeGreaterThan(-1);
+    /* THE GUARD IS ON THE SAME CONDITION, read backwards from the sentence to the `{` that opens it -- an
+       assertion that merely found `!mayPin` anywhere in the file would pass on the two style lines that
+       already use it. */
+    const opens = CODE.lastIndexOf("{mayActThisTurn", at);
+    expect(opens).toBeGreaterThan(-1);
+    const condition = CODE.slice(opens, at);
+    expect(condition).toContain('orSubPhase === "Track"');
+    expect(condition).toContain("!mayPin");
+  });
+
+  it("leaves the button's label alone (design note #870)", () => {
+    /* THE PROPOSAL THAT WAS WITHDRAWN. The report opened with "What if we updated the button to 'Select a Hex
+       to Lay 1 Track' or something?" and then withdrew it -- "no change needed" -- once the hint's missing
+       gate turned out to be the whole fault. Recorded because a label change that never happened is exactly
+       the kind of thing that gets half-applied later. #834's constant stands. */
+    expect(CODE).toContain('label: "Lay 1 Track"');
+    expect(CODE).not.toContain("Select a Hex to Lay");
+  });
+
   it("keeps the rotation rule somewhere", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
@@ -255,7 +287,14 @@ describe("a jump is not an action", () => {
        whatever target it is handed, which is #810's own argument applied to two targets instead of one. */
     const dollar = String.fromCharCode(36);
     expect(CODE).toContain("node.style.scrollMarginTop = `" + dollar + "{clearance}px`;");
-    expect(CODE).toContain("<div ref={stepPanelRef}>");
+    /* THE PROPERTY IS "THE REF IS ON THE WRAPPER", not the wrapper's exact opening tag. This assertion used
+       to read `"<div ref={stepPanelRef}>"` and #859 broke it by adding `style={styles.stepPanelRow}` to that
+       very element -- a green harness turning red over a change it had no opinion about. Kept as a record of
+       why the looser form is the right one: an assertion that fails when an UNRELATED attribute is added is
+       testing the spelling, not the rule.
+       #859's own property -- that the wrapper takes a full row so the panel has a width to divide -- is a
+       different claim and is asserted where it belongs, in `stickyBarSplit.test.ts`. */
+    expect(CODE).toMatch(/<div ref=\{stepPanelRef\}[^>]*>/);
   });
 
   it("measures the clearance rather than assuming one", () => {

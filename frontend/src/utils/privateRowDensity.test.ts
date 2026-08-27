@@ -421,3 +421,89 @@ describe("the shell supplies the colour", () => {
     expect(app).toContain("return seat === -1 ? null : seatColor(address, seat);");
   });
 });
+
+// ==================================================================
+//  DESIGN NOTE 864 (harness): THE STEP IS NOT A CARD ON THE STEP
+// ==================================================================
+//
+// Three reports with one cause -- #715 embedded this panel in the action bar and kept the modal's shape.
+//   (a) "I'm not sure '[Corporation] proposes a purchase' is necessary for the subpanel title."
+//   (b) "each of the PC boxes in that subpanel end a weird distance from the edge of the Action Bar panel."
+//   (f) "clicking the PCs causes them to expand to different horizontal sizes, and MH actually expands so
+//        wide that it overflows the Action Bar."
+//
+// (b) AND (f) ARE BOTH ABOUT WIDTH AND THEY ARE NOT THE SAME BUG. (b) is chrome: a border and 14px of
+// padding inside a bar that already has both, so the rows are inset twice. (f) is `alignItems: "flex-start"`
+// on the open card, which makes a column flex child shrink to ITS OWN content -- and "different horizontal
+// sizes" is the symptom only shrink-to-fit produces, which is what identifies it.
+//
+// THE MODAL KEEPS EVERYTHING. `styles.card` is untouched and the header still renders unembedded, so these
+// assertions are all about the EMBEDDED branch and say so.
+describe("the embedded panel is the step (design note #864)", () => {
+  it("drops the heading when embedded and keeps it in the modal", () => {
+    /* NOT DELETED OUTRIGHT. A floating window has to say whose it is; a subpanel under a bar that already
+       names the acting corporation does not. So the string survives behind `!embedded`, and this asserts
+       both halves -- a plain deletion would pass "the bar has no heading" and break the modal. */
+    expect(CODE).toContain("{buyerTicker} proposes a purchase");
+    const at = CODE.indexOf("{buyerTicker} proposes a purchase");
+    const before = CODE.slice(Math.max(0, at - 200), at);
+    expect(before).toContain("{!embedded && (");
+  });
+
+  it("keeps the close button inside the same guard", () => {
+    /* THE BUTTON WAS ALREADY `!embedded`; the header now is too, so the two cannot disagree about which shape
+       they are in. #715's rule -- no close button on a step you cannot leave -- is unchanged and is now
+       carried by the wrapper rather than restated inside it. */
+    const at = CODE.indexOf('aria-label="Close"');
+    expect(at).toBeGreaterThan(-1);
+    const guard = CODE.lastIndexOf("{!embedded && (", at);
+    expect(guard).toBeGreaterThan(-1);
+    // No second guard between them: one condition covers the header and its button.
+    expect(CODE.slice(guard, at)).toContain("styles.heading");
+  });
+
+  it("gives the embedded form no frame of its own", () => {
+    /* THE ROWS REACH THE BAR'S EDGE. A border, a fill and a horizontal inset are what a modal needs to say
+       where it ends; inside the bar they are a second frame around content the bar already frames. */
+    const at = CODE.indexOf("  embeddedCard: {");
+    expect(at).toBeGreaterThan(-1);
+    const body = CODE.slice(at, CODE.indexOf("},", at));
+    expect(body).toContain('width: "100%"');
+    expect(body).toContain("minWidth: 0");
+    expect(body).not.toContain("border");
+    expect(body).not.toContain("padding");
+    expect(body).not.toContain("backgroundColor");
+  });
+
+  it("leaves the modal's own frame alone", () => {
+    /* THE NEGATIVE HALF OF THE PREVIOUS TEST. Stripping both would be the easy over-correction and would take
+       the floating window's edges with it. */
+    const at = CODE.indexOf("  card: {");
+    expect(at).toBeGreaterThan(-1);
+    const body = CODE.slice(at, CODE.indexOf("},", at));
+    expect(body).toContain("border");
+    expect(body).toContain("padding");
+  });
+
+  it("stops the open card sizing itself to its own sentence", () => {
+    /* `flex-start` IS THE BUG AND `stretch` IS THE FIX, and the guards beside it are what make the panel's
+       width a ceiling: `minWidth: 0` lets a long run shorten rather than push, `overflowWrap` breaks one that
+       cannot shorten. Without both, `stretch` alone still overflows on an unbreakable string. */
+    const at = CODE.indexOf("  cardBody: {");
+    expect(at).toBeGreaterThan(-1);
+    const body = CODE.slice(at, CODE.indexOf("},", at));
+    expect(body).toContain('alignItems: "stretch"');
+    expect(body).not.toContain('alignItems: "flex-start"');
+    expect(body).toContain("minWidth: 0");
+    const rule = CODE.slice(CODE.indexOf("  cardRule: {"));
+    expect(rule.slice(0, rule.indexOf("},"))).toContain('overflowWrap: "anywhere"');
+  });
+
+  it("keeps the fold mark that lets the bar come back (design note #863)", () => {
+    /* THE TWO REPORTS MEET HERE. #863 returns the bar to sticky on its RESTING height, and the resting height
+       is only smaller than the actual one because this subtree is marked foldable. Unmark it and the open
+       card counts toward the resting height, so a bar released by opening a private could not return -- the
+       exact symptom 5d described, reintroduced from the other end. */
+    expect(CODE).toContain("style={styles.cardBody} {...STICKY_OPTIONAL}");
+  });
+});

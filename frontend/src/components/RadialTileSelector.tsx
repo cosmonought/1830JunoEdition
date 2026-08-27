@@ -92,6 +92,28 @@ export interface RadialTileSelectorProps {
   onConfirm: () => void;
   /** Step back one stage -- design note #2. */
   onCancel: () => void;
+  /* ==================================================================
+      DESIGN NOTE 874: THE X MEANS BACK ONE STEP, AT EVERY LEVEL
+     ==================================================================
+
+     REPORTED: "For CSL and DH, once a player selects the Lay Track power, there is no 'escape.' Selecting the
+     red X on the tileselector preview tile does not escape the private power."
+
+     TRUE, AND #817 THOUGHT IT HAD FIXED THIS. That pass added a named cancel for an armed errand -- and put it
+     on the action bar, while the player is looking at the ring. #849 caught the identical mistake one report
+     later and said it plainly: "There was a cancel on the action bar (#817) and the player was looking at the
+     map; the modal's X is where they are." Third time, same shape: an exit nobody can find is not an exit.
+
+     SO THE X BECOMES A BACK BUTTON, which is one rule rather than a third meaning bolted on. Previewing a
+     tile, it goes back to the candidates (#2's meaning, unchanged). On the candidates with a power armed, it
+     goes back to the modal that sent the player here -- and that modal's own X cancels the power outright,
+     which is where "escape" finally lives. Every level is reversible by the same gesture. */
+  /** Present only while there is somewhere to go BACK to -- an armed private power. Absent for an ordinary
+   *  lay, where the candidate ring's X would be #471's duplicate of click-away. */
+  onEscape?: (() => void) | null;
+  /** What that X says it will do. Required with `onEscape`, because a back button that does not name its
+   *  destination is the thing this note is fixing. */
+  escapeTitle?: string;
   onDismiss: () => void;
 }
 
@@ -455,9 +477,15 @@ export function RadialTileSelector({
   onSelectCandidate,
   onConfirm,
   onCancel,
+  onEscape = null,
+  escapeTitle,
   onDismiss,
 }: RadialTileSelectorProps) {
   const previewing = selectedTileId !== null;
+  /* Design note #874: there is somewhere to go back to. The ring needs no new prop for this -- the selector
+     already computes `showCancel`, `onCancel` and `cancelTitle` for it, and this simply gives those three a
+     second case. */
+  const canEscape = onEscape !== null;
 
   // Deduplicated by tile: the ring offers TILES, and rotation is chosen
   // afterwards on the board itself. Six ring entries for one tile at six
@@ -520,21 +548,39 @@ export function RadialTileSelector({
       /* Design note #471: the candidate ring's X sits behind its own top
          thumbnail and duplicates click-away. The preview state keeps it --
          there it is the discard half of a check/X pair, with the ring
-         hidden behind the previewed tile. */
-      showCancel={previewing}
+         hidden behind the previewed tile.
+         ==================================================================
+          DESIGN NOTE 874: BOTH HALVES OF #471 STOPPED BEING TRUE
+         ==================================================================
+         THE OCCLUSION WAS FIXED BY #174, one note later, and nobody came back here: "A fixed -158px was
+         correct only while the ring was fixed too; now that the radius grows with the candidate count, a
+         large ring would put its 12 o'clock thumbnail above a fixed button row and the two would collide."
+         The row now sits at `-radius - 38px` and clears the ring by construction, so the X has been drawable
+         at the candidate stage ever since.
+         AND "DUPLICATES CLICK-AWAY" IS ONLY TRUE FOR AN ORDINARY LAY. With a private power armed, clicking
+         away does not merely close a menu -- it abandons a power the player pressed a button to use, which
+         is precisely the thing they could not find a way to do on purpose. A labelled control for that is not
+         a duplicate of an unlabelled gesture.
+         SO IT IS STILL ABSENT BY DEFAULT and present exactly where there is something to go back TO. */
+      showCancel={previewing || canEscape}
       canConfirm={canConfirm}
       confirmDisabledReason={confirmDisabledReason ?? "Tile lay disabled"}
       confirmTitle={`Lay this tile on ${hexLabel}.`}
       confirmAriaLabel="Confirm tile lay"
       // The X means different things in the two stages, and that is
       // intentional rather than sloppy -- see design note #2.
+      /* Design note #874: three stages, one gesture, and each says where it goes. */
       cancelTitle={
-        previewing ? "Discard this preview and go back to the tile options." : "Close."
+        previewing
+          ? "Discard this preview and go back to the tile options."
+          : (escapeTitle ?? "Close.")
       }
-      cancelAriaLabel={previewing ? "Discard preview" : "Close tile options"}
+      cancelAriaLabel={
+        previewing ? "Discard preview" : canEscape ? "Cancel this lay" : "Close tile options"
+      }
       radius={radius}
       onConfirm={onConfirm}
-      onCancel={previewing ? onCancel : onDismiss}
+      onCancel={previewing ? onCancel : (onEscape ?? onDismiss)}
       onDismiss={onDismiss}
     >
         {/* ---- The candidate ring. Hidden while previewing -- design note

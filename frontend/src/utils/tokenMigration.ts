@@ -22,6 +22,8 @@
 //
 // See docs/ai_architecture/hex_tile_math.md, tokenMigration.ts #0 / #1.
 
+import { cityExitEdges, tileCityCount, tileCityEdges } from "../components/hexGeometry";
+import { fitStationsToUpgrade, type StationAnchor } from "./stationConnectivity";
 import { archetypeForHex } from "../components/hexGeometry";
 import { printedArtworkEdgePairs, tileCitySlotCounts } from "../components/TileGraphics";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
@@ -111,6 +113,12 @@ function currentCityCount(mapGrid: MapGridResponse, q: number, r: number): numbe
  *  `null` when nothing is standing on the hex, which is the common case and the
  *  one where the ring should say nothing at all -- a caption about token
  *  migration on an empty hex is noise on every ordinary tile lay. */
+/** SUPERSEDED BY `planTokenUpgrade` (design note #878) AND KEPT ONLY AS THE RECORD OF THE OLD RULE.
+ *
+ *  It answers "which city index did this token have" and preserves it, which is not a question the board can
+ *  answer -- "city 0" names a different corner at each of six orientations, and this function takes no
+ *  orientation at all. Nothing in the app calls it. Do not wire it to anything: a token's destination is
+ *  whichever city still owns its edges, which is what `planTokenUpgrade` computes. */
 export function previewTokenMigration(
   mapGrid: MapGridResponse,
   q: number,
@@ -257,4 +265,94 @@ export function describeTokenMigration(preview: TokenMigrationPreview | null): s
     return toCityCount === 1 ? `Station token stays put (${named}).` : `Station token: ${named}.`;
   }
   return `This tile splits the hex into ${toCityCount} cities. ${named} — the tile lay cannot choose a different one.`;
+}
+
+/* ==================================================================
+    DESIGN NOTE 878: THE CONNECTIVITY-AWARE REPLACEMENT
+   ==================================================================
+
+   `previewTokenMigration` above is SUPERSEDED and kept only so its note stays readable beside the thing that
+   corrects it. Its rule was `to = clamp(from)` -- "the index is PRESERVED" -- and it took no ORIENTATION,
+   which is the tell: connectivity is a property of a tile AS LAID, so a signature with no rotation in it
+   cannot express the question. Reported as "upgrades to OO tiles are not preserving corporation station
+   network connectivity."
+
+   THIS ONE ASKS THE BOARD. Each token's city has live edges today (`cityExitEdges`, #852); the destination is
+   whichever city of the candidate still owns them (`fitStationToUpgrade`, #878). `null` for the whole thing
+   means this orientation strands somebody and is not a legal upgrade. */
+
+
+export interface TokenLanding {
+  companyId: number;
+  ticker: string;
+  fromCityIndex: number | null;
+  /** Where connectivity puts it, or `null` when it has none to preserve and the president may choose. */
+  toCityIndex: number | null;
+}
+
+export interface UpgradeTokenPlan {
+  landings: readonly TokenLanding[];
+  /** True when at least one token is unanchored, so the president still has a say (ERIE's first upgrade). */
+  anyFree: boolean;
+}
+
+/** Where every token on `(q, r)` lands if `tileId` is laid at `orientation`, or `null` if one is stranded.
+ *
+ *  `null` IS ALSO THE LEGALITY ANSWER, which is why the rotation filter and the preview can share one call:
+ *  an orientation that cannot seat every standing token is not an upgrade a president may choose. */
+export function planTokenUpgrade(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  companies: readonly StationTokenCompany[],
+  tileId: number,
+  orientation: number,
+): UpgradeTokenPlan | null {
+  const here = companies.filter((company) =>
+    company.station_token_hexes.some(([tq, tr]) => tq === q && tr === r),
+  );
+  // No token, no constraint -- and no plan to draw. Every orientation stays legal.
+  if (here.length === 0) return { landings: [], anyFree: false };
+
+  const cityCount = tileCityCount(tileId);
+  /* A CANDIDATE THIS BUILD CANNOT DESCRIBE says nothing rather than guessing, and specifically does not
+     REFUSE: a single-city upgrade distinguishes no cities, every token lands in the only one there is, and
+     calling that illegal would forbid the commonest lay in the game. */
+  if (cityCount < 2) {
+    return {
+      landings: here.map((company) => ({
+        companyId: company.company_id,
+        ticker: company.ticker,
+        fromCityIndex: tokenCityIndex(company, q, r) ?? null,
+        toCityIndex: cityCount === 1 ? 0 : null,
+      })),
+      anyFree: false,
+    };
+  }
+
+  const candidate: number[][] = [];
+  for (let city = 0; city < cityCount; city++) {
+    candidate.push(tileCityEdges(tileId, orientation, city) ?? []);
+  }
+
+  const anchors: StationAnchor[] = here.map((company) => ({
+    companyId: company.company_id,
+    /* THE TOKEN'S OWN CITY, not the hex's. `cityExitEdges` returns every live edge when it cannot tell which
+       city a token is in -- which would over-constrain rather than under-constrain, and is the safe direction:
+       a president is refused an orientation rather than silently handed a severed network. */
+    edges: cityExitEdges(mapGrid, q, r, tokenCityIndex(company, q, r) ?? null),
+  }));
+
+  const landing = fitStationsToUpgrade(anchors, candidate);
+  if (landing === null) return null;
+
+  return {
+    landings: here.map((company) => ({
+      companyId: company.company_id,
+      ticker: company.ticker,
+      fromCityIndex: tokenCityIndex(company, q, r) ?? null,
+      toCityIndex: landing.get(company.company_id) ?? null,
+    })),
+    anyFree: here.some((company) => landing.get(company.company_id) == null),
+  };
 }

@@ -1594,6 +1594,37 @@ export function homeSlotsAreOpen(hexLabel: string | undefined): boolean {
   return hexLabel !== undefined && YELLOW_OO_HEXES.has(hexLabel);
 }
 
+/* ==================================================================
+    DESIGN NOTE 858: THE RING'S DECISION, EXTRACTED SO THE CLICK CAN ASK IT
+   ==================================================================
+
+   REPORTED: "for NNH's Home Station, the correct city is shown with the glow ring, but a player can select
+   G19's other city and place the home station there. This should not be allowed: NNH's home station is
+   locked to that one city."
+
+   THE RING WAS ALREADY RIGHT. `HexGridRenderer`'s draw pass computed `eitherSlot`/`homeSlot` inline and lit
+   one circle on New York and both on an OO hex, which is #584 and #742 correctly combined. The CLICK handler,
+   forty lines away in the same file, resolved `cityIndex` from the pointer and passed it on -- so the board
+   drew the rule and the placement never asked it. Eleventh instance this session of a rule stated in one
+   place and never asked in its sibling (#807, #809, #816, #820, #824, #825, #826, #831, #844, #852).
+
+   EXTRACTED RATHER THAN REPEATED. The obvious fix is to paste the two lines into the click handler, which is
+   how two answers to one question start. This is the one function, called twice in the file that owns the
+   geometry -- so the circle that lights and the circle that may be clicked cannot diverge.
+
+   `null` MEANS "EITHER", NOT "UNKNOWN", which is the distinction #742 exists for: on ERIE's E11 the president
+   genuinely picks, and a caller must not read that as "no restriction known" and go looking for one. */
+
+/** Which city a home station is locked to on this hex, or `null` where the president may choose. */
+export function homeSlotIndex(
+  hexLabel: string | undefined,
+  slotNodes: ReadonlyArray<{ x: number; y: number }>,
+  markerPoint: { x: number; y: number },
+): number | null {
+  if (homeSlotsAreOpen(hexLabel)) return null;
+  return homeCityIndexAt(slotNodes, markerPoint);
+}
+
 export function homeCityIndexAt(
   nodes: ReadonlyArray<{ x: number; y: number }>,
   markerPoint: { x: number; y: number },

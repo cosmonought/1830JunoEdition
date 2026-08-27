@@ -226,16 +226,39 @@ export function ProposePrivatePurchase({
 
   const body = (
       <div style={embedded ? styles.embeddedCard : styles.card}>
-        <div style={styles.header}>
-          <span style={styles.heading}>{buyerTicker} proposes a purchase</span>
-          {/* Design note #715: no close button when embedded -- the panel is the step, and a control that
-              dismissed it would leave the player on a step with nothing on it. */}
-          {!embedded && (
+        {/* ==================================================================
+             DESIGN NOTE 864: THE EMBEDDED FORM IS THE STEP, NOT A CARD ON IT
+            ==================================================================
+
+            REPORTED: "I'm not sure '[Corporation] proposes a purchase' is necessary for the subpanel title. I
+            think it can just be deleted and go straight to the list of PCs, since clicking to open those has
+            the 'Propose Purchase to Player' button already."
+            AND: "each of the PC boxes in that subpanel end a weird distance from the edge of the Action Bar
+            panel, if that makes sense."
+
+            IT MAKES SENSE AND IT IS ONE CAUSE. #715 moved this out of a modal and into the bar, and kept the
+            modal's shape: a heading naming the actor, a border, a background, and 14px of padding. In a modal
+            all four earn their place -- a floating window has to say whose it is and where its edges are. In
+            the bar they are restating what the bar already says. The step is announced above, the acting
+            corporation is named across the top (#740 relies on that), and the bar has its own border and its
+            own padding. So the rows sit inside two frames and two paddings, which is the "weird distance":
+            the panel is inset from the bar and the rows are inset from the panel.
+
+            THE HEADING GOES BY THE SAME ARGUMENT AS #814 AND #810 -- both removed prose from this panel for
+            restating something a player already had. `{buyerTicker} proposes a purchase` is the third.
+            THE MODAL KEEPS ALL OF IT. `styles.card` is untouched and the header still renders when it is not
+            embedded, because a floating window still needs its title and its close button. The two callers
+            genuinely need two shapes, which is what `embedded` has meant since #715. */}
+        {!embedded && (
+          <div style={styles.header}>
+            <span style={styles.heading}>{buyerTicker} proposes a purchase</span>
+            {/* Design note #715: no close button when embedded -- the panel is the step, and a control that
+                dismissed it would leave the player on a step with nothing on it. */}
             <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
               &#10006;
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Design note #814: THE INTRO PARAGRAPH IS GONE, and #810 removed its twin one report earlier.
            REQUESTED: "I think we can also remove this from the Buy Private Companies subpanel ... It is
@@ -669,15 +692,17 @@ const styles: Record<string, React.CSSProperties> = {
      width fighting the bar's own, no drop shadow (nothing is floating), no scroll cap (the bar scrolls with
      the page). The border stays: it is what separates this block from the buttons above it, exactly as the
      depot panel's does. */
+  /* Design note #864: NO FRAME AND NO PADDING, so the rows reach the bar's own edge. The border, the fill and
+     the 14px inset were the modal's, and in the bar they were a second frame inside the bar's frame -- which
+     is what put the rows "a weird distance from the edge". `minWidth: 0` because this is a flex/grid child of
+     the step wrapper (#859) and without it a long power summary sets a floor on the whole panel's width.
+     `marginTop` survives: it is separation from the buttons above, which the bar does not supply. */
   embeddedCard: {
     width: "100%",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     gap: "10px",
-    padding: "12px 14px",
-    borderRadius: "10px",
-    border: "1px solid #2b3242",
-    backgroundColor: "#141a26",
     marginTop: "6px",
   },
   card: {
@@ -893,17 +918,42 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #804: the open card -- rule, price and submit, in the row they belong to. It is `rowDetail`
      grown a form: same inset, same well, and now a flex column because it holds three blocks rather than one
      paragraph. */
+  /* ==================================================================
+      DESIGN NOTE 864: A CARD THAT SIZED ITSELF TO ITS OWN SENTENCE
+     ==================================================================
+
+     REPORTED: "clicking the PCs causes them to expand to different horizontal sizes, and MH actually expands
+     so wide that it overflows the Action Bar."
+     `alignItems: "flex-start"` IS THE WHOLE OF IT, and the first half of the report is what identifies it.
+     On a column flex container that keyword makes every child shrink-to-fit its own content instead of
+     filling the line -- so each open card is as wide as ITS OWN power summary, and five open cards give five
+     widths. Nothing else in this file varies per company, which is why the symptom names the cause.
+     MH IS THE LONGEST OF THE FIVE ON OFFER (344 characters; only the D&H's 418 beats it, and the D&H was
+     already taken in the reported game), so it is the one that runs out of room first. Its overflow is the
+     same fact as the ragged widths, not a second bug.
+     `stretch` IS THE DEFAULT AND THE RIGHT ONE: a card is a block in a list, and blocks in a list are the
+     width of the list. `minWidth: 0` on the children so a long unbroken run shortens rather than pushing,
+     and `overflowWrap` so it breaks if it has to -- the two guards that make "as wide as the panel" a
+     ceiling rather than a suggestion. */
   cardBody: {
     display: "flex",
     flexDirection: "column",
-    alignItems: "flex-start",
+    alignItems: "stretch",
+    minWidth: 0,
     gap: "8px",
     margin: "0 12px 10px",
     padding: "8px 10px",
     borderRadius: "6px",
     backgroundColor: "#151a25",
   },
-  cardRule: { margin: 0, fontSize: FONT_SIZE.small, color: "#c1c7d3", lineHeight: 1.5 },
+  cardRule: {
+    margin: 0,
+    fontSize: FONT_SIZE.small,
+    color: "#c1c7d3",
+    lineHeight: 1.5,
+    minWidth: 0,
+    overflowWrap: "anywhere",
+  },
   /* Design note #804: the reason, where a player can read it. #386 showed a blocked private and put its
      reason in a `title` attribute -- a hover, on a game played on a tablet. Amber rather than red: "still
      unsold in the auction" is the state of the board, not the player's mistake. */

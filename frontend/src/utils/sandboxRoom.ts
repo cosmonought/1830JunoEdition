@@ -367,6 +367,63 @@ export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: num
   return room.players.every((player) => player.isReady);
 }
 
+/* ==================================================================
+    DESIGN NOTE 857: WHAT THE ROOM IS WAITING FOR, SAID ONCE
+   ==================================================================
+
+   ASKED: "in the game lobby, when a non-host player clicks 'Ready,' there should be a notification like
+   'Waiting for Host to start the game...' so that players know they don't need to do anything else."
+
+   THE ANSWER ALREADY EXISTED AND ONLY THE HOST COULD SEE IT -- in a `title`. `SandboxWaitingRoom`'s Start
+   button carried a three-way explanation of what was blocking, hovered by the one person who did not need it:
+   the host is the one who can act. Everyone else, who genuinely cannot, was told nothing.
+   THAT IS THE THIRD TOOLTIP THIS SESSION to be holding something a player needs (#806, #839), and the same
+   answer: promote it to text and let both surfaces read one rule.
+
+   "WAITING FOR THE HOST" IS NOT ALWAYS TRUE, which is why this returns a reason rather than a sentence. A
+   player who readies up in a room of one is not waiting for the host -- the host cannot start either. Saying
+   so would be a surface asserting something the authority does not: `canStartSandboxGame` refuses on player
+   count first, and this reports the same conditions in the same order so the two cannot disagree.
+
+   THE ROOM'S STATE, NOT THE VIEWER'S. Whose turn it is to act is the caller's business; this says what the
+   ROOM is short of, and the caller decides whom to tell. */
+
+/** What is between this room and a dealt game. */
+export type WaitingRoomBlock = "need-players" | "need-ready" | "host-to-start" | "not-waiting";
+
+export function waitingRoomBlock(
+  room: SandboxRoomDoc | null,
+  minPlayers: number,
+): WaitingRoomBlock {
+  if (!room || room.status !== "waiting") return "not-waiting";
+  if (room.players.length < minPlayers) return "need-players";
+  if (!room.players.every((player) => player.isReady)) return "need-ready";
+  return "host-to-start";
+}
+
+/** The sentence for a player who is NOT the host, or `null` when they have nothing to wait for.
+ *
+ *  `null` UNTIL THEY ARE READY, which is what was asked for -- the line answers "have I finished?", and a
+ *  player who has not pressed Ready has not. Telling them what the room lacks before they have done their own
+ *  part would read as a refusal of a button they have not tried. */
+export function waitingRoomNotice(
+  room: SandboxRoomDoc | null,
+  minPlayers: number,
+  viewer: { isHost: boolean; isReady: boolean },
+): string | null {
+  if (viewer.isHost || !viewer.isReady) return null;
+  switch (waitingRoomBlock(room, minPlayers)) {
+    case "need-players":
+      return `You are ready. Waiting for more players — Project 18XX needs at least ${minPlayers}.`;
+    case "need-ready":
+      return "You are ready. Waiting for the other players to mark themselves ready.";
+    case "host-to-start":
+      return "You are ready. Waiting for the Host to start the game…";
+    default:
+      return null;
+  }
+}
+
 /** The waiting room's roster, as the setup payload wants it. */
 export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
   return room.players.map((player) => ({

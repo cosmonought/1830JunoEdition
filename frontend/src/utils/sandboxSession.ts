@@ -1985,7 +1985,7 @@ function applyOneAction(
        THE SET LIVES IN STATE, not on the tile grid -- `terrainFee.ts` #723 has the reasoning, and it is about
        replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
        here would be right live and wrong on every rebuild. */
-    const { protocol_id, q, r, token_city } = msg.LayTile;
+    const { protocol_id, q, r, token_city, token_cities } = msg.LayTile;
     const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
     const recorded: GameStateResponse = {
       ...state,
@@ -2008,19 +2008,47 @@ function applyOneAction(
          as arbitrary as the first's. In practice there is one -- nobody else may token these hexes before
          they are upgraded -- but a rule that quietly assumed that would be a rule about the board rather than
          about the cardboard.
-         ABSENT MEANS UNCHANGED, which is every ordinary upgrade in the game. */
-      public_companies:
-        token_city === undefined
-          ? state.public_companies
-          : state.public_companies.map((company) => ({
-              ...company,
-              station_tokens:
-                company.station_tokens?.map((entry) =>
-                  entry[0] === q && entry[1] === r
-                    ? ([entry[0], entry[1], token_city] as [number, number, number])
-                    : entry,
-                ) ?? null,
-            })),
+         ABSENT MEANS UNCHANGED, which is every ordinary upgrade in the game.
+
+         ==================================================================
+          DESIGN NOTE 880: BOTH ARMS OF THAT WERE WRONG
+         ==================================================================
+         ASKED: "If a tile has multiple stations and a corporation upgrades it, it is necessary that all the
+         stations maintain their connectivity, not just the one whose corporation is upgrading."
+
+         "EVERY TOKEN ON THE HEX MOVES" WAS TRUE AND MOVED THEM ALL TO ONE CITY. Right for ERIE's home, where
+         only one token stands; on a shared OO hex it stacks two corporations into the same circle.
+         "ABSENT MEANS UNCHANGED" WAS THE LIVE BUG. Every ordinary upgrade sent nothing, so no token ever
+         moved -- and #878 is the finding that a token's city is NOT preserved across an upgrade, it is
+         recomputed from the network. This arm is why the report said "upgrades to OO tiles are not
+         preserving corporation station network connectivity": the frontend could compute the right city and
+         had no way to say it, and the reducer's default was to do nothing.
+
+         SO THE MAP DECIDES, PER COMPANY, and `token_city` survives only as the old spelling: a log written
+         before this must replay to where it landed then (#522, "the log is the game"). */
+      public_companies: (() => {
+        const perCompany = new Map<number, number>(token_cities ?? []);
+        if (perCompany.size === 0 && token_city === undefined) return state.public_companies;
+        return state.public_companies.map((company) => {
+          /* THE OLD SPELLING APPLIED TO EVERYBODY, which is what it meant when it was written; the new one
+             applies to the company it names and leaves the rest alone. */
+          const city = perCompany.has(company.company_id)
+            ? perCompany.get(company.company_id)
+            : perCompany.size === 0
+              ? token_city
+              : undefined;
+          if (city === undefined) return company;
+          return {
+            ...company,
+            station_tokens:
+              company.station_tokens?.map((entry) =>
+                entry[0] === q && entry[1] === r
+                  ? ([entry[0], entry[1], city] as [number, number, number])
+                  : entry,
+              ) ?? null,
+          };
+        });
+      })(),
     };
     return fee > 0 ? adjustTreasury(recorded, protocol_id, -fee) : recorded;
   }

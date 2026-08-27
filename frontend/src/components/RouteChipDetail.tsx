@@ -30,6 +30,9 @@
 
 import React from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { TrainGlyph } from "./TrainGlyph";
+import { trainTier } from "../utils/gamePhase";
+import { routeTrainColor } from "../styles/routeLivery";
 import type { TrainRouteDraft } from "./RoutePlannerPanel";
 
 export interface RouteChipDetailProps {
@@ -56,10 +59,40 @@ export function RouteChipDetail({
 
   const stops = draft.stops ?? [];
   const model = draft.model ?? "Train";
+  /* Design note #869: the route's own ink, from the one function that decides it (#494). The chip above, the
+     line on the map and this head are now three drawings of one colour rather than three opinions. */
+  const routeInk = routeTrainColor(draft.trainIndex);
 
   return (
-    <div style={styles.strip} role="group" aria-label={`${model} route`}>
-      <span style={styles.model}>{model}</span>
+    <div style={styles.strip} role="group" aria-label={`${model}-Train route`}>
+      {/* ==================================================================
+           DESIGN NOTE 869: A BARE "2" IS NOT THE THING THE PLAYER CLICKED
+          ==================================================================
+
+          ASKED: "when I click the train chip on Run Routes to see what hexes it's going through, the printed
+          string text is: '2 F6 $30 -> F2 $40' and I'm wondering if rather than or in addition to '2' we put
+          the full train chip (the one showing the revenue center marks) and color it the color matching the
+          route color?"
+
+          IN ADDITION, NOT INSTEAD. The glyph's carriages ARE the reach -- `TrainGlyph` draws one per revenue
+          centre, three dots for the Diesel's "and onward" (#617) -- so it answers "how far can this go"
+          without a number. But reading it requires COUNTING, and the model is the train's name: a player
+          says "the 3-train", not "the three-carriage one". Two channels for two questions, which is #732's
+          rule rather than an exception to it.
+
+          THE HEAD IS THE CHIP THAT OPENED IT. `condensedTrainChip` above carries the route ink on a bottom
+          rule; this wears the same rule in the same colour, so a disclosure opened from a chip is visibly
+          about that chip. A different shape here would have been a second object claiming to be the same
+          one -- which is what "2" already was.
+
+          WHY TINTING IS SAFE HERE and was not on the fleet chips (#702 measured a 2-train at 1.00:1 against
+          NNH's livery): those six route inks are chosen LIGHT on purpose, because the map draws them inside
+          the rail's ink (`routeLivery.ts` #494b). On this panel's dark ground that constraint works for us
+          rather than against us, and the chip keeps its own opaque body underneath. */}
+      <span style={{ ...styles.model, borderBottomColor: routeInk }}>
+        <TrainGlyph tier={trainTier(model) ?? model} color={routeInk} height={11} />
+        <span style={{ color: routeInk }}>{model}-Train</span>
+      </span>
 
       {stops.length === 0 ? (
         /* Design note #802: AN EMPTY ROUTE IS A STATE, NOT A BLANK. A chip with no drafted route is the
@@ -131,7 +164,28 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: "#d7dce6",
   },
-  model: { fontWeight: 800, letterSpacing: "0.02em" },
+  /* Design note #869: the chip shell, matching `condensedTrainChip` in `appStyles.ts` -- same padding, same
+     radius, same two-weight border, so the head and the chip that opened it read as one object. Declared
+     here rather than imported because this file owns its own styles and a cross-file import for four
+     properties would couple the two surfaces harder than it would keep them in step; the harness asserts
+     they agree instead. LONGHAND BORDERS THROUGHOUT (#840): `borderBottomColor` is overridden per route, so
+     declaring the rest as a `border` shorthand is the exact React diffing trap that pass documented. */
+  model: {
+    display: "inline-flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "6px",
+    padding: "2px 8px",
+    borderRadius: "6px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a4150",
+    borderBottomWidth: "2px",
+    backgroundColor: "#232936",
+    fontWeight: 800,
+    letterSpacing: "0.02em",
+    whiteSpace: "nowrap",
+  },
   path: { display: "flex", flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: "3px 6px", minWidth: 0 },
   stop: { display: "inline-flex", alignItems: "baseline", gap: "3px", whiteSpace: "nowrap" },
   stopValue: { fontSize: FONT_SIZE.micro, color: "#8f98a8", fontVariantNumeric: "tabular-nums" },

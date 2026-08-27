@@ -34,6 +34,7 @@ import {
   errandClickIntent,
   errandSurvivesStep,
 } from "./privateErrand";
+import { homeCityRefusal } from "./privateErrand";
 
 const F16 = { q: 3, r: 6 };
 const ELSEWHERE = { q: 9, r: 9 };
@@ -159,5 +160,87 @@ describe("the shell asks these rather than keeping its own copies", () => {
 
   it("hands the bar a named exit", () => {
     expect(APP).toContain("errandCancelLabel(homeStationPlacement)");
+  });
+});
+
+// ==================================================================
+//  DESIGN NOTE 858 (harness): THE HEX WAS LOCKED AND THE CITY WAS NOT
+// ==================================================================
+//
+// REPORTED: "for NNH's Home Station, the correct city is shown with the glow ring, but a player can select
+// G19's other city and place the home station there. This should not be allowed: NNH's home station is locked
+// to that one city."
+//
+// `errandClickIntent` ABOVE HAS ALWAYS LOCKED THE HEX. The city had no gate: `handleStageFreeStation` staged
+// whatever `cityIndex` the pointer resolved to. Harmless on every one-city hex -- which is why it lasted --
+// and wrong on New York, the one hex where "which hex" and "which city" are different questions.
+//
+// ELEVENTH INSTANCE this session of a rule stated in one place and never asked in its sibling, and the most
+// literal: the ring and the click are forty lines apart in one file.
+
+
+describe("homeCityRefusal", () => {
+  const NY = { hexLabel: "New York (G19)" };
+
+  it("refuses the city the ring is not on", () => {
+    expect(homeCityRefusal({ ...NY, clickedCityIndex: 1, homeCityIndex: 0 })).toContain(
+      "reserved for the other city",
+    );
+  });
+
+  it("allows the city the ring is on", () => {
+    expect(homeCityRefusal({ ...NY, clickedCityIndex: 0, homeCityIndex: 0 })).toBeNull();
+  });
+
+  it("allows either where the president chooses", () => {
+    /* #742: on an OO hex the badge is anchored to NO circle on purpose, and `null` from the board means
+       "either" rather than "unknown". A rule that read the absence as no-answer-available and refused would
+       break the exact hex it was written to protect -- ERIE's E11. */
+    expect(homeCityRefusal({ ...NY, clickedCityIndex: 0, homeCityIndex: null })).toBeNull();
+    expect(homeCityRefusal({ ...NY, clickedCityIndex: 1, homeCityIndex: null })).toBeNull();
+  });
+
+  it("does not turn 'could not tell' into 'you may not'", () => {
+    /* #453: `cityIndex` is `null` where the geometry cannot resolve one, and the contract has a documented
+       fallback for that. Refusing here would be the inversion #764 spent a note on -- ignorance answering as
+       a refusal. */
+    expect(homeCityRefusal({ ...NY, clickedCityIndex: null, homeCityIndex: 0 })).toBeNull();
+  });
+
+  it("names the hex, because the player is looking at the wrong circle on it", () => {
+    // #619: a refusal carries its reason, and "the one with the glowing ring" is where to look.
+    const line = homeCityRefusal({ ...NY, clickedCityIndex: 1, homeCityIndex: 0 });
+    expect(line).toContain("New York (G19)");
+    expect(line).toContain("glowing ring");
+  });
+});
+
+describe("the shell enforces it (design note #858)", () => {
+  const APP = (() => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs
+      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+  })();
+
+  it("asks before staging the placement", () => {
+    /* ORDER IS THE FIX, as it was for #850 and #852: the refusal has to come before `setPendingToken`, or the
+       ring opens on a city the placement will then reject. */
+    const ask = APP.indexOf("const cityRefusal = homeCityRefusal({");
+    const stage = APP.indexOf("setPendingToken({", ask);
+    expect(ask).toBeGreaterThan(-1);
+    expect(stage).toBeGreaterThan(ask);
+  });
+
+  it("reads the board's answer rather than deriving its own", () => {
+    // The renderer computes it with the same function the ring uses; App must not recompute the geometry.
+    expect(APP).toContain("homeCityIndex,");
+    expect(APP).not.toContain("homeCityIndexAt(");
+  });
+
+  it("says why rather than swallowing the click", () => {
+    expect(APP).toContain('logInfoRef.current?.("Home Station", cityRefusal);');
   });
 });

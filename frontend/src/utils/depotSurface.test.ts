@@ -137,7 +137,12 @@ describe("the rule moved rather than vanished", () => {
        rather than prose, which is why the paragraph was the removable part. */
     expect(PANEL).toContain("upcomingTier");
     expect(PANEL).toContain("Pay ");
-    expect(PANEL).toContain("laterTiers.map((tier) => (");
+    /* #860 MERGED THE TWO LISTS. `laterTiers` was "the depot minus the one you can buy", which existed only
+       because the purchasable tier had a table of its own; with that table gone the roster is the WHOLE
+       depot. The property this line guards -- that a player can still see every tier, its stock, its price
+       and what rusts it -- is unchanged and now covers one more row than it did. */
+    expect(PANEL).toContain("depot.map((tier) => (");
+    expect(PANEL).not.toContain("laterTiers");
   });
 
   it("keeps the note that records the removal", () => {

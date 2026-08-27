@@ -195,6 +195,7 @@ import {
   depotInventory,
   derivePhase,
   rustOutlook,
+  tierEra,
 } from "./utils/gamePhase";
 // Design note #703: the train-limit rule, so this gate and the Buy Trains panel cannot drift apart again.
 import { isTrainLocked } from "./utils/trainLimit";
@@ -225,6 +226,7 @@ import { inspectorClickRefused } from "./utils/inspectorClick";
    stops being relevant. Three questions that used to be answered by three unrelated `if`s. */
 import {
   errandCancelLabel,
+  homeCityRefusal,
   errandClaimsLay,
   errandClickIntent,
   errandSurvivesStep,
@@ -278,7 +280,7 @@ import { localCatalogPlacements } from "./components/hexGeometry";
 // Design note #823: `describeTokenMigration` is no longer imported -- the ring stopped printing its
 // sentence. The function survives in `tokenMigration.ts` with its own note; the arithmetic beside it is
 // still what the radial thumbnails read.
-import { previewTokenMigration, tokenDestinationChoices } from "./utils/tokenMigration";
+import { planTokenUpgrade, tokenDestinationChoices } from "./utils/tokenMigration";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
   OPERATING_SUB_PHASE_LABELS,
@@ -424,9 +426,13 @@ import {
   applyPrivateExchange,
   CA_BONUS_TICKER,
   CA_PRIVATE_ID,
+  MH_PRIVATE_ID,
   resolvePrivateExchange,
 } from "./utils/privateExchange";
 import { effectiveActions, undoReachFor } from "./utils/logRevert";
+import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRouteChips";
+import { autoSkipExit } from "./utils/autoSkipExit";
+import { stepsFor } from "./utils/operatingCursor";
 // Design note #673: one computation of what a previewed lay costs, read by the
 // corporation card and by the radial confirm caption.
 import { describePendingSpend, pendingSpend } from "./utils/pendingSpend";
@@ -448,10 +454,11 @@ import {
    276-entry list inside that loop would be the only expensive thing in the pass. */
 const ALL_TILE_PLACEMENTS = localCatalogPlacements();
 
-/** Design note #740: rivals' live routes are keyed above any real train index, so a watcher's overlay can
- *  never collide with their own on the key three surfaces join by (#373). A corporation has at most four
- *  trains; a thousand is room to be wrong in. */
-const RIVAL_ROUTE_INDEX_BASE = 1000;
+/* Design note #875: `RIVAL_ROUTE_INDEX_BASE` moved to `watcherRouteChips.ts`, which is now the thing that
+   applies it. #740's reasoning travels with it: "rivals' live routes are keyed above any real train index, so
+   a watcher's overlay can never collide with their own on the key three surfaces join by (#373)." Imported
+   rather than redeclared, because the map overlay below keys rival routes the same way and a second literal
+   1000 is how that join quietly breaks. */
 
 /** Design note #727: whether the ACTING CORPORATION holds a private -- `owner_protocol_id`, not `owner`.
  *  A power belongs to the railroad, not to the president personally (#441), so the player's own certificate
@@ -1681,6 +1688,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      say which of the two happened. */
   const [dhStationForfeited, setDhStationForfeited] = useState(false);
 
+  /* Design note #866: the standing request the board answers -- "resolve this hex's free-station slot".
+     STATE RATHER THAN A ONE-SHOT CALL because the answer expires: the anchor is board-relative pixels, so a
+     pan or a zoom while the confirmation is open changes it. The board re-reports on every view change and
+     the ring stays on the token. Cleared by the X (#866 in `handleCancelTokenPlacement`) and by the station
+     resolving either way. */
+  const [autoStageStation, setAutoStageStation] = useState<{ q: number; r: number } | null>(null);
+
+  /* Design note #873: the one-shot that opens the tile picker on a hex the player has already named.
+     A TOKEN RATHER THAN A BOOLEAN OR A BARE COORDINATE. The same hex can be armed twice in a row -- cancel
+     the C&SL's lay, then ask for it again -- and both a boolean and a coordinate would compare equal the
+     second time, so the picker would open once and never again. The counter is what makes "again" a change. */
+  const [autoSelectHex, setAutoSelectHex] = useState<{ q: number; r: number; token: number } | null>(
+    null,
+  );
+  const autoSelectTokenRef = useRef(0);
+
   /* Design note #849: the flow the modal renders, or `null`. Derived from the same power state the panel and
      the board read -- so what the modal says has happened and what the game thinks has happened are one
      reading, not two. */
@@ -1698,10 +1721,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       dhLaid && dhStation === "pending" && !dhPower.forfeited && ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId);
     const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : privatePowerRequest;
     if (key === null) return null;
+    /* ==================================================================
+       DESIGN NOTE 871: THE EXCHANGE IS NOT A HEX POWER AND LEAVES FIRST
+       ==================================================================
+       The two lines below look up a reserved hex, which the M&H does not have (#312: it "reserves nothing at
+       all because its power is the NYC exchange"). Returning before them is not a special case bolted on --
+       `PowerFlowInput` is a union (#871a) precisely so this branch cannot be handed a hex it has no use for.
+       AND OWNERSHIP IS RE-CHECKED HERE, not merely at the chip that raised it. A flow is derived state read
+       every render; the chip is a control clicked once. If the private closes -- or is sold -- between the
+       click and the next frame, this is what stops the modal describing a power the viewer no longer has. */
+    if (key === "mh-exchange") {
+      const mh = gameState?.private_companies?.find((row) => row.private_id === MH_PRIVATE_ID);
+      if (!mh || mh.closed || mh.owner === null || mh.owner !== viewerAddress) return null;
+      const revenue = Number(mh.revenue_per_or);
+      return privatePowerFlow({
+        abilityKey: key,
+        holder: mh.owner,
+        /* `undefined` RATHER THAN A GUESS when the figure is unreadable: the sentence then names the loss
+           without a number, which is honest, where `|| 0` would tell a player they are giving up nothing. */
+        revenuePerOr: Number.isFinite(revenue) ? revenue : undefined,
+      });
+    }
     const hex = privateHexFor(key === "dh-tile" ? DH_PRIVATE_ID : CSL_PRIVATE_ID);
     if (!hex) return null;
     return privatePowerFlow({
       abilityKey: key,
+      holder:
+        gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)?.ticker ??
+        "This corporation",
       hexLabel: hex.hexLabel,
       layDone: usedPrivateAbilities.has(key),
       station: key === "dh-tile" ? dhStation : "none",
@@ -1709,6 +1756,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [
     privatePowerRequest,
     usedPrivateAbilities,
+    /* Design note #871: `viewerAddress` is read by the M&H branch to check ownership. Missing from this list
+       in the first draft, which the lint caught -- and it would have been a real staleness bug rather than a
+       hygiene point: a memo that never re-runs on a viewer change would keep offering the exchange to the
+       browser that used to hold the private. */
+    viewerAddress,
     dhStationForfeited,
     dhPower,
     gameState,
@@ -1719,6 +1771,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => privatePowerHexKeys(privatePowerOfferList),
     [privatePowerOfferList],
   );
+  /* ==================================================================
+      DESIGN NOTE 871: THE M&H RIDES IN THE BAR, NOT UNDER IT
+     ==================================================================
+     REPORTED: "In the Stock Round, the MH private power is pinned below the Action Bar rather than sticky
+     with it, so it is easy to miss for players not scrolling up and down the page."
+
+     AND THAT IS #785 WORKING AS DESIGNED, which is why it is a placement question rather than a bug in the
+     panel. That pass moved every tall panel OUT of the sticky element on the finding that "the two that were
+     [reported] are precisely the two that lived INSIDE the sticky element and pushed it past the budget".
+     `PrivatePowerPanel` has always rendered past the bar's closing tag and was never the problem -- until a
+     power that is one button and one decision inherited a placement chosen for tables and ledgers.
+     SO THE OFFER TRAVELS AND THE PANEL STAYS. A chip costs a few pixels of resting height (#837 measures it),
+     which is the trade #846 already made for the two hex powers: "one list feeds both entry points".
+     SEPARATE FROM `privatePowerOffers`, deliberately. That module's note is explicit that it holds HEX powers
+     -- "M&H and C&A are share exchanges" -- and that its list "can never hold more than two entries". Growing
+     it here would falsify a note that is load-bearing for `privatePowerHexKeys`, which feeds the board's glow
+     and must never be handed a power with no hex. Two lists, joined only where the bar takes a generic chip. */
+  const stockRoundPowerOffers = useMemo(() => {
+    /* READ HERE rather than from a shared binding: `roundType` is a local inside another memo (line ~1289),
+       and lifting it would touch a memo this change has no business in. `current_round_type` is the same
+       field that one reads. */
+    if (gameState?.current_round_type !== "StockRound") return [];
+    const mh = gameState?.private_companies?.find((row) => row.private_id === MH_PRIVATE_ID);
+    /* OWNED BY THIS VIEWER AND STILL OPEN. `owner` is the PLAYER field -- #441: "a PLAYER owning the MH may
+       exchange it" -- so a corporation holding it offers nobody a chip, which is correct: a corporation
+       cannot take the exchange. */
+    if (!mh || mh.closed || mh.owner === null || mh.owner !== viewerAddress) return [];
+    return [{ abilityKey: "mh-exchange", chipLabel: "Exchange M&H for NYC" }];
+  }, [gameState, viewerAddress]);
+
   /* Read through a ref for the same reason `isMyTurnRef` is: the click handler is a `useCallback` the canvas
      holds across renders, and a click is a user event long after the commit that set it. */
   const privatePowerOffersRef = useRef(privatePowerOfferList);
@@ -2726,52 +2808,66 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  Both are DERIVED FROM TRUTH and merely INDEXED BY A HINT: the route being priced is a guess about what a
    *  rival will do, but the board it is priced against, and the fleet it is attributed to, are facts. Keeping
    *  the channel thin is right; refusing to join it to state the reader already has is not. */
-  const rivalTrainDrafts = useMemo<TrainRouteDraft[]>(() => {
-    const drafts: TrainRouteDraft[] = [];
-    for (const entry of rivalPresence) {
-      const presenceCompany = entry.actingCompanyId ?? null;
-      for (const [index, hexes] of Object.entries(entry.routeDrafts ?? {})) {
-        const labels = hexes
-          .map(([q, r]) => STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label)
-          .filter((label): label is string => label !== undefined);
-        const priced =
-          labels.length >= 2
-            ? sandboxRouteBreakdown(
-                mapGrid,
-                labels.map((hex) => ({ hex })),
-                ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
-              ).revenue
-            : null;
-        /* The fleet this index points into, from the board rather than from the wire. A train rusted or
-           discarded mid-turn leaves the lookup empty, and "Train" unnumbered is the honest answer for a
-           watcher then -- a stale index rendered as a confident model would be the one thing worse than a
-           vague label. */
-        const roster =
-          gameState?.public_companies.find(
-            (entry) => entry.company_id === presenceCompany,
-          )?.owned_trains ?? [];
-        const model = roster[Number(index)];
+  /* ==================================================================
+      DESIGN NOTE 875: ONE CHIP PER TRAIN, OR ONE CHIP PER DRAFT?
+     ==================================================================
 
-        drafts.push({
-          trainIndex: RIVAL_ROUTE_INDEX_BASE + Number(index),
-          model: model ? `${model}` : "Train",
-          value: priced,
-          /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a
-             chip and a figure; the fields behind the president's own planner -- capacity, the full path, the
-             legality complaints -- are about a DECISION this reader is not making, and inventing plausible
-             values for them would be the #724 mistake in a new place. */
-          maxDistance: undefined,
-          hexLabels: [],
-          stops: [],
-          revenueCentres: 0,
-          exceedsMaxDistance: false,
-          endsOffTerminus: false,
-          tokenBlockReason: null,
-        });
-      }
-    }
-    return drafts;
-  }, [rivalPresence, mapGrid, currentPhase, gameState]);
+     REPORTED, AND NOT FOR THE FIRST TIME: "On Run Routes subphase, non-active players STILL cannot see the
+     train chips + revenue of the operating corporation. It is imperative that this gets fixed."
+
+     THE TWO SIDES OF ONE PROP WERE BUILT FROM DIFFERENT THINGS, and that is the whole bug. `trainDrafts`
+     above maps `ownedTrainRoster` -- one entry PER TRAIN, so a chip exists whether or not a route has been
+     drawn for it, with `value: null` until one is. This mapped `entry.routeDrafts` -- one entry PER DRAFTED
+     ROUTE. A president who has drafted nothing publishes nothing, so a watcher's array was EMPTY, and the
+     row's own `trainDrafts.length > 0` guard then hid it completely. Not a missing chip: a missing row.
+
+     WHICH IS WHY IT SURVIVED TWO FIXES. #740 and #802 both worked on this path and both tested it with
+     routes already drawn, where presence does carry an entry per train and the row looks right. The failure
+     is the state a watcher is in for most of the step -- watching, before anything is drawn.
+
+     AND #802'S NOTE SAID THIS WAS ALREADY TRUE: "The chips render for the whole table (they come off
+     `activeCorporation.trains`, which is shared state) and the drafts arrive through presence for a watcher
+     and locally for the actor." That is exactly the right design and it describes the president's branch
+     only. The watcher's branch never read the roster at all.
+
+     SO THE FLEET COMES FROM STATE AND ONLY THE REVENUE COMES FROM PRESENCE. `ownedTrainRoster` is derived
+     from `actingProtocolId` against `gameState`, so it is the same list on every client in the room --
+     replayed from the same log. A watcher needs no channel to know which trains are running; they need one
+     to know what the president has plotted for them, which is what presence is for and all it is for.
+     THE INDEX CONVENTION SURVIVES. `RIVAL_ROUTE_INDEX_BASE` keeps a watcher's chips from colliding with
+     their own drafts on the key three surfaces join by (#373/#740), and the map overlay below still keys
+     rival routes the same way -- so hovering a chip still lights the right line. */
+  /* Design note #875: the rule lives in `watcherRouteChips.ts` so it can be tested as arithmetic rather than
+     scanned for. This memo supplies the board -- the roster from game state, the pricing and the hex names --
+     and fills in the fields a watcher's row does not carry. */
+  const rivalTrainDrafts = useMemo<TrainRouteDraft[]>(() => {
+    const era = ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"];
+    /* THE ACTING CORPORATION'S OWN ENTRY, not "any rival". Presence carries one entry per connected player;
+       the one that matters is whoever is publishing drafts for the company now operating. `null` when nobody
+       is -- the ordinary case at the start of the step, and the case that used to produce no row at all. */
+    const actor =
+      rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId) ?? null;
+    return watcherTrainDrafts({
+      roster: ownedTrainRoster,
+      actorDrafts: actor?.routeDrafts ?? null,
+      labelForHex: (q, r) => STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label,
+      priceRoute: (labels) =>
+        sandboxRouteBreakdown(mapGrid, labels.map((hex) => ({ hex })), era).revenue,
+    }).map((chip) => ({
+      ...chip,
+      /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a chip
+         and a figure; the fields behind the president's own planner -- capacity, the full path, the legality
+         complaints -- are about a DECISION this reader is not making, and inventing plausible values for them
+         would be the #724 mistake in a new place. */
+      maxDistance: undefined,
+      hexLabels: [],
+      stops: [],
+      revenueCentres: 0,
+      exceedsMaxDistance: false,
+      endsOffTerminus: false,
+      tokenBlockReason: null,
+    }));
+  }, [rivalPresence, mapGrid, currentPhase, ownedTrainRoster, actingProtocolId]);
 
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
     const overlays: RouteOverlay[] = [];
@@ -2915,6 +3011,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setActionToast({ text, token: actionToastTokenRef.current });
   }, []);
 
+  /* ==================================================================
+      DESIGN NOTE 868: THE ERA IS GOOD NEWS, SO IT IS ANNOUNCED, NOT COUNTED DOWN TO
+     ==================================================================
+
+     SPECIFIED: "the meaningful era change information (Green Tiles are now available, Brown Tiles are now
+     available) could be a toast notification to every player when the threshold is crossed. The Rust and
+     Limit warnings restrict what players can do, the Era change expands their repertoires."
+
+     THE DISTINCTION IS THE DESIGN. A warning badge is a countdown to a LOSS, and it earns its colour because
+     a player may want to act before it lands -- sell a train, spend a slot. Nothing about new tiles needs
+     preparing for, so counting down to them put good news in a row that means danger. This fires once, when
+     it is true.
+
+     `showDividendToast` RATHER THAN `showActionToast`, on #738's own distinction: that one is a receipt for
+     YOUR dispatch, this is a notification about a change in the world, and every player at the table gets it
+     because every player derives it from the same state.
+
+     DERIVED, NOT DISPATCHED. There is no era-change message on the wire and there should not be -- the era
+     is a function of the highest train in play (#1), so each client can see the moment it turns. A message
+     would be a second source for a fact already in `gameState`.
+
+     THE FIRST OBSERVATION IS NOT A CHANGE, which is the whole subtlety here. On page load, on a refresh, and
+     on a client joining mid-game the ref starts empty and the era is simply whatever it is; toasting there
+     would announce "Green Tiles are now available" to somebody who has been laying green tiles for an hour.
+     `replayingHistory` is handled inside `showDividendToast` already (#825). */
+  const eraNow = currentPhase ? tierEra(currentPhase.tier) : null;
+  const lastEraRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (eraNow === null) return;
+    const previous = lastEraRef.current;
+    lastEraRef.current = eraNow;
+    if (previous === null || previous === eraNow) return;
+    showDividendToast(
+      `${eraNow} Tiles are now available.`,
+      `Every corporation may now lay ${eraNow} tiles, and upgrade existing track to them.`,
+    );
+  }, [eraNow, showDividendToast]);
+
   const [cashDeltas, setCashDeltas] = useState<CashDelta[]>([]);
   const noteCashChanges = useCallback(
     (changes: ReadonlyArray<{ address: string; amount: number }>) => {
@@ -3045,9 +3179,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         returnTab: activeMainTab,
       });
       setActiveMainTab("map");
+      /* ==================================================================
+         DESIGN NOTE 873: THE PICKER OPENS ITSELF ON A HEX ALREADY CHOSEN
+         ==================================================================
+         ASKED: "Forcing them to click Yes on the modal, then click on the hex, feels like it has an
+         unnecessary step."
+         AND THE SENTENCE BELOW IS THE ADMISSION. It read "click F16 on the Rail Map, the only hex left lit"
+         -- a line whose own wording says the destination is already decided. A gesture with one possible
+         target is not a choice; the choice is WHICH TILE, and that is what the picker is for.
+         ONLY THE TILE ERRANDS. A `private-station` errand does not open a picker at all -- #866 stages its
+         token directly, because that placement has one answer too. This is the same reasoning applied to the
+         step where a real question survives.
+         THE ERRAND STILL ARMS, and that matters: it is what lifts the connectivity gate (#725), what the
+         cancel banner reads (#817), and what `errandClickIntent` uses to decide what a click somewhere else
+         means. Opening the picker is an addition to the errand, not a replacement for it -- a player who
+         dismisses the ring is still armed and can click the hex the old way. */
+      if (abilityKey !== "dh-token") {
+        /* ==================================================================
+           DESIGN NOTE 873a: THE REF HAS TO BE TRUE BEFORE THE EFFECT RUNS
+           ==================================================================
+           #725 PUT THIS REF IN AN EFFECT ON PURPOSE and said why: "written in an effect rather than at the
+           two call sites that set the errand, so arming and disarming cannot get out of step -- the ref
+           follows the state by construction." That is still the authority and the effect below still runs.
+           WHAT #873 ADDED IS A READER INSIDE THE SAME COMMIT. The board's auto-select effect is a CHILD
+           effect, and React runs child effects before parent ones -- so it calls back into
+           `handleHexClickQuery` before App's own effect has mirrored the errand. `privatePowerOfferAt` reads
+           this ref to decide whether the marked hex should raise the power prompt, and with a stale `null` it
+           would raise it: the player presses "Lay Track on F16", the modal closes, and the modal immediately
+           reopens instead of the picker. Not an infinite loop, but a control that appears to do nothing.
+           SO THE WRITE IS ADDITIVE, NOT A SECOND AUTHORITY. The effect overwrites this on the next commit
+           with the same value, and remains the only thing that CLEARS it -- which is the half #725's note is
+           really about, since a disarm that forgot to clear is the failure it names. */
+        privateTileHexKeyRef.current = `${reservation.q},${reservation.r}`;
+        autoSelectTokenRef.current += 1;
+        setAutoSelectHex({
+          q: reservation.q,
+          r: reservation.r,
+          token: autoSelectTokenRef.current,
+        });
+      }
       logInfoRef.current?.(
         "Private Power",
-        `${label} — click ${reservation.hexLabel} on the Rail Map, the only hex left lit.`,
+        /* THE SENTENCE FOLLOWS THE BEHAVIOUR. It used to send the player hex-hunting; the picker is now
+           already open on that hex, so the log says which hex and what to do in it. */
+        `${label} — the tile picker is open on ${reservation.hexLabel}.`,
       );
     },
     [actingProtocolId, activeMainTab],
@@ -3058,6 +3233,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      acting. It also keeps #263 satisfied: nothing on the bar dispatches. */
   const handleChipPowerOffer = useCallback(
     (abilityKey: string) => {
+      /* Design note #871: the M&H is not in the hex-offer list and never will be -- see
+         `stockRoundPowerOffers`. Its chip raises the same request all the same, because `activePowerFlow`
+         re-checks ownership from game state before deriving a flow; the list lookup below is about which HEX
+         powers are live, not about permission. */
+      if (abilityKey === "mh-exchange") {
+        setPrivatePowerRequest("mh-exchange");
+        return;
+      }
       const offer = privatePowerOffersRef.current.find(
         (entry) => entry.abilityKey === abilityKey,
       );
@@ -3066,13 +3249,60 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [],
   );
 
+  /* ==================================================================
+      DESIGN NOTE 871: ONE DISPATCH, TWO DOORS
+     ==================================================================
+     EXTRACTED FROM `handleUsePrivateAbility`, unchanged, because the flow modal now reaches the same move.
+     #846 established the rule for the hex powers -- "One question, asked one way, whichever door a player
+     came through" -- and a second copy of this dispatch would be the thing that rule exists to prevent: two
+     paths to `ExchangePrivate` that could come to disagree about the legality check, the log line, or the
+     turn gate. */
+  const runPrivateExchange = useCallback((privateId: number, actionLabel: string) => {
+    const owner = viewerAddressRef.current;
+    const outcome = resolvePrivateExchange(gameStateRef.current, privateId, owner ?? "");
+    if (!outcome.ok) {
+      setPrivateAbilityError(outcome.reason);
+      logInfoRef.current?.("Private Power", outcome.reason);
+      return;
+    }
+    setPrivateAbilityError(null);
+    void runGameplayActionRef.current?.(
+      `${actionLabel} — exchanging for a 10% ${outcome.ticker} share.`,
+      {
+        ExchangePrivate: {
+          private_id: outcome.privateId,
+          company_id: outcome.companyId,
+          player: outcome.player,
+          source: outcome.source,
+        },
+      },
+      /* `automatic`: an exchange may be taken between other players' turns (the M&H's own rule), so the turn
+         gate would refuse the one moment the power is most useful. Ownership is the gate here and
+         `resolvePrivateExchange` has already checked it. */
+      { automatic: true },
+    );
+    /* Deliberately NOT marked used: design note #573a closes the COMPANY instead, which removes the row
+       entirely rather than greying it. */
+  }, []);
+
   /* Design note #849: the modal's three answers, all landing on machinery that already existed. The flow
      module decides WHICH buttons are live; these decide what each one does, and neither duplicates the
      other's judgement. */
   const handlePowerFlowAct = useCallback(
-    (step: "lay" | "station") => {
+    (step: "lay" | "station" | "exchange") => {
       const key = activePowerFlow?.abilityKey;
       if (!key) return;
+      /* Design note #871: the exchange fires here rather than from the panel button, and it is the SAME
+         dispatch `handleUsePrivateAbility` already makes -- `resolvePrivateExchange` for the legality answer,
+         `ExchangePrivate` for the message, `automatic: true` because the M&H may be traded between other
+         players' turns. What changed is that a confirmation now stands in front of it; the rule underneath is
+         untouched, which is what keeps the panel's button and this modal from becoming two accounts of one
+         move. */
+      if (step === "exchange") {
+        runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share");
+        setPrivatePowerRequest(null);
+        return;
+      }
       if (step === "lay") {
         /* The SAME arming the powers panel does (#845), so a lay reached through the modal and a lay reached
            through the panel are one errand. */
@@ -3083,18 +3313,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         );
         return;
       }
-      armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", "Place Station Token for $0 (F16)");
+      /* ==================================================================
+         DESIGN NOTE 866: THE FREE STATION HAS ONE SLOT, SO IT IS STAGED, NOT HUNTED
+         ==================================================================
+         REPORTED: "clicking F16 to place the free station token is still calling up the tileselector radial
+         menu. Why don't we just have the station automatically placed there with the green checkmark and red
+         x above it, since there's no other placement possible in this private power?"
+         THIS LINE USED TO READ `armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", ...)`, which lit F16 and sent
+         the player to go and click it. That click could only land one way -- F16 is Scranton, a single-city
+         hex -- and because it was a click it also reached the tile inspector, which opened a picker over the
+         confirmation. #850 guarded that collision with `pendingTokenRef`, but the guard only fires once a
+         token is ALREADY staged; on the first click there is nothing staged for it to see.
+         SO THE GESTURE IS REMOVED RATHER THAN THE COLLISION PATCHED. Asking the board to resolve the slot
+         skips the inspector entirely, because no click happens.
+         `armPrivateHexErrand` IS STILL THE FALLBACK, in the shell's auto-stage handler: a hex with two
+         cities is a real choice and has to be asked (#858), and this must not become the code that answers
+         it. */
+      const hex = privateHexFor(DH_PRIVATE_ID);
+      if (!hex) return;
+      setActiveMainTab("map");
+      setAutoStageStation({ q: hex.q, r: hex.r });
     },
-    [activePowerFlow, armPrivateHexErrand],
+    [activePowerFlow, armPrivateHexErrand, runPrivateExchange],
   );
 
-  const handlePowerFlowDecline = useCallback((step: "lay" | "station") => {
-    /* ONLY THE STATION STEP OFFERS A DECLINE, and `privatePowerFlow` renders no decline button on the lay --
-       so this arm exists to make that explicit rather than to be reached. Spending the ability is what makes
-       the forfeit a DECISION (#818) rather than a turn that moved on. */
+  const handlePowerFlowDecline = useCallback((step: "lay" | "station" | "exchange") => {
+    /* ==================================================================
+       DESIGN NOTE 871: TWO DECLINES, TWO MEANINGS, AND THEY MUST NOT BE MERGED
+       ==================================================================
+       The D&H's decline SPENDS the power -- #818's whole argument is that the free placement must be
+       forfeited by a named button rather than by a dismissal. The M&H's decline spends nothing: the private
+       is still yours, the chip still offers it, and the question can be asked again next turn.
+       #845 DREW THIS LINE ALREADY, one power earlier: "Declining THIS one costs nothing: the power is still
+       unspent, the hex still rings, the chip still offers it. Two modals, two rules, and the difference is
+       whether the question can be asked again." Same distinction, third power.
+       SO THE EXCHANGE JUST CLOSES. No `usedPrivateAbilities` entry, no log line -- nothing happened, and a
+       log entry for a question answered "no" would be a record of a non-event. */
+    if (step === "exchange") {
+      setPrivatePowerRequest(null);
+      return;
+    }
+    /* ONLY THE STATION STEP OFFERS A DECLINE among the hex powers, and `privatePowerFlow` renders no decline
+       button on the lay -- so this arm exists to make that explicit rather than to be reached. Spending the
+       ability is what makes the forfeit a DECISION (#818) rather than a turn that moved on. */
     if (step !== "station") return;
     setDhStationForfeited(true);
     setPrivatePowerRequest(null);
+    /* Design note #866: and the standing request goes with it. A forfeited placement that was still being
+       resolved every frame would re-stage the token the player just declined. */
+    setAutoStageStation(null);
     logInfoRef.current?.(
       "Private Power",
       "Delaware & Hudson — the free placement on F16 was forfeited. The marker returns to the supply.",
@@ -3133,36 +3400,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* A refusal must leave the power alone - returning before setUsedPrivateAbilities is the whole difference.
          See docs/ai_architecture/contract_economy.md - App.tsx #573 */
       if (action.key === "mh-exchange" || action.key === "ca-exchange") {
-        const owner = viewerAddressRef.current;
-        const outcome = resolvePrivateExchange(
-          gameStateRef.current,
-          ability.privateId,
-          owner ?? "",
-        );
-        if (!outcome.ok) {
-          setPrivateAbilityError(outcome.reason);
-          logInfoRef.current?.("Private Power", outcome.reason);
-          return;
-        }
-        setPrivateAbilityError(null);
-        void runGameplayActionRef.current?.(
-          `${action.label} — exchanging for a 10% ${outcome.ticker} share.`,
-          {
-            ExchangePrivate: {
-              private_id: outcome.privateId,
-              company_id: outcome.companyId,
-              player: outcome.player,
-              source: outcome.source,
-            },
-          },
-          /* `automatic`: an exchange may be taken between other players'
-             turns (the M&H's own rule), so the turn gate would refuse the
-             one moment the power is most useful. Ownership is the gate here
-             and `resolvePrivateExchange` has already checked it. */
-          { automatic: true },
-        );
-        /* Deliberately NOT marked used: design note #573a closes the COMPANY
-           instead, which removes the row entirely rather than greying it. */
+        runPrivateExchange(ability.privateId, action.label);
         return;
       }
 
@@ -3171,8 +3409,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     },
     /* Design note #845: `activeMainTab` and `actingProtocolId` moved INTO `armPrivateHexErrand` with the
        four lines that read them, so this list carries the callback instead of the values. Listing both
-       would leave two stale-closure risks where there is now one. */
-    [armPrivateHexErrand],
+       would leave two stale-closure risks where there is now one.
+       Design note #871: and `runPrivateExchange` joins it for the same reason -- the exchange body moved into
+       a callback, so this list carries the callback rather than the four refs it reads. */
+    [armPrivateHexErrand, runPrivateExchange],
   );
 
   /* round is an optional override; the default ref is right for every caller except a round transition, which announces a round the ref does not know yet.
@@ -4825,6 +5065,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       r,
       hexLabel,
       cityIndex,
+      // Design note #858: which city the home is locked to here, from the same reader the ring uses.
+      homeCityIndex,
       centroidX,
       centroidY,
       // Design note #516: the chosen city slot's own point.
@@ -4835,6 +5077,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       r: number;
       hexLabel: string;
       cityIndex: number | null;
+      homeCityIndex: number | null;
       centroidX: number;
       centroidY: number;
       /** Design note #516: the chosen city slot's centre, already through
@@ -4863,6 +5106,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // Design note #444: a tile lay is not staged here. It falls through
       // to the tile picker and finishes in `handleConfirmRadialLay`.
       if (placement.kind === "private-tile") return;
+
+      /* ==================================================================
+         DESIGN NOTE 858: AND THE CITY, NOT ONLY THE HEX
+         ==================================================================
+         REPORTED: "for NNH's Home Station, the correct city is shown with the glow ring, but a player can
+         select G19's other city and place the home station there."
+         `errandClickIntent` above locks the HEX and always has. The city had no gate at all, so the pointer's
+         answer went straight into the staged placement -- harmless on every one-city hex, which is why it
+         lasted, and wrong on the one hex where the two questions differ.
+         REFUSED WITH A SENTENCE rather than silently, because the player is looking at a ring on the OTHER
+         circle and needs to be told which one (#619). */
+      const cityRefusal = homeCityRefusal({
+        clickedCityIndex: cityIndex,
+        homeCityIndex,
+        hexLabel: placement.hexLabel,
+      });
+      if (cityRefusal) {
+        logInfoRef.current?.("Home Station", cityRefusal);
+        return;
+      }
 
       setPendingToken({
         q,
@@ -5514,6 +5777,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!pendingToken) return;
     const { q, r, cityIndex, kind } = pendingToken;
     setPendingToken(null);
+    /* Design note #866: the standing request ends when the placement does. The board re-answers it on every
+       view change, so a confirmed token that left the request set would immediately stage a second one. */
+    setAutoStageStation(null);
 
     /* A free placement finishes through its own committer; PlaceStationToken would charge the escalating price.
        See docs/ai_architecture/contract_economy.md - App.tsx #239 */
@@ -5548,12 +5814,56 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  "if they click yes and then decide they don't want to, they click the X which takes them back to the
    *  modal where they can decline the power." Cancelling a PLACEMENT is not declining a POWER -- the X keeps
    *  meaning what it means everywhere else in this app, and the forfeit stays behind a button that says so. */
+  /* Design note #866: the board's answer, turned into a staged placement.
+     `useCallback` IS LOAD-BEARING HERE, not hygiene. This is a dependency of the board's reporting effect,
+     so an inline arrow would change identity every render, re-run the effect, set state, and render again --
+     a render loop rather than a stale closure. The deps are the two figures a placement carries. */
+  const handleAutoStageStation = useCallback(
+    (info: {
+      q: number;
+      r: number;
+      hexLabel: string;
+      boardLabel: string | null;
+      cityIndex: number | null;
+      nodeX: number;
+      nodeY: number;
+    }) => {
+      /* TWO CITIES IS A REAL CHOICE AND MUST BE ASKED. #858 is the report that established it -- "a player
+         can select G19's other city and place the home station there" -- and auto-staging one of two would
+         be that bug with no click to blame. F16 has one city today; this is what happens if it ever does
+         not, rather than a comment promising it never will. */
+      if (info.cityIndex === null) {
+        setAutoStageStation(null);
+        armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", "Place Station Token for $0 (F16)");
+        return;
+      }
+      setPendingToken({
+        q: info.q,
+        r: info.r,
+        hexLabel: info.hexLabel,
+        cityIndex: info.cityIndex,
+        companyId: actingProtocolId,
+        kind: "free",
+        offsetX: info.nodeX,
+        offsetY: info.nodeY,
+      });
+    },
+    [actingProtocolId, armPrivateHexErrand],
+  );
+
   const handleCancelTokenPlacement = useCallback(() => {
     /* Design note #818/#849: cancelling a PLACEMENT is not declining a POWER. Clearing the errand as well
        returns the player to the modal, where the forfeit is a button that says what it does -- so the X on
-       the confirmation ring keeps the single meaning it has everywhere else in this app. */
+       the confirmation ring keeps the single meaning it has everywhere else in this app.
+       Design note #866: AND THE STANDING REQUEST, or the X would not work. Asked for explicitly: "we need to
+       make sure clicking X returns players to the modal where they click 'Forfeit' for the station
+       placement." `autoStageStation` is a request the board answers on every view change (so the ring
+       follows a pan); leaving it set would re-stage the token on the very next frame and the X would look
+       broken. Clearing it is what lets `activePowerFlow`'s standing obligation raise the modal again --
+       which is #818's mechanism, unchanged, reached through one more piece of state. */
     setPendingToken(null);
     setHomeStationPlacement(null);
+    setAutoStageStation(null);
   }, []);
 
   // A staged placement must not outlive the mode that produced it -- the
@@ -5619,6 +5929,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const handleSkipSubPhase = useCallback(() => skipSubPhase(false), [skipSubPhase]);
   /** The auto-skip effect's entry point -- design note #439. */
   const skipSubPhaseAutomatically = useCallback(() => skipSubPhase(true), [skipSubPhase]);
+
+  /* Design note #876: the automatic twin of End Turn, and the same `{ automatic, derived }` pair the skip
+     above carries -- #439's split entry points, so Undo rewinds past a turn the game ended on the player's
+     behalf rather than stopping at it. `PassTurn` is what End Turn dispatches; this is that dispatch without
+     the tutorial navigation, which belongs to a button somebody pressed. */
+  const endTurnAutomatically = useCallback(
+    () =>
+      runGameplayAction("PassTurn", { PassTurn: { game_id: gameId } }, { automatic: true, derived: true }),
+    [runGameplayAction, gameId],
+  );
 
   // Audit G-15. Each refreshes the offer list on completion: the whole point
   // of these four is that they change what BOTH players can do next, and the
@@ -6016,19 +6336,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const key = turnGuardKey(turnIdentity, actingProtocolId, orSubPhase);
     if (autoSkippedRef.current.has(key)) return;
     autoSkippedRef.current.add(key);
+    /* ==================================================================
+       DESIGN NOTE 876: SKIPPING THE LAST STEP IS ENDING THE TURN
+       ==================================================================
+       ASKED: "When a corporation is at the train limit, I think the game should auto-skip to end their turn
+       instead of making them click it."
+       THE REASON WAS ALREADY HERE -- `autoSkipReason` has returned "it is already at its train limit" for the
+       Hardware step since #249 -- and this line dispatched an advance into a step that does not exist.
+       `nextSubPhase` returns `current` at the end of the list (#656: "a phase change is not a turn event"),
+       so the cursor stayed put, the guard below marked the turn handled, and the only trace was a log line
+       claiming a skip that never happened.
+       THE PREDICATE IS A POSITION, NOT A NAME. `stepsFor` is the reducer's own list and it varies -- it drops
+       `BuyPrivate` once the last private is bought -- so asking "is this the last one" keeps the shell and
+       the reducer agreeing about where the turn ends. See `autoSkipExit.ts`. */
+    const exit = gameState
+      ? autoSkipExit(orSubPhase, stepsFor(gameState))
+      : ("advance" as const);
     logInfo(
       "Auto-Skip",
-      `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} — ${autoSkipReason}.`,
+      exit === "end-turn"
+        ? `Ended the turn — ${autoSkipReason}.`
+        : `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} — ${autoSkipReason}.`,
     );
-    // Design note #439: the AUTOMATIC entry point, so Undo rewinds past it.
-    skipSubPhaseAutomatically();
+    // Design note #439: the AUTOMATIC entry points, so Undo rewinds past either.
+    if (exit === "end-turn") endTurnAutomatically();
+    else skipSubPhaseAutomatically();
   }, [
     autoSkipReason,
     isMyTurn,
     actingProtocolId,
     turnIdentity,
     orSubPhase,
+    /* Design note #876: `gameState` joins the list because `stepsFor` reads it. The guard above makes the
+       effect idempotent per turn, so a wider dependency costs a comparison rather than a second dispatch. */
+    gameState,
     skipSubPhaseAutomatically,
+    endTurnAutomatically,
     logInfo,
   ]);
 
@@ -6063,6 +6406,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       bonusLay = false,
       /** Design note #824: where the token on this hex goes, when the president had a say. */
       tokenCity?: number,
+      /** Design note #880: where EVERY token on this hex goes -- `[company_id, city_index]`, derived from
+       *  connectivity. Supersedes `tokenCity`, which could only say one thing to all of them. */
+      tokenCities?: ReadonlyArray<[number, number]>,
     ) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
@@ -6082,6 +6428,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              every client's reducer must reach the same answer from the log alone, and a choice the log does
              not carry is a choice that does not survive a replay. */
           ...(tokenCity !== undefined ? { token_city: tokenCity } : {}),
+          /* Design note #880: and the per-company answer, which is the one the reducer prefers. Omitted when
+             empty so an ordinary lay on an empty hex is byte-identical to what this app has always sent. */
+          ...(tokenCities && tokenCities.length > 0 ? { token_cities: [...tokenCities] } : {}),
         },
       });
 
@@ -6165,13 +6514,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (previewTile === null) return [];
     const angles = radialCandidates
       .filter((placement) => placement.tile_id === previewTile.tileId)
+      /* ==================================================================
+         DESIGN NOTE 879: AN ORIENTATION THAT SEVERS A NETWORK IS NOT LEGAL
+         ==================================================================
+         REPORTED: "if a Green OO has a station marker with connectivity to a specific hex, the only legal
+         upgrades are those that preserve the station marker with that connectivity to that specific hex."
+         SO THE FILTER IS PART OF LEGALITY, not a courtesy. `planTokenUpgrade` returns `null` when no city of
+         the candidate at this facing still owns a standing token's edges -- and the rotate gesture must not
+         be able to reach an arrangement the rules forbid, because a president who can see it will try to lay
+         it.
+         AN EMPTY HEX AND A FREE TOKEN BOTH PASS. The plan only refuses when there is a network to sever, so
+         ordinary lays and ERIE's unconnected home keep every facing they had. */
+      .filter(
+        (placement) =>
+          planTokenUpgrade(
+            mapGrid,
+            previewTile.q,
+            previewTile.r,
+            gameState?.public_companies ?? [],
+            placement.tile_id,
+            placement.orientation,
+          ) !== null,
+      )
       .map((placement) => placement.orientation);
     return Array.from(new Set(angles)).sort((a, b) => a - b);
-  }, [radialCandidates, previewTile]);
+  }, [radialCandidates, previewTile, mapGrid, gameState]);
 
+  /* ==================================================================
+      DESIGN NOTE 874: LEAVING THE PICKER LEAVES THE POWER
+     ==================================================================
+
+     REPORTED: "once a player selects the Lay Track power, there is no 'escape.' Selecting the red X on the
+     tileselector preview tile does not escape the private power."
+
+     THE RING AND THE ERRAND WERE TWO STATES AND ONLY ONE OF THEM CLOSED. Dismissing the picker cleared the
+     ring and left `homeStationPlacement` armed -- so the veil stayed, the connectivity gate stayed lifted,
+     and the only labelled way out was #817's cancel on the action bar, which the player is not looking at.
+     BOTH EXITS AGREE NOW, which is the part that matters: the X and the click-away do the same thing, so a
+     player who reaches for either gets the same answer. `errandClickIntent` already treats a click on ANOTHER
+     hex as a cancel (#817), and this is the third gesture finally joining the other two.
+     ONLY THE TILE ERRAND. A `private-station` errand opens no picker (#866) and a HOME station errand is
+     compulsory -- "there is nothing to cancel and nowhere else to go" -- so neither is reachable from here.
+     THE MODAL COMES BACK ON ITS OWN. `privatePowerRequest` is untouched by arming, so clearing the placement
+     is enough for `activePowerFlow` to raise the flow again -- where the X cancels the power outright. */
   const handleDismissRadial = useCallback(() => {
     setRadialSelector(null);
     setPreviewTile(null);
+    setHomeStationPlacement((current) =>
+      current?.kind === "private-tile" ? null : current,
+    );
   }, []);
 
   const handlePreviewRotate = useCallback(
@@ -6211,24 +6602,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         const wrapped = at + 1 >= legalRotations.length;
         const nextAngle = legalRotations[(at + 1) % legalRotations.length];
 
-        const cities = tokenDestinationChoices(
+        /* ==================================================================
+           DESIGN NOTE 879: THE CITY IS DERIVED PER FACING, NOT CARRIED
+           ==================================================================
+           #824 CYCLED A CHOICE and that was right for the case it was built for -- ERIE's home token, where
+           the board has never said which city it is in. It was wrong as a general rule, because for every
+           OTHER token the destination is not a choice at all: it is whichever city of THIS facing still owns
+           the token's edges, and it changes as the tile turns.
+           SO THE OUTER LOOP SURVIVES ONLY WHERE THERE IS SOMETHING TO CHOOSE. `anyFree` is true exactly when
+           a standing token has no network to preserve, which is #878's one-line statement of the ERIE case;
+           everywhere else the marker follows the track and the president rotates through facings alone. */
+        const plan = planTokenUpgrade(
           mapGrid,
           current.q,
           current.r,
           gameState?.public_companies ?? [],
           current.tileId,
+          nextAngle,
         );
+        const mine = plan?.landings.find((entry) => entry.companyId === actingProtocolId) ?? null;
+        const cities = plan?.anyFree
+          ? tokenDestinationChoices(
+              mapGrid,
+              current.q,
+              current.r,
+              gameState?.public_companies ?? [],
+              current.tileId,
+            )
+          : [];
         const cityAt = cities.indexOf(current.tokenCity ?? cities[0] ?? -1);
         const nextCity =
-          wrapped && cities.length > 1
-            ? cities[(Math.max(cityAt, 0) + 1) % cities.length]
-            : (current.tokenCity ?? cities[0]);
+          mine?.toCityIndex != null
+            ? /* ANCHORED: the board decides, and it may differ at every facing. */
+              mine.toCityIndex
+            : wrapped && cities.length > 1
+              ? cities[(Math.max(cityAt, 0) + 1) % cities.length]
+              : (current.tokenCity ?? cities[0]);
 
         if (nextAngle === current.orientation && nextCity === current.tokenCity) return current;
         return { ...current, orientation: nextAngle, tokenCity: nextCity };
       });
     },
-    [radialSelector, handleDismissRadial, legalRotations, mapGrid, gameState],
+    [radialSelector, handleDismissRadial, legalRotations, mapGrid, gameState, actingProtocolId],
   );
 
   /** A live preview gives the canvas to rotation, so the query interceptor is disarmed. Token destinations are recomputed per candidate tile.
@@ -6253,6 +6668,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        per radial candidate, to decide which destination each thumbnail draws (#449) -- so the arithmetic has
        a live reader and the prose does not. Corrected rather than quietly reworded, because a note asserting
        something the code beneath it does not do is the single failure this project keeps finding.
+       AND #879 RETIRED THAT READER TOO. The thumbnails now ask `planTokenUpgrade`, which knows the ORIENTATION
+       and therefore can answer where a token lands; `previewTokenMigration` preserved a city INDEX and has no
+       caller in this file any more. A third correction to one paragraph, left visible for the same reason the
+       second was.
 
        THE MEMO ITSELF IS KEPT, returning `null`, rather than deleting the `tokenNote` prop: the ring's
        caption is a general facility (#684 shows it only while previewing) and a future note may earn it.
@@ -6270,21 +6689,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const radialStationMarkersFor = useCallback(
     (tileId: number): readonly StationPreviewMarker[] => {
       if (!radialSelector) return [];
-      const preview = previewTokenMigration(
+      /* ==================================================================
+         DESIGN NOTE 879: A THUMBNAIL HAS TO PICK A FACING
+         ==================================================================
+         REPORTED: "the tileselector radial menu cannot predict where the station will be."
+         EXACTLY SO, AND THAT IS NOT A REASON TO DRAW NOTHING. The destination depends on the orientation and
+         the ring has not asked for one yet, so this shows the arrangement the player will actually meet
+         FIRST: the lowest facing that is legal for this candidate. Pressing it opens the preview at that same
+         facing (`legalRotations[0]`), so the marker on the thumbnail is the marker they then see on the board
+         rather than a guess that changes under them.
+         AND AN ILLEGAL CANDIDATE DRAWS NO MARKER, which is honest: if no facing of this tile can seat the
+         tokens, there is no destination to promise. The candidate itself is filtered out of the ring by the
+         same rule (#879 in `legalRotations`), so this is the belt to that braces. */
+      const companies = gameState?.public_companies ?? [];
+      const facing = radialCandidates
+        .filter((placement) => placement.tile_id === tileId)
+        .map((placement) => placement.orientation)
+        .sort((a, b) => a - b)
+        .find(
+          (orientation) =>
+            planTokenUpgrade(
+              mapGrid,
+              radialSelector.q,
+              radialSelector.r,
+              companies,
+              tileId,
+              orientation,
+            ) !== null,
+        );
+      if (facing === undefined) return [];
+      const plan = planTokenUpgrade(
         mapGrid,
         radialSelector.q,
         radialSelector.r,
-        gameState?.public_companies ?? [],
+        companies,
         tileId,
+        facing,
       );
-      if (!preview) return [];
-      return preview.migrations.map((entry) => ({
-        cityIndex: entry.toCityIndex,
-        ticker: entry.ticker,
-        color: stationTickerColor(entry.companyId),
-      }));
+      if (!plan) return [];
+      return plan.landings
+        /* A FREE TOKEN HAS NO DESTINATION TO DRAW. Rendering it at city 0 would be the superseded rule
+           reappearing on the one surface that never had it. */
+        .filter((entry) => entry.toCityIndex !== null)
+        .map((entry) => ({
+          cityIndex: entry.toCityIndex as number,
+          ticker: entry.ticker,
+          color: stationTickerColor(entry.companyId),
+        }));
     },
-    [radialSelector, mapGrid, gameState],
+    [radialSelector, mapGrid, gameState, radialCandidates],
   );
 
   /* Order matches cursorMode's: a home-station errand names its own corporation and wins. private-tile is excluded because it ends in the tile picker.
@@ -6321,6 +6774,65 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       (message) => setSandboxRoomError(message),
     );
   }, [sandbox, sandboxRoomCode]);
+
+  /* ==================================================================
+     DESIGN NOTE 856: JOINING A ROOM DID NOT PUT YOU IN IT
+     ==================================================================
+
+     REPORTED: "When I Host Game and a player joins, it does not update on my screen until/unless I refresh
+     the page." And, decisively, on being asked which way round it failed: "the joiner sees the host, but the
+     host doesn't see joiners."
+
+     THAT ASYMMETRY IS THE WHOLE DIAGNOSIS. `hostSandboxRoom` writes the host into the room document, so a
+     joiner's FIRST SNAPSHOT already contains them -- which is why the joiner's screen looked correct and made
+     the listeners look healthy. `handleJoinSandboxRoom` reads the log and sets the room code, and writes
+     NOTHING. `upsertSandboxPlayer` had exactly three callers, all of them waiting-room controls: set a
+     nickname, pick a colour, press Ready. So a joiner who had not yet touched one of those three was not in
+     the document at all, and the host's listener had nothing to fire on.
+
+     IT WAS NEVER LAG, which is what it looks like from the host's chair -- "the joining player showed up on
+     the host's browser while talking to you". The delay is exactly how long the joiner takes to type a name
+     or press Ready, which is unbounded and feels like a slow network. Refreshing the host appeared to fix it
+     because by then the joiner had usually interacted.
+
+     AND IT IS NOT A REGRESSION, though it was reported as one. `git log -S upsertSandboxPlayer` finds three
+     commits, all ADDING call sites, none in the join path; nothing was removed in the last two pushes or in
+     any before them. What changed is probably the playtest habit, not the code.
+
+     THE ROSTER IS LOAD-BEARING, which is why this is more than cosmetic: `SandboxWaitingRoom` derives
+     `players.length` from it, and the host's Start button is gated on `MIN_PLAYERS` -- so an unseated joiner
+     does not merely fail to appear, they cannot be started with.
+
+     ONCE PER ROOM, THROUGH A REF. The effect must not re-fire on every snapshot: `upsertSandboxPlayer` is a
+     read-modify-write transaction, and an effect keyed on the roster that writes the roster is a loop. The
+     ref records which room code has been claimed, so a second room re-arms it and a failed write does not
+     spin. #573's rule, applied to a write rather than to a power: an attempt that changes nothing must leave
+     the world alone.
+
+     THE NAME IS THE ONE THE HOST USES for itself -- `sandboxSeatRef`, falling back to "Player". #765 records
+     that a code-joiner never touches the lobby's `displayName`, so anything read from there would be blank;
+     the roster nickname is the name of record and the waiting room is where it is chosen. */
+  const seatedRoomRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sandbox || !sandboxRoomCode) {
+      seatedRoomRef.current = null;
+      return;
+    }
+    // Not until the first snapshot: "no such room" and "have not heard yet" are different (#764).
+    if (!sandboxRoomResolved || !sandboxRoom) return;
+    if (seatedRoomRef.current === sandboxRoomCode) return;
+    if (sandboxRoom.players.some((player) => player.id === localId)) {
+      // Already in the roster -- the host, or a rejoin. Claim it so this cannot write over them later.
+      seatedRoomRef.current = sandboxRoomCode;
+      return;
+    }
+    seatedRoomRef.current = sandboxRoomCode;
+    void upsertSandboxPlayer(sandboxRoomCode, {
+      id: localId,
+      nickname: sandboxSeatRef.current || "Player",
+      isReady: false,
+    });
+  }, [sandbox, sandboxRoomCode, sandboxRoomResolved, sandboxRoom, localId]);
 
   const replayingRef = useRef(false);
   /* Design note #668: the ids of the entries this client has already applied,
@@ -6742,8 +7254,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        is free. The two privates are exact opposites and this is where they part. */
     const bonusLay =
       homeStationPlacement?.kind === "private-tile" && homeStationPlacement.abilityKey === "csl-tile";
+    /* ==================================================================
+       DESIGN NOTE 880: EVERY TOKEN'S DESTINATION, NOT JUST THE ACTOR'S
+       ==================================================================
+       ASKED: "If a tile has multiple stations and a corporation upgrades it, it is necessary that all the
+       stations maintain their connectivity, not just the one whose corporation is upgrading."
+       `planTokenUpgrade` HAS ALWAYS COMPUTED ALL OF THEM -- the legality filter (#879) already refuses any
+       orientation that strands anybody -- and the message could only carry one index, so the other tokens'
+       answers were computed, drawn, and thrown away.
+       THE ACTING CORPORATION'S ENTRY IS OVERRIDDEN by `previewTile.tokenCity` where the plan left it FREE:
+       that is ERIE's case, where the board never distinguished the cities and the president has just chosen
+       by rotating (#824). An anchored token ignores the choice, because there was none to make. */
+    const plan = planTokenUpgrade(
+      mapGrid,
+      q,
+      r,
+      gameState?.public_companies ?? [],
+      tileId,
+      orientation,
+    );
+    const tokenCities: Array<[number, number]> = (plan?.landings ?? []).flatMap((entry) => {
+      const chosen =
+        entry.companyId === actingProtocolId && entry.toCityIndex === null
+          ? previewTile.tokenCity
+          : entry.toCityIndex;
+      return chosen === undefined || chosen === null ? [] : [[entry.companyId, chosen] as [number, number]];
+    });
     if (sandbox) {
-      handleSandboxLayTile(q, r, tileId, orientation, bonusLay, previewTile.tokenCity);
+      handleSandboxLayTile(q, r, tileId, orientation, bonusLay, previewTile.tokenCity, tokenCities);
     } else {
       runGameplayAction("LayTile", {
         LayTile: {
@@ -6758,6 +7296,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              every ordinary lay is byte-identical to what this app has always sent -- the containment #808's
              `bypass` has, for the same reason. */
           ...(previewTile?.tokenCity !== undefined ? { token_city: previewTile.tokenCity } : {}),
+          // Design note #880: the per-company map, which is what the reducer reads first.
+          ...(tokenCities.length > 0 ? { token_cities: tokenCities } : {}),
         },
       });
     }
@@ -6792,6 +7332,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     handleDismissRadial,
     actingProtocolId,
     homeStationPlacement,
+    /* Design note #880: the lay now derives every token's destination, so it reads the board and the
+       corporations. Both are already inputs to the ring that opened this. */
+    mapGrid,
+    gameState,
   ]);
 
 
@@ -7399,7 +7943,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
                      disagree about whether a power is available. Empty outside Lay Track by construction --
                      `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
-                  powerOffers={privatePowerOfferList}
+                  /* Design note #871: the hex powers in an Operating Round, the M&H in a Stock Round. The two
+                     lists are disjoint by round, so this concatenation never shows both. */
+                  powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}
                   onUsePowerOffer={handleChipPowerOffer}
                   /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
                      returns `null` for the compulsory home station, which collapses the whole control. */
@@ -7794,6 +8340,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                                 : undefined
                       }
                       onHexClickQuery={handleHexClickQuery}
+                      /* Design note #866: the standing request and the board's answer. */
+                      autoStageStation={autoStageStation}
+                      onAutoStageStation={handleAutoStageStation}
+                      /* Design note #873: the one-shot that opens the picker where the errand points. */
+                      autoSelectHex={autoSelectHex}
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
                       // PublicCompanyState[] is structurally assignable to StationTokenCompany[]; omitted entirely until gameState resolves.
@@ -8048,7 +8599,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           NOT MOUNTED WHILE THE PLACEMENT IS IN FLIGHT. #818's own condition, kept: once the player has
           accepted, the board is the thing to look at and a modal over it is asking a question already
           answered. `armedErrand` is that state, and `powerFlowOpen` refuses a completed flow. */}
-      {powerFlowOpen(activePowerFlow) && homeStationPlacement === null && activePowerFlow && (
+      {/* Design note #866: AND NOT OVER A STAGED PLACEMENT. The flow modal is a STANDING obligation -- a
+          laid D&H with an unresolved station raises it whether or not anybody asked (#849) -- so once the
+          station step stages its token without an errand to hide behind, the modal would cover the very
+          confirmation it just produced. `pendingToken === null` is #850's rule one layer up: a player with an
+          unanswered question in front of them is not being asked a second one.
+          IT IS ALSO WHAT MAKES THE X WORK. Cancelling clears the token, the obligation is still standing, and
+          the modal comes back on its own -- which is exactly what was asked for. */}
+      {powerFlowOpen(activePowerFlow) &&
+        homeStationPlacement === null &&
+        pendingToken === null &&
+        activePowerFlow && (
         <PrivatePowerFlowModal
           flow={activePowerFlow}
           ticker={activeCorporationContext?.ticker ?? "This corporation"}
@@ -8204,6 +8765,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           stockFor={radialStockFor}
           onConfirm={handleConfirmRadialLay}
           onCancel={() => setPreviewTile(null)}
+          /* Design note #874: present only while a private power is armed, because only then is there
+             somewhere to go BACK to. An ordinary lay keeps #471's bare click-away. */
+          onEscape={
+            homeStationPlacement?.kind === "private-tile" ? handleDismissRadial : null
+          }
+          escapeTitle="Cancel this lay and go back to the power — nothing is spent."
           onDismiss={handleDismissRadial}
         />
       )}

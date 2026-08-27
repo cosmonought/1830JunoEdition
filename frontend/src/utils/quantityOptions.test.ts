@@ -148,7 +148,12 @@ describe("the panel reads the rule rather than re-deriving it", () => {
        `${...}` inside a plain string and `no-template-curly-in-string` reads every one as a template the
        author forgot to write. The interpolation is the POINT here, so the rule is sidestepped rather than
        silenced. */
-    expect(panel).toContain('atTrainLimit ? "Train Limit Reached" : `$');
+    /* THE NEEDLE USED TO READ ``: `$`` AND THE SOURCE NOW SAYS ``: `Pay $``, which is a rewording this
+       assertion was never told about -- the panel's own note above the button records it: "'PAY $600' IS
+       BETTER THAN 'BUY FOR $600'... Reported: 'instead of'". The property is unchanged and is the reason this
+       line exists at all: THE VISIBLE LABEL CARRIES A PRICE AND NOT THE OBJECT, which is precisely why the
+       accessible name below has to spell out the quantity and the tier. */
+    expect(panel).toContain('atTrainLimit ? "Train Limit Reached" : `Pay $');
     expect(panel).toMatch(/aria-label=\{\s*atTrainLimit/);
     expect(panel).toContain("from the Bank for $");
 

@@ -159,31 +159,26 @@ export function TrainPurchasePanel({
      (#813) turns on the bar's tallest state, and the roster with eight operating corporations open UNDER a
      full depot table is that state. This removes the worst case rather than merely shrinking the ordinary
      one. */
-  const [bankOpen, setBankOpen] = useState(true);
-  useEffect(() => {
-    setBankOpen(!corporateOpen);
-  }, [corporateOpen]);
-  /* Design note #828: AND PINNED MEANS COLLAPSED, which is what lets this panel live inside the sticky bar.
-     #720 unpins a bar past half the viewport, and the probe (#813) measured the open panel at 242px against a
-     326px budget it shares with a 185px bar. Folded, the section is a header and the buy row.
-     A DEFAULT, NOT A LOCK, like #812's: a player may open the table while pinned, and if that tips the bar
-     past the threshold #720 unpins it -- which is the right outcome for something they deliberately expanded,
-     and is a different event from the bar unpinning by surprise, which is what was reported twice.
+  /* ==================================================================
+      DESIGN NOTE 859: THE BANK LOSES ITS CARET, AND ITS CLAIM TO BE OPTIONAL
+     ==================================================================
 
-     DESIGN NOTE 837: THIS LINE WAS HALF OF A DEADLOCK, and the half that was easiest to miss. `condensed` was
-     only ever true when the bar had PINNED, and the bar could only pin if this table was already folded --
-     so the table folded because the bar pinned and the bar pinned because the table folded. Reported as "in
-     OR 1.1 it's not [sticky], but in OR 2.1 it is", which is not a fact about rounds at all: it is whichever
-     side of the threshold the first measurement happened to land on.
-     THE LINE SURVIVES BECAUSE ITS TRIGGER CHANGED, not because the rule was wrong. `stickyCollapse.ts` #837
-     makes the pin test read the bar's RESTING height -- what it occupies with this table folded away -- which
-     no longer depends on whether it is folded. So `condensed` now means what it says: the bar has stuck and
-     travelled. A player ARRIVING at Buy Trains is not scrolled, so the depot is open, which is what was asked
-     for ("Shouldn't the Bank one be expanded?"); it folds as they scroll away, which is the moment a compact
-     bar is worth having. */
-  useEffect(() => {
-    if (condensed) setBankOpen(false);
-  }, [condensed]);
+     REPORTED, twice over: "the 'Buy Trains from the Bank' caret is still starting closed rather than open",
+     and then the conclusion it leads to -- "with the double-column layout, I am not even sure the Buy options
+     needs a caret to collapse them, but I suppose the Buy from Corps table might get large with 8 corps."
+
+     EXACTLY SO, AND #837's FIX WAS THE HALF-MEASURE. That pass made `condensed` mean "the bar has stuck and
+     travelled" rather than "it was short enough on the first frame", which was right -- but a player who is
+     already scrolled when the step arrives meets a pinned bar, so the bank still folded before they saw it.
+     Chasing that with a third trigger would have been a third guess at a question the layout answers: at half
+     the bar's width the depot table costs a column, not a screen.
+
+     AND THE MARK GOES WITH THE CARET, which is the part that would have been easy to miss. `restingHeight`
+     means "what this bar occupies with every COLLAPSIBLE body folded away" (#837). A body nobody can fold is
+     not collapsible, and leaving `STICKY_OPTIONAL` on it would have the bar claim a resting height it can
+     never reach -- pinning at a size that traps the page, which is #720's original bug wearing #837's fix.
+     The roster keeps both its caret and its mark: eight operating corporations is the case #758 was reported
+     for, and it is still a table a player opens on purpose. */
   /* Design note #633: CLOSED by default. The five tiers behind it are
      reference, and a reference list that opens itself is the vertical space
      this pass exists to give back. */
@@ -208,19 +203,19 @@ export function TrainPurchasePanel({
 
   const depotSupply = nextTier === null ? 0 : (nextTier.remaining ?? 99);
 
-  /* Design note #633: THE ONE YOU CAN BUY, AND EVERYTHING ELSE. Rusted tiers go with the later ones rather
-     than being dropped: a 2-train that has left play is still the reason the board looks the way it does.
-     NO AVAILABLE TIER IS A REAL STATE -- every tier sold out, which in 1830 means Diesels or over. The
-     accordion then holds the whole depot, which is honest: there is nothing to buy and the panel says so by
-     having nothing in the top slot. */
-  const availableTiers = useMemo(
-    () => (nextTier === null ? [] : depot.filter((row) => row.tier === nextTier.tier)),
-    [depot, nextTier],
-  );
-  const laterTiers = useMemo(
-    () => (nextTier === null ? depot : depot.filter((row) => row.tier !== nextTier.tier)),
-    [depot, nextTier],
-  );
+  /* ==================================================================
+      DESIGN NOTE 860: ONE LIST NOW, BECAUSE THERE IS ONE TABLE
+     ==================================================================
+     #633 SPLIT THE DEPOT IN TWO -- "the one you can buy, and everything else" -- because the purchasable tier
+     had a table of its own above the caret. That table is gone (see the note at its old site), so the split
+     has nothing to split: the Train Roster below holds every tier, purchasable one included, and marks it.
+     #633's REASONING SURVIVES WHERE IT WAS RIGHT: "rusted tiers go with the later ones rather than being
+     dropped -- a 2-train that has left play is still the reason the board looks the way it does." That is why
+     the roster is the WHOLE depot rather than the tiers still for sale, and it is also (h): "'Upcoming Trains'
+     is not quite right either because it lists old trains, their bank supply, price, and rust condition."
+     `availableTiers` AND `laterTiers` ARE DELETED rather than left unread, per #772: an unused derivation is
+     invisible to `tsc` and reads like the authority for something. `upcomingTier` below survives -- it feeds
+     the collapsed caption, which still answers "what is next and what does it cost". */
 
   /* ==================================================================
    *  DESIGN NOTE 798: "NEXT" WAS THE FIRST ROW, NOT THE NEXT ONE
@@ -465,33 +460,16 @@ export function TrainPurchasePanel({
     >
       {/* ================= BANK ================= */}
       <section style={styles.section}>
-        {/* Design note #812: the header is a disclosure now, matching the roster's below it -- two sections
-            that behave differently while looking the same is the kind of difference a player learns by being
-            surprised. The treasury stays on the header in both states: it is the figure that decides whether
-            EITHER purchase is possible, so it belongs to the panel rather than to one section's body. */}
-        <button
-          type="button"
-          style={styles.accordionHeader}
-          onClick={() => setBankOpen((open) => !open)}
-          aria-expanded={bankOpen}
-          title={bankOpen ? "Hide the depot table." : "Show the depot table and the buy controls."}
-        >
-          <span style={styles.accordionCaret} aria-hidden="true">
-            {bankOpen ? "▼" : "▶"}
-          </span>
+        {/* Design note #859: A HEADING, NOT A DISCLOSURE. #812 gave this section the roster's caret so the
+            two would "behave differently while looking the same" no longer -- true then, when folding it was
+            how the panel fitted. At half the bar's width it fits open, and a caret on a section nobody needs
+            to close is a control whose only use is to hide the step.
+            THE TREASURY STAYS ON THE LINE. #812's real point: it is the figure that decides whether EITHER
+            purchase is possible, so it belongs to the panel rather than to one section's body. */}
+        <div style={styles.sectionHeading}>
           <span style={styles.sectionTitle}>Buy Trains from the Bank</span>
-          {/* Design note #812: THE FIGURE THE COMPARISON IS AGAINST, kept when everything else folds away.
-              This is the whole difference between the proposal I declined and the one that was made: with the
-              tier and its price on the header, a player weighing a corporation's asking price against the
-              depot's can still read both at once. Absent when the depot is empty, which the body says in a
-              sentence rather than the header saying it in a dash. */}
-          {!bankOpen && nextTier && (
-            <span style={styles.sectionSummary}>
-              {nextTier.tier}-train ${nextTier.cost}
-            </span>
-          )}
           {buyer && <span style={styles.sectionMeta}>{buyer.ticker} treasury ${treasury}</span>}
-        </button>
+        </div>
 
         {/* Design note #827: THE BODY BELONGS TO THE HEADER THAT OPENS IT.
             REPORTED: "the 'Buy Trains from the Bank' expands/collapses a section that isn't actually inside
@@ -501,42 +479,34 @@ export function TrainPurchasePanel({
             differently while looking the same is the kind of difference a player learns by being surprised"
             -- and then left its body as a bare fragment at the section's own level, where the roster's sits
             in `accordionBody` with the inset that makes it read as contained. So the two now look the same
-            until you open them, which is the same complaint one layer down. */}
-        {/* Design note #837: reference behind a caret, not part of the bar's resting height. */}
-        {bankOpen && (
-          <div style={styles.accordionBody} {...STICKY_OPTIONAL}>
+            until you open them, which is the same complaint one layer down.
+            SUPERSEDED BY #859/#860 AND KEPT: the bank has no header to belong to any more -- it is a heading,
+            and the body it wrapped is deleted. The note stays because its RULE outlived its subject: a
+            disclosure's contents belong inside the disclosure, which is why the corporation roster below
+            still renders its body in `accordionBody` rather than as a bare fragment. */}
+        {/* ==================================================================
+             DESIGN NOTE 860: THE DEPOT TABLE IS GONE; THE BUY LINE CARRIES ITS ONE FACT
+            ==================================================================
 
-        {/* The whole depot, not only the purchasable row. A player deciding
-            whether to buy the last 3-train needs to see that a 4-train costs
-            $300 and that six 2-trains are about to rust -- which is a fact
-            about the tiers they CANNOT buy. */}
-        {/* Design note #618: SIX ROWS, NOT SIX CARDS. Nothing is dropped -- what changes is the AXIS. Each tier was
-           a five-line stack ~100px tall wrapping into two or three rows of cards; the same six as single lines are
-           one column about a third the height.
-           AND IT READS BETTER, which is the argument for doing it this way rather than shrinking the cards: the
-           question here is comparative, and a wrapping grid puts "how many 4s are left" and "what does the 5 cost"
-           in different places on different widths. Columns put every cost under every other cost.
-           The report's own observation is why this is safe -- "you can only ever interact with one of them". The
-           other five are reference, and reference wants a table. */}
-        {/* Design note #633: ONE ROW BY DEFAULT, FIVE BEHIND A CARET. #618 made each row shorter and kept all six
-           on screen, so the panel got tidier and barely got shorter -- the height was never in the row's design, it
-           was in the row COUNT.
-           And five of the six are reference: the depot sells cheapest-first, so exactly one tier is ever
-           purchasable. The rest fold into the same accordion this file already uses for corporate trades, for the
-           reason recorded there -- the ordinary case is the open one. The collapsed summary still names what is
-           next and what it costs. This is also what retires the "For sale" badge (#634). */}
-        <div style={styles.depotGrid}>
-          {availableTiers.map((tier) => (
-            <DepotRow
-              key={tier.tier}
-              tier={tier}
-              isNext={nextTier !== null && tier.tier === nextTier.tier}
-            />
-          ))}
-        </div>
-          </div>
-        )}
+            REPORTED: "the caret for Buy Trains from the Bank only expands to show how many are left in the
+            bank depot and when/if they rust... I wonder if we could simply scrap that whole section and
+            replace 'Current Train Limit 2 / 3' on the line with the Buy button with the remaining bank
+            quantity? our new Rust warning badge will signal players already."
 
+            BOTH HALVES ARE RIGHT AND THE SECOND IS THE STRONGER. #633 built this table when the depot's six
+            tiers were the only place any of these numbers lived. Since then the purchasable tier's price is
+            on the buy row, the whole six-tier roster is behind the caret below, and #839 promoted the rust to
+            a badge on the action bar -- so a table that showed one buyable row plus a rust flag was restating
+            three facts that now have homes, in the largest block on the panel.
+
+            WHAT WAS NOT ALREADY SOMEWHERE ELSE is the depot's remaining stock, which is why it moves rather
+            than being deleted: it is the number that decides whether this purchase is the last of its tier,
+            and #839's phase badge counts BUYS rather than saying what is left. It goes on the buy line, beside
+            the limit, which is where the quantity selector is already bounded by it (#247).
+
+            #633'S ARGUMENT SURVIVES, INVERTED. "Five of the six are reference and reference wants a table" --
+            still true, and the table is the Train Roster below. What has changed is that the sixth is no
+            longer worth a table of its own. */}
         {/* ==================================================================
              DESIGN NOTE 828: THE CARET HIDES THE REFERENCE, NEVER THE ACTION
             ==================================================================
@@ -643,6 +613,37 @@ export function TrainPurchasePanel({
                 {nextTier.tier}-train{quantity === 1 ? "" : "s"} from the Bank
               </span>
 
+              {/* ==================================================================
+                   DESIGN NOTE 860: THE DEPOT'S STOCK, ON THE LINE THAT SPENDS IT
+                  ==================================================================
+                  ASKED: "replace 'Current Train Limit 2 / 3' on the line with the Buy button with the
+                  remaining bank quantity".
+                  BESIDE IT RATHER THAN INSTEAD OF IT, and the reason is #294's: these are "TWO NUMBERS, TWO
+                  SUBJECTS" -- one counts cardboard in the bank, the other caps a corporation's holdings.
+                  Replacing one with the other would answer a different question than the one the label asks,
+                  and #247 records what happens when the panel shows one ceiling and enforces another.
+                  IT IS WHAT THE TABLE ABOVE WAS FOR, which is the half that makes the deletion safe: the
+                  stock is the only fact the depot table carried that had no other home.
+                  `null` REMAINING IS THE DIESEL, which is unlimited rather than unknown -- an infinity sign
+                  rather than a figure, because "0" and "as many as you like" must not look alike. */}
+              {nextTier && (
+                <span
+                  style={styles.limitReadout}
+                  title={
+                    nextTier.remaining === null
+                      ? "Diesels are unlimited — the Bank Depot never runs out of them."
+                      : `The Bank Depot holds ${nextTier.remaining} ${nextTier.tier}-train${
+                          nextTier.remaining === 1 ? "" : "s"
+                        }. The quantity selector cannot exceed it.`
+                  }
+                >
+                  <span style={styles.limitLabel}>In the Bank Depot</span>
+                  <span style={styles.limitValue}>
+                    {nextTier.remaining === null ? "\u221e" : `${nextTier.remaining}`}
+                  </span>
+                </span>
+              )}
+
               {/* Design note #248: the limit, where the decision is made. `Trains: 2 / 4` explains why the quantity list
                  stops where it does, and it was only available on the Operating Round strip -- a different panel from the
                  one enforcing it. */}
@@ -654,7 +655,7 @@ export function TrainPurchasePanel({
                 title={
                   limitDropsOnPurchase
                     ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} — anything above ${limitAfterPurchase} is discarded when the phase turns.`
-                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains Project 18XX allows one corporation in this phase. Separate from the depot's own stock above.`
+                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains Project 18XX allows one corporation in this phase. Separate from the depot's own stock beside it.`
                 }
               >
                 <span
@@ -822,7 +823,7 @@ export function TrainPurchasePanel({
            between the one purchasable tier and the control that buys it. The two halves of a single decision
            had a filing cabinet between them, and opening the accordion pushed the buy row off the bottom of a
            condensed panel entirely. */}
-        {bankOpen && laterTiers.length > 0 && (
+        {depot.length > 0 && (
           <>
             <button
               type="button"
@@ -839,7 +840,7 @@ export function TrainPurchasePanel({
                  it counts rows behind a caret, and it decrements as the game advances in a way that invites
                  reading it as trains remaining. The summary beside it already answers the question a player
                  actually has, which is what comes next and what it costs. */}
-              <span style={styles.laterTrainsTitle}>Upcoming Trains</span>
+              <span style={styles.laterTrainsTitle}>Train Roster</span>
               {/* Design note #633: the collapsed summary answers the
                   commonest reference question -- what is next and what does
                   it cost -- so opening this is for the rarer ones.
@@ -857,8 +858,12 @@ export function TrainPurchasePanel({
               /* Design note #837: the same marker the depot table carries -- five tiers of reference a player
                  opened deliberately, which must not be what decides whether the bar can pin at all. */
               <div style={styles.depotGrid} {...STICKY_OPTIONAL}>
-                {laterTiers.map((tier) => (
-                  <DepotRow key={tier.tier} tier={tier} isNext={false} />
+                {depot.map((tier) => (
+                  <DepotRow
+                    key={tier.tier}
+                    tier={tier}
+                    isNext={nextTier !== null && tier.tier === nextTier.tier}
+                  />
                 ))}
               </div>
             )}
@@ -1342,6 +1347,9 @@ const styles: Record<string, React.CSSProperties> = {
      draw a roster of two corporations as tall as a full depot table and imply a relationship. */
   root: {
     display: "grid",
+    /* Design note #859: FULL WIDTH, or the columns divide whatever the flex parent happened to give this
+       panel. `stepPanelRow` claims the bar's row; this claims that row's width. */
+    width: "100%",
     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
     alignItems: "start",
     gap: "14px 18px",
@@ -1372,6 +1380,16 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "none",
   },
   section: { display: "flex", flexDirection: "column", gap: "10px" },
+  /* Design note #859: the bank's line, now that it is a heading rather than a disclosure. Same type and
+     spacing as the roster's header so the two sections still read as siblings -- #812's point survives the
+     caret it argued for. */
+  sectionHeading: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "12px",
+    flexWrap: "wrap",
+    padding: "2px 0",
+  },
   sectionHeader: { display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" },
   /* Design note #812: the tier and price on a collapsed bank header. Monospace and green because it is a
      FIGURE being compared against another figure -- the corporation's asking price a few pixels below -- and

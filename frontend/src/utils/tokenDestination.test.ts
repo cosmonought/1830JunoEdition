@@ -155,14 +155,24 @@ describe("the answer travels, because a choice the log drops is not a choice", (
   it("moves every token on the hex, not only the acting corporation's", () => {
     /* On an unlaid preprinted pair the cities are indistinguishable for whoever is standing there. In
        practice there is one occupant -- nobody else may token these hexes before they are upgraded -- but a
-       rule that assumed that would be a rule about the board rather than about the cardboard. */
+       rule that assumed that would be a rule about the board rather than about the cardboard.
+       CORRECTED BY #880, AND THE OLD SENTENCE IS THE INTERESTING PART. "Moves every token" was true and moved
+       them all to ONE city, which is right for ERIE's home and stacks two corporations into one circle
+       anywhere else. Asked directly: "If a tile has multiple stations and a corporation upgrades it, it is
+       necessary that all the stations maintain their connectivity, not just the one whose corporation is
+       upgrading." So every token still moves -- each to its OWN derived city. */
     expect(REDUCER).toContain("entry[0] === q && entry[1] === r");
-    expect(REDUCER).toContain("token_city === undefined");
+    expect(REDUCER).toContain("perCompany.get(company.company_id)");
   });
 
-  it("leaves the state untouched when the field is absent", () => {
-    // `state.public_companies` by reference: the refusal idiom, and what keeps a replay of an old log identical.
-    expect(REDUCER).toContain("? state.public_companies");
+  it("leaves the state untouched when the lay says nothing about tokens", () => {
+    /* `state.public_companies` by reference: the refusal idiom, and what keeps a replay of an old log
+       identical.
+       THE NEEDLE WAS `"? state.public_companies"` -- the old ternary's exact spelling, which #880 turned into
+       an early return. The PROPERTY is unchanged and is what this line was always about; pinning the
+       expression rather than the behaviour is what made it break over a rewrite it had no opinion about. */
+    expect(REDUCER).toContain("return state.public_companies;");
+    expect(REDUCER).toContain("perCompany.size === 0 && token_city === undefined");
   });
 });
 

@@ -82,7 +82,8 @@ import type { PrivateCompanyState } from "../utils/gameState";
 import {
   cityIndexAtPoint,
   cityNodePoints,
-  nextCitySlotPoint,
+  soleCityIndex,
+  stationSlotAnchor,
   tokenCityBucket,
 } from "../utils/stationTokens";
 import {
@@ -144,8 +145,7 @@ import {
   drawValueBadge,
   fitFontSize,
   offboardNameplateLines,
-  homeCityIndexAt,
-  homeSlotsAreOpen,
+  homeSlotIndex,
   stationMarkerPoint,
   stationMarkerRadius,
   withHexClip,
@@ -271,12 +271,63 @@ export interface HexGridRendererProps {
     /* null means "could not tell", NOT "city zero" -- omitting lets the contract apply its documented fallback rather than sending a guessed index with full confidence.
        See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #453 */
     cityIndex: number | null;
+    /** Design note #858: which city a HOME station is locked to on this hex, or `null` where the president
+     *  may choose (an OO hex, per #742). Computed by the same `homeSlotIndex` the glow ring calls.
+     *  NOT "which city was clicked" -- that is `cityIndex` above, and the whole bug was that only one of the
+     *  two questions was ever asked. */
+    homeCityIndex: number | null;
     clientX: number;
     clientY: number;
   }) => void;
   /** Reports the click-triggered `GetLegalTilePlacements` query's
    *  lifecycle -- see `HexClickQueryState`. */
   onHexClickQuery?: (state: HexClickQueryState) => void;
+  /* ==================================================================
+      DESIGN NOTE 866: A PLACEMENT WITH ONE ANSWER SHOULD NOT NEED A CLICK
+     ==================================================================
+
+     REPORTED: "clicking F16 to place the free station token is still calling up the tileselector radial
+     menu. Why don't we just have the station automatically placed there with the green checkmark and red x
+     above it, since there's no other placement possible in this private power?"
+
+     TWO FAULTS AND THE SECOND ONE EXPLAINS THE FIRST. `onHexClick` and `onHexClickQuery` are BOTH wired, so
+     one click on F16 reached the station stager AND the tile inspector -- the inspector opened its ring over
+     the confirmation. #850 caught this shape once already and guarded it with `pendingTokenRef`, which only
+     covers the case where a token is ALREADY staged; on the first click nothing is staged yet, so the guard
+     is not looking.
+     AND THE CLICK WAS CARRYING NO INFORMATION. F16 is a single-city hex, so the D&H's station step has one
+     legal slot. A gesture whose outcome is fixed before it happens is not a choice, and making the player
+     perform it is what created the collision in the first place.
+
+     SO THE HOST ASKS AND THE BOARD ANSWERS, rather than the host waiting for a pointer it does not need. The
+     board is the only thing that knows the live pan/zoom, which is why this is a prop pair here rather than
+     arithmetic in the shell.
+     RE-REPORTED WHENEVER THE VIEW MOVES, deliberately: the anchor is board-relative pixels, so a pan or a
+     zoom while the confirmation is open would otherwise leave the ring behind the token it belongs to. */
+  /** Ask the board to resolve this hex's free-station slot without a click. `null` asks nothing. */
+  autoStageStation?: { q: number; r: number } | null;
+  /* ==================================================================
+      DESIGN NOTE 873: OPEN THE PICKER ON A HEX THE PLAYER ALREADY CHOSE
+     ==================================================================
+     ASKED: "why don't we have the tileselector radial menu automatically pop up on the designated hex?
+     Forcing them to click Yes on the modal, then click on the hex, feels like it has an unnecessary step."
+     A TOKEN, NOT A STANDING QUESTION, and that is the difference from `autoStageStation` above. That request
+     is re-answered on every view change so the confirmation ring follows a pan; this one ISSUES A QUERY, so
+     re-answering it on every frame of a drag would be a request per frame. The shell hands over a token and
+     clears it once the board has acted on it. */
+  /** A one-shot request: resolve this hex as though it had been clicked. Changing the token re-fires. */
+  autoSelectHex?: { q: number; r: number; token: number } | null;
+  /** The resolved anchor. `cityIndex` is `null` where the hex has more than one city -- the caller must then
+   *  fall back to asking, because auto-staging a choice would be #858's bug with no click to blame. */
+  onAutoStageStation?: (info: {
+    q: number;
+    r: number;
+    hexLabel: string;
+    boardLabel: string | null;
+    cityIndex: number | null;
+    nodeX: number;
+    nodeY: number;
+  }) => void;
   /** When set, draws a translucent dashed-outline "ghost" preview of
    *  `tileId` at `orientation` on hex `(q, r)` -- the live map preview (see
    *  design note #7 / item 3 of the popup feature). */
@@ -479,6 +530,9 @@ export function HexGridRenderer({
   protocolId,
   onHexClick,
   onHexClickQuery,
+  autoStageStation = null,
+  onAutoStageStation,
+  autoSelectHex = null,
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
@@ -1648,13 +1702,15 @@ export function HexGridRenderer({
              question it was placed to avoid -- and rings one slot as though the other were unavailable.
              Reported of ERIE's E11 after a brown upgrade. Both slots are lit there; everywhere else #584's
              pairing stands untouched. */
+          /* Design note #858: ONE FUNCTION, and the click handler below calls it too -- so the circle that
+             lights and the circle that may be clicked cannot diverge. It was two inline lines here and
+             nothing at all there, which is the bug. */
           const slotNodes = cityNodePoints(mapGrid, hex.q, hex.r, hexSize);
-          const eitherSlot = homeSlotsAreOpen(
+          const homeSlot = homeSlotIndex(
             STATIC_BOARD_HEXES.find((entry) => entry.q === hex.q && entry.r === hex.r)?.label,
+            slotNodes,
+            stationMarkerPoint(hex.q, hex.r, hexSize, laidHere),
           );
-          const homeSlot = eitherSlot
-            ? null
-            : homeCityIndexAt(slotNodes, stationMarkerPoint(hex.q, hex.r, hexSize, laidHere));
           const litNodes = homeSlot === null ? slotNodes : [slotNodes[homeSlot]];
           for (const node of litNodes) {
             if (!node) continue;
@@ -1898,6 +1954,37 @@ export function HexGridRenderer({
     setView(fitView);
   }, [fitView, detailedView]);
 
+  /* Design note #866: the board answers the host's standing question about one hex's free-station slot.
+     KEYED ON `view` AS WELL AS THE REQUEST, so a pan or a zoom re-reports and the confirmation ring follows
+     the token it belongs to. The alternative -- resolving once and remembering -- is how a ring ends up
+     floating over empty board after a drag.
+     `mapGrid` IS IN THE LIST because the slot depends on what is laid and on who is already tokened there;
+     `publicCompanies` for the same reason, via `nextCitySlotPoint`'s occupancy walk. */
+  useEffect(() => {
+    if (!autoStageStation || !onAutoStageStation) return;
+    const { q, r } = autoStageStation;
+    const { nodeX, nodeY } = stationSlotAnchor({
+      mapGrid,
+      publicCompanies,
+      q,
+      r,
+      cityIndex: soleCityIndex(mapGrid, q, r, hexSize),
+      hexSize,
+      zoom: view.zoom,
+      panX: view.panX,
+      panY: view.panY,
+    });
+    onAutoStageStation({
+      q,
+      r,
+      hexLabel: describeHex(q, r),
+      boardLabel: boardHexLabel(q, r),
+      cityIndex: soleCityIndex(mapGrid, q, r, hexSize),
+      nodeX,
+      nodeY,
+    });
+  }, [autoStageStation, onAutoStageStation, mapGrid, publicCompanies, hexSize, view]);
+
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       // Always tracked, even at the locked baseline: dragStateRef doubles as the click-vs-drag check the interceptor relies on.
@@ -2090,32 +2177,37 @@ export function HexGridRenderer({
 
   /** Pointer-up rather than a native click, so a genuine click is told from the tail of a pan drag using the SAME dragStateRef already tracked for panning.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #7 */
-  const handlePointerUp = useCallback(
-    (event: React.PointerEvent<HTMLCanvasElement>) => {
-      const drag = dragStateRef.current;
-      dragStateRef.current = null;
-      releaseCapture(event);
+  /* ==================================================================
+      DESIGN NOTE 873: A HEX CAN BE SELECTED WITHOUT BEING CLICKED
+     ==================================================================
 
-      if (!drag) return;
-      const movedX = event.clientX - drag.startX;
-      const movedY = event.clientY - drag.startY;
-      const movedDistance = Math.sqrt(movedX * movedX + movedY * movedY);
-      /* A real pan drag almost always moves several pixels even when the user "meant" to click; a small dead
-         zone tells the two apart without feeling laggy on a genuine click.
-         Design note #773: THE ZONE DEPENDS ON THE POINTER. It was a flat 4px, which is a mouse's figure. A
-         fingertip rolls further than that in the act of pressing, so on a tablet a genuine tap read as a
-         drag and selected nothing. `isTapGesture` keeps 4px for a mouse and gives a finger 10. */
-      if (!isTapGesture(event.pointerType, movedDistance)) return;
+     ASKED: "When a player indicates that they want to use the CSL or DH Lay Track power, why don't we have
+     the tileselector radial menu automatically pop up on the designated hex? Forcing them to click Yes on
+     the modal, then click on the hex, feels like it has an unnecessary step."
 
-      const rect = event.currentTarget.getBoundingClientRect();
-      const cssX = event.clientX - rect.left;
-      const cssY = event.clientY - rect.top;
-      // Undo `draw()`'s own `ctx.translate(view.panX, view.panY)` /
-      // `ctx.scale(view.zoom, view.zoom)` to land back in the hex layer's
-      // own untransformed coordinate space that `pixelToAxial` expects.
-      const contentX = (cssX - view.panX) / view.zoom;
-      const contentY = (cssY - view.panY) / view.zoom;
-      const { q, r } = pixelToAxial(contentX, contentY, hexSize);
+     THE SAME OBSERVATION AS #866, ONE POWER OVER. That report was about the D&H's free station, where the
+     click carried no information because F16 has one city. This one is subtler: the PICKER still has to
+     open, because which tile to lay is a real choice. What carries no information is the gesture that opens
+     it -- the veil has already reduced the board to one lit hex, so "click the hex" is a step whose only
+     possible outcome is the one the player just asked for.
+
+     SO THE POINTER-DEPENDENT PART STAYS IN THE HANDLER and everything after the coordinate moves here. The
+     handler works out WHICH hex from a pointer; this works out what selecting a hex MEANS. Extracted rather
+     than duplicated for #866's reason: two copies of the eligibility gates and the query lifecycle would be
+     two chances to answer one question differently.
+     `clientX`/`clientY` ARE PARAMETERS because App still positions the query's status toast from them
+     (`hexClickQuery.clientX + 16`). The auto path passes the hex's own centre on screen, which is where a
+     player is looking. */
+  const selectHex = useCallback(
+    (params: {
+      q: number;
+      r: number;
+      clientX: number;
+      clientY: number;
+      /** The city a pointer landed in, or `null` where there was no pointer. */
+      cityIndexAtPoint2: number | null;
+    }) => {
+      const { q, r, clientX, clientY, cityIndexAtPoint2 } = params;
       const hexLabel = describeHex(q, r);
 
       // Click-time log: the hex's coordinate and preprinted terrain are known synchronously.
@@ -2145,8 +2237,8 @@ export function HexGridRenderer({
           q,
           r,
           hexLabel,
-          clientX: event.clientX,
-          clientY: event.clientY,
+          clientX: clientX,
+          clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2156,14 +2248,17 @@ export function HexGridRenderer({
 
       // The hex's own CENTRE, not the cursor: a ring built on clientX/Y opens wherever the pointer landed, so two clicks on one hex produced two different rings. #453: the city node, measured in content space.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #171
-      const cityIndex = cityIndexAtPoint(mapGrid, q, r, contentX, contentY, hexSize);
+      // Design note #873: supplied by the caller. `null` is the honest answer for a selection with no
+      // pointer behind it -- which is what this field's own doc says `null` means.
+      const cityIndex = cityIndexAtPoint2 ?? null;
 
       /* The chosen slot's centre, through the same transform -- the SAME geometry the click resolved against and the pulse drew on, so the confirmation lands where the glow promised.
          See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #516 */
       const nodes = cityNodePoints(mapGrid, q, r, hexSize);
       /* ONE CITY IS NOT AN AMBIGUOUS CITY. The centroid fallback is right when the geometry cannot say, and wrong when there is exactly one node. THE ANCHOR ONLY -- cityIndex still travels as null, because it answers a different question that other board modes read.
          See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #557 */
-      const soleNode = nodes.length === 1 ? nodes[0] : undefined;
+      /* Design note #866: `soleNode` moved into `stationSlotAnchor` with the rest of the fallback chain.
+         `nodes` stays because `homeSlotIndex` below still reads it. */
       /* Design note #698: THE SLOT, THEN THE CITY, THEN THE CENTROID.
          Reported: the Place Station preview sits "in the middle of the tile, though it moves to a correct
          position after placement". It never moved -- the preview anchored HERE, to a city, and the placed
@@ -2172,19 +2267,22 @@ export function HexGridRenderer({
          `nextCitySlotPoint` answers the placement's question rather than the click's, so the ring opens on the
          circle the token then appears in. The two fallbacks below are unchanged and still needed: a preprinted
          OO hex has no artwork to dock into (#459), and a hex with no resolvable node has only its centroid. */
-      const slotPoint = nextCitySlotPoint(
+      /* Design note #866: THIS ARITHMETIC IS NOW SHARED, because a second caller needs it without a pointer.
+         The chain and its order are unchanged -- slot, then city, then sole node, then centroid -- it simply
+         lives in `stationSlotAnchor` so the auto-staged placement lands on the same pixel this click would
+         have chosen, by construction rather than by two copies agreeing. `nodes` and `soleNode` above are
+         still read by the reporting below, so they stay. */
+      const { nodeX, nodeY } = stationSlotAnchor({
         mapGrid,
         publicCompanies,
         q,
         r,
         cityIndex,
-        centre,
         hexSize,
-      );
-      const chosenNode =
-        slotPoint ?? (cityIndex === null ? undefined : nodes[cityIndex]) ?? soleNode;
-      const nodeX = chosenNode ? chosenNode.x * view.zoom + view.panX : centroidX;
-      const nodeY = chosenNode ? chosenNode.y * view.zoom + view.panY : centroidY;
+        zoom: view.zoom,
+        panX: view.panX,
+        panY: view.panY,
+      });
 
       onHexClick?.({
         q,
@@ -2193,8 +2291,17 @@ export function HexGridRenderer({
         // Design note #242: the identifier, alongside the display name.
         boardLabel: boardHexLabel(q, r),
         cityIndex,
-        clientX: event.clientX,
-        clientY: event.clientY,
+        /* Design note #858: which city a HOME station is locked to here, or `null` where the president may
+           choose. The same function the ring calls, so the circle that lights and the circle a placement will
+           accept are one answer. The shell compares this against `cityIndex`; the board does not decide what
+           to do about a mismatch, because it does not know which errand is armed. */
+        homeCityIndex: homeSlotIndex(
+          boardHexLabel(q, r) ?? undefined,
+          nodes,
+          stationMarkerPoint(q, r, hexSize, mapGrid.tiles.find((t) => t.q === q && t.r === r)),
+        ),
+        clientX: clientX,
+        clientY: clientY,
         centroidX,
         centroidY,
         nodeX,
@@ -2229,8 +2336,8 @@ export function HexGridRenderer({
           q,
           r,
           hexLabel: eligibility.hexLabel,
-          clientX: event.clientX,
-          clientY: event.clientY,
+          clientX: clientX,
+          clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2261,8 +2368,8 @@ export function HexGridRenderer({
           q,
           r,
           hexLabel,
-          clientX: event.clientX,
-          clientY: event.clientY,
+          clientX: clientX,
+          clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2277,8 +2384,8 @@ export function HexGridRenderer({
         q,
         r,
         hexLabel,
-        clientX: event.clientX,
-        clientY: event.clientY,
+        clientX: clientX,
+        clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2306,8 +2413,8 @@ export function HexGridRenderer({
             q,
             r,
             hexLabel,
-            clientX: event.clientX,
-            clientY: event.clientY,
+            clientX: clientX,
+            clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2322,8 +2429,8 @@ export function HexGridRenderer({
             q,
             r,
             hexLabel,
-            clientX: event.clientX,
-            clientY: event.clientY,
+            clientX: clientX,
+            clientY: clientY,
           centroidX,
           centroidY,
         hexRadiusPx,
@@ -2356,6 +2463,69 @@ export function HexGridRenderer({
       // inside `TileSelectionPopup` instead.
     ],
   );
+
+  /* Design note #873: the one-shot. Keyed on the TOKEN rather than on the coordinate, so arming the same hex
+     twice in a row still opens the picker -- a player who cancels the C&SL and then asks for it again is
+     naming the same hex, and a coordinate-keyed effect would silently do nothing the second time.
+     THE CANVAS RECT IS READ HERE because `selectHex` reports `clientX`/`clientY` to the shell, which
+     positions the query's status toast from them. The hex's own centre on screen is where the player is
+     already looking, and it is the same point a click on the middle of that hex would have produced. */
+  const lastAutoSelectRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!autoSelectHex) {
+      lastAutoSelectRef.current = null;
+      return;
+    }
+    if (lastAutoSelectRef.current === autoSelectHex.token) return;
+    lastAutoSelectRef.current = autoSelectHex.token;
+    const { q, r } = autoSelectHex;
+    const centre = axialToPixel(q, r, hexSize);
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const left = rect?.left ?? 0;
+    const top = rect?.top ?? 0;
+    selectHex({
+      q,
+      r,
+      clientX: left + centre.x * view.zoom + view.panX,
+      clientY: top + centre.y * view.zoom + view.panY,
+      /* NO POINTER, NO CITY. A tile lay does not ask which city was hit, and `null` is what this field means
+         when the geometry cannot say -- see `onHexClick`'s own note (#453). */
+      cityIndexAtPoint2: null,
+    });
+  }, [autoSelectHex, selectHex, hexSize, view.zoom, view.panX, view.panY]);
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drag = dragStateRef.current;
+      dragStateRef.current = null;
+      releaseCapture(event);
+
+      if (!drag) return;
+      const movedX = event.clientX - drag.startX;
+      const movedY = event.clientY - drag.startY;
+      const movedDistance = Math.sqrt(movedX * movedX + movedY * movedY);
+      /* A real pan drag almost always moves several pixels even when the user "meant" to click; a small dead
+         zone tells the two apart without feeling laggy on a genuine click.
+         Design note #773: THE ZONE DEPENDS ON THE POINTER. It was a flat 4px, which is a mouse's figure. A
+         fingertip rolls further than that in the act of pressing, so on a tablet a genuine tap read as a
+         drag and selected nothing. `isTapGesture` keeps 4px for a mouse and gives a finger 10. */
+      if (!isTapGesture(event.pointerType, movedDistance)) return;
+
+      const rect = event.currentTarget.getBoundingClientRect();
+      const cssX = event.clientX - rect.left;
+      const cssY = event.clientY - rect.top;
+      // Undo `draw()`'s own `ctx.translate(view.panX, view.panY)` /
+      // `ctx.scale(view.zoom, view.zoom)` to land back in the hex layer's
+      // own untransformed coordinate space that `pixelToAxial` expects.
+      const contentX = (cssX - view.panX) / view.zoom;
+      const contentY = (cssY - view.panY) / view.zoom;
+      const { q, r } = pixelToAxial(contentX, contentY, hexSize);
+      const cityIndex = cityIndexAtPoint(mapGrid, q, r, contentX, contentY, hexSize);
+      selectHex({ q, r, clientX: event.clientX, clientY: event.clientY, cityIndexAtPoint2: cityIndex });
+    },
+    [view.panX, view.panY, view.zoom, hexSize, selectHex, mapGrid],
+  );
+
 
   /** Scroll-wheel zoom REMOVED entirely, not merely gated, so no dead path can be re-enabled. preventDefault stays -- scroll containment, not zoom.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #67 */

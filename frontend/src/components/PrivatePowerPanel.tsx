@@ -169,14 +169,32 @@ export const PRIVATE_ABILITIES: readonly PrivateAbility[] = [
     /* Design note #807: THE LINE THAT GREYED THE FREE STATION. `subPhase: "Track"` was true of the D&H's
        FIRST action and false of its second, and there is no single value that would have been right -- which
        is the whole reason #782 moved the field onto the actions. Removing it here is the other half of that
-       move; the two actions above carry "Track" and "Tokens" and nothing else needs to know. */
+       move; the two actions above carry "Track" and "Tokens" and nothing else needs to know.
+       DESIGN NOTE 865: THAT LAST CLAUSE STOPPED BEING TRUE AT #849 and is kept because the argument it makes
+       is still the live one. There is ONE action above now, carrying "Track", and the Tokens step is reached
+       through the flow modal rather than through a second action with its own `subPhase`. The rule the note
+       states -- that no single ability-level value could be right for a two-step power -- is what made the
+       field belong to the actions, and it is why collapsing to one action did not put it back. */
     hideOutOfRound: true,
   },
   {
     privateId: 4,
     actions: [{ key: "mh-exchange", label: "Exchange for NYC share" }],
-    description:
-      "Mohawk & Hudson — the owner may exchange this private for a 10% share of the New York Central (NYC). The exchange closes this private permanently.",
+    /* ==================================================================
+        DESIGN NOTE 871: THE RULE MOVES TO THE MOMENT OF THE DECISION
+       ==================================================================
+       REPORTED: "Its whole purpose is to be exchanged for an NYC share, and for some reason it has a
+       multi-line/sentence explanation of this rule."
+       THE OLD TEXT, kept because a deletion should be readable as one -- and kept UNWRAPPED, which is #814's
+       hard-won rule: "a comment that wraps mid-sentence preserves the words and destroys the STRING", and a
+       harness asserting the record survived searches for the string.
+       "Mohawk & Hudson - the owner may exchange this private for a 10% share of the New York Central (NYC). The exchange closes this private permanently."
+       Two sentences of rules on a standing panel, above a button that says the same thing in three words.
+       #800'S TEST DECIDES IT: a rule a player meets once belongs where the decision is, not on a surface read
+       every Stock Round. The confirmation modal (#871) now carries the consequence at the moment it matters,
+       and the full rule is in the Rules Reference's private table (#843). What survives here is the trade,
+       in one line, beside the `$20/OR` figure #443 put on the name. */
+    description: "Trade in for a 10% NYC share. Taking it closes the company.",
     phase: "StockRound",
     // "A PLAYER owning the MH may exchange it" -- design note #441.
     scope: "player",

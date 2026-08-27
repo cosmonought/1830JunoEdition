@@ -67,19 +67,39 @@ describe("action keys", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("gives the D&H two independent actions", () => {
-    // Both in one turn is legal 1830; one key for both would have made
-    // either consume the other.
+  /* ==================================================================
+      DESIGN NOTE 865: RED SINCE #849 AND NOBODY RAN IT
+     ==================================================================
+
+     FOUND WHILE VERIFYING #863/#864, by running a pattern wide enough to sweep this file in. These two
+     assertions have been failing since #849 collapsed the D&H's pair of panel buttons into one, and the only
+     reason it went unnoticed is that every run since has been scoped to the files being edited -- which is
+     the standing instruction and the right one, so the lesson is not "run everything". It is that a harness
+     nobody has a reason to run is a harness nobody knows the state of.
+
+     THE OLD FORM, KEPT, because its reasoning is still the reason the KEYS test above it exists:
+       expect(dh?.actions.map((a) => a.key)).toEqual(["dh-tile", "dh-token"]);
+       expect(dh?.actions.map((a) => a.label)).toEqual([
+         "Lay Track (F16)", "Place Station Token for $0 (F16)",
+       ]);
+     with the note "Both in one turn is legal 1830; one key for both would have made either consume the
+     other."
+     THAT RULE HAS NOT CHANGED -- what changed is where it is expressed. #849: "ONE BUTTON FOR A TWO-STEP
+     POWER, because the modal is what walks the steps", and the modal greys line two until line one is done,
+     which two peer buttons could only imply. So the independence lives in `privatePowerFlow.ts` now and is
+     tested there; what this file still owns is that the PANEL offers the single door. */
+  it("gives the D&H one panel action, because the modal walks the steps", () => {
     const dh = byId(3);
-    expect(dh?.actions.map((a) => a.key)).toEqual(["dh-tile", "dh-token"]);
+    expect(dh?.actions.map((a) => a.key)).toEqual(["dh-tile"]);
   });
 
-  it("labels the D&H buttons as the requirement words them", () => {
+  it("labels that action as the door it is", () => {
+    /* "Use Power" rather than "Lay Track (F16)": the button no longer performs the lay, it opens the flow
+       that offers the lay and then the token. A label naming only the first step would promise less than the
+       control does -- and would be the second half of the power going unmentioned again, which is what #442
+       split the buttons to avoid in the first place. */
     const dh = byId(3);
-    expect(dh?.actions.map((a) => a.label)).toEqual([
-      "Lay Track (F16)",
-      "Place Station Token for $0 (F16)",
-    ]);
+    expect(dh?.actions.map((a) => a.label)).toEqual(["Use Power"]);
   });
 
   it("gives every other actionable ability exactly one action", () => {

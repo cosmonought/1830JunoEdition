@@ -82,3 +82,61 @@ describe("the waiting room still works the way it did", () => {
     expect(CODE).toContain("useState<SandboxRoomDoc | null>(null)");
   });
 });
+
+// ==================================================================
+//  DESIGN NOTE 856 (harness): JOINING A ROOM DID NOT PUT YOU IN IT
+// ==================================================================
+//
+// REPORTED: "When I Host Game and a player joins, it does not update on my screen until/unless I refresh the
+// page" -- and then, decisively: "the joiner sees the host, but the host doesn't see joiners."
+//
+// THE ASYMMETRY WAS THE DIAGNOSIS. `hostSandboxRoom` writes the host into the room document, so a joiner's
+// FIRST snapshot already contains them; that is why the joiner's screen looked right and the listeners looked
+// healthy. The join path wrote nothing. `upsertSandboxPlayer` had three callers, every one of them a
+// waiting-room control -- nickname, colour, Ready -- so an untouched joiner was not in the document and the
+// host's listener had nothing to fire on.
+//
+// IT LOOKED LIKE LAG because the delay is however long the joiner takes to type a name. It is not, and it was
+// not a regression either: `git log -S` finds three commits, all ADDING call sites, none in the join path.
+//
+// THIS FILE, because #764 is the other half of the same screen: that note made joining WAIT for the room to
+// answer, and this one makes the room have something to say.
+
+describe("joining a room seats you in it (design note #856)", () => {
+  it("writes the local player when the roster does not have them", () => {
+    expect(CODE).toContain("void upsertSandboxPlayer(sandboxRoomCode, {");
+    expect(CODE).toContain("sandboxRoom.players.some((player) => player.id === localId)");
+  });
+
+  it("waits for the first snapshot before deciding they are absent", () => {
+    /* #764's third state, reused: `null` means both "no such room" and "have not heard yet", and writing a
+       seat into the second one would be answering a question nobody has asked yet. */
+    expect(CODE).toContain("if (!sandboxRoomResolved || !sandboxRoom) return;");
+  });
+
+  it("claims the room through a ref so the write cannot loop", () => {
+    /* `upsertSandboxPlayer` is a read-modify-write transaction and this effect depends on the roster it
+       writes. Without the guard, every snapshot triggers another write, which triggers another snapshot. */
+    expect(CODE).toContain("const seatedRoomRef = useRef<string | null>(null);");
+    expect(CODE).toContain("if (seatedRoomRef.current === sandboxRoomCode) return;");
+  });
+
+  it("claims the room for someone already seated, rather than rewriting them", () => {
+    /* THE HOST'S CASE, and a rejoin. Writing over an existing entry would reset a nickname and a colour the
+       player had already chosen -- #569's rule that the upsert REPLACES, so a field left out is erased. */
+    const effect = CODE.slice(
+      CODE.indexOf("const seatedRoomRef"),
+      CODE.indexOf("const replayingRef"),
+    );
+    expect(effect.length).toBeGreaterThan(0);
+    const guard = effect.indexOf("players.some((player) => player.id === localId)");
+    const write = effect.indexOf("void upsertSandboxPlayer");
+    expect(guard).toBeGreaterThan(-1);
+    expect(write).toBeGreaterThan(guard);
+  });
+
+  it("re-arms when the room code changes", () => {
+    // Leaving and joining a second room must seat you there too.
+    expect(CODE).toContain("seatedRoomRef.current = null;");
+  });
+});

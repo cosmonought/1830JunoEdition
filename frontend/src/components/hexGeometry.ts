@@ -455,6 +455,43 @@ export function liveEdgesForHex(mapGrid: MapGridResponse, q: number, r: number):
  *  should not be, so every gap -- no city index recorded, no grouping authored, an index past the end -- falls
  *  back to every live edge, which is exactly today's behaviour. Nothing is newly hidden except a rail that
  *  provably belongs to another city. */
+/* ==================================================================
+    DESIGN NOTE 877: THE SAME ROTATION, ASKED OF A TILE NOT YET LAID
+   ==================================================================
+
+   `cityExitEdges` below rotates a tile's `cityGroups` and then intersects with the LIVE edges of the hex it
+   is laid on. #878 needs the first half without the second: "if this candidate tile went down at this
+   orientation, which edges would each of its cities own?" -- a question about a tile that is still in the
+   picker, on a hex it has not touched.
+
+   EXTRACTED RATHER THAN COPIED, for the reason this codebase keeps rediscovering (#686, #852, #862): a second
+   copy of `(edge + orientation) % 6` is a second answer waiting to disagree with the first, and it would
+   disagree exactly on the tiles where being right matters -- the OO upgrades.
+
+   `null` MEANS "THIS TILE DOES NOT DISTINGUISH ITS CITIES", not "no edges". A single-city tile, a tile with
+   no authored groups, or an index past the end all return `null`, and callers read that as "the question does
+   not apply here" rather than as an empty set. */
+export function tileCityEdges(
+  tileId: number,
+  orientation: number,
+  cityIndex: number,
+): number[] | null {
+  const groups = TILE_CATALOG_BY_ID.get(tileId)?.cityGroups;
+  if (!groups || groups.length < 2) return null;
+  const group = groups[cityIndex];
+  if (!group) return null;
+  /* `cityGroups` is BASE (pre-rotation) edges, like every other geometry field on the entry -- rotating here
+     is what `rotateConnections` does for the mask, done one edge at a time because a group is a list rather
+     than a bitmask. */
+  const turn = (edge: number) => (edge + (((orientation % 6) + 6) % 6)) % 6;
+  return group.map(turn);
+}
+
+/** How many cities `tileId` distinguishes -- `0` where it distinguishes none. */
+export function tileCityCount(tileId: number): number {
+  return TILE_CATALOG_BY_ID.get(tileId)?.cityGroups?.length ?? 0;
+}
+
 export function cityExitEdges(
   mapGrid: MapGridResponse,
   q: number,
@@ -466,15 +503,9 @@ export function cityExitEdges(
 
   const laidTile = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laidTile) {
-    const groups = TILE_CATALOG_BY_ID.get(laidTile.tile_id)?.cityGroups;
-    if (!groups || groups.length < 2) return all;
-    const group = groups[cityIndex];
-    if (!group) return all;
-    /* `cityGroups` is BASE (pre-rotation) edges, like every other geometry field on the entry -- rotating here
-       is what `rotateConnections` does for the mask, done one edge at a time because a group is a list rather
-       than a bitmask. */
-    const turn = (edge: number) => (edge + (((laidTile.orientation % 6) + 6) % 6)) % 6;
-    const rotated = group.map(turn).filter((edge) => all.includes(edge));
+    const rotatedGroup = tileCityEdges(laidTile.tile_id, laidTile.orientation, cityIndex);
+    if (rotatedGroup === null) return all;
+    const rotated = rotatedGroup.filter((edge) => all.includes(edge));
     return rotated.length > 0 ? rotated : all;
   }
 

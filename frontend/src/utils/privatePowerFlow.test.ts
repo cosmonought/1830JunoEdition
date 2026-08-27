@@ -23,9 +23,11 @@
 import { powerFlowOpen, privatePowerFlow } from "./privatePowerFlow";
 
 const dh = (layDone: boolean, station: "pending" | "placed" | "forfeited") =>
-  privatePowerFlow({ abilityKey: "dh-tile", hexLabel: "F16", layDone, station });
+  privatePowerFlow({ abilityKey: "dh-tile", holder: "NNH", hexLabel: "F16", layDone, station });
 const csl = (layDone: boolean) =>
-  privatePowerFlow({ abilityKey: "csl-tile", hexLabel: "B20", layDone, station: "none" });
+  privatePowerFlow({ abilityKey: "csl-tile", holder: "NNH", hexLabel: "B20", layDone, station: "none" });
+const mh = (revenuePerOr?: number) =>
+  privatePowerFlow({ abilityKey: "mh-exchange", holder: "B", revenuePerOr });
 
 describe("the D&H is two steps, in order", () => {
   it("opens with the lay live and the station greyed", () => {
@@ -182,8 +184,18 @@ describe("the shell derives the flow instead of remembering it (design note #849
   });
 
   it("does not mount the modal over a placement in flight", () => {
-    // #818's own condition: once accepted, the board is the thing to look at.
-    expect(APP).toContain("powerFlowOpen(activePowerFlow) && homeStationPlacement === null");
+    /* #818's own condition: once accepted, the board is the thing to look at.
+       DESIGN NOTE 866 ADDED THE SECOND HALF, and this test's own name is why it belongs here. The condition
+       was `homeStationPlacement === null` alone, which is "no errand is armed" -- and that was a sufficient
+       proxy only while every free placement began by arming one. Auto-staging skips the errand entirely, so
+       a placement genuinely in flight had `homeStationPlacement === null` and the modal would have mounted
+       over the confirmation it had just produced. A PROXY THAT STOPPED STANDING FOR THE THING, which is the
+       failure this session keeps turning up; the fix is to ask about the placement directly.
+       The needle is matched loosely across the two lines because the condition now wraps. */
+    expect(APP).toContain("powerFlowOpen(activePowerFlow) &&");
+    expect(APP).toMatch(
+      /powerFlowOpen\(activePowerFlow\) &&\s*homeStationPlacement === null &&\s*pendingToken === null/,
+    );
   });
 });
 
@@ -223,5 +235,87 @@ describe("one hex, one question (design note #850)", () => {
     expect(body).toContain("setPendingToken(null);");
     expect(body).toContain("setHomeStationPlacement(null);");
     expect(body).not.toContain("dh-token");
+  });
+});
+
+
+// ==================================================================
+//  DESIGN NOTE 871 (harness): ONE QUESTION, AND A WAY OUT OF IT
+// ==================================================================
+//
+// SPECIFIED: "let's have a modal pop up when a player clicks it that basically says 'Exchanging this Private
+// Company for an NYC share forfeits its $20/OR revenue. Are you sure?' and allows them to escape by
+// selecting no."
+describe("the M&H is one question (design note #871)", () => {
+  it("asks once and names the revenue it costs", () => {
+    const flow = mh(20);
+    expect(flow.steps).toHaveLength(1);
+    expect(flow.steps[0].key).toBe("exchange");
+    expect(flow.steps[0].text).toBe(
+      "Exchanging this Private Company for an NYC share forfeits its $20/OR revenue. Are you sure?",
+    );
+  });
+
+  it("names the loss without a figure when the room has not reported one", () => {
+    /* `|| 0` WOULD BE THE TEMPTING WRONG ANSWER -- it would tell a player they are giving up nothing, which
+       is the opposite of the fact the sentence exists to carry. */
+    expect(mh().steps[0].text).toContain("forfeits its Operating Round revenue");
+    expect(mh().steps[0].text).not.toContain("$");
+  });
+
+  it("offers a No as well as an X", () => {
+    /* "allows them to escape by selecting no" -- so the escape is a NAMED BUTTON, not only the corner X.
+       Both are present and both mean the same thing here, which is correct rather than redundant: nothing is
+       committed until the exchange fires, so every exit is the same exit. */
+    const flow = mh(20);
+    expect(flow.steps[0].declineLabel).toBe("No, Keep the Private");
+    expect(flow.cancellable).toBe(true);
+  });
+
+  it("promises nothing is lost by declining", () => {
+    /* THE DIFFERENCE FROM THE D&H, in the words a player reads. #845: "Declining THIS one costs nothing: the
+       power is still unspent... Two modals, two rules, and the difference is whether the question can be
+       asked again." */
+    expect(mh(20).steps[0].declineHint).toContain("untouched");
+    expect(dh(true, "pending").steps[1].declineHint).toContain("Give up the free placement");
+  });
+
+  it("is live the moment it opens", () => {
+    // No ordering to respect: there is one step and nothing before it.
+    expect(mh(20).steps[0].enabled).toBe(true);
+    expect(mh(20).steps[0].done).toBe(false);
+    expect(powerFlowOpen(mh(20))).toBe(true);
+  });
+
+  it("names its holder as a player, not a corporation", () => {
+    /* Design note #872: the modal used to write "{ticker} holds this power." itself, which is right for the
+       two corporate hex powers and wrong for this one -- the M&H belongs to a PERSON (#441). */
+    expect(mh(20).holderLine).toBe("B holds this power.");
+    expect(dh(false, "pending").holderLine).toBe("NNH holds this power.");
+  });
+});
+
+describe("the modal writes no copy of its own (design note #872)", () => {
+  const read = (rel: string) => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs
+      .readFileSync(path.join(__dirname, "..", rel), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+  };
+  const MODAL = read("components/PrivatePowerFlowModal.tsx");
+
+  it("takes the holder line from the flow", () => {
+    expect(MODAL).toContain("{flow.holderLine}");
+    expect(MODAL).not.toContain("holds this power.");
+  });
+
+  it("takes the decline hint from the step", () => {
+    /* THE STRING THAT WOULD HAVE LIED TO AN M&H OWNER: "Give up the free placement. The marker stays in the
+       supply for an ordinary placement later." True of the only decline that existed when it was written. */
+    expect(MODAL).toContain("step.declineHint");
+    expect(MODAL).not.toContain("Give up the free placement");
   });
 });

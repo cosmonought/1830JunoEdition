@@ -70,7 +70,11 @@ export function PrivatePowerFlowModal({
           )}
         </div>
 
-        <p style={styles.who}>{ticker} holds this power.</p>
+        {/* Design note #872: the sentence comes from the flow now. It read `{ticker} holds this power.`
+            here, which is right for the two corporate hex powers and wrong for the M&H -- a PLAYER power
+            (#441), whose holder has a name rather than a ticker. #848's claim that this component "writes no
+            rules and no copy" was two strings away from true; this is one of them. */}
+        <p style={styles.who}>{flow.holderLine}</p>
 
         {flow.steps.map((step, index) => (
           <div
@@ -103,11 +107,10 @@ export function PrivatePowerFlowModal({
                   }}
                   disabled={!step.enabled}
                   onClick={() => onDecline(step.key)}
-                  title={
-                    step.enabled
-                      ? "Give up the free placement. The marker stays in the supply for an ordinary placement later."
-                      : "Available once the tile is laid."
-                  }
+                  /* Design note #872: and the other one. This was the D&H's forfeit sentence, hardcoded --
+                     true of the only decline that existed when it was written, and the exact opposite of the
+                     M&H's, where declining gives up nothing at all. `declineHint` travels with the step. */
+                  title={step.enabled ? (step.declineHint ?? undefined) : "Available once the tile is laid."}
                 >
                   {step.declineLabel}
                 </button>

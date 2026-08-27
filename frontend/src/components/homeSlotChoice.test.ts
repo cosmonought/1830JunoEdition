@@ -101,9 +101,32 @@ describe("the renderer consults the rule rather than the marker", () => {
 
   it("skips the nearest-marker lookup where either slot is open", () => {
     /* The shape of the fix: `homeCityIndexAt` is still asked on every OTHER hex, so #584's pairing of ring and
-       badge survives exactly where its reasoning holds. */
-    expect(renderer).toContain("const eitherSlot = homeSlotsAreOpen(");
-    expect(renderer).toContain("const homeSlot = eitherSlot");
+       badge survives exactly where its reasoning holds.
+       DESIGN NOTE 858 MOVED THE TWO LINES INTO ONE FUNCTION, because the CLICK handler needed the same answer
+       and inlining it there would have been the second copy. The property is unchanged and is now checked
+       where it lives -- `homeSlotIndex` returns `null` for an open hex and defers to `homeCityIndexAt`
+       otherwise -- so this asserts the renderer CALLS it rather than re-deriving it. */
+    expect(renderer).toContain("homeSlotIndex(");
+    expect(renderer).not.toContain("homeCityIndexAt(");
+    const primitives = (() => {
+      const fs = require("fs") as typeof import("fs");
+      const path = require("path") as typeof import("path");
+      return fs
+        .readFileSync(path.join(__dirname, "hexCanvasPrimitives.ts"), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+    })();
+    expect(primitives).toContain("if (homeSlotsAreOpen(hexLabel)) return null;");
+    expect(primitives).toContain("return homeCityIndexAt(slotNodes, markerPoint);");
+  });
+
+  it("asks it for the CLICK as well as the ring (design note #858)", () => {
+    /* THE REPORT. "the correct city is shown with the glow ring, but a player can select G19's other city and
+       place the home station there." The ring computed the answer inline and the click, forty lines away in
+       the same file, never asked -- so the board drew the rule and the placement ignored it.
+       BOTH CALL SITES, counted: one in the draw pass, one in the click payload. */
+    expect((renderer.match(/homeSlotIndex\(/g) ?? []).length).toBe(2);
+    expect(renderer).toContain("homeCityIndex: homeSlotIndex(");
   });
 
   it("still lights every node when no single slot is resolved", () => {

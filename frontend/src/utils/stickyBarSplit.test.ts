@@ -149,11 +149,14 @@ describe("the panels are back inside the bar, on a measurement (design note #828
     expect(sticky).toContain("<ProposePrivatePurchase");
   });
 
-  it("folds the depot table when the bar is pinned", () => {
-    /* THE 101 PIXELS. Reference folds, the action does not -- see `TrainPurchasePanel` #828. Without this the
-       panel is 242px and the bar unpins, which is the bug #785 was fixing by relocation. */
-    const depot = strip(read("components/TrainPurchasePanel.tsx"));
-    expect(depot).toContain("if (condensed) setBankOpen(false);");
+  it("no longer folds the depot table, because there is no table (design note #860)", () => {
+    /* #828 FOLDED IT TO MAKE THE PANEL FIT and the fit came from somewhere else in the end: #859 gave the
+       panel the bar's full width in two columns, and #860 deleted the purchasable-tier table whose three
+       facts had all found other homes. A fold is not needed for a section that is half a column tall.
+       THE PROPERTY #828 CARED ABOUT SURVIVES and is asserted in `buyTrainsPanel.test.ts`: the only bodies
+       still marked `STICKY_OPTIONAL` are the two a player can actually collapse. */
+    const panel = read("components/TrainPurchasePanel.tsx");
+    expect(panel).not.toContain("setBankOpen");
   });
 
   it("never folds the buy row", () => {

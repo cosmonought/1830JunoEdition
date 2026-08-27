@@ -134,36 +134,27 @@ describe("the probe measures the question that was asked", () => {
   });
 });
 
-describe("the bank stands aside for the roster (design note #812)", () => {
-  it("closes the depot when the corporate accordion opens", () => {
-    expect(DEPOT).toContain("const [bankOpen, setBankOpen] = useState(true);");
-    expect(DEPOT).toContain("setBankOpen(!corporateOpen);");
+describe("the bank no longer stands aside, because it no longer folds (#812 -> #859/#860)", () => {
+  /* #812 COLLAPSED THE DEPOT WHEN THE ROSTER OPENED, and its reasoning was about height: the roster with
+     eight corporations UNDER a full depot table was the bar's worst case, and folding one removed it.
+     BOTH HALVES OF THAT PREMISE ARE GONE. #859 gave the panel the bar's full width, so the two sections sit
+     SIDE BY SIDE rather than stacked -- neither is under the other. #860 then deleted the depot table
+     outright, its three facts having found other homes (the price on the buy row, the roster behind the
+     caret, the rust on #839's badge). What is left of the bank is a heading, a buy row and two figures.
+     #812's REAL POINT SURVIVES AND IS ASSERTED BELOW: the treasury stays on the bank's line, because it is
+     the figure that decides whether EITHER purchase is possible. */
+  it("keeps the treasury on the bank's line", () => {
+    expect(DEPOT).toContain("treasury " + String.fromCharCode(36) + "{treasury}");
   });
 
-  it("keeps the tier and its price on the collapsed header", () => {
-    /* THE DIFFERENCE BETWEEN THE PROPOSAL I DECLINED AND THE ONE THAT WAS MADE. I turned this down once
-       because comparing the depot's price against a corporation's asking price is why a player opens the
-       roster at all -- so hiding the depot hides the number being compared. With the figure on the header,
-       that objection is answered rather than overruled. */
-    expect(DEPOT).toContain("{!bankOpen && nextTier && (");
-    const dollar = String.fromCharCode(36);
-    expect(DEPOT).toContain("{nextTier.tier}-train " + dollar + "{nextTier.cost}");
+  it("has no fold left to trigger", () => {
+    expect(DEPOT).not.toContain("setBankOpen");
+    expect(DEPOT).not.toContain("bankOpen");
   });
 
-  it("leaves the player able to reopen it", () => {
-    // A default, not a lock: there are boards where seeing both in full is exactly right.
-    expect(DEPOT).toContain("onClick={() => setBankOpen((open) => !open)}");
-    expect(DEPOT).toContain("aria-expanded={bankOpen}");
-  });
-
-  it("keeps the treasury on the header in both states", () => {
-    /* It decides whether EITHER purchase is possible, so it belongs to the panel rather than to one
-       section's body -- and a player weighing a trade needs it while the depot is folded away. */
-    const header = DEPOT.slice(
-      DEPOT.indexOf("Buy Trains from the Bank"),
-      DEPOT.indexOf("{bankOpen && ("),
-    );
-    expect(header).toContain("treasury");
+  it("keeps the roster's own caret, which is the one that grows", () => {
+    // #758's case: eight operating corporations. That table is still a table a player opens on purpose.
+    expect(DEPOT).toContain("setCorporateOpen((open) => !open)");
   });
 });
 

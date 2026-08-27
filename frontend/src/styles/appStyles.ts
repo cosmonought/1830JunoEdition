@@ -81,7 +81,23 @@ export const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     whiteSpace: "nowrap",
     flexShrink: 0,
-    cursor: "help",
+    /* ==================================================================
+        DESIGN NOTE 867: A CURSOR PROMISING A TOOLTIP THAT WAS REMOVED
+       ==================================================================
+       REPORTED: "all of the warning badges have a tooltip hover cursor icon, but no tooltip appears for
+       them."
+       EXACTLY RIGHT, AND #839 IS WHERE IT HAPPENED. That pass removed the phase badge's `title` on request --
+       "Keeping with our policy of not hiding critical information in hover tooltips ... The Phase Change can
+       stay and have its tooltip removed" -- and left `cursor: "help"` behind on the shared style. The badges
+       added in the same pass inherited it, so three chips advertised a hover that had been deliberately
+       deleted.
+       A CURSOR IS AN AFFORDANCE, which is why this is a bug and not a cosmetic leftover: `help` tells a
+       player there is more to read, and the whole point of #839 was that there is no more to read because it
+       is all already on the chip. The `aria-label` is not a tooltip -- it carries the same sentence for a
+       reader who cannot see the label, and no pointer will ever reveal it.
+       `default`, NOT UNSET: these sit inside a bar of buttons, and a badge that inherited a neighbouring
+       `pointer` would advertise a click instead. */
+    cursor: "default",
   },
   phaseShiftBadgeWarn: {
     borderColor: ALERT_WARN_BORDER,
@@ -497,6 +513,9 @@ export const styles: Record<string, React.CSSProperties> = {
      own bottom for the rest of the scroll.
      `zIndex` stays: the bar still overlaps the panels below it while it travels, and dropping the stacking
      order here would make it flicker under them instead of trapping. */
+  /* Design note #859: the step panel's own row in the bar's wrapping flex. Without it the wrapper is a flex
+     item sized to its content, and every layout inside it divides a fragment of the bar instead of the bar. */
+  stepPanelRow: { flexBasis: "100%", width: "100%", minWidth: 0 },
   actionBarUnpinned: {
     position: "static",
   },

@@ -14,7 +14,7 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
-import type { SandboxRoomDoc } from "../utils/sandboxRoom";
+import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
 
@@ -53,6 +53,13 @@ export function SandboxWaitingRoom({
   const enough = players.length >= MIN_PLAYERS;
   const allReady = players.length > 0 && players.every((player) => player.isReady);
   const canStart = isHost && enough && allReady;
+  /* Design note #857: what the ROOM is short of, from the same reader `canStartSandboxGame` uses -- so the
+     host's tooltip and the guest's line cannot describe the same room differently. */
+  const block = waitingRoomBlock(room, MIN_PLAYERS);
+  const notice = waitingRoomNotice(room, MIN_PLAYERS, {
+    isHost,
+    isReady: me?.isReady ?? false,
+  });
 
   /* Design note #529: the numbers this room WOULD be dealt, shown live as people
      arrive. They are the whole consequence of the player count, and a lobby that
@@ -197,10 +204,12 @@ export function SandboxWaitingRoom({
               /* A disabled control with no explanation is the thing this
                  codebase's own prop conventions exist to prevent, so the
                  reason names whichever condition is actually blocking. */
+              /* Design note #857: the SAME reader the guest's line uses. This tooltip was the only statement
+                 of what was blocking, and it was hovered by the one person who could act on it. */
               title={
-                !enough
+                block === "need-players"
                   ? `Project 18XX needs at least ${MIN_PLAYERS} players.`
-                  : !allReady
+                  : block === "need-ready"
                     ? "Waiting for everyone to mark themselves ready."
                     : "Deal the game and begin."
               }
@@ -209,6 +218,17 @@ export function SandboxWaitingRoom({
             </button>
           )}
         </div>
+
+        {/* ==================================================================
+             DESIGN NOTE 857: THE GUEST IS TOLD WHAT THE HOST WAS ONLY HOVERING
+            ==================================================================
+            ASKED: "when a non-host player clicks 'Ready,' there should be a notification like 'Waiting for
+            Host to start the game...' so that players know they don't need to do anything else."
+            BELOW THE ROW, because it is the ANSWER to the button just pressed -- the same placement rule
+            #835 applied to the Track hint and #855 to the route detail: a line about a control goes under it.
+            NOT AN ERROR, and drawn so: nothing has gone wrong, the player has finished their part. `error`
+            below keeps its own louder treatment. */}
+        {notice && <span style={styles.notice}>{notice}</span>}
 
         {error && <span style={styles.error}>{error}</span>}
       </div>
@@ -350,6 +370,13 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: "auto",
   },
   buttonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  /* Design note #857: calm, not alarmed. #707's distinction between a refusal and a status -- this reports
+     that the player has finished and the room has not, which is neither an error nor an instruction. */
+  notice: {
+    fontSize: FONT_SIZE.small,
+    lineHeight: LINE_HEIGHT.normal,
+    color: "#9ec5ff",
+  },
   quiet: {
     fontSize: FONT_SIZE.small,
     padding: "5px 10px",

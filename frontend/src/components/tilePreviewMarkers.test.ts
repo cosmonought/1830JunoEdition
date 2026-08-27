@@ -29,7 +29,7 @@
 import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import { drawTileOverlays, restrictionLabelFor } from "./hexCanvasPrimitives";
 import { tileCityAnchors, tileCitySlotCounts } from "./TileGraphics";
-import { describeTokenMigration, previewTokenMigration } from "../utils/tokenMigration";
+import { describeTokenMigration, planTokenUpgrade, previewTokenMigration } from "../utils/tokenMigration";
 import type { MapGridResponse, StationTokenCompany } from "./hexContractTypes";
 
 /** Every tile that carries a B/NY/OO label -- `restrictionLabelFor`'s own
@@ -175,13 +175,28 @@ describe("design note 488: the marker and the caption are one answer", () => {
     expect(tileCityAnchors(GREEN_OO, 0, CENTRE, SIZE)).toHaveLength(2);
   });
 
-  it("preserves the city index across the upgrade", () => {
-    const preview = previewTokenMigration(GRID, OO_HEX.q, OO_HEX.r, [HOLDER], GREEN_OO);
-    expect(preview).not.toBeNull();
-    expect(preview!.migrations).toHaveLength(1);
-    // Design note #1 in `tokenMigration.ts`: a token in city `i` stays in
-    // city `i`. Not city 0, which is what an "arbitrary placement" bug does.
-    expect(preview!.migrations[0].toCityIndex).toBe(1);
+  it("leaves an unconnected token free, rather than preserving its index", () => {
+    /* ==================================================================
+        SUPERSEDED BY #878, AND THE FIXTURE WAS ERIE ALL ALONG
+       ==================================================================
+       THIS TEST READ:
+         const preview = previewTokenMigration(GRID, OO_HEX.q, OO_HEX.r, [HOLDER], GREEN_OO);
+         expect(preview!.migrations[0].toCityIndex).toBe(1);
+       under the note "Design note #1 in `tokenMigration.ts`: a token in city `i` stays in city `i`. Not city
+       0, which is what an 'arbitrary placement' bug does."
+       IT WAS ASSERTING THE BUG. Reported: "a station on a double city tile is not anchored to a particular
+       city, it's anchored to its particular network ... upgrades to OO tiles are not preserving corporation
+       station network connectivity." A city index is a bookkeeping artefact; the network is the fact.
+       AND THE FIXTURE MAKES THE POINT TWICE OVER. `GRID` is bare, so this token's city touches no live edges
+       at all -- which is not the general case the test claimed to cover, it is precisely the ERIE case: "its
+       home station can be placed on a city tile before that city has any track connecting it". The right
+       answer here is that the president may put it in either city, and the old rule was quietly deciding for
+       them. */
+    const plan = planTokenUpgrade(GRID, OO_HEX.q, OO_HEX.r, [HOLDER], GREEN_OO, 0);
+    expect(plan).not.toBeNull();
+    expect(plan!.landings).toHaveLength(1);
+    expect(plan!.landings[0].toCityIndex).toBeNull();
+    expect(plan!.anyFree).toBe(true);
   });
 
   it("indexes a real anchor with the destination the caption names", () => {

@@ -37,6 +37,10 @@ export const EXCHANGE_SHARE_PERCENT = 10;
    would have CLOSED a company 1830 keeps open and paying $25 a round. ONE ENTRY
    NOW -- the M&H genuinely is an exchange; the C&A is a purchase bonus granted
    where the auction resolves. */
+/** The Mohawk & Hudson. Named here rather than inline in the shell for the reason `DH_PRIVATE_ID` is named
+ *  in `dhPower.ts`: a bare `4` in a condition is a fact nobody can grep for. */
+export const MH_PRIVATE_ID = 4;
+
 export const PRIVATE_EXCHANGES: Readonly<
   Record<number, { ticker: string; corporationName: string }>
 > = {

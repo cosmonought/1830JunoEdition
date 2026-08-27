@@ -78,8 +78,15 @@ describe("what #720 built is untouched", () => {
        included the step panel since #828 -- so the pin test measured a subtree whose height the pin test's
        own answer controlled. Reported as "in OR 1.1 it's not [sticky], but in OR 2.1 it is", which is a
        deadlock settling on whichever side of the threshold the first frame landed. `restingHeight` is the
-       bar with every collapsible body taken out, which does not move when the fold moves. */
-    expect(HOOK).toContain("canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)");
+       bar with every collapsible body taken out, which does not move when the fold moves.
+       DESIGN NOTE 863 CHANGED WHO IS ASKED, not what is measured. `restingHeight` is still the input on the
+       edge back into stickiness; the predicate reading it is now `shouldReleasePin`, because the comfort
+       threshold turned out to be the thing preventing a released bar from ever returning. The needle was
+       `canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop)`; what this file is really
+       guarding is that the bar consults a SHARED predicate from `stickyCollapse` rather than answering
+       locally, and that is unchanged. */
+    expect(HOOK).toContain("restingHeight(node)");
+    expect(HOOK).toContain("shouldReleasePin(");
     // AND THE CLEARANCE STILL READS THE RECT: "can I pin" and "what am I covering" are different questions.
     expect(HOOK).toContain("Math.round(stickyTop + rect.height)");
   });

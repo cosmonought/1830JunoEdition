@@ -58,7 +58,6 @@ import type { StationTokenSlot } from "../utils/stationTokens";
 import type { PrivateCompanyState } from "../utils/gameState";
 import type { RoundType, TileColor } from "../utils/gameState";
 import {
-  phaseAlertLevel,
   type GamePhase,
   type TierRustOutlook,
   type TrainTier,
@@ -268,10 +267,71 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
          what made a refusal sentence and one button drop it out of the viewport mid-decision.
          THE PREVIOUS ANSWER COMES FROM A REF, not from `mayPin`: this closure is rebuilt only when the effect
          re-subscribes, and `measure` runs on every scroll frame in between. */
+      /* ==================================================================
+         DESIGN NOTE 863: THE 50% RULE'S ONLY EFFECT WAS TO PREVENT RECOVERY
+         ==================================================================
+
+         REPORTED TWICE. 4d: "I accidentally clicked 'Upcoming trains' and the Action Bar zipped up to fixed
+         placement/stopped being sticky; however, when I closed that Upcoming trans section, the Action Bar
+         stayed pinned instead of becoming sticky again." 5d: "at least when there are 5 PCs available,
+         clicking any of them forces the Action Bar to jump and pin. Like 4d before, closing the PC leaves the
+         Action Bar pinned and doesn't return it to being sticky."
+         I INSTRUMENTED 4d RATHER THAN FIXING IT because I could not find the fault in the release logic. It
+         was never in the release logic. It is two lines above, in the seed.
+
+         `mayPin` AND `mayPinRef` BOTH START `true` -- an assertion, not a measurement. Follow it through:
+           A bar begins life claiming it may pin, so `wasPinned` is true on the very first frame, so the
+           comfort test is NEVER ASKED of a bar that has not already been released. From birth until the first
+           release, the bar is governed only by the 80% trapping test.
+           The first release flips the ref to false. From then on the return is governed only by the 50%
+           comfort test -- of a bar that was sticky at up to 80%.
+         SO THE BAND BETWEEN 50% AND 80% IS A ONE-WAY DOOR. Every bar wide enough to be interesting lives in
+         it: sticky by default because nothing under 80% ever released it, then permanently static because it
+         cannot get back under 50%. That is exactly the two reports, and it is why closing the section changed
+         nothing -- closing it was never the question being asked.
+
+         WHICH MEANS #720's COMFORT RULE HAS NEVER ONCE DECIDED WHETHER THIS BAR IS STICKY. Its sole
+         observable effect, across its whole life in this file, has been to block recovery. Confirmed by
+         reading its callers: this line and the fit probe's `verdict`, which is an instrument and changes
+         nothing.
+
+         THE HYSTERESIS IS THE RESTING/ACTUAL SPLIT, NOT THE TWO CONSTANTS. #851's insight survives intact and
+         is the thing worth keeping: "may I pin" is about the bar's RESTING form and "am I trapping" is about
+         the pixels ACTUALLY on screen. Give both edges the trapping threshold and let the height source do
+         the hysteresis, and every case lands right:
+           A DELIBERATELY OPENED ROSTER OR PRIVATE CARD grows the actual height past 80% and releases (#758's
+           case, unchanged). Its subtree is `STICKY_OPTIONAL`, so the RESTING height never moved -- and when
+           the player closes it the bar returns, because the resting form was never the problem.
+           A REFUSAL SENTENCE AND ONE BUTTON (#851's report, item 7) take the bar from 45% to 55% and change
+           nothing, because 55% is not trapping. The case that motivated the 50% constant is answered by the
+           80% one.
+           A GENUINELY OVERSIZED BAR whose resting height is past 80% releases and stays released, which is
+           the outcome #720 wanted and never actually produced.
+         `canPinWithoutTrapping` IS DELIBERATELY LEFT IMPORTED for the fit probe, and #720's constant with it.
+         If the comfort rule should ever bite, the honest place is the SEED -- measure the first frame instead
+         of asserting it -- and that is a change in what the bar does on load, which is not what was reported
+         here. Written down so the choice is a choice. */
       const wasPinned = mayPinRef.current;
-      const pinnable = wasPinned
-        ? !shouldReleasePin(rect.height, window.innerHeight, stickyTop)
-        : canPinWithoutTrapping(restingHeight(node), window.innerHeight, stickyTop);
+      const pinnable = !shouldReleasePin(
+        wasPinned ? rect.height : restingHeight(node),
+        window.innerHeight,
+        stickyTop,
+      );
+      /* ==================================================================
+         DESIGN NOTE 861: A BAR THAT STOPS TRAVELLING TAKES THE PLAYER WITH IT
+         ==================================================================
+         REPORTED: "since I think pinning is the right action when the Action Bar takes up 80+% of the screen,
+         we need to make sure that when this pin happens that the player is auto-scrolled to the top of the
+         Action Bar, otherwise it seems like the Action Bar mysteriously disappeared and they are interrupted
+         mid-task."
+         EXACTLY THE SYMPTOM, AND THE MECHANISM IS ORDINARY CSS: a `position: sticky` element that becomes
+         `static` snaps back to its place in the document, which is above the current scroll. Nothing has
+         moved except the rule, and from the chair it reads as the bar vanishing upward.
+         ONLY ON THE TRANSITION, never on a frame where the answer is unchanged -- a scroll handler that
+         scrolls is a loop, and `measure` runs on every frame of a drag.
+         AND ONLY WHEN IT UNPINS. Going the other way the bar arrives at the top of the viewport on its own,
+         which is where the player already is. */
+      if (wasPinned && !pinnable) node.scrollIntoView({ behavior: "smooth", block: "start" });
       mayPinRef.current = pinnable;
       setMayPin(pinnable);
       // Design note #810: the same rect, in the same frame, for the same reason the pin test uses it.
@@ -420,9 +480,15 @@ function useStickyFitProbe(
       const shape = nested
         ? `bar ${barHeight} (panel ${panelHeight} inside)`
         : `bar ${barHeight} + panel ${panelHeight}`;
+      /* Design note #861a: AND WHICH STATE IT IS ACTUALLY IN. Reported: "when I closed that Upcoming trains
+         section, the Action Bar stayed pinned instead of becoming sticky again" -- and I could not reproduce
+         it by reading, which is the same position #813 was in before it built this probe. `verdict` is what
+         the rule WOULD say; `now` is what the bar is doing. If those two disagree in a playtest, the fault is
+         between the measurement and the style; if they agree, the measurement is what is wrong. */
+      const now = bar.getBoundingClientRect().top <= stickyTop + 1 ? "pinned" : "travelling";
       const next =
         `fit probe · ${shape} = ${combined}px · ${share}% of ${viewport}px` +
-        ` · resting ${resting}px · ${verdict}`;
+        ` · resting ${resting}px · ${verdict} · now ${now}`;
       setReading((was) => (was === next ? was : next));
     };
 
@@ -798,13 +864,12 @@ export default function ContextualActionBar({
      Derived phase (`utils/gamePhase.ts`) for the far-right badge -- design note #40 for why it moved here. */
   phase?: GamePhase | null;
 }) {
-  // Design note #7 (`gamePhase.ts`): the ONE severity decision, shared with
-  // the train chips. Computed here rather than inline in the JSX because
-  // both the badge's style and its wording branch on it.
-  const phaseAlert = phaseAlertLevel(phase ?? null);
   /* Design note #839: what the next purchase destroys, as badges rather than as hover text and rather than
-     as a line inside a table the scroll folds away. `purchaseWarnings` owns WHAT; `phaseAlertLevel` above
-     still owns HOW LOUD, which is why neither re-derives the other. */
+     as a line inside a table the scroll folds away.
+     Design note #7 (`gamePhase.ts`): the ONE severity decision, shared with the train chips. It used to be
+     read HERE as `phaseAlert` for a badge of its own; #868 deleted that badge and #867 moved the call inside
+     `purchaseWarnings`, so the severity now reaches the row through the warnings themselves. This file no
+     longer has an opinion about how loud anything is -- which is what #839's note claimed and did not do. */
   const buyWarnings = React.useMemo(
     () => purchaseWarnings(phase ?? null, trainPurchase?.depot ?? []),
     [phase, trainPurchase],
@@ -1304,7 +1369,29 @@ export default function ContextualActionBar({
     // this a minimal-footprint change", then their signature changed to take a company id and four call sites
     // failed to typecheck for a prop nobody reads. Dead props are a type error waiting for the real
     // implementation to move.
-    contextualButtons = [];
+    /* ==================================================================
+        DESIGN NOTE 871: EXCEPT THE M&H, WHICH IS A STOCK-ROUND POWER
+       ==================================================================
+       REPORTED: "the MH private power is pinned below the Action Bar rather than sticky with it, so it is
+       easy to miss for players not scrolling up and down the page."
+       THE SENTENCE ABOVE IS STILL TRUE OF BUY AND SELL -- they live in `StockRoundPanel`'s corporation cards
+       and a duplicate here would be a second control surface for the same move. A private POWER is not that:
+       nothing else in this round offers it, so this is its only control rather than its second.
+       IT DISPATCHES NOTHING, which is what keeps #263 satisfied. The chip raises the same confirmation the
+       panel's own button raises -- #846's rule, third power: "One question, asked one way, whichever door a
+       player came through."
+       NOT TURN-GATED, and that is the M&H's own rule rather than an oversight: the exchange "can be made on
+       their own stock-round turn, or in the gap between any other player's or corporation's turn". The gate
+       is OWNERSHIP, applied where the list is built. */
+    contextualButtons = onUsePowerOffer
+      ? powerOffers.map((offer) => ({
+          key: `power-${offer.abilityKey}`,
+          label: offer.chipLabel,
+          onClick: () => onUsePowerOffer(offer.abilityKey),
+          disabled: false,
+          title: "Opens the exchange question — nothing is spent until you answer it.",
+        }))
+      : [];
   }
 
   /* Design note #413: THE BAR NOW ASKS WHOSE TURN IT IS. Reported as the president being locked out of Lay
@@ -2039,30 +2126,26 @@ export default function ContextualActionBar({
                  decision on this screen to inform.
                  IT IS NOT DELETED, IT IS MOVED -- #326 hangs it off the president's own name. The auction and Stock
                  Round branch keeps its badge (#308): there the money IS the player's. */}
-              {phaseAlert && (
-                <span
-                  className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
-                  style={{
-                    ...styles.phaseShiftBadge,
-                    ...(phaseAlert === "critical"
-                      ? styles.phaseShiftBadgeCritical
-                      : styles.phaseShiftBadgeWarn),
-                  }}
-                  /* Design note #839: THE TOOLTIP IS GONE. It carried `phase.shiftWarning` -- the exact consequence of the
-                     coming shift, the rust included -- which put the most consequential sentence in an 1830 game behind a
-                     hover. Asked for directly: "Keeping with our policy of not hiding critical information in hover
-                     tooltips ... The Phase Change can stay and have its tooltip removed." #806 withdrew a tooltip from
-                     this same bar on the same grounds.
-                     NOT DELETED, PROMOTED: the badges beside this one say what is coming in text, and carry the whole
-                     sentence in `aria-label` for a reader who cannot see them. */
-                >
-                  {phaseAlert === "critical" ? (
-                    <>&#9888; Phase Shift Imminent</>
-                  ) : (
-                    <>&#9888; Phase Shift in 2 Buys</>
-                  )}
-                </span>
-              )}
+          {/* ==================================================================
+                    DESIGN NOTE 868: THE BADGE THAT ONLY SAID SOMETHING WAS COMING
+                  ==================================================================
+                  ASKED: "I'm wondering if we can combine the Phase and Phase Change badges? and I'm wondering if
+                  we need the Phase Change notification for every phase or only the two that shift from Yellow to
+                  Green and Green to Brown?"
+                  THE BADGE IS GONE AND ITS JOB IS SHARED OUT. "Phase Shift Imminent" named an event rather than a
+                  consequence -- every phase change is a phase change -- while the two badges beside it were
+                  already saying what this particular one would DO. The era change was the one fact none of them
+                  carried, so it becomes the third warning rather than the generic one staying.
+                  NOT SUPPRESSED ON THE OTHER THREE, which was the other half of the question and would have been
+                  the wrong move: 3->4, 5->6 and 6->D are the RUST transitions, so filtering to era changes would
+                  silence the row exactly when trains are about to be destroyed. Those three are covered by the
+                  rust and limit badges instead, and `purchaseWarnings.test.ts` asserts the whole table.
+                  THE `phase.label` TAG ABOVE STAYS SEPARATE. Current state and what is coming are two facts, and
+                  a chip that is always present but sometimes red would be carrying both on one channel -- #732's
+                  rule, and the reason the two were not merged.
+                  WHAT WENT WITH IT: `phaseAlert`, and #839's note about the tooltip it used to carry. That note's
+                  argument survives in `purchaseWarnings.ts`, which is where the sentence it was defending now
+                  lives. */}
               {/* Design note #839: the two facts the phase badge used to whisper. Same row, same shape and the
                   same escalation -- a warning drawn differently from the warning beside it reads as a different KIND
                   of thing, which is the distinction #732 keeps on one channel. */}
@@ -2213,8 +2296,36 @@ export default function ContextualActionBar({
                 </button>
               )}
               {/* Design note #835: the line under the pair. See the note above the button group for why this
-                 sentence and not the rotation one, and why it renders here rather than first. */}
-              {mayActThisTurn && orSubPhase === "Track" && (
+                 sentence and not the rotation one, and why it renders here rather than first.
+                 ==================================================================
+                  DESIGN NOTE 870: THE SENTENCE HAD NO STATE, SO IT RODE OVER THE MAP
+                 ==================================================================
+                 REPORTED: "we added the character string 'Click a hex on the Rail Map to lay track.' below the
+                 two Action Buttons, but this eats up some vertical space that is needed for viewing the map."
+                 AND THE SHAPE OF THE FIX, on being told the wrong diagnosis: "the sentence IS appearing when
+                 the Action Bar is sticky, it isn't only displayed when the Action Bar is pinned. If that were
+                 the behavior it would be completely fine, no change needed."
+
+                 EXACTLY SO, AND #835 SIMPLY NEVER ASKED. The line rendered on `mayActThisTurn && Track` and
+                 nothing else, so it was drawn in every state the bar has -- including the one where the bar
+                 is stuck to the top of the viewport and travelling over the board a player is trying to read.
+                 `orPanelStepHint` claims `flexBasis: 100%`, so it is a whole row of map, spent restating a
+                 destination the player has already reached.
+
+                 THE GATE IS `mayPin`, WHICH IS THE DISTINCTION THE REPORT DRAWS. A bar that MAY pin travels
+                 with the scroll and covers the top of the viewport; a bar that may not is `position: static`
+                 (#720), parked in the document above the map, and costs nothing to make one line taller. So
+                 the sentence appears where a player is looking at the BAR and is absent where they are
+                 looking at the MAP -- which is also the only place it was ever useful.
+                 NOT `condensed`. That flag means "has stuck and travelled", which would keep the line while
+                 the bar sits at rest at the top of the page with a sticky future ahead of it -- true for most
+                 of a turn, and the row would then vanish mid-scroll. `mayPin` is a property of the bar's
+                 SHAPE and does not flicker as the player moves.
+
+                 THE BUTTON IS UNCHANGED, and that was the other half of the answer. The report opened by
+                 proposing "Select a Hex to Lay 1 Track" as a label; the reply withdrew it -- "no change
+                 needed" -- once the real behaviour was named. #834's constant "Lay 1 Track" stands. */}
+              {mayActThisTurn && orSubPhase === "Track" && !mayPin && (
                 <span style={styles.orPanelStepHint}>Click a hex on the Rail Map to lay track.</span>
               )}
               {/* Design note #707/#619 said: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
@@ -2721,35 +2832,26 @@ export default function ContextualActionBar({
               {phase.label}
             </span>
           )}
-          {/* Design note #7 (`gamePhase.ts`): TWO steps, not one. This badge rendered identically at two purchases
-             and at one, so the last purchase before a rust -- the most consequential moment in an 1830 game --
-             looked exactly like the moment before it. It reads the same `phaseAlertLevel` helper the train chips do,
-             so the bar and the chips escalate together, and the wording escalates with the colour: "Imminent" is a
-             claim about the NEXT purchase, and it was being made one purchase too early. */}
-          {phaseAlert && (
-            <span
-              className={phaseAlert === "critical" ? "app-phase-shift-critical" : undefined}
-              style={{
-                ...styles.phaseShiftBadge,
-                ...(phaseAlert === "critical"
-                  ? styles.phaseShiftBadgeCritical
-                  : styles.phaseShiftBadgeWarn),
-              }}
-              /* Design note #839: THE TOOLTIP IS GONE. It carried `phase.shiftWarning` -- the exact consequence of the
-                 coming shift, the rust included -- which put the most consequential sentence in an 1830 game behind a
-                 hover. Asked for directly: "Keeping with our policy of not hiding critical information in hover
-                 tooltips ... The Phase Change can stay and have its tooltip removed." #806 withdrew a tooltip from
-                 this same bar on the same grounds.
-                 NOT DELETED, PROMOTED: the badges beside this one say what is coming in text, and carry the whole
-                 sentence in `aria-label` for a reader who cannot see them. */
-            >
-              {phaseAlert === "critical" ? (
-                <>&#9888; Phase Shift Imminent</>
-              ) : (
-                <>&#9888; Phase Shift in 2 Buys</>
-              )}
-            </span>
-          )}
+          {/* ==================================================================
+                DESIGN NOTE 868: THE BADGE THAT ONLY SAID SOMETHING WAS COMING
+              ==================================================================
+              ASKED: "I'm wondering if we can combine the Phase and Phase Change badges? and I'm wondering if
+              we need the Phase Change notification for every phase or only the two that shift from Yellow to
+              Green and Green to Brown?"
+              THE BADGE IS GONE AND ITS JOB IS SHARED OUT. "Phase Shift Imminent" named an event rather than a
+              consequence -- every phase change is a phase change -- while the two badges beside it were
+              already saying what this particular one would DO. The era change was the one fact none of them
+              carried, so it becomes the third warning rather than the generic one staying.
+              NOT SUPPRESSED ON THE OTHER THREE, which was the other half of the question and would have been
+              the wrong move: 3->4, 5->6 and 6->D are the RUST transitions, so filtering to era changes would
+              silence the row exactly when trains are about to be destroyed. Those three are covered by the
+              rust and limit badges instead, and `purchaseWarnings.test.ts` asserts the whole table.
+              THE `phase.label` TAG ABOVE STAYS SEPARATE. Current state and what is coming are two facts, and
+              a chip that is always present but sometimes red would be carrying both on one channel -- #732's
+              rule, and the reason the two were not merged.
+              WHAT WENT WITH IT: `phaseAlert`, and #839's note about the tooltip it used to carry. That note's
+              argument survives in `purchaseWarnings.ts`, which is where the sentence it was defending now
+              lives. */}
           {/* Design note #839: the two facts the phase badge used to whisper. Same row, same shape and the
               same escalation -- a warning drawn differently from the warning beside it reads as a different KIND
               of thing, which is the distinction #732 keeps on one channel. */}
@@ -2929,7 +3031,21 @@ export default function ContextualActionBar({
           second destination that a different component owns: if the clearance were an inline style, the map's
           owner would have to know about this bar's height. The hook applies it to whatever target it is
           given, so neither caller has to. */}
-      <div ref={stepPanelRef}>
+      {/* ==================================================================
+           DESIGN NOTE 859: THE PANEL NEVER HAD THE BAR'S WIDTH TO DIVIDE
+          ==================================================================
+          REPORTED: "we had discussed making this subpanel double columned ... Instead it is still sitting
+          under Buy Trains from the Bank", and then, decisively: "the current version has two columns appear
+          in half the width of the Action Bar, when actually each column should be half the width of the
+          Action Bar."
+          THIS WRAPPER HAD NO STYLE AT ALL. `styles.actionBar` is a WRAPPING FLEX ROW, so an unstyled child is
+          a flex item sized to its own content, sharing a line with the corporation card and the button row.
+          #838's `repeat(auto-fit, minmax(320px, 1fr))` then had a content-width box to fit columns into --
+          one column at first, and two crammed inside that narrow box the moment the train limit changed the
+          content enough to cross 640px. The grid was right and the container was never asked to be wide.
+          `flexBasis: 100%` CLAIMS THE ROW, which is how a wrapping flex container is told "this child gets a
+          line of its own". Then #838's grid divides the bar rather than a fragment of it. */}
+      <div ref={stepPanelRef} style={styles.stepPanelRow}>
       {/* Design note #691: THE PANEL THE REPORT NAMES. The depot table, its quantity selector and its Buy
           button are the largest block in this bar, and on three of four screens they were furniture. */}
       {/* Design note #715: THE STEP'S OWN CONTROLS, ON THE STEP. Reported: the purchase panel "should maybe

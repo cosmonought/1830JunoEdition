@@ -75,6 +75,18 @@ export function tierTint(tier: TrainTier): PhaseTint {
   return TIER_PRESENTATION[tier].tint;
 }
 
+/** The tile era a tier belongs to -- `"Yellow"`, `"Green"` or `"Brown"`.
+ *
+ *  Design note #868: EXPOSED SO THE WARNING CAN COMPARE TWO TIERS. `purchaseWarnings` needs to know whether
+ *  the coming phase changes the tile colour, and the only alternative was a second copy of
+ *  `TIER_PRESENTATION`'s era column living in that file -- the drift this module exists to prevent (#5's
+ *  "ONE COUNTDOWN, NOT TWO", arrived at from the other direction).
+ *  NOTE WHAT THIS IS NOT: a phase number. #612's rule is that the era names a TILE COLOUR, which is the fact
+ *  a player acts on; Diesel is `Brown` because it arrives during that era rather than starting a fourth. */
+export function tierEra(tier: TrainTier): string {
+  return TIER_PRESENTATION[tier].era;
+}
+
 /* Design note #5: ONE COUNTDOWN, NOT TWO. The phase badge and the train chips disagreed and the badge was
    wrong: in Phase 3 with one 3-train left it read "Next buy (4-Train) triggers Phase 4" while the chip read
    "rusts after 2 more purchases". The chip had it right -- the next depot purchase is the LAST 3-TRAIN.

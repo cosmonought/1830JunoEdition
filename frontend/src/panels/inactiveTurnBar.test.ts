@@ -45,11 +45,34 @@ const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""
 /** Every render condition in the Operating Round branch that puts an ACTION on
  *  screen. Written out, because the failure mode is a new one being added and
  *  nobody noticing -- an inferred list would grow silently with the bug. */
+/* ==================================================================
+    DESIGN NOTE 862: THIS LIST WAS THE LAST TO HEAR ABOUT TWO CHANGES
+   ==================================================================
+
+   FOUND WHILE VERIFYING #859/#860/#861 -- three of these four had been red at HEAD, and neither of the two
+   causes was a regression. Both were this session's dominant pattern in its twelfth form: A RULE RESTATED IN
+   ONE AUTHORITY AND NEVER ASKED IN ITS SIBLING. Recorded rather than quietly repaired, because the list's
+   whole premise is that it is written out by hand and so it can only be as current as its last reader.
+
+   CAUSE ONE -- A TIGHTENING THE HARNESS READ AS AN ABSENCE. The two Hardware surfaces moved from `orSubPhase`
+   to `orStep`, which line 1427 defines as `roundType === "OperatingRound" ? orSubPhase : null`: strictly
+   narrower, and made for #841's reason that unqualified sub-phase questions were firing outside the Operating
+   Round. The gate these tests defend was never touched. A `search` that returns -1 cannot tell "the surface
+   lost its gate" from "the surface is spelled differently now", and it reports both as the first.
+
+   CAUSE TWO -- A SURFACE THAT STOPPED BEING AN ACTION. The condensed drafted-routes row is on this list
+   because in #740's day the chips WERE the draft cursor. #815 split that in two: `isOpen` ("this chip's route
+   is showing") belongs to every viewer, `isDrafting` ("map clicks land on this train") belongs to the
+   president. The row is now reference whose actionable half is gated INLINE -- `mayActThisTurn && draft...`
+   on the cursor, and `if (mayActThisTurn) onSelectRouteTrain(...)` in the handler. Gating the whole row on
+   the turn would DELETE a readout #802 built for watchers, so the old assertion did not merely fail, it
+   asked for the wrong thing. It moves to "what an inactive player keeps" and takes its real rule with it.
+   THE ORIGINAL ENTRY IS KEPT ABOVE IN PROSE because the reasoning that put it here was correct when written;
+   what changed is the surface, not the judgement. */
 const ACTION_SURFACES: ReadonlyArray<{ what: string; marker: RegExp }> = [
-  { what: "the train purchase panel", marker: /orSubPhase === "Hardware" && trainPurchase/ },
-  { what: "the must-buy-a-train notice", marker: /orSubPhase === "Hardware" && mustBuyTrain/ },
+  { what: "the train purchase panel", marker: /orStep === "Hardware" && trainPurchase/ },
+  { what: "the must-buy-a-train notice", marker: /orStep === "Hardware" && mustBuyTrain/ },
   { what: "the dividend payout panel", marker: /orSubPhase === "Dividends" &&/ },
-  { what: "the condensed drafted-routes row", marker: /orSubPhase === "Routes" && condensed/ },
 ];
 
 describe("an inactive player's Operating Round bar", () => {
@@ -94,6 +117,34 @@ describe("what an inactive player keeps", () => {
     const at = CODE.indexOf("styles.subPhaseTrail");
     expect(at).toBeGreaterThan(-1);
     expect(CODE.slice(Math.max(0, at - 300), at)).not.toContain("mayActThisTurn");
+  });
+
+  it("keeps the drafted-routes chips, and gates only the cursor inside them", () => {
+    /* MOVED HERE BY #862 from `ACTION_SURFACES`, where it asked for the row to disappear. #815's split is the
+       reason: the chips carry TWO facts and only one of them is an action.
+         SHOWN TO EVERYONE  -- `isOpen`, "this chip's route is on the map", which is the whole point of the
+                               readout #802 built for watchers.
+         THE PRESIDENT ONLY -- `isDrafting`, "map clicks land on this train", and the dispatch behind it.
+       So the gate is INSIDE the row rather than on it, and this asserts the two places it has to appear. A
+       row-level gate would pass a naive version of this test while removing the readout. */
+    const at = CODE.indexOf('aria-label="Drafted routes"');
+    expect(at).toBeGreaterThan(-1);
+    const row = CODE.slice(at, at + 1600);
+    expect(row).toContain("mayActThisTurn && draft.trainIndex === activeTrainIndex");
+    expect(row).toContain("if (mayActThisTurn) onSelectRouteTrain(draft.trainIndex);");
+    /* AND THE ROW ITSELF IS NOT GATED. The condition that renders it asks about the sub-phase and about
+       whether there is anything to show -- never about whose turn it is.
+       THE FIRST DRAFT OF THIS CHECK WAS VACUOUS, and it is kept in description because it is the session's
+       standing trap wearing a new hat. It read `lastIndexOf('orSubPhase === "Routes"', at)` and searched from
+       there to the row -- but a gate is written BEFORE the condition it guards, so `mayActThisTurn && orSub...`
+       puts the gate UPSTREAM of the anchor and the slice could never contain it. The negative control caught
+       it: adding the gate left all thirteen green. AN ANCHOR HAS TO SIT OUTSIDE WHAT IT IS LOOKING FOR, so
+       this takes the whole render line instead, and proves it found the right line before judging it. */
+    const opens = CODE.lastIndexOf('orSubPhase === "Routes"', at);
+    expect(opens).toBeGreaterThan(-1);
+    const line = CODE.slice(CODE.lastIndexOf("\n", opens) + 1, CODE.indexOf("\n", opens));
+    expect(line).toContain("trainDrafts.length > 0");
+    expect(line).not.toContain("mayActThisTurn");
   });
 
   it("keeps Undo ungated by the turn", () => {

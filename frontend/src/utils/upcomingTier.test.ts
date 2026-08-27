@@ -142,10 +142,25 @@ describe("the panel is wired to it", () => {
     expect(CODE).not.toContain("`next: " + dollar + "{laterTiers[0].tier}");
   });
 
-  it("keeps the list showing everything else", () => {
-    /* #633's choice, untouched: a rusted 2-train behind the caret is context worth having. This pass changed
-       the CAPTION's source, not the accordion's contents. */
-    expect(CODE).toContain("depot.filter((row) => row.tier !== nextTier.tier)");
-    expect(CODE).toContain("laterTiers.map((tier) => (");
+  it("keeps the list showing everything, and flags the one on sale", () => {
+    /* SUPERSEDED BY #860 AND THE OLD FORM IS WORTH KEEPING: this used to read
+         expect(CODE).toContain('depot.filter((row) => row.tier !== nextTier.tier)');
+         expect(CODE).toContain('laterTiers.map((tier) => (');
+       under the heading "keeps the list showing everything ELSE", and its reasoning was "#633's choice,
+       untouched: a rusted 2-train behind the caret is context worth having."
+       WHAT CHANGED IS WHAT THE SECTION IS FOR. The purchasable tier was excluded because a table above it
+       already showed that row, so listing it twice was the duplication. #860 deleted that table -- reported:
+       "the caret for Buy Trains from the Bank only expands to show how many are left in the bank depot and
+       when/if they rust... could we simply scrap that whole section" -- and renamed the caret to "Train
+       Roster", reported: "'Upcoming Trains' is not quite right either because it lists old trains". A roster
+       with a hole where today's train should be is the thing the new name promises not to be.
+       SO THE EXCLUSION BECOMES A MARK. `isNext` says which row is on sale instead of removing it, which keeps
+       #633's context and answers #860's rename with the same list. */
+    expect(CODE).toContain("depot.map((tier) => (");
+    expect(CODE).toContain("isNext={nextTier !== null && tier.tier === nextTier.tier}");
+    /* AND THE OLD SPLIT IS GONE RATHER THAN ORPHANED. `laterTiers` was the filtered memo; leaving it computed
+       and unused is how a deleted rule comes back. */
+    expect(CODE).not.toContain("laterTiers");
+    expect(CODE).not.toContain("availableTiers");
   });
 });

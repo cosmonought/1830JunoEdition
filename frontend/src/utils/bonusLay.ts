@@ -64,3 +64,39 @@ export function isBonusLay(msg: GameplayExecuteMsg | Record<string, unknown>): b
 export function layEndsTrackStep(msg: GameplayExecuteMsg | Record<string, unknown>): boolean {
   return !isBonusLay(msg);
 }
+
+// ==================================================================
+//  DESIGN NOTE 885: THE HALF THAT DECIDES, BESIDE THE HALF THAT READS
+// ==================================================================
+//
+// THIS MODULE HELD ONLY THE READING END. `isBonusLay` answers "was this message flagged?", but the sentence
+// that decides whether to flag it -- "the errand the player came through is the C&StL's" -- lived inline in
+// `handleConfirmRadialLay`, forty lines from any of the reasoning above. #776's whole finding was that the
+// two privates are opposites and easy to conflate; keeping the decision away from the paragraph that spells
+// that out is how they get conflated again.
+//
+// THE KEY IS COMPARED, NOT THE HEX. Same reason as `isBonusLay`: a connected B-20 lay can legitimately be
+// the ordinary placement, so the hex cannot say which lay this is. The errand can.
+//
+// NARROWED TO `private-tile` FIRST. A `private-station` errand (#866, the D&H's free token) lays no tile at
+// all, so it can never be a bonus lay -- and it carries `abilityKey: "dh-token"`, which is neither key here.
+// Checking the kind first means a future ability key cannot accidentally match through a station errand.
+
+/** The C&StL's tile-lay ability key, as the private-power flow spells it. */
+export const CSL_ABILITY_KEY = "csl-tile";
+
+/** The shape this rule needs from an errand -- deliberately narrower than `homeStationPlacement`, so the
+ *  rule can be tested without building a whole placement. */
+export interface BonusLayErrand {
+  kind: string;
+  abilityKey?: string | null;
+}
+
+/** Whether a lay made through this errand is EXTRA rather than the corporation's ordinary placement.
+ *
+ *  The D&H (`dh-tile`) is excluded on purpose -- #548: its lay consumes the placement and only its token is
+ *  free. No errand at all is an ordinary lay, which is what every lay outside a private power is. */
+export function errandLaysBonus(errand: BonusLayErrand | null | undefined): boolean {
+  if (!errand || errand.kind !== "private-tile") return false;
+  return errand.abilityKey === CSL_ABILITY_KEY;
+}

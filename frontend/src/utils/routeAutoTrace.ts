@@ -18,6 +18,7 @@
 //
 // Design notes #2-#9: see `docs/ai_architecture/routing_pathfinding.md`.
 
+import { isUnlimitedReach } from "./trainReach";
 import {
   HEX_NEIGHBOR_OFFSETS,
   /* Design note #852: `liveEdgesForHex` is no longer called here, for the reason `trackReach.ts` #686 gives
@@ -606,7 +607,10 @@ const CANDIDATES_PER_TOKEN = 6;
 /** Every route worth considering for one train, best first. */
 function candidateRoutes(input: AutoTraceInput): SearchResult[] {
   const { mapGrid, era, startHexes, maxRevenueCentres, excludeSegments } = input;
-  const cap = maxRevenueCentres >= 999 ? MAX_PATH_HEXES : maxRevenueCentres;
+  /* Design note #881: the sentinel through the one function that owns it. This read `>= 999` while the
+     draft flag read `!== 999` -- two spellings of one magic number, which is how a hypothetical 1000-reach
+     train would have been unlimited here and over-long there. */
+  const cap = isUnlimitedReach(maxRevenueCentres) ? MAX_PATH_HEXES : maxRevenueCentres;
   const occupied = excludeSegments ?? new Set<SegmentKey>();
 
   const all: SearchResult[] = [];

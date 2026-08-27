@@ -172,11 +172,58 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
 
   it("derives the city per facing instead of carrying it", () => {
     /* #824 CYCLED A CHOICE, which was right for ERIE and wrong as a general rule: for every other token the
-       destination changes as the tile turns. */
+       destination changes as the tile turns.
+       RE-AIMED BY #886. This used to look for the inline expressions `mine?.toCityIndex != null` and
+       `plan?.anyFree`; #886 folded the rotate path, the selection path and the confirm path into one
+       `derivePreviewLandings`, so those literals are gone and the property moved to the derivation. The
+       assertion follows it rather than being deleted -- and both arms of the split are named, because
+       "anchored takes the derived city" is the half #824 got wrong and a call-only assertion would drop. */
     const at = APP.indexOf("const handlePreviewRotate");
-    const body = APP.slice(at, at + 3200);
-    expect(body).toContain("mine?.toCityIndex != null");
-    expect(body).toContain("plan?.anyFree");
+    expect(at).toBeGreaterThan(-1);
+    const body = APP.slice(at, APP.indexOf("[radialSelector, handleDismissRadial", at));
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("derivePreviewLandings(");
+    /* #889 MOVED THE BRANCH INTO `previewRotation.ts`, so `probe.ownIsFree` / `probe.ownCity` are no longer
+       written here. The shell's remaining obligation is to ASK about the candidate facing rather than the
+       current one -- everything downstream of that is the module's arithmetic, walked in its own harness. */
+    expect(body).toContain("fitAt: (orientation, chosenCity) =>");
+    const RULE = read("utils/previewRotation.ts");
+    expect(RULE).toContain("const fit = fitAt(facing.orientation, current.tokenCity);");
+    expect(RULE).toContain("const tokenCity = fit.ownIsFree");
+    expect(RULE).toContain("fit.ownCity;");
+    /* AND THE ROTATION STORES THE WHOLE MAP, not just its own index -- this is the call site that feeds
+       every OO token on the board through a rotation (#886, fault ii). */
+    expect(body).toContain("tokenCities: landing.tokenCities,");
+    /* THE DERIVATION IS WHERE FREE IS DEFINED, and it is defined per-company: this token has no network to
+       preserve. `plan.anyFree` was a fact about the HEX and is the weaker question. */
+    const dv = APP.indexOf("const derivePreviewLandings");
+    expect(dv).toBeGreaterThan(-1);
+    const derive = APP.slice(dv, APP.indexOf("[mapGrid, gameState, actingProtocolId]", dv));
+    expect(derive).toContain("planTokenUpgrade(");
+    expect(derive).toContain("ownIsFree: own !== null && own.toCityIndex === null,");
+  });
+
+  it("uses that one derivation everywhere a marker is placed", () => {
+    /* #886'S FAULT IN ONE SENTENCE: "#879 taught the ROTATE path to derive a token's city from connectivity
+       and left every other path on the old rule." Selecting a candidate seeded `tokenCity` from #824's
+       superseded `tokenDestinationChoices(...)[0]`, so the FIRST preview of an upgrade put the marker in the
+       wrong city and only a rotation corrected it.
+       THREE CALL SITES, NOT TWO: selection, the rotate probe, and the rotate recompute for the chosen city.
+       The count is asserted because a fourth path appearing without one is exactly how this recurred. */
+    const calls = APP.match(/derivePreviewLandings\(\n/g) ?? [];
+    expect(calls.length).toBe(3);
+    /* ANCHORED ON THE JSX PROP, not on a `const` -- this handler is written inline on the ring. The strip
+       above removes the comments, so #886's own note quoting `onSelectCandidate` cannot be what is found
+       (#490a). */
+    const sel = APP.indexOf("onSelectCandidate={");
+    expect(sel).toBeGreaterThan(-1);
+    const select = APP.slice(sel, APP.indexOf("legalRotationCount=", sel));
+    expect(select.length).toBeGreaterThan(0);
+    expect(select).toContain("derivePreviewLandings(");
+    expect(select).not.toContain("tokenDestinationChoices(");
+    /* THE OTHER HALF OF THE SAME FAULT: the FIRST preview must seed the whole map too, or an OO hex opens
+       with every token stacked in the acting corporation's city and only looks right after a rotation. */
+    expect(select).toContain("tokenCities: landing.tokenCities,");
   });
 
   it("passes the orientation to the thumbnails", () => {
@@ -194,12 +241,26 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     expect(APP).not.toContain("previewTokenMigration(");
   });
 
-  it("never draws a free token at a default city", () => {
-    /* THE SUPERSEDED RULE'S LAST HIDING PLACE. A `null` destination rendered as `0` would put ERIE's marker
-       in a city the board never chose, on the one surface that never had the bug. */
+  it("never draws SOMEBODY ELSE'S free token at a default city", () => {
+    /* THE SUPERSEDED RULE'S LAST HIDING PLACE. A `null` destination rendered as `0` would put a marker in a
+       city the board never chose.
+       NARROWED BY #889, and the narrowing is the whole of the change. The thumbnail promises "the marker on
+       the thumbnail is the marker they then see on the board", so once the preview seats the ACTING
+       corporation's free token at the first city on offer, this surface has to seat it too or the promise is
+       false. A RIVAL's free token still draws nothing: this president is not choosing for them, so there is
+       no arrangement to promise -- as opposed to one they are about to be handed. */
     const at = APP.indexOf("const radialStationMarkersFor");
-    const body = APP.slice(at, at + 2000);
-    expect(body).toContain("entry.toCityIndex !== null");
+    expect(at).toBeGreaterThan(-1);
+    const body = APP.slice(at, APP.indexOf("[radialSelector, mapGrid, gameState, radialCandidates", at));
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain(
+      "entry.toCityIndex ?? (entry.companyId === actingProtocolId ? seededCity : undefined)",
+    );
+    /* AND THE UNDECIDED ONES ARE DROPPED RATHER THAN COERCED. `cityIndex: undefined` reaching the canvas as
+       `0` is the same bug through the type system instead of through an expression. */
+    expect(body).toContain("marker.cityIndex !== undefined");
+    /* THE SEED IS THE SAME RULE THE PREVIEW USES, not a second literal `0` that happens to agree today. */
+    expect(body).toContain("freeCityChoices(tileCityCount(tileId))[0]");
   });
 });
 
@@ -215,22 +276,51 @@ describe("the lay carries every token's destination (design note #880)", () => {
   };
   const APP = read("App.tsx");
   const REDUCER = read("utils/sandboxSession.ts");
+  const MIGRATION = read("utils/tokenMigration.ts");
+  const BOARD = read("components/HexGridRenderer.tsx");
 
   it("sends one entry per token, not one index for the hex", () => {
     /* ASKED: "If a tile has multiple stations and a corporation upgrades it, it is necessary that all the
        stations maintain their connectivity, not just the one whose corporation is upgrading."
        `planTokenUpgrade` always computed all of them; the message could only carry one, so the rest were
-       computed, drawn, and discarded. */
-    expect(APP).toContain("const tokenCities: Array<[number, number]>");
+       computed, drawn, and discarded.
+       RE-AIMED BY #886. The map used to be assembled inline in the confirm handler, which was a SECOND call
+       to the same derivation on the same inputs -- and a second call is a second chance to disagree with the
+       ghost the player is looking at. The lay now sends what the preview already holds. */
+    expect(APP).toContain("const tokenCities = previewTile.tokenCities ?? [];");
     expect(APP).toContain("token_cities: tokenCities");
+    /* AND BOTH PREVIEW PATHS HAVE TO ACTUALLY CARRY THEM, or the line above sends an empty array on every
+       lay -- which would be silent, because an absent map falls back to the legacy single index (#880).
+       COUNTED, NOT MERELY CONTAINED, and the first draft of this assertion was the loose form. The string
+       occurs twice -- once where a rotation lands and once where a candidate is first selected -- so a
+       negative control deleting either one stayed GREEN behind the other. That is the bare-count vacuity
+       trap wearing its opposite face: a bare `toContain` that survives a deletion. The two are also pinned
+       to their own call sites in the tests above and below, so this count cannot be satisfied by two copies
+       in one place. */
+    expect(APP.match(/tokenCities: landing\.tokenCities,/g) ?? []).toHaveLength(2);
+  });
+
+  it("draws each company from that map, not from one index", () => {
+    /* THE SAME FAULT ON THE CANVAS, reported as "on other OO hexes, the stations are previewing incorrectly
+       and jumping around on rotations". The board read `previewTile.tokenCity` -- ONE index -- inside a loop
+       over every company, so every token on an OO hex was drawn in the ACTING corporation's city and moved
+       whenever the president rotated. #880 fixed the wire; this is the wire's other end. */
+    expect(BOARD).toContain("previewTile.tokenCities?.find(([id]) => id === company.company_id)?.[1]");
   });
 
   it("lets the president's choice override only a FREE token", () => {
     /* ERIE'S CASE AND NOBODY ELSE'S. An anchored token ignores the rotation choice, because connectivity has
-       already answered -- letting the choice win there would put the old bug back through a side door. */
-    const at = APP.indexOf("const tokenCities: Array<[number, number]>");
-    const body = APP.slice(at, at + 700);
-    expect(body).toContain("entry.companyId === actingProtocolId && entry.toCityIndex === null");
+       already answered -- letting the choice win there would put the old bug back through a side door.
+       ASSERTED IN THE RULE (#885) rather than at the call site: `tokenLandingsFor` is now the only place the
+       override is written, and a call-site assertion would have gone green on an extraction that quietly
+       dropped it. */
+    expect(MIGRATION).toContain(
+      "anchored === null && entry.companyId === actingCompanyId ? chosenCity : anchored;",
+    );
+    /* AND A FREE TOKEN BELONGING TO SOMEBODY ELSE IS OMITTED, not defaulted -- the board never said which
+       city it is in and this president is not choosing for them. `0` would be #878's superseded rule in a
+       third hat. */
+    expect(MIGRATION).toContain("return chosen === undefined || chosen === null");
   });
 
   it("stops applying one index to every corporation on the hex", () => {

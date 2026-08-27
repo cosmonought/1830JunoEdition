@@ -32,8 +32,7 @@ import HexGridRenderer, {
   type HexClickQueryState,
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
-import { liveEdgesForHex } from "./components/hexGeometry";
-import { assignRouteSet, bridgeWaypoints } from "./utils/routeAutoTrace";
+import { assignRouteSet } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork, stationTokensOf, type StationToken } from "./utils/trackReach";
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
@@ -275,12 +274,20 @@ import AutoPassModal from "./components/AutoPassModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
-import { localCatalogPlacements } from "./components/hexGeometry";
+import { localCatalogPlacements, tileCityCount } from "./components/hexGeometry";
 
 // Design note #823: `describeTokenMigration` is no longer imported -- the ring stopped printing its
 // sentence. The function survives in `tokenMigration.ts` with its own note; the arithmetic beside it is
 // still what the radial thumbnails read.
-import { planTokenUpgrade, tokenDestinationChoices } from "./utils/tokenMigration";
+import { planTokenUpgrade, tokenLandingsFor } from "./utils/tokenMigration";
+/* Design note #889: the rotate odometer. `tokenDestinationChoices` is no longer imported -- it reached the
+   superseded `previewTokenMigration` to decide whether a choice exists, and #878's `ownIsFree` answers that
+   directly. It survives in `tokenMigration.ts` as the record, with no caller in the shell. */
+import {
+  freeCityChoices,
+  nextPreviewArrangement,
+  seedPreviewArrangement,
+} from "./utils/previewRotation";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
   OPERATING_SUB_PHASE_LABELS,
@@ -347,7 +354,6 @@ import {
   // Design note #624: counts a drafted route's paying STOPS against the
   // train's capacity. `isRouteTerminusHex` answers a different question --
   // towns pay but cannot end a route -- so the two are not interchangeable.
-  isRevenueCentreHex,
   grantBOPresidency,
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
@@ -388,7 +394,6 @@ import {
   BO_TICKER,
   ERA_FOR_PHASE_TINT,
   NO_TRAIN_ROUTE_REASON,
-  SMALLEST_TRAIN_CAPACITY,
 } from "./utils/gameConstants";
 import {
   MOCK_BUY_STOCK_PAR_VALUE,
@@ -398,7 +403,6 @@ import {
   MOCK_TRAIN_CATALOG,
 } from "./utils/mockFixtures";
 import {
-  axialHexDistance,
   routePointsToWaypoints,
   type RoutePoint,
   routeTokenBlockReason,
@@ -432,6 +436,10 @@ import {
 import { effectiveActions, undoReachFor } from "./utils/logRevert";
 import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./utils/autoSkipExit";
+import { overrunsReach, reachForDrafting } from "./utils/trainReach";
+import { editRouteDraft } from "./utils/routeDraftEdit";
+import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
+import { errandLaysBonus } from "./utils/bonusLay";
 import { stepsFor } from "./utils/operatingCursor";
 // Design note #673: one computation of what a previewed lay costs, read by the
 // corporation card and by the radial confirm caption.
@@ -1567,8 +1575,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       tileId: number;
       orientation: number;
       /** Design note #824: which city the token on this hex is being placed into, when that is a choice at
-       *  all. `undefined` on every ordinary lay -- the index is preserved and there is nothing to pick. */
+       *  all. `undefined` on every ordinary lay -- the index is preserved and there is nothing to pick.
+       *  Design note #886: THE ACTING CORPORATION'S ONLY. It was being applied to every token on the hex,
+       *  which is the same fault #880 removed from the wire -- see `tokenCities` below. */
       tokenCity?: number;
+      /** Design note #886: `[company_id, city_index]` for EVERY token standing here, derived from
+       *  connectivity at THIS orientation (#878). The board draws from it and the lay sends it, so the ghost
+       *  and the dispatch cannot disagree about where a marker lands. */
+      tokenCities?: ReadonlyArray<[number, number]>;
     } | null
   >(null);
 
@@ -2452,9 +2466,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       startHexes: corporation ? stationTokensOf(corporation) : [],
       trains: ownedTrainRoster.map((train) => ({
         trainIndex: train.trainIndex,
-        // `999` is the Diesel's unlimited; 4 is the safe default for a model
-        // this build's catalog does not know.
-        maxRevenueCentres: train.maxDistance ?? 4,
+        /* Design note #881: the same permissive answer the click uses. It read `?? 4` -- a third fallback
+           for one question, agreeing with neither of the other two -- and `routeAutoTrace` bounds an
+           unlimited budget by `MAX_PATH_HEXES` at its own end, so this cannot run away. */
+        maxRevenueCentres: reachForDrafting(train.maxDistance),
       })),
     });
 
@@ -2517,6 +2532,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     handleAutoRoute();
   }, [handleAutoRoute]);
 
+  /* ==================================================================
+      DESIGN NOTE 882: THE RULES LEFT; THE PLUMBING STAYED
+     ==================================================================
+     THIS CALLBACK HELD SEVEN RULES -- where a route may start, what may be added, what a repeat click means,
+     no hex twice, adjacency, the bridge, and the capacity -- and every one of them was reachable only
+     through a React state setter. Not one had a test; the refusal strings appeared in no harness at all.
+     Found by auditing this file rather than by a report, which is the only reason it was found before the
+     next bug in it.
+     WHAT IS LEFT HERE IS SHELL WORK: read the refs, ask the rule, write the state or show the sentence.
+     `editRouteDraft` takes no refs, no setters and no React, so every one of those seven rules is now
+     arithmetic a test can hold. */
   const handleRouteHexClick = useCallback(
     (info: {
       q: number;
@@ -2526,116 +2552,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       clientX: number;
       clientY: number;
     }) => {
-      /* Store boardLabel (the canonical identifier), not hexLabel (the display string) - the pricing table and the contract both key on the former.
+      /* Store boardLabel (the canonical identifier), not hexLabel (the display string) - the pricing table
+         and the contract both key on the former.
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #243 */
       const boardLabel = info.boardLabel;
       if (boardLabel === null) return;
-      const point: RoutePoint = { q: info.q, r: info.r, hexLabel: boardLabel };
 
       /* Editing a draft makes it yours; with no auto/manual toggle there is nothing to correct.
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
-
-      // A route runs between two revenue centres: the FIRST click is refused outright if it is not one; the last is left to the readout. Towns are not termini (#264).
-      // See docs/ai_architecture/routing_pathfinding.md - App.tsx #256
-      const current = routeDraftsRef.current[activeTrainIndexRef.current] ?? [];
-      if (current.length === 0 && !isRouteTerminusHex(mapGrid, boardLabel)) {
-        setRouteFeedback(
-          `${info.hexLabel} cannot START a route. Routes begin at a city or a red off-board hex — towns and plain track are passed through.`,
-        );
-        return;
-      }
-
-      /* A waypoint needs track. liveEdgesForHex counts preprinted rails as well as laid tiles.
-         See docs/ai_architecture/routing_pathfinding.md - App.tsx #186 */
-      if (liveEdgesForHex(mapGrid, info.q, info.r).length === 0) {
-        setRouteFeedback(
-          `${info.hexLabel} has no track. Lay a tile there first, or pick a hex the network already runs through.`,
-        );
-        return;
-      }
-
       setRouteDrafts((all) => {
         const trainIndex = activeTrainIndexRef.current;
-        const prev = all[trainIndex] ?? [];
-        /* Refuse the click that would exceed the train's capacity, counted in revenue CENTRES and checked on the commit so a bridge's extra stops count.
-           See docs/ai_architecture/routing_pathfinding.md - App.tsx #624 */
-        const cap =
-          ownedTrainRosterRef.current.find((train) => train.trainIndex === trainIndex)
-            ?.maxDistance ?? null;
-        const centresIn = (points: readonly RoutePoint[]) =>
-          points.reduce(
-            (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel) ? total + 1 : total),
-            0,
-          );
-        /** Appends, unless doing so would overrun the train. */
-        const commit = (next: RoutePoint[]) => {
-          if (cap !== null) {
-            const centres = centresIn(next);
-            if (centres > cap) {
-              setRouteFeedback(
-                `That would give this train ${centres} stops and it can only run ${cap}. Click ${prev[prev.length - 1]?.hexLabel ?? "a hex on the route"} to step back, or select a longer train.`,
-              );
-              return all;
-            }
-          }
-          setRouteFeedback(null);
-          return { ...all, [trainIndex]: next };
-        };
-        const write = (next: RoutePoint[]) => ({ ...all, [trainIndex]: next });
-        const last = prev[prev.length - 1];
-        // Clicking the most recently added point again is a quick one-step
-        // undo, rather than a no-op or a rejected duplicate.
-        if (last && last.q === point.q && last.r === point.r) {
-          setRouteFeedback(null);
-          return write(prev.slice(0, -1));
-        }
-        if (prev.length === 0) {
-          // Design note #624: even the first stop is capped -- a 1-stop cap
-          // is not a state 1830 has, but the check is uniform rather than
-          // special-cased, which is what keeps it honest for the Diesel.
-          return commit([point]);
-        }
-
-        // Clicking a hex the route already passes through, other than the
-        // last one, would make the chain visit it twice -- and 1830 pays a
-        // hex once per pass, so the drawing and the pricing would disagree.
-        // Refused with the reason rather than silently ignored.
-        if (prev.some((entry) => entry.q === point.q && entry.r === point.r)) {
-          setRouteFeedback(
-            `${point.hexLabel} is already on this route. A route may not visit the same hex twice — click ${last.hexLabel} to step back instead.`,
-          );
-          return all;
-        }
-
-        /* Design note #276: ADJACENT CLICKS ARE UNCHANGED.
-           A neighbouring hex is appended exactly as before, which is what
-           keeps hex-by-hex drawing available for disambiguating a branch --
-           the bridge below only fills gaps the player chose to leave. */
-        if (axialHexDistance(last, point) === 1) {
-          return commit([...prev, point]);
-        }
-
-        /* bridgeWaypoints fills the gap between two stops, preferring plain track over a third city. A failed bridge is still refused.
-           See docs/ai_architecture/routing_pathfinding.md - App.tsx #276 */
-        const bridge = bridgeWaypoints(
+        const edit = editRouteDraft({
           mapGrid,
-          last,
-          point,
-          // A route is a simple path, so the bridge may not loop back
-          // through hexes the player has already routed over.
-          new Set(prev.map((entry) => `${entry.q},${entry.r}`)),
-        );
-        if (!bridge) {
-          setRouteFeedback(
-            `No track path from ${last.hexLabel} to ${point.hexLabel}. Lay the missing tiles, or click through the hexes you want the route to take.`,
-          );
+          points: all[trainIndex] ?? [],
+          click: { q: info.q, r: info.r, hexLabel: boardLabel },
+          displayLabel: info.hexLabel,
+          maxDistance: ownedTrainRosterRef.current.find(
+            (train) => train.trainIndex === trainIndex,
+          )?.maxDistance,
+        });
+        if (!edit.ok) {
+          setRouteFeedback(edit.reason);
           return all;
         }
-        // Design note #624: the bridge may add several paying stops at once.
-        return commit([...prev, ...bridge]);
+        setRouteFeedback(null);
+        return { ...all, [trainIndex]: edit.points };
       });
     },
-    // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas click prop is not rebuilt mid-draw.
+    // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas
+    // click prop is not rebuilt mid-draw.
     // See docs/ai_architecture/routing_pathfinding.md - App.tsx #232
     [mapGrid],
   );
@@ -2675,7 +2620,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* An unknown train falls back to the smallest real capacity rather than having none; the count is stops.length, the list the panel renders.
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #285 */
       const centres = breakdown?.stops.length ?? 0;
-      const cap = train.maxDistance ?? SMALLEST_TRAIN_CAPACITY;
+      /* Design note #881: `cap` is gone from here -- `overrunsReach` below owns the fallback it carried, and
+         a local that only fed one expression is how the fallback came to differ from its three siblings. */
       const last = points[points.length - 1];
       return {
         trainIndex: train.trainIndex,
@@ -2688,9 +2634,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            honest answer there is that the question does not apply. */
         value: ownsAnyTrain ? (breakdown?.revenue ?? null) : null,
         revenueCentres: centres,
-        // Design note #285: `999` is the Diesel's genuine "unlimited"; an
-        // absent figure is ignorance and must not read as one.
-        exceedsMaxDistance: cap !== 999 && centres > cap,
+        /* Design note #285: `999` is the Diesel's genuine "unlimited"; an absent figure is ignorance and must
+           not read as one -- which is why the unknown fallback here is the SMALLEST train rather than no
+           limit at all.
+           Design note #881: and both halves of that now live in `overrunsReach`, because this file asked the
+           same question in four places and no two agreed. The sentinel was `!== 999` here and `>= 999` in
+           `routeAutoTrace`; the click path below had no sentinel at all. */
+        exceedsMaxDistance: overrunsReach(centres, train.maxDistance),
         // Design note #256/#264: only meaningful once there is a route.
         endsOffTerminus:
           points.length >= 2 && last !== undefined
@@ -4750,6 +4700,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Any in-flight gesture belonged to the history just discarded.
     setPreviewTile(null);
     setRadialSelector(null);
+    /* ==================================================================
+       DESIGN NOTE 887: #767's SWEEP CAUGHT THE NEXT ONE
+       ==================================================================
+       FOUND BY THE HARNESS, NOT BY A REPORT, which is what #767 built it for: "Pinning 'the map grid is
+       reset' would fix today and say nothing about the next ref somebody adds." This is the next ref
+       somebody added. #850 gave `pendingToken` a ref -- the hex click handler is a `useCallback` the canvas
+       holds across renders, so a click reads a commit-old closure -- and the rebuild reset only the state.
+       THE SYMPTOM WOULD HAVE BEEN A DEAD TILE PICKER. `handleHexClick` refuses to open the ring while
+       `pendingTokenRef.current !== null` (#850, so a tile question cannot land on top of an unanswered token
+       question). After a rebuild the ref still held the discarded placement, so every hex click was
+       swallowed -- silently, with no refusal to read -- until React committed the reset render and the
+       mirroring effect caught up. In a replay burst that window is the whole burst.
+       REF FIRST, THEN THE SETTER, for #767's reason exactly: the synchronous write is the one the click
+       handler actually reads, and the setter only has to agree with it afterwards. */
+    pendingTokenRef.current = null;
     setPendingToken(null);
     setHomeStationPlacement(null);
     setBoParPrompt(null);
@@ -5393,43 +5358,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
-    /* One RunManualRoute per train, awaited in sequence. Invalid drafts are skipped, not refused - the good routes are not hostage to the bad one.
-       See docs/ai_architecture/routing_pathfinding.md - App.tsx #275 */
-    const runnable = trainDrafts.filter(
-      (draft) =>
-        draft.value !== null &&
-        draft.value > 0 &&
-        !draft.exceedsMaxDistance &&
-        !draft.endsOffTerminus &&
-        // Design note #474: and it must touch one of this corporation's
-        // tokens. The one 1830 rule this filter did not express.
-        draft.tokenBlockReason === null,
-    );
-
+    /* One RunManualRoute per train, awaited in sequence. Invalid drafts are skipped, not refused - the good
+       routes are not hostage to the bad one.
+       See docs/ai_architecture/routing_pathfinding.md - App.tsx #275
+       Design note #883: BOTH RULES LEFT. Which drafts may run, and -- when none may -- which of several true
+       complaints the player is shown, were a filter and four ordered `if`s inside this callback. The ORDER
+       was the part worth rescuing: it is a decision about what a player most needs to know, it was expressed
+       only as source order, and nothing asserted it. */
+    const runnable = runnableDrafts(trainDrafts);
     if (runnable.length === 0) {
-      const drafted = trainDrafts.filter((draft) => draft.hexLabels.length > 0);
-      if (drafted.length === 0) {
-        setRouteFeedback(
-          "Select at least two connected hexes on the Rail Map to declare a route.",
-        );
-        return;
-      }
-      /* The LAST stop is reported here, not refused on click. #474: the token warning comes first, because a tokenless route is wrong about where it runs.
-         See docs/ai_architecture/routing_pathfinding.md - App.tsx #256 */
-      const tokenless = drafted.find((draft) => draft.tokenBlockReason !== null);
-      if (tokenless?.tokenBlockReason) {
-        setRouteFeedback(tokenless.tokenBlockReason);
-        return;
-      }
-      const offTerminus = drafted.find((draft) => draft.endsOffTerminus);
-      if (offTerminus) {
-        const last = offTerminus.hexLabels[offTerminus.hexLabels.length - 1];
-        setRouteFeedback(
-          `${last} cannot END a route. Routes finish at a city or a red off-board hex — click one to finish, or click ${last} again to step back.`,
-        );
-        return;
-      }
-      setRouteFeedback("No drafted route can run yet.");
+      setRouteFeedback(runTrainsRefusal(trainDrafts));
       return;
     }
 
@@ -6167,7 +6105,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       startHexes,
       trains: ownedTrainRoster.map((train) => ({
         trainIndex: train.trainIndex,
-        maxRevenueCentres: train.maxDistance ?? 4,
+        /* Design note #881: THE SIXTH SITE, and the audit missed it -- the harness's own "no bare 999 / no
+           `?? 4`" assertion is what turned it up, which is the whole argument for asserting an absence
+           across the file rather than checking the call sites you happen to have found. */
+        maxRevenueCentres: reachForDrafting(train.maxDistance),
       })),
     });
     return result.totalRevenue;
@@ -6565,6 +6506,56 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, []);
 
+  /* ==================================================================
+      DESIGN NOTE 886: ONE DERIVATION, EVERY SURFACE THAT DRAWS A TOKEN
+     ==================================================================
+
+     REPORTED, of #878/#879's fix: "currently rotating through upgrade tiles on the ERIE home station hex is
+     showing the correct/legal options, but the very first preview placement is jumping the station to the
+     wrong city marker, even though all subsequent rotations place it correctly" -- and "on other OO hexes,
+     the stations are previewing incorrectly and jumping around on rotations".
+
+     TWO FAULTS, AND BOTH ARE THE SAME OMISSION SEEN FROM DIFFERENT ANGLES: #879 taught the ROTATE path to
+     derive a token's city from connectivity and left every other path on the old rule.
+       (i) SELECTION NEVER DERIVED. `onSelectCandidate` seeded `tokenCity` from `tokenDestinationChoices(...)
+           [0]` -- #824's rule, which consults neither connectivity nor orientation -- so the FIRST preview
+           was placed by the superseded rule and only rotating corrected it. Exactly what was reported.
+       (ii) AND THE BOARD APPLIED ONE INDEX TO EVERYBODY. `previewTile.tokenCity` is a single number, and the
+           renderer read it inside a per-company loop -- so two corporations on one OO hex were both drawn in
+           the acting corporation's city, and it moved on every rotation. That is #880's wire bug over again
+           on the canvas: an index cannot say where two tokens go.
+
+     SO THE PREVIEW CARRIES THE MAP, not the index, and this is the only place it is computed. The ring's
+     thumbnails, the board's ghost and the dispatched lay now read one answer. */
+  const derivePreviewLandings = useCallback(
+    (q: number, r: number, tileId: number, orientation: number, chosenCity: number | undefined) => {
+      const plan = planTokenUpgrade(
+        mapGrid,
+        q,
+        r,
+        gameState?.public_companies ?? [],
+        tileId,
+        orientation,
+      );
+      const tokenCities = tokenLandingsFor({
+        plan,
+        actingCompanyId: actingProtocolId,
+        chosenCity,
+      });
+      /* THE ACTING CORPORATION'S OWN CITY, kept beside the map because the rotate cycle needs to know
+         whether it was ANCHORED (the board decided) or FREE (the president is cycling). `anyFree` answers
+         that; the index alone cannot. */
+      const own = plan?.landings.find((entry) => entry.companyId === actingProtocolId) ?? null;
+      return {
+        tokenCities,
+        ownCity: own?.toCityIndex ?? chosenCity,
+        ownIsFree: own !== null && own.toCityIndex === null,
+        legal: plan !== null,
+      };
+    },
+    [mapGrid, gameState, actingProtocolId],
+  );
+
   const handlePreviewRotate = useCallback(
     ({ q, r }: { q: number; r: number }) => {
       // A click on a DIFFERENT hex while a preview is up means "I have
@@ -6598,10 +6589,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
            ONE CHOICE MEANS ONE PASS, so every ordinary upgrade on the board cycles exactly as it did: the
            city list has a single entry, the outer loop never advances, and `tokenCity` stays put. */
-        const at = legalRotations.indexOf(current.orientation);
-        const wrapped = at + 1 >= legalRotations.length;
-        const nextAngle = legalRotations[(at + 1) % legalRotations.length];
-
         /* ==================================================================
            DESIGN NOTE 879: THE CITY IS DERIVED PER FACING, NOT CARRIED
            ==================================================================
@@ -6609,41 +6596,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            the board has never said which city it is in. It was wrong as a general rule, because for every
            OTHER token the destination is not a choice at all: it is whichever city of THIS facing still owns
            the token's edges, and it changes as the tile turns.
-           SO THE OUTER LOOP SURVIVES ONLY WHERE THERE IS SOMETHING TO CHOOSE. `anyFree` is true exactly when
-           a standing token has no network to preserve, which is #878's one-line statement of the ERIE case;
-           everywhere else the marker follows the track and the president rotates through facings alone. */
-        const plan = planTokenUpgrade(
-          mapGrid,
+           SO THE OUTER LOOP SURVIVES ONLY WHERE THERE IS SOMETHING TO CHOOSE. `ownIsFree` is true exactly
+           when a standing token has no network to preserve, which is #878's one-line statement of the ERIE
+           case; everywhere else the marker follows the track and the president rotates through facings alone.
+           ==================================================================
+            DESIGN NOTE 889: THE ARITHMETIC LEFT, THE BOARD STAYED
+           ==================================================================
+           The odometer is `previewRotation.ts` now -- the wrapping facing list, the city-as-outer-loop, and
+           the free-vs-anchored branch -- so it can be exercised as arithmetic instead of scanned for. What
+           remains here is the two questions only the shell can answer: what connectivity does at a candidate
+           facing, and how many cities the candidate carries. */
+        const step = nextPreviewArrangement({
+          current: { orientation: current.orientation, tokenCity: current.tokenCity },
+          legalRotations,
+          /* Design note #886: through the one derivation, so a rotation and a fresh selection place the
+             marker by the same rule. Asked about the NEXT facing with the city the president currently has. */
+          fitAt: (orientation, chosenCity) =>
+            derivePreviewLandings(current.q, current.r, current.tileId, orientation, chosenCity),
+          freeCityChoices: () => freeCityChoices(tileCityCount(current.tileId)),
+        });
+        if (step === null) return current;
+
+        /* THE MAP IS RECOMPUTED FOR THE CHOSEN CITY, not reused from the probe inside the step: when the
+           token is free and the cycle has just advanced it, the probe was asked about the PREVIOUS choice. */
+        const landing = derivePreviewLandings(
           current.q,
           current.r,
-          gameState?.public_companies ?? [],
           current.tileId,
-          nextAngle,
+          step.orientation,
+          step.tokenCity,
         );
-        const mine = plan?.landings.find((entry) => entry.companyId === actingProtocolId) ?? null;
-        const cities = plan?.anyFree
-          ? tokenDestinationChoices(
-              mapGrid,
-              current.q,
-              current.r,
-              gameState?.public_companies ?? [],
-              current.tileId,
-            )
-          : [];
-        const cityAt = cities.indexOf(current.tokenCity ?? cities[0] ?? -1);
-        const nextCity =
-          mine?.toCityIndex != null
-            ? /* ANCHORED: the board decides, and it may differ at every facing. */
-              mine.toCityIndex
-            : wrapped && cities.length > 1
-              ? cities[(Math.max(cityAt, 0) + 1) % cities.length]
-              : (current.tokenCity ?? cities[0]);
-
-        if (nextAngle === current.orientation && nextCity === current.tokenCity) return current;
-        return { ...current, orientation: nextAngle, tokenCity: nextCity };
+        return {
+          ...current,
+          orientation: step.orientation,
+          tokenCity: step.tokenCity,
+          tokenCities: landing.tokenCities,
+        };
       });
     },
-    [radialSelector, handleDismissRadial, legalRotations, mapGrid, gameState, actingProtocolId],
+    [radialSelector, handleDismissRadial, legalRotations, derivePreviewLandings],
   );
 
   /** A live preview gives the canvas to rotation, so the query interceptor is disarmed. Token destinations are recomputed per candidate tile.
@@ -6727,17 +6718,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         facing,
       );
       if (!plan) return [];
+      /* ==================================================================
+         DESIGN NOTE 889: THE THUMBNAIL SEEDS LIKE THE PREVIEW SEEDS
+         ==================================================================
+         THE ORIGINAL RULE HERE WAS "A FREE TOKEN HAS NO DESTINATION TO DRAW. Rendering it at city 0 would be
+         the superseded rule reappearing on the one surface that never had it." That was right while the
+         preview drew nothing either. #889 seats the ACTING corporation's free token at the first city on
+         offer -- so keeping the blank here would have made this note's own promise false: "the marker on the
+         thumbnail is the marker they then see on the board rather than a guess that changes under them."
+         Two surfaces answering one question two different ways is the pattern this project keeps producing;
+         creating a fresh instance of it while fixing another would be a poor trade.
+         SOMEBODY ELSE'S FREE TOKEN STILL DRAWS NOTHING, and that is the half of the old rule that survives.
+         This president is not choosing for them (`tokenLandingsFor`, #885), so there is no arrangement to
+         promise -- as opposed to one they are about to be handed. */
+      const seededCity = freeCityChoices(tileCityCount(tileId))[0];
       return plan.landings
-        /* A FREE TOKEN HAS NO DESTINATION TO DRAW. Rendering it at city 0 would be the superseded rule
-           reappearing on the one surface that never had it. */
-        .filter((entry) => entry.toCityIndex !== null)
         .map((entry) => ({
-          cityIndex: entry.toCityIndex as number,
+          cityIndex:
+            entry.toCityIndex ?? (entry.companyId === actingProtocolId ? seededCity : undefined),
           ticker: entry.ticker,
           color: stationTickerColor(entry.companyId),
-        }));
+        }))
+        .filter(
+          (marker): marker is { cityIndex: number; ticker: string; color: string } =>
+            marker.cityIndex !== undefined,
+        );
     },
-    [radialSelector, mapGrid, gameState, radialCandidates],
+    [radialSelector, mapGrid, gameState, radialCandidates, actingProtocolId],
   );
 
   /* Order matches cursorMode's: a home-station errand names its own corporation and wins. private-tile is excluded because it ends in the tile picker.
@@ -7252,8 +7259,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        ordinary placement, so inference would grant a free second tile in that case.
        THE D&H IS EXCLUDED ON PURPOSE (#548): `dh-tile` consumes the corporation's placement; only its token
        is free. The two privates are exact opposites and this is where they part. */
-    const bonusLay =
-      homeStationPlacement?.kind === "private-tile" && homeStationPlacement.abilityKey === "csl-tile";
+    // Design note #885: the rule lives beside the one that READS the flag, so both halves are in one place.
+    const bonusLay = errandLaysBonus(homeStationPlacement);
     /* ==================================================================
        DESIGN NOTE 880: EVERY TOKEN'S DESTINATION, NOT JUST THE ACTOR'S
        ==================================================================
@@ -7265,21 +7272,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        THE ACTING CORPORATION'S ENTRY IS OVERRIDDEN by `previewTile.tokenCity` where the plan left it FREE:
        that is ERIE's case, where the board never distinguished the cities and the president has just chosen
        by rotating (#824). An anchored token ignores the choice, because there was none to make. */
-    const plan = planTokenUpgrade(
-      mapGrid,
-      q,
-      r,
-      gameState?.public_companies ?? [],
-      tileId,
-      orientation,
-    );
-    const tokenCities: Array<[number, number]> = (plan?.landings ?? []).flatMap((entry) => {
-      const chosen =
-        entry.companyId === actingProtocolId && entry.toCityIndex === null
-          ? previewTile.tokenCity
-          : entry.toCityIndex;
-      return chosen === undefined || chosen === null ? [] : [[entry.companyId, chosen] as [number, number]];
-    });
+    /* Design note #886: THE PREVIEW ALREADY HOLDS THIS. It was recomputed here, which is a second call to
+       the same derivation on the same inputs -- and a second call is a second chance to disagree with the
+       ghost the player is looking at. The lay now sends exactly what was drawn. */
+    const tokenCities = previewTile.tokenCities ?? [];
     if (sandbox) {
       handleSandboxLayTile(q, r, tileId, orientation, bonusLay, previewTile.tokenCity, tokenCities);
     } else {
@@ -7332,10 +7328,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     handleDismissRadial,
     actingProtocolId,
     homeStationPlacement,
-    /* Design note #880: the lay now derives every token's destination, so it reads the board and the
-       corporations. Both are already inputs to the ring that opened this. */
-    mapGrid,
-    gameState,
+    /* Design note #886: `mapGrid` and `gameState` left this list with the derivation itself -- the lay now
+       sends the map the PREVIEW already holds, so it reads neither. #880 added them here for a computation
+       that has since moved. */
   ]);
 
 
@@ -8728,24 +8723,57 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // The ring hands back that tile's FIRST legal orientation
           // (design note #173), so the preview never opens on an angle the
           // rotate cycle would then refuse to return to.
-          onSelectCandidate={(tileId, orientation) =>
+          onSelectCandidate={(tileId, orientation) => {
+            /* ==================================================================
+               DESIGN NOTE 886: THE FIRST PREVIEW DERIVES LIKE EVERY OTHER
+               ==================================================================
+               THIS SEEDED `tokenCity` FROM `tokenDestinationChoices(...)[0]` -- #824's rule, which knows
+               nothing about connectivity or orientation. Reported: "the very first preview placement is
+               jumping the station to the wrong city marker, even though all subsequent rotations place it
+               correctly." Exactly so: #879 taught the ROTATE path to derive and left this one behind, so the
+               opening placement was the only one still using the superseded rule.
+               THE CHOICE IS `undefined` HERE and that is deliberate -- the president has not rotated yet, so
+               a FREE token has no chosen city and the derivation must not pick one for them.
+               ==================================================================
+                DESIGN NOTE 889: ...AND THEN THE SEED PICKS ONE, ON PURPOSE
+               ==================================================================
+               THE LINE ABOVE WAS HALF A FIX. `tokenLandingsFor` omits a free token with no chosen city, so
+               the opening preview of ERIE's home upgrade drew NO MARKER AT ALL -- while a lay from that state
+               sends neither a map nor an index, and the reducer's "absent means unchanged" arm leaves the
+               token in the city it was already in (`sandboxSession.ts` #880). Preview and outcome disagreed,
+               which is the fault class #886 exists to close, so it had simply moved rather than gone.
+               A SEED IS NOT A CLAIM ABOUT THE BOARD. For a token with no network there is nothing to get
+               wrong -- every city is equally legal -- so opening at the first one and letting the president
+               rotate is #824's design, not #1's superseded index-preservation. An ANCHORED token is untouched
+               by this: `seedPreviewArrangement` hands its derived city straight back. */
+            const probe = derivePreviewLandings(
+              radialSelector.q,
+              radialSelector.r,
+              tileId,
+              orientation,
+              undefined,
+            );
+            const seed = seedPreviewArrangement({
+              orientation,
+              fit: probe,
+              freeCityChoices: freeCityChoices(tileCityCount(tileId)),
+            });
+            const landing = derivePreviewLandings(
+              radialSelector.q,
+              radialSelector.r,
+              tileId,
+              orientation,
+              seed.tokenCity,
+            );
             setPreviewTile({
               q: radialSelector.q,
               r: radialSelector.r,
               tileId,
               orientation,
-              /* Design note #824: the first of the destinations this tile offers, which on every ordinary
-                 upgrade is the preserved index and on an unlaid preprinted pair is simply where the cycle
-                 starts. `undefined` when nothing is standing here at all. */
-              tokenCity: tokenDestinationChoices(
-                mapGrid,
-                radialSelector.q,
-                radialSelector.r,
-                gameState?.public_companies ?? [],
-                tileId,
-              )[0],
-            })
-          }
+              tokenCity: seed.tokenCity,
+              tokenCities: landing.tokenCities,
+            });
+          }}
           legalRotationCount={legalRotations.length}
           // Design note #0 in `utils/tokenMigration.ts`: where the tokens
           // already standing on this hex end up. `null` on the ordinary

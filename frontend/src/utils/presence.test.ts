@@ -136,38 +136,67 @@ describe("publishing is coalesced, but never delayed at the start", () => {
   });
 });
 
-describe("the label is looked up, not carried", () => {
-  const app = (() => {
+// ==================================================================
+//  DESIGN NOTE 888 (harness): THREE ASSERTIONS OUTLIVED THEIR SUBJECT
+// ==================================================================
+//
+// THIS BLOCK WAS RED AT HEAD and had been for a while. It pinned #740's implementation line by line -- an
+// index lookup (`roster[Number(index)]`), a presence join spelled `entry.company_id === presenceCompany`,
+// and a `"Train"` fallback for an index that pointed at nothing. #875 replaced all three when it moved the
+// watcher's chip row into `watcherRouteChips.ts`, and nothing pointed the harness at the new home.
+//
+// FOUND BY RUNNING THE NEIGHBOURS, not by looking: `presence.test.ts` reads `App.tsx`, so it came up in the
+// sweep for #885/#886 and was NOT caused by them -- the same substrings are absent from `App.tsx` at HEAD.
+// This is the second stale harness of this shape (`privateAbilities.test.ts` was the first) and the third
+// time a suite that scans `App.tsx` has gone quietly red while its subject moved out of the file.
+//
+// TWO OF THE THREE ARE NOW STRUCTURAL RATHER THAN TEXTUAL, which is the point of the extraction. A roster
+// entry CARRIES its model, so there is no index lookup left to get wrong and no missing model to fall back
+// from -- `"Train"` had nothing left to be a fallback for. What is still a live risk is the JOIN, so that is
+// what stays asserted here, and the arithmetic lives in `watcherRouteChips.test.ts`.
+describe("the label comes from state, and only the join comes from presence", () => {
+  const read = (rel: string) => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-  })();
+    return fs.readFileSync(path.join(__dirname, rel), "utf8");
+  };
+  const app = read("../App.tsx");
+  const CHIPS = read("watcherRouteChips.ts").replace(/\/\*[\s\S]*?\*\//g, "");
 
   it("names the actual train rather than its index", () => {
     /* Design note #740, corrected on report: "Nobody knows what 'Train 1' is. Have it display the actual
        train that's running."
-       The first version reasoned that presence carries no roster, so the model was unknowable. It is knowable:
-       the roster is GAME STATE, replayed from the same log on every client. Presence supplies the corporation
-       and the index; the board supplies the fleet. */
+       The first version reasoned that presence carries no roster, so the model was unknowable. It is
+       knowable: the roster is GAME STATE, replayed from the same log on every client.
+       #875 MADE THAT A TYPE RATHER THAN A LOOKUP. The chip's model is copied straight off the roster entry
+       that produced it, so a chip cannot be built for a train whose model is unknown. */
     const code = app.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     /* The needle drops the leading `${`, for `appNaming.test.ts`'s reason: written in full it is a literal
        `${...}` inside a plain string and `no-template-curly-in-string` reads it as a template the author
        forgot to write. */
     expect(code).not.toContain("`Train ");
-    expect(code).toContain("const model = roster[Number(index)];");
+    expect(CHIPS).toContain("model: train.model,");
   });
 
-  it("joins the hint to state by the corporation presence names", () => {
-    /* The join key. Attributing a rival's routes to the wrong fleet would put a 6-Train's revenue on a
-       2-Train's chip, which is worse than a vague label. */
-    expect(app).toContain("entry.company_id === presenceCompany");
+  it("keeps the model out of the presence payload entirely", () => {
+    /* THE STRONGEST FORM OF THE OLD ASSERTION. A label a watcher reads off the channel is a label that can
+       disagree with the board; the channel simply cannot carry one. `PresenceState` publishes an acting
+       company, an index and coordinates -- a HINT (#740) -- and every human-readable word is derived
+       locally from the log both clients replayed. */
+    const presence = read("presence.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(presence).not.toContain("model");
+    expect(presence).toContain("actingCompanyId?: number | null;");
   });
 
-  it("falls back to an unnumbered label rather than a stale model", () => {
-    /* A train rusted or discarded mid-turn leaves the index pointing at nothing. "Train" is vague; a confident
-       wrong model is the failure this whole session has been about. */
-    expect(app).toContain('model ? `');
-    expect(app).toContain(': "Train"');
+  it("joins the hint to state by the operating corporation", () => {
+    /* The join key, and the one thing here that is still a runtime decision. Attributing a rival's routes to
+       the wrong fleet would put a 6-Train's revenue on a 2-Train's chip, which is worse than a vague label.
+       RE-SPELLED BY #875: presence carries one entry per connected PLAYER, so the entry that matters is
+       whoever is publishing for the company now operating -- not whoever happens to be first. */
+    expect(app).toContain("rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId)");
+    /* AND `null` WHEN NOBODY IS PUBLISHING, which is the ordinary state at the start of Run Routes and the
+       exact case #875 found producing no row at all. */
+    expect(app).toContain("actorDrafts: actor?.routeDrafts ?? null,");
   });
 });
 

@@ -160,9 +160,30 @@ describe("the shell says which lay it is", () => {
     // #490a: the notes quote the rule while explaining it.
     return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   })();
+  /* #885 moved the DECIDING half of this rule into the module that already held the READING half, so the
+     assertions follow it. Same #490a strip: the notes in `bonusLay.ts` quote both ability keys while
+     explaining why only one of them counts. */
+  const RULE = (() => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const raw = fs.readFileSync(path.join(__dirname, "bonusLay.ts"), "utf8");
+    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  })();
 
   it("flags the lay reached through the csl-tile errand", () => {
-    expect(APP).toContain('homeStationPlacement.abilityKey === "csl-tile"');
+    /* MOVED, NOT WEAKENED. The shell used to spell the comparison out inline; it now asks `errandLaysBonus`.
+       BOTH HALVES ARE ASSERTED ON PURPOSE -- asserting only the call would let the rule quietly change its
+       mind about which private it means, and asserting only the rule would let the shell stop asking it.
+       That pair of one-sided assertions is how #776's fault survived being written down in two places. */
+    expect(APP).toContain("const bonusLay = errandLaysBonus(homeStationPlacement);");
+    expect(RULE).toContain('export const CSL_ABILITY_KEY = "csl-tile";');
+    expect(RULE).toContain("return errand.abilityKey === CSL_ABILITY_KEY;");
+  });
+
+  it("refuses an errand that lays no tile at all", () => {
+    /* THE KIND IS CHECKED BEFORE THE KEY. `private-station` is the D&H's free token (#866) -- it opens no
+       picker and lays nothing -- so it can never be a bonus lay whatever key it carries. */
+    expect(RULE).toContain('if (!errand || errand.kind !== "private-tile") return false;');
   });
 
   it("sends the flag on both the sandbox and the chain path", () => {
@@ -189,8 +210,12 @@ describe("the shell says which lay it is", () => {
     const bonus = APP.slice(start, APP.indexOf("if (sandbox) {", start));
     expect(start).toBeGreaterThan(-1);
     expect(bonus.length).toBeGreaterThan(0);
-    expect(bonus).toContain('abilityKey === "csl-tile"');
+    expect(bonus).toContain("errandLaysBonus(");
     expect(bonus).not.toContain("dh-tile");
+    /* AND THE SAME ABSENCE INSIDE THE RULE, which is where the C&SL-only property now lives. Without this
+       the slice above is satisfied by a one-word call and says nothing at all about the D&H -- the whole
+       point of the assertion. An extracted rule moves the property; it must not evaporate it. */
+    expect(RULE).not.toContain("dh-tile");
   });
 
   it("omits the field entirely for an ordinary lay", () => {

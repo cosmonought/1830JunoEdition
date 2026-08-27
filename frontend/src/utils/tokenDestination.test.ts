@@ -186,9 +186,20 @@ describe("the rotate gesture carries the second dimension", () => {
   it("advances the city only after the angles wrap", () => {
     /* REQUESTED: "let players click through every possible Green tile upgrade with the station marker on one
        city, then do it again on the other city." Orientation inner, city outer -- which is the order the
-       question is asked in: can I get the facing I want, and then with the token where? */
-    expect(APP).toContain("const wrapped = at + 1 >= legalRotations.length;");
-    expect(APP).toContain("wrapped && cities.length > 1");
+       question is asked in: can I get the facing I want, and then with the token where?
+       RE-AIMED BY #889. The odometer moved to `previewRotation.ts`, so the two inline expressions this used
+       to pin are gone. The PROPERTY did not move, and it is now checked as arithmetic rather than as text --
+       `previewRotation.test.ts` walks three facings against two cities and compares the whole six-state
+       sequence, which is a thing this scan could never have done. What stays here is that the shell reaches
+       that module and nothing else. */
+    const ROTATE = (() => {
+      const fs = require("fs") as typeof import("fs");
+      const path = require("path") as typeof import("path");
+      return fs.readFileSync(path.join(__dirname, "previewRotation.ts"), "utf8");
+    })().replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(APP).toContain("nextPreviewArrangement({");
+    expect(ROTATE).toContain("if (!wrapped) return current;");
+    expect(ROTATE).toContain("return { orientation: legalRotations[next], wrapped: next === 0 };");
   });
 
   it("adds no control to learn", () => {

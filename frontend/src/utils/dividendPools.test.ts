@@ -38,6 +38,29 @@ function state(over: { ipo?: number; pool?: number; held?: number } = {}): GameS
   const held = over.held ?? 100 - ipo - pool;
   return {
     game_id: 1,
+    /* ==================================================================
+        DESIGN NOTE 884: THE FIXTURE STOPPED REACHING ITS SUBJECT
+       ==================================================================
+       FOUND WHILE VERIFYING #883, running a pattern wide enough to sweep this file in. All five assertions
+       below had been failing in the committed tree, and not because the money rule broke: `dividendGate.ts`
+       was added after this harness and refuses the message outright when `current_round_type` is not an
+       Operating Round -- "Dividends are declared during an Operating Round." The reducer returned the state
+       untouched, so every figure compared its own starting value and every assertion failed at once.
+       WHICH MEANS #706's MONEY RULE HAD NO EFFECTIVE COVERAGE. The bank-pool slice is one of the few rules
+       that moves real money in two directions at once, and its only harness had quietly stopped exercising
+       it -- red, so not silent, but red for a reason that looks like a broken rule and is not.
+       `operating_sub_phase` IS DELIBERATELY STILL ABSENT. The gate lets an unknown cursor through on purpose
+       ("refusing there would brick a board on the strength of a missing field"), so leaving it out keeps this
+       fixture exercising the ROUND arm only -- one guard at a time. */
+    current_round_type: "OperatingRound",
+    /* AND THE QUEUE, which the gate reads to check the declaration names the corporation actually operating.
+       `active_operating_order` is REQUIRED on `GameStateResponse`; this fixture omitted it and got away with
+       it only because it casts through `as unknown as`. The cast is what let the fake diverge from the shape
+       -- `operatingCorporationId` indexes the array directly and threw on `undefined[undefined]`, which is
+       the type being right and the fixture being wrong. No defensive `?? []` added in the gate: the contract
+       says the field is there, and guarding it would be writing code for a state the type forbids. */
+    active_operating_order: [1],
+    active_corporation_index: 0,
     virtual_bank_vgp: "10000",
     player_addresses: [ALICE],
     active_player_index: 0,

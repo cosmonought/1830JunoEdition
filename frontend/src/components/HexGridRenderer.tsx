@@ -338,8 +338,12 @@ export interface HexGridRendererProps {
     orientation: number;
     /** Design note #824: the city the token on this hex is being placed into while the ghost is up. Only
      *  meaningful where that is a choice -- an unlaid preprinted double city, whose two cities the cardboard
-     *  never distinguished. `undefined` everywhere else, where the index is simply preserved. */
+     *  never distinguished. `undefined` everywhere else, where the index is simply preserved.
+     *  Design note #886: THE ACTING CORPORATION'S ONLY, and no longer read here. See `tokenCities`. */
     tokenCity?: number;
+    /** Design note #886: `[company_id, city_index]` for every token standing on the hex, derived from
+     *  connectivity at this facing (#878). */
+    tokenCities?: ReadonlyArray<readonly [number, number]>;
   } | null;
   /** The live current_global_era, driving which off-board revenue tier renders. Defaults to Yellow so this still renders before a live query is wired.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
@@ -1108,10 +1112,20 @@ export function HexGridRenderer({
               : laid;
           /* Design note #824: while a preview is up on this hex and the president is choosing a destination,
              the marker belongs in the city they are looking at rather than the one the chain recorded --
-             which on an unlaid preprinted pair was never a fact about the board anyway. */
+             which on an unlaid preprinted pair was never a fact about the board anyway.
+             ==================================================================
+              DESIGN NOTE 886: ONE INDEX CANNOT PLACE TWO MARKERS
+             ==================================================================
+             REPORTED: "on other OO hexes, the stations are previewing incorrectly and jumping around on
+             rotations, not maintaining their corporation's network connectivity as they must."
+             THIS READ `previewTile.tokenCity` -- ONE NUMBER -- INSIDE A PER-COMPANY LOOP. Every token on the
+             hex was drawn in the ACTING corporation's chosen city, and that number changes with every
+             rotation, so a rival's marker hopped from circle to circle while its own network stayed put.
+             It is #880's wire bug on the canvas: an index says where ONE token goes, and an OO hex can hold
+             two. The map answers per company, and a company with no entry keeps what the chain recorded. */
           const previewCity =
             previewTile && previewTile.q === q && previewTile.r === r
-              ? previewTile.tokenCity
+              ? previewTile.tokenCities?.find(([id]) => id === company.company_id)?.[1]
               : undefined;
           const chainCity = previewCity ?? tokenCityIndex(company, q, r);
           const tokenCenter = axialToPixel(q, r, hexSize);

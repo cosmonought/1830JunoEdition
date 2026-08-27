@@ -265,7 +265,7 @@ export type GameplayExecuteMsg =
            THE RUST SIDE STILL NEEDS THIS. `pathfinding.rs` / `hexmap.rs` carry neither field; the sandbox
            reducer is the authority today and this is flagged in the same breath as `token_city` above and
            #808's `bypass`. */
-        token_cities?: Array<[number, number]>;
+        token_cities?: ReadonlyArray<readonly [number, number]>;
         /** Design note #776: THIS LAY IS IN ADDITION TO THE ORDINARY ONE. Set only by the Champlain & St.
          *  Lawrence's power, whose lay is a bonus rather than a substitute -- reported as "using its power
          *  advanced the Lay Track subphase completely", because the sub-phase cursor ended the Track step on

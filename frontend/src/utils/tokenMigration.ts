@@ -356,3 +356,37 @@ export function planTokenUpgrade(
     anyFree: here.some((company) => landing.get(company.company_id) == null),
   };
 }
+
+/* ==================================================================
+    DESIGN NOTE 885: THE MAP THE LAY ACTUALLY SENDS
+   ==================================================================
+   #880 derived every token's destination and then assembled the wire map inline in the confirm handler --
+   the newest rule in `App.tsx` and, like the six before it, reachable only by grep. It decides two things
+   worth holding: that EVERY standing token's answer travels (not just the actor's), and that the president's
+   rotation choice overrides exactly one case.
+   THE OVERRIDE IS THE SUBTLE HALF. A token the plan left FREE has no derived city -- ERIE's, on a board that
+   never distinguished the two -- so the choice the president made by rotating is the answer. An ANCHORED
+   token ignores that choice, because connectivity already decided and there was no choice to make. Letting
+   the choice win there would put #878's superseded rule back through a side door. */
+
+/** `[company_id, city_index]` for every token whose destination is known.
+ *
+ *  A FREE TOKEN BELONGING TO ANYONE ELSE IS OMITTED rather than guessed: the board never said which city it
+ *  is in, this president is not choosing for them, and inventing an index would be the index-preservation
+ *  bug #878 removed, wearing a third hat. */
+export function tokenLandingsFor(input: {
+  plan: UpgradeTokenPlan | null;
+  actingCompanyId: number | null;
+  /** What the president chose by rotating, where the plan left their own token free. */
+  chosenCity: number | undefined;
+}): Array<[number, number]> {
+  const { plan, actingCompanyId, chosenCity } = input;
+  return (plan?.landings ?? []).flatMap((entry) => {
+    const anchored = entry.toCityIndex;
+    const chosen =
+      anchored === null && entry.companyId === actingCompanyId ? chosenCity : anchored;
+    return chosen === undefined || chosen === null
+      ? []
+      : [[entry.companyId, chosen] as [number, number]];
+  });
+}

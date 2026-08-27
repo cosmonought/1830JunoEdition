@@ -45,6 +45,11 @@ const MIRRORED: ReadonlyArray<{ ref: string; setter: string }> = [
   { ref: "mapGridRef", setter: "setMapGrid" },
   { ref: "sandboxMarketRef", setter: "setSandboxMarket" },
   { ref: "settledPrivatePricesRef", setter: "setSettledPrivatePrices" },
+  /* #887: the sweep below found this one before any player did, and it is named here as well so the pair is
+     asserted by name rather than only by discovery. #850's ref made a rebuild leave a discarded token
+     placement in the ref while the state said none -- and `handleHexClick` refuses to open the tile picker
+     on a hex with one, so every click was swallowed until React caught up. */
+  { ref: "pendingTokenRef", setter: "setPendingToken" },
 ];
 
 describe("the rebuild resets refs and state together", () => {
@@ -66,6 +71,17 @@ describe("the rebuild resets refs and state together", () => {
        the ref -- which is the window this bug lived in. */
     const refAt = REBUILD.indexOf("mapGridRef.current = MOCK_MAP_GRID;");
     const setAt = REBUILD.indexOf("setMapGrid(MOCK_MAP_GRID);");
+    expect(refAt).toBeGreaterThan(-1);
+    expect(setAt).toBeGreaterThan(refAt);
+  });
+
+  it("writes the pending-token ref before its setter too (#887)", () => {
+    /* SAME ORDER, SAME REASON. The reader here is a click handler rather than a replay, but the shape is
+       identical: the ref is what the synchronous reader sees, so a setter-first reset leaves a window in
+       which the board still believes a token is staged. Asserted separately from the sweep because the
+       sweep can only see THAT both halves are present, not in which order. */
+    const refAt = REBUILD.indexOf("pendingTokenRef.current = null;");
+    const setAt = REBUILD.indexOf("setPendingToken(null);");
     expect(refAt).toBeGreaterThan(-1);
     expect(setAt).toBeGreaterThan(refAt);
   });

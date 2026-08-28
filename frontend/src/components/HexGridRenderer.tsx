@@ -73,6 +73,8 @@ import {
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
+// Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
+import { frameHexes } from "../utils/frameHexes";
 import { canvasTouchAction, isTapGesture } from "../utils/mapGesture";
 // Design note #723: the one place that decides whether ground is still unpaid.
 import { terrainFeeDue } from "../utils/terrainFee";
@@ -317,6 +319,20 @@ export interface HexGridRendererProps {
      clears it once the board has acted on it. */
   /** A one-shot request: resolve this hex as though it had been clicked. Changing the token re-fires. */
   autoSelectHex?: { q: number; r: number; token: number } | null;
+  /* ==================================================================
+      DESIGN NOTE 888: FRAME THESE HEXES, BECAUSE THE MAP IS FITTED NOT SCROLLED
+     ==================================================================
+     REPORTED, of the Lay Track button: "Would it make more sense for this button to auto-scroll them to
+     their network on the map?"
+     AND THERE IS NOTHING TO SCROLL. This component opens with `detailedView = false`, which locks the camera
+     at `fitView` -- the whole board fitted to the pane and centred on its own bounds -- so a player at the
+     default pose already has their network on screen. It is not off screen; it is SMALL. The move that
+     answers the report is a ZOOM.
+     A TOKEN, THE SAME SHAPE AS `autoSelectHex` ABOVE and for the same reason: this is a one-shot request,
+     not a standing question. Re-answering it every frame would fight the player's own pan the moment they
+     touched the board, which is #866's collision in a different costume. */
+  /** A one-shot request to frame these `"q,r"` hexes. Changing the token re-fires. */
+  frameHexRequest?: { keys: readonly string[]; token: number } | null;
   /** The resolved anchor. `cityIndex` is `null` where the hex has more than one city -- the caller must then
    *  fall back to asking, because auto-staging a choice would be #858's bug with no click to blame. */
   onAutoStageStation?: (info: {
@@ -537,6 +553,7 @@ export function HexGridRenderer({
   autoStageStation = null,
   onAutoStageStation,
   autoSelectHex = null,
+  frameHexRequest = null,
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
@@ -974,6 +991,11 @@ export function HexGridRenderer({
       (q, r) => {
         const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
         if (boardHex && GRAY_HEXES[boardHex.label]) return boardHex.label;
+        /* Design note #895: the red areas answer here too. They were absent, so a route running onto an
+           off-board hex resolved no label, found no authored rail, and was drawn in no colour at all. Their
+           stubs are generated into `PRINTED_GRAPHICS_CATALOG` from `OFFBOARD_TRACKS`, so from this callback's
+           point of view an off-board hex is simply another preprinted one -- which is what it is. */
+        if (boardHex && OFFBOARD_TRACKS[boardHex.label]) return boardHex.label;
         const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
         return landmark?.label;
       },
@@ -2590,6 +2612,54 @@ export function HexGridRenderer({
     setView(fitView);
     scheduleDraw();
   }, [fitView, scheduleDraw]);
+
+  /* ==================================================================
+      DESIGN NOTE 888: THE FRAMING REQUEST, ANSWERED ONCE PER TOKEN
+     ==================================================================
+     THE ARITHMETIC IS NOT HERE. `frameHexes` is a pure module (#887's argument, applied on purpose this
+     time): a camera pose is a calculation with an answer, and every way it can be wrong is a NUMBER -- an
+     axis fitted on the wrong side, a clamp applied before the centring, a zoom that inverts on a set of one.
+     Inside this component none of that could be asserted except by scanning for the presence of arithmetic.
+     `handleFitToScreen` IS THE WAY BACK, unchanged and already on screen. That is what makes this an
+     acceptable thing to do to a player's camera on a button press: the pose is reversible by a control they
+     can see, which #818's rule about decisions-by-dismissal is the general case of.
+     CLAMPED THE SAME WAY A DRAG IS. `clampPanToBoard` is what stops a frame near the board's edge leaving
+     half the canvas empty; skipping it here would make the button the one camera move in this component that
+     can leave the board off-centre against its own bounds. */
+  const lastFrameTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!frameHexRequest) {
+      lastFrameTokenRef.current = null;
+      return;
+    }
+    if (lastFrameTokenRef.current === frameHexRequest.token) return;
+    lastFrameTokenRef.current = frameHexRequest.token;
+    const points = frameHexRequest.keys
+      .map((key) => {
+        const [q, r] = key.split(",").map(Number);
+        return Number.isFinite(q) && Number.isFinite(r) ? axialToPixel(q, r, hexSize) : null;
+      })
+      .filter((point): point is { x: number; y: number } => point !== null);
+    /* Design note #888: a hex-radius and a half of slack, so the outermost hex of the set is not flush
+       against the canvas edge and its neighbours read as context rather than as a crop. */
+    const framed = frameHexes(points, { width, height }, {
+      padding: hexSize * 1.5,
+      minZoom,
+      maxZoom: minZoom * MAX_ZOOM_MULTIPLIER,
+    });
+    if (!framed) return;
+    setDetailedView(true);
+    const clamped = clampPanToBoard(
+      framed.panX,
+      framed.panY,
+      framed.zoom,
+      boardContentBounds,
+      width,
+      height,
+    );
+    setView({ zoom: framed.zoom, panX: clamped.panX, panY: clamped.panY });
+    scheduleDraw();
+  }, [frameHexRequest, hexSize, width, height, minZoom, boardContentBounds, scheduleDraw]);
 
   /* THE THIRD TOOLTIP -- the one armed but not yet fired. #269 handled "already showing" and "about to be set"; a click during #365's dwell fires the timer ON TOP of the open ring. It survived because both natural ways to test it pass.
      See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #505 */

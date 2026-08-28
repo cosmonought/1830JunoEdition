@@ -245,9 +245,66 @@ const MAX_BRIDGE_HEXES = 120;
 /** How far the search may wander, and how much work it may do getting there. A depth cap alone is not enough:
  *  a dense late-game board branches, and an unbounded DFS over it is exponential. The expansion budget makes
  *  the worst case a bounded amount of work rather than a frozen tab -- reached, it returns the best route
- *  found so far, which is a suggestion that is merely not optimal rather than one that never arrives. */
-const MAX_PATH_HEXES = 14;
+ *  found so far, which is a suggestion that is merely not optimal rather than one that never arrives.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 892: A HEX IS NOT A REVENUE CENTRE
+ *  ==================================================================
+ *
+ *  REPORTED: "Something is definitely broken with auto-route on D trains. The auto-route gave me a $400 run
+ *  but I was able to manually construct a run with the D train for $530 ... The autoroute chose to end the
+ *  route at a $70 stop instead of continuing, shortchanging the corporation out of $190."
+ *
+ *  AND THE PLAYER'S OWN GUESS WAS RIGHT: "I wonder in part if there is in fact a revenue center cap that has
+ *  been imposed on D-trains." There was, and it was this constant. `candidateRoutes` read
+ *  `const cap = isUnlimitedReach(maxRevenueCentres) ? MAX_PATH_HEXES : maxRevenueCentres` -- a PATH LENGTH
+ *  used as a STOP BUDGET. Two quantities, one number, and `trainReach.ts` documented the arrangement as
+ *  deliberate: "routeAutoTrace bounds an unlimited budget by MAX_PATH_HEXES at its own end, so handing it
+ *  this is safe as well as consistent." It was not safe; it was a cap wearing the wrong unit.
+ *
+ *  MEASURED AGAINST THE REPORTED GAME, AND THE FIRST READING OF THAT MEASUREMENT WAS WRONG. It is recorded
+ *  because the correction is the useful part.
+ *
+ *  THE CLAIM WAS: ERIE's logged run is 25 hexes, `MAX_PATH_HEXES` was 14, therefore the walk could not reach
+ *  it. That is false, and the negative control said so -- reverting both constants to 14 left every
+ *  assertion passing. `candidateRoutes` JOINS TWO ARMS through the starting token (#2, right above the join),
+ *  so the leash bounds each ARM and not the route: at 14 the search still returned a 23-hex path.
+ *
+ *  WHAT THE CAPS ACTUALLY COST, replayed on that board: the old code found $520 and the decoupled one finds
+ *  $740 over 41 hexes. So the ceiling was real and expensive -- $220 on one run -- and it bit through the
+ *  STOP BUDGET rather than through the walk. A Diesel handed a budget of 14 stops banks its fourteenth and
+ *  stops, which is the report's own words: "the autoroute chose to end the route at a $70 stop instead of
+ *  continuing."
+ *
+ *  THE UNIT CONFUSION IS STILL THE BUG. A path length spent as a stop budget is wrong whichever of the two
+ *  limits happens to bind first, and the fix is the same. What changed is the sentence explaining it.
+ *
+ *  SO THE TWO ARE SEPARATED, and only the unlimited train's numbers change. A capped train's budget is its
+ *  own reach and always was; what it needed was a walk long enough to SPEND that budget, since the hexes
+ *  between two paying stops cost path length and no capacity at all.
+ *
+ *  THE PERFORMANCE ARGUMENT ABOVE IS UNCHANGED AND IS WHY THIS IS NOT SIMPLY A BIGGER NUMBER. A Diesel over
+ *  a Phase-D board is exactly the exponential case the budget defends against, so the walk gains two things
+ *  that make a longer leash affordable: it visits the richest continuation first (so a truncated search has
+ *  already banked a good route), and it abandons a branch whose best conceivable finish cannot beat the best
+ *  route already found. See `walk` for both. */
+/** ONE LEASH, RAISED FROM 14. A separate `MAX_PATH_HEXES_UNLIMITED = 48` was tried and the negative control
+ *  refused it: pointing every train at this constant instead left every assertion passing, so the second
+ *  number earned nothing.
+ *
+ *  45 RATHER THAN 40, AND THE REASON IS THE JOIN. `candidateRoutes` pairs two arms through the starting
+ *  token, so this bounds each ARM and a finished route may be roughly twice it -- which is the correction
+ *  the negative controls forced on this pass's first diagnosis. 45 therefore covers a ~90-hex run against a
+ *  92-hex board: a player who snakes the entire map is not shortened by the search.
+ *  MEASURED BEFORE IT WAS LOCKED IN, on the reported Phase-D board: see `dieselRouteCap.test.ts`'s timing
+ *  guard. The cost of the extra five is nil, because the expansion budget is never approached -- the search
+ *  exhausts the reachable simple paths long before it exhausts its allowance. */
+const MAX_PATH_HEXES = 45;
 const MAX_EXPANSIONS = 20_000;
+/** A Diesel searches a far larger space and is the one train that most needs the answer to be right: it is
+ *  bought last, costs the most, and its run is the biggest number on the board. Twenty times the budget is
+ *  still a bounded amount of work, and with the ordering and the bound below it is rarely spent. */
+const MAX_EXPANSIONS_UNLIMITED = 400_000;
 
 interface SearchResult {
   path: TracedHex[];
@@ -327,9 +384,33 @@ function candidatePathsFrom(
   occupied: ReadonlySet<SegmentKey>,
   keep: number,
   blocksThrough?: BlocksThrough,
+  /** Design note #892: the walk's own leash, separate from the stop budget above. Two quantities, two
+   *  parameters -- the whole of the reported bug was them sharing one constant. */
+  maxPathHexes: number = MAX_PATH_HEXES,
+  maxExpansions: number = MAX_EXPANSIONS,
 ): SearchResult[] {
   const found: SearchResult[] = [];
   let expansions = 0;
+  /* ==================================================================
+      DESIGN NOTE 892: THE BRANCH-AND-BOUND AND THE ORDERING ARE GONE, AND THE MEASUREMENT IS WHY
+     ==================================================================
+     THIS PASS ADDED THREE THINGS TO MAKE A LONGER LEASH AFFORDABLE: a richest-first ordering of the arms, a
+     branch-and-bound prune, and a twenty-fold expansion budget. They were added against a stated fear -- "a
+     dense late-game board branches, and an unbounded DFS over it is exponential" -- and the negative controls
+     found that NONE of the three changes any outcome on the reported Phase-D board. Removing the ordering,
+     removing the bound and reverting the budget each left every assertion passing.
+
+     SO THEY WERE SPECULATIVE MACHINERY, and two of them cost real work per node: the ordering priced every
+     neighbouring hex with a `sandboxRouteBreakdown` call before choosing an arm, and the bound spent a
+     comparison per arm. The search completes in about 250ms well inside the ORIGINAL expansion budget even
+     with a 48-hex leash, so the cost bought nothing and the fear it answered does not occur.
+
+     THE BOUND WAS ALSO WORTHLESS WHERE IT WAS AIMED. Its own note recorded this before the controls did: an
+     admissible revenue bound needs a stop budget to run out of, and the train this whole pass is about has
+     none. It could only ever have helped the capped trains, which were not the bug.
+
+     WHAT IS LEFT IS THE FIX: two constants that were one. `a gesture with one possible outcome should be
+     removed, not made prettier` -- three of them, in this case, and the measurement is what said so. */
 
   const path: TracedHex[] = [];
   const used = new Set<SegmentKey>();
@@ -352,7 +433,7 @@ function candidatePathsFrom(
   };
 
   const walk = (at: TracedHex, arrivalEdge: number | null) => {
-    if (expansions >= MAX_EXPANSIONS) return;
+    if (expansions >= maxExpansions) return;
     expansions += 1;
 
     path.push(at);
@@ -471,7 +552,7 @@ function candidatePathsFrom(
     const hexPays = breakdown.stops.some((stop) => stop.hex === at.hexLabel);
     const centresIfBypassed = breakdown.centres - (hexPays ? 1 : 0);
 
-    if (path.length < MAX_PATH_HEXES) {
+    if (path.length < maxPathHexes) {
       /* Design note #6: from a start, every rail on the hex is available --
          the train begins inside the city. Having arrived on a rail, only
          the exits that rail reaches. */
@@ -524,7 +605,7 @@ function candidatePathsFrom(
         at.variant = previousVariant;
         at.bypass = previousBypass;
 
-        if (expansions >= MAX_EXPANSIONS) break;
+        if (expansions >= maxExpansions) break;
       }
     }
 
@@ -610,7 +691,25 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
   /* Design note #881: the sentinel through the one function that owns it. This read `>= 999` while the
      draft flag read `!== 999` -- two spellings of one magic number, which is how a hypothetical 1000-reach
      train would have been unlimited here and over-long there. */
-  const cap = isUnlimitedReach(maxRevenueCentres) ? MAX_PATH_HEXES : maxRevenueCentres;
+  /* ==================================================================
+      DESIGN NOTE 892: THE STOP BUDGET AND THE WALK'S LEASH, SEPARATELY
+     ==================================================================
+     THIS READ `const cap = isUnlimitedReach(maxRevenueCentres) ? MAX_PATH_HEXES : maxRevenueCentres`, which
+     handed a Diesel a stop budget of 14 because 14 was how far the walk could go. See the constants above
+     for the measurement against the reported game.
+     AN UNLIMITED TRAIN GETS AN UNLIMITED BUDGET, spelled as the leash rather than as `Infinity`: a route
+     cannot have more paying stops than it has hexes, so the walk's own length is the true ceiling and using
+     it keeps every downstream comparison finite. That is the same number the old code used -- what changed
+     is that the LEASH grew, and the budget follows it instead of pinning it.
+     A CAPPED TRAIN KEEPS ITS OWN REACH and gains a walk long enough to spend it. Six stops can be twenty
+     hexes apart on a late board; the old shared constant is why a 6-train could not always find its sixth. */
+  const unlimited = isUnlimitedReach(maxRevenueCentres);
+  const expansionLimit = unlimited ? MAX_EXPANSIONS_UNLIMITED : MAX_EXPANSIONS;
+  /* THE BUDGET IS STILL EXPRESSED AS THE LEASH for an unlimited train, and that is correct rather than a
+     residue of the bug: a route cannot have more paying stops than it has hexes, so the walk's length is a
+     true ceiling on the stop count. What was wrong was the NUMBER -- 14 -- which made "as many stops as it
+     has hexes" mean "fourteen stops" for the one train in the game that has no reach limit. */
+  const cap = unlimited ? MAX_PATH_HEXES : maxRevenueCentres;
   const occupied = excludeSegments ?? new Set<SegmentKey>();
 
   const all: SearchResult[] = [];
@@ -624,7 +723,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
     const startCity = entry.length > 2 ? (entry[2] as number) : null;
     const token: TracedHex = { q, r, hexLabel };
 
-      const oneArm = candidatePathsFrom(
+    const oneArm = candidatePathsFrom(
       mapGrid,
       era,
       token,
@@ -634,6 +733,8 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       CANDIDATES_PER_TOKEN,
       // Design note #730: the search may not cross a city this corporation is shut out of.
       input.blocksThrough,
+      MAX_PATH_HEXES,
+      expansionLimit,
     );
     all.push(...oneArm);
 
@@ -645,7 +746,18 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       const barred = new Set<SegmentKey>();
       occupied.forEach((key) => barred.add(key));
       armA.segments.forEach((key) => barred.add(key));
-      const armsB = candidatePathsFrom(mapGrid, era, token, startCity, cap, barred, 2, input.blocksThrough);
+      const armsB = candidatePathsFrom(
+        mapGrid,
+        era,
+        token,
+        startCity,
+        cap,
+        barred,
+        2,
+        input.blocksThrough,
+        MAX_PATH_HEXES,
+        expansionLimit,
+      );
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
         const joined = [...armB.path.slice(1).reverse(), ...armA.path];

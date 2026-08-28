@@ -33,7 +33,11 @@ export const PRIORITY_DEAL_TOOLTIP = "Priority Deal: Starts the next Stock Round
 export type TileColor = "Yellow" | "Green" | "Brown";
 /** Pre-Game Waterfall Auction (`waterfall.rs`): every room genesis-starts here, before `"StockRound"` is
  *  ever reachable. Mirrors `state.rs`'s `RoundType` exactly. */
-export type RoundType = "WaterfallAuction" | "StockRound" | "OperatingRound";
+/** Design note #898: `GameEnd` is a ROUND, and putting it here is what makes the ending survive a replay.
+ *  The game's end was previously a derivation in the shell -- "is the bank at zero right now" -- which had no
+ *  way to express "and the current set finishes first", and no way to be undone. A terminal round type is a
+ *  fact the log produces, so every client reaches it at the same action. */
+export type RoundType = "WaterfallAuction" | "StockRound" | "OperatingRound" | "GameEnd";
 
 export interface PlayerCashEntry {
   player: string;
@@ -178,6 +182,14 @@ export interface GameStateResponse {
    *  operating queue finished its turn and the macro round closed. Consumed
    *  and cleared by the caller, which owns the log and the tab. */
   operating_round_just_ended?: boolean;
+  /** Design note #899: the room is closed and the payout has been dispatched.
+   *
+   *  IN STATE RATHER THAN IN THE SHELL because it is what makes `CloseRoom` idempotent: every client runs its
+   *  own auto-close timer and every one of them dispatches, so the reducer has to be able to tell the first
+   *  from the fourth. A flag the shell held would make each client's answer its own.
+   *  NOT `?? false` ANYWHERE IT IS WRITTEN BACK -- #232's rule and #897's correction. Absent means an older
+   *  log that predates room closure, which is a different thing from a room that is open. */
+  room_closed?: boolean;
   /** Design note #656: WHICH STEP of its turn the acting corporation is on. This was React state in `App.tsx`
    *  re-seeded by an effect keyed on the era and phase tier -- so buying a train that advanced the phase sent
    *  the buying corporation back to the top of its own turn. A cursor held outside the reducer is also not in

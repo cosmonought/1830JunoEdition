@@ -11,21 +11,12 @@
 // THE SAME OBSERVATION AS #866 WITH ONE DIFFERENCE THAT MATTERS. There the click carried no information and
 // was removed outright; here the PICKER still has to open, because which tile to lay is a real choice. What
 // carries nothing is the gesture that opens it -- the veil has already reduced the board to one lit hex.
+import { readSource, stripComments } from "./sourceScan";
+
 export {};
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
-const strip = (source: string) =>
-  source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-
-const APP = strip(read("App.tsx"));
-const BOARD = strip(read("components/HexGridRenderer.tsx"));
+const APP = stripComments(readSource("App.tsx"));
+const BOARD = stripComments(readSource("components/HexGridRenderer.tsx"));
 
 describe("selecting a hex is separable from clicking one", () => {
   it("splits the pointer arithmetic from what a selection means", () => {

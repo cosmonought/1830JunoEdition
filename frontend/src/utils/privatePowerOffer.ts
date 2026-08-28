@@ -49,6 +49,11 @@ export interface PrivatePowerOffer {
   hexLabel: string;
   /** The chip's label. Short: it sits beside "Lay 1 Track" and "Skip Track". */
   chipLabel: string;
+  /** Design note #884: the chip's hover sentence, beside the label it belongs to. It was written inline in
+   *  `ContextualActionBar.tsx` -- one sentence for the hex powers, another for the M&H -- which put copy
+   *  about a rule in the component #848 says "writes no rules and no copy". Same reason `chipLabel` is here
+   *  rather than there. */
+  chipTitle: string;
   /** The prompt's heading. */
   title: string;
   /** What the power does, in the catalog's own words -- so the modal and the private's card cannot describe
@@ -86,6 +91,8 @@ export function privatePowerOffers(
       hexKey: `${candidate.hex.q},${candidate.hex.r}`,
       hexLabel: candidate.hex.hexLabel,
       chipLabel: `Use ${catalog.acronym} Power`,
+      chipTitle:
+        "Opens the question the hex asks — the same prompt, for a player who has not scrolled to the map.",
       title: `Use the ${catalog.acronym}'s private power?`,
       /* THE CATALOG'S FIRST BULLET, not a sentence written here. #661 built `abilityBullets` as the one
          description of a power, and a modal with prose of its own is how a rule comes to be stated twice and

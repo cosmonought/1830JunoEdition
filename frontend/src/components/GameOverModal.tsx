@@ -28,6 +28,24 @@ export interface GameOverModalProps {
   totalAnte: number;
   /** Named for the bankruptcy headline. */
   bankruptLabel: string | null;
+  /* ==================================================================
+      DESIGN NOTE 900: DISMISSIBLE, BECAUSE THE BOARD IS THE POST-MORTEM
+     ==================================================================
+     REQUESTED: "Make the Game End modal dismissible (and re-openable) so players can view the final board
+     state."
+     AND IT IS THE OPPOSITE CASE TO #896'S. That modal blocks because what it says changes the turn you are
+     about to take; this one has no turn after it. The game is over, the numbers are settled, and the only
+     thing left to do is look at the map you spent two hours building -- which the modal was covering.
+     RE-OPENABLE IS THE HALF THAT MAKES IT SAFE. A dismissible modal with no way back would lose the standings
+     for good, so the shell keeps a control to raise it again; `onDismiss` is only ever a hide. */
+  onDismiss: () => void;
+  /** Design note #899: closes the room and dispatches the payout. Any player may. `null` once it is closed,
+   *  or in a local game with nothing to settle -- the button becomes a statement instead of a control. */
+  onCloseRoom: (() => void) | null;
+  /** What the auto-close countdown reads, already formatted. `null` when nothing is counting. */
+  autoCloseIn: string | null;
+  /** Whether the room has already been closed and the payout dispatched. */
+  roomClosed: boolean;
 }
 
 export function GameOverModal({
@@ -36,6 +54,10 @@ export function GameOverModal({
   viewerAddress,
   totalAnte,
   bankruptLabel,
+  onDismiss,
+  onCloseRoom,
+  autoCloseIn,
+  roomClosed,
 }: GameOverModalProps) {
   if (!reason) return null;
 
@@ -55,7 +77,16 @@ export function GameOverModal({
         : null;
 
   return (
-    <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Game Over">
+    /* Design note #900: the backdrop dismisses, unlike #896's. Nothing is pending behind it. */
+    <div
+      style={styles.backdrop}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Game Over"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onDismiss();
+      }}
+    >
       <div style={styles.panel}>
         <span style={styles.kicker}>Game Over</span>
 
@@ -85,19 +116,37 @@ export function GameOverModal({
             <span style={styles.cellNum}>Payout</span>
           </div>
 
-          {standings.map((row) => (
+          {/* ==================================================================
+               DESIGN NOTE 900: THE HIGHLIGHT FINDS YOU; THE BADGE NAMES THE WINNER
+              ==================================================================
+              REQUESTED: "keep the Winner badge on the winning player, but change the row highlighting.
+              Instead of highlighting the winner's row for everyone, highlight the local player's own row so
+              they can easily find their own stats."
+              THE TWO MARKS WERE DOING ONE JOB AND IT WAS THE LESS USEFUL ONE. `WINNER` already says who won,
+              in words, on the row it belongs to -- so tinting that same row said it twice, and left the
+              question every player actually opens this table with ("where am I?") unanswered. At six seats
+              that is a real scan.
+              A SPECTATOR GETS NO HIGHLIGHT AT ALL, which is correct rather than a gap: `viewerAddress` is
+              `null` for them, they have no row, and tinting the winner's row as a consolation would put the
+              highlight back where it started. */}
+          {standings.map((row) => {
+            const isViewer = viewerAddress !== null && row.address === viewerAddress;
+            return (
             <div
               key={row.address}
               role="row"
+              /* Bankruptcy still wins the tint, and it is last for that reason: a player who went bankrupt
+                 needs to see THAT before they see which row is theirs. */
               style={{
                 ...styles.row,
-                ...(row.isWinner ? styles.rowWinner : {}),
+                ...(isViewer ? styles.rowViewer : {}),
                 ...(row.isBankrupt ? styles.rowBankrupt : {}),
               }}
             >
               <span style={styles.cellRank}>{row.rank}</span>
               <span style={styles.cellName}>
                 {row.label}
+                {isViewer && <span style={styles.tagYou}>YOU</span>}
                 {row.isWinner && <span style={styles.tagWinner}>WINNER</span>}
                 {row.isBankrupt && <span style={styles.tagBankrupt}>BANKRUPT</span>}
               </span>
@@ -107,7 +156,8 @@ export function GameOverModal({
               <span style={styles.cellNumStrong}>${row.netWorth}</span>
               <span style={styles.cellNum}>${row.expectedPayout.toFixed(2)}</span>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Design note #4 in `endgame.ts`: the payout is an ESTIMATE and the
@@ -115,7 +165,7 @@ export function GameOverModal({
             reads. Overstating this would be promising real money on a split
             the contract has not agreed to. */}
         <p style={styles.payoutNote}>
-          Payout estimated by share of net worth against a ${totalAnte} pool. The real
+          Payout estimated by share of net worth against a ${totalAnte} pool. The payout
           distribution is settled on-chain when the room closes.
         </p>
 
@@ -124,6 +174,29 @@ export function GameOverModal({
             <strong>{winner.label}</strong> wins with ${winner.netWorth}.
           </p>
         )}
+
+        {/* Design note #899: the closure controls, and the countdown stated as a fact rather than as a
+            threat. Every client runs its own timer and any player may press the button, so this is not "you
+            have fifteen minutes to act" -- it is "this will finish itself if nobody gets to it". */}
+        <div style={styles.footer}>
+          <span style={styles.footerNote}>
+            {roomClosed
+              ? "The room is closed and the payout has been dispatched."
+              : autoCloseIn
+                ? `Closing automatically in ${autoCloseIn}. Any player may close it now.`
+                : "Any player may close the room to settle the payout."}
+          </span>
+          <span style={styles.footerButtons}>
+            <button type="button" style={styles.secondaryButton} onClick={onDismiss}>
+              View final board
+            </button>
+            {onCloseRoom && (
+              <button type="button" style={styles.primaryButton} onClick={onCloseRoom}>
+                Close Room
+              </button>
+            )}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -202,12 +275,57 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: "#7f8798",
   },
-  rowWinner: { backgroundColor: "#17301f", color: "#dff6e7" },
+  /* Design note #900: BLUE, NOT GREEN. The winner tint was green and green reads as "good news"; this mark
+     answers "which row is mine", which is true whether the news is good or not. A player who came fourth
+     should not have their own row congratulating them. */
+  rowViewer: { backgroundColor: "#152436", color: "#dbe8f7" },
   rowBankrupt: { backgroundColor: "#2a1618", color: "#f0c9c9" },
   cellRank: { flex: "0 0 22px", color: "#7f8798" },
   cellName: { flex: "1 1 auto", display: "flex", alignItems: "center", gap: "6px", minWidth: 0 },
   cellNum: { flex: "0 0 78px", textAlign: "right" },
   cellNumStrong: { flex: "0 0 88px", textAlign: "right", fontWeight: 800, color: "#e6e8ef" },
+  footer: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    flexWrap: "wrap",
+    marginTop: "6px",
+    paddingTop: "10px",
+    borderTop: "1px solid #2b3040",
+  },
+  footerNote: { fontSize: FONT_SIZE.micro, color: "#8a90a0", lineHeight: 1.4, flex: "1 1 220px" },
+  footerButtons: { display: "flex", gap: "8px", flex: "none" },
+  secondaryButton: {
+    padding: "7px 14px",
+    borderRadius: "8px",
+    border: "1px solid #3a4055",
+    backgroundColor: "transparent",
+    color: "#c8cdd8",
+    fontSize: FONT_SIZE.small,
+    cursor: "pointer",
+  },
+  primaryButton: {
+    padding: "7px 14px",
+    borderRadius: "8px",
+    border: "1px solid #7a6320",
+    backgroundColor: "#3b3113",
+    color: "#f0dfa8",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  tagYou: {
+    marginLeft: "6px",
+    padding: "1px 6px",
+    borderRadius: "999px",
+    border: "1px solid #3f5f8a",
+    backgroundColor: "#1d3350",
+    color: "#bcd4f0",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.06em",
+  },
   tagWinner: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,

@@ -105,10 +105,15 @@ export function purchaseWarnings(
     const buys = phase.purchasesUntilRust;
     warnings.push({
       key: "rust",
+      /* Design note #889: ACTIVE TENSE, AND THE COUNT ALWAYS SPOKEN. Was `Rust Event: X-Trains` at one buy
+         and `Rust in N Buys: X-Trains` above it -- so the most urgent state was the one that stopped saying
+         how long was left. "Rusts in 1 Buy" keeps the countdown on the badge that is a countdown (#868: a
+         warning is for something being taken away), and the singular is spelled rather than pluralised
+         blindly. */
       label:
         buys <= 1
-          ? `Rust Event: ${phase.rustingTier}-Trains`
-          : `Rust in ${buys} Buys: ${phase.rustingTier}-Trains`,
+          ? `Rusts in 1 Buy: ${phase.rustingTier}-train`
+          : `Rusts in ${buys} Buys: ${phase.rustingTier}-train`,
       detail:
         buys <= 1
           ? `The next train purchase destroys every ${phase.rustingTier}-Train in play, in every corporation.`
@@ -125,10 +130,15 @@ export function purchaseWarnings(
     const buys = phase.purchasesUntilPhaseChange;
     warnings.push({
       key: "train-limit",
+      /* Design note #889: CONDENSED TO THE EVENT AND ITS COUNTDOWN. Was `Limit X → Y in N Buys` / `Train
+         Limit Drops: X → Y`. The two figures are still in the `detail` below, where a player who wants the
+         new ceiling can read it; on the badge they made the busiest string in a row of badges, and the fact
+         that decides anything is WHEN. Same shape as the rust badge beside it, which is the point -- #839:
+         "a warning drawn differently from the warning beside it reads as a different KIND of thing". */
       label:
         buys !== null && buys > 1
-          ? `Limit ${phase.trainLimit} → ${after} in ${buys} Buys`
-          : `Train Limit Drops: ${phase.trainLimit} → ${after}`,
+          ? `Train Limit Drops in ${buys} Buys`
+          : "Train Limit Drops in 1 Buy",
       detail:
         `The next phase lowers the train limit from ${phase.trainLimit} to ${after} for every corporation. ` +
         `Anything held above ${after} is discarded when the phase turns.`,

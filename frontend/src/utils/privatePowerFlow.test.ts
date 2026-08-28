@@ -20,6 +20,8 @@
 // the action bar -- and the player was looking at the map. An exit nobody can find is not an exit, which is
 // #279's own test applied to a control instead of a sentence.
 
+import { readSource, readStripped, stripComments } from "./sourceScan";
+
 import { powerFlowOpen, privatePowerFlow } from "./privatePowerFlow";
 
 const dh = (layDone: boolean, station: "pending" | "placed" | "forfeited") =>
@@ -134,22 +136,31 @@ describe("the copy carries the rules difference", () => {
 });
 
 describe("the shell derives the flow instead of remembering it (design note #849)", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-  };
-  const strip = (source: string) =>
-    source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-  const APP = strip(read("App.tsx"));
-  const PANEL = strip(read("components/PrivatePowerPanel.tsx"));
+    const APP = stripComments(readSource("App.tsx"));
 
   it("raises the modal on an unresolved D&H without being told to", () => {
     /* THE REOPENING IS A DERIVATION, not an event. The D&H's second step happens after the lay, and a D&H
        lay ENDS the Track step -- so a flag set at the click site would have to survive a dispatch, a
        sub-phase change and a re-render. A laid tile with an unresolved station IS the open question. */
-    expect(APP).toContain("const dhOwed =");
-    expect(APP).toContain('const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : privatePowerRequest;');
+    /* ==================================================================
+        DESIGN NOTE 887: THIS PAIR MOVED FROM SCANNING TO CALLING
+       ==================================================================
+       IT READ, on one line per #814: `expect(APP).toContain('const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : privatePowerRequest;');`
+       -- true of `App.tsx`'s text and silent about whether the derivation WORKS. It would have passed for a
+       memo whose dependency array never fired and for a condition written inverted.
+       THE RULE IS THE SAME AND IS NOW EXERCISED: `activePrivatePower.test.ts` raises the D&H's station
+       question with `request: null` and asserts the station step comes back enabled, then asserts the
+       obligation outranks a competing `mh-exchange` request. What survives here is the SHELL's half -- that
+       the shell asks the extracted function at all, and hands it the standing-obligation inputs rather than
+       only the click. */
+    expect(APP).toContain("deriveActivePowerFlow({");
+    const at = APP.indexOf("deriveActivePowerFlow({");
+    expect(at).toBeGreaterThan(-1);
+    const call = APP.slice(at, APP.indexOf("});", at));
+    expect(call).not.toBe("");
+    expect(call).toContain("request: privatePowerRequest,");
+    expect(call).toContain("usedAbilities: usedPrivateAbilities,");
+    expect(call).toContain("dhStationForfeited,");
   });
 
   it("retires the prompt cursor rather than keeping a second account", () => {
@@ -170,17 +181,53 @@ describe("the shell derives the flow instead of remembering it (design note #849
     expect(APP).toContain("the free placement on F16 was forfeited");
   });
 
-  it("labels the panel button Use Power for both powers", () => {
-    expect(PANEL.match(/label: "Use Power"/g) ?? []).toHaveLength(2);
-    expect(PANEL).not.toContain('label: "Lay Track (F16)"');
-    expect(PANEL).not.toContain('label: "Lay Track (B20)"');
+  it("labels the chips for the power, not for the first step", () => {
+    /* ==================================================================
+        DESIGN NOTE 885: THE SUBJECT MOVED FROM THE PANEL TO THE CHIP
+       ==================================================================
+       THIS ASSERTED, on one line per #814: `expect(PANEL.match(/label: "Use Power"/g) ?? []).toHaveLength(2);`
+       -- two "Use Power" buttons in `PrivatePowerPanel.tsx`, plus the absence of `label: "Lay Track (F16)"`
+       and `label: "Lay Track (B20)"`.
+       #849's RULE IS WHAT IT WAS PROTECTING and the rule outlived the panel: "A BUTTON LABELLED WITH ONE STEP
+       IS A BUTTON THAT LIES ABOUT A TWO-STEP POWER ... What each one actually does is the modal's first
+       line." The panel is deleted (#885); the chips are where a player presses now, and `privatePowerOffer.ts`
+       composes their labels as `Use <ACRONYM> Power`.
+       IT WAS ALSO A BARE COUNT. `toHaveLength(2)` could not tell the D&H's button from the C&SL's, so it
+       would have passed for two labels on one power. The replacement asserts the composition itself. */
+    const OFFERS = stripComments(readSource("utils/privatePowerOffer.ts"));
+    const dollar = String.fromCharCode(36);
+    expect(OFFERS).toContain("chipLabel: `Use " + dollar + "{catalog.acronym} Power`");
+    expect(OFFERS).not.toContain('"Lay Track (F16)"');
+    expect(OFFERS).not.toContain('"Lay Track (B20)"');
   });
 
-  it("makes the panel button ask rather than arm", () => {
-    /* 6a: "there is no way to escape/cancel that track lay". There was one -- #817's cancel on the action
-       bar -- and the player was on the map. The modal's X is where they are. */
-    expect(APP).toContain('if (action.key === "dh-tile" || action.key === "csl-tile") {');
-    expect(APP).toContain("setPrivatePowerRequest(action.key);");
+  it("makes every door ask rather than arm", () => {
+    /* ==================================================================
+        DESIGN NOTE 885: THE PANEL BUTTON WAS THE DOOR THIS DESCRIBED
+       ==================================================================
+       IT ASSERTED, on one line per #814: `expect(APP).toContain('if (action.key === "dh-tile" || action.key === "csl-tile") {');`
+       -- `handleUsePrivateAbility`'s branch raising the modal instead of arming the errand directly.
+       6a IS THE REPORT IT DEFENDS and it is unchanged: "there is no way to escape/cancel that track lay."
+       There was one -- #817's cancel on the action bar -- and the player was on the map, so the escape had
+       to be where they were looking. #849 made the panel ASK; #885 removed the panel, leaving the chip as
+       the only door, and `handleChipPowerOffer` raises the same request.
+       SO THE PROPERTY IS NOW AN ABSENCE PLUS A PRESENCE: nothing arms an errand from an entry point, and the
+       one entry point that exists sets a request. The absence is the half that would silently come back --
+       a future "convenience" that arms directly from a chip is exactly 6a again. */
+    expect(APP).toContain("if (offer) setPrivatePowerRequest(offer.abilityKey);");
+    const start = APP.indexOf("const handleChipPowerOffer");
+    expect(start).toBeGreaterThan(-1);
+    /* BOUNDED AT `runPrivateExchange`'s OWN DECLARATION, which is the next thing in the file. The first
+       draft bounded at `handlePowerFlowAct` and swept the declaration INTO the slice, so the
+       `not.toContain` below failed on the definition rather than on a call -- an anchor placed downstream
+       of the thing being looked for, which is the same trap as an anchor placed upstream and reads as a
+       real failure rather than as a vacuous pass. */
+    const end = APP.indexOf("const runPrivateExchange", start);
+    expect(end).toBeGreaterThan(start);
+    const chip = APP.slice(start, end);
+    expect(chip).not.toBe("");
+    expect(chip).not.toContain("armPrivateHexErrand");
+    expect(chip).not.toContain("runPrivateExchange");
   });
 
   it("does not mount the modal over a placement in flight", () => {
@@ -200,12 +247,7 @@ describe("the shell derives the flow instead of remembering it (design note #849
 });
 
 describe("one hex, one question (design note #850)", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-  };
-  const APP = read("App.tsx").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const APP = readSource("App.tsx").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
   it("refuses the tile picker while a token placement is staged", () => {
     /* REPORTED: "the tileselector radial menu popped up on top of the checkmark/x for the station. I then
@@ -237,7 +279,6 @@ describe("one hex, one question (design note #850)", () => {
     expect(body).not.toContain("dh-token");
   });
 });
-
 
 // ==================================================================
 //  DESIGN NOTE 871 (harness): ONE QUESTION, AND A WAY OUT OF IT
@@ -296,16 +337,12 @@ describe("the M&H is one question (design note #871)", () => {
 });
 
 describe("the modal writes no copy of its own (design note #872)", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", rel), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-  };
-  const MODAL = read("components/PrivatePowerFlowModal.tsx");
+  /* Design note #886: `readStripped`, NOT `readSource`. This binding came from a describe-local `read` that
+     did the comment-stripping INSIDE itself rather than through a named `strip` -- so the survey that found
+     "twelve copies of strip" missed it, and the migration replaced a read-and-strip with a plain read. The
+     suite caught it on `not.toContain("holds this power.")`, which #872's own note quotes two lines above the
+     code it describes. A thirteenth stripper, wearing a different name. */
+  const MODAL = readStripped("components/PrivatePowerFlowModal.tsx");
 
   it("takes the holder line from the flow", () => {
     expect(MODAL).toContain("{flow.holderLine}");

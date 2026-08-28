@@ -1,0 +1,344 @@
+{
+ "truncatedAt": 126,
+ "count": 23,
+ "actions": [
+  {
+   "index": 11,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 10,
+     "player": "p-dfaodrea",
+     "summary": "the last private company exchange"
+    }
+   }
+  },
+  {
+   "index": 18,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 4,
+     "q": 3,
+     "r": 8,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "I15"
+    }
+   }
+  },
+  {
+   "index": 20,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 1,
+     "q": 2,
+     "r": 7,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "H12"
+    }
+   }
+  },
+  {
+   "index": 30,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 5,
+     "q": 0,
+     "r": 5,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "F6"
+    }
+   }
+  },
+  {
+   "index": 34,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "tile_id": 57,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 35,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 42,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 7,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 48,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 6,
+     "tile_id": 8,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 56,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 8,
+     "tile_id": 7,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 62,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 60,
+     "player": "p-dfaodrea",
+     "summary": "the last train purchase"
+    }
+   }
+  },
+  {
+   "index": 64,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 7,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 70,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 6,
+     "tile_id": 8,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 73,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 72,
+     "player": "p-05wc61on",
+     "summary": "the last route"
+    }
+   }
+  },
+  {
+   "index": 79,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 6,
+     "q": 3,
+     "r": 4,
+     "kind": "home",
+     "city_index": 0,
+     "hex_label": "E11"
+    }
+   }
+  },
+  {
+   "index": 86,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 9,
+     "r": 1,
+     "tile_id": 58,
+     "orientation": 0,
+     "bonus_lay": true
+    }
+   }
+  },
+  {
+   "index": 87,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 7,
+     "tile_id": 57,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 95,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 7,
+     "tile_id": 14,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 102,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 4,
+     "tile_id": 59,
+     "orientation": 5,
+     "token_city": 1,
+     "token_cities": [
+      [
+       6,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 108,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 107,
+     "player": "p-dfaodrea",
+     "summary": "the last pass"
+    }
+   }
+  },
+  {
+   "index": 110,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 109,
+     "player": "p-dfaodrea",
+     "summary": "the last train purchase"
+    }
+   }
+  },
+  {
+   "index": 113,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 6,
+     "tile_id": 69,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 120,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 5,
+     "r": 7,
+     "tile_id": 59,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 126,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 8,
+     "tile_id": 53,
+     "orientation": 0,
+     "token_city": 0
+    }
+   }
+  }
+ ]
+}

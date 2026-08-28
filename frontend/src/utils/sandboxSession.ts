@@ -19,6 +19,7 @@ import type {
   WaterfallPrivateStatus,
   WaterfallStateResponse,
 } from "./gameState";
+import { bankIsBroken } from "./endgame";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
@@ -657,8 +658,42 @@ export function applyPhaseChange(
   const doomed = new Set(tiersRustedBy(arrivingTier));
   const limit = limitForTier(state, arrivingTier);
 
+  /* ==================================================================
+   *  DESIGN NOTE 897: #232'S RULE APPLIED TO THE ROSTER ITSELF, NOT ONLY TO ITS CONTENTS
+   * ==================================================================
+   *
+   * REPORTED: `fleetDiscard.test.ts` crashed with "Cannot read properties of undefined (reading 'map')" on
+   * every case whose arriving tier was 5 -- seven of its fourteen.
+   *
+   * AND THE FIXTURE WAS RIGHT. It builds a state carrying `public_companies` and nothing else, which is a
+   * legitimate partial state under this codebase's own rule: `undefined` is "the chain did not say", never
+   * "there are none". This function already honours that rule ONE LEVEL DOWN -- `owned_trains == null` returns
+   * the company untouched, three lines below, with a comment saying why. What it did not do is ask the same
+   * question of the lists themselves.
+   *
+   * SO THE BUG IS THE RULE APPLIED AT ONE DEPTH AND NOT THE OTHER, which is this project's commonest shape
+   * seen from a new angle: not two surfaces disagreeing, but one surface asking a question of a field and not
+   * of the field's container. #736 added the privates arm long after #284 wrote the fleet arm, and inherited
+   * the coordinates without the caution.
+   *
+   * ABSENT IS NOT EMPTY, AND THE FALLBACK MUST NOT SAY IT IS. `?? []` is only safe here because the result is
+   * never written back: an empty roster produces no changes, so the guarded spread below leaves the field
+   * absent exactly as it found it. Writing `public_companies: []` into the returned state would convert "the
+   * chain did not say" into "there are none" -- the precise error #232 exists to prevent, committed by the
+   * fix for it.
+   *
+   * TWO GUARDS, TWO JOBS, AND THE FIRST DRAFT OF THIS NOTE CREDITED THE WRONG ONE. It claimed the `!= null`
+   * check below was what kept the field from being invented. It is not: a negative control replacing it with
+   * `?? []` left every assertion passing, because an empty list changes nothing and `privatesChanged` stays
+   * false. What actually protects the field is the CONDITIONAL SPREAD in the return -- a control that writes
+   * `private_companies` unconditionally fails immediately.
+   * So: the `!= null` check stops the THROW, and the conditional spread stops the LIE. Recorded because a note
+   * naming the wrong mechanism is worse than no note -- the next person deletes the guard it praised and keeps
+   * the one it did not mention.
+   *
+   * See docs/ai_architecture/sandbox_reducer.md, sandboxSession.ts #897. */
   let changed = false;
-  const companies = state.public_companies.map((company) => {
+  const companies = (state.public_companies ?? []).map((company) => {
     const owned = company.owned_trains;
     // `undefined` means the chain does not report rosters. Trimming a fleet
     // this build cannot see would invent one.
@@ -705,12 +740,17 @@ export function applyPhaseChange(
    *
    * IDEMPOTENT, which matters because the Undo path replays the whole log: closing an already-closed private
    * changes nothing, so a rebuild produces the same state as the play did. */
-  const closesPrivates = closesPrivateCompanies(arrivingTier);
-  const privates = closesPrivates
-    ? state.private_companies.map((priv) => (priv.closed ? priv : { ...priv, closed: true }))
-    : state.private_companies;
-  const privatesChanged =
-    closesPrivates && privates.some((priv, at) => priv !== state.private_companies[at]);
+  /* Design note #897: AND A STATE THAT NEVER MENTIONED PRIVATES CLOSES NONE. Written as a guard rather than as
+     `?? []` because this list IS returned when it changes -- the empty-array trick that is safe for the
+     roster above would, here, be one step from writing "there are no privates" onto a state that merely never
+     said. `knownPrivates` stays exactly what the state held, absent included. */
+  const knownPrivates = state.private_companies;
+  let privates = knownPrivates;
+  let privatesChanged = false;
+  if (closesPrivateCompanies(arrivingTier) && knownPrivates != null) {
+    privates = knownPrivates.map((priv) => (priv.closed ? priv : { ...priv, closed: true }));
+    privatesChanged = privates.some((priv, at) => priv !== knownPrivates[at]);
+  }
 
   if (!changed && !privatesChanged) return state;
   return {
@@ -730,10 +770,17 @@ export function describePrivateClosures(
   before: GameStateResponse,
   after: GameStateResponse,
 ): string[] {
+  /* Design note #897: THE SAME GUARD, AND IT IS NOT DEFENSIVE PADDING. `App.tsx` calls this in the same block
+     as `describeFleetLosses`, immediately after the reducer that just stopped throwing -- so a state that
+     reaches `applyPhaseChange` without a privates list reaches this too, and this would have been the very
+     next crash. Naming NO closures for a list nobody reported is the honest answer: a closure that cannot be
+     observed must not be announced. */
   const names: string[] = [];
-  for (const priv of after.private_companies) {
+  for (const priv of after.private_companies ?? []) {
     if (!priv.closed) continue;
-    const was = before.private_companies.find((entry) => entry.private_id === priv.private_id);
+    const was = (before.private_companies ?? []).find(
+      (entry) => entry.private_id === priv.private_id,
+    );
     if (was && !was.closed) names.push(priv.name);
   }
   return names;
@@ -775,8 +822,15 @@ export function describeFleetLosses(
   const arrivingTier = derivePhase(after)?.tier ?? null;
   const losses: FleetLoss[] = [];
 
-  for (const company of after.public_companies) {
-    const was = before.public_companies.find((entry) => entry.company_id === company.company_id);
+  /* Design note #897: THE THIRD FUNCTION IN THE SAME BLOCK, GUARDED FOR THE SAME REASON. `App.tsx` runs
+     `describeFleetLosses`, `describeFleetLoss` and `describePrivateClosures` back to back on the state
+     `applyPhaseChange` just returned, so any state that can reach one can reach all of them. Fixing three of
+     the four would be the half-fix this codebase keeps producing -- the same rule asked in one authority and
+     not in its sibling. */
+  for (const company of after.public_companies ?? []) {
+    const was = (before.public_companies ?? []).find(
+      (entry) => entry.company_id === company.company_id,
+    );
     const had = was?.owned_trains;
     const has = company.owned_trains;
     // `undefined` on either side is "the chain did not say", never "owns nothing" -- the distinction #232
@@ -1679,6 +1733,44 @@ function settleRoundTransitions(
   }
 
   if (state.operating_round_just_ended) {
+    /* ==================================================================
+     *  DESIGN NOTE 898: THE BANK BREAKS, AND THE SET STILL FINISHES
+     * ==================================================================
+     *
+     * REPORTED: "If the bank breaks during an Operating Round set, players complete that current set before
+     * the game ends. If the bank breaks during a Stock Round, players complete one final set of ORs after
+     * that Stock Round before the game ends."
+     *
+     * THE OLD TRIGGER ENDED THE GAME MID-TURN. `App.tsx` derived the ending as `bankIsBroken(gameState)` on
+     * every render, so the modal appeared the instant a payout emptied the bank -- in the middle of somebody's
+     * Operating Round, with corporations still owed their runs. Two rules were missing and the derivation had
+     * nowhere to put them: it could see the bank, and it could not see the calendar.
+     *
+     * TWO REPORTED CASES, ONE CONDITION, and finding that collapse is most of this note. Written out:
+     *   break during OR set N  -> set N finishes -> game ends.
+     *   break during SR N      -> SR finishes, OR set N runs in full -> game ends.
+     * Both are "the game ends when the first OR SET COMPLETES at or after the break". So nothing anywhere
+     * needs to record WHEN the bank broke -- no `bank_broke_at` field, no macro-round comparison, no second
+     * fact to keep in step with `macro_round_number`. The transition that opens a Stock Round is exactly the
+     * moment an OR set has finished, so asking about the bank HERE answers both cases at once.
+     *
+     * AND IT HAS TO BE HERE RATHER THAN IN THE SHELL, for #1206's reason: the round machine belongs to the
+     * reducer. An ending computed in `App.tsx` is an ending one client can hold and another cannot, and it
+     * cannot be undone -- a `RevertTo` that rewinds past the break has to un-end the game, which a replay does
+     * for free and a live derivation never would.
+     *
+     * BANKRUPTCY IS STILL IMMEDIATE and is deliberately not routed through here. 1830 stops the game the
+     * moment a president cannot fund a mandatory purchase; there is no set to finish, because the corporation
+     * cannot take the turn it is in. `App.tsx` keeps that arm.
+     *
+     * See docs/ai_architecture/state_machine.md, sandboxSession.ts #898. */
+    if (bankIsBroken(state)) {
+      return {
+        ...state,
+        operating_round_just_ended: false,
+        current_round_type: "GameEnd" as const,
+      };
+    }
     return {
       ...state,
       operating_round_just_ended: false,
@@ -1987,6 +2079,25 @@ function applyOneAction(
        here would be right live and wrong on every rebuild. */
     const { protocol_id, q, r, token_city, token_cities } = msg.LayTile;
     const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
+    /* ==================================================================
+       DESIGN NOTE 891: THE GROUND HAS TO BE PAID FOR, NOT MERELY BILLED
+       ==================================================================
+       REPORTED: "B&O had $0 in its treasury and was able to lay a track tile on a terrain hex costing $80.
+       Its treasury stayed $0."
+       BOTH HALVES OF THAT SENTENCE HAVE ONE CAUSE, and it is `adjustTreasury`, which ends
+       `Math.max(0, current + delta)`. That floor is right for its other callers -- a treasury must not go
+       negative -- and here it turned an unaffordable charge into a SILENT no-op: the debit was issued, the
+       clamp swallowed it, the tile landed, and nothing anywhere said no. #723 taught this arm to charge the
+       fee once; nobody had asked whether it could be charged at all.
+       SO THE CHECK IS HERE, BEFORE THE RECORD IS BUILT. Returning the state unchanged is how every other
+       refusal in this reducer is spelled, and it refuses the WHOLE action -- the tile does not land, which is
+       the rule 1830 actually has. A corporation that cannot pay the terrain cost may not build there.
+       THE UI REFUSES FIRST (`App.tsx` #891) so a player is told rather than ignored; this is the authority
+       behind that, and it is the one that survives a replay. */
+    const layingTreasury = Number(
+      state.public_companies.find((company) => company.company_id === protocol_id)?.treasury ?? 0,
+    );
+    if (fee > 0 && (!Number.isFinite(layingTreasury) || layingTreasury < fee)) return state;
     const recorded: GameStateResponse = {
       ...state,
       terrain_fees_paid: withTerrainPaid(state.terrain_fees_paid, q, r, fee),

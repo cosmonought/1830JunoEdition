@@ -19,6 +19,8 @@
 // transform it claims to apply; the wiring is a source scan, in this file's usual shape.
 
 import { stationSlotAnchor, soleCityIndex } from "./stationTokens";
+// Design note #891: the shared source-scan helpers (#886) -- `sliceBetween` throws on a missing anchor.
+import { readSource, sliceBetween, stripComments } from "./sourceScan";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const read = (rel: string) => {
@@ -166,5 +168,50 @@ describe("the click is gone and the modal knows it", () => {
     expect(BOARD).toContain("stationSlotAnchor({");
     expect((BOARD.match(/stationSlotAnchor\(\{/g) ?? []).length).toBe(2);
     expect(BOARD).not.toContain("nextCitySlotPoint(");
+  });
+});
+
+/* ==================================================================
+    DESIGN NOTE 891 (harness): THE STAGED PLACEMENT HAD NOTHING TO COMMIT
+   ==================================================================
+   REPORTED: "when they click the modal to place the free station token and then click the green checkmark to
+   confirm its placement, it returns them to the modal prompting them to place the free station token, in a
+   loop they can only escape by forfeiting their free station placement."
+   ONE OMISSION, TWO SYMPTOMS. `handleConfirmTokenPlacement` routes a free placement to
+   `commitFreeStationPlacement`, which opens `const placement = homeStationPlacement; if (!placement) return;`
+   -- and #866's auto-stage path set `pendingToken` ALONE. So the tick committed nothing: no
+   `PlaceHomeStation` went to the log, and no `usedPrivateAbilities` entry was recorded. The second is the
+   loop: `activePowerFlow` derives the D&H's standing obligation from `usedPrivateAbilities.has("dh-token")`,
+   so an unrecorded placement raises the modal on every frame forever.
+   A SOURCE SCAN IS THE RIGHT TOOL HERE and the wrong one for the two bugs beside it. The rule is "these two
+   pieces of state are set together" -- a fact about one function's body, with no return value to interrogate
+   and no pure function to call. `terrainAffordability.test.ts` and `dividendLedge.test.ts` are behavioural
+   because their subjects are arithmetic; this one is not, and pretending otherwise would mean rendering the
+   shell to assert an assignment. */
+describe("the auto-staged free station is a placement in flight (design note #891)", () => {
+  it("sets the placement the committer reads, not only the staged token", () => {
+    const handler = sliceBetween(
+      stripComments(readSource("App.tsx")),
+      "const handleAutoStageStation = useCallback(",
+      "[actingProtocolId, armPrivateHexErrand]",
+    );
+    expect(handler).toContain("setHomeStationPlacement({");
+    /* THE ABILITY KEY IS THE HALF THAT ENDS THE LOOP. `commitFreeStationPlacement` only records a spend when
+       the placement names one -- `if (placement.abilityKey)` -- so a placement set without it would land the
+       token and leave the modal standing, which is the same bug one step quieter. */
+    expect(handler).toContain('abilityKey: "dh-token"');
+    expect(handler).toContain("setPendingToken({");
+  });
+
+  it("keeps the committer's guard, which is what made the omission silent", () => {
+    /* THE GUARD IS CORRECT AND STAYS. A committer that ran without a placement would invent a companyId and
+       an ability key; the bug was never that it returned early, it was that a caller reached it with nothing
+       set. Asserted so a future pass does not "fix" this by removing the guard. */
+    const commit = sliceBetween(
+      stripComments(readSource("App.tsx")),
+      "const commitFreeStationPlacement = useCallback(",
+      "runGameplayActionRef",
+    );
+    expect(commit).toContain("if (!placement) return;");
   });
 });

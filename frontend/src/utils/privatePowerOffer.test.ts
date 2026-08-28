@@ -20,6 +20,8 @@
 // NINTH INSTANCE OF THE SESSION'S DOMINANT SHAPE -- a rule stated in one place and never asked in the
 // authority beside it (#807, #809, #816, #820, #824, #825, #826, #831, and now this).
 
+import { readSource, stripComments } from "./sourceScan";
+
 import {
   privatePowerOfferAt,
   privatePowerHexKeys,
@@ -27,17 +29,10 @@ import {
   type PrivatePowerCandidate,
 } from "./privatePowerOffer";
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
 // #490a: every note here quotes the rule it explains.
-const strip = (source: string) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-const APP = strip(read("App.tsx"));
-const BAR = strip(read("panels/ContextualActionBar.tsx"));
+const APP = stripComments(readSource("App.tsx"));
+const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
 
 const DH: PrivatePowerCandidate = {
   privateId: 3,
@@ -168,8 +163,21 @@ describe("both doors, one question (design note #846)", () => {
        `const armPrivateHexErrand = useCallback(`, so it does not match this pattern, and the dependency
        arrays are bare identifiers -- which is what makes this a count of CALLERS.
        WHAT THE COUNT GUARDS is that nothing arms an errand without going through here, so `kind` and
-       `returnTab` cannot be decided twice. */
-    expect(APP.match(/armPrivateHexErrand\(/g) ?? []).toHaveLength(3);
+       `returnTab` cannot be decided twice.
+       DESIGN NOTE 885: TWO NOW, NOT THREE. The powers panel is deleted and its non-hex fallback with it, so
+       the remaining callers are the modal's LAY step and the modal's STATION step -- both steps, neither an
+       entry point, which is what the sentence above already said should be true of all of them.
+       AND THE COUNT IS BACKED BY IDENTITIES, because a bare `toHaveLength` cannot tell a caller that was
+       removed from one that was added: it would pass just as happily for a third path arming an errand
+       while one of the modal's two stopped. The two named below are the ones that must exist. */
+    expect(APP.match(/armPrivateHexErrand\(/g) ?? []).toHaveLength(2);
+    const act = APP.indexOf("const handlePowerFlowAct");
+    expect(act).toBeGreaterThan(-1);
+    const actEnd = APP.indexOf("const handlePowerFlowDecline", act);
+    expect(actEnd).toBeGreaterThan(act);
+    const actBody = APP.slice(act, actEnd);
+    expect(actBody).not.toBe("");
+    expect(actBody).toContain("armPrivateHexErrand(");
     expect(APP).toContain('kind: abilityKey === "dh-token" ? "private-station" : "private-tile"');
   });
 
@@ -207,24 +215,43 @@ describe("both doors, one question (design note #846)", () => {
        exchange has no hex (#312), so putting one in that list would hand the map a key nothing resolves --
        and the veil would either miss a hex or light an undefined one. Asserted as the ABSENCE of the M&H
        from the module that builds hex offers, because that is where a future tidy-up would merge them. */
-    const offers = read("utils/privatePowerOffer.ts");
+    const offers = readSource("utils/privatePowerOffer.ts");
     expect(offers).not.toContain("mh-exchange");
     expect(offers).not.toContain("MH_PRIVATE_ID");
   });
 
-  it("puts the chips before the map jump", () => {
-    /* #792's ordering argument one step over: an obligation before an exit, and here an opportunity before a
-       destination. A power is a thing you may not know you have; the map is a place you know how to reach. */
-    const chip = BAR.indexOf("key: `power-" + String.fromCharCode(36) + "{offer.abilityKey}`");
+  it("puts the chips in their own group, not among the centred actions", () => {
+    /* ==================================================================
+        DESIGN NOTE 884: THE ORDERING SURVIVES, IN A DIFFERENT CONTAINER
+       ==================================================================
+       THIS ASSERTED that the chip's `key:` appeared BEFORE `key: "go-to-map"` in `contextualButtons`, on
+       #846's reasoning -- "an opportunity before a destination" -- which is still right and is now a fact
+       about a group rather than about a position in a list. #884 moved the chips out of the centred group
+       entirely, because inside it an appearing chip pushed Pass and Lay 1 Track sideways.
+       SO THE PROPERTY BECOMES: the chips are not in `contextualButtons` at all, and they render ahead of
+       Undo in the trailing rail. `actionBarUndoRail.test.ts` holds the rail's own shape. */
+    expect(BAR).toContain("const powerChips: ActionBarButton[] =");
     const jump = BAR.indexOf('key: "go-to-map"');
-    expect(chip).toBeGreaterThan(-1);
     expect(jump).toBeGreaterThan(-1);
-    expect(chip).toBeLessThan(jump);
+    /* THE `contextualButtons` ASSIGNMENT THAT HOLDS THE MAP JUMP MUST NOT HOLD A CHIP. Bounded by the next
+       `case`, and the bound is pinned first -- an `indexOf` of -1 would give a backwards slice, i.e. `""`,
+       which satisfies the `not.toContain` below by containing nothing at all. */
+    const trackStart = BAR.lastIndexOf("contextualButtons = [", jump);
+    expect(trackStart).toBeGreaterThan(-1);
+    const trackEnd = BAR.indexOf('case "BuyPrivate":', jump);
+    expect(trackEnd).toBeGreaterThan(trackStart);
+    const trackCase = BAR.slice(trackStart, trackEnd);
+    expect(trackCase).not.toBe("");
+    expect(trackCase).not.toContain("powerOffers");
+    expect(trackCase).toContain('key: "go-to-map"');
   });
 
   it("offers no chip when the shell cannot answer one", () => {
     // The same rule the jump buttons follow: a control pointing at nothing is worse than no control.
-    expect(BAR).toContain("...(onUsePowerOffer");
+    /* Design note #884: was `"...(onUsePowerOffer"`, the spread that mixed the chips into
+       `contextualButtons`. The guard moved to the single producer and gained a second clause -- see #884 for
+       why `mayActThisTurn` belongs on it rather than being applied twice. */
+    expect(BAR).toContain("onUsePowerOffer && mayActThisTurn");
   });
 });
 

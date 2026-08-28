@@ -164,6 +164,33 @@ export interface OpenStockRoundMsg {
   OpenStockRound: Record<string, never>;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 899: CLOSING THE ROOM, AND WHY EVERY CLIENT MAY DO IT
+ * ==================================================================
+ *
+ * REQUESTED: a manual "Close Room" button during `GameEnd`, plus an auto-close timer so a table cannot be
+ * held hostage by somebody refusing to press it.
+ *
+ * THE SHAPE IS #546'S, DELIBERATELY, and its note already argued this exact case one event earlier:
+ * "IDEMPOTENT ON PURPOSE, which is what lets every client offer the button rather than electing one owner. A
+ * second copy in the log is noise, not a bug; nominating one player strands the table when they walk away."
+ * That is the whole design of the auto-close, written down before the auto-close existed. Every client runs
+ * its own fifteen-minute timer and every client dispatches; the reducer takes the first and ignores the rest.
+ *
+ * A DESIGNATED TIMER CLIENT WAS CONSIDERED AND REJECTED, and the reason is worth keeping because it is the
+ * better argument: whichever client owns the countdown can close its tab, and then the timer dies with it and
+ * the room is held hostage by exactly the person the timer was meant to route around. Redundant dispatches
+ * cost a few log rows; an elected owner costs the whole feature the moment they leave.
+ *
+ * IT IS NOT A `GameplayExecuteMsg`, on the same rule as its neighbours: that type is the contract's own
+ * message set and the authz allow-list. The on-chain settlement is a SEPARATE dispatch that this event
+ * triggers -- see `closeRoomPayout.ts` #899 -- and is stubbed until Phase 5.
+ *
+ * See docs/ai_architecture/state_machine.md, gameSetup.ts #899. */
+export interface CloseRoomMsg {
+  CloseRoom: Record<string, never>;
+}
+
 /* Design note #550: EVERY DECISION GOES IN THE LOG, OR IT IS NOT SHARED. Reported: P1 won the B&O and set
    its par, P1 could see themselves as president, P2 could not -- and then tried to buy the same certificate.
    The handler wrote the presidency, the par and the market mark straight into local state, and its own note
@@ -341,6 +368,7 @@ export type SandboxLogMsg =
   | GameplayExecuteMsg
   | SetupGameMsg
   | OpenStockRoundMsg
+  | CloseRoomMsg
   | SetBoParMsg
   | PlaceHomeStationMsg
   | ExchangePrivateMsg
@@ -374,6 +402,10 @@ export function isOpenStockRoundMsg(msg: unknown): msg is OpenStockRoundMsg {
   return typeof msg === "object" && msg !== null && "OpenStockRound" in msg;
 }
 
+export function isCloseRoomMsg(msg: unknown): msg is CloseRoomMsg {
+  return typeof msg === "object" && msg !== null && "CloseRoom" in msg;
+}
+
 export function isSetBoParMsg(msg: unknown): msg is SetBoParMsg {
   return typeof msg === "object" && msg !== null && "SetBoPar" in msg;
 }
@@ -399,6 +431,8 @@ export function isSandboxOnlyMsg(
   msg is
     | SetupGameMsg
     | OpenStockRoundMsg
+    // Design note #899: the room closure, which the chain has never heard of either.
+    | CloseRoomMsg
     | SetBoParMsg
     | PlaceHomeStationMsg
     | ExchangePrivateMsg
@@ -413,6 +447,7 @@ export function isSandboxOnlyMsg(
   return (
     isSetupGameMsg(msg) ||
     isOpenStockRoundMsg(msg) ||
+    isCloseRoomMsg(msg) ||
     isSetBoParMsg(msg) ||
     isPlaceHomeStationMsg(msg) ||
     isExchangePrivateMsg(msg) ||

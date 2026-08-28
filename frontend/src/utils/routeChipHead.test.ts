@@ -11,21 +11,16 @@
 // THREE CLAIMS TO KEEP, and they are separable, so they get separate tests: the glyph draws the reach, the
 // ink comes from the one function that owns route colour, and the head matches the chip it belongs to.
 
+import { readSource, stripComments } from "./sourceScan";
+
 import { routeTrainColor, ROUTE_TRAIN_COLORS } from "../styles/routeLivery";
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
 /* #490a: the note below quotes the markup it replaced, so code assertions read a comment-stripped copy. */
-const strip = (source: string) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
-const RAW = read("components/RouteChipDetail.tsx");
-const DETAIL = strip(RAW);
-const GLYPH = strip(read("components/TrainGlyph.tsx"));
-const APP_STYLES = strip(read("styles/appStyles.ts"));
+const RAW = readSource("components/RouteChipDetail.tsx");
+const DETAIL = stripComments(RAW);
+const GLYPH = stripComments(readSource("components/TrainGlyph.tsx"));
+const APP_STYLES = stripComments(readSource("styles/appStyles.ts"));
 
 describe("the glyph is the revenue-centre marks", () => {
   it("draws one carriage per revenue centre the train reaches", () => {

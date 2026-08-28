@@ -29,21 +29,16 @@
 // AND THIS IS THE CLASS #732's SWEEP LEFT OPEN -- "~38 unverified `border`/`borderColor` shorthand pairs",
 // noted and never checked. It has now produced a user-visible report, which is the argument for finishing it.
 
+import { readSource, stripComments } from "./sourceScan";
+
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "./privateCatalog";
 import { SANDBOX_PRIVATES } from "./sandboxState";
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
 // #490a: the notes below quote the broken declaration while explaining it.
-const strip = (source: string) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-const PANEL_RAW = read("components/PrivateTradePanel.tsx");
-const PANEL = strip(PANEL_RAW);
-const RULES = strip(read("components/RulesReference.tsx"));
+const PANEL_RAW = readSource("components/PrivateTradePanel.tsx");
+const PANEL = stripComments(PANEL_RAW);
+const RULES = stripComments(readSource("components/RulesReference.tsx"));
 
 describe("no shorthand a sibling state overrides (design note #840)", () => {
   it("declares the row's border as longhands", () => {

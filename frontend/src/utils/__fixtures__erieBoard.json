@@ -1,0 +1,2071 @@
+{
+ "roomCode": "JUNO-Y8V",
+ "throughIndex": 651,
+ "actions": [
+  {
+   "index": 11,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 10,
+     "player": "p-dfaodrea",
+     "summary": "the last private company exchange"
+    }
+   }
+  },
+  {
+   "index": 18,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 4,
+     "q": 3,
+     "r": 8,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "I15"
+    }
+   }
+  },
+  {
+   "index": 20,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 1,
+     "q": 2,
+     "r": 7,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "H12"
+    }
+   }
+  },
+  {
+   "index": 30,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 5,
+     "q": 0,
+     "r": 5,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "F6"
+    }
+   }
+  },
+  {
+   "index": 34,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "tile_id": 57,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 35,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 42,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 7,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 48,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 6,
+     "tile_id": 8,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 56,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 8,
+     "tile_id": 7,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 62,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 60,
+     "player": "p-dfaodrea",
+     "summary": "the last train purchase"
+    }
+   }
+  },
+  {
+   "index": 64,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 7,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 70,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 6,
+     "tile_id": 8,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 73,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 72,
+     "player": "p-05wc61on",
+     "summary": "the last route"
+    }
+   }
+  },
+  {
+   "index": 79,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 6,
+     "q": 3,
+     "r": 4,
+     "kind": "home",
+     "city_index": 0,
+     "hex_label": "E11"
+    }
+   }
+  },
+  {
+   "index": 86,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 9,
+     "r": 1,
+     "tile_id": 58,
+     "orientation": 0,
+     "bonus_lay": true
+    }
+   }
+  },
+  {
+   "index": 87,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 7,
+     "tile_id": 57,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 95,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 7,
+     "tile_id": 14,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 102,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 4,
+     "tile_id": 59,
+     "orientation": 5,
+     "token_city": 1,
+     "token_cities": [
+      [
+       6,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 108,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 107,
+     "player": "p-dfaodrea",
+     "summary": "the last pass"
+    }
+   }
+  },
+  {
+   "index": 110,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 109,
+     "player": "p-dfaodrea",
+     "summary": "the last train purchase"
+    }
+   }
+  },
+  {
+   "index": 113,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 6,
+     "tile_id": 69,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 120,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 5,
+     "r": 7,
+     "tile_id": 59,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 126,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 8,
+     "tile_id": 53,
+     "orientation": 0,
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 127,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 7,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 133,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 7,
+     "tile_id": 8,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 134,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 5,
+     "r": 7,
+     "city_index": 1
+    }
+   }
+  },
+  {
+   "index": 136,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 135,
+     "player": "p-05wc61on",
+     "summary": "the last route"
+    }
+   }
+  },
+  {
+   "index": 141,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 4,
+     "r": 3,
+     "tile_id": 8,
+     "orientation": 4
+    }
+   }
+  },
+  {
+   "index": 142,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 5,
+     "r": 3
+    }
+   }
+  },
+  {
+   "index": 152,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 7,
+     "q": 6,
+     "r": 6,
+     "kind": "home",
+     "city_index": 0,
+     "hex_label": "G19"
+    }
+   }
+  },
+  {
+   "index": 161,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "tile_id": 14,
+     "orientation": 1,
+     "token_city": 0,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 168,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 5,
+     "r": 5,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 174,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 5,
+     "tile_id": 1,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 181,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 7,
+     "tile_id": 24,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 187,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 4,
+     "r": 3,
+     "tile_id": 23,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 189,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 187,
+     "player": "p-dfaodrea",
+     "summary": "the last tile lay"
+    }
+   }
+  },
+  {
+   "index": 190,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 4,
+     "r": 3,
+     "tile_id": 16,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 196,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 8,
+     "tile_id": 7,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 202,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 7,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 208,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 7,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 214,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 8,
+     "r": 5,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 215,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 8,
+     "r": 5,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 220,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 4,
+     "r": 4,
+     "tile_id": 7,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 230,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 3,
+     "q": 9,
+     "r": 0,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "A19"
+    }
+   }
+  },
+  {
+   "index": 236,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 8,
+     "tile_id": 61,
+     "orientation": 0,
+     "token_city": 0,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 241,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": -2,
+     "r": 7,
+     "tile_id": 14,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 246,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -3,
+     "r": 8,
+     "tile_id": 9,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 247,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 7,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 251,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 6,
+     "tile_id": 54,
+     "orientation": 1,
+     "token_city": 0,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 256,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 10,
+     "r": 1,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 262,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 4,
+     "tile_id": 65,
+     "orientation": 5,
+     "token_city": 1,
+     "token_cities": [
+      [
+       6,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 264,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 262,
+     "player": "p-dfaodrea",
+     "summary": "the last tile lay"
+    }
+   }
+  },
+  {
+   "index": 265,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 4,
+     "tile_id": 65,
+     "orientation": 5,
+     "token_city": 1,
+     "token_cities": [
+      [
+       6,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 272,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 270,
+     "player": "p-dfaodrea",
+     "summary": "the last skipped step"
+    }
+   }
+  },
+  {
+   "index": 273,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 5,
+     "r": 7,
+     "tile_id": 67,
+     "orientation": 5,
+     "token_city": 1,
+     "token_cities": [
+      [
+       5,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 278,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 7,
+     "tile_id": 63,
+     "orientation": 0,
+     "token_city": 0,
+     "token_cities": [
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 283,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 5,
+     "tile_id": 8,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 288,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 5,
+     "r": 6,
+     "tile_id": 56,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 293,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 3,
+     "tile_id": 59,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 298,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 8,
+     "r": 1,
+     "tile_id": 8,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 303,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 6,
+     "r": 6,
+     "tile_id": 62,
+     "orientation": 1,
+     "token_city": 0,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 306,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 305,
+     "player": "p-dfaodrea",
+     "summary": "the last route"
+    }
+   }
+  },
+  {
+   "index": 307,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 304,
+     "player": "p-dfaodrea",
+     "summary": "the last skipped step"
+    }
+   }
+  },
+  {
+   "index": 308,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 6,
+     "r": 6,
+     "city_index": 1
+    }
+   }
+  },
+  {
+   "index": 309,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 308,
+     "player": "p-dfaodrea",
+     "summary": "the last station placement"
+    }
+   }
+  },
+  {
+   "index": 310,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 6,
+     "r": 6,
+     "city_index": 1
+    }
+   }
+  },
+  {
+   "index": 314,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 6,
+     "tile_id": 7,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 319,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 3,
+     "tile_id": 68,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 324,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 9,
+     "r": 4,
+     "tile_id": 53,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 329,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 7,
+     "r": 1,
+     "tile_id": 57,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 334,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 4,
+     "r": 6,
+     "tile_id": 27,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 341,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 2,
+     "q": 7,
+     "r": 4,
+     "kind": "home",
+     "city_index": null,
+     "hex_label": "E19"
+    }
+   }
+  },
+  {
+   "index": 345,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceHomeStation": {
+     "company_id": 8,
+     "q": 9,
+     "r": 4,
+     "kind": "home",
+     "city_index": 0,
+     "hex_label": "E23"
+    }
+   }
+  },
+  {
+   "index": 356,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 5,
+     "tile_id": 7,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 361,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 6,
+     "r": 5,
+     "tile_id": 24,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 366,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 8,
+     "r": 5,
+     "tile_id": 15,
+     "orientation": 0,
+     "token_city": 0,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 371,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 6,
+     "r": 1,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 376,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 2,
+     "r": 3,
+     "tile_id": 8,
+     "orientation": 4
+    }
+   }
+  },
+  {
+   "index": 381,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 9,
+     "r": 4,
+     "tile_id": 61,
+     "orientation": 1,
+     "token_city": 0,
+     "token_cities": [
+      [
+       8,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 387,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 4,
+     "r": 5,
+     "tile_id": 26,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 392,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 7,
+     "r": 4,
+     "tile_id": 57,
+     "orientation": 0,
+     "token_city": 0,
+     "token_cities": [
+      [
+       2,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 398,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 5,
+     "tile_id": 44,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 402,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 401,
+     "player": "p-dfaodrea",
+     "summary": "the last dividend decision"
+    }
+   }
+  },
+  {
+   "index": 404,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 403,
+     "player": "p-dfaodrea",
+     "summary": "the last dividend decision"
+    }
+   }
+  },
+  {
+   "index": 407,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 4,
+     "r": 4,
+     "tile_id": 26,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 413,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 3,
+     "r": 5,
+     "tile_id": 8,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 418,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 5,
+     "r": 1,
+     "tile_id": 8,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 423,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 1,
+     "r": 4,
+     "tile_id": 58,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 428,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 6,
+     "tile_id": 24,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 434,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 8,
+     "r": 4,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 439,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 7,
+     "r": 4,
+     "tile_id": 14,
+     "orientation": 3,
+     "token_city": 0,
+     "token_cities": [
+      [
+       2,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 444,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 8,
+     "r": 4,
+     "tile_id": 19,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 450,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 0,
+     "r": 4,
+     "tile_id": 59,
+     "orientation": 4
+    }
+   }
+  },
+  {
+   "index": 455,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 8,
+     "r": 1,
+     "tile_id": 25,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 460,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 5,
+     "r": 5,
+     "tile_id": 15,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 465,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 0,
+     "r": 4,
+     "tile_id": 64,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 472,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 7,
+     "r": 4,
+     "tile_id": 63,
+     "orientation": 0,
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 477,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 6,
+     "tile_id": 43,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 482,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 6,
+     "r": 5,
+     "tile_id": 46,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 493,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": -1,
+     "r": 5,
+     "tile_id": 57,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 495,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 493,
+     "player": "p-dfaodrea",
+     "summary": "the last tile lay"
+    }
+   }
+  },
+  {
+   "index": 496,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 0,
+     "r": 3,
+     "tile_id": 3,
+     "orientation": 4
+    }
+   }
+  },
+  {
+   "index": 501,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 8,
+     "r": 2,
+     "tile_id": 9,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 506,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 5,
+     "tile_id": 57,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 508,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 506,
+     "player": "p-05wc61on",
+     "summary": "the last tile lay"
+    }
+   }
+  },
+  {
+   "index": 509,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 8,
+     "r": 4,
+     "tile_id": 45,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 514,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 8,
+     "r": 3,
+     "tile_id": 9,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 519,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 8,
+     "r": 3,
+     "tile_id": 24,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 524,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 4,
+     "r": 4,
+     "tile_id": 42,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 529,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 7,
+     "tile_id": 63,
+     "orientation": 0,
+     "token_city": 0,
+     "token_cities": [
+      [
+       5,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 534,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 8,
+     "r": 1,
+     "tile_id": 46,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 539,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 7,
+     "r": 1,
+     "tile_id": 14,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 544,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 5,
+     "r": 2,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 545,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "PlaceStationToken": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 7,
+     "r": 1,
+     "city_index": 0
+    }
+   }
+  },
+  {
+   "index": 549,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 7,
+     "tile_id": 24,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 554,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 4,
+     "r": 2,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 559,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 3,
+     "r": 2,
+     "tile_id": 7,
+     "orientation": 5
+    }
+   }
+  },
+  {
+   "index": 565,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": -1,
+     "r": 4,
+     "tile_id": 7,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 570,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 1,
+     "r": 7,
+     "tile_id": 14,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 575,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 7,
+     "r": 3,
+     "tile_id": 8,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 580,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 7,
+     "tile_id": 47,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 585,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 5,
+     "tile_id": 57,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 590,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": -1,
+     "r": 4,
+     "tile_id": 28,
+     "orientation": 1
+    }
+   }
+  },
+  {
+   "index": 595,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 8,
+     "r": 2,
+     "tile_id": 24,
+     "orientation": 2
+    }
+   }
+  },
+  {
+   "index": 600,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 6,
+     "r": 3,
+     "tile_id": 9,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 605,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 5,
+     "q": 4,
+     "r": 3,
+     "tile_id": 43,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 610,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 3,
+     "tile_id": 25,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 613,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "RevertTo": {
+     "index": 612,
+     "player": "p-dfaodrea",
+     "summary": "the last route"
+    }
+   }
+  },
+  {
+   "index": 617,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 2,
+     "q": 3,
+     "r": 2,
+     "tile_id": 26,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 624,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 2,
+     "tile_id": 42,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 629,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 2,
+     "r": 2,
+     "tile_id": 8,
+     "orientation": 4
+    }
+   }
+  },
+  {
+   "index": 634,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 3,
+     "q": 1,
+     "r": 3,
+     "tile_id": 7,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 639,
+   "actor": "p-05wc61on",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 8,
+     "q": 2,
+     "r": 3,
+     "tile_id": 23,
+     "orientation": 0
+    }
+   }
+  },
+  {
+   "index": 644,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 2,
+     "r": 3,
+     "tile_id": 41,
+     "orientation": 3
+    }
+   }
+  },
+  {
+   "index": 649,
+   "actor": "p-dfaodrea",
+   "derived": false,
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "protocol_id": 6,
+     "q": 7,
+     "r": 3,
+     "tile_id": 40,
+     "orientation": 1
+    }
+   }
+  }
+ ]
+}

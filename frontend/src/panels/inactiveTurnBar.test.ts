@@ -72,7 +72,20 @@ const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""
 const ACTION_SURFACES: ReadonlyArray<{ what: string; marker: RegExp }> = [
   { what: "the train purchase panel", marker: /orStep === "Hardware" && trainPurchase/ },
   { what: "the must-buy-a-train notice", marker: /orStep === "Hardware" && mustBuyTrain/ },
-  { what: "the dividend payout panel", marker: /orSubPhase === "Dividends" &&/ },
+  /* ==================================================================
+      DESIGN NOTE 890: THE DIVIDEND READOUT LEAVES THIS LIST
+     ==================================================================
+     THE ENTRY READ `{ what: "the dividend payout panel", marker: /orSubPhase === "Dividends" &&/ }`, and
+     this table's rule is that the marked surface must have `mayActThisTurn` immediately in front of it.
+     #691 PUT IT HERE AND THE REPORT WITHDREW THE REASON: "the payout table and the two market moves are the
+     INPUTS to Pay and Withhold. With those buttons gone on an inactive screen, the inputs describe a choice
+     the reader is not making." Asked for directly -- "non-active players can see the operating corporation's
+     payout and withhold information ... without the action buttons" -- because the table also says what
+     every OTHER player is about to be paid, which is a fact about their own cash stated nowhere else before
+     it happens.
+     THIS IS THE SAME SHAPE AS CAUSE TWO ABOVE, one surface later: a readout that was listed as an action
+     because in #691's day it only ever appeared beside one. The buttons keep their gate; the numbers do not
+     need it. Moved to "what an inactive player keeps", where its real rule now lives. */
 ];
 
 describe("an inactive player's Operating Round bar", () => {
@@ -102,11 +115,24 @@ describe("an inactive player's Operating Round bar", () => {
 });
 
 describe("what an inactive player keeps", () => {
+  it("sees the dividend readout, without the controls that act on it", () => {
+    /* Design note #890: the half of the old ACTION_SURFACES entry that survives. The readout travels to
+       every seat; Pay and Withhold do not, and #740's rule -- "eight greyed buttons on four screens describe
+       somebody else's decision" -- is about exactly that pair. Asserted together so a future pass cannot
+       read the ungated readout as permission to ungate the buttons. */
+    expect(CODE).toContain('{orSubPhase === "Dividends" && (');
+    expect(CODE).toMatch(/mayActThisTurn && orSubPhase !== "Hardware"/);
+  });
+
   it("is told who is operating", () => {
     /* The report asks for the current player and corporation, and #740 relies on
        it too -- "the acting corporation is already named across the top of the
        bar". If that line ever goes, the hiding becomes a blank panel. */
-    expect(CODE).toMatch(/!mayActThisTurn && \(/);
+    /* Design note #890: the guard gained a clause -- `!mayActThisTurn && orSubPhase !== "Dividends"`. In
+       that step the payout readout is now in the centre column saying far more than this sentence does. The
+       regex is widened rather than re-pinned, because what this test protects is that the line is TURN-GATED
+       and present, not the exact set of steps it sits out. */
+    expect(CODE).toMatch(/!mayActThisTurn &&/);
     expect(SOURCE).toMatch(/is operating — its president has the controls/);
   });
 

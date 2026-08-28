@@ -309,6 +309,40 @@ export interface MarketProjection {
    so a price-keyed search projected a par-boxed company from the top row ($67 -> $60 instead of $65).
    Takes a nullable entry so callers can pass a `MarketPositionEntry` straight through. Clamps at the
    edge -- `moves` is false and the marker stays, never an invented cell. */
+/* ==================================================================
+    DESIGN NOTE 891: THE ROW ENDS AND THE TOKEN DOES NOT STOP
+   ==================================================================
+
+   REPORTED: "When a corporation's share price is at a ledge where its movement is supposed to move up if it
+   pays dividends, the market move reads: 'Market move: $100 -> $100 (already at the top of its row).' This is
+   wrong. It is NOT at the top of its row, it's at the right edge of its row. It should read 100 > 110 (at the
+   right edge of its row, moving up). Game-breaking bug: upon paying dividends, the corporation's share price
+   did not actually move up."
+
+   THE HEADER ABOVE ADMITTED THIS IN WRITING. #187: "it models only the two ORDINARY moves. Ledges, the right
+   cliff and the sold-out rise are `market.rs`'s; a step that would leave the chart clamps. The contract
+   remains the authority." That was an honest scope statement and it stopped being true of the SANDBOX the
+   moment the sandbox became the thing people play: `App.tsx` wires `ctx.projectDividend` to
+   `projectDividendCellMove`, so this arithmetic is not merely the readout -- it IS the move. A clamp here is
+   a share price that does not rise.
+
+   THE RULE IS ONE STEP, NOT A CLAMP. In 1830 a payout moves the token RIGHT; from the rightmost cell of a row
+   it moves UP instead. A withhold moves LEFT; from the leftmost cell it moves DOWN. Only when THAT cell is
+   missing too is the token genuinely at an edge of the chart.
+   `y + 1` IS UP on this grid, and `y - 1` is down -- the axis is inverted relative to the screen, which
+   `projectShareSaleMove` records as the bug it once caused ("`y + 1` walked up and a sale RAISED the price").
+   Both directions are spelled here rather than derived from a sign, because the two mistakes are symmetrical
+   and a shared expression would make them one edit apart. */
+function dividendStepFrom(
+  from: { x: number; y: number },
+  choice: "pay" | "withhold",
+): PriceCell | undefined {
+  const along = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
+  if (along) return along;
+  /* THE LEDGE. Nothing further along the row, so the token turns -- up on a payout, down on a withhold. */
+  return cellAt(from.x, from.y + (choice === "pay" ? 1 : -1));
+}
+
 export function projectDividendFrom(
   from: { x: number; y: number; price?: string | null } | null | undefined,
   choice: "pay" | "withhold",
@@ -316,7 +350,7 @@ export function projectDividendFrom(
   if (!from) return null;
   const start = cellAt(from.x, from.y);
   if (!start) return null;
-  const next = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
+  const next = dividendStepFrom(start, choice);
   return next ? { price: next.price, moves: true } : { price: start.price, moves: false };
 }
 
@@ -373,7 +407,11 @@ export function projectDividendCellMove(
 ): { price: number; x: number; y: number } | null {
   const start = cellAt(from.x, from.y);
   if (!start) return null;
-  const next = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
+  /* Design note #891: THE SAME STEP THE READOUT USES. This is the arm the sandbox reducer calls
+     (`App.tsx`: `projectDividend: (from, choice) => projectDividendCellMove(from, choice)`), so the two
+     sharing one rule is what stops the bar promising a rise the board does not perform -- which is the
+     failure the report describes from both ends in one sentence. */
+  const next = dividendStepFrom(start, choice);
   return next ? { price: next.price, x: next.x, y: next.y } : start;
 }
 

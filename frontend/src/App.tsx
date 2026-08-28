@@ -34,6 +34,8 @@ import HexGridRenderer, {
 } from "./components/HexGridRenderer";
 import { assignRouteSet } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork, stationTokensOf, type StationToken } from "./utils/trackReach";
+// Design note #888: which hexes the Lay Track jump frames, and the camera pose that frames them.
+import { chooseFrameKeys } from "./utils/frameHexes";
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
@@ -45,10 +47,7 @@ import {
   // response has not named, so the cursor still carries a herald.
   stationTickerLabel,
 } from "./components/hexContractTypes";
-import {
-  type PrivateAbility,
-  type PrivateAbilityAction,
-} from "./components/PrivatePowerPanel";
+// Design note #885: `PrivateAbility` / `PrivateAbilityAction` came from `PrivatePowerPanel`, which is gone.
 import { corporationPrivateCompanies } from "./utils/gameState";
 import type { TrainRouteDraft } from "./components/RoutePlannerPanel";
 import {
@@ -68,6 +67,7 @@ import {
   BANK_START,
   MIN_PLAYERS,
   dealSandboxGame,
+  isCloseRoomMsg,
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
   isExchangePrivateMsg,
@@ -210,11 +210,10 @@ import {
   privatePowerOfferAt,
   privatePowerOffers,
 } from "./utils/privatePowerOffer";
-import {
-  powerFlowOpen,
-  privatePowerFlow,
-  type PowerAbilityKey,
-} from "./utils/privatePowerFlow";
+/* Design note #887: `privatePowerFlow` itself is no longer imported here. The shell used to CALL it, in the
+   memo that decided which flow was open; that decision moved to `activePrivatePower.ts`, which calls it
+   instead. What is left is the open/closed predicate and the key type -- the two things the render needs. */
+import { powerFlowOpen, type PowerAbilityKey } from "./utils/privatePowerFlow";
 // Design note #729: which cities a corporation may not run through.
 import { cityBlockerFor } from "./utils/cityBlocking";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
@@ -271,6 +270,7 @@ import {
   type AutoPassConditions,
 } from "./utils/autoPass";
 import AutoPassModal from "./components/AutoPassModal";
+import FleetLossModal from "./components/FleetLossModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
@@ -317,8 +317,21 @@ import {
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
-import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE } from "./utils/endgame";
+import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
+import {
+  AUTO_CLOSE_MS,
+  formatCountdown,
+  settleRoomPayout,
+} from "./utils/closeRoomPayout";
+import {
+  fleetLossNotices,
+  isNoticeSilenced,
+  nextDueNotice,
+  noticeDismissKey,
+  setNoticeSilenced,
+  type FleetLossNotice,
+} from "./utils/fleetLossNotice";
 import { dividendRefused } from "./utils/dividendGate";
 import { dividendSplit } from "./utils/dividendSplit";
 import {
@@ -424,7 +437,16 @@ import SeatOrderTrail from "./components/SeatOrderTrail";
 import { passedSeatIndices } from "./utils/passedSeats";
 // Design note #628: how many copies of a tile are still in the tray.
 import { tileStock } from "./utils/tileSupply";
+/* Design note #881 added `privateAcronym` here for the Stock Round chip label; design note #887 moved that
+   label into `activePrivatePower.ts`, which imports the lookup directly. The catalog itself is still read
+   here for other surfaces. */
 import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
+// Design note #887: the shell's private-power derivations, extracted so a test can call them.
+import {
+  deriveActivePowerFlow,
+  ownsPrivateByCorporation,
+  stockRoundExchangeOffers,
+} from "./utils/activePrivatePower";
 import { playerFinances } from "./utils/playerFinance";
 import {
   applyPrivateExchange,
@@ -468,18 +490,10 @@ const ALL_TILE_PLACEMENTS = localCatalogPlacements();
    rather than redeclared, because the map overlay below keys rival routes the same way and a second literal
    1000 is how that join quietly breaks. */
 
-/** Design note #727: whether the ACTING CORPORATION holds a private -- `owner_protocol_id`, not `owner`.
- *  A power belongs to the railroad, not to the president personally (#441), so the player's own certificate
- *  says nothing about whether the corporation now operating may use it. */
-function ownsPrivate(
-  state: GameStateResponse | null,
-  privateId: number,
-  protocolId: number | null,
-): boolean {
-  if (protocolId == null) return false;
-  const entry = state?.private_companies?.find((row) => row.private_id === privateId);
-  return !!entry && entry.owner_protocol_id === protocolId;
-}
+/* Design note #887: `ownsPrivate` MOVED to `activePrivatePower.ts` as `ownsPrivateByCorporation`, with
+   #727's note. It was module-private here -- not exported, so not callable, so the corporate half of #441's
+   scope rule could only ever be asserted as a string. Renamed on the way out because `ownsPrivate` reads as
+   "does anyone own it"; the question it answers is whether the OPERATING CORPORATION does. */
 
 /* Move-only extraction: ~3,500 lines left this file for panels/, styles/ and utils/.
    See docs/ai_architecture/ui_shell_layout.md - App.tsx #382 */
@@ -589,6 +603,26 @@ interface AppShellProps {
   mode: BoardMode;
 }
 
+/* Design note #900: the reopen pill. Bottom-centre rather than in the action bar, because during `GameEnd`
+   the bar carries the Close Room control and two end-of-game buttons side by side read as a choice between
+   them. */
+const gameOverReopenStyle: React.CSSProperties = {
+  position: "fixed",
+  left: "50%",
+  bottom: "18px",
+  transform: "translateX(-50%)",
+  zIndex: 1500,
+  padding: "8px 16px",
+  borderRadius: "999px",
+  border: "1px solid #7a6320",
+  backgroundColor: "#241d0e",
+  color: "#f0dfa8",
+  fontSize: "13px",
+  fontWeight: 700,
+  cursor: "pointer",
+  boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+};
+
 function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
@@ -670,7 +704,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #573b: the last refusal, for the panel. A REASON rather than
      a boolean -- "you cannot" sends the player looking for why, and the
      answer ("you hold 60% of the PRR") is the whole content of the message. */
-  const [privateAbilityError, setPrivateAbilityError] = useState<string | null>(null);
+  /* ==================================================================
+      DESIGN NOTE 882: THE REASON KNOWS WHICH POWER IT IS ABOUT
+     ==================================================================
+
+     WAS `useState<string | null>`, and the string was written by `runPrivateExchange` and read by
+     `PrivatePowerPanel`'s error line. That worked while the panel was the only surface, because the panel
+     showed every power at once and the sentence named its own company.
+
+     A BARE STRING IS A PROXY THAT STOPPED STANDING FOR ITS SUBJECT. The refusal now renders inside the flow
+     modal, which shows ONE power -- so "the last refusal" has to answer "the last refusal FOR THIS POWER",
+     and a lone string cannot. Left as a string, a refused M&H exchange would still be on screen inside a
+     D&H modal raised two minutes later by the standing station obligation, attached to a power it says
+     nothing about.
+     SCOPED BY KEY, NOT CLEARED ON A TIMER OR ON EVERY OPEN. The match is computed where the modal is
+     mounted, so a refusal belonging to another power cannot be shown at all rather than being cleared before
+     it gets the chance -- the difference between a rule and a habit. Clearing on a fresh attempt is still
+     done at the two doors, because a SAME-power refusal can go stale (sell the share, ask again) and no
+     amount of scoping catches that one. */
+  const [privatePowerRefusal, setPrivatePowerRefusal] = useState<{
+    abilityKey: PowerAbilityKey;
+    reason: string;
+  } | null>(null);
 
 
   // Display name read once at mount; a rename must not rewrite bylines on messages already sent.
@@ -855,6 +910,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const queued = gameState?.active_operating_order[gameState.active_corporation_index];
     return queued ?? MOCK_LAY_TILE_PROTOCOL_ID;
   }, [gameState]);
+
+  /* ==================================================================
+      DESIGN NOTE 896: THE TRAINS A CORPORATION LOST WHILE IT WAS NOT ACTING
+     ==================================================================
+     Queued by the phase-change block below, drained at the top of the owning corporation's turn. A REF PLUS A
+     MIRROR, which is the same shape the par-mark reconcile beside that block uses and for the same reason: the
+     queue is written inside a dispatch that runs before React commits, so the ref is the truth and the state
+     exists to make the modal re-render.
+     `dismissed` IS A REF AND NOT STATE on purpose -- nothing renders from it, and putting it in state would
+     re-run the memo that reads it every time it grew. */
+  /* Design note #899: the standings and the trigger the closure handler needs, mirrored during render. The
+     handler runs inside a dispatch and cannot read a `useMemo` from a later line; a ref written during render
+     is the same arrangement `gameStateRef` uses two hundred lines up, for the same reason. */
+  const finalStandingsRef = useRef<PlayerStanding[]>([]);
+  const closeRoomTriggerRef = useRef<"manual" | "timer">("manual");
+
+  const pendingFleetNoticesRef = useRef<FleetLossNotice[]>([]);
+  const [pendingFleetNotices, setPendingFleetNotices] = useState<FleetLossNotice[]>([]);
+  const dismissedFleetNoticesRef = useRef<Set<string>>(new Set());
 
   // Renders the whole depot tier by tier; depotInventory already applies the cheapest-first queue rule.
   // See docs/ai_architecture/contract_economy.md - App.tsx #203
@@ -1216,9 +1290,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
   const gameEndReason = useMemo<GameEndReason | null>(() => {
     if (emergencyPurchasePlan?.bankrupt) return "bankruptcy";
-    if (sandbox && bankIsBroken(gameState)) return "bank-broken";
+    /* ==================================================================
+        DESIGN NOTE 898: THE ROUND SAYS SO, NOT THE BANK BALANCE
+       ==================================================================
+       WAS `sandbox && bankIsBroken(gameState)`, which ended the game the instant a payout emptied the bank --
+       mid-turn, with corporations still owed their runs. The rule 1830 actually has is that the current
+       Operating Round SET finishes first, and a derivation over the bank balance has no way to express a
+       calendar.
+       The reducer now owns it: `settleRoundTransitions` enters `GameEnd` when the first OR set completes at
+       or after the break, which covers both reported cases with one condition. This reads that decision
+       rather than re-deriving it -- two surfaces answering one question two ways is the bug this codebase
+       produces most, and the bank balance is still sitting right there to be asked. */
+    if (gameState?.current_round_type === "GameEnd") return "bank-broken";
     return null;
-  }, [emergencyPurchasePlan, sandbox, gameState]);
+  }, [emergencyPurchasePlan, gameState]);
 
   const bankruptLabel = emergencyPurchasePlan?.bankrupt
     ? emergencyPurchasePlan.presidentLabel
@@ -1239,6 +1324,78 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       totalAnte: PLACEHOLDER_TOTAL_ANTE,
     });
   }, [gameEndReason, gameState, sandbox, sandboxMarketPrices, emergencyPurchasePlan]);
+
+  /* Design note #899: HOISTED ABOVE ITS FIRST READER. `closeRoom` below calls through this ref, and it was
+     declared two thousand lines lower -- fine for the callers that came after it, a temporal-dead-zone error
+     for one that comes before. Moving the declaration is safer than moving the closure block, which depends
+     on the standings above it. */
+  const runGameplayActionRef = useRef<
+    | ((
+        fallbackLabel: string,
+        msg: SandboxLogMsg,
+        options?: { automatic?: boolean },
+      ) => Promise<void> | void)
+    | null
+  >(null);
+
+  /* Design note #899: mirrored for the closure handler, which runs inside a dispatch. */
+  finalStandingsRef.current = finalStandings;
+
+  /** Design note #899: the room's closure, and whether anything is still counting down toward it. */
+  const roomClosed = gameState?.room_closed === true;
+
+  /* ==================================================================
+      DESIGN NOTE 899: EVERY CLIENT COUNTS DOWN, AND THAT IS THE POINT
+     ==================================================================
+     A single elected timekeeper dies with their browser tab, and then the room is held hostage by exactly the
+     person the countdown was meant to route around. So all of them count, all of them dispatch, and the
+     reducer takes the first -- #546's rule, which argued this before the countdown existed.
+     THE DEADLINE IS DERIVED FROM WHEN THE GAME ENDED, not from when this effect mounted. A player who opens
+     the tab ten minutes late must not restart the clock, and one who refreshes must not either. */
+  const [gameEndedAt, setGameEndedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!gameEndReason) {
+      setGameEndedAt(null);
+      return;
+    }
+    setGameEndedAt((current) => current ?? Date.now());
+  }, [gameEndReason]);
+
+  useEffect(() => {
+    if (!gameEndReason || roomClosed || gameEndedAt === null) return undefined;
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [gameEndReason, roomClosed, gameEndedAt]);
+
+  const autoCloseRemaining =
+    gameEndedAt === null || roomClosed ? null : Math.max(0, gameEndedAt + AUTO_CLOSE_MS - now);
+
+  const closeRoom = useCallback((trigger: "manual" | "timer") => {
+    /* The trigger is stamped on a ref rather than carried in the message, and deliberately: it describes
+       which CLIENT dispatched, which is local colour for the payout log line. Putting it in the payload
+       would make it part of the shared log, where four clients would write four different answers to a
+       question about one closure.
+       THROUGH THE REF, like `handleProceedToStockRound`: `runGameplayAction` is declared two thousand lines
+       below and a callback body reads the ref at call time rather than at declaration time.
+       `automatic`, for the same reason the auction close is -- closing a finished room belongs to nobody's
+       turn, so the turn gate has no rotation to check it against. */
+    closeRoomTriggerRef.current = trigger;
+    void runGameplayActionRef.current?.("closing the room", { CloseRoom: {} }, { automatic: true });
+  }, []);
+
+  useEffect(() => {
+    if (autoCloseRemaining === null || autoCloseRemaining > 0) return;
+    closeRoom("timer");
+  }, [autoCloseRemaining, closeRoom]);
+
+  /* Design note #900: dismissed, not destroyed. Re-armed whenever a NEW ending arrives so an Undo back into
+     play and a second ending does not open silently behind a dismissal from the first. */
+  const [gameOverDismissed, setGameOverDismissed] = useState(false);
+  useEffect(() => {
+    if (!gameEndReason) setGameOverDismissed(false);
+  }, [gameEndReason]);
 
   const waterfallState = sandboxWaterfall ?? liveWaterfallState;
 
@@ -1667,7 +1824,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           usable:
             dhPower.layAvailable &&
             !dhPower.forfeited &&
-            ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId),
+            ownsPrivateByCorporation(gameState, DH_PRIVATE_ID, actingProtocolId),
         },
         {
           privateId: CSL_PRIVATE_ID,
@@ -1676,7 +1833,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           usable:
             cslPower.layAvailable &&
             !cslPower.forfeited &&
-            ownsPrivate(gameState, CSL_PRIVATE_ID, actingProtocolId),
+            ownsPrivateByCorporation(gameState, CSL_PRIVATE_ID, actingProtocolId),
         },
       ]),
     [dhPower, cslPower, gameState, actingProtocolId],
@@ -1721,65 +1878,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #849: the flow the modal renders, or `null`. Derived from the same power state the panel and
      the board read -- so what the modal says has happened and what the game thinks has happened are one
      reading, not two. */
-  const activePowerFlow = useMemo(() => {
-    const dhStation: "pending" | "placed" | "forfeited" = usedPrivateAbilities.has("dh-token")
-      ? "placed"
-      : dhStationForfeited
-        ? "forfeited"
-        : "pending";
-    /* THE STANDING OBLIGATION FIRST. A D&H lay with the station unresolved raises the modal whether or not
-       anybody asked for it: the game is waiting on an answer, and #818 exists because a player who is not
-       asked does not know they are deciding. */
-    const dhLaid = usedPrivateAbilities.has("dh-tile");
-    const dhOwed =
-      dhLaid && dhStation === "pending" && !dhPower.forfeited && ownsPrivate(gameState, DH_PRIVATE_ID, actingProtocolId);
-    const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : privatePowerRequest;
-    if (key === null) return null;
-    /* ==================================================================
-       DESIGN NOTE 871: THE EXCHANGE IS NOT A HEX POWER AND LEAVES FIRST
-       ==================================================================
-       The two lines below look up a reserved hex, which the M&H does not have (#312: it "reserves nothing at
-       all because its power is the NYC exchange"). Returning before them is not a special case bolted on --
-       `PowerFlowInput` is a union (#871a) precisely so this branch cannot be handed a hex it has no use for.
-       AND OWNERSHIP IS RE-CHECKED HERE, not merely at the chip that raised it. A flow is derived state read
-       every render; the chip is a control clicked once. If the private closes -- or is sold -- between the
-       click and the next frame, this is what stops the modal describing a power the viewer no longer has. */
-    if (key === "mh-exchange") {
-      const mh = gameState?.private_companies?.find((row) => row.private_id === MH_PRIVATE_ID);
-      if (!mh || mh.closed || mh.owner === null || mh.owner !== viewerAddress) return null;
-      const revenue = Number(mh.revenue_per_or);
-      return privatePowerFlow({
-        abilityKey: key,
-        holder: mh.owner,
-        /* `undefined` RATHER THAN A GUESS when the figure is unreadable: the sentence then names the loss
-           without a number, which is honest, where `|| 0` would tell a player they are giving up nothing. */
-        revenuePerOr: Number.isFinite(revenue) ? revenue : undefined,
-      });
-    }
-    const hex = privateHexFor(key === "dh-tile" ? DH_PRIVATE_ID : CSL_PRIVATE_ID);
-    if (!hex) return null;
-    return privatePowerFlow({
-      abilityKey: key,
-      holder:
-        gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)?.ticker ??
-        "This corporation",
-      hexLabel: hex.hexLabel,
-      layDone: usedPrivateAbilities.has(key),
-      station: key === "dh-tile" ? dhStation : "none",
-    });
-  }, [
-    privatePowerRequest,
-    usedPrivateAbilities,
-    /* Design note #871: `viewerAddress` is read by the M&H branch to check ownership. Missing from this list
-       in the first draft, which the lint caught -- and it would have been a real staleness bug rather than a
-       hygiene point: a memo that never re-runs on a viewer change would keep offering the exchange to the
-       browser that used to hold the private. */
-    viewerAddress,
-    dhStationForfeited,
-    dhPower,
-    gameState,
-    actingProtocolId,
-  ]);
+  const activePowerFlow = useMemo(
+    /* Design note #887: the body of this memo is `deriveActivePowerFlow` now -- a pure function in
+       `activePrivatePower.ts`, tested by CALLING it. What stood here was ~45 lines carrying #818's standing
+       obligation, #871's ownership re-check and #312's "the M&H reserves no hex", none of which any test
+       could execute; they were asserted by searching this file for the sentences that implement them. */
+    () =>
+      deriveActivePowerFlow({
+        state: gameState,
+        request: privatePowerRequest,
+        usedAbilities: usedPrivateAbilities,
+        dhStationForfeited,
+        dhForfeited: dhPower.forfeited,
+        actingProtocolId,
+        /* Design note #871: `viewerAddress` is read by the M&H branch to check ownership. Missing from the
+           dependency list in the first draft, which the lint caught -- and it would have been a real
+           staleness bug rather than a hygiene point: a memo that never re-runs on a viewer change would keep
+           offering the exchange to the browser that used to hold the private. */
+        viewerAddress,
+        dhPrivateId: DH_PRIVATE_ID,
+        cslPrivateId: CSL_PRIVATE_ID,
+        mhPrivateId: MH_PRIVATE_ID,
+      }),
+    [
+      privatePowerRequest,
+      usedPrivateAbilities,
+      viewerAddress,
+      dhStationForfeited,
+      dhPower,
+      gameState,
+      actingProtocolId,
+    ],
+  );
 
   const privatePowerHexes = useMemo(
     () => privatePowerHexKeys(privatePowerOfferList),
@@ -1802,18 +1932,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      -- "M&H and C&A are share exchanges" -- and that its list "can never hold more than two entries". Growing
      it here would falsify a note that is load-bearing for `privatePowerHexKeys`, which feeds the board's glow
      and must never be handed a power with no hex. Two lists, joined only where the bar takes a generic chip. */
-  const stockRoundPowerOffers = useMemo(() => {
-    /* READ HERE rather than from a shared binding: `roundType` is a local inside another memo (line ~1289),
-       and lifting it would touch a memo this change has no business in. `current_round_type` is the same
-       field that one reads. */
-    if (gameState?.current_round_type !== "StockRound") return [];
-    const mh = gameState?.private_companies?.find((row) => row.private_id === MH_PRIVATE_ID);
-    /* OWNED BY THIS VIEWER AND STILL OPEN. `owner` is the PLAYER field -- #441: "a PLAYER owning the MH may
-       exchange it" -- so a corporation holding it offers nobody a chip, which is correct: a corporation
-       cannot take the exchange. */
-    if (!mh || mh.closed || mh.owner === null || mh.owner !== viewerAddress) return [];
-    return [{ abilityKey: "mh-exchange", chipLabel: "Exchange M&H for NYC" }];
-  }, [gameState, viewerAddress]);
+  const stockRoundPowerOffers = useMemo(
+    /* Design note #887: `stockRoundExchangeOffers` in `activePrivatePower.ts`. The three rules this memo
+       used to state inline -- #883's sandbox gate, the Stock Round test, and #441's PLAYER-scope ownership --
+       are now three branches a test can exercise one at a time instead of three sentences a scan has to
+       find. The note above still explains WHY the offer travels with the bar; what it no longer has to do is
+       be the only record of what the code checks. */
+    () =>
+      stockRoundExchangeOffers({
+        state: gameState,
+        viewerAddress,
+        sandbox,
+        mhPrivateId: MH_PRIVATE_ID,
+      }),
+    [gameState, viewerAddress, sandbox],
+  );
 
   /* Read through a ref for the same reason `isMyTurnRef` is: the click handler is a `useCallback` the canvas
      holds across renders, and a click is a user event long after the commit that set it. */
@@ -1947,6 +2080,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     privatePowerHexes,
     blocksThroughCity,
   ]);
+
+  /* ==================================================================
+      DESIGN NOTE 888: WHERE THE LAY TRACK JUMP SHOULD POINT
+     ==================================================================
+     REPORTED: "Would it make more sense for this button to auto-scroll them to their network on the map?
+     Other than CPR (and maybe B&M) this is unlikely to be at the very top of the screen at the start of the
+     game when players will be getting acclimated with the game flow."
+     THE INSTINCT IS RIGHT AND THE MECHANISM IS A ZOOM. `HexGridRenderer` locks its camera at `fitView` until
+     the player presses a zoom control, so at the start of a game the network is already on screen -- small,
+     in the corner of a whole fitted board. Scrolling cannot help; framing can.
+     `chooseFrameKeys` DECIDES WHAT TO SHOW, in `frameHexes.ts`, and its note argues why the buildable set
+     beats "the network" as the answer: a network mid-game is a sprawl, and its bounding box can centre the
+     camera on a fully-built stretch with nothing to do in it. The station tokens are the last resort and are
+     non-empty from the moment a corporation floats. */
+  const layTrackFrameKeys = useMemo(() => {
+    const corporation = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    return chooseFrameKeys({
+      buildable: layTrackFocus?.highlighted,
+      network: layTrackFocus?.network,
+      /* THE SAME `stationTokensOf` THE GLOW USES (#686: the recorded city slot travels with the token), so
+         the fallback frames the hexes the board actually drew a token on rather than a second reading. */
+      stations: (corporation ? stationTokensOf(corporation) : []).map(
+        ([q, r]) => `${q},${r}`,
+      ),
+    });
+  }, [layTrackFocus, gameState, actingProtocolId]);
+
+  /* A TOKEN, NOT A STANDING REQUEST -- #873's shape. Re-answering a frame every render would fight the
+     player's own pan the moment they touched the board after pressing it. */
+  const [frameHexRequest, setFrameHexRequest] = useState<{
+    keys: readonly string[];
+    token: number;
+  } | null>(null);
+  const frameTokenRef = useRef(0);
+  const handleFrameNetwork = useCallback(() => {
+    if (layTrackFrameKeys.length === 0) return;
+    frameTokenRef.current += 1;
+    setFrameHexRequest({ keys: layTrackFrameKeys, token: frameTokenRef.current });
+  }, [layTrackFrameKeys]);
 
 
   /* Layer 3: close the ring when the sub-phase advances, since that can happen without a board click.
@@ -2803,15 +2977,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       labelForHex: (q, r) => STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label,
       priceRoute: (labels) =>
         sandboxRouteBreakdown(mapGrid, labels.map((hex) => ({ hex })), era).revenue,
+      /* Design note #890: the paying stops, from the SAME breakdown that prices the route one line up. Two
+         calls rather than one because the two fields are optional independently -- and re-deriving the stops
+         from a second pricing pass is how the figure and its itemisation come to disagree. */
+      stopsFor: (labels) =>
+        sandboxRouteBreakdown(mapGrid, labels.map((hex) => ({ hex })), era).stops,
     }).map((chip) => ({
       ...chip,
       /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a chip
          and a figure; the fields behind the president's own planner -- capacity, the full path, the legality
          complaints -- are about a DECISION this reader is not making, and inventing plausible values for them
-         would be the #724 mistake in a new place. */
+         would be the #724 mistake in a new place.
+         ==================================================================
+          DESIGN NOTE 890: THE PATH AND ITS STOPS ARE NOT AMONG THEM
+         ==================================================================
+         REPORTED: "Non-active players should see the same drafted route data the acting corporation does."
+         #740's LINE IS DRAWN IN THE RIGHT PLACE AND TWO FIELDS WERE ON THE WRONG SIDE OF IT. Its rule is
+         sound -- do not invent values for a decision this reader is not making -- and `maxDistance`,
+         `exceedsMaxDistance`, `endsOffTerminus` and `tokenBlockReason` are exactly that: complaints about a
+         draft the watcher cannot edit. But `hexLabels` and `stops` are not a decision, they are the ROUTE,
+         and the watcher is already looking at it drawn across the board. Blanking them here is what made the
+         chip say "No route drafted for this train yet" about a line the reader could see.
+         `revenueCentres` STAYS ZERO, which is the boundary case worth naming: it is a count used to judge
+         whether the run fits the train, which is the capacity question above. */
       maxDistance: undefined,
-      hexLabels: [],
-      stops: [],
       revenueCentres: 0,
       exceedsMaxDistance: false,
       endsOffTerminus: false,
@@ -2852,21 +3041,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        keeps a rival's line un-hoverable from this player's chips, which is correct -- hovering somebody else's
        chip row is not a thing that exists. */
     for (const entry of rivalPresence) {
+      /* ==================================================================
+          DESIGN NOTE 890: THE OPERATING CORPORATION'S ROUTES ARE NOT "SOMEBODY ELSE'S"
+         ==================================================================
+         REPORTED: "the highlighting of the route dims the route for non-active players, whereas for the
+         operating corporation it brightens (and slightly widens?). Everyone should get the brighter (and
+         wider?) route highlighting."
+         #740 WROTE ONE RULE FOR TWO POPULATIONS. Its sentence -- "a live draft belonging to somebody else is
+         context, and drawing it at the same weight as the reader's own route would make the board argue
+         about whose turn it is" -- is right about a RIVAL, and a rival is what it was written for. In an
+         Operating Round there is one acting corporation, and the presence entry carrying its drafts is not
+         somebody else's context: it is THE run, the only one on the board, and the thing every player at the
+         table is watching. Muting it makes the board argue that nothing is happening.
+         SO THE POPULATION IS SPLIT RATHER THAN THE RULE REWRITTEN. The offset and the mute survive for
+         entries that are not the acting corporation's -- two clients drafting at once is still a real state
+         in a sandbox, and #740's collision argument still holds there. */
+      const isActor =
+        entry.actingCompanyId !== null &&
+        entry.actingCompanyId !== undefined &&
+        entry.actingCompanyId === actingProtocolId;
       for (const [index, hexes] of Object.entries(entry.routeDrafts ?? {})) {
         if (hexes.length < 2) continue;
         overlays.push({
-          trainLabel: `${entry.playerId}'s route`,
+          trainLabel: isActor ? `${index}` : `${entry.playerId}'s route`,
           color: routeTrainColor(Number(index)),
           hexes: hexes.map((hex) => [hex[0], hex[1]] as [number, number]),
-          trainIndex: RIVAL_ROUTE_INDEX_BASE + Number(index),
-          /* Always muted: a live draft belonging to somebody else is context, and drawing it at the same
-             weight as the reader's own route would make the board argue about whose turn it is. */
-          emphasis: "muted",
+          /* THE REAL INDEX FOR THE ACTOR, so the chip row and the highlight join on it -- which is also what
+             gives the route its emphasis, since `routeEmphasisFor` compares against the hovered chip. */
+          trainIndex: isActor ? Number(index) : RIVAL_ROUTE_INDEX_BASE + Number(index),
+          emphasis: isActor
+            ? routeEmphasisFor(Number(index), highlightedTrainIndex)
+            : "muted",
         });
       }
     }
     return overlays;
-  }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex, rivalPresence]);
+  }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex, rivalPresence, actingProtocolId]);
 
   /* handleTileDispatched/handleCloseTilePopup removed: the radial selector confirms through runGameplayAction, so there is one dispatch route and one log writer.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
@@ -3093,16 +3303,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, []);
 
-  /* Design note #725: greyed with a reason rather than hidden. "Lay the F16 tile first" teaches the rule; a
-     missing button teaches nothing and a live one that refuses on click teaches the wrong thing. */
-  const privateActionBlocks = useMemo(
-    () => ({
-      "dh-tile": dhPower.layBlockedReason,
-      "dh-token": dhPower.tokenBlockedReason,
-      "csl-tile": cslPower.layBlockedReason,
-    }),
-    [dhPower, cslPower],
-  );
+  /* ==================================================================
+      DESIGN NOTE 885: `privateActionBlocks` GOES WITH ITS ONE READER
+     ==================================================================
+     IT READ, on one line per #814: `{ "dh-tile": dhPower.layBlockedReason, "dh-token": dhPower.tokenBlockedReason, "csl-tile": cslPower.layBlockedReason }`
+     and #725's argument for it stands unchanged: "greyed with a reason rather than hidden. 'Lay the F16
+     tile first' teaches the rule; a missing button teaches nothing and a live one that refuses on click
+     teaches the wrong thing."
+
+     THE RULE MOVED TO THE MODAL BEFORE THE PANEL DID. #849 gave the D&H's station step
+     `enabled: layDone && station === "pending"`, and #848's note says why that greying IS the rule drawn:
+     "#548: the token REQUIRES the lay -- there is nothing to put a marker on until the tile is down -- so
+     this is not a UI courtesy, it is 1830 refusing an order of operations." So the sentences this memo
+     produced had already been superseded by a step that greys itself for the same reason and says so in the
+     step text.
+     WHAT IT WAS FEEDING was the panel's per-action `blockedActions`, and with the panel gone the lint found
+     it in the same pass. `dhPower.ts` still computes all three reasons; nothing reads them here any more.
+     Deleted rather than left assigned, because a memo with no reader is how the panel's third surface comes
+     back -- and because an unused binding is the one form of dead code the toolchain will actually report. */
 
   /* Hex-holding private powers route through the shared map flow and are marked spent WHEN THE CLICK LANDS. Share exchanges stay marked-and-logged.
      See docs/ai_architecture/contract_economy.md - App.tsx #444 */
@@ -3187,6 +3405,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          `stockRoundPowerOffers`. Its chip raises the same request all the same, because `activePowerFlow`
          re-checks ownership from game state before deriving a flow; the list lookup below is about which HEX
          powers are live, not about permission. */
+      /* Design note #882: A FRESH ASK CLEARS THE LAST ANSWER. Scoping the refusal by ability key stops it
+         appearing on somebody else's modal; it cannot stop it appearing on a SECOND attempt at the same
+         power, where the refusal may no longer be true -- "sell a share first" is advice a player can act
+         on and come straight back. Cleared where the question is raised rather than where the modal closes,
+         because closing is not the event that makes the sentence stale. */
+      setPrivatePowerRefusal(null);
       if (abilityKey === "mh-exchange") {
         setPrivatePowerRequest("mh-exchange");
         return;
@@ -3207,15 +3431,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      came through" -- and a second copy of this dispatch would be the thing that rule exists to prevent: two
      paths to `ExchangePrivate` that could come to disagree about the legality check, the log line, or the
      turn gate. */
-  const runPrivateExchange = useCallback((privateId: number, actionLabel: string) => {
+  /* ==================================================================
+      DESIGN NOTE 882: A REFUSAL IS AN ANSWER, SO IT HAS TO REACH THE ASKER
+     ==================================================================
+
+     FOUND WHILE CHECKING WHAT THE POWERS PANEL WOULD TAKE WITH IT, not reported: the caller below used to
+     read `runPrivateExchange(...)` and then close the modal unconditionally on the next line. So a REFUSED
+     exchange dismissed the question as though it had been granted, and the reason went to a panel below the
+     fold and to the log. Both M&H refusals are reachable -- `privateExchange.ts` returns one for a player
+     already holding 60% of the NYC and one for no certificate being left in the IPO or the bank pool.
+
+     THE RETURN VALUE IS THE FIX, not a second piece of state the caller inspects. `ok` is what the caller
+     needs and it is what `resolvePrivateExchange` already computed; handing it back means the modal cannot
+     close on a refusal without someone deliberately ignoring the answer.
+     #573b's ARGUMENT IS WHY IT GOES IN THE MODAL AND NOT ONLY IN THE LOG: "the interesting refusals ... are
+     facts about somewhere else on the board ... this one has to be a sentence the player can act on." That
+     note predates the modal by three hundred numbers; the modal is where the player is standing when they
+     ask, and it was already the right place the moment #871 built it. */
+  const runPrivateExchange = useCallback((privateId: number, actionLabel: string): boolean => {
     const owner = viewerAddressRef.current;
     const outcome = resolvePrivateExchange(gameStateRef.current, privateId, owner ?? "");
     if (!outcome.ok) {
-      setPrivateAbilityError(outcome.reason);
+      setPrivatePowerRefusal({ abilityKey: "mh-exchange", reason: outcome.reason });
       logInfoRef.current?.("Private Power", outcome.reason);
-      return;
+      return false;
     }
-    setPrivateAbilityError(null);
+    setPrivatePowerRefusal(null);
     void runGameplayActionRef.current?.(
       `${actionLabel} — exchanging for a 10% ${outcome.ticker} share.`,
       {
@@ -3233,6 +3474,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
     /* Deliberately NOT marked used: design note #573a closes the COMPANY instead, which removes the row
        entirely rather than greying it. */
+    return true;
   }, []);
 
   /* Design note #849: the modal's three answers, all landing on machinery that already existed. The flow
@@ -3249,8 +3491,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          untouched, which is what keeps the panel's button and this modal from becoming two accounts of one
          move. */
       if (step === "exchange") {
-        runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share");
-        setPrivatePowerRequest(null);
+        /* Design note #882: CLOSED ONLY IF IT FIRED. This read `runPrivateExchange(...); setPrivatePowerRequest(null);`
+           -- two statements with no relationship between them, so the question was dismissed whether or not
+           it had been answered. On a refusal the modal now stays open with the reason in it, which is also
+           what makes the reason worth writing: #573b's "SHOWN AFTER THE ATTEMPT rather than pre-emptively,
+           because the attempt costs nothing" only holds if the player is still looking at the thing they
+           attempted. */
+        if (runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share")) {
+          setPrivatePowerRequest(null);
+        }
         return;
       }
       if (step === "lay") {
@@ -3325,45 +3574,66 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setHomeStationPlacement(null);
   }, []);
 
-  const handleUsePrivateAbility = useCallback(
-    (ability: PrivateAbility, action: PrivateAbilityAction) => {
-      const reservation = privateHexFor(ability.privateId);
-      const targetsHex = action.key === "dh-tile" || action.key === "dh-token" ||
-        action.key === "csl-tile";
+  /* ==================================================================
+      DESIGN NOTE 885: `handleUsePrivateAbility` IS GONE, AND SO IS ITS PANEL
+     ==================================================================
 
-      if (targetsHex && reservation) {
-        /* Design note #849: THE PANEL ASKS, IT DOES NOT ACT. Its button is "Use Power" now, and a power is a
-           sequence -- so this raises the flow modal rather than arming the first step directly. That is what
-           closes 6a: "Once I clicked the 'Lay Track' button in the Private Powers panel for DH, there is no
-           way to escape/cancel that track lay." There was a cancel on the action bar (#817) and the player
-           was looking at the map; the modal's X is where they are.
-           `dh-token` STILL ARMS DIRECTLY, because it is not an entry point -- nothing renders it now, and if
-           something does, arming is what it means. */
-        if (action.key === "dh-tile" || action.key === "csl-tile") {
-          setPrivatePowerRequest(action.key);
-          return;
-        }
-        armPrivateHexErrand(ability.privateId, action.key, action.label);
-        return;
-      }
+     ASKED: "Given how nice the modal is (it's big and easily readable) versus how cramped and hard to read
+     the Private Powers subpanel is, I'm wondering if we should scrap the Private Powers subpanel
+     completely... DH and CSL both have clickable rail map hexes that the rainbow outline is likely to get
+     players' attention, and the 'Exchange MH for NYC' in the Action Bar is probably adequate for the only
+     other player-interactive PC."
 
-      /* A refusal must leave the power alone - returning before setUsedPrivateAbilities is the whole difference.
-         See docs/ai_architecture/contract_economy.md - App.tsx #573 */
-      if (action.key === "mh-exchange" || action.key === "ca-exchange") {
-        runPrivateExchange(ability.privateId, action.label);
-        return;
-      }
+     THE PANEL WAS THE SECOND DOOR EVERYWHERE, AND NEVER THE BETTER ONE. Every row it rendered is offered
+     somewhere a player is already looking: the D&H and C&SL by a rainbow-ringed hex and a bar chip built
+     from ONE list (#845/#846, so the ring and the chip cannot disagree), the M&H by its own chip (#871). The
+     panel added a third surface for each, below the fold, and #881 found what a third surface costs -- its
+     button was the one door in the whole flow that dispatched without asking.
 
-      setUsedPrivateAbilities((prev) => new Set(prev).add(action.key));
-      logInfoRef.current?.("Private Power", `${action.label} — ${ability.description}`);
-    },
-    /* Design note #845: `activeMainTab` and `actingProtocolId` moved INTO `armPrivateHexErrand` with the
-       four lines that read them, so this list carries the callback instead of the values. Listing both
-       would leave two stale-closure risks where there is now one.
-       Design note #871: and `runPrivateExchange` joins it for the same reason -- the exchange body moved into
-       a callback, so this list carries the callback rather than the four refs it reads. */
-    [armPrivateHexErrand, runPrivateExchange],
-  );
+     WHAT IT UNIQUELY HELD, and where each piece went:
+       #573b's REFUSAL SENTENCE -- into the flow modal (#882), which is where the player is standing when
+         they ask. It was rendering below the fold while the modal closed on top of it.
+       #576's C&A PARAGRAPH -- nowhere, because it was already somewhere. That note kept a button-less row so
+         "a C&A owner who finds no row at all would reasonably conclude the company has no power", and #843
+         then built the Rules Reference private table, whose C&A line says the same two things this row did
+         ("Its auction buyer was handed a 10% PRR share on purchase. Nothing further to trigger -- the company
+         stays open") with the revenue in a column beside it. #576's worry was about an ABSENCE being
+         misread; with the panel gone there is no absence to misread.
+       #1's SANDBOX GATE -- onto the offer list (#883). It was the load-bearing piece nobody had noticed the
+         panel was carrying: `ExchangePrivate` is not in `GAMEPLAY_MESSAGE_KEYS`, and `if (!sandbox) return
+         null` was the only thing stopping the chip offering it on chain.
+
+     AND `PRIVATE_ABILITIES` GOES WITH IT, which is the part that deserved an argument rather than a
+     deletion. That table declared four rules: each power's SCOPE (#441 -- the exchanges belong to a player,
+     the lays to a corporation), its ROUND, its STEP (#782/#807 -- on the ACTION, because the D&H spans two),
+     and `hideOutOfRound`. All four have living statements elsewhere, and had before this change:
+       SCOPE     `stockRoundPowerOffers` tests `mh.owner !== viewerAddress`; `privatePowerOfferList` tests
+                 `ownsPrivate(gameState, id, actingProtocolId)`. Those ARE the two scopes, applied.
+       ROUND     the same two lists, one gated on `"StockRound"` and one reachable only with an
+                 `actingProtocolId`.
+       STEP      `ContextualActionBar`'s `case "Track"`, which is where a step gate can actually be read.
+       hideOutOfRound  redundant since #470 made the round match unconditional; its own note says so.
+     SO IT IS DELETED RATHER THAN REHOMED. A rules table with no reader is not a safeguard -- it is a fifth
+     statement of four rules, kept alive by its tests, free to drift from the four that run. That is the
+     failure this project keeps finding from the other end (#815's three chip rows, #829's two acronym
+     vocabularies), and preserving the table "just in case" would be choosing it deliberately.
+     WHAT THE TABLE SAID IS ABOVE, in words, which is what a design note is for. If a third hex power ever
+     arrives, the place that needs a new entry is `privatePowerOffers`, not a table beside it.
+
+     AND TWO RECORDS COME WITH IT, because a record kept in a file that gets deleted is not a record. Both
+     are kept UNWRAPPED per #814 -- a comment that wraps mid-sentence preserves the words and destroys the
+     string, and a harness asserting the record survived searches for the string.
+
+     #871 REMOVED THIS FROM THE M&H's PANEL ROW, on the report "for some reason it has a multi-line/sentence
+     explanation of this rule":
+     "Mohawk & Hudson - the owner may exchange this private for a 10% share of the New York Central (NYC). The exchange closes this private permanently."
+     Its replacement was the one-line "Trade in for a 10% NYC share. Taking it closes the company.", which is
+     now itself gone: the rule is asked at the decision, in `privatePowerFlow.ts`'s exchange question.
+
+     #576 KEPT THE C&A's ROW WITHOUT A BUTTON, and this is what it said:
+     "Camden & Amboy — its purchaser received a 10% share of the Pennsylvania Railroad (PRR) free, at the moment they won it. Nothing further to trigger: the company stays open and keeps paying its revenue."
+     The Rules Reference table says both halves and prints the $25 in a column, which is better than "keeps
+     paying its revenue" -- a figure where there was a phrase. */
 
   /* round is an optional override; the default ref is right for every caller except a round transition, which announces a round the ref does not know yet.
      See docs/ai_architecture/state_machine.md - App.tsx #659 */
@@ -3403,14 +3673,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* A ref, not a dependency: runGameplayAction is in the dependency array of the two effects that dispatch.
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #546 */
-  const runGameplayActionRef = useRef<
-    | ((
-        fallbackLabel: string,
-        msg: SandboxLogMsg,
-        options?: { automatic?: boolean },
-      ) => Promise<void> | void)
-    | null
-  >(null);
 
   /* `payPrivateRevenue` and its ref are GONE -- design note #685 moved the payout into `settleRoundTransitions`,
      where the round machine already lives and where a replay reproduces it.
@@ -3839,6 +4101,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           sandboxWaterfallRef.current = closed;
           setSandboxWaterfall(closed);
           logInfo("Round", "The Waterfall Auction is complete \u2014 Stock Round 1 begins.");
+          return;
+        }
+
+        if (isCloseRoomMsg(msg)) {
+          /* ==================================================================
+              DESIGN NOTE 899: THE FIRST CLOSE WINS AND THE REST ARE NOT ERRORS
+             ==================================================================
+             Every client runs its own fifteen-minute countdown and any player may press the button, so this
+             handler is reached several times for one closure -- by design, per #546's rule that an elected
+             owner strands the table when they walk away. The guards below are what make that safe, and each
+             one refuses SILENTLY: a player whose timer lost the race has done nothing wrong, and logging it
+             would put four identical scare lines in the Activity Log of a finished game.
+             THE PAYOUT FIRES ON THE TRANSITION, never on the state. `room_closed` already true means this is
+             a duplicate or a replay, and either way the money has been dealt with -- see `closeRoomPayout.ts`
+             #899 for why the client-side guard is a courtesy and the contract still owes a real one. */
+          const base = sandboxStateRef.current;
+          if (!base) return;
+          if (base.room_closed === true) return;
+          if (base.current_round_type !== "GameEnd") return;
+
+          const closed: GameStateResponse = { ...base, room_closed: true };
+          sandboxStateRef.current = closed;
+          setSandboxState(closed);
+
+          const settlement = settleRoomPayout({
+            roomCode: sandboxRoomCode,
+            standings: finalStandingsRef.current,
+            totalAnte: PLACEHOLDER_TOTAL_ANTE,
+            trigger: closeRoomTriggerRef.current,
+          });
+          logInfo(
+            "Room",
+            settlement.dispatched
+              ? "The room is closed. The payout distribution has been dispatched for on-chain settlement."
+              : `The room is closed. No payout was dispatched — ${settlement.reason}`,
+          );
           return;
         }
 
@@ -4367,9 +4665,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                Same division as the two blocks around it: the reducer settles, the shell narrates, and the
                branching lives in `sandboxSession` where a test can reach it. */
             const limitNow = depotInventory(after).find((row) => row.isCurrent)?.trainLimit ?? null;
+            /* Design note #896: AND THE PRESIDENT IS STOPPED FOR IT, at the top of their own next turn. The
+               line above is written whatever the player's toggles say -- silencing a notice changes WHEN they
+               find out, never whether the game told them. */
+            const arrivingTier = derivePhase(after)?.tier ?? null;
+            const queuedNotices = [...pendingFleetNoticesRef.current];
             for (const loss of describeFleetLosses(before, after)) {
               const sentence = describeFleetLoss(loss, limitNow);
               if (sentence) logInfo("Phase Change", sentence);
+
+              for (const notice of fleetLossNotices(loss, arrivingTier, limitNow)) {
+                /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
+                   this block runs again for a phase change the player already saw. Keyed by CONTENT rather
+                   than by position -- two different phase changes carry different arriving tiers and both
+                   survive, while a replay of the same one lands on the same key and adds nothing. */
+                const key = `${notice.companyId}:${notice.cause}:${notice.arrivingTier}:${notice.trains.join(",")}`;
+                const already = queuedNotices.some(
+                  (entry) =>
+                    `${entry.companyId}:${entry.cause}:${entry.arrivingTier}:${entry.trains.join(",")}` === key,
+                );
+                if (!already) queuedNotices.push(notice);
+              }
+            }
+            if (queuedNotices.length !== pendingFleetNoticesRef.current.length) {
+              pendingFleetNoticesRef.current = queuedNotices;
+              setPendingFleetNotices(queuedNotices);
             }
 
             /* Design note #736: AND THE PRIVATES THE PHASE CLOSED. Same division as the fleet losses beside
@@ -5677,6 +5997,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             r,
             company: activeStationCompany,
             allCompanies: gameState?.public_companies ?? [],
+            /* Design note #893: THE CIRCLE THE PLAYER CLICKED. This handler has had `cityIndex` since #453
+               and the gate had nowhere to put it -- "a signature that can't express the question", and the
+               reported OO bug is what that costs: reaching one city of D10 read as permission to token the
+               other. `null` where the geometry cannot resolve a circle, which the gate treats as the
+               hex-level question it always asked. */
+            cityIndex,
           })
         : { allowed: isTokenableHex(mapGrid, q, r), reason: null };
 
@@ -5775,6 +6101,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", "Place Station Token for $0 (F16)");
         return;
       }
+      /* ==================================================================
+         DESIGN NOTE 891: THE STAGED PLACEMENT NEEDED A PLACEMENT TO BELONG TO
+         ==================================================================
+         REPORTED: "when they click the modal to place the free station token and then click the green
+         checkmark to confirm its placement, it returns them to the modal prompting them to place the free
+         station token, in a loop they can only escape by forfeiting."
+         `handleConfirmTokenPlacement` SENDS A FREE PLACEMENT TO `commitFreeStationPlacement`, whose first two
+         lines are `const placement = homeStationPlacement; if (!placement) return;`. #866 built this
+         auto-stage path to remove a click -- correctly, and it set `pendingToken` ALONE. So the tick called
+         the committer, the committer found no placement in flight, and returned having done nothing: no
+         `PlaceHomeStation` dispatched, and no `usedPrivateAbilities` entry.
+         THAT SECOND OMISSION IS THE LOOP. `activePowerFlow` derives the D&H's standing obligation from
+         `usedPrivateAbilities.has("dh-token")` (#849) -- an unresolved station raises the modal on every
+         frame whether or not anybody asked. Nothing was ever recorded, so the obligation never ended and the
+         only exit was the forfeit button, which is exactly what the report describes.
+         A PROXY THAT STOPPED STANDING FOR ITS SUBJECT. `homeStationPlacement` means "a placement is in
+         flight, and here is whose and which ability it spends"; #866 introduced a way to have a placement in
+         flight without one. Setting it here is what makes the tick reach the committer with something to
+         commit -- not a second cursor, the same one every other placement path already sets (#845). */
+      setHomeStationPlacement({
+        kind: "private-station",
+        companyId: actingProtocolId,
+        q: info.q,
+        r: info.r,
+        hexLabel: info.hexLabel,
+        abilityKey: "dh-token",
+        returnTab: "map",
+      });
       setPendingToken({
         q: info.q,
         r: info.r,
@@ -6173,6 +6527,57 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       gameState?.sub_round_index,
       gameState?.active_corporation_index,
     ],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE 896: WHICH LOSS THIS CORPORATION HAS NOT BEEN TOLD ABOUT
+     ==================================================================
+     NOT GATED ON THE OPENING SUB-PHASE, which the first draft did and which was wrong. "The absolute start of
+     their turn" reads like `orSubPhase === openingSubPhase(state)`, but this app AUTO-SKIPS steps -- #414 and
+     #438 skip Routes and Tokens outright -- so a corporation whose trains all rusted can be moved off the
+     opening step before this ever renders, and the notice would be lost precisely in the case it matters most.
+     Asking only "is it this corporation's turn, and is there something unsaid" fires on the first render of
+     the turn whatever step that turn opens on, which is what the request actually wants.
+     SILENCE IS READ HERE rather than watched, and the memo does not depend on the store. That is deliberate:
+     the modal writes a toggle through immediately, and a memo that re-ran on that write would close the modal
+     under the player's cursor. It recomputes when the QUEUE changes -- which is on acknowledgement -- and that
+     is exactly when the next notice's toggle needs a fresh read. */
+  const dueFleetNotice = useMemo<FleetLossNotice | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
+    if (spectator) return null;
+    return nextDueNotice(
+      pendingFleetNotices.filter((notice) => notice.companyId === actingProtocolId),
+      turnIdentity,
+      (notice) => isNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause),
+      dismissedFleetNoticesRef.current,
+    );
+  }, [
+    gameState?.current_round_type,
+    spectator,
+    pendingFleetNotices,
+    actingProtocolId,
+    turnIdentity,
+    sandboxRoomCode,
+  ]);
+
+  const acknowledgeFleetNotice = useCallback(() => {
+    const notice = dueFleetNotice;
+    if (!notice) return;
+    /* BOTH, and they do different jobs. Dropping it from the queue closes this modal now; remembering the
+       turn key is what stops a log replay from raising it again -- see `fleetLossNotice.ts` #896. */
+    dismissedFleetNoticesRef.current.add(noticeDismissKey(turnIdentity, notice));
+    const next = pendingFleetNoticesRef.current.filter((entry) => entry !== notice);
+    pendingFleetNoticesRef.current = next;
+    setPendingFleetNotices(next);
+  }, [dueFleetNotice, turnIdentity]);
+
+  const toggleFleetNoticeSilence = useCallback(
+    (silenced: boolean) => {
+      const notice = dueFleetNotice;
+      if (!notice) return;
+      setNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause, silenced);
+    },
+    [dueFleetNotice, sandboxRoomCode],
   );
 
   const autoSkipReason = useMemo<string | null>(() => {
@@ -7252,6 +7657,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const handleConfirmRadialLay = useCallback(() => {
     if (!radialSelector || !previewTile || !canLayTileNow) return;
     const { q, r } = radialSelector;
+    /* ==================================================================
+       DESIGN NOTE 891: A LAY THE TREASURY CANNOT COVER IS REFUSED HERE FIRST
+       ==================================================================
+       REPORTED: "B&O had $0 in its treasury and was able to lay a track tile on a terrain hex costing $80.
+       Its treasury stayed $0. Corporations should not be able to lay track if they cannot afford the terrain
+       cost."
+       THE FIGURE WAS ALREADY ON SCREEN AND NOBODY ASKED IT. `pendingTileCost` (#673) computes exactly this
+       and reports `short` -- the radial's own confirm caption has been printing "Costs $80 -- treasury $-80
+       after" from the same call. So the app could say the corporation could not afford it, drew that
+       sentence, and then laid the tile anyway: a rule stated on one surface and never asked in the one that
+       acts, which is this codebase's most common bug wearing a price tag.
+       REFUSED WITH A REASON, not silently. The player pressed a button; the log is where they find out why
+       nothing happened, and `sandboxSession.ts` #891 is the authority that also refuses it on replay.
+       `pendingLayCost` IS REUSED RATHER THAN RECOMPUTED, which is #673's own rule about this figure: "computed
+       ONCE and rendered in two places ... Two surfaces deriving one figure is how the two come to show
+       different figures." A third call here would be a third chance to disagree with the caption the player
+       just read. It is gated on `orSubPhase === "Track" && canLayTileNow`, the same pair guarding this
+       handler's first line, so it is non-null wherever this runs.
+       SCOPE, STATED: this refuses what the reducer CHARGES. Whether the C&SL's bonus lay should be exempt
+       from terrain at all is a separate question -- that arm charges `terrainFeeDue` unconditionally today
+       (`sandboxSession.ts`), so refusing an unaffordable one is consistent with the bill rather than a new
+       rule about which lays are free. */
+    if (pendingLayCost?.short) {
+      logInfoRef.current?.(
+        "Lay Track",
+        `${activeCorporationContext?.ticker ?? "This corporation"} cannot afford the $${pendingLayCost.fee} terrain cost here — its treasury holds $${pendingLayCost.before ?? 0}.`,
+      );
+      return;
+    }
     const { tileId, orientation } = previewTile;
     /* Design note #776: THE C&StL'S LAY IS EXTRA, and this is the only place that knows it. The player
        reached this hex through the `csl-tile` errand, so the shell can state which lay it is instead of
@@ -7330,7 +7764,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     homeStationPlacement,
     /* Design note #886: `mapGrid` and `gameState` left this list with the derivation itself -- the lay now
        sends the map the PREVIEW already holds, so it reads neither. #880 added them here for a computation
-       that has since moved. */
+       that has since moved.
+       Design note #891: and two arrive for the affordability refusal. `pendingLayCost` is the figure the
+       radial's own caption is drawn from, so a handler holding a stale one would refuse against a price the
+       player is not looking at -- the exact disagreement #673 built the single computation to prevent. */
+    pendingLayCost,
+    activeCorporationContext,
   ]);
 
 
@@ -7663,12 +8102,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           declared FROM that modal -- the game ending has to be able to
           cover the screen the president was looking at when it happened. */}
       <GameOverModal
-        reason={gameEndReason}
+        /* Design note #900: dismissal hides the modal and nothing else -- the ending stands, and the rail
+           below re-raises it. Passing `null` for the reason is what the component already treats as "absent",
+           so a dismissed modal renders nothing at all rather than a hidden layer over the board. */
+        reason={gameOverDismissed ? null : gameEndReason}
         standings={finalStandings}
         viewerAddress={viewerAddress}
         totalAnte={PLACEHOLDER_TOTAL_ANTE}
         bankruptLabel={bankruptLabel}
+        onDismiss={() => setGameOverDismissed(true)}
+        /* Design note #899: no button once it is closed -- there is nothing left to do, and a control that
+           silently no-ops is worse than one that is not there. */
+        onCloseRoom={roomClosed ? null : () => closeRoom("manual")}
+        autoCloseIn={autoCloseRemaining === null ? null : formatCountdown(autoCloseRemaining)}
+        roomClosed={roomClosed}
       />
+
+      {/* Design note #900: the way back in. Only while an ending is standing and the modal is down, so it
+          never competes with the modal itself for the same corner. */}
+      {gameEndReason && gameOverDismissed && (
+        <button
+          type="button"
+          style={gameOverReopenStyle}
+          onClick={() => setGameOverDismissed(false)}
+        >
+          {roomClosed
+            ? "Final standings"
+            : autoCloseRemaining !== null
+              ? `Final standings · closing in ${formatCountdown(autoCloseRemaining)}`
+              : "Final standings"}
+        </button>
+      )}
 
       {/* Design note #34: one bar. The room context is the middle of the single header now. It still says WHICH
          room this shell is bound to, and is still the only place `chatError` surfaces -- chat failing silently
@@ -7677,6 +8141,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onLeaveGame={onLeaveGame}
         roomContext={
           <>
+        {/* ==================================================================
+             DESIGN NOTE 901: THE BANK IS BROKEN AND THE GAME HAS NOT STOPPED
+            ==================================================================
+            REQUESTED: "Add a persistent Bank Broken warning badge to the main UI once the bank has broken so
+            all players are visually aware that they are in the final set of rounds."
+            AND #898 IS WHAT MAKES IT NECESSARY. Before that fix the bank breaking ended the game on the spot,
+            so there was no interval to warn about -- the modal WAS the notification. Now there is a stretch of
+            real play between the break and the ending, during which every decision is a last decision, and
+            nothing on screen said so. A player buying a train to set up next round needs to know there is no
+            next round.
+            IT NAMES WHAT IS LEFT rather than just raising an alarm. "Bank broken" alone tells a player
+            something is wrong; the second half tells them what to do about it, and the two cases differ --
+            finish this set, or play one more.
+            NOT GATED ON `sandbox`, unlike the ending used to be. A broken bank is a fact about the game, not
+            about which build is running it. */}
+        {bankIsBroken(gameState) && gameState?.current_round_type !== "GameEnd" && (
+          <span style={styles.bankBrokenBadge} title="The Bank cannot pay. The game ends when this Operating Round set finishes.">
+            ⚠ BANK BROKEN &middot;{" "}
+            {gameState?.current_round_type === "OperatingRound"
+              ? "final OR set"
+              : "one final OR set to play"}
+          </span>
+        )}
+
         {/* Design note #23: says plainly what mode this is, because a
             read-only board is otherwise indistinguishable from a board where
             it simply is not your turn. */}
@@ -7798,6 +8286,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   </div>
                 ) : (
                 <ContextualActionBar
+                /* Design note #899: any player may close a finished room; the reducer takes the first.
+                   PASSED EVEN WHEN CLOSED, because the bar disables it rather than dropping it -- the first
+                   draft here passed `undefined` once closed, which made the button vanish and contradicted
+                   the note in `ContextualActionBar` saying it stays. The handler is inert then anyway: the
+                   reducer refuses a second `CloseRoom`. */
+                onCloseRoom={() => closeRoom("manual")}
+                roomClosed={roomClosed}
                   /* Design note #500: `latestFeedItem`/`onOpenActivityLog`
                      are gone. The bar no longer echoes the activity log --
                      `TopTicker` above carries it, from this same
@@ -7806,6 +8301,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   /* Design note #517: the board's own round numbering, from
                      the same two fields `ContextualSubPanel` prints as
                      "OR n.m". `null` before the first poll. */
+                  /* ==================================================================
+                      DESIGN NOTE 889: THE OPERATING ORDER, SORTED WHERE IT IS ALREADY SORTED
+                     ==================================================================
+                     `sortForOperatingOrder` is the authority (#285: reproducing the sort is what let the
+                     roster table re-sort mid-round while the frozen queue did not budge), so the bar is
+                     handed the result rather than the ingredients.
+                     `done` IS AN INDEX COMPARISON against `active_corporation_index`, which is the same
+                     cursor `actionLog.ts` and `dividendGate.ts` read -- not a second reading of who has
+                     acted. */
+                  operatingOrder={
+                    gameState && gameState.current_round_type === "OperatingRound"
+                      ? gameState.active_operating_order.map((companyId, index) => ({
+                          companyId,
+                          ticker:
+                            gameState.public_companies.find(
+                              (entry) => entry.company_id === companyId,
+                            )?.ticker ?? `#${companyId}`,
+                          color: stationTickerColor(companyId),
+                          done: index < gameState.active_corporation_index,
+                        }))
+                      : []
+                  }
+                  /* Design note #890: the depot, unconditionally. The buy PANEL is Hardware-only; the
+                     rust and limit countdowns are not, and reading them off `trainPurchase` is what made the
+                     limit badge vanish when the step turned rather than when the threshold cleared. */
+                  depot={depot}
                   orSequence={
                     gameState
                       ? {
@@ -7935,6 +8456,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                      `onShowMap` exists to resolve. */
                   mapEl={activeMainTab === "map" ? boardEl : null}
                   onShowMap={handleShowMap}
+                  /* Design note #888: the jump frames the buildable hexes rather than finding a pane the
+                     player can already see. `canFrameNetwork` is what replaces `mapInView` as the gate. */
+                  onFrameNetwork={handleFrameNetwork}
+                  canFrameNetwork={layTrackFrameKeys.length > 0}
                   /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
                      disagree about whether a power is available. Empty outside Lay Track by construction --
                      `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
@@ -7974,13 +8499,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   activePlayerCash={activeSeatCash}
                   activePlayerEscrow={activeSeatEscrow}
                   privateCompanies={gameState?.private_companies ?? []}
-                  privatePowerViewer={viewerAddress}
-                  sandboxMode={sandbox}
-                  usedPrivateAbilities={usedPrivateAbilities}
-                  // Design note #725: the D&H's ordering rule, computed where the board is.
-                  privateActionBlocks={privateActionBlocks}
-                  onUsePrivateAbility={handleUsePrivateAbility}
-                  privateAbilityError={privateAbilityError}
+                  /* ==================================================================
+                       DESIGN NOTE 885: SIX PROPS LEAVE WITH THE POWERS PANEL
+                     ==================================================================
+                     `privatePowerViewer`, `sandboxMode`, `usedPrivateAbilities`, `privateActionBlocks`,
+                     `onUsePrivateAbility` and `privateAbilityError` existed for one child, and the bar was a
+                     CONDUIT for all six -- it read none of them. #508's note names that arrangement where it
+                     is right ("the bar is a conduit for these, not a reader of them"), and the test of
+                     whether it is still right is whether the child is still there.
+                     `privateCompanies` STAYS because the bar genuinely reads it, in the rust/limit warnings
+                     memo. That is the difference between a prop that was passing through and one that
+                     arrived. */
                   onRunTrains={handleRunTrains}
                   onPayDividends={handlePayDividends}
                   onWithholdRevenue={handleWithholdRevenue}
@@ -8340,6 +8869,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       onAutoStageStation={handleAutoStageStation}
                       /* Design note #873: the one-shot that opens the picker where the errand points. */
                       autoSelectHex={autoSelectHex}
+                      /* Design note #888: the Lay Track jump's destination, as a one-shot token. */
+                      frameHexRequest={frameHexRequest}
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
                       // PublicCompanyState[] is structurally assignable to StationTokenCompany[]; omitted entirely until gameState resolves.
@@ -8504,7 +9035,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
       {activeMainTab === "rules" && (
         <RulesReference
-          roundType={gameState?.current_round_type ?? null}
+          /* Design note #898: `GameEnd` is deliberately NOT widened into `RulesRoundType`. That union is the
+             set of rounds with a rules FLOW to show, and the ending has none -- passing `null` falls back to
+             the full reference, which is what a player reading the rules after the game is looking for.
+             Widening the union instead would have required inventing a flow for a round nobody plays. */
+          roundType={
+            gameState?.current_round_type === "GameEnd"
+              ? null
+              : (gameState?.current_round_type ?? null)
+          }
           operatingSubPhase={orSubPhase}
         />
       )}
@@ -8609,11 +9148,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           flow={activePowerFlow}
           ticker={activeCorporationContext?.ticker ?? "This corporation"}
           tokensLeft={dhStationSupply.tokensLeft}
+          /* Design note #882: THE MATCH IS THE WHOLE GUARD. Passed only when the stored refusal belongs to
+             the power on screen, so the modal never has to ask -- and a refusal that belongs to another
+             power is not "cleared before it shows", it is unable to show. The D&H's modal is the case that
+             makes this matter: it can be raised by a STANDING OBLIGATION rather than by a click (#849), so
+             there is no door to hang a clear on. */
+          refusal={
+            privatePowerRefusal?.abilityKey === activePowerFlow.abilityKey
+              ? privatePowerRefusal.reason
+              : null
+          }
           onAct={handlePowerFlowAct}
           onDecline={handlePowerFlowDecline}
           onCancel={handlePowerFlowCancel}
         />
       )}
+      {/* Design note #896: unskippable, and above everything -- the turn does not start until it is answered.
+          `key` remounts it per notice so the silence checkbox re-seeds from the store for each one. */}
+      <FleetLossModal
+        key={dueFleetNotice ? `${dueFleetNotice.companyId}:${dueFleetNotice.cause}` : "none"}
+        notice={dueFleetNotice}
+        silenced={
+          dueFleetNotice
+            ? isNoticeSilenced(sandboxRoomCode, dueFleetNotice.companyId, dueFleetNotice.cause)
+            : false
+        }
+        onToggleSilence={toggleFleetNoticeSilence}
+        onAcknowledge={acknowledgeFleetNotice}
+      />
+
       <AutoPassModal
         open={autoPassOpen}
         initial={autoPassChoices}

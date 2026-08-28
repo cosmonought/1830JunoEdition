@@ -23,6 +23,9 @@ import {
   TURN_PULSE_INK_RGB,
 } from "./palette";
 import type { GamePhase } from "../utils/gamePhase";
+/* Design note #884: the private-power hue circle, imported rather than retyped. #727 is explicit that the
+   MECHANISM cannot be shared between a canvas gradient and a CSS one, "so what must be shared is the list". */
+import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
 
 export const NEUTRAL_PHASE_BADGE: React.CSSProperties = {
   borderColor: "#3a4055",
@@ -56,6 +59,43 @@ export const styles: Record<string, React.CSSProperties> = {
      rather than clips, and a phase label broken across two lines in a slim
      bar reads as a layout fault. */
   actionBarSpacer: { flex: 1, minWidth: "8px" },
+  /* ==================================================================
+      DESIGN NOTE 889: THE OPERATING ORDER, AS A ROW OF TICKERS
+     ==================================================================
+     LONGHAND BORDERS, per #732/#840: the chip's `borderColor` is written inline from the corporation's
+     livery and two sibling states override other properties, which is exactly the pairing that makes React
+     blank a shorthand's colour on the render that drops an override.
+     `flexWrap` BECAUSE EIGHT TICKERS IS A REAL COUNT. #590's rule for this rail: "If a narrow window ever
+     makes this tight, the answer is wrapping or a smaller type scale, not deciding for the player which
+     facts they may keep." */
+  orTurnOrder: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "3px",
+    flexWrap: "wrap",
+    minWidth: 0,
+  },
+  orTurnOrderChip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.03em",
+    padding: "2px 6px",
+    borderRadius: "4px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    backgroundColor: "transparent",
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    cursor: "help",
+  },
+  /* DIMMED, NOT REMOVED. A row that shortens as the round goes on stops being an ORDER and becomes a queue,
+     and "have they gone yet" is the question a player asks about the corporations behind them. */
+  orTurnOrderChipDone: { opacity: 0.4 },
+  /* THE ACTING ONE IS FILLED, and both its background and its ink are written INLINE at the call site --
+     the fill from the corporation's livery, the ink from `bestContrastTextColor` against it. Neither can be
+     a static entry here, so there is no `orTurnOrderChipActing` to define; saying so is worth a line,
+     because an absent style in a set of three reads as an oversight. */
   phaseBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
@@ -270,6 +310,21 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#2a1e3a",
     border: "1px solid #6a4a8a",
     color: "#c9a8e8",
+    flexShrink: 0,
+  },
+  /* Design note #901: RED, where the spectator badge is amber. Amber is this app's "be aware"; a broken bank
+     is not a mode the player is in, it is a countdown they cannot stop, and it has to out-rank every other
+     badge in the same strip. Complete `border` shorthand rather than a longhand beside a sibling's shorthand
+     -- #840/#732. */
+  bankBrokenBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.5px",
+    padding: "4px 12px",
+    borderRadius: "999px",
+    backgroundColor: "#3d1a18",
+    border: "1px solid #8a3a30",
+    color: "#f0a898",
     flexShrink: 0,
   },
   spectatorBadge: {
@@ -636,7 +691,65 @@ export const styles: Record<string, React.CSSProperties> = {
     justifySelf: "start",
     minWidth: 0,
   },
-  actionBarRailTrail: { display: "block", minWidth: 0 },
+  /* Design note #881: A RAIL, NOT A SPACER, so it takes the layout its sibling has had since #426: `flex`
+     with `justifyContent: end`, mirroring `actionBarRailLead`'s `justifySelf: start`.
+     `justifyContent`, NOT `justifySelf`. The grid track is already `minmax(0, 1fr)` and this element fills
+     it, so `justifySelf` would move the RAIL inside a track it already spans -- which is nothing. What has
+     to move is the button inside the rail, and that is the flex container's business. The lead rail can use
+     `justifySelf` because it is `minWidth: 0` and shrinks to its content; this one holds a fixed-width
+     button and does not.
+     `minWidth: 0` STAYS, unchanged and load-bearing: a `1fr` track has an `auto` minimum (#654), so without
+     the explicit floor a rail holding a real button refuses to shrink and drags the centred group off true
+     on a narrow bar -- the exact failure #654 fixed by adding the floor to the tracks. */
+  actionBarRailTrail: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "6px",
+    minWidth: 0,
+  },
+  /* ==================================================================
+      DESIGN NOTE 884: THE PRIVATE-POWER MARK IS INSIDE THE CHIP
+     ==================================================================
+     ASKED: "whether the PC action bar buttons should share the rainbow outline, or have a PC chip, or
+     something similar."
+
+     THE PALETTE IS RIGHT AND THE BORDER IS THE WRONG PLACE FOR IT. #727 chose the auction's hue circle for
+     the powered hexes precisely because #320 picked it to be "unmistakably not any status colour", and a
+     player meets it first on the private company cards -- "the association is not decorative". Carrying it
+     to the chip completes card -> hex -> chip, which is the whole reason to mark them at all.
+
+     BUT THE BORDER ON THIS BAR IS A STATE CHANNEL. `actionBarButtonDisabled` overrides `borderColor`,
+     `actionBarCancelErrand` paints it amber for an armed power's escape hatch. A border that is sometimes a
+     rainbow is #732's failure exactly -- identity and state on one channel -- and #840 makes it concrete:
+     a `border` shorthand in a base style beside a `borderColor` longhand in a sibling state makes React
+     write `borderColor = ""` on the render that drops the override. A gradient border cannot be expressed as
+     a `borderColor` longhand at all (it needs `borderImage`), so it could not participate in that channel
+     even if the collision were acceptable.
+
+     SO THE MARK IS A CHILD, not an edge: a small gradient bar at the chip's leading edge, using the same
+     `PRIVATE_POWER_GLOW_STOPS` the canvas draws, and the border stays free to say whether the control is
+     live. `flexShrink: 0` because it is an identifier -- a mark that narrows on a crowded bar reads as a
+     rendering fault, which is #2951's argument for gating the hex ticker on measured size.
+
+     THE STOPS ARE IMPORTED, NOT RETYPED. #727 is explicit that the one thing two renderers cannot share is
+     the MECHANISM -- canvas gradient here, CSS there -- "so what must be shared is the list. Two hard-coded
+     palettes drifting apart is how the association quietly stops being one." This is the third renderer. */
+  actionBarPowerChip: {
+    display: "inline-flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "7px",
+  },
+  actionBarPowerChipMark: {
+    flexShrink: 0,
+    width: "4px",
+    alignSelf: "stretch",
+    minHeight: "12px",
+    borderRadius: "2px",
+    backgroundImage: `linear-gradient(180deg, ${PRIVATE_POWER_GLOW_STOPS.join(", ")})`,
+  },
   /* Design note #426: nudged back up. #31 slimmed these on the reasoning that a chrome strip only has to be
      comfortably clickable, which took them below comfortable. These are the primary actions of a turn and
      several are destructive-ish, so they get one step of the type scale back. */

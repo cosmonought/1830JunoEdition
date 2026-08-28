@@ -178,6 +178,10 @@ export interface ReachableTrack {
      network cannot flow into bare cardboard -- but bare cardboard is exactly where a tile gets laid, so the port
      survives where the hex does not. */
   ports: Set<string>;
+  /** Design note #893: every CITY the network actually enters, as `"q,r:cityIndex"`. Distinct from `hexes`
+   *  because an OO tile carries two circles whose spurs need not touch -- a token is placed in a city, and
+   *  the hex-level answer says yes to both when the network reaches either. */
+  cities: Set<string>;
 }
 
 /** The walk, with both of its results. `reachableNetwork` below is this
@@ -226,6 +230,24 @@ export function reachableTrack(
 ): ReachableTrack {
   const hexes = new Set<string>();
   const ports = new Set<string>();
+  /* ==================================================================
+      DESIGN NOTE 893: A HEX IS REACHED; A CITY IS ENTERED
+     ==================================================================
+     REPORTED: "on OO tiles, corporations are allowed to place stations on cities they don't actually have
+     connectivity to (e.g., D10/E11) ... NYC has connectivity to exactly three hexes, but the Station Marker
+     subphase allows it to place a station in almost any city on the board."
+     `hexes` ANSWERS THE WRONG QUESTION FOR A TOKEN. It is the set of hexes the network reaches, which is
+     exactly right for the tile-lay veil -- a lay is about a HEX -- and one granularity too coarse for a
+     placement, because an OO tile carries two cities whose spurs need not touch. A corporation reaching the
+     left circle of D10 has `D10` in `hexes`, and the token gate read that as permission to stand in the
+     right one.
+     #852 FOUND THIS EXACT THING IN THE ROUTE SEARCH -- "`[q, r]` IS NOT ENOUGH, AND NEW YORK PROVES IT" --
+     and #686 found it in this walk's START. Both fixed the case in front of them and left the token gate,
+     which is the third caller. Third instance of one rule stated in one authority and never asked in its
+     sibling, in the same walk.
+     KEYED `q,r:cityIndex`, so a caller that knows which circle it means can ask about that circle, and one
+     that does not can still ask about the hex through `hexes`. */
+  const cities = new Set<string>();
   /** `q,r:arrivalEdge` -- one hex may legitimately be entered several ways. */
   const visited = new Set<string>();
   const queue: Array<{
@@ -245,7 +267,12 @@ export function reachableTrack(
     /* `null` arrival: a station is entered from inside. Design note #686: from
        inside ONE CITY, though -- which is the part "every rail on it" got
        wrong on the hexes that carry two. */
-    queue.push({ q, r, arrivalEdge: null, cityIndex: token.length > 2 ? (token[2] ?? null) : null });
+    queue.push({
+      q,
+      r,
+      arrivalEdge: null,
+      cityIndex: token.length > 2 ? (token[2] ?? null) : null,
+    });
   }
 
   while (queue.length > 0) {
@@ -256,6 +283,24 @@ export function reachableTrack(
     const stateKey = `${hexKey(at.q, at.r)}:${at.arrivalEdge ?? `start${at.cityIndex ?? ""}`}`;
     if (visited.has(stateKey)) continue;
     visited.add(stateKey);
+
+    /* Design note #893: which circle this visit is standing in. A start is the city the token sits in
+       (#686); an arrival is whichever city that rail lands in, which is what `cityForArrival` answers and
+       what #730's blocking test already asks one block below.
+       A BYPASS GUARD WAS DRAFTED HERE AND REMOVED, and the reason is worth keeping. The first version carried
+       a `viaBypass` flag on the queue entry so a hex reached only by #737's bow would be in `hexes` and its
+       city not in `cities`. It could never fire: the bow belongs to the transit LEAVING a hex, so both push
+       sites had nothing to say about how the NEXT hex would be entered and both wrote `false`. The note above
+       it described the intention as an accomplishment, which is a shape this codebase has produced before.
+       AND IT WAS NOT NEEDED, which is the substantive half. `cityForArrival` is already the authority on
+       whether an arrival lands in a city; where a bow and a city track join the same two edges, a walk
+       arriving on that edge genuinely CAN take the city track, so answering "the city" is correct rather than
+       merely convenient. The `null` return is what covers the arrivals that enter nothing. */
+    const entered =
+      at.arrivalEdge === null
+        ? (at.cityIndex ?? 0)
+        : cityForArrival(mapGrid, at.q, at.r, at.arrivalEdge);
+    if (entered !== null) cities.add(`${hexKey(at.q, at.r)}:${entered}`);
 
     /* ==================================================================
      *  DESIGN NOTE 729: A TOKENED-OUT CITY IS A WALL, NOT A GAP
@@ -310,14 +355,15 @@ export function reachableTrack(
        that rail reaches. `traversalsFrom` is the strict half -- it drops the pair when there is no authored rail
        joining the two edges, which is what makes two curves on one tile two curves rather than a junction.
        Design note #820: and when the city here is shut, only the ways through that miss it. */
-    const exits =
+    const exits: ReadonlyArray<{ exitEdge: number; bypass?: boolean }> =
       at.arrivalEdge === null
-        ? cityExitEdges(mapGrid, at.q, at.r, at.cityIndex)
-        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge)
-            .filter((t) => blockedCity === null || t.bypass === true)
-            .map((t) => t.exitEdge);
+        ? cityExitEdges(mapGrid, at.q, at.r, at.cityIndex).map((exitEdge) => ({ exitEdge }))
+        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).filter(
+            (t) => blockedCity === null || t.bypass === true,
+          );
 
-    for (const edge of exits) {
+    for (const transit of exits) {
+      const edge = transit.exitEdge;
       /* Design note #483: recorded BEFORE the two-sided join is tested. An
          edge the corporation's track runs to is reached whether or not
          anything sits beyond it -- and the case where nothing does is the
@@ -327,10 +373,28 @@ export function reachableTrack(
       const next = neighbourAcross(mapGrid, at.q, at.r, edge);
       if (!next) continue;
       hexes.add(hexKey(next.q, next.r));
-      queue.push({ q: next.q, r: next.r, arrivalEdge: next.arrivalEdge, cityIndex: null });
+      queue.push({
+        q: next.q,
+        r: next.r,
+        arrivalEdge: next.arrivalEdge,
+        cityIndex: null,
+      });
     }
   }
-  return { hexes, ports };
+  return { hexes, ports, cities };
+}
+
+/** Design note #893: the city-level companion to `reachableNetwork`. Keys are `"q,r:cityIndex"`.
+ *
+ *  A SEPARATE FUNCTION RATHER THAN A SECOND RETURN, because the two answer different questions and the
+ *  callers do not overlap: a tile lay is about a hex and a station token is about a circle. Naming them
+ *  apart is what stops the next caller reaching for whichever is nearer. */
+export function reachableCities(
+  mapGrid: MapGridResponse,
+  stationHexes: ReadonlyArray<StationToken>,
+  blocksThrough?: (q: number, r: number, cityIndex: number) => boolean,
+): Set<string> {
+  return reachableTrack(mapGrid, stationHexes, blocksThrough).cities;
 }
 
 export function reachableNetwork(

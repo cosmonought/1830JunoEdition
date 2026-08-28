@@ -37,7 +37,7 @@ import {
   tileCitySlotPoints,
 } from "../components/TileGraphics";
 import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
-import { hexKey, reachableNetwork, stationTokensOf } from "./trackReach";
+import { hexKey, reachableCities, reachableNetwork, stationTokensOf } from "./trackReach";
 
 /** The home token, granted at float rather than bought. */
 export const STATION_TOKEN_HOME_COST = 0;
@@ -140,6 +140,10 @@ export interface StationPlacementInput {
   company: StationPlacementCompany;
   /** Every corporation, for slot occupancy and reservations. */
   allCompanies: readonly StationPlacementCompany[];
+  /** Design note #893: WHICH CIRCLE, on a hex that has more than one. `null`/absent means "the caller cannot
+   *  say", which is the veil's honest position -- it lights hexes -- and keeps the pre-#893 hex-level answer.
+   *  The click knows, and passing it is what closes the OO gap. */
+  cityIndex?: number | null;
 }
 
 export interface StationPlacementResult {
@@ -151,10 +155,18 @@ export interface StationPlacementResult {
 
 const ALLOWED: StationPlacementResult = { allowed: true, reason: null };
 
+/** Design note #893: one sentence for the connectivity refusal, so the hex arm and the city arm cannot come
+ *  to phrase it two ways. */
+const NOT_REACHED: StationPlacementResult = {
+  allowed: false,
+  reason:
+    "This corporation's track does not reach this city. Station tokens may only be placed on the network it already runs.",
+};
+
 export function evaluateStationPlacement(
   input: StationPlacementInput,
 ): StationPlacementResult {
-  const { mapGrid, q, r, company, allCompanies } = input;
+  const { mapGrid, q, r, company, allCompanies, cityIndex } = input;
   const here = (hexes: ReadonlyArray<readonly [number, number]>) =>
     hexes.some(([hq, hr]) => hq === q && hr === r);
 
@@ -229,14 +241,30 @@ export function evaluateStationPlacement(
      A corporation with no token yet has no network to measure, and its first placement is its home city -- which
      the contract grants at float rather than asking for. Rather than guess, that case is allowed through. */
   if (company.station_token_hexes.length > 0) {
-    // Design note #686: the recorded city slot, same resolver as the veil.
-    const network = reachableNetwork(mapGrid, stationTokensOf(company));
-    if (!network.has(hexKey(q, r))) {
-      return {
-        allowed: false,
-        reason:
-          "This corporation's track does not reach this city. Station tokens may only be placed on the network it already runs.",
-      };
+    /* ==================================================================
+       DESIGN NOTE 893: THE QUESTION IS ABOUT A CIRCLE, NOT ABOUT A HEX
+       ==================================================================
+       REPORTED: "on OO tiles, corporations are allowed to place stations on cities they don't actually have
+       connectivity to (e.g., D10/E11) ... the Station Marker subphase allows it to place a station in almost
+       any city on the board, including the discontinuous jump from E11 to D10."
+       THIS ASKED `network.has(hexKey(q, r))` -- the HEX-level set -- and a hex is in that set when the
+       network reaches EITHER of its circles. On an OO tile whose two cities do not join, reaching the left
+       one read as permission to stand in the right one. The walk was never wrong; it was answering a coarser
+       question than a token asks.
+       #852 FOUND THIS IN THE ROUTE SEARCH and #686 in this walk's own start, both on New York. This is the
+       third caller and the same sentence applies: a token is in a CITY, not on a hex.
+       `cityIndex` IS OPTIONAL AND THE ABSENT CASE IS DELIBERATELY THE OLD ONE. `placeableStationHexes` lights
+       HEXES and cannot name a circle -- a hex with one reachable city is a hex worth lighting -- so a caller
+       that does not say which circle it means still gets the hex-level answer. The caller that DOES know is
+       the click, and #893 in `App.tsx` is where it started saying so.
+       SINGLE-CITY HEXES ARE UNAFFECTED either way: their one circle and their hex are the same question. */
+    const tokens = stationTokensOf(company);
+    if (cityIndex === null || cityIndex === undefined) {
+      const network = reachableNetwork(mapGrid, tokens);
+      if (!network.has(hexKey(q, r))) return NOT_REACHED;
+    } else {
+      const cities = reachableCities(mapGrid, tokens);
+      if (!cities.has(`${hexKey(q, r)}:${cityIndex}`)) return NOT_REACHED;
     }
   }
 

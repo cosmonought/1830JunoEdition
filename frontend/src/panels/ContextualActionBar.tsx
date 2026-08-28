@@ -18,10 +18,8 @@ import React from "react";
 
 import { TrainChips } from "../components/TrainBadges";
 import { RouteChipDetail } from "../components/RouteChipDetail";
-import PrivatePowerPanel, {
-  type PrivateAbility,
-  type PrivateAbilityAction,
-} from "../components/PrivatePowerPanel";
+// Design note #885: `PrivatePowerPanel` is deleted -- see `App.tsx` #885 for what it held and where each
+// piece went. This file's own #884 is the surface that replaced it.
 // Design note #623: `RunRoutesButton` joins them -- the step's finishing
 // action belongs on the bar that follows the player down the page.
 /* Design note #802: `RoutePlannerPanel` itself is no longer imported -- the chip detail replaced it. The
@@ -189,11 +187,19 @@ function MarketMoveLine({
       {/* The edge of the chart: both prices and the arrow are still there and simply equal, with the reason
          appended -- "$100 -> $100" with no explanation looks like a bug rather than a ceiling. WHICH edge is a
          fact about the token's travel, so this is the one place `direction` is still the right thing to read. */}
+      {/* Design note #891: THE OLD SENTENCES NAMED A THING THAT DOES NOT EXIST. They read
+          " (already at the top of its row)" and " (already at the bottom of its row)" -- and a ROW has a
+          left and a right edge, not a top and a bottom. Reported: "It is NOT at the top of its row, it's at
+          the right edge of its row."
+          AND THEY FIRED IN THE WRONG PLACE, which is the half that mattered: the right edge of a row is a
+          LEDGE, where a payout moves the token up a row, so `moves` is true there now and this note is not
+          reached. What remains is the genuine edge of the CHART -- the top-right corner on a payout, the
+          bottom-left on a withhold -- where there is no cell in either direction. */}
       {!projection.moves && (
         <span style={styles.dividendMoveNote}>
           {direction === "pay"
-            ? " (already at the top of its row)"
-            : " (already at the bottom of its row)"}
+            ? " (already at the ceiling of the chart)"
+            : " (already at the floor of the chart)"}
         </span>
       )}
     </span>
@@ -527,6 +533,8 @@ function useStickyFitProbe(
 
 export default function ContextualActionBar({
   roundType,
+  onCloseRoom,
+  roomClosed = false,
   orSubPhase,
   sessionReady,
   onPassTurn,
@@ -542,10 +550,14 @@ export default function ContextualActionBar({
   setTokenTargetMode,
   onSkipSubPhase,
   orSequence = null,
+  operatingOrder = [],
   trainPurchase = null,
+  depot = [],
   armedErrand = null,
   mapEl = null,
   onShowMap,
+  onFrameNetwork,
+  canFrameNetwork = false,
   powerOffers = [],
   onUsePowerOffer,
   privatePurchase,
@@ -557,12 +569,6 @@ export default function ContextualActionBar({
   activePlayerEscrow,
   actingSeatColor = null,
   privateCompanies,
-  privatePowerViewer,
-  sandboxMode,
-  usedPrivateAbilities,
-  privateActionBlocks,
-  privateAbilityError = null,
-  onUsePrivateAbility,
   onRunTrains,
   onPayDividends,
   onWithholdRevenue,
@@ -594,6 +600,11 @@ export default function ContextualActionBar({
   phase,
 }: {
   roundType: RoundType | null;
+  /** Design note #899: closes the room and settles the payout. `undefined` outside a room that can be
+   *  closed, which is what keeps the button out of the bar in a local game. */
+  onCloseRoom?: () => void;
+  /** Whether it has already been closed -- the button stays and goes inert (#899). */
+  roomClosed?: boolean;
   /** Only meaningful while `roundType === "OperatingRound"` -- see design
    *  note #10/item 2. */
   orSubPhase: OperatingSubPhase;
@@ -696,19 +707,16 @@ export default function ContextualActionBar({
   actingSeatColor?: string | null;
   /* Design note #601: `playerRoster` is gone. The bar never read it except in the unreachable pill branch
      -- `App.tsx` still computes the figures and hands them straight to `SeatOrderTrail`.
-     Design note #0 in `PrivatePowerPanel.tsx`. */
+     Design note #885: and the pointer to `PrivatePowerPanel.tsx` is gone with the file. `privateCompanies`
+     survives the panel's removal because this component READS it, in the rust and train-limit warnings --
+     which is the test #885 applies to all six of the props that did not. */
   privateCompanies: readonly PrivateCompanyState[];
-  privatePowerViewer: string | null;
-  sandboxMode: boolean;
-  /** Design note #442: keyed by ACTION, not by private id -- the D&H's
-   *  two powers are spent independently. */
-  usedPrivateAbilities: ReadonlySet<string>;
-  /** Design note #725: per-action refusals for the private powers, keyed by action key. Passed straight
-   *  through -- the bar hosts the panel but has no opinion about the D&H's ordering rule. */
-  privateActionBlocks?: Readonly<Record<string, string | null>>;
-  /** Design note #573b: why the last exchange refused. */
-  privateAbilityError?: string | null;
-  onUsePrivateAbility: (ability: PrivateAbility, action: PrivateAbilityAction) => void;
+  /* Design note #885: THREE ORPHANED DOC COMMENTS STOOD HERE, describing props deleted two lines apart --
+     #442's "keyed by ACTION, not by private id", #725's per-action refusals "passed straight through", and
+     #573b's "why the last exchange refused". Each documented a member of this interface that no longer
+     exists, which is worse than an undocumented one: a reader looks for the field. #442's and #725's rules
+     live on in `dhPower.ts`, which is where the D&H's ordering is computed; #573b's sentence is now a prop
+     on the flow modal (#882). */
   onRunTrains: () => void;
   onPayDividends: () => void;
   onWithholdRevenue: () => void;
@@ -716,7 +724,32 @@ export default function ContextualActionBar({
      Design note #517: which Operating Round this is, as the board counts them (`macro_round_number` and
      `sub_round_index`, rendered "3.2"). PASSED RATHER THAN DERIVED, because this bar has no game state.
      `null` before the first poll keeps the bare "Operating Round" wording rather than a placeholder pair. */
+  /** Design note #890: the Bank Depot's tiers, always -- `buyWarnings` reads it to know what the NEXT phase's
+   *  train limit will be, and that question is live all round rather than only while the buy panel is up. */
+  depot?: readonly DepotTier[];
   orSequence?: { cycle: number; index: number } | null;
+  /* ==================================================================
+      DESIGN NOTE 889: WHO OPERATES NEXT, ON THE BAR THAT SAYS WHO OPERATES NOW
+     ==================================================================
+     ASKED: "In the Action Bar during ORs, add the Corporation Turn Order layout (flush left or flush right,
+     whichever fits best alongside the Subphase order)."
+     FLUSH LEFT, IN THE STATUS RAIL. The right rail holds the step caption and Undo -- controls and the name
+     of the thing Undo would reverse -- while the left rail is #654's "fixed home, so the phase badge and the
+     rust warning sit in the same place all game". A turn order is status of exactly that kind: it changes
+     without anybody pressing anything, and it belongs where a player's eye already goes for "where are we".
+     ONE ROW, NOT A TABLE. `ContextualSubPanel` has the full roster with prices; this is the ORDER, which is
+     the only part of it that is about the clock. Same relationship `SeatOrderTrail` has to the Ledger.
+     PASSED PRE-SORTED, because the sort is `sortForOperatingOrder`'s and reproducing it here is what #285
+     records going wrong: "the table re-sorted mid-round while the actual turn order -- frozen in
+     `active_operating_order` when the round opened -- did not budge." */
+  operatingOrder?: readonly {
+    companyId: number;
+    ticker: string;
+    /** The corporation's livery, for the chip's ink. */
+    color: string;
+    /** It has already operated this Operating Round. */
+    done: boolean;
+  }[];
   /** Design note #817: the private power currently holding the board, and the way out of it.
    *
    *  REPORTED: "I have no clear way of escaping this action if I decide I don't want to do it ... they may
@@ -736,6 +769,24 @@ export default function ContextualActionBar({
   /** Design note #833: bring the Rail Map tab forward. Not a game action and it dispatches nothing (#263):
    *  it is the first half of the same jump, for a player who is looking at the Stock Market. */
   onShowMap?: () => void;
+  /* ==================================================================
+      DESIGN NOTE 888: THE JUMP FRAMES THE TRACK, IT DOES NOT FIND THE MAP
+     ==================================================================
+     REPORTED: "The 'Lay 1 Track' button ... currently auto-scrolls to the rail map, which when players are
+     at the top of the screen is trivially true so it remains grayed out/disabled unless they are scrolled
+     all the way down to the corporation and player subpanels."
+     THE BUTTON WAS HONEST AND ITS SUBJECT HAD MOVED. `mapInView` is an IntersectionObserver at
+     `threshold: 0.25` on the board PANE, so it greys the button whenever a quarter of a DOM element is on
+     screen -- a fact about layout, not about whether the player can see where they may build. #833 picked
+     that subject when the map genuinely needed FINDING. It does not need finding any more; it needs READING,
+     and the predicate never moved with the question. A proxy that stopped standing for its subject.
+     SO THE DESTINATION CHANGES AND THE GATE GOES WITH IT. The press now frames the board on the hexes a tile
+     actually fits (#716's glow set), which is the question the step asks -- and a control that always has
+     somewhere to go needs no "you are already there" arm at all. */
+  onFrameNetwork?: () => void;
+  /** Whether there is anything to frame. `false` disables the jump, per #797: a control pointing at nothing
+   *  is worse than no control. */
+  canFrameNetwork?: boolean;
   /** ==================================================================
    *   DESIGN NOTE 846: THE POWER, WHERE A PLAYER IS ALREADY LOOKING
    *  ==================================================================
@@ -752,7 +803,13 @@ export default function ContextualActionBar({
    *  IT OPENS THE SAME PROMPT THE HEX DOES, rather than arming the errand directly. One question, asked one
    *  way, whichever door a player came through -- and it keeps this bar's rule that a chip here dispatches
    *  nothing (#263/#793). */
-  powerOffers?: readonly { abilityKey: string; chipLabel: string }[];
+  /* Design note #884: `chipTitle` TRAVELS WITH THE OFFER, like `chipLabel` already does. The two producers
+     had different sentences for the hover -- "Opens the question the hex asks" for the lays, "Opens the
+     exchange question" for the M&H -- written inline at the two places this bar assembled the chips. Pulling
+     the chips into one group would have forced a choice between one wrong sentence and a `switch` in this
+     file on which power it is, which is this component writing copy about a rule it does not own (#848's
+     rule, and #872's correction of two strings that had escaped it). */
+  powerOffers?: readonly { abilityKey: string; chipLabel: string; chipTitle?: string }[];
   /** Raises the prompt for one of them. Absent means no chips, the same way an absent `mapEl` means no jump. */
   onUsePowerOffer?: (abilityKey: string) => void;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
@@ -870,9 +927,27 @@ export default function ContextualActionBar({
      read HERE as `phaseAlert` for a badge of its own; #868 deleted that badge and #867 moved the call inside
      `purchaseWarnings`, so the severity now reaches the row through the warnings themselves. This file no
      longer has an opinion about how loud anything is -- which is what #839's note claimed and did not do. */
+  /* ==================================================================
+      DESIGN NOTE 890: THE LIMIT BADGE WAS READING A DEPOT THAT COMES AND GOES
+     ==================================================================
+     REPORTED: "When there were 2 or 1 3-trains left, the Rust and Limit badges popped up until the operating
+     corporation ended their turn: then the Rust badge stayed, but the Limit badge disappeared."
+     THE TWO BADGES DEPEND ON DIFFERENT THINGS AND ONLY ONE OF THEM TRAVELS. `purchaseWarnings` builds the
+     rust arm from `phase` alone; the limit arm calls `limitAfterNextPhase(phase, depot)`, which looks the
+     current tier up IN THE DEPOT to read the next tier's `trainLimit`. Handed `[]`, that lookup returns
+     `null` and the arm is skipped -- silently, because a missing tier and a tier with no successor are the
+     same answer.
+     AND `trainPurchase` IS HARDWARE-ONLY BY CONSTRUCTION. `App.tsx` builds it as
+     `orSubPhase === "Hardware" ? {...} : null`, which is right for a BUY PANEL and wrong as the source of a
+     countdown that is true all round. So the badge vanished the moment the step turned -- not when the
+     threshold cleared.
+     THE DEPOT ARRIVES ON ITS OWN PROP NOW. `depotInventory` is already computed unconditionally in the shell
+     and handed to the purchase panel; this asks the same value for a different reason, which is why it is a
+     second prop rather than a reshaped `trainPurchase`. A warning about the next purchase is not a property
+     of the step in which purchases happen. */
   const buyWarnings = React.useMemo(
-    () => purchaseWarnings(phase ?? null, trainPurchase?.depot ?? []),
-    [phase, trainPurchase],
+    () => purchaseWarnings(phase ?? null, depot),
+    [phase, depot],
   );
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
@@ -1029,7 +1104,20 @@ export default function ContextualActionBar({
 
      `boardPane` IS THE THING MEANT, and the shell already held it in state for the radial selector -- so it
      arrives as an element and the observer follows it across a tab change. */
-  const [mapInView, scrollToMap] = useJumpTarget(mapEl ?? null, barClearance);
+  /* ==================================================================
+      DESIGN NOTE 888: THE OBSERVER'S `inView` HALF HAS NO READER LEFT
+     ==================================================================
+     `mapInView` existed to grey the Lay Track button, and greying it was the reported bug -- the predicate
+     answered "is a quarter of the pane on screen" while the question had become "can you see where you may
+     build". With the gate replaced by `canFrameNetwork`, nothing reads it.
+     THE HOOK STAYS AND THE BINDING GOES, which is the honest shape rather than a courtesy: `useJumpTarget`
+     returns a pair and `stepPanelInView` still uses both halves, so the hook is not the thing that became
+     redundant. A destructuring hole says "this is deliberately unread" where a named binding would read as
+     something a future pass should wire back up.
+     THE SCROLL IS NOW UNCONDITIONAL, and that is fine rather than merely tolerable: `scrollIntoView` on an
+     element already at the top of the viewport moves nothing, so the "you are already there" check was
+     buying a skipped no-op at the price of a wrong disabled state. */
+  const [, scrollToMap] = useJumpTarget(mapEl ?? null, barClearance);
 
   /* THE MAP TAB IS PART OF "NOT ALREADY ON IT". Asked for as "scrolled players to the rail map if they
      weren't already on it", and a player reading the Stock Market tab is not already on it. Without this the
@@ -1203,28 +1291,52 @@ export default function ContextualActionBar({
            an ordinary lay ends the step and takes this button with it. Raised again as a maybe -- "I suppose
            'Lay 0 Track' may be necessary if a player Undo's back into the Lay Track subphase" -- and an Undo
            that returns to Track has REVERSED the lay it is undoing, so the lay is available again. One. */
+        /* ==================================================================
+            DESIGN NOTE 884: THE POWER CHIPS LEAVE `contextualButtons`
+           ==================================================================
+           REPORTED: "I don't want the PC action bar buttons to interfere with the center of the standard
+           action and Skip buttons, so we need to find a way to organize them a bit."
+           #846 PUT THEM HERE AND ITS ORDERING ARGUMENT IS STILL RIGHT -- "BEFORE the map jump, because a
+           power is a thing you may not know you have and the map is a place you already know how to reach ...
+           an opportunity before a destination". What it did not weigh is that `contextualButtons` renders
+           inside the CENTRED column, so an opportunity appearing shoved Pass and Lay 1 Track sideways: the
+           standard controls moved position depending on which privates a corporation happened to own.
+           #309 ALREADY NAMED THAT COST in the other direction -- "switching rounds moved the buttons across
+           the screen and muscle memory built in one phase missed in the next" -- and this is the same failure
+           reached by owning a private instead of by changing round.
+           SO THE ORDERING SURVIVES INSIDE A GROUP OF ITS OWN. `powerChips` is built once below, from the same
+           `powerOffers` both branches used, and renders in the trailing rail beside Undo. */
         contextualButtons = [
-          /* Design note #846: BEFORE the map jump, because a power is a thing you may not know you have and
-             the map is a place you already know how to reach. #792's ordering argument, one step over: an
-             obligation before an exit, and here an opportunity before a destination. */
-          ...(onUsePowerOffer
-            ? powerOffers.map((offer) => ({
-                key: `power-${offer.abilityKey}`,
-                label: offer.chipLabel,
-                onClick: () => onUsePowerOffer(offer.abilityKey),
-                disabled: false,
-                title:
-                  "Opens the question the hex asks — the same prompt, for a player who has not scrolled to the map.",
-              }))
-            : []),
           {
             key: "go-to-map",
             label: "Lay 1 Track",
-            onClick: goToMap,
-            disabled: mapInView,
-            title: mapInView
-              ? "The Rail Map is already on screen. Click a hex to lay or upgrade track."
-              : "Scrolls to the Rail Map, where the track is laid.",
+            /* Design note #888: BOTH, in this order. `goToMap` still switches to the map tab and scrolls the
+               page when the pane is elsewhere -- a framed camera behind a Stock Market tab helps nobody --
+               and the framing then puts the buildable hexes under the player's eye. The scroll is the
+               journey; the frame is the arrival. */
+            onClick: () => {
+              goToMap();
+              onFrameNetwork?.();
+            },
+            /* Design note #888: `mapInView` NO LONGER GATES THIS. It answered "is a quarter of the pane on
+               screen", which is true at the top of the page and says nothing about whether the player can
+               see their own track. What can genuinely make this press pointless is having nowhere to frame,
+               and that is what the shell reports. */
+            disabled: !canFrameNetwork,
+            /* ==================================================================
+                DESIGN NOTE 888: THE GREYED SENTENCE SAYS "NOWHERE TO GO", NOT "YOU MAY NOT BUILD"
+               ==================================================================
+               THE FIRST DRAFT READ "No hex is open to this corporation right now." -- caught by
+               `stepJumpButton.test.ts`, whose note states the rule this button has always been held to:
+               greyed here means "pressing this would not move you" and never "you may not lay track", because
+               "that refusal lives on the hex (#716)". A sentence about which hexes are OPEN puts a legality
+               answer on a navigation control, which is #732's one-channel rule and the doubt #279 raised.
+               AND THE HONEST READING IS THE NAVIGATIONAL ONE ANYWAY. `chooseFrameKeys` falls back to the
+               corporation's station tokens, and a floated corporation always has its home token -- so the
+               empty case is not "boxed in", it is "no corporation is operating yet". */
+            title: canFrameNetwork
+              ? "Zooms the Rail Map to the hexes you may build on this turn. Fit to Screen returns to the whole board."
+              : "Nothing to show on the map yet.",
           },
         ];
         break;
@@ -1380,19 +1492,55 @@ export default function ContextualActionBar({
        IT DISPATCHES NOTHING, which is what keeps #263 satisfied. The chip raises the same confirmation the
        panel's own button raises -- #846's rule, third power: "One question, asked one way, whichever door a
        player came through."
+
+       DESIGN NOTE 881: THE SECOND HALF OF THAT SENTENCE WAS FALSE WHEN IT WAS WRITTEN, and is corrected here
+       rather than deleted because it states the rule this file is still built on. The chip did raise the
+       confirmation. The PANEL's button did not -- `handleUsePrivateAbility` called `runPrivateExchange`
+       directly, so the two doors reached the same dispatch by different routes and only one of them asked
+       first. Reported as: "clicking 'Exchange for NYC' in the Private Powers subpanel instantly completes
+       the action without the modal."
+       #871 DESCRIBED AN INTENTION AS AN ACCOMPLISHMENT, which is worth naming as the failure mode rather
+       than as an oversight: the note was written from the chip's side, where the claim was true, and the
+       sibling it asserted about was never opened. App.tsx #881 is where both doors now ask.
        NOT TURN-GATED, and that is the M&H's own rule rather than an oversight: the exchange "can be made on
        their own stock-round turn, or in the gap between any other player's or corporation's turn". The gate
        is OWNERSHIP, applied where the list is built. */
-    contextualButtons = onUsePowerOffer
-      ? powerOffers.map((offer) => ({
-          key: `power-${offer.abilityKey}`,
-          label: offer.chipLabel,
-          onClick: () => onUsePowerOffer(offer.abilityKey),
-          disabled: false,
-          title: "Opens the exchange question — nothing is spent until you answer it.",
-        }))
-      : [];
+    /* Design note #884: AND THIS BRANCH KEEPS NONE. It existed only to carry the M&H chip -- the note above
+       says so outright ("nothing else in this round offers it, so this is its only control rather than its
+       second") -- and the chip now renders from `powerChips` in the trailing rail, in every round alike. An
+       empty assignment rather than a deleted `case`, because `contextualButtons` is declared without an
+       initialiser and every path has to give it one. */
+    contextualButtons = [];
   }
+
+  /* ==================================================================
+      DESIGN NOTE 899: THE ONE CONTROL A FINISHED GAME STILL HAS
+     ==================================================================
+     REQUESTED: "Add a manual Close Room button to the UI (e.g., in the Action Bar) during the GameEnd state."
+     APPENDED RATHER THAN BRANCHED, and the reason is the `else` above: that branch is "Stock & Auction", and
+     `GameEnd` reaches it only by not being an Operating Round. A new `roundType === "GameEnd"` arm would have
+     meant restating the whole if/else to say something the append says directly -- during `GameEnd` there are
+     no contextual actions, and this is the only one.
+     OFFERED TO EVERY PLAYER, per #899's idempotency: any seat may close the room, and a client whose press
+     loses the race to another's is a no-op rather than an error. Electing an owner is what strands a table.
+     STAYS VISIBLE ONCE CLOSED, disabled, rather than vanishing. The bar is where a player looks to find out
+     what is happening; a control that disappears at the moment it succeeds leaves them wondering whether they
+     pressed it. */
+  if (roundType === "GameEnd" && onCloseRoom) {
+    contextualButtons = [
+      ...contextualButtons,
+      {
+        key: "close-room",
+        label: roomClosed ? "Room closed" : "Close Room",
+        onClick: onCloseRoom,
+        disabled: roomClosed,
+        title: roomClosed
+          ? "The payout distribution has been dispatched for on-chain settlement."
+          : "Close the room and settle the payout on-chain. Any player may do this; it closes on its own if nobody does.",
+      },
+    ];
+  }
+
 
   /* Design note #413: THE BAR NOW ASKS WHOSE TURN IT IS. Reported as the president being locked out of Lay
      Tile while every non-acting player could click Skip -- both halves at once, which is what gives it away.
@@ -1427,6 +1575,61 @@ export default function ContextualActionBar({
      description of one. */
   const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;
   if (!mayActThisTurn) contextualButtons = [];
+
+  /* ==================================================================
+      DESIGN NOTE 884: ONE GROUP, BUILT ONCE, FOR EVERY ROUND
+     ==================================================================
+     BOTH BRANCHES PRODUCED THE SAME MAPPING and differed only in the hover sentence, which is now carried by
+     the offer (`chipTitle`). Building it here instead means the Track step and the Stock Round cannot come to
+     disagree about what a power chip is -- #815's three chip rows and #829's two acronym vocabularies are
+     what that disagreement looks like when it is allowed to happen.
+     `mayActThisTurn` IS APPLIED, and it is the same expression `contextualButtons` gets rather than a second
+     rule: `roundType !== "OperatingRound" || isMyTurn`, so a watcher during somebody's Operating Round loses
+     the hex chips and the M&H's Stock Round chip is untouched. That is exactly #871's rule -- the exchange is
+     "NOT TURN-GATED, and that is the M&H's own rule rather than an oversight" -- preserved without this file
+     having to know which power is which. */
+  const powerChips: ActionBarButton[] =
+    onUsePowerOffer && mayActThisTurn
+      ? powerOffers.map((offer) => ({
+          key: `power-${offer.abilityKey}`,
+          label: offer.chipLabel,
+          onClick: () => onUsePowerOffer(offer.abilityKey),
+          disabled: false,
+          title: offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
+        }))
+      : [];
+
+  /* ==================================================================
+      DESIGN NOTE 884: RENDERED ONCE, PLACED TWICE
+     ==================================================================
+     THE TWO BRANCHES OF THIS BAR HAVE DIFFERENT RIGHT-HAND RAILS -- `orPanelRailRight` in an Operating Round,
+     `actionBarRailTrail` everywhere else -- and the chips belong in both. Written out at both sites, the
+     rainbow mark, the disabled treatment and the `type="button"` would be two copies to keep in step, which
+     is how #619 describes the same hazard for the expanded and condensed forms of the ordinary buttons:
+     "the two forms of this bar must not disagree about whether a control is available."
+     AN ARRAY OF ELEMENTS RATHER THAN A COMPONENT, because the two placements are mutually exclusive by round
+     -- only one rail is mounted at a time -- so there is no second instance for React to reconcile and a
+     component would add a name and a props interface to carry nothing. */
+  const powerChipNodes = powerChips.map((chip) => (
+    <button
+      key={chip.key}
+      type="button"
+      style={{
+        ...styles.actionBarButton,
+        ...styles.actionBarPowerChip,
+        ...(chip.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+      }}
+      onClick={chip.onClick}
+      disabled={chip.disabled || !sessionReady}
+      title={chip.title}
+    >
+      {/* Design note #884: THE MARK IS INSIDE THE CHIP, NOT ITS BORDER. See `appStyles.ts` for why the
+          border cannot carry it. `aria-hidden` because the acronym in the label already says which company
+          this is -- the gradient is a second channel for sighted players, not a fact of its own. */}
+      <span style={styles.actionBarPowerChipMark} aria-hidden="true" />
+      {chip.label}
+    </button>
+  ));
 
 
   /* Design note #33: THE ROUTE TOGGLE IS A RUN-TRAINS TOOL, NOT A GLOBAL ONE. `Routes` is this UI's name
@@ -2118,6 +2321,45 @@ export default function ContextualActionBar({
                   {phase.label}
                 </span>
               )}
+              {/* Design note #889: the turn order, beside the phase. `done` dims rather than removes -- a
+                  row that shortens as the round goes on stops being an ORDER and becomes a queue, and the
+                  question "have they gone yet" is the one a player asks about the corporations behind them.
+                  The acting corporation is already named across the top of this bar, so it is not marked
+                  again here; what this row adds is everyone else. */}
+              {operatingOrder.length > 0 && (
+                <span style={styles.orTurnOrder} aria-label="Corporation turn order this Operating Round">
+                  {operatingOrder.map((entry) => (
+                    <span
+                      key={entry.companyId}
+                      style={{
+                        ...styles.orTurnOrderChip,
+                        borderColor: entry.color,
+                        color: entry.color,
+                        ...(entry.done ? styles.orTurnOrderChipDone : {}),
+                        ...(entry.companyId === activeCorporation?.companyId
+                          ? {
+                              backgroundColor: entry.color,
+                              /* Design note #889: the ink is COMPUTED, not a constant. A livery fill with a
+                                 livery-coloured label is invisible on half the roster, and a fixed dark ink
+                                 is invisible on the other half -- `bestContrastTextColor` is the same
+                                 helper the acting-seat badge below uses for the same reason. */
+                              color: bestContrastTextColor(entry.color),
+                            }
+                          : {}),
+                      }}
+                      title={
+                        entry.companyId === activeCorporation?.companyId
+                          ? `${entry.ticker} is operating now.`
+                          : entry.done
+                            ? `${entry.ticker} has already operated this Operating Round.`
+                            : `${entry.ticker} operates later this Operating Round.`
+                      }
+                    >
+                      {entry.ticker}
+                    </span>
+                  ))}
+                </span>
+              )}
               {/* Design note #325: TWO POCKETS, ONE ROW, CONSTANT CONFUSION. #300 added personal cash here so a
                  president facing an emergency buy could see what they can cover -- true, and the placement was still
                  wrong: this rail sits directly under the corporation strip, which shows `Treasury $X` in the same
@@ -2352,7 +2594,11 @@ export default function ContextualActionBar({
                   player who is not acting. Without it the centre column is
                   simply empty, which reads as a panel that failed to load
                   rather than as somebody else's turn. */}
-              {!mayActThisTurn && (
+              {/* Design note #890: NOT IN DIVIDENDS, where the readout below now says what is happening in
+                  far more detail than this sentence does. The line exists so the centre column does not read
+                  as a panel that failed to load; a payout table is not an empty column. It stays for every
+                  other step, where an inactive viewer genuinely has nothing in front of them. */}
+              {!mayActThisTurn && orSubPhase !== "Dividends" && (
                 <span style={styles.orPanelNoActions}>
                   {activeCorporation
                     ? `${activeCorporation.ticker} is operating — its president has the controls.`
@@ -2374,6 +2620,14 @@ export default function ContextualActionBar({
                  I did in Track". #439 made Undo rewind past auto-skipped steps to the last thing the player chose, so
                  naming the step it lands on is what makes that legible rather than surprising.
                  It sits in the right rail, which the grid keeps clear of the centred group, so adding it moves nothing. */}
+              {/* Design note #884: THE POWER CHIPS, AHEAD OF THE STEP CAPTION AND UNDO. #451's sentence above
+                 -- "the right rail, which the grid keeps clear of the centred group, so adding it moves
+                 nothing" -- is the whole argument for putting them here: the D&H's and C&SL's chips appear
+                 and vanish with ownership and with the Track step, and in the centre that motion dragged
+                 Skip and Lay 1 Track sideways with them.
+                 SAME NODES AS THE OTHER BRANCH RENDERS, so the two forms of this bar cannot disagree about
+                 what a power chip looks like or when it is live. */}
+              {powerChipNodes}
               <span style={styles.undoStepLabel}>
                 {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel}
               </span>
@@ -2576,7 +2830,27 @@ export default function ContextualActionBar({
           {/* Design note #691: the payout table and the two market moves are the INPUTS to Pay and Withhold
               (#509). With those buttons gone on an inactive screen, the inputs describe a choice the reader is
               not making -- and the round's own result reaches them through the Activity Log either way. */}
-          {mayActThisTurn && orSubPhase === "Dividends" && (
+          {/* ==================================================================
+                DESIGN NOTE 890: THE DIVIDEND READOUT IS FOR THE TABLE, NOT THE PRESIDENT
+              ==================================================================
+              ASKED: "Let's change this so that non-active players can see the operating corporation's payout
+              and withhold information -- essentially duplicate the operating corporation's subpanel across
+              all players' action bars (without the action buttons)."
+              #691 GATED IT AND ITS REASON IS WITHDRAWN, on report. That note argued: "the payout table and
+              the two market moves are the INPUTS to Pay and Withhold (#509). With those buttons gone on an
+              inactive screen, the inputs describe a choice the reader is not making -- and the round's own
+              result reaches them through the Activity Log either way."
+              BOTH HALVES TURN OUT TO BE WRONG ABOUT 1830. The payout table is not only an input to a
+              decision: it says what every OTHER player is about to be paid, which is a fact about their own
+              cash and the only place it is stated before it happens. And "the Activity Log either way" is
+              after the fact -- a shareholder watching a president choose wants to know what the choice is
+              worth to them WHILE it is being made, which is the same argument #705 made for showing both
+              ends of the transfer rather than a bare delta.
+              THE BUTTONS STAY GATED, which is the distinction that makes this safe: `mayActThisTurn` still
+              guards Pay and Withhold four hundred lines up, so what travels is the READOUT and not the
+              controls. #740's rule -- "eight greyed buttons on four screens describe somebody else's
+              decision" -- is about controls, and it is untouched. */}
+          {orSubPhase === "Dividends" && (
             <div style={styles.dividendPanel}>
               <div style={styles.dividendColumn}>
                 <span style={styles.dividendHeading}>
@@ -2963,25 +3237,12 @@ export default function ContextualActionBar({
               {btn.label}
             </button>
           ))}
-          <span style={styles.actionBarDivider} />
-          {/* Design note #592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED. `sessionReady` is
-             `controlsEnabled && isMyTurn`, so Undo wore the same gate as Buy and Pass -- exactly backwards, since
-             the player who most needs it is the one whose turn has just passed, and the host's longer reach exists
-             to fix a mistake that is no longer theirs to fix on their own turn.
-             ONE REASON STRING IS THE WHOLE GATE: `undoBlockedReason` is non-null whenever Undo cannot fire, and the
-             button shows it. A boolean plus a separate message would be two things to keep in step. */}
-          <button
-            style={{
-              ...styles.actionBarButton,
-              ...styles.actionBarUtilityButton,
-              ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
-            }}
-            onClick={onUndoLastAction}
-            disabled={undoBlockedReason !== null}
-            title={undoBlockedReason ?? "Takes back the last action. Available on anyone's turn."}
-          >
-            Undo Last Action
-          </button>
+          {/* Design note #881: THE DIVIDER GOES WITH UNDO, for #540's reason applied one step further. That
+             note's rule is that "a divider needs something on both sides"; with Undo moved to the trailing
+             rail there is nothing to its right in this group, so a rule here would be a bar at the end of a
+             row -- the same empty-sided divider #540 was reported for, arrived at by moving the neighbour
+             instead of by the neighbour being absent. The rule above `contextualButtons` still has the
+             group on both sides and stays. */}
           {/* The route mode toggle used to render here too. It is `showRouteToggle`-gated and that flag is
              OR-and-Routes-only, so in this branch it was unreachable markup -- removed rather than left as a second
              copy to keep in step with the live one. */}
@@ -2997,7 +3258,80 @@ export default function ContextualActionBar({
              everything one column over and renders something plausible.
              Phase leads, buttons centre, and the trailing rail is empty and unconditional -- it exists only so the
              centre column has equal weight either side. */}
-          <span style={styles.actionBarRailTrail} aria-hidden="true" />
+          {/* ==================================================================
+                DESIGN NOTE 881: THE TRAILING RAIL HAS A TENANT, AND IT IS UNDO
+              ==================================================================
+              REPORTED: "in the Stock Round the 'Undo Last Action' button is not flush right in the action bar
+              like it is in the Operating Rounds, and I don't know why."
+
+              BECAUSE THE TWO BRANCHES PUT IT IN DIFFERENT COLUMNS. `orPanelActionRow` has a genuine right
+              rail -- #451 put Undo in it explicitly, and its note says why in a sentence that reads as a
+              prediction of this bug: "It sits in the right rail, which the grid keeps clear of the centred
+              group, so adding it moves nothing." This branch's grid has the same three columns (#426/#654)
+              and Undo was the LAST ITEM OF THE CENTRE GROUP, so it was centred along with Pass -- flush
+              right only by accident, whenever the group happened to be wide enough to reach the edge.
+
+              #654 IS WHY IT LOOKED SETTLED. That pass found this grid had "three columns and two children"
+              and fixed the count by adding an EMPTY trailing rail: "the trailing rail carries nothing and
+              exists to be the third grid column ... An empty element as layout is worth defending because it
+              looks like something to delete." The defence was right about the element and wrong about the
+              emptiness -- the OR branch's third column was never empty, and the branch being mirrored had
+              had a tenant for it since #451. So the rail stops being a spacer and becomes what its sibling
+              already is.
+
+              `aria-hidden` HAD TO GO WITH THE CHANGE, and it is the sharp edge here rather than the layout.
+              It was correct for a decorative spacer and is a bug the moment the element contains a control:
+              `aria-hidden` on an ancestor hides the whole subtree, so Undo would have rendered, been
+              clickable with a mouse, and been invisible to a screen reader and skipped by keyboard focus --
+              a control that is present, functional and unreachable. `undoStepLabel`'s counterpart in the OR
+              branch is not hidden either.
+
+              THE STEP CAPTION DOES NOT COME WITH IT. #451's pair -- "`Undo` alone answers 'can I take that
+              back'; `Track undo` answers 'take back what I did in Track'" -- is an Operating Round fact:
+              this branch has no sub-phases, so there is no step to name and the caption would be a label
+              with nothing to say. */}
+          <span style={styles.actionBarRailTrail}>
+            {/* ==================================================================
+                  DESIGN NOTE 884: THE POWER CHIPS, LEFT OF UNDO
+                ==================================================================
+                ASKED: "I don't want the PC action bar buttons to interfere with the center of the standard
+                action and Skip buttons, so we need to find a way to organize them a bit."
+
+                THE TRAILING RAIL IS THE CORNER THAT MEANS "not one of this step's centred controls" -- the
+                Operating Round's own right rail is described in exactly those words (#451: "always-available
+                utilities, never sub-phase specific, so they do not belong in the centre"). Putting the chips
+                here makes the centre INVARIANT: Pass, Auto-Pass and the step's own button sit in the same
+                place whether or not the viewer owns a private.
+
+                NOT THE LEAD RAIL, which was the other candidate and is the wrong neighbourhood. That rail
+                carries the phase badge and `buyWarnings` -- countdowns to a loss. A private power is the
+                opposite kind of thing: it EXPANDS what a player may do, and the rule this project settled is
+                that those are not drawn as warnings. A chip beside a rust warning is that distinction
+                collapsing on the one channel #732 keeps clear.
+
+                LEFT OF UNDO, not right of it. Undo is the last thing on the bar in both rounds and moving it
+                would undo #881 one note later; and the chips are an opportunity while Undo is a way back,
+                so reading order puts the offer before the retreat. */}
+            {powerChipNodes}
+            {/* Design note #592d: UNDO IS NOT A MOVE, SO IT IS NOT TURN-GATED. `sessionReady` is
+               `controlsEnabled && isMyTurn`, so Undo wore the same gate as Buy and Pass -- exactly backwards, since
+               the player who most needs it is the one whose turn has just passed, and the host's longer reach exists
+               to fix a mistake that is no longer theirs to fix on their own turn.
+               ONE REASON STRING IS THE WHOLE GATE: `undoBlockedReason` is non-null whenever Undo cannot fire, and the
+               button shows it. A boolean plus a separate message would be two things to keep in step. */}
+            <button
+              style={{
+                ...styles.actionBarButton,
+                ...styles.actionBarUtilityButton,
+                ...(undoBlockedReason ? styles.actionBarButtonDisabled : {}),
+              }}
+              onClick={onUndoLastAction}
+              disabled={undoBlockedReason !== null}
+              title={undoBlockedReason ?? "Takes back the last action. Available on anyone's turn."}
+            >
+              Undo Last Action
+            </button>
+          </span>
         </div>
       </div>
       )}
@@ -3156,27 +3490,12 @@ export default function ContextualActionBar({
         </div>
       )}
 
-      {/* Design note #0 in `PrivatePowerPanel.tsx`: the abilities, gated on
-          ownership and on the round they may be used in. Renders nothing
-          outside sandbox, and nothing when the viewer owns none. */}
-      <PrivatePowerPanel
-        privateCompanies={privateCompanies}
-        viewerAddress={privatePowerViewer}
-        roundType={roundType}
-        orSubPhase={roundType === "OperatingRound" ? orSubPhase : null}
-        sandbox={sandboxMode}
-        /* Design note #441: a corporate power belongs to the corporation OPERATING and is executed by whoever
-           holds its controls. The bar already resolves both, so the panel is handed the same answers the rest of
-           the bar is gated on rather than deriving a second set. */
-        actingProtocolId={activeCorporation?.companyId ?? null}
-        actingPresident={activeCorporation?.presidentAddress ?? null}
-        usedAbilities={usedPrivateAbilities}
-        // Design note #725: the D&H's station stays greyed, with its reason, until its lay resolves.
-        blockedActions={privateActionBlocks}
-        abilityError={privateAbilityError}
-        onUseAbility={onUsePrivateAbility}
-        controlsEnabled={sessionReady}
-      />
+      {/* Design note #885: `<PrivatePowerPanel>` rendered here, with eleven props. Deleted -- App.tsx #885
+          records what it held, where each piece went, and why its rules table went with it rather than being
+          rehomed. The power chips in this file's #884 are what a player uses now.
+          A JSX-CHILD COMMENT, in braces. The first draft of this note was a bare block comment in the same
+          position, which is not a comment at all here -- JSX renders it as TEXT, so the bar would have worn
+          three lines of design note across it. Valid between ATTRIBUTES, never between children. */}
       {/* ==================================================================
            DESIGN NOTE 802: THE PLANNER PANEL IS GONE; THE CHIP CARRIES THE ROUTE
           ==================================================================

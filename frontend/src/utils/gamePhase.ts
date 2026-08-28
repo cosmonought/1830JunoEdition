@@ -352,7 +352,14 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
   // that turns out to be current.
   const ownedByTier = new Map<TrainTier, number>();
 
-  for (const company of gameState.public_companies) {
+  /* Design note #897: AND THE ROSTER ITSELF IS "UNKNOWN" THE SAME WAY. The three lines below have stated
+     #232's rule for `owned_trains` since this function was written, and the loop header did not ask it of the
+     list holding them -- so a state that never reported a roster threw here instead of answering "phase
+     unknown", which is the answer it already has for a roster full of unreported fleets.
+     FOUND BY THE FIX FOR `applyPhaseChange`, not by reading: guarding the reducer moved its crash one frame
+     down the stack into this function, which `limitForTier` reaches through `depotInventory`. Third instance
+     of one shape -- the rule asked of a field and not of its container. */
+  for (const company of gameState.public_companies ?? []) {
     const trains = company.owned_trains;
     // `undefined`/`null` is "unknown" and contributes nothing -- not even
     // evidence that the field is supported. `[]` is a real answer.

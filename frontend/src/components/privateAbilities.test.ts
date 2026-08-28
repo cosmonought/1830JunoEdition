@@ -1,137 +1,47 @@
 // frontend/src/components/privateAbilities.test.ts
 //
 // ==================================================================
-//  DESIGN NOTES 441/442/444 (harness): SCOPE, KEYS AND THE HEX
+//  DESIGN NOTES 548/725 (harness): THE D&H'S COPY, AND THE TWO HEXES
 // ==================================================================
 //
-// Three facts about the ability table that the panel's behaviour depends on
-// and that nothing else would catch:
+// WHAT THIS FILE USED TO BE, and why most of it is gone: it opened as a harness for `PRIVATE_ABILITIES`,
+// the ability table inside `PrivatePowerPanel.tsx`, and asserted three things about it -- SCOPE (#441),
+// ACTION KEYS (#442) and ROUND (#470). Design note #885 deleted the panel and the table with it, and
+// records in full why the table was not rehomed: all four of its rules have living statements in the two
+// offer lists and the bar's step switch, and a rules table with no reader is a fifth statement free to
+// drift from the four that run.
 //
-//   SCOPE, because the reported bug -- the PRR President seeing the D&H --
-//   was a single ability being filtered on the wrong ownership field. The
-//   table now declares which test applies, and a new power added with the
-//   wrong scope reintroduces the bug silently.
+// SO THE ASSERTIONS THAT DIED ARE THE ONES WHOSE SUBJECT DIED. "gives the two hex powers CORPORATION
+// scope", "are unique across the whole table", "puts every hex power in the Operating Round" and the rest
+// were about the table's shape. Deleting a test whose subject is gone is not a loss of coverage; keeping
+// it by inventing a new subject for it is how a harness starts describing something nobody built.
 //
-//   ACTION KEYS, because `usedAbilities` is keyed by them. Two abilities
-//   sharing a key would make one power consume the other, which is exactly
-//   the failure keying by `private_id` produced for the D&H's pair.
+// WHAT SURVIVES IS EVERYTHING THAT WAS NEVER REALLY ABOUT THE PANEL:
 //
-//   THE HEX, because "accurate D&H execution mapping strictly to F16" is a
-//   deliverable, and the coordinate comes from a table the board can move
-//   under (`hexBoardData.ts` has relocated F16 once already).
+//   THE D&H CAPTION, because #548's copyright measure and #725's asymmetry both live in the sentence, and
+//   the sentence lives in `dhPower.ts`. The panel rendered `DH_POWER_DESCRIPTION`; these assertions read it
+//   through `byId(3)?.description`, which was a copy of it one hop away. Repointing them at the export is
+//   strictly stronger -- the flow modal and the auction card read the same string, so this now guards every
+//   surface that shows it rather than the one that has been removed.
+//
+//   THE HEX, because "accurate D&H execution mapping strictly to F16" is a deliverable and the coordinate
+//   comes from a table the board can move under (`hexBoardData.ts` has relocated F16 once already).
 
-import { PRIVATE_ABILITIES } from "./PrivatePowerPanel";
+import { DH_POWER_DESCRIPTION } from "../utils/dhPower";
 import { privateHexFor } from "../utils/privateReservations";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 
-const byId = (id: number) => PRIVATE_ABILITIES.find((a) => a.privateId === id);
-
-describe("ability scope", () => {
-  it("gives the two hex powers CORPORATION scope", () => {
-    // "A railroad owning the DH may lay a track tile and a station token."
-    // The railroad, not the player holding the certificate -- which is the
-    // reported bug in one word.
-    expect(byId(2)?.scope).toBe("corporation"); // Champlain & St. Lawrence
-    expect(byId(3)?.scope).toBe("corporation"); // Delaware & Hudson
-  });
-
-  it("gives the two share exchanges PLAYER scope", () => {
-    // "A player owning the MH may exchange it for a 10% share of NYC."
-    expect(byId(4)?.scope).toBe("player"); // Mohawk & Hudson
-    expect(byId(5)?.scope).toBe("player"); // Camden & Amboy
-  });
-
-  it("declares a scope for every ability", () => {
-    // A power added without one would fall to whichever branch the panel
-    // checks first, which is how the original bug read as correct.
-    for (const ability of PRIVATE_ABILITIES) {
-      expect(["player", "corporation"]).toContain(ability.scope);
-    }
-  });
-
-  it("no longer offers the B&O presidency", () => {
-    // Design note #441: granted by `BoParPrompt` at the auction since design
-    // note #399, so the button offered to do something already done.
-    expect(byId(6)).toBeUndefined();
-  });
-
-  it("offers nothing for Schuylkill Valley, which has no power", () => {
-    expect(byId(1)).toBeUndefined();
-    expect(PRIVATE_COMPANY_CATALOG[1].ability).toMatch(/No special power/i);
-  });
-});
-
-describe("action keys", () => {
-  it("are unique across the whole table", () => {
-    const keys = PRIVATE_ABILITIES.flatMap((a) => a.actions.map((x) => x.key));
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-
-  /* ==================================================================
-      DESIGN NOTE 865: RED SINCE #849 AND NOBODY RAN IT
-     ==================================================================
-
-     FOUND WHILE VERIFYING #863/#864, by running a pattern wide enough to sweep this file in. These two
-     assertions have been failing since #849 collapsed the D&H's pair of panel buttons into one, and the only
-     reason it went unnoticed is that every run since has been scoped to the files being edited -- which is
-     the standing instruction and the right one, so the lesson is not "run everything". It is that a harness
-     nobody has a reason to run is a harness nobody knows the state of.
-
-     THE OLD FORM, KEPT, because its reasoning is still the reason the KEYS test above it exists:
-       expect(dh?.actions.map((a) => a.key)).toEqual(["dh-tile", "dh-token"]);
-       expect(dh?.actions.map((a) => a.label)).toEqual([
-         "Lay Track (F16)", "Place Station Token for $0 (F16)",
-       ]);
-     with the note "Both in one turn is legal 1830; one key for both would have made either consume the
-     other."
-     THAT RULE HAS NOT CHANGED -- what changed is where it is expressed. #849: "ONE BUTTON FOR A TWO-STEP
-     POWER, because the modal is what walks the steps", and the modal greys line two until line one is done,
-     which two peer buttons could only imply. So the independence lives in `privatePowerFlow.ts` now and is
-     tested there; what this file still owns is that the PANEL offers the single door. */
-  it("gives the D&H one panel action, because the modal walks the steps", () => {
-    const dh = byId(3);
-    expect(dh?.actions.map((a) => a.key)).toEqual(["dh-tile"]);
-  });
-
-  it("labels that action as the door it is", () => {
-    /* "Use Power" rather than "Lay Track (F16)": the button no longer performs the lay, it opens the flow
-       that offers the lay and then the token. A label naming only the first step would promise less than the
-       control does -- and would be the second half of the power going unmentioned again, which is what #442
-       split the buttons to avoid in the first place. */
-    const dh = byId(3);
-    expect(dh?.actions.map((a) => a.label)).toEqual(["Use Power"]);
-  });
-
-  it("gives every other actionable ability exactly one action", () => {
-    /* Design note #576: the Camden & Amboy now has ZERO. Its share arrives
-       on purchase, so there is nothing for its owner to trigger -- the row
-       keeps its description and loses its button.
-
-       The exception is written as an explicit id rather than as
-       `actions.length > 0`, because a self-satisfying assertion ("every
-       ability with actions has actions") would pass for an ability that had
-       silently lost its button too. Naming the two exceptions means a third
-       one has to be argued for here. */
-    for (const ability of PRIVATE_ABILITIES) {
-      if (ability.privateId === 3) continue; // D&H: two independent powers
-      if (ability.privateId === 5) continue; // C&A: a purchase bonus, not an action
-      expect(ability.actions).toHaveLength(1);
-    }
-  });
-
-  it("leaves the Camden & Amboy describable but not clickable", () => {
-    const ca = PRIVATE_ABILITIES.find((a) => a.privateId === 5);
-    expect(ca).toBeDefined();
-    expect(ca?.actions).toHaveLength(0);
-    // The description still has to explain what the company did, or a player
-    // finding a buttonless row concludes it has no power at all.
-    expect(ca?.description).toMatch(/10%/);
-    expect(ca?.description).toMatch(/PRR/);
-  });
-});
+/* Design note #885: the two ids the hex powers belong to, named here rather than read from a table. They
+   are `privatePowerOffer.ts`'s `PowerAbilityKey` union expressed as numbers, and that union is the thing
+   that would have to grow for a third hex power to exist. */
+const CSL_ID = 2;
+const DH_ID = 3;
 
 describe("the D&H caption", () => {
-  const caption = byId(3)?.description ?? "";
+  /* Design note #885: WAS `byId(3)?.description`, the panel table's copy of this string. Now the export
+     itself, which is what the panel was rendering all along -- see this file's header for why that makes
+     the block stronger rather than merely surviving. */
+  const caption = DH_POWER_DESCRIPTION;
 
   it("names F16 and the $120 terrain cost", () => {
     expect(caption).toContain("F16");
@@ -204,17 +114,17 @@ describe("the D&H caption", () => {
 
 describe("hex mapping", () => {
   it("maps the D&H strictly to F16", () => {
-    const hex = privateHexFor(3);
+    const hex = privateHexFor(DH_ID);
     expect(hex).not.toBeNull();
     expect(hex!.hexLabel).toBe("F16");
   });
 
   it("maps the C&SL to B20", () => {
-    expect(privateHexFor(2)?.hexLabel).toBe("B20");
+    expect(privateHexFor(CSL_ID)?.hexLabel).toBe("B20");
   });
 
   it("resolves both to real board coordinates", () => {
-    for (const id of [2, 3]) {
+    for (const id of [CSL_ID, DH_ID]) {
       const hex = privateHexFor(id);
       expect(Number.isInteger(hex?.q)).toBe(true);
       expect(Number.isInteger(hex?.r)).toBe(true);
@@ -229,12 +139,16 @@ describe("hex mapping", () => {
     }
   });
 
-  it("gives every corporation-scoped ability a hex to act on", () => {
-    // The panel routes these to the map; one without a coordinate would
-    // press a button that goes nowhere -- the bug being fixed.
-    for (const ability of PRIVATE_ABILITIES) {
-      if (ability.scope !== "corporation") continue;
-      expect(privateHexFor(ability.privateId)).not.toBeNull();
+  it("gives both hex powers a coordinate to act on", () => {
+    /* Design note #885: WAS "gives every corporation-scoped ability a hex to act on", walking
+       `PRIVATE_ABILITIES` and filtering on `scope`. The table is gone; the property is not, and it is the
+       same property stated over the two members that union has: a power routed to the map without a
+       coordinate presses a button that goes nowhere.
+       `privatePowerOffers` ENFORCES THIS AT RUN TIME -- "A CANDIDATE WITHOUT A HEX IS DROPPED, not rendered
+       with a placeholder" -- so the failure it would produce today is a silently missing chip rather than a
+       dead one. That is the better failure and still the wrong one. */
+    for (const id of [CSL_ID, DH_ID]) {
+      expect(privateHexFor(id)).not.toBeNull();
     }
   });
 });
@@ -259,38 +173,3 @@ describe("hex mapping", () => {
  * decided by `phase` plus the filter. A future power added with the wrong
  * phase is what these catch.
  */
-describe("round scoping", () => {
-  it("puts every hex power in the Operating Round", () => {
-    for (const ability of PRIVATE_ABILITIES) {
-      if (ability.scope !== "corporation") continue;
-      expect(ability.phase).toBe("OperatingRound");
-    }
-  });
-
-  it("puts every share exchange in the Stock Round", () => {
-    // These are what leaked. Their phase is what the filter now compares
-    // against, so it has to be right.
-    for (const ability of PRIVATE_ABILITIES) {
-      if (ability.scope !== "player") continue;
-      expect(ability.phase).toBe("StockRound");
-    }
-  });
-
-  it("gives every ability exactly one round", () => {
-    for (const ability of PRIVATE_ABILITIES) {
-      expect(["OperatingRound", "StockRound"]).toContain(ability.phase);
-    }
-  });
-
-  it("has no ability that would render in both rounds", () => {
-    // The filter is `roundType === ability.phase`, so a power can appear in
-    // one round only. Asserted as a property of the table so a future
-    // "either round" escape hatch has to be added deliberately.
-    const byRound = new Map<string, number>();
-    for (const ability of PRIVATE_ABILITIES) {
-      byRound.set(ability.phase, (byRound.get(ability.phase) ?? 0) + 1);
-    }
-    expect(byRound.get("OperatingRound")).toBe(2); // C&SL, D&H
-    expect(byRound.get("StockRound")).toBe(2); // M&H, C&A
-  });
-});

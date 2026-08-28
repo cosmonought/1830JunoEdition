@@ -21,6 +21,8 @@
 // So the arithmetic and the wording moved to `pendingSpend.ts` and both rings ask it. The tests below pin
 // that there is exactly one of it.
 
+import { readSource, stripComments } from "./sourceScan";
+
 import { describePendingSpend, pendingSpend } from "./pendingSpend";
 
 describe("pendingSpend", () => {
@@ -78,18 +80,12 @@ describe("describePendingSpend", () => {
 });
 
 describe("one sentence, two rings", () => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  const read = (...parts: string[]) =>
-    fs.readFileSync(path.join(__dirname, ...parts), "utf8");
   /* #490a: the notes in both files QUOTE the sentence while explaining where it lives, so a raw search would
      find the prose and call it the implementation. Comment-stripped copies for the code assertions; the raw
      text is read separately where a note is what is being checked. */
-  const strip = (source: string) =>
-    source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const RING = strip(read("..", "components", "RadialTileSelector.tsx"));
-  const APP = strip(read("..", "App.tsx"));
-  const SPEND = strip(read("pendingSpend.ts"));
+  const RING = stripComments(readSource("components/RadialTileSelector.tsx"));
+  const APP = stripComments(readSource("App.tsx"));
+  const SPEND = stripComments(readSource("utils/pendingSpend.ts"));
 
   it("builds the wording in exactly one place", () => {
     /* THE PROPERTY THIS WHOLE HARNESS EXISTS FOR. If the phrase is ever written into a component, this fails
@@ -147,9 +143,9 @@ describe("one sentence, two rings", () => {
   it("keeps the terrain rule where terrain rules live", () => {
     /* THE HALF THAT DID NOT MOVE. `pendingTileCost.ts` still owns which ground costs what and #723's rule
        that it is charged once -- the generalisation took the arithmetic, not the rules. */
-    const tile = read("pendingTileCost.ts");
+    const tile = readSource("utils/pendingTileCost.ts");
     expect(tile).toContain("terrainFeeDue");
     expect(tile).toContain("pendingSpend(");
-    expect(strip(tile)).not.toContain("short: after");
+    expect(stripComments(tile)).not.toContain("short: after");
   });
 });

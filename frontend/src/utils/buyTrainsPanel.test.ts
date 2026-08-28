@@ -24,6 +24,8 @@
 // THE CUT IS `restingHeight` -- the bar with every collapsible body subtracted. "Can this be a sticky bar at
 // all" is properly a question about the resting form, and that number does not move when the fold moves.
 
+import { readSource, stripComments } from "./sourceScan";
+
 import {
   restingHeight,
   shouldReleasePin,
@@ -34,18 +36,11 @@ import {
 import { purchaseWarnings, limitAfterNextPhase } from "./purchaseWarnings";
 import type { DepotTier, GamePhase } from "./gamePhase";
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
 /* #490a: every note below quotes the rule it explains, so the code assertions read a comment-stripped copy
    and the notes are checked separately against the raw text where that is the point. */
-const strip = (source: string) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-const BAR = strip(read("panels/ContextualActionBar.tsx"));
-const PANEL = strip(read("components/TrainPurchasePanel.tsx"));
+const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
+const PANEL = stripComments(readSource("components/TrainPurchasePanel.tsx"));
 
 /** A fake element tree, because `restingHeight` is DOM arithmetic and jsdom is not needed to check it.
  *
@@ -132,8 +127,8 @@ describe("the pin no longer depends on what it decides", () => {
        had those removed for #490a's reason. Slicing the stripped copy on a comment anchor finds nothing and
        returns an empty string, which passes every `not.toContain` beside it -- the vacuity this session has
        now caught six times. The length guard is what turned it into a failure instead. */
-    const raw = read("components/TrainPurchasePanel.tsx");
-    const bank = strip(
+    const raw = readSource("components/TrainPurchasePanel.tsx");
+    const bank = stripComments(
       raw.slice(
         raw.indexOf("{/* ================= BANK ================= */}"),
         raw.indexOf("{/* ================= CORPORATION ================= */}"),
@@ -198,7 +193,8 @@ describe("purchaseWarnings (design note #839)", () => {
   it("names the rusting tier and how many buys away it is", () => {
     const [rust] = purchaseWarnings(PHASE, DEPOT);
     expect(rust.key).toBe("rust");
-    expect(rust.label).toBe("Rust in 2 Buys: 3-Trains");
+    // Design note #889: active tense, singular train noun. Was `"Rust in 2 Buys: 3-Trains"`.
+    expect(rust.label).toBe("Rusts in 2 Buys: 3-train");
     expect(rust.imminent).toBe(false);
   });
 
@@ -212,7 +208,9 @@ describe("purchaseWarnings (design note #839)", () => {
       { ...PHASE, purchasesUntilRust: 1, purchasesUntilPhaseChange: 1 },
       DEPOT,
     );
-    expect(warnings[0].label).toBe("Rust Event: 3-Trains");
+    /* Design note #889: was `"Rust Event: 3-Trains"`. The most urgent state used to be the one that stopped
+       saying how long was left; it now keeps the countdown, which is what makes it a countdown badge. */
+    expect(warnings[0].label).toBe("Rusts in 1 Buy: 3-train");
     expect(warnings[0].imminent).toBe(true);
   });
 
@@ -300,7 +298,7 @@ describe("the warnings are read, not hovered", () => {
        SO THE ASSERTION FLIPS: the module must CALL the authority. `depotRemaining` stays forbidden, which is
        the part that was always right -- reaching past the helper to the raw stock would be a second
        implementation of the same judgement. */
-    const warnings = strip(read("utils/purchaseWarnings.ts"));
+    const warnings = stripComments(readSource("utils/purchaseWarnings.ts"));
     expect(warnings).toContain("phaseAlertLevel(phase)");
     expect(warnings).not.toContain("depotRemaining");
   });
@@ -428,8 +426,14 @@ describe("the depot's stock moved to the buy line (design note #860)", () => {
     /* ASKED: "replace 'Current Train Limit 2 / 3' on the line with the Buy button with the remaining bank
        quantity". BESIDE rather than INSTEAD: #294's "two numbers, two subjects" -- one counts cardboard in
        the bank, the other caps a corporation's holdings. */
-    expect(PANEL).toContain("In the Bank Depot");
-    expect(PANEL).toContain("Current Train Limit");
+    /* Design note #889: `"In the Bank Depot"` became `"Depot Supply"` with a denominator -- a stock of 2
+       means something different out of 6 than out of 2. And `"Current Train Limit"` is GONE from this line
+       entirely, on report: the corporation strip two rows up carries it and #590 guarantees it stays there
+       even when the bar is pinned. The "after purchase" tense it also carried now lives on the action bar as
+       "Train Limit Drops in N Buys", which is the same fact drawn as the warning it is. */
+    expect(PANEL).toContain("Depot Supply");
+    expect(PANEL).toContain("of " + String.fromCharCode(36) + "{nextTier.total ?? nextTier.remaining}");
+    expect(PANEL).not.toContain("Current Train Limit");
   });
 
   it("shows unlimited as unlimited, not as a number", () => {

@@ -2,6 +2,13 @@
 //
 // A private power as the sequence of decisions it actually is.
 //
+
+// Design note #881: what a private is CALLED has one authority (#364), and this file's three modal titles
+// were not asking it. The reasoning is at #881 beside `flowAcronym`, below; the statement lives up here
+// because `import/first` requires it and because a dependency belongs where a reader looks for one.
+import { PRIVATE_COMPANY_CATALOG } from "./privateCatalog";
+
+//
 // ==================================================================
 //  DESIGN NOTE 847: THE POWER IS TWO STEPS, AND THE UI ASKED ONE QUESTION
 // ==================================================================
@@ -46,6 +53,55 @@
    modal that would drift from this one". A third power asking one question is that argument's own next case:
    requested as "like we did with the other Private Powers, let's have a modal pop up". */
 export type PowerAbilityKey = "csl-tile" | "dh-tile" | "mh-exchange";
+
+/* ==================================================================
+    DESIGN NOTE 881: THE ACRONYM HAS AN AUTHORITY AND THIS FILE WAS NOT ASKING IT
+   ==================================================================
+
+   REPORTED: "the acronym used in the action bar still contains the old acronym style (eg, M&H rather than the
+   sleeker MH that we agreed to)".
+
+   THE RULE WAS SETTLED AT #364 AND STATED IN THREE PLACES. `hexCanvasPrimitives.ts`: "The private's initials,
+   e.g. `CSL`. No ampersand -- design note #364." `privateReservations.ts` repeats it -- "NO AMPERSAND --
+   `CSL`, not `C&SL`" -- and `privateCatalog.ts` is where the answer actually lives, one `acronym` field per
+   private. `privatePowerOffer.ts` asks it (`chipLabel: `Use ${catalog.acronym} Power``) and gets `Use DH
+   Power`. THIS FILE NEVER ASKED. All three titles were hand-typed with the ampersand form the catalog had
+   already abandoned, so the modal a player opens from a correctly-named chip is headed with the old name.
+
+   THE ACRONYM IS NOT THE COMPANY NAME. "Mohawk & Hudson" keeps its ampersand -- it is a railroad's name and
+   the rulebook's. What #364 removed is the ampersand from the SHORT form, because a badge seven pixels tall
+   spends real width on a character that adds nothing. That distinction is why this is a lookup rather than a
+   find-and-replace: `priv.name` is right as it stands and only the abbreviation moves.
+
+   IMPORTED RATHER THAN PASSED IN, which is a departure from how `holder` and `hexLabel` reach this module.
+   Those are facts about the GAME (who is operating, which hex) and only the shell knows them; an acronym is a
+   fact about a fixed set of six and there is exactly one table of it. Threading it through `PowerFlowInput`
+   would let a caller hand this module the wrong one, which is the failure the catalog exists to prevent.
+   `privatePowerOffer.ts` imports it for the same reason and the two modules now agree by construction.
+
+   THE `import` ITSELF SITS AT THE TOP OF THE FILE, above the design-note block this module opens with, and
+   not here where the reasoning is. `import/first` refuses a statement below other declarations, and it is
+   right to: a module's imports are its dependency list and burying one two hundred lines down hides what
+   this file now depends on. This was the file's FIRST import -- it had none -- so there was no existing
+   block to join and the placement had to be chosen rather than inherited. */
+
+/** The private ids the three flows belong to. Local rather than imported from the shell's constants: this
+ *  module's whole job is to turn an ability key into copy, and the key IS what it is handed. */
+const FLOW_PRIVATE_ID: Readonly<Record<PowerAbilityKey, number>> = {
+  "csl-tile": 2,
+  "dh-tile": 3,
+  "mh-exchange": 4,
+};
+
+/** The acronym for a flow's private. Falls back to the ability key's own prefix rather than to a hand-typed
+ *  string, so a catalog that ever loses an entry produces something recognisably derived rather than a stale
+ *  literal that reads as deliberate. */
+function flowAcronym(abilityKey: PowerAbilityKey): string {
+  return (
+    PRIVATE_COMPANY_CATALOG[FLOW_PRIVATE_ID[abilityKey]]?.acronym ??
+    abilityKey.split("-")[0].toUpperCase()
+  );
+}
 
 /** What has happened to the D&H's free station. `"none"` for a power that has no station step at all. */
 export type StationOutcome = "none" | "pending" | "placed" | "forfeited";
@@ -188,7 +244,9 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
     };
     return {
       abilityKey,
-      title: "Exchange the M&H for an NYC share?",
+      /* Design note #881: the old literal was "Exchange the M&H for an NYC share?" -- kept on one line per
+         #814, since a wrapped quote preserves the words and destroys the string. */
+      title: `Exchange the ${flowAcronym(abilityKey)} for an NYC share?`,
       holderLine: `${holder} holds this power.`,
       steps: [exchange],
       /* THE X AND THE "NO" BOTH MEAN THE SAME THING HERE, and that is correct rather than redundant: nothing
@@ -215,7 +273,8 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
   if (abilityKey === "csl-tile") {
     return {
       abilityKey,
-      title: "Use the C&SL's extra tile lay?",
+      /* Design note #881: was "Use the C&SL's extra tile lay?". */
+      title: `Use the ${flowAcronym(abilityKey)}'s extra tile lay?`,
       holderLine: `${holder} holds this power.`,
       steps: [lay],
       cancellable: !layDone,
@@ -251,7 +310,8 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
 
   return {
     abilityKey,
-    title: "Use the D&H's private power?",
+    /* Design note #881: was "Use the D&H's private power?". */
+    title: `Use the ${flowAcronym(abilityKey)}'s private power?`,
     holderLine: `${holder} holds this power.`,
     steps: [lay, stationStep],
     /* NOTHING COMMITTED YET. Once the tile is on the board the power is partly spent and cannot be handed

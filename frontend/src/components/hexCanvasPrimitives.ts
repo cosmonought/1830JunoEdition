@@ -76,6 +76,8 @@ import {
   newYorkPrintedPaths,
   printedArtwork,
   printedArtworkPaths,
+  OFFBOARD_STUB_TIP_FRACTION,
+  OFFBOARD_STUB_SHAFT_END_FRACTION,
   printedPathsForEdge,
   printedTerminalRailAtEdge,
   printedPathsForTraversal,
@@ -1427,9 +1429,12 @@ export function drawOffboardTrack(
   /* How far in the stub runs, and how much of that the head occupies. The
      shaft stops where the head begins so the round cap is never visible
      past the point -- a cap poking out of an arrowhead is the blunt end
-     this replaces, just smaller. */
-  const TIP_FRACTION = 0.52;
-  const HEAD_LENGTH = size * 0.20;
+     this replaces, just smaller.
+     Design note #895: BOTH FRACTIONS NOW COME FROM `TileGraphics`, which generates the route overlay's
+     colourable rail from the same two numbers. They were local constants and the overlay had no rail at all,
+     so there was nothing to disagree with; now that there is, one of them has to be the source. */
+  const TIP_FRACTION = OFFBOARD_STUB_TIP_FRACTION;
+  const HEAD_LENGTH = size * (OFFBOARD_STUB_SHAFT_END_FRACTION - TIP_FRACTION) * (Math.sqrt(3) / 2);
 
   // Rail Map Overhaul (design note #42): each stub is a
   // perpendicular-entering Bezier curve (`bezierTrackSegment`) rather than a

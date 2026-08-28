@@ -3,6 +3,13 @@
    Every entry is a literal, hand-authored SVG path string. No procedural curve
    generation anywhere, and none is permitted: a tile in this catalog renders
    from its `d` strings and nothing else.
+
+   ONE EXEMPTION, NAMED RATHER THAN QUIETLY TAKEN. Design note #895 generates the seven red off-board hexes'
+   stubs from `OFFBOARD_TRACKS`. It is not a curve -- every one is a straight radial line whose only variables
+   are which edge and how far in -- and the rule above exists to stop plausible-looking shapes being invented
+   from memory, which a straight line between two points already fixed by the board cannot do. What it buys is
+   that the generated rail and the drawn stub cannot drift apart, which is the whole of the bug #895 fixes.
+   A CURVE STILL GETS TYPED OUT. If a future off-board hex needs a bend, it goes in the catalog by hand.
    
    UNIT HEX. Origin at centre, +x east, +y SOUTH, circumradius 1, pointy-top.
    Every path starts and ends EXACTLY on an edge midpoint (or dead-ends in the
@@ -16,6 +23,8 @@
    
    Orientation is a rigid rotation. Revenue is chain data, not artwork.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #131 */
+
+import { OFFBOARD_TRACKS } from "./hexBoardData";
 
 /** A revenue centre printed on a tile, in unit-hex coordinates. */
 export interface TileArtworkMarker {
@@ -528,6 +537,70 @@ export interface PrintedArtwork {
   bypassTracks?: readonly number[];
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 895: THE RED AREAS HAD NO RAILS TO COLOUR
+ * ==================================================================
+ *
+ * REPORTED: the red off-board segments are not coloured when a route runs onto them.
+ *
+ * AND THE OVERLAY WAS RIGHT TO DRAW NOTHING, which is why this is a data fix rather than a drawing one.
+ * `drawRouteOverlays` strokes a preprinted hex by looking up its authored rails; every off-board hex returned
+ * nothing:
+ *
+ *   printedArtworkEdgePairs("F2")  ->  []     (and A9, A11, I1, J2, K13, B24 alike)
+ *
+ * The red areas were drawn by `drawOffboardTrack`, which strokes straight onto the canvas from
+ * `OFFBOARD_TRACKS` and authors no `Path2D` anybody else can find. So the base board showed track and the
+ * route overlay had no geometry to trace over it. Two surfaces answering one question two ways -- this
+ * codebase's second-commonest bug shape, and here the second surface was answering "there is no track".
+ *
+ * GENERATED FROM `OFFBOARD_TRACKS` RATHER THAN TYPED OUT. The edge list is already authoritative and already
+ * verified against the real board; retyping seven hexes' stubs into this catalog would create a second list to
+ * keep in step, which is the very thing being fixed. A hex added to `OFFBOARD_TRACKS` gets its colourable rail
+ * for free.
+ *
+ * THE SHAFT, NOT THE ARROWHEAD. An off-board stub is drawn as a shaft plus a filled arrowhead, and only the
+ * shaft is a stroked line. The generated rail is exactly the shaft, so the colour lands ON the drawn track
+ * rather than beside it or past it, and the black arrowhead survives as what it is -- the marker that says
+ * "the board ends here". `drawOffboardTrack` now derives its own shaft from these same two fractions, so the
+ * pair cannot drift.
+ *
+ * NO MARKER, DELIBERATELY. An off-board area's revenue comes from its era table rather than from a circle on
+ * the hex, and `traversalSegments` refuses to cross one before it ever consults this catalog (#484). These
+ * entries exist to be DRAWN and are inert to routing. */
+
+/** How far in from the edge the off-board arrow points, as a fraction of the edge-to-centre distance. */
+export const OFFBOARD_STUB_TIP_FRACTION = 0.52;
+/** Where the shaft stops and the arrowhead begins, in the same fraction. `TIP_FRACTION` plus the head's own
+ *  length divided by the apothem -- precomputed because this file has no geometry imports and must not grow
+ *  any: it is the one leaf in the rendering chain and everything else depends on it staying that way. */
+export const OFFBOARD_STUB_SHAFT_END_FRACTION = 0.7509401;
+
+/** The six edge midpoints in the unit-hex space this catalog is authored in. */
+const UNIT_EDGE_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [0.866025, 0],
+  [0.433013, -0.75],
+  [-0.433013, -0.75],
+  [-0.866025, 0],
+  [-0.433013, 0.75],
+  [0.433013, 0.75],
+];
+
+const round = (n: number) => Number(n.toFixed(6));
+
+const OFFBOARD_STUB_ARTWORK: Readonly<Record<string, PrintedArtwork>> = Object.fromEntries(
+  Object.entries(OFFBOARD_TRACKS).map(([label, edges]) => [
+    label,
+    {
+      tracks: edges.map((edge) => {
+        const [x, y] = UNIT_EDGE_POINTS[edge];
+        const f = OFFBOARD_STUB_SHAFT_END_FRACTION;
+        return `M ${round(x)} ${round(y)} L ${round(x * f)} ${round(y * f)}`;
+      }),
+    },
+  ]),
+);
+
 /** Every entry's edge set matches hexBoardData's own table for that label, and every marker sits on its own track's apex -- the same three rules the tile catalog's markers follow.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #210 */
 export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> = {
@@ -611,9 +684,39 @@ export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> 
   /** Rochester -- straight 0-3 through the city, with a curved spur in from
    *  edge 4. The spur enters its edge on the normal and eases into the
    *  station rather than meeting the main line as a straight radial spoke. */
+  /* ==================================================================
+   *  DESIGN NOTE 894: ROCHESTER IS THREE SPOKES, NOT A LINE PLUS A STUB
+   * ==================================================================
+   *
+   * REPORTED: the route marker cuts off at D14.
+   *
+   * IT WAS NOT A DRAWING BUG. `traversalsFrom` at D14 returned 0<->3 AND NOTHING ELSE -- a train arriving on
+   * edge 4 had no way out of Rochester and no way in, so the whole third arm of the hex was unroutable:
+   *
+   *   printedArtworkEdgePairs("D14")        -> [[0,3],[4,null]]
+   *   traversalsFrom(grid, 5, 3, 4)         -> []
+   *
+   * AND THE CAUSE IS IN `pathVariantsForTraversal`, which joins two rails through the interior only when BOTH
+   * are SPOKES -- "exactly one end on an edge". The straight rail had both ends on edges, so it was never a
+   * spoke, so the edge-4 spoke had nothing to meet. The hub test was right; the artwork was lying to it.
+   *
+   * WHAT THE BOARD ACTUALLY SHOWS is a city with three rails running into it. The old first entry drew ONE
+   * line straight across, passing through the marker's point without ever declaring that it touches the
+   * marker -- a shape indistinguishable from Rochester on screen and a different hex to the router. Split at
+   * the city, the two halves are collinear and share the endpoint, so the render is pixel-identical and the
+   * join falls out of the rule that was already there.
+   *
+   * THIS IS WHY THE #244 CUT LOOKED RIGHT TOO: a train terminating at D14 traced the whole straight rail and
+   * was trimmed back to the marker at draw time. Now the rail it traces ENDS at the marker, so the trim has
+   * nothing left to do -- the same picture, arrived at honestly.
+   *
+   * NO OTHER PREPRINTED HEX HAS THIS SHAPE. Every other entry is either a single edge-to-edge rail with its
+   * marker sitting beside the track, or spokes that already meet -- checked across the whole catalog rather
+   * than assumed, which is what `printedArtworkEdgePairs` makes cheap to do. */
   D14: {
     tracks: [
-      "M 0.866025 0 L -0.866025 0",
+      "M 0.866025 0 L 0 0",
+      "M -0.866025 0 L 0 0",
       "M -0.433013 0.75 C -0.240563 0.416667 -0.130526 0.226134 0 0",
     ],
     marker: { kind: "city", at: { x: 0, y: 0 } },
@@ -667,6 +770,9 @@ export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> 
     tracks: ["M 0.866025 0 C 0.330127 0 -0.165064 0.285898 -0.433013 0.75"],
     marker: { kind: "city", at: { x: 0.116025, y: 0.200962 } },
   },
+
+  /* ---- Red off-board areas (`OFFBOARD_TRACKS`) -- design note #895 ---- */
+  ...OFFBOARD_STUB_ARTWORK,
 };
 
 /** New York needs its own entry because the hex carries TWO stations and the singular marker field cannot express that. Same shape as #59: two terminal spurs that never meet, each capped by its own station.

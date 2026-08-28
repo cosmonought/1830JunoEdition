@@ -29,6 +29,7 @@ import {
   applyPhaseChange,
   describeFleetLoss,
   describeFleetLosses,
+  describePrivateClosures,
 } from "./sandboxSession";
 import type { GameStateResponse } from "./gameState";
 
@@ -83,6 +84,83 @@ describe("the phase takes the cheapest train first", () => {
       public_companies: [{ company_id: 1, ticker: "C1", owned_trains: undefined }],
     } as unknown as GameStateResponse;
     expect(applyPhaseChange(before, "5")).toBe(before);
+  });
+});
+
+describe("a partial state is survived, not filled in (design note #897)", () => {
+  /* ==================================================================
+      THE CRASH THIS FILE FOUND, AND THE WORSE FIX IT COULD HAVE HAD
+     ==================================================================
+     Seven cases here threw "Cannot read properties of undefined (reading 'map')" -- every one whose arriving
+     tier was 5, because only Phase 5 reaches #736's privates arm. The fixture above was RIGHT: it reports
+     `public_companies` and nothing else, which #232 says means "the chain did not say", not "there are none".
+     `applyPhaseChange` already honoured that rule for `owned_trains` and not for the lists holding them.
+     THE TEMPTING FIX WAS THE DANGEROUS ONE. Defaulting the field and returning it would stop the throw and
+     convert "did not say" into "there are none" -- the exact error #232 exists to prevent, committed by the
+     fix for it. So these cases assert BOTH halves: it does not throw, AND it does not invent the field. */
+
+  const partial = (fleets: Record<number, string[]>) =>
+    ({
+      public_companies: Object.entries(fleets).map(([id, owned_trains]) => ({
+        company_id: Number(id),
+        ticker: `C${id}`,
+        owned_trains,
+        is_floated: true,
+      })),
+    }) as unknown as GameStateResponse;
+
+  it("closes no privates for a state that never reported any", () => {
+    const before = partial({ 1: ["3", "3", "4", "5"] });
+    const after = applyPhaseChange(before, "5");
+    // The fleet rule still ran, which is what proves the guard did not short-circuit the whole function.
+    expect(fleetOf(after, 1)).toEqual(["4", "5"]);
+  });
+
+  it("does not invent an empty privates list on the way out", () => {
+    /* THE ASSERTION THAT MATTERS MOST, and `hasOwnProperty` rather than `=== undefined` because those two
+       answers differ here: a field written as `[]` and a field never written are both falsy to a careless
+       reader, and only one of them lies about the game.
+       WHAT IT ACTUALLY GUARDS is the conditional spread in `applyPhaseChange`'s return, NOT the `!= null`
+       check beside it -- established by control rather than assumed: replacing that check with `?? []` leaves
+       this passing, and writing `private_companies` unconditionally fails it. The two guards do different
+       jobs, and the sibling case above is the one that covers the throw. */
+    const before = partial({ 1: ["3", "3", "4", "5"] });
+    const after = applyPhaseChange(before, "5");
+    expect(after).not.toBe(before); // it really did rebuild the state, so the check is not vacuous
+    expect(Object.prototype.hasOwnProperty.call(after, "private_companies")).toBe(false);
+  });
+
+  it("survives a state with no public roster either", () => {
+    /* The sibling hazard, and the same rule. A state reporting neither list has nothing to change, so the
+       function must hand it straight back rather than throwing on the way to that conclusion. */
+    const empty = { private_companies: [] } as unknown as GameStateResponse;
+    expect(applyPhaseChange(empty, "5")).toBe(empty);
+    expect(Object.prototype.hasOwnProperty.call(applyPhaseChange(empty, "5"), "public_companies")).toBe(
+      false,
+    );
+  });
+
+  it("still closes the privates it CAN see, which is the control", () => {
+    /* Without this the three cases above would all be satisfied by a function that had simply stopped closing
+       privates altogether -- a guard that swallows the rule it was protecting. */
+    const before = {
+      public_companies: [],
+      private_companies: [
+        { private_id: 1, name: "Schuylkill Valley", closed: false },
+        { private_id: 2, name: "Camden & Amboy", closed: true },
+      ],
+    } as unknown as GameStateResponse;
+    const after = applyPhaseChange(before, "5");
+    expect(after.private_companies.map((priv) => priv.closed)).toEqual([true, true]);
+    expect(describePrivateClosures(before, after)).toEqual(["Schuylkill Valley"]);
+  });
+
+  it("narrates nothing rather than throwing when the lists are absent", () => {
+    /* The two describers run in the same `App.tsx` block as the reducer, on the state it just returned, so a
+       partial state reaches all three. Guarding the reducer alone would have moved the crash one line down. */
+    const partialState = partial({ 1: ["4"] });
+    expect(describePrivateClosures(partialState, partialState)).toEqual([]);
+    expect(describeFleetLosses({} as GameStateResponse, {} as GameStateResponse)).toEqual([]);
   });
 });
 

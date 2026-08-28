@@ -120,14 +120,22 @@ describe("a jump is not an action", () => {
        taken, but here it means 'Resolve this action elsewhere'." It does not -- it means pressing it would
        do nothing, because the destination is already on screen. */
     expect(CODE.match(/onClick: scrollToStepPanel/g)?.length).toBe(2);
-    expect(CODE).toContain("onClick: goToMap,");
+    /* Design note #888: was `expect(CODE).toContain("onClick: goToMap,");`. The press now does two things --
+       travel, then frame -- so the assertion moved to `layTrackJump.test.ts`, which pins BOTH and their
+       order. What this file still guards is the property in its own name: the click is navigation and
+       framing, and nothing on this bar dispatches (#263). */
+    expect(CODE).toContain("goToMap();");
+    expect(CODE).toContain("onFrameNetwork?.();");
   });
 
   it("gives the Lay Track step the jump it lacked", () => {
     /* REPORTED: "it's the one panel that doesn't have a clear action button when it's one of the more
        consequential actions of the whole game." The map IS that step's panel; it was simply owned elsewhere. */
     expect(CODE).toContain('key: "go-to-map"');
-    expect(CODE).toContain("disabled: mapInView,");
+    /* Design note #888: was `disabled: mapInView,`. The button still exists and still belongs to this step;
+       what it points AT changed, and the greying rule it obeys is asserted in "keeps the greying on one
+       channel" below rather than twice here. */
+    expect(CODE).toContain("disabled: !canFrameNetwork,");
   });
 
   it("says Lay 1 Track and could never say two (design note #834)", () => {
@@ -149,10 +157,25 @@ describe("a jump is not an action", () => {
     /* THE ANSWER TO THE DOUBT RAISED THREE REPORTS AGO about greyed buttons meaning two things. `disabled` is
        `mapInView` and nothing else, so greyed means "pressing this would not move you" and never "you may
        not lay track" -- that refusal lives on the hex (#716). */
+    /* ==================================================================
+        DESIGN NOTE 888: THE CHANNEL IS THE RULE; `mapInView` WAS ONE IMPLEMENTATION OF IT
+       ==================================================================
+       THIS ASSERTED `disabled: mapInView,` and the paragraph above explains what it was protecting: that
+       greyed means ONE thing on this button. `mapInView` is gone -- it answered "is a quarter of the pane on
+       screen", which is what made the button useless at the top of the page -- and the rule it served is
+       unchanged, so the assertion follows the rule rather than the variable.
+       THIS TEST EARNED ITS KEEP ON THE WAY THROUGH. The first draft of the replacement greyed the button
+       with "No hex is open to this corporation right now", which is a LEGALITY sentence on a navigation
+       control -- the exact second meaning this block exists to keep off the channel. It failed here and the
+       copy was corrected. */
     const mapCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
     expect(mapCase.length).toBeGreaterThan(0);
-    expect(mapCase).toContain("disabled: mapInView,");
+    expect(mapCase).toContain("disabled: !canFrameNetwork,");
     expect(mapCase.match(/disabled:/g)?.length).toBe(1);
+    /* THE SENTENCE IS ABOUT MOVEMENT, NOT ABOUT LEGALITY. A greyed jump may say "there is nowhere to go";
+       it may never say "you may not build here", which is the hex's answer to give. */
+    expect(mapCase).toContain("Nothing to show on the map yet.");
+    expect(mapCase).not.toContain("No hex is open");
   });
 
   it("takes a player on another tab to the map rather than nowhere (design note #833)", () => {
@@ -329,10 +352,16 @@ describe("there is exactly one destination", () => {
     /* One wrapper rather than a ref per panel: the two steps are mutually exclusive, so a single target is
        always correct and cannot point at a panel that is not rendered. */
     expect(CODE).toContain("<div ref={stepPanelRef}");
-    const wrapper = CODE.slice(
-      CODE.indexOf("<div ref={stepPanelRef}"),
-      CODE.indexOf("<PrivatePowerPanel"),
-    );
+    /* Design note #885: THE CLOSING BOUND WAS `<PrivatePowerPanel`, the next element after the wrapper.
+       That panel is deleted, and an `indexOf` returning -1 for it would have produced a BACKWARDS slice --
+       `""` -- which satisfies both `toContain`s below by containing nothing to contradict them. The bound is
+       now the probe that genuinely follows the wrapper, and it is pinned before the slice is taken so the
+       vacuity cannot come back the next time something between them moves. */
+    const wrapperStart = CODE.indexOf("<div ref={stepPanelRef}");
+    const wrapperEnd = CODE.indexOf("{stickyFitProbe && (");
+    expect(wrapperStart).toBeGreaterThan(-1);
+    expect(wrapperEnd).toBeGreaterThan(wrapperStart);
+    const wrapper = CODE.slice(wrapperStart, wrapperEnd);
     expect(wrapper).toContain("<TrainPurchasePanel");
     expect(wrapper).toContain("<ProposePrivatePurchase");
   });

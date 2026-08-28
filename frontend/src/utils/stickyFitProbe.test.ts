@@ -143,8 +143,16 @@ describe("the bank no longer stands aside, because it no longer folds (#812 -> #
      caret, the rust on #839's badge). What is left of the bank is a heading, a buy row and two figures.
      #812's REAL POINT SURVIVES AND IS ASSERTED BELOW: the treasury stays on the bank's line, because it is
      the figure that decides whether EITHER purchase is possible. */
-  it("keeps the treasury on the bank's line", () => {
-    expect(DEPOT).toContain("treasury " + String.fromCharCode(36) + "{treasury}");
+  it("no longer restates the treasury the corporation strip carries", () => {
+    /* Design note #889: this asserted `treasury ${treasury}` on the bank's heading. #812 put it there as
+       "the figure that decides whether EITHER purchase is possible", which was true when the panel was the
+       only place it appeared -- the corporation strip above shows `Treasury $X` in the same typeface, which
+       is #325's two-pockets-one-row complaint from the other side.
+       THE FIGURE IS STILL READ, four lines up, to decide affordability and to word the refusal; what went is
+       the second DISPLAY of it. Asserted as the absence, because a heading is exactly where it would come
+       back. */
+    expect(DEPOT).not.toContain("treasury " + String.fromCharCode(36) + "{treasury}");
+    expect(DEPOT).toContain("Buy Trains from the Bank Depot");
   });
 
   it("has no fold left to trigger", () => {

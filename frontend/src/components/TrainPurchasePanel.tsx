@@ -466,9 +466,20 @@ export function TrainPurchasePanel({
             to close is a control whose only use is to hide the step.
             THE TREASURY STAYS ON THE LINE. #812's real point: it is the figure that decides whether EITHER
             purchase is possible, so it belongs to the panel rather than to one section's body. */}
+        {/* ==================================================================
+             DESIGN NOTE 889: THE TREASURY LINE GOES; THE TITLE NAMES THE SELLER
+            ==================================================================
+            REPORTED: "delete the redundant 'B&O treasury $640' title string ... (they are already on the
+            corp card)".
+            #812 PUT IT HERE AND ITS ARGUMENT HAS EXPIRED. That note called the treasury "the figure that
+            decides whether EITHER purchase is possible, so it belongs to the panel rather than to one
+            section's body" -- true when the panel was the only place it appeared. The corporation strip
+            above this bar carries `Treasury $X` in the same typeface, which is #325's own complaint about
+            two pockets in one row, arrived at from the other side.
+            AND `treasury` IS STILL READ, four lines up, to decide whether the buy is affordable and to word
+            the refusal. What is removed is the second DISPLAY of it, not the figure. */}
         <div style={styles.sectionHeading}>
-          <span style={styles.sectionTitle}>Buy Trains from the Bank</span>
-          {buyer && <span style={styles.sectionMeta}>{buyer.ticker} treasury ${treasury}</span>}
+          <span style={styles.sectionTitle}>Buy Trains from the Bank Depot</span>
         </div>
 
         {/* Design note #827: THE BODY BELONGS TO THE HEADER THAT OPENS IT.
@@ -536,6 +547,10 @@ export function TrainPurchasePanel({
                  be mistaken for a choice of train.
                  The group carries its own `aria-label` rather than pointing at a fragment, because the visible
                  text is now two spans with the control between them and neither half labels it alone. */}
+              {/* Design note #889: "Buy 1/2/3/4 x-train(s)". #719 wrapped the selector in a label because
+                  "Buy from bank" left the digits' subject unstated; that stays. What goes is the trailing
+                  "from the Bank", which the section title now says once -- "Buy Trains from the Bank Depot"
+                  -- rather than every buy line repeating it. */}
               <span style={styles.quantityLabel}>Buy</span>
               {/* Design note #247: A DROPDOWN THAT LISTS WHAT IS BUYABLE. Two things were true at once and it was not one
                  bug. IT WAS NOT A DROPDOWN -- it was `<input type="number">` that silently CLAMPED, so typing 2 against a
@@ -610,7 +625,7 @@ export function TrainPurchasePanel({
                 )}
               </div>
               <span style={styles.quantityLabel}>
-                {nextTier.tier}-train{quantity === 1 ? "" : "s"} from the Bank
+                {nextTier.tier}-train{quantity === 1 ? "" : "s"}
               </span>
 
               {/* ==================================================================
@@ -637,54 +652,41 @@ export function TrainPurchasePanel({
                         }. The quantity selector cannot exceed it.`
                   }
                 >
-                  <span style={styles.limitLabel}>In the Bank Depot</span>
+                  {/* Design note #889: "Depot Supply: X of Y". Was `In the Bank Depot  X`, which named the
+                      place rather than the quantity and left the bare number without a denominator -- #294's
+                      "two numbers, two subjects" one step further on: a stock of 2 means something different
+                      out of 6 than out of 2. `total` is the tier's printed count.
+                      THE INFINITY SIGN SURVIVES FOR THE DIESEL, which is unlimited rather than unknown, and
+                      it takes no denominator because there is nothing to be out of. */}
+                  <span style={styles.limitLabel}>Depot Supply</span>
                   <span style={styles.limitValue}>
-                    {nextTier.remaining === null ? "\u221e" : `${nextTier.remaining}`}
+                    {nextTier.remaining === null
+                      ? "\u221e"
+                      : `${nextTier.remaining} of ${nextTier.total ?? nextTier.remaining}`}
                   </span>
                 </span>
               )}
 
-              {/* Design note #248: the limit, where the decision is made. `Trains: 2 / 4` explains why the quantity list
-                 stops where it does, and it was only available on the Operating Round strip -- a different panel from the
-                 one enforcing it. */}
-              {/* Design note #296: the label states WHICH MOMENT the number describes. On an ordinary purchase these are
-                 the same figure and it reads as the plain current limit; on the purchase that advances the phase it says
-                 so, in amber, because the ceiling is about to move under the player. */}
-              <span
-                style={styles.limitReadout}
-                title={
-                  limitDropsOnPurchase
-                    ? `Buying a ${nextTier?.tier}-train starts the next phase, which lowers the limit from ${currentTrainLimit} to ${limitAfterPurchase} for every corporation. This corporation holds ${ownedTrainCount} — anything above ${limitAfterPurchase} is discarded when the phase turns.`
-                    : `This corporation holds ${ownedTrainCount} of the ${trainLimit} trains Project 18XX allows one corporation in this phase. Separate from the depot's own stock beside it.`
-                }
-              >
-                <span
-                  style={{
-                    ...styles.limitLabel,
-                    ...(limitDropsOnPurchase ? styles.limitLabelFuture : {}),
-                  }}
-                >
-                  {limitDropsOnPurchase ? "Train Limit After Purchase" : "Current Train Limit"}
-                </span>
-                <span
-                  style={{
-                    ...styles.limitValue,
-                    ...(atTrainLimit ? styles.limitValueFull : {}),
-                    ...(limitDropsOnPurchase ? styles.limitValueFuture : {}),
-                  }}
-                >
-                  {limitDropsOnPurchase
-                    ? `${limitAfterPurchase}`
-                    : `${ownedTrainCount} / ${trainLimit}`}
-                </span>
-                {/* Design note #703: "now 4 · holds 3" REMOVED, on report. #296 added it because "After
-                    Purchase: 3" is "a number with no baseline to read it against" -- true of that number
-                    alone, and it stopped being the whole line. `ownedTrainCount` is drawn as a train chip
-                    for every train the corporation owns two rows up, and the current limit is on the action
-                    bar's own rail; restating both here made the busiest line on the panel out of the one
-                    that a player reads while deciding. The label still says "After Purchase", which is the
-                    tense the bare number needed. */}
-              </span>
+              {/* ==================================================================
+                   DESIGN NOTE 889: THE TRAIN LIMIT READOUT LEAVES THE BUY LINE
+                  ==================================================================
+                  REPORTED: "delete ... the 'Current Train Limit' string (they are already on the corp
+                  card)."
+                  #248 PUT IT HERE BECAUSE IT WAS NOWHERE ELSE -- "`Trains: 2 / 4` explains why the quantity
+                  list stops where it does, and it was only available on the Operating Round strip, a
+                  different panel from the one enforcing it." That premise is gone: #590 settled that the
+                  corporation strip keeps the train limit even when the bar is pinned, precisely because "a
+                  player who learns that presidency and train limit vanish under pressure reasonably
+                  concludes they matter less, which is the opposite of true for the train limit". So the
+                  figure is on screen, in the same sticky element, two rows up.
+                  #296's "AFTER PURCHASE" TENSE GOES WITH IT, and that is the part worth pausing on: it said
+                  the ceiling is about to move under the player, which the strip's plain current limit does
+                  NOT say. It is not lost -- `purchaseWarnings` raises "Train Limit Drops in N Buys" on the
+                  action bar (#889), which is the same fact with a countdown and is drawn as a warning
+                  because that is what it is.
+                  WHAT WAS HERE, on one line per #814, was a `limitReadout` printing
+                  `{limitDropsOnPurchase ? "Train Limit After Purchase" : "Current Train Limit"}` over
+                  `{limitDropsOnPurchase ? limitAfterPurchase : `${ownedTrainCount} / ${trainLimit}`}`. */}
 
               {/* ==================================================================
                    DESIGN NOTE 838: THE CEILING CAPTION IS GONE FROM THE BUY LINE
@@ -765,7 +767,25 @@ export function TrainPurchasePanel({
                    "buy" and the object; repeating "Buy" on the button is the duplication #722 objected to,
                    and "Pay" is the half of the transaction the button uniquely performs. One word, one
                    figure, no repetition, and it still reads as an action rather than as a caption. */}
-                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost}`}
+                {/* ==================================================================
+                     DESIGN NOTE 890: THE BALANCE THIS PRESS LEAVES BEHIND
+                    ==================================================================
+                    REPORTED: "the 'Pay' button does not show the effect on the corporation's treasury like
+                    we've done with (almost?) every other transaction."
+                    THE PATTERN IS ALREADY THE HOUSE STYLE and this button was the hold-out: #509a gives the
+                    withhold column a before-and-after, #705 gives the payout column one for the same reason
+                    ("a bare delta only a reader already holding the figure in their head could use"), and
+                    #673 puts the provisional treasury on the corporation card for a previewed tile lay.
+                    AND IT REPLACES WHAT #889 TOOK AWAY, which is why it lands well here rather than merely
+                    being consistent: the treasury line left this panel's heading because the corporation
+                    strip already carries the CURRENT figure. What no other surface carries is the figure
+                    AFTER, and that is the one the press turns on.
+                    COMPUTED INLINE from two values already in scope -- a subtraction is not a rule, and
+                    `bankTotal` is already "the only place a multi-buy is priced" (#740 in this file). */}
+                {/* ON ONE LINE, per #814 and because two suites anchor on this exact ternary: wrapping it
+                    preserved the words and broke the string, which is that note's rule reaching a JSX
+                    expression rather than a comment. */}
+                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost} (Treasury: $${treasury - (bankTotal || nextTier.cost)})`}
               </button>
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}

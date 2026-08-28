@@ -15,22 +15,13 @@
 // they are" -- and moved it to the modal. Now the player is looking at the RING.
 //
 // SO THE RULE IS "THE X GOES BACK ONE STEP", at all three levels, rather than a third special case.
+import { readSource, stripComments } from "./sourceScan";
+
 export {};
 
-const read = (rel: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-};
-const strip = (source: string) =>
-  source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-
-const APP = strip(read("App.tsx"));
-const RING = strip(read("components/RadialTileSelector.tsx"));
-const FLOW = strip(read("privatePowerFlow.ts".replace(/^/, "utils/")));
+const APP = stripComments(readSource("App.tsx"));
+const RING = stripComments(readSource("components/RadialTileSelector.tsx"));
+const FLOW = stripComments(readSource("privatePowerFlow.ts".replace(/^/, "utils/")));
 
 describe("the X goes back one step", () => {
   it("shows at the candidate stage only when there is somewhere to go back to", () => {

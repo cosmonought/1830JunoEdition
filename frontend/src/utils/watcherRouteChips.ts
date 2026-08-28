@@ -45,6 +45,22 @@ export interface WatcherChip {
   model: string;
   /** The route's revenue, or `null` for a train with nothing drafted yet. */
   value: number | null;
+  /* ==================================================================
+      DESIGN NOTE 890: THE PATH, BECAUSE THE CHIP OPENS INTO IT
+     ==================================================================
+     REPORTED: "although non-active players can see the route printed on the board, when they click the train
+     chip, it says 'No route drafted for this train yet.'"
+     THE CHIP CARRIED THE PRICE AND NOT THE ROUTE. `RouteChipDetail` reads `stops` and `hexLabels`; a watcher
+     chip supplied neither, so the component took its `stops.length === 0` branch -- which is #802's honest
+     "an empty route is a state, not a blank" answering a question nobody asked. The route was on the board
+     the whole time, drawn from the same presence entry this is built from.
+     #802's OWN NOTE CLAIMED THIS ALREADY WORKED: "the drafts arrive through presence for a watcher and
+     locally for the actor. The only thing that changes with `canClear` is whether the Clear button is
+     there." The drafts arrived; the PATHS did not. Corrected in place, because the sentence states the
+     intention this change implements. */
+  hexLabels: readonly string[];
+  /** The paying stops. `value` is the sum; this is what the readout lists. */
+  stops: ReadonlyArray<{ hex: string; value: number }>;
 }
 
 /** Rivals' live routes are keyed above any real train index, so a watcher's overlay can never collide with
@@ -65,8 +81,12 @@ export function watcherTrainDrafts(input: {
   labelForHex: (q: number, r: number) => string | undefined;
   /** `null` where the caller cannot price it. Fewer than two stops is never priced at all. */
   priceRoute: (labels: readonly string[]) => number | null;
+  /** Design note #890: what each stop pays, for the readout the chip opens into. `null` where the caller
+   *  cannot price the individual stops -- the chip then lists the path without figures rather than
+   *  inventing them, which is the same rule `value: null` follows one line down. */
+  stopsFor?: (labels: readonly string[]) => ReadonlyArray<{ hex: string; value: number }>;
 }): WatcherChip[] {
-  const { roster, actorDrafts, labelForHex, priceRoute } = input;
+  const { roster, actorDrafts, labelForHex, priceRoute, stopsFor } = input;
   return roster.map((train) => {
     const hexes = actorDrafts?.[train.trainIndex] ?? [];
     const labels = hexes
@@ -76,9 +96,25 @@ export function watcherTrainDrafts(input: {
        a different fact from a draft that is still being drawn -- the same distinction #498 drew for the em
        dash on the chip. */
     return {
-      trainIndex: RIVAL_ROUTE_INDEX_BASE + train.trainIndex,
+      /* ==================================================================
+          DESIGN NOTE 890: THE ACTOR'S TRAINS KEEP THEIR REAL INDICES
+         ==================================================================
+         WAS `RIVAL_ROUTE_INDEX_BASE + train.trainIndex`, and #740's reason for the offset was that "two
+         clients both drafting train 0 would otherwise collide on `trainIndex`, which is the key the highlight
+         and the chip row join on."
+         THAT PREMISE DOES NOT HOLD FOR THESE CHIPS. An Operating Round has ONE acting corporation, and this
+         function builds chips for its roster alone -- `actorDrafts` comes from the presence entry whose
+         `actingCompanyId` matches. There is no second drafter to collide with, so the offset was buying
+         collision-safety against a state the round cannot be in, and charging for it in the one place that
+         matters: the join. A chip at index 1000 matches no overlay at index 0, so the watcher's route was
+         never `primary` and was drawn muted -- the reported dimming.
+         THE OFFSET SURVIVES WHERE ITS PREMISE DOES, in `App.tsx`'s overlay loop, for presence entries that
+         are NOT the acting corporation's. */
+      trainIndex: train.trainIndex,
       model: train.model,
       value: labels.length >= 2 ? priceRoute(labels) : null,
+      hexLabels: labels,
+      stops: labels.length >= 2 && stopsFor ? stopsFor(labels) : [],
     };
   });
 }

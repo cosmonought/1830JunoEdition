@@ -55,13 +55,24 @@ describe("projectDividendFrom", () => {
     );
   });
 
-  it("clamps at the left edge rather than inventing a cell", () => {
-    // (0, 10) is the leftmost cell of the top row. Stepping left off the
-    // board must leave the marker where it is -- the other half of "tokens
-    // disappear off the matrix".
+  it("drops a row at the left edge, and clamps only at the chart's floor", () => {
+    /* ==================================================================
+        DESIGN NOTE 891: THE CLAMP WAS THE BUG, ON THE OTHER SIDE
+       ==================================================================
+       THIS ASSERTED `{ price: 60, moves: false }` from (0, 10) -- "stepping left off the board must leave the
+       marker where it is". That was #187's stated scope showing through: "it models only the two ORDINARY
+       moves. Ledges, the right cliff and the sold-out rise are `market.rs`'s." Honest when the contract was
+       the authority; false once `App.tsx` wired `ctx.projectDividend` to this family and made the sandbox's
+       arithmetic the move itself.
+       REPORTED ON THE PAY SIDE -- "at the right edge of its row ... It should read 100 > 110" -- and the
+       withhold is the same rule mirrored: left along the row, and DOWN a row when the row runs out. (0, 10)
+       is the leftmost cell of the TOP row, so withholding there now falls to (0, 9) at $53.
+       THE CLAMP STILL EXISTS, and this test still guards it: it belongs at the chart's actual floor, where
+       there is no cell either left or below. `dividendLedge.test.ts` walks every left edge on the real grid
+       and asserts exactly that split. */
     expect(projectDividendFrom({ x: 0, y: 10 }, "withhold")).toEqual({
-      price: 60,
-      moves: false,
+      price: 53,
+      moves: true,
     });
   });
 

@@ -36,6 +36,23 @@ export interface PrivatePowerFlowModalProps {
    *  company down to its last one is choosing between Scranton and somewhere it would rather be. Absent
    *  rather than guessed when unknown. */
   tokensLeft: number | null;
+  /** ==================================================================
+   *   DESIGN NOTE 882: WHY THE LAST ATTEMPT DID NOT HAPPEN
+   *  ==================================================================
+   *
+   *  #848 CLAIMS THIS COMPONENT "writes no rules and no copy", and this prop is what keeps that true of the
+   *  refusal too: the sentence is composed by `privateExchange.ts`, which is where the rule being broken
+   *  lives, and arrives here already written. #872 found the same claim two strings short and fixed it the
+   *  same way.
+   *
+   *  IT IS NOT A STEP, and that is deliberate. A refusal is not a stage of the flow -- nothing was spent,
+   *  the step it belongs to is still live, and rendering it as a fourth greyed box would say the opposite.
+   *  It is an answer to the last press, so it sits above the steps and the step below it stays enabled.
+   *
+   *  `null` WHENEVER THE FLOW IS CLEAN, including for a refusal belonging to a different power: the shell
+   *  matches the ability key before passing it, so this component never has to ask whether the sentence is
+   *  about the power it is showing. */
+  refusal?: string | null;
   onAct: (step: PowerFlowStep["key"]) => void;
   onDecline: (step: PowerFlowStep["key"]) => void;
   /** Only called while `flow.cancellable`; the control is not rendered otherwise. */
@@ -46,6 +63,7 @@ export function PrivatePowerFlowModal({
   flow,
   ticker,
   tokensLeft,
+  refusal = null,
   onAct,
   onDecline,
   onCancel,
@@ -75,6 +93,17 @@ export function PrivatePowerFlowModal({
             (#441), whose holder has a name rather than a ticker. #848's claim that this component "writes no
             rules and no copy" was two strings away from true; this is one of them. */}
         <p style={styles.who}>{flow.holderLine}</p>
+
+        {/* Design note #882: ABOVE THE STEPS, BELOW THE HOLDER LINE. It answers the last press, so it goes
+            where the eye returns after the modal fails to close -- and it must not push the live step off
+            screen, which is what putting it under the buttons would do on the D&H's two-step card.
+            AMBER, NOT RED, matching the panel line this replaces: nothing was spent and the power is intact,
+            so a destructive colour would misdescribe a refusal a player can act on and come back from. */}
+        {refusal && (
+          <p style={styles.refusal} role="alert">
+            {refusal}
+          </p>
+        )}
 
         {flow.steps.map((step, index) => (
           <div
@@ -185,6 +214,23 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   who: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa2b1" },
+  /* Design note #882: the powers panel's `abilityError` treatment, carried over unchanged so the refusal a
+     player used to read below the fold looks like the same object in its new home.
+     LONGHANDS, per #732/#840: this box sits among siblings (`step`, `stepLive`) that override
+     `borderColor`, and a `border` shorthand here is exactly the pairing that makes React write
+     `borderColor = ""` on the render that drops the override. */
+  refusal: {
+    margin: 0,
+    padding: "9px 11px",
+    borderRadius: "6px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#6b4a2f",
+    backgroundColor: "#2a1d13",
+    color: "#e6c08a",
+    fontSize: FONT_SIZE.small,
+    lineHeight: 1.45,
+  },
   step: {
     borderWidth: "1px",
     borderStyle: "solid",

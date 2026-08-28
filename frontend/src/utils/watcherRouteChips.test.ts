@@ -103,12 +103,20 @@ describe("the key three surfaces join by survives", () => {
     /* #740's rule: a watcher's overlay must never collide with their OWN drafts on `trainIndex`, which the
        map, the chips and the planner all join on (#373). The map overlay keys rival routes the same way, so
        hovering a chip still lights the right line. */
+    /* ==================================================================
+        DESIGN NOTE 890: THE OFFSET LEAVES THESE CHIPS, AND ITS PREMISE IS WHY
+       ==================================================================
+       THIS ASSERTED `[BASE, BASE + 1, BASE + 2]`, holding #740's rule that "a watcher's overlay must never
+       collide with their OWN drafts on `trainIndex`".
+       THE COLLISION IT GUARDS AGAINST CANNOT HAPPEN HERE. These chips are built for the ACTING corporation's
+       roster alone, from the presence entry whose `actingCompanyId` matches -- and an Operating Round has one
+       acting corporation. There is no second drafter to collide with, so the offset bought safety against a
+       state the round cannot be in and charged for it at the join: a chip at 1000 matches no overlay at 0, so
+       the watcher's route was never `primary` and drew muted. That is the reported dimming.
+       THE OFFSET SURVIVES WHERE ITS PREMISE DOES, in `App.tsx`'s overlay loop, for presence entries that are
+       NOT the acting corporation's. `RIVAL_ROUTE_INDEX_BASE` is still exported and still applied there. */
     const chips = watcherTrainDrafts({ roster: ROSTER, actorDrafts: null, labelForHex, priceRoute });
-    expect(chips.map((chip) => chip.trainIndex)).toEqual([
-      RIVAL_ROUTE_INDEX_BASE,
-      RIVAL_ROUTE_INDEX_BASE + 1,
-      RIVAL_ROUTE_INDEX_BASE + 2,
-    ]);
+    expect(chips.map((chip) => chip.trainIndex)).toEqual([0, 1, 2]);
   });
 
   it("leaves room for more trains than 1830 can hold", () => {
